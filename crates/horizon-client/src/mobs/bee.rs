@@ -17,7 +17,7 @@ use super::{
     path::PathType,
 };
 use crate::beehive::BeehiveExt;
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::random::{LevelRandom, RandomSource};
 use std::collections::HashMap;
 
 const FLAG_ROLL: u8 = 2;
@@ -282,7 +282,7 @@ fn can_target(m: &Mob, w: &MobWorld) -> bool {
 
 /// `Bee.tick` after `super.tick()`: nectar drips (positions drawn from the
 /// level's random even on the server), then the roll.
-pub fn tick(m: &mut Mob, level_random: &mut LegacyRandom) {
+pub fn tick(m: &mut Mob, level_random: &mut LevelRandom) {
     if has_nectar(m) && get(m).is_some_and(|b| b.crops_grown < 10) && m.random.next_float() < 0.05 {
         let mut i = 0;
         while i < m.random.next_int_bound(2).unwrap_or(0) + 1 {

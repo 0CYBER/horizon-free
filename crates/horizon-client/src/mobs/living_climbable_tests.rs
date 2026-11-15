@@ -127,7 +127,7 @@ fn a_horse_in_vines_is_still_pushable() {
                 crate::mobs::ai::tick(
                     &mut m,
                     w,
-                    &mut horizon_core::random::LegacyRandom::new(1),
+                    &mut crate::mobs::world::level_random(1),
                     &mut events,
                 );
                 (m.on_climbable, m.pushable())

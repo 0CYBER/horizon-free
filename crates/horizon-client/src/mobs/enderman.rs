@@ -807,7 +807,7 @@ mod tests {
                 &mut m,
                 &death(true),
                 &mut sequences,
-                &mut horizon_core::random::LegacyRandom::new(0),
+                &mut crate::mobs::world::level_random(0),
             );
             let dropped: Vec<String> = out
                 .into_iter()
@@ -832,7 +832,7 @@ mod tests {
             &mut m,
             &death(false),
             &mut sequences,
-            &mut horizon_core::random::LegacyRandom::new(0),
+            &mut crate::mobs::world::level_random(0),
         );
         assert!(
             !out.iter()

@@ -6,7 +6,7 @@
 //! the experience orbs.
 use super::{Mob, Species, equine, gear, raider, render::DYE_NAMES, species};
 use crate::random_sequences::RandomSequences;
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
 use horizon_world::{
     loot::{EntityLootParams, LootDamage, LootData, LootEntity, LootStack},
     registry::BlockStateId,
@@ -446,7 +446,7 @@ pub fn die(
     m: &mut Mob,
     d: &Death,
     sequences: &mut RandomSequences,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
 ) -> (Vec<Drop>, bool) {
     let mut out = Vec::new();
     death_state(m);
@@ -618,7 +618,7 @@ fn roll(
     params: &EntityLootParams,
     sequences: &mut RandomSequences,
     seed: i64,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
 ) -> Vec<LootStack> {
     if seed != 0 {
         return d
@@ -683,6 +683,7 @@ pub fn base_experience(m: &mut Mob) -> i32 {
 #[cfg(test)]
 mod death_loot_table_tests {
     use super::*;
+    use crate::mobs::world::level_random;
     use horizon_world::loot::{LootData, PackOverlay};
 
     /// Mob.getLootTable and LootTable.getRandomItems: a mob's own
@@ -719,7 +720,7 @@ mod death_loot_table_tests {
             }
             m.extra.death_loot_seed = seed;
             let mut sequences = RandomSequences::default();
-            let (out, _) = die(&mut m, &death, &mut sequences, &mut LegacyRandom::new(7));
+            let (out, _) = die(&mut m, &death, &mut sequences, &mut level_random(7));
             out.into_iter()
                 .filter_map(|d| match d {
                     Drop::Item(s) => Some(s.item),
@@ -737,6 +738,7 @@ mod death_loot_table_tests {
 mod slot_tests {
     use super::*;
     use crate::mobs::sensor_scan_tests::kind;
+    use crate::mobs::world::level_random;
     use horizon_core::geometry::Vec3;
     use horizon_world::loot::PackOverlay;
     use std::sync::Arc;
@@ -822,7 +824,7 @@ mod slot_tests {
             &mut m,
             &death(true),
             &mut RandomSequences::default(),
-            &mut LegacyRandom::new(7),
+            &mut level_random(7),
         );
         assert!(orbs(&out) > 0, "memory timer awards experience: {out:?}");
 
@@ -831,7 +833,7 @@ mod slot_tests {
             &mut m,
             &death(false),
             &mut RandomSequences::default(),
-            &mut LegacyRandom::new(7),
+            &mut level_random(7),
         );
         assert_eq!(orbs(&out), 0, "no timer, no experience: {out:?}");
 
@@ -840,7 +842,7 @@ mod slot_tests {
             &mut m,
             &death(true),
             &mut RandomSequences::default(),
-            &mut LegacyRandom::new(7),
+            &mut level_random(7),
         );
         assert!(helmet(&out), "memory timer drops equipment: {out:?}");
 
@@ -849,7 +851,7 @@ mod slot_tests {
             &mut m,
             &death(false),
             &mut RandomSequences::default(),
-            &mut LegacyRandom::new(7),
+            &mut level_random(7),
         );
         assert!(!helmet(&out), "no timer, no equipment: {out:?}");
     }

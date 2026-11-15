@@ -22,7 +22,7 @@ fn dive_ages(ticks: i32) -> Option<(i32, Vec<i32>)> {
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 74.0, 0.5), 0.0);
             register(&mut m);
             m.persistent = true;
-            let mut lr = LegacyRandom::new(1);
+            let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(1));
             let mut events = Vec::new();
             let (mut started, mut swoops, mut was) = (None, Vec::new(), false);
             for _ in 0..ticks {

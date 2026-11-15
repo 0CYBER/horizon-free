@@ -35,7 +35,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Axis},
-    random::OrderedDraws,
+    random::{LevelRandom, OrderedDraws},
 };
 use std::{
     cell::Cell,
@@ -263,7 +263,7 @@ impl Islands<'_> {
                     .collect();
                 let group_start = Start {
                     events: Vec::new(),
-                    random: draws.lane(lane),
+                    random: LevelRandom::for_level(draws.lane(lane)),
                     guests: start.guests.clone(),
                     player: start.player.clone(),
                     bindings,
@@ -346,7 +346,7 @@ impl Islands<'_> {
             mobs,
             Vec::new(),
             Start {
-                random: draws.finish(),
+                random: LevelRandom::for_level(draws.finish()),
                 targets,
                 ..start
             },
@@ -1481,7 +1481,7 @@ mod tests {
                 };
                 let start = Start {
                     events: Vec::new(),
-                    random: horizon_core::random::LegacyRandom::new(7),
+                    random: LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7)),
                     guests: Vec::new(),
                     player: None,
                     bindings: Default::default(),
@@ -1545,7 +1545,7 @@ mod tests {
             .unwrap();
         let mobs = game.mobs.to_vec();
         let snapshot = mobs.iter().map(|m| m.seen(None)).collect::<Vec<_>>();
-        let mut random = horizon_core::random::LegacyRandom::new(7);
+        let mut random = LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7));
         random.next_gaussian();
         let start = Start {
             events: Vec::new(),
@@ -1974,7 +1974,7 @@ mod tests {
         };
         let start = Start {
             events: Vec::new(),
-            random: horizon_core::random::LegacyRandom::new(7),
+            random: LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7)),
             guests: Vec::new(),
             player: None,
             bindings: Default::default(),

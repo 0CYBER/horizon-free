@@ -20,7 +20,7 @@ fn llama_events(drops: bool) -> Option<Vec<MobEvent>> {
         let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
         m.extra.in_love = 600;
         m.extra.tame = true;
-        let mut lr = LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut events = Vec::new();
         for _ in 0..600 {
             crate::mobs::ai::tick(&mut m, w, &mut lr, &mut events);

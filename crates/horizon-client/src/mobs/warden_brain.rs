@@ -1339,7 +1339,6 @@ mod warden_owned_memory_tests {
         Tag::String(s.into())
     }
     use crate::mobs::{Species, world::with_built_test_world};
-    use horizon_core::random::LegacyRandom;
 
     fn types() -> HashMap<String, Arc<MobType>> {
         let mut kind = crate::mobs::sensor_scan_tests::kind();
@@ -1535,7 +1534,7 @@ mod warden_owned_memory_tests {
                 put(&mut raw, "Health", Tag::Float(500f32.to_bits()));
                 let mut m = mob_from_nbt(&raw, &types, 93, None).unwrap();
                 let loaded = slot_state(&m);
-                let mut random = LegacyRandom::new(0);
+                let mut random = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 for tick in 1..=5 {
                     assert!(m.tick(w, &mut random, &mut events));

@@ -12,7 +12,7 @@ use super::{
 use crate::sculk::{self, Context, Info};
 use horizon_core::{
     geometry::{Vec3, trig::Mth},
-    random::{LegacyRandom, RandomSource},
+    random::{LegacyRandom, LevelRandom, RandomSource},
 };
 use horizon_protocol::entity_data::PositionSource;
 use std::{
@@ -793,7 +793,7 @@ pub fn pre_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 pub fn server_ai_step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     if m.extra.warden.is_none() {

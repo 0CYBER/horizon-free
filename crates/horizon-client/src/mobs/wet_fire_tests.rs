@@ -31,7 +31,7 @@ fn step(mob: &mut Mob, w: &MobWorld, environment: &str) -> (f32, i32, usize) {
     mob.velocity = Vec3::ZERO;
     assert_eq!(in_rain(mob, &scene), scene.raining);
     let mut events = Vec::new();
-    assert!(tick(mob, &scene, &mut LegacyRandom::new(2), &mut events));
+    assert!(tick(mob, &scene, &mut level_random(2), &mut events));
     let sounds = events
         .iter()
         .filter(|event| matches!(event, MobEvent::Sound("entity.generic.extinguish_fire", ..)))

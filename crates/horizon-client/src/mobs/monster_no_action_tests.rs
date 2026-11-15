@@ -25,7 +25,7 @@ fn mob(types: &crate::mobs::MobTypes, name: &str) -> Mob {
 /// the threshold is the 201st.
 fn no_action_times(types: &crate::mobs::MobTypes, w: &MobWorld<'_>, name: &str) -> (i32, i32) {
     let mut m = mob(types, name);
-    let mut lr = LegacyRandom::new(7);
+    let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(7));
     let mut events = Vec::new();
     let mut seen = Vec::with_capacity(201);
     for _ in 0..201 {

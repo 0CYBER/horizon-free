@@ -2934,7 +2934,7 @@ mod eat_block_tests {
         with_built_test_world_rules(&[], griefing, true, build, |w, types| {
             let kind = Arc::new(types.types["minecraft:sheep"].clone());
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            let mut random = LegacyRandom::new(0);
+            let mut random = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             for _ in 0..6000 {
                 crate::mobs::ai::tick(&mut m, w, &mut random, &mut events);

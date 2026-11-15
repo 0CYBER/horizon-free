@@ -6,7 +6,7 @@
 use super::{Mob, MobEvent, MobWorld, Species, control::MoveKind, nav::NavKind, path::PathType};
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{LegacyRandom, LevelRandom, RandomSource},
 };
 
 /// `Parrot.MOB_SOUND_MAP` (the happy ghast's is `SoundEvents.EMPTY`: "").
@@ -81,7 +81,7 @@ fn pitch(random: &mut LegacyRandom) -> f32 {
 pub fn ai_step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     if let Some(at) = m.extra.party_jukebox {

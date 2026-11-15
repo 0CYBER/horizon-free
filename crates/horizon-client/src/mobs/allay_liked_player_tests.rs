@@ -4,7 +4,7 @@
 //! `NoAI` runs no brain tick; a memory without a time to live never expires
 //! (tools/test_allay_liked_player_parity.py measures the same).
 use super::*;
-use horizon_core::random::LegacyRandom;
+use crate::mobs::world::level_random;
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
@@ -86,7 +86,7 @@ fn a_loaded_finite_liked_player_saves_its_own_time_to_live() {
             }
             let tag = saved_tag(Some(Some(2)), false);
             let mut m = load(types, &tag);
-            crate::mobs::ai::tick(&mut m, w, &mut LegacyRandom::new(1), &mut Vec::new());
+            crate::mobs::ai::tick(&mut m, w, &mut level_random(1), &mut Vec::new());
             assert_eq!(
                 saved_memory(&m, Some(&tag)),
                 Some((value(), Some(1))),
@@ -112,7 +112,7 @@ fn a_finite_liked_player_expires_only_under_ai() {
                 let mut m = load(types, &tag);
                 let mut seen = vec![saved_memory(&m, None).map(|(_, t)| t)];
                 for _ in 0..3 {
-                    crate::mobs::ai::tick(&mut m, w, &mut LegacyRandom::new(1), &mut Vec::new());
+                    crate::mobs::ai::tick(&mut m, w, &mut level_random(1), &mut Vec::new());
                     seen.push(saved_memory(&m, None).map(|(_, t)| t));
                 }
                 let liked = is_liked_player(&m, Some(crate::mobs::Who::Player), OWNER);
@@ -157,7 +157,7 @@ fn a_given_item_makes_the_liked_player_permanent_again() {
             let mine = Some(Tag::IntArray(actor.to_vec()));
             assert_eq!(saved_memory(&m, Some(&tag)), Some((mine.clone(), None)));
             for _ in 0..4 {
-                crate::mobs::ai::tick(&mut m, w, &mut LegacyRandom::new(1), &mut Vec::new());
+                crate::mobs::ai::tick(&mut m, w, &mut level_random(1), &mut Vec::new());
             }
             assert_eq!(
                 saved_memory(&m, Some(&tag)),
@@ -183,7 +183,7 @@ fn never_expiring_readded_and_replaced_liked_players() {
         |_, _| {},
         |w, types| {
             let step = |m: &mut Mob| {
-                crate::mobs::ai::tick(m, w, &mut LegacyRandom::new(1), &mut Vec::new());
+                crate::mobs::ai::tick(m, w, &mut level_random(1), &mut Vec::new());
             };
             // Long.MAX_VALUE: permanent.
             let tag = saved_tag(Some(Some(i64::MAX)), false);

@@ -146,7 +146,7 @@ fn displaced_elders(xs: &[f64]) -> Option<Vec<(bool, Option<[i32; 3]>)>> {
             let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 62.0, 0.5), 0.0);
             register(&mut m);
             m.fluids.in_water = true;
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0));
             let mut events = Vec::new();
             elder_server_ai_step(
                 &mut m,

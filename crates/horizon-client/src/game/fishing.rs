@@ -17,7 +17,7 @@ use horizon_client::{
 use horizon_core::{
     geometry::{Aabb, Vec3, traverse_blocks, trig},
     position::BlockPos,
-    random::{LegacyRandom, RandomSource},
+    random::{LegacyRandom, LevelRandom, RandomSource},
 };
 use horizon_protocol::entity_data::{Value, serializer};
 use std::{collections::HashMap, sync::Arc};
@@ -44,7 +44,7 @@ fn fishing_loot(
     loot: &horizon_world::loot::LootData,
     table: &str,
     sequences: &mut horizon_client::random_sequences::RandomSequences,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     world_seed: i64,
     luck: f32,
     biome: Option<&str>,
@@ -2009,7 +2009,7 @@ mod tests {
     #[test]
     #[ignore = "requires prepared resources and the vanilla fishing reference"]
     fn fishing_retrieve_reference() {
-        use horizon_core::random::{LegacyRandom, RandomSource};
+        use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
         use horizon_world::loot::{LootData, PackOverlay};
         let resources = std::env::var_os("HORIZON_FISHING_RESOURCES").unwrap();
         let path = std::env::var_os("HORIZON_FISHING_REFERENCE").unwrap();
@@ -2020,7 +2020,7 @@ mod tests {
         for row in rows {
             let seed = row["sequence_seed"].as_i64().unwrap();
             let mut sequences = horizon_client::random_sequences::RandomSequences::default();
-            let mut level_random = LegacyRandom::new(1);
+            let mut level_random = LevelRandom::for_level(LegacyRandom::new(1));
             let items = super::fishing_loot(
                 &loot,
                 super::FISHING_TABLE,

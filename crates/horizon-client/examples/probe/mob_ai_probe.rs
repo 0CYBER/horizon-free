@@ -25,7 +25,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::{LegacyRandom, RandomSource},
+    random::{LegacyRandom, LevelRandom, RandomSource},
 };
 use horizon_world::loot::PackOverlay;
 use horizon_world::{chunk::BlockState, registry::BlockRegistry, registry::BlockStateId};
@@ -340,7 +340,7 @@ fn summon_golem(
     w: &MobWorld,
     types: &MobTypes,
     born: &mut Vec<Mob>,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
 ) {
     use horizon_client::mobs::{villager, villager_brain};
     let Some(near) = villager::golem_summoners(mobs, a, w.game_time, needed) else {
@@ -382,7 +382,7 @@ fn villager_events(
     items: &Items,
     born: &mut Vec<Mob>,
     day_time: i64,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
 ) {
     use horizon_client::mobs::villager;
     let index = |mobs: &[Mob], id: u32| {
@@ -1184,7 +1184,7 @@ pub fn main() -> horizon_client::Result<()> {
                 vehicle: None,
             }
         });
-        let mut scratch = LegacyRandom::new(0);
+        let mut scratch = LevelRandom::for_level(LegacyRandom::new(0));
         // The level random for eating sounds: only goats and sniffers draw
         // from it, and the scenarios feed neither.
         let mut level_random = LegacyRandom::new(0);

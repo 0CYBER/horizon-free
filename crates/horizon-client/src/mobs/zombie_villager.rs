@@ -397,7 +397,7 @@ mod tests {
             m.persistent = true;
             m.no_ai = no_ai;
             start_converting(&mut m, None, 3, &mut Vec::new());
-            let mut level_random = horizon_core::random::LegacyRandom::new(0);
+            let mut level_random = crate::mobs::world::level_random(0);
             let mut ticks = 0;
             while ticks < 10 {
                 let mut events = Vec::new();

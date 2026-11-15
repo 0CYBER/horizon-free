@@ -798,6 +798,11 @@ pub(crate) fn with_test_world(
 ) -> bool {
     with_built_test_world(others, |_, _| {}, f)
 }
+/// A test's level random (`Level.random`), seeded.
+#[cfg(test)]
+pub(crate) fn level_random(seed: i64) -> horizon_core::random::LevelRandom {
+    horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(seed))
+}
 /// `with_test_world` with `build` placing blocks first.
 #[cfg(test)]
 pub(crate) fn with_built_test_world(

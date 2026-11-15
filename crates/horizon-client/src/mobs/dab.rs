@@ -9,7 +9,7 @@
 //! skipped decisions are not made.
 use super::{Mob, MobEvent, MobWorld, Species};
 use horizon_core::geometry::Vec3;
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::LevelRandom;
 
 /// The four settings. `start` is in blocks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -111,7 +111,7 @@ pub fn runs_ai(m: &Mob, w: &MobWorld) -> bool {
 pub(super) fn step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     if runs_ai(m, w) {

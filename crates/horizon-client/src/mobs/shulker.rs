@@ -15,7 +15,7 @@ use crate::projectiles::{Projectile, ProjectileWorld, STEPS};
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{
     geometry::{Aabb, Direction, ShapeOp, Vec3, VoxelShape},
-    random::{LegacyRandom, RandomSource},
+    random::{LevelRandom, RandomSource},
 };
 use std::f32::consts::PI;
 
@@ -680,7 +680,7 @@ pub fn hurt_teleport(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 pub fn run_pending_teleports(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     hurt_teleport(m, w, events);
@@ -694,7 +694,7 @@ pub fn run_pending_teleports(
 pub fn ai_step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     run_pending_teleports(m, w, level_random, events);
@@ -706,7 +706,7 @@ pub fn ai_step(
 fn hit_by_shulker_bullet(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     let old_position = m.position;

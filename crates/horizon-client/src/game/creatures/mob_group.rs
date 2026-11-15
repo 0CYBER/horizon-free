@@ -8,7 +8,7 @@ use horizon_client::{
     fast_hash::{FxHashMap, FxHashSet},
     mobs::{MobSlot, PendingPushes, seen_grid::SeenGrid, spawning::LocalDifficulty},
 };
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::LevelRandom;
 
 /// What every mob of the loop reads and none writes.
 pub(super) struct Shared<'a> {
@@ -46,7 +46,7 @@ pub(super) struct Group<M: MobSlot> {
     pub pushes: PendingPushes,
     pub events: Vec<MobEvent>,
     /// The level random, lent to the mobs (brain behaviours draw from it).
-    pub random: LegacyRandom,
+    pub random: LevelRandom,
     pub guests: super::super::lan_mobs::GuestViews,
     /// What stands in a guest's slot while a mob holds that guest's view for its tick.
     spare: Option<PlayerView>,
@@ -108,7 +108,7 @@ pub(super) struct Turns<'t, 'w> {
 #[derive(Clone)]
 pub(super) struct Start {
     pub events: Vec<MobEvent>,
-    pub random: LegacyRandom,
+    pub random: LevelRandom,
     pub guests: super::super::lan_mobs::GuestViews,
     pub player: Option<PlayerView>,
     pub bindings: FxHashMap<u32, u32>,
@@ -368,9 +368,12 @@ impl<M: MobSlot> Group<M> {
         let sampled = super::super::tick_profile::start_mob(&self.mobs[i].mob().kind);
         // The level's stream is one for every lane: a turn that draws from it waits for the
         // turns before it. On its own stream it waits for none.
-        let mut own = self
-            .own_random
-            .then(|| horizon_client::parallel::mob_turn_random(self.mobs[i].mob().id, w.game_time));
+        let mut own = self.own_random.then(|| {
+            LevelRandom::for_level(horizon_client::parallel::mob_turn_random(
+                self.mobs[i].mob().id,
+                w.game_time,
+            ))
+        });
         let kept = horizon_client::mobs::riders::tick(
             &mut self.mobs,
             i,

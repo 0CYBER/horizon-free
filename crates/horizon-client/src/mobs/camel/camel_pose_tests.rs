@@ -55,7 +55,7 @@ fn a_walk_target_stands_a_sitting_camel_up_and_then_it_walks() {
         let mut player = test_player(Vec3::new(6.5, 64.0, 0.5));
         player.main_hand = Some("minecraft:cactus".into());
         world.player = Some(player);
-        let mut lr = LegacyRandom::new(0);
+        let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0));
         let mut events = Vec::new();
         // Settle on the grass.
         for _ in 0..5 {
@@ -157,7 +157,7 @@ fn a_sitting_baby_camel_does_not_follow_its_parent() {
         let kind = Arc::new(types.types["minecraft:camel"].clone());
         let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
         m.extra.age = -24_000;
-        let mut lr = LegacyRandom::new(0);
+        let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0));
         let mut events = Vec::new();
         // Sit it before it ever follows the parent, and let the kneel finish.
         sit_down(&mut m, &mut events);

@@ -1550,7 +1550,7 @@ mod tnt_rule_tests {
                 m.extra.counter2 = 4; // loaded fuse 3
                 m.extra.ints[3] = 100;
                 m.extra.scratch[2] = 10;
-                let mut random = horizon_core::random::LegacyRandom::new(0);
+                let mut random = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 for remaining in [2, 1] {
                     assert!(m.tick(w, &mut random, &mut events));
@@ -1897,7 +1897,7 @@ mod mob_contact_tests {
                     m.no_gravity = true;
                     m.persistent = true;
                     m.extra.body = body.map(Into::into);
-                    let mut random = horizon_core::random::LegacyRandom::new(0);
+                    let mut random = crate::mobs::world::level_random(0);
                     let mut events = Vec::new();
                     assert!(m.tick(w, &mut random, &mut events));
                     let hits: Vec<_> = events

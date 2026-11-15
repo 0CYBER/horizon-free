@@ -284,7 +284,7 @@ fn check_restriction(m: &mut Mob) {
 pub fn ai_step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut horizon_core::random::LegacyRandom,
+    level_random: &mut horizon_core::random::LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     // customServerAiStep: the home is kept before the rest of the step.
@@ -407,7 +407,7 @@ pub fn aggravated(m: &Mob) -> bool {
 fn find_target(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut horizon_core::random::LegacyRandom,
+    level_random: &mut horizon_core::random::LevelRandom,
 ) -> Option<Who> {
     if m.extra.in_love > 0 || !m.fluids.in_water || m.is_baby() || m.extra.tame {
         return None;
@@ -916,7 +916,7 @@ mod hostile_target_tests {
                 .map(|seed| {
                     let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 62.0, 0.5), 270.0);
                     m.fluids.in_water = true;
-                    let mut level = horizon_core::random::LegacyRandom::new(seed);
+                    let mut level = crate::mobs::world::level_random(seed);
                     find_target(&mut m, w, &mut level)
                 })
                 .collect();
@@ -1101,7 +1101,7 @@ mod cooldown_memory_tests {
                         let tag = raw(id, state, no_ai);
                         let mut m = crate::entity_nbt::mob_from_nbt(&tag, &types, 7, None).unwrap();
                         m.attrs.speed = 0.0;
-                        let mut level_random = horizon_core::random::LegacyRandom::new(140);
+                        let mut level_random = crate::mobs::world::level_random(140);
                         let mut events = Vec::new();
                         for elapsed in 0..=6 {
                             if elapsed > 0 {

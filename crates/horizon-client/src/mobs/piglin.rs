@@ -11,7 +11,7 @@ use super::{
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
 use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
@@ -1883,7 +1883,7 @@ pub fn client_converting(m: &mut Mob, nether: bool) {
 pub fn ai_step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     if m.extra.anim_ticks > 0 {
@@ -2467,6 +2467,7 @@ mod hurt_broadcast_tests {
 mod crossbow_tests {
     use super::*;
     use crate::mobs::sensor_scan_tests::kind;
+    use crate::mobs::world::level_random;
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
@@ -2510,7 +2511,7 @@ mod crossbow_tests {
             &mut m,
             &death,
             &mut RandomSequences::default(),
-            &mut LegacyRandom::new(7),
+            &mut level_random(7),
         );
         assert!(
             drops.iter().any(
@@ -2583,7 +2584,7 @@ mod crossbow_tests {
 #[cfg(test)]
 mod conversion_tests {
     use super::*;
-    use crate::mobs::world::with_test_world;
+    use crate::mobs::world::{level_random, with_test_world};
 
     #[test]
     fn converting_piglin_drops_its_inventory_before_conversion() {
@@ -2614,7 +2615,7 @@ mod conversion_tests {
             m.extra.using_item = 60;
             m.extra.counter2 = CONVERSION + 1;
             let mut events = Vec::new();
-            ai_step(&mut m, w, &mut LegacyRandom::new(0), &mut events);
+            ai_step(&mut m, w, &mut level_random(0), &mut events);
             let relevant: Vec<_> = events
                 .iter()
                 .filter(|e| {
@@ -2660,7 +2661,7 @@ mod conversion_tests {
             m.extra.off_hand = Some("minecraft:gold_ingot".into());
             m.extra.using_item = 60;
             m.extra.counter2 = CONVERSION + 1;
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = level_random(0);
             let mut events = Vec::new();
             ai_step(&mut m, w, &mut lr, &mut events);
             assert!(

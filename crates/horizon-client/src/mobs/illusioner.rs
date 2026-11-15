@@ -307,7 +307,7 @@ mod tests {
                 0.0,
             );
             m.extra.counter = 20;
-            let (mut lr, mut events) = (horizon_core::random::LegacyRandom::new(0), Vec::new());
+            let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
             for _ in 0..5 {
                 crate::mobs::ai::tick(&mut m, w, &mut lr, &mut events);
             }

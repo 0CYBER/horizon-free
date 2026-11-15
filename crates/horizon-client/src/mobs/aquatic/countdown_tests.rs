@@ -1,5 +1,4 @@
 use super::*;
-use horizon_core::random::LegacyRandom;
 use std::sync::Arc;
 
 #[test]
@@ -30,7 +29,7 @@ fn mob_tick_keeps_glow_squid_countdowns_with_no_ai() {
                     squid.no_gravity = true;
                     squid.persistent = true;
                     set_dark_ticks(&mut squid, initial);
-                    let mut random = LegacyRandom::new(0);
+                    let mut random = crate::mobs::world::level_random(0);
                     let mut events = Vec::new();
                     for elapsed in 1..=10 {
                         assert!(squid.tick(world, &mut random, &mut events));

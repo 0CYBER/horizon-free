@@ -674,7 +674,7 @@ mod keep_jumping_tests {
                 m.no_ai = true;
                 m.on_ground = true;
                 m.extra.flag2 = false;
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 super::super::ai::tick(&mut m, w, &mut lr, &mut events);
                 result = Some(m.extra.flag2);
