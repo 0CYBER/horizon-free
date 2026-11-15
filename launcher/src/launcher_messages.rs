@@ -309,10 +309,11 @@ impl Launcher {
                     // The MCP server keeps its own server's log; the launcher's are the preparer's
                     // and the game's.
                     if job != Job::Server {
-                        self.prepare_log.push_back(line);
-                        if self.prepare_log.len() > LOG_LINES {
-                            self.prepare_log.pop_front();
-                        }
+                        console_page::keep_line(
+                            &mut self.prepare_log,
+                            &mut self.log_revision,
+                            line,
+                        );
                     }
                 }
                 Msg::Exit(job, result) => {

@@ -19,8 +19,9 @@ pub(super) struct Console {
         Vec<String>,
     )>,
     scroll: Scrollbar,
-    /// Lines and search at the last draw: a change means scroll down when following.
-    seen: (usize, String),
+    /// Revision, lines shown and search at the last draw: a change means scroll down when
+    /// following.
+    seen: (u64, usize, String),
     confirm_share: bool,
     sharing: bool,
     shared: Option<Result<Shared, String>>,
@@ -33,7 +34,7 @@ impl Default for Console {
             level: Level::All,
             file: None,
             scroll: Scrollbar::default(),
-            seen: (0, String::new()),
+            seen: (0, 0, String::new()),
             confirm_share: false,
             sharing: false,
             shared: None,
@@ -47,6 +48,15 @@ pub(super) enum Level {
     All,
     Warnings,
     Errors,
+}
+
+/// Keeps a received line, dropping the oldest past `LOG_LINES`, and counts it in `revision`.
+pub(super) fn keep_line(log: &mut VecDeque<String>, revision: &mut u64, line: String) {
+    log.push_back(line);
+    *revision += 1;
+    if log.len() > LOG_LINES {
+        log.pop_front();
+    }
 }
 
 /// How bad a log line is: 0 for information, 1 for a warning, 2 for an error.
@@ -167,7 +177,7 @@ impl Launcher {
             .filter(|l| game_log::matches(l, &search))
             .cloned()
             .collect();
-        let now = (count, search);
+        let now = (self.log_revision, count, search);
         if self.console.follow && now != self.console.seen {
             self.console.scroll.handle.scroll_to_bottom();
         }
@@ -186,7 +196,7 @@ impl Launcher {
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.console.follow = !this.console.follow;
-                this.console.seen.0 = usize::MAX;
+                this.console.seen.0 = u64::MAX;
                 cx.notify();
             }));
         let copied = lines.join("\n");
@@ -404,7 +414,7 @@ impl Launcher {
             .filter(|l| severity(l) >= floor && game_log::matches(l, &search))
             .cloned()
             .collect();
-        let now = (count, search);
+        let now = (self.log_revision, count, search);
         if self.console.follow && now != self.console.seen {
             self.console.scroll.handle.scroll_to_bottom();
         }
@@ -425,7 +435,7 @@ impl Launcher {
             .child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr("Follow")))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.console.follow = !this.console.follow;
-                this.console.seen.0 = usize::MAX;
+                this.console.seen.0 = u64::MAX;
                 cx.notify();
             }));
         let copied = lines.join("\n");
@@ -442,7 +452,7 @@ impl Launcher {
             move |pick, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.console.level = pick;
-                    this.console.seen.0 = usize::MAX;
+                    this.console.seen.0 = u64::MAX;
                     cx.notify();
                 });
             },
@@ -667,5 +677,24 @@ impl Launcher {
             .child(bar)
             .child(log);
         Some(body.children(status).child(terminal))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn follow_sees_new_lines_after_the_buffer_is_full() {
+        let mut launcher_revision = 0u64;
+        let mut log = VecDeque::new();
+        let mut last = (launcher_revision, log.len());
+        for n in 0..LOG_LINES + 3 {
+            keep_line(&mut log, &mut launcher_revision, n.to_string());
+            let now = (launcher_revision, log.len());
+            assert_ne!(now, last, "line {n} must change what follow compares");
+            last = now;
+        }
+        assert_eq!(log.len(), LOG_LINES);
     }
 }

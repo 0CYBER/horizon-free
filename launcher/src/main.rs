@@ -389,6 +389,9 @@ struct Launcher {
     links: backend::Links,
     preparing: bool,
     prepare_log: VecDeque<String>,
+    /// Lines received from the game and the preparer since the launcher started: it only grows,
+    /// so it moves when a line arrives even while `prepare_log` is full and its length stays.
+    log_revision: u64,
     prepare_error: Option<String>,
     client: Option<Running>,
     client_error: Option<String>,
