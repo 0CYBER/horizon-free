@@ -273,7 +273,7 @@ fn mod_stem(dimension_type: &str, name: &str) -> serde_json::Value {
 }
 
 /// What runtime levels' opens leaked into the game's `&'static` tables, kept so that every later
-/// open reuses it: opening and unloading one id over and over leaks once (#4019).
+/// open reuses it: opening and unloading one id over and over leaks once (arismoko/horizon#4019).
 #[derive(Default)]
 struct Leaked {
     /// A level's names and dimension type, by its id and the dimension type it was opened with.

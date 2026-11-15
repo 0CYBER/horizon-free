@@ -1,4 +1,4 @@
-//! #3720: real Game ticks, Parts storage and transaction close/restore traces.
+//! arismoko/horizon#3720: real Game ticks, Parts storage and transaction close/restore traces.
 use super::super::{Game, Pos};
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
 use horizon_client::{

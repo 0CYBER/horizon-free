@@ -128,7 +128,7 @@ impl Game<'_> {
             Target::Player => return self.player_nbt(),
             Target::Mob(id) => {
                 // `saveWithoutId` writes the entity as saved, riders under
-                // `Passengers`: `/data get` reads the same tree persistence does (#1519).
+                // `Passengers`: `/data get` reads the same tree persistence does (arismoko/horizon#1519).
                 let i = self.mobs.iter().position(|m| m.id == id)?;
                 let mut tag = self.mob_tree_nbt(i);
                 let session = self

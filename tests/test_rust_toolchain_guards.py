@@ -2,7 +2,7 @@
 
 `verify` can run the Python suite where no Rust toolchain is installed (a documentation-only change, which installs
 none), and a contributor may run it without one, so an unguarded `subprocess.run(["rustc", ...])` fails there with
-FileNotFoundError (#2868, and `tests/test_prebuilt_game.py` after #2622).
+FileNotFoundError (arismoko/horizon#2868, and `tests/test_prebuilt_game.py` after arismoko/horizon#2622).
 
 The rule, checked statically over `tests/*.py`: a test that starts `rustc` or `cargo` (a command list, a local name
 bound to one, or a shell string; through `subprocess.<launcher>` or a launcher imported from subprocess), either

@@ -462,7 +462,7 @@ impl Levels {
     }
 
     /// Whether a save of `dim` is still waiting for a tick that admits
-    /// saves (the #2488 gate holds it back).
+    /// saves (the arismoko/horizon#2488 gate holds it back).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::game) fn save_pending(&self, dim: Dim) -> bool {
         self.requested_saves.contains(&dim)
@@ -605,7 +605,7 @@ impl Levels {
             .map(|(_, level)| level)
     }
 
-    /// Whether a parked level's general rows hold any of these UUIDs (#792's
+    /// Whether a parked level's general rows hold any of these UUIDs (arismoko/horizon#792's
     /// dimension-transfer check: a destination may not already hold a row
     /// of the travelling tree's UUIDs).
     pub(in crate::game) fn parked_general_holds_any_uuid(
@@ -1436,7 +1436,7 @@ impl Game<'_> {
                     // A portal ticket keeps its dimension active
                     // (`TicketType.shouldKeepDimensionActive`).
                     || !self.portal_tickets_in(*d).is_empty()
-                    // So does a viewed `Ticking` area (#3716), for its chunks only.
+                    // So does a viewed `Ticking` area (arismoko/horizon#3716), for its chunks only.
                     || self.viewed_level(*d) == Some(true)
             })
             .collect();

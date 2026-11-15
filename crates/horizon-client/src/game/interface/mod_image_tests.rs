@@ -1,5 +1,5 @@
 //! A client mod's own image (`ClientHost::mod_image`): its atlas slot follows the loaded mods,
-//! native or wasm, with no mixin (#4437).
+//! native or wasm, with no mixin (arismoko/horizon#4437).
 use super::resource_tables::mod_image_slot;
 use horizon_client::{
     gfx::entity_pixel_test::render_hud,

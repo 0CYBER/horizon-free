@@ -1,4 +1,4 @@
-//! What a mod's blast takes beyond vanilla's short `Level.explode` (#4009): its
+//! What a mod's blast takes beyond vanilla's short `Level.explode` (arismoko/horizon#4009): its
 //! damage type, its damage calculator as data (`SimpleExplosionDamageCalculator`)
 //! and what players see and hear of it. `level_explode` resolves them once; the
 //! combat state holds them while the blast goes off, and the rays, the entity

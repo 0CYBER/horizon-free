@@ -1493,7 +1493,7 @@ pub struct Mob {
     /// `LivingEntity.damageCooldownTime`: 20 after a hit, counting down;
     /// while it is above 10 a weaker hit does only the difference.
     pub invulnerable: i32,
-    /// `Entity.invulnerableTime` (#916): the entity-level invulnerability
+    /// `Entity.invulnerableTime` (arismoko/horizon#916): the entity-level invulnerability
     /// window, its own field — never the damage cooldown beside it
     /// (`Entity.isTemporarilyInvulnerable`), decremented by the base tick.
     pub invulnerable_time: i32,
@@ -3099,7 +3099,7 @@ pub struct PlayerView {
     pub eye: [f64; 3],
     pub alive: bool,
     /// The `invulnerable` ability, the `Invulnerable` flag or its window,
-    /// which `asValidTarget` refuses a target by (#1175, #916): a
+    /// which `asValidTarget` refuses a target by (arismoko/horizon#1175, arismoko/horizon#916): a
     /// valid-target rule a goal tick's view asks.
     pub invulnerable: bool,
     pub creative: bool,
@@ -3215,7 +3215,7 @@ pub struct MobWorld<'a> {
     /// Switchable per-tick player views, present only when target listeners
     /// can redirect a mob to a different real player.
     pub player_selection: Option<&'a player_selection::PlayerSelection>,
-    /// The uuid and entity id of the player whose view `player` is (#1077):
+    /// The uuid and entity id of the player whose view `player` is (arismoko/horizon#1077):
     /// captured once where the tick lends its player — the game's own, or the
     /// guest a server's mob sees — so a goal resolves that player without a
     /// scan, and a fake player's view resolves as none. None when `player` is
@@ -3288,7 +3288,7 @@ pub struct MobWorld<'a> {
     /// The mod hooks the AI asks mid-tick, on a server where a mod listens
     /// (None otherwise: the AI asks nothing).
     pub mob_hooks: Option<&'a dyn MobHooks>,
-    /// The goal view's facts (#1077), on the native-authoritative side where
+    /// The goal view's facts (arismoko/horizon#1077), on the native-authoritative side where
     /// a mod attached an entity part (None otherwise: no mod goal runs).
     pub goal_host: Option<&'a dyn part_goals::GoalHost>,
     /// Whether a listener can cancel animal taming.
@@ -3526,7 +3526,7 @@ pub fn living_random() -> (LegacyRandom, [i32; 4]) {
 impl Mob {
     /// A mob as its authoritative side builds it — spawned, or loaded from a
     /// chunk (`Mob.finalizeSpawn` runs around it): the species' own goals, then
-    /// the goals every mod part attached to its type (#1077), vanilla's
+    /// the goals every mod part attached to its type (arismoko/horizon#1077), vanilla's
     /// `registerGoals` moment.
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
         Self::with_random(id, kind, position, yaw, entity_random(id, position))
@@ -3540,9 +3540,9 @@ impl Mob {
     ) -> Self {
         let mut mob = Self::remote_with_random(id, kind, position, yaw, random);
         // The parts a mod attached to this entity type add their goals right
-        // after the species' own (#1077): vanilla's `registerGoals` moment,
+        // after the species' own (arismoko/horizon#1077): vanilla's `registerGoals` moment,
         // which belongs to the authoritative construction. A type with no
-        // brain is told so at the same moment (#824); a brain-driven type
+        // brain is told so at the same moment (arismoko/horizon#824); a brain-driven type
         // registers its behaviors at the brain's own construction.
         part_goals::attach(&mut mob);
         mod_behaviors::attach_at_construction(&mob);
@@ -3553,7 +3553,7 @@ impl Mob {
     /// client's own reads of its copy ask them — but a mod part's
     /// `register_goals` runs nowhere here: the authoritative side already ran
     /// it for the mob itself, and a copy's would only allocate goal state no
-    /// tick runs (#1077).
+    /// tick runs (arismoko/horizon#1077).
     pub fn new_remote(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
         Self::remote_with_random(id, kind, position, yaw, entity_random(id, position))
     }
@@ -3773,7 +3773,7 @@ impl Mob {
     pub fn alive(&self) -> bool {
         self.health > 0.0
     }
-    /// `Entity.isInvulnerable` (#916): the permanent `Invulnerable` flag or
+    /// `Entity.isInvulnerable` (arismoko/horizon#916): the permanent `Invulnerable` flag or
     /// the temporary window `invulnerableTime > 0` — what damage refusal
     /// (`isInvulnerableToBase`) and enemy targeting (`canBeSeenAsEnemy`)
     /// both read.

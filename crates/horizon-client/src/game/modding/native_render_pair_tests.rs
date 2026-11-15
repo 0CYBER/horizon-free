@@ -1,4 +1,4 @@
-//! The render hook pair around a living entity (#3681): `render_living_pre` and
+//! The render hook pair around a living entity (arismoko/horizon#3681): `render_living_pre` and
 //! `render_living_post`, wrapped for a player by `render_player_pre` and `render_player_post`. A
 //! canceled pre hook skips the entity's model, its layers, its post hooks and the frame's later
 //! passes; a culled entity is asked neither; the hooks run in the draw queue's order.

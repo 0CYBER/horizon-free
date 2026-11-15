@@ -1,4 +1,4 @@
-//! Installed mod code loading above the engine (docs/layers.md, #2534).
+//! Installed mod code loading above the engine (docs/layers.md, arismoko/horizon#2534).
 //! The platform prepares the engine, loads mods here, then makes one engine start call.
 #![deny(unsafe_code)]
 

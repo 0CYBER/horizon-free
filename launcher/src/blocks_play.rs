@@ -108,7 +108,7 @@ impl Launcher {
                 .children(memory);
         };
         let prepared = backend::is_prepared(&tag);
-        // Prepared without sounds (#1035): Prepare again is the fix, so it stands out.
+        // Prepared without sounds (arismoko/horizon#1035): Prepare again is the fix, so it stands out.
         let silent = prepared && !backend::has_sounds(&tag);
         let version = java
             .as_ref()
@@ -396,7 +396,7 @@ impl Launcher {
                                 .child(hero)
                                 .child(actions)
                                 // The preparation's steps right under Play, where the player looks
-                                // after pressing it, not below the fold (#666).
+                                // after pressing it, not below the fold (arismoko/horizon#666).
                                 .children(steps),
                         )
                         // Notes and friends are Horizon's.

@@ -110,7 +110,7 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
         game.lan_assign_ids();
         let id = game.dragon.as_ref().unwrap().id;
         bind(game, id, Kind::Dragon);
-        // #792: a general row joins its own family's list; the lookup is the
+        // arismoko/horizon#792: a general row joins its own family's list; the lookup is the
         // same table path every family takes.
         game.resident_entities
             .general

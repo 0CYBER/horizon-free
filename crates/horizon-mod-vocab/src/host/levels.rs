@@ -830,7 +830,7 @@ pub trait LevelsBackendMut {
     #[access(WorldOnly)]
     fn level_set_spawn_flags(&mut self, level: LevelRef, flags: SpawnFlags) -> bool;
     /// Side: server.
-    /// Registers `passage` in the level ([`Passage`], #3775) and numbers it. The engine
+    /// Registers `passage` in the level ([`Passage`], arismoko/horizon#3775) and numbers it. The engine
     /// tells it to every Horizon client holding its chunk ([`Passage::chunk`]) at the end of
     /// the server's tick, and to a client that gets the chunk later as the chunk is sent
     /// (`chunk_sent`); a client forgets it with the chunk. Passages are not saved and a

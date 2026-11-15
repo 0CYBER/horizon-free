@@ -234,7 +234,7 @@ pub(crate) fn pe_machine(path: &Path) -> Result<u16, String> {
 pub enum Plan {
     /// The build already exists: nothing compiles.
     UpToDate,
-    /// The mods compile against the prebuilt game (#589); the game doesn't compile.
+    /// The mods compile against the prebuilt game (arismoko/horizon#589); the game doesn't compile.
     Prebuilt,
 }
 

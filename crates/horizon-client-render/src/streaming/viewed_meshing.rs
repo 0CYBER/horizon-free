@@ -1,4 +1,4 @@
-//! Viewed levels' sections meshed (#4187): each level a world view names gets a set of meshed
+//! Viewed levels' sections meshed (arismoko/horizon#4187): each level a world view names gets a set of meshed
 //! sections of its own, apart from the player's level, as Immersive Portals keeps a chunk render
 //! dispatcher per dimension (`MyBuiltChunkStorage`). The player's level never waits for them:
 //! their jobs run on the shared pool in the far class, after every queued job of the player's
@@ -7,7 +7,7 @@
 //! [`VIEWED_LINGER`] after, and goes at once with its level.
 //!
 //! The sets are the meshes on the client's side; their copy into the renderer and their drawing
-//! are the next parts of #4187. Nothing here touches the player's world or its `Streaming`.
+//! are the next parts of arismoko/horizon#4187. Nothing here touches the player's world or its `Streaming`.
 use super::{
     MeshSettings, Streaming, WorkerContext,
     mesh_job::{Faces, mesh_section},

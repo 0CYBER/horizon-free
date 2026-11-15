@@ -471,7 +471,7 @@ mod tests {
         );
     }
 
-    /// The seven cases left out without a word before (#3774) and a clip plane out of range
+    /// The seven cases left out without a word before (arismoko/horizon#3774) and a clip plane out of range
     /// are each refused by name, and the view taken stays the only one.
     #[test]
     fn views_out_of_range_are_refused_by_name() {

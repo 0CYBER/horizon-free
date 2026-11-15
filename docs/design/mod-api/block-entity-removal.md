@@ -115,6 +115,6 @@ invented generic chest rule.
   retained capability references revalidate after removal, replacement and abort.
 - Make lifecycle effects, drops, menu closure and client notifications atomic with root commit;
   specify their order against other writes and prove it with the tests above.
-- Coordinate container viewers and limits in [#975](https://github.com/arismoko/horizon/issues/975)
-  and lock and replacement writes in [#977](https://github.com/arismoko/horizon/issues/977) with
+- Coordinate container viewers and limits in [arismoko/horizon#975](https://github.com/arismoko/horizon/issues/975)
+  and lock and replacement writes in [arismoko/horizon#977](https://github.com/arismoko/horizon/issues/977) with
   these existence, rollback and replacement rules; neither may introduce a second storage route.

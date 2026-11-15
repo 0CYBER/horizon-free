@@ -1180,7 +1180,7 @@ mod pet_credit_tests {
 
     /// A tame wolf's hit on the player in place is its owner's
     /// (`resolvePlayerResponsibleForDamage` asks `instanceof Wolf`), so a
-    /// content mod's type copying the wolf (#4031) names its owner too, and
+    /// content mod's type copying the wolf (arismoko/horizon#4031) names its owner too, and
     /// an untamed one names no one.
     #[test]
     #[ignore = "daily"]

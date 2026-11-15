@@ -1255,7 +1255,7 @@ impl Game<'_> {
             binding: self.collision,
             subject: None,
         };
-        // The bobber's Entity.move goes through the move gate (#2414); PR 1a
+        // The bobber's Entity.move goes through the move gate (arismoko/horizon#2414); PR 1a
         // records the movement unchanged.
         let mut gate = horizon_client::move_gate::armed(
             &self.loop_context,
@@ -2084,7 +2084,7 @@ impl Game<'_> {
             binding: self.collision,
             subject: None,
         };
-        // The bobber's Entity.move goes through the move gate (#2414); PR 1a
+        // The bobber's Entity.move goes through the move gate (arismoko/horizon#2414); PR 1a
         // records the movement unchanged.
         let mut gate = horizon_client::move_gate::armed(
             &self.loop_context,

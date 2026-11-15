@@ -3,7 +3,7 @@ name: fn-replace-check
 # with warnings denied, then the launcher's native build of the check mods against it
 # (tools/ci/fn_replace_check.sh): function replacement, bridges, support modules, a published loop,
 # a mod with registry dependencies, and the refusals by name. So a change that breaks native mods
-# fails here and not on a player's machine (#1102). Build and link only: no game runs and no vanilla
+# fails here and not on a player's machine (arismoko/horizon#1102). Build and link only: no game runs and no vanilla
 # data is read. Checked by the daily run and by dispatch, never on pull requests or main pushes.
 # The launcher takes its SDK from an SDK release folder and checks its signature, so the check gets one: the server
 # SDK of the commit, built here, gathered and indexed as sdk-publish.yml does and signed with a throwaway key made

@@ -288,7 +288,7 @@ fn event_input(
 }
 /// What a proxy answers when its guest call answers nothing. `reason`, where there was a call,
 /// is the expression naming why (`crate::wasm_call_refusal()`, the including crate's). An
-/// isolated hook (#2414 ruling) unwinds instead: the isolated dispatch catches the unwind the
+/// isolated hook (arismoko/horizon#2414 ruling) unwinds instead: the isolated dispatch catches the unwind the
 /// same way it catches a native listener's panic, so a trapped or refused wasm call cannot fall
 /// back to `Continue` and leave an earlier listener's replacement standing (review round 1).
 fn fallback(
@@ -896,7 +896,7 @@ impl Cx {
                 let refusal = if let Some(event) = prepared_event {
                     format!("{{ p{event}.can_equip=false; }}")
                 } else {
-                    // A hook the catalog isolates (#2414) must fail loudly: the
+                    // A hook the catalog isolates (arismoko/horizon#2414) must fail loudly: the
                     // isolated dispatch unwinds this proxy the same way it
                     // unwinds a panicking native listener, instead of a silent
                     // `Continue` that leaves an earlier replacement standing.
@@ -1087,7 +1087,7 @@ fn host_and_coverage(root: &std::path::Path) -> Result<(String, String), String>
 mod tests {
     /// The wasm host's build script runs `generate_host`, so every file the generator reads must be
     /// one Cargo is told to watch: a hook signature moved in the vocabulary left the generated code
-    /// stale until the build script was touched (#3123).
+    /// stale until the build script was touched (arismoko/horizon#3123).
     #[test]
     #[ignore = "daily"]
     fn host_generation_asks_cargo_to_watch_the_vocabulary_hook_sources() {

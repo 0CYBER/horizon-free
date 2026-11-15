@@ -1,4 +1,4 @@
-//! ITEM_USED_ON_BLOCK after the block phase sees the stack copied before it (#2940).
+//! ITEM_USED_ON_BLOCK after the block phase sees the stack copied before it (arismoko/horizon#2940).
 use super::*;
 use horizon_client::advancements as a;
 use serde_json::json;

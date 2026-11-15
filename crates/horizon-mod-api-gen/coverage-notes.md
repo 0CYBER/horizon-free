@@ -15,7 +15,7 @@ Native-side note, not a wasm gap: a buggy custom native CapabilityProviders impl
 
 Real Wasmtime group/provider behavior and budget exhaustion are separate integration checks, not established by the native loopback or forged-host transport probes.
 
-## Individual block entity tick reply (#3669)
+## Individual block entity tick reply (arismoko/horizon#3669)
 
 | Audit input | Native / wasm boundary |
 | --- | --- |

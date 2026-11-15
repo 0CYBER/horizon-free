@@ -67,7 +67,7 @@ pub struct SavedBody {
     pub food_tick_timer: i32,
     /// `TicksFrozen`: the time spent in powder snow.
     pub ticks_frozen: i32,
-    /// `Invulnerable` and its `invulnerableTime` window (#916), the same
+    /// `Invulnerable` and its `invulnerableTime` window (arismoko/horizon#916), the same
     /// tags the host's own save keeps.
     pub invulnerable: bool,
     pub invulnerable_time: i32,
@@ -354,7 +354,7 @@ pub struct Guest {
     pub max_unacknowledged: u32,
     pub chunks_per_tick: f32,
     pub batch_quota: f32,
-    /// A mod's boxes of its level in which the level's blocks don't stop it (#3717): its moves
+    /// A mod's boxes of its level in which the level's blocks don't stop it (arismoko/horizon#3717): its moves
     /// are checked through them, and its body takes them at each turn. Not saved.
     pub collision_exclusions: horizon_world::collision_exclusions::CollisionExclusions,
     // Entities.
@@ -482,7 +482,7 @@ pub struct Guest {
     /// receiving the world, but not placed, so no one else sees, hears or
     /// hurts it until the hand-over finishes.
     pub held: bool,
-    /// Its areas in any level and the other levels its client views (#3716): apart from what
+    /// Its areas in any level and the other levels its client views (arismoko/horizon#3716): apart from what
     /// makes it one of a level's players (`placed_in`, `watches_level`).
     pub viewed: super::viewed_levels::Viewed,
     /// The hub tick at which it was held, to drop it if its hand-over never comes.
@@ -657,7 +657,7 @@ impl Guest {
     pub fn watches_level(&self, dimension: &str) -> bool {
         self.participates_online() && (self.placed || self.held) && self.dimension == dimension
     }
-    /// Whether the guest's client views level `dimension` besides its own (#3716): its areas
+    /// Whether the guest's client views level `dimension` besides its own (arismoko/horizon#3716): its areas
     /// name it, or its client holds chunks of it still. It is not one of that level's players.
     pub fn views_level(&self, dimension: &str) -> bool {
         self.participates_online()
@@ -885,7 +885,7 @@ impl Guest {
     pub fn negotiated_attachment_sync(&self) -> bool {
         crate::raw_payloads::negotiated(self.sender.payload_transport(), attachment_sync::CHANNEL)
     }
-    /// Passages to hold or forget (#3775), if the guest is on a Horizon client, the only
+    /// Passages to hold or forget (arismoko/horizon#3775), if the guest is on a Horizon client, the only
     /// one that reads them, and placed or held (a hand-over's arrival is sent its chunks,
     /// so their passages too); a message that cannot be written is not sent.
     pub fn send_passage_sync(&self, message: &passage_sync::Message) {

@@ -765,7 +765,7 @@ pub fn mob_to_nbt(
         Tag::Byte(i8::from(m.invulnerable_flag)),
     );
     // Entity.saveWithoutId: `invulnerable_time` — the entity-level window
-    // (#916), not the hurt cooldown (LivingEntity saves none) — only while
+    // (arismoko/horizon#916), not the hurt cooldown (LivingEntity saves none) — only while
     // it runs.
     if m.invulnerable_time > 0 {
         map.insert("invulnerable_time".into(), Tag::Int(m.invulnerable_time));
@@ -2057,7 +2057,7 @@ fn mob_from_nbt_at(
     m.silent = flag(tag, "Silent");
     m.invulnerable_flag = flag(tag, "Invulnerable");
     // Entity.load: `getIntOr("invulnerable_time", 0)` — the entity-level
-    // window (#916); the hurt cooldown never loads.
+    // window (arismoko/horizon#916); the hurt cooldown never loads.
     m.invulnerable_time = match tag.get("invulnerable_time") {
         Some(Tag::Int(ticks)) => *ticks,
         _ => 0,

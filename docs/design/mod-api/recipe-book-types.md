@@ -1,6 +1,6 @@
 # Design: custom recipe-book settings
 
-Design for [#1023](https://github.com/arismoko/horizon/issues/1023).
+Design for [arismoko/horizon#1023](https://github.com/arismoko/horizon/issues/1023).
 Storage, registration, player settings handles and negotiated synchronization
 are implemented. This is a Horizon design; vanilla 26.3 is the reference for the
 four existing books. No other project's implementation is a reference.
@@ -191,7 +191,7 @@ net.minecraft.stats.RecipeBookSettings replaceFrom` and `rea_vanilla.py method
 net.minecraft.stats.ServerRecipeBook sendInitialRecipeBook`. Custom registration,
 retention and negotiation are Horizon decisions, not claims about vanilla.
 
-## Recipe displays and category membership (#828)
+## Recipe displays and category membership (arismoko/horizon#828)
 
 The `recipe_book_categories` declaration now carries `target_menu`, `book`,
 `search_group` and `displays` beside the category id, recipe type and icon.
@@ -259,9 +259,9 @@ opens a display preview using the shared recipe-book overlay painter, including
 stonecutter and smithing ingredient layouts. Larger ingredient grids scale to fit
 the preview instead of spilling into adjacent alternatives. These previews do not place recipes,
 create ghost slots, or send a custom id through vanilla placement packets;
-placement and ghosts are tracked separately in #2599.
+placement and ghosts are tracked separately in arismoko/horizon#2599.
 
-A declaration's `book` is a registered `RecipeBookTypeKey` from #2415; it does not
+A declaration's `book` is a registered `RecipeBookTypeKey` from arismoko/horizon#2415; it does not
 implicitly register a book or create settings. The index checks the key against
 the frozen registry. No vanilla book ordinal or packet meaning changes.
 

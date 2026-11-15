@@ -885,7 +885,7 @@ impl Game<'_> {
     /// mid-walk over a lent level, the whole callback staged: only an answering
     /// callback's writes join the walk, and a panic there is contained, leaving
     /// the batch's rows and the level as they were. The level is lent and given
-    /// back per contact, as `item_fall_on` lends its own (#2194's carrier
+    /// back per contact, as `item_fall_on` lends its own (arismoko/horizon#2194's carrier
     /// discipline).
     pub(in crate::game) fn fire_batch_inside(
         &mut self,

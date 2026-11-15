@@ -51,7 +51,7 @@ def corpus(resources):
             f=fixture(biomes,rng.randrange(-2**63,2**63),mode,selected)
             f['cx']=rng.randrange(-1875000,1875000);f['cz']=rng.randrange(-1875000,1875000)
             yield f
-    # A mod feature inserted into bundled steps (#815): the oracle pins how global
+    # A mod feature inserted into bundled steps (arismoko/horizon#815): the oracle pins how global
     # indices, and so the feature seeds of the vanilla features after it, move.
     added=len(names)
     def insert(steps,where):

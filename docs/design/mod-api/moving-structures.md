@@ -1,6 +1,6 @@
 # Design: moving structures
 
-Proposed contract for horizon-rust/horizon issue #794; this document requests design
+Proposed contract for horizon-rust/horizon issue arismoko/horizon#794; this document requests design
 agreement and does not claim an implemented feature. One game-owned carrier entity
 owns a sparse collection of local block cells, their block entities and attachments.
 Mods control it through typed handles and Parts, without depending on game internals.
@@ -43,7 +43,7 @@ owner per cell. Assembly transfers ownership; it never clones live block entitie
 Its world side, taking a block entity out with its attachments and none of its removal
 side effects and installing it elsewhere as a new holder, is `BlockEntities::carry` and
 `land` (`crates/horizon-client-render/src/block_entities/carry.rs`), which pistons use
-for a block whose part answers `piston_carries_block_entity` with `Some(true)` (#3184).
+for a block whose part answers `piston_carries_block_entity` with `Some(true)` (arismoko/horizon#3184).
 
 Assembly preflights a bounded selection in loaded, ticking chunks, permissions,
 block support and cell epochs. A server callback may veto within a transaction;

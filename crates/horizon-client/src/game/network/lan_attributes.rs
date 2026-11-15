@@ -131,7 +131,7 @@ impl Game<'_> {
             .unwrap_or(0.0)
     }
 
-    /// A mob's synced instances: the live attribute map's (#941) — what
+    /// A mob's synced instances: the live attribute map's (arismoko/horizon#941) — what
     /// finalizeSpawn set, `/attribute` changed, the save loaded and every
     /// worn or held stack granted, its base and each modifier exactly once,
     /// as the map holds them — plus movement speed (its first `aiStep` reads

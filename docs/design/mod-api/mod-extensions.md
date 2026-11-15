@@ -1,6 +1,6 @@
 # Design: mods extending the mod API
 
-This is a proposed contract for [#2339](https://github.com/arismoko/horizon/issues/2339). The explicit `Wire` derive and recursive layout identity are implemented; the mod extension facilities below remain proposed. It covers how a library mod (a chemicals system, an energy network, a machine framework) defines things that other mods use, listen to or extend: **mod hooks**, **mod Part kinds**, **mod services** and **mod registries**, plus the `#[derive(Wire)]` they rest on (section 0, the first to build) and how addons patch another mod's code. Each section gives the contract, its behaviour on wasm, its NeoForge counterpart and what it costs when nobody uses it. A staged PR plan and the open questions come at the end.
+This is a proposed contract for [arismoko/horizon#2339](https://github.com/arismoko/horizon/issues/2339). The explicit `Wire` derive and recursive layout identity are implemented; the mod extension facilities below remain proposed. It covers how a library mod (a chemicals system, an energy network, a machine framework) defines things that other mods use, listen to or extend: **mod hooks**, **mod Part kinds**, **mod services** and **mod registries**, plus the `#[derive(Wire)]` they rest on (section 0, the first to build) and how addons patch another mod's code. Each section gives the contract, its behaviour on wasm, its NeoForge counterpart and what it costs when nobody uses it. A staged PR plan and the open questions come at the end.
 
 ## What exists, and the one fact the design rests on
 
@@ -10,7 +10,7 @@ These already work, read from the code at `54bee0f608`:
 - **Mod capability keys.** `CapabilityKey::<dyn ResourceHandler<Chemical>>::new("chemlib:chemical")`, providers through `Registrar`, lookups through `level.capability`. A provider whose handler type belongs to a mod is stored erased (`OwnProvider`, `parts/capabilities.rs`). On wasm, an erased `Arc<dyn Any + Send + Sync>` crosses as a group-scoped resource id. The group that made it gets it back, and any other group gets `wire::Unsupported::CROSS_GROUP` (`wire_resources.rs`, generator `wire/mod.rs` `ERASED`).
 - **Hook machinery.** `horizon_mod_runtime::subscribers::Subscribers` builds per-hook lists once at install. Order is priority descending, then dependency order. It also tracks `receive_cancelled` and keeps a bitset for the "anyone listening?" test. `set_mod_enabled` and `mark_mod` handle the player's switch and crash attribution.
 - **Typed slot keys.** `BlockKey(u32)` and the other slot keys are backed by `horizon_mod_runtime::registry_keys::Names`: requested at load, then resolved to slots.
-- **Attachments.** `AttachmentType<T>` on entity, player, block entity, chunk and level holders, with an optional codec, sync and copy-on-death (`horizon-mod-runtime/src/attachments.rs`). The Part instance state design ([#2328](https://github.com/arismoko/horizon/pull/2328)) makes this the only store for per-instance data.
+- **Attachments.** `AttachmentType<T>` on entity, player, block entity, chunk and level holders, with an optional codec, sync and copy-on-death (`horizon-mod-runtime/src/attachments.rs`). The Part instance state design ([arismoko/horizon#2328](https://github.com/arismoko/horizon/pull/2328)) makes this the only store for per-instance data.
 
 **The fact:** a mod can name a library's types only if it depends on the library. On native it then sits in the same binary as the library; on wasm it sits in the same group. So within one target, a library-defined value never has to cross the Wire to reach the mods that can use it. The game's job is the part a library cannot do alone: names, ownership, refusals, ordering, the player's on/off switch, crash attribution, lifetimes tied to the server and its levels, and the Mods page. The payload stays in the caller's address space as an erased handle.
 
@@ -115,13 +115,13 @@ Owner decision (2026-11-09): the derive is always written on the type by hand. N
 Every place where a type has to cross, and that is known at compile time, is a trait bound. So a missing derive is a **compile error** that names the type:
 - a field of a derived type, through the `out.put(&self.f)` bound;
 - a parameter or return in a call table (the generator emits a bound check per signature type);
-- a point record field (#2242's records are built from `mod_api` types);
+- a point record field (arismoko/horizon#2242's records are built from `mod_api` types);
 - a mod hook's event and a mod registry's value: `ModHook` and `ModRegistry` require `E: Wire` / `T: Wire`. The bound costs nothing when nothing crosses, and it means a library's hooks and registries never have to refuse a cross-target addon.
 
 `Wire` gets `#[diagnostic::on_unimplemented(message = "`{Self}` has no Wire form", label = "add #[derive(mod_api::Wire)] to it")]`.
 
 A **refusal at load or registration** is left only where the type is decided at run time:
-- a point on an engine function whose parameter has no API type, which is #2242's existing refusal naming the parameter (an engine type, not a derive question);
+- a point on an engine function whose parameter has no API type, which is arismoko/horizon#2242's existing refusal naming the parameter (an engine type, not a derive question);
 - a cross-target dependency whose recorded layout differs, refused naming the type.
 
 ### The trait stays unsealed
@@ -147,7 +147,7 @@ Many hand-written impls exist only because the type is built through a checked c
 | generated: `serde_json::Value`, `Map` | 2 | **move to `wire.rs` by hand** | foreign types; JSON string form kept byte for byte |
 | generated: `ModelPart`, `MeshDefinition` | 2 | **hand-written JSON impls** beside the types | keeps their bytes; a structural derive later would be a deliberate layout change |
 | generated: other value types | 528 | **`#[derive(Wire)]`** on the type | the rules above |
-| `wire_types.rs`: `Transaction`, `TransactionSeal` | 2 | **stay hand-written** | game-issued tokens: a transaction's write token (`u64`), and a seal's write and close tokens; the game checks them on every use (#2424) |
+| `wire_types.rs`: `Transaction`, `TransactionSeal` | 2 | **stay hand-written** | game-issued tokens: a transaction's write token (`u64`), and a seal's write and close tokens; the game checks them on every use (arismoko/horizon#2424) |
 | `wire_types.rs`: `LoadedMods`, `RegistrationContext` | 2 | **stay hand-written** | zero-byte lent tokens: the receiver rebuilds its own token. Boundary policy, not a layout |
 | `wire_types.rs`: `OwnProvider`; `wire_slots.rs`: `Id` | 2 | **stay hand-written** | resource handles (group-scoped ids, the `Unsupported` marker) |
 | `wire_types.rs`: slot keys (9 `u32`, `UnresolvedFluid` `u64`) | 1 macro | **stay hand-written** | the host checks each slot with `from_slot`; the guest carries it unchecked, which differs by target |
@@ -155,20 +155,20 @@ Many hand-written impls exist only because the type is built through a checked c
 | `wire_types.rs`: impls whose `take` validates or converts (`Identifier`, `LevelKey`, `ConfigPath`, `JavaString`, `BlockState`, `BlockStateRange`, `Components`, `ItemStack`, `StatePredicate`, …) | ~25 | **`#[wire(via = …)]`** where one simple form exists (`LevelKey`, `ConfigPath` via `String`); **hand-written** where `take` runs several steps (`ItemStack`, `Identifier` as two strings) | validation stays where it is |
 | `attachment_query.rs`: `AttachmentHolder` | 1 | **derive** | already a declaration-ordered `u32` case plus payload |
 | `attachment_query.rs`: `AttachmentWriteToken`, `AttachmentBatch` | 2 | **stay hand-written** | tokens with generation checks |
-| `wire_patch.rs`: `RecordPatch` | 1 | **deleted by #2242** | — |
+| `wire_patch.rs`: `RecordPatch` | 1 | **deleted by arismoko/horizon#2242** | — |
 
 The first PR classifies every impl in a table in its description, with the golden test proving each "derive" row.
 
 - **Tests that go:** `the_hand_written_wire_impls_are_tracked_sources` (it guards the `manual` scan, which goes away) and the generator's emit fixtures.
 - **Tests that change:** `layout_includes_private_borrowed_shapes` hashes the call-table shapes it still owns.
 - **Tests that stay:** the wasm coverage page (rendered from the generator when the book builds) and `coverage_page_is_well_formed` describe calls, which still cross, so they stay.
-- **Crossing layouts:** `crossing.rs` is deleted by #2242. The `WIRE_LAYOUT` value changes once, in the derive PR, which is expected and refuses old wasm builds.
+- **Crossing layouts:** `crossing.rs` is deleted by arismoko/horizon#2242. The `WIRE_LAYOUT` value changes once, in the derive PR, which is expected and refuses old wasm builds.
 
 ### PR plan for the derive
 
 | PR | What | Size (estimate) | Depends on |
 |---|---|---|---|
-| D1 | **One PR, in order:** (1) the golden byte test, passing against today's generated and hand-written impls; (2) the derive in `horizon-mod-api-macros` (shapes, `MIN`, `put_owned`, `non_exhaustive`, generic bounds, `via`, `layout`), the `layout` method on the trait with std layouts composed by encoding, `on_unimplemented`; (3) `mod_api` switched: `#[derive(Wire)]` on the 528 types, the hand-impl migration above, the generator stripped to call tables, `WIRE_LAYOUT` from `layout`, the golden test passing unchanged. `layout` has no default for compound types, so the derive can't land without every impl providing it: one PR, not two. Ordered before the restructure, as api-scaffold confirmed: the mover carries `#[derive(mod_api::Wire)]` with each item, and `::mod_api::wire::Wire` still resolves after `wire.rs` becomes `wire/mod.rs`. | ~2,200 changed, mostly one-line attributes; generator −1,000 | #2242 merged |
+| D1 | **One PR, in order:** (1) the golden byte test, passing against today's generated and hand-written impls; (2) the derive in `horizon-mod-api-macros` (shapes, `MIN`, `put_owned`, `non_exhaustive`, generic bounds, `via`, `layout`), the `layout` method on the trait with std layouts composed by encoding, `on_unimplemented`; (3) `mod_api` switched: `#[derive(Wire)]` on the 528 types, the hand-impl migration above, the generator stripped to call tables, `WIRE_LAYOUT` from `layout`, the golden test passing unchanged. `layout` has no default for compound types, so the derive can't land without every impl providing it: one PR, not two. Ordered before the restructure, as api-scaffold confirmed: the mover carries `#[derive(mod_api::Wire)]` with each item, and `::mod_api::wire::Wire` still resolves after `wire.rs` becomes `wire/mod.rs`. | ~2,200 changed, mostly one-line attributes; generator −1,000 | arismoko/horizon#2242 merged |
 | D2 | Mods: documented `wire` API, per-mod layout in `cargo horizon-mod build` metadata, load refusal naming the type, a book page. | ~400 | D1 |
 
 The restructure can be stacked on D1, or D1's attribute edits can be done inside the restructure's moves; api-scaffold and fork-lead decide which. Stages 2–6 of the plan below assume D1 has landed.
@@ -177,7 +177,7 @@ The restructure can be stacked on D1, or D1's attribute edits can be done inside
 
 ### Contract
 
-A mod hook is a hook in the same sense as a catalog hook or a point under [#2242](https://github.com/arismoko/horizon/pull/2242). It has a listener of the form `fn(&mut <Side>Host, &mut Event)`, a contract, priority and dispatch order. Its name is owned by a mod and not taken from the catalog or from an engine function.
+A mod hook is a hook in the same sense as a catalog hook or a point under [arismoko/horizon#2242](https://github.com/arismoko/horizon/pull/2242). It has a listener of the form `fn(&mut <Side>Host, &mut Event)`, a contract, priority and dispatch order. Its name is owned by a mod and not taken from the catalog or from an engine function.
 
 ```rust
 // chemlib's crate
@@ -213,7 +213,7 @@ The names in the example are only illustrations and still need API review.
 | Lifetime | Declarations and listeners are fixed when registration seals, and the order is resolved once. A mod the player switches off is skipped, through `mod_index_on`, as for catalog hooks. |
 | Errors | A native listener's panic is handled exactly as a catalog hook listener's: the `mark_mod` guard only *attributes* it (mod and hook name) while it unwinds, and nothing catches it. This design adds no containment; whether native listener panics should be contained is a separate contract for all hooks. A wasm trap stops the group, which is also the library's group. Posting depth is bounded across all mod hooks together, not per hook, so a chain A → B → A is caught too: a post 32 levels deep is refused with a log line naming the chain's last hook, not a stack overflow. |
 
-**Points.** Under #2242 a point is a hook named by an engine function path, with a generated record. A mod hook is a hook named by a mod identifier, with a record the mod writes. Both use the same listener shape, contracts, order, switch and refusal style. The one difference is registration. Points are declared in `[[inject]]`, because the game fills compiled slots at load without source. Mod hooks are registered in code, because the library's type is a Cargo dependency anyway. `[[inject]]` applies only to engine API points, never to a mod's own hooks or functions, so `[[inject]] at = "chemlib:tank_filled"` is not a supported way to listen (question 2).
+**Points.** Under arismoko/horizon#2242 a point is a hook named by an engine function path, with a generated record. A mod hook is a hook named by a mod identifier, with a record the mod writes. Both use the same listener shape, contracts, order, switch and refusal style. The one difference is registration. Points are declared in `[[inject]]`, because the game fills compiled slots at load without source. Mod hooks are registered in code, because the library's type is a Cargo dependency anyway. `[[inject]]` applies only to engine API points, never to a mod's own hooks or functions, so `[[inject]] at = "chemlib:tank_filled"` is not a supported way to listen (question 2).
 
 ### On wasm
 
@@ -250,7 +250,7 @@ for reactor in REACTORS.parts(host, block_entity_type) { … }
 | Multiplicity | One part of each concrete type per kind and thing, the existing `insert_part` rule and message. Different mods' parts on one thing are all kept. |
 | Order | Dependency order, then registration order within a mod, as `Attached` keeps it. |
 | Contract | The library's own. `parts()` yields the parts in order, and the library decides whether all of them run, the first answer wins, or anything else. Part kind methods are part of the library's API: a pipe library's `PipeAttachment` trait is the library's to define and evolve. |
-| State | Parts are shared behaviour. Data for each instance lives in attachments, as #2328 proposes. |
+| State | Parts are shared behaviour. Data for each instance lives in attachments, as arismoko/horizon#2328 proposes. |
 | Lifetime | Attached during `register` and frozen when it seals. The resolved table is rebuilt at world open and on `/reload`, and an iterator never outlives the call it was made in. |
 
 A Part kind and a capability key share storage but answer different questions. A capability is "who answers this, from this side", with the first answer winning and possibly a default from the game. A Part kind is "every behaviour attached to this thing". Both should be built on one erased parts table (`Attached<dyn Any>`), not two. Whether `CapabilityKey` becomes a Part kind with a context is question 3.
@@ -261,7 +261,7 @@ This works like `OwnProvider` today. The part is an erased resource in the attac
 
 ### NeoForge
 
-There is no first-class counterpart, and #41's Parts are already a fork addition. On NeoForge, a library that wants addons to attach behaviour to its blocks (say, filters and upgrades that fit into a pipe) defines its own interface and its own lookup table for it. Capabilities (`BlockCapability.createSided` plus `RegisterCapabilitiesEvent`, in the public [capabilities guide](https://docs.neoforged.net/docs/inventories/capabilities/), labelled 26.1) are the platform's nearest mechanism, and they map to `CapabilityKey`. Horizon gives every library the same table, the same refusals and tag resolution in place of hand-rolled maps.
+There is no first-class counterpart, and arismoko/horizon#41's Parts are already a fork addition. On NeoForge, a library that wants addons to attach behaviour to its blocks (say, filters and upgrades that fit into a pipe) defines its own interface and its own lookup table for it. Capabilities (`BlockCapability.createSided` plus `RegisterCapabilitiesEvent`, in the public [capabilities guide](https://docs.neoforged.net/docs/inventories/capabilities/), labelled 26.1) are the platform's nearest mechanism, and they map to `CapabilityKey`. Horizon gives every library the same table, the same refusals and tag resolution in place of hand-rolled maps.
 
 ### Cost when unused
 
@@ -271,7 +271,7 @@ None if no kind is declared: no tables and no world-open call. A declared kind w
 
 Plain calls already cover a stateless library API. A service is for the two things plain calls get wrong.
 
-**Scoped state.** A library that keeps a manager in a `static` shares it between the client thread and the server thread in single player, which runs on a server thread (#1514). The state also outlives the world when the player leaves and reopens it. Scoped state ties the object to the host's own lifetime:
+**Scoped state.** A library that keeps a manager in a `static` shares it between the client thread and the server thread in single player, which runs on a server thread (arismoko/horizon#1514). The state also outlives the world when the player leaves and reopens it. Scoped state ties the object to the host's own lifetime:
 
 ```rust
 pub static NETWORKS: Scoped<Server, Networks> = Scoped::new("chemlib:networks", Networks::default);
@@ -322,14 +322,14 @@ CHEMICALS.get(PLASMA) / CHEMICALS.by_name("addon:plasma") / CHEMICALS.iter()
 
 | Point | Rule |
 |---|---|
-| Registry name | Namespaced by the declaring mod, declared once (refused otherwise, naming both). It shares one key space with the game's registries and with #2332's data-pack registries, and a collision with either is refused. |
-| Entries | Named in the registering mod's own namespace, which is refused otherwise, as #2332 proposes. A duplicate entry name is refused, naming both mods. `register` returns a typed `RegistryEntry<T>` slot key, the same kind of key as `BlockKey`. |
+| Registry name | Namespaced by the declaring mod, declared once (refused otherwise, naming both). It shares one key space with the game's registries and with arismoko/horizon#2332's data-pack registries, and a collision with either is refused. |
+| Entries | Named in the registering mod's own namespace, which is refused otherwise, as arismoko/horizon#2332 proposes. A duplicate entry name is refused, naming both mods. `register` returns a typed `RegistryEntry<T>` slot key, the same kind of key as `BlockKey`. |
 | Order | Dependency order already makes the library's `declare_registry` run before any dependent's `register`, so one registration phase is enough. NeoForge registers a new registry in `NewRegistryEvent` and its entries afterwards through `DeferredRegister` or `RegisterEvent`; Horizon's declared dependency order makes that second phase unnecessary. |
 | Freezing | The registry is frozen when registration seals. After sealing, the library builds its derived tables in a listener of the first lifecycle hook after registration. Which hook that is, and whether it needs a dedicated "registries frozen" hook with no NeoForge name, is question 6. |
-| Slots | Fixed when registration seals and local to the session. Saves store names, never slots, as #2332 requires. A save naming an entry that is no longer registered follows #2336's quarantine rule. |
+| Slots | Fixed when registration seals and local to the session. Saves store names, never slots, as arismoko/horizon#2332 requires. A save naming an entry that is no longer registered follows arismoko/horizon#2336's quarantine rule. |
 | Clients | With `RegistrySync::Names`, the server sends name→slot during configuration and the client remaps, as NeoForge's `sync(true)` does. Values aren't sent: both sides ran the same code. A client missing the declaring mod is refused at join with the registry named. `RegistrySync::None` registries are server-only. |
 | Tags | `data/<ns>/tags/<registry ns>/<registry path>/…`, through the existing tag loader. Part kinds (section 2) can target these tags. |
-| Data packs | A code registry has no entries from data packs. A registry whose entries come from data is #2332's. #2332 entries may refer to code-registry entries by name, resolved on the game side. |
+| Data packs | A code registry has no entries from data packs. A registry whose entries come from data is arismoko/horizon#2332's. arismoko/horizon#2332 entries may refer to code-registry entries by name, resolved on the game side. |
 
 ### On wasm
 
@@ -376,16 +376,16 @@ Sizes are estimates.
 | Stage | What | Size | Depends on |
 |---|---|---|---|
 | 0 | This note. | docs | — |
-| D1–D2 | `#[derive(Wire)]`, as section 0's plan. **First.** | see section 0 | #2242; D1 before or with the restructure |
+| D1–D2 | `#[derive(Wire)]`, as section 0's plan. **First.** | see section 0 | arismoko/horizon#2242; D1 before or with the restructure |
 | 1 | (after D1) An erased table shared by owner, kind and name: the declare-once and namespace refusals, type-agreement checks, and the load-phase "resolved table" call into wasm groups. Ported onto it: `OwnProvider`, with the capability key plan's name/type refusals. | ~600 | the restructure (lands into `runtime`) |
-| 2 | Mod hooks: `ModHook`, `declare_hook`, `listen`, the four contracts, `Subscribers` reused, the switch, crash attribution, the depth limit. Tests: a real wasm library and addon (`real_library` style) and the same source natively, covering order, cancel, `receive_cancelled`, a switched-off mod, an undeclared hook, type mismatch, and no listeners meaning no work. Sample: chem-api plus an addon listener in horizon-machine-sample. | ~900 | 1, and #2242 merged (shares listener shape and order code) |
-| 3 | Mod registries: `ModRegistry`, slots through `Names`, sync during configuration, tags, saves by name. | ~900 | 1; coordinate the key space with #2332 |
+| 2 | Mod hooks: `ModHook`, `declare_hook`, `listen`, the four contracts, `Subscribers` reused, the switch, crash attribution, the depth limit. Tests: a real wasm library and addon (`real_library` style) and the same source natively, covering order, cancel, `receive_cancelled`, a switched-off mod, an undeclared hook, type mismatch, and no listeners meaning no work. Sample: chem-api plus an addon listener in horizon-machine-sample. | ~900 | 1, and arismoko/horizon#2242 merged (shares listener shape and order code) |
+| 3 | Mod registries: `ModRegistry`, slots through `Names`, sync during configuration, tags, saves by name. | ~900 | 1; coordinate the key space with arismoko/horizon#2332 |
 | 4 | Part kinds on the shared table, including registry scope. | ~600 | 1, 3 (for registry scope) |
 | 5 | Scoped state and `ServiceKey`; `AttachmentHolder::Server` if question 4 says yes. | ~600 | 1 |
 | 6 | Mixed targets: the cross-target refusals with clear messages (they can land early and small), then cross-target hook forwarding and registry value reads over the derive's per-mod layouts. | ~300 + ~800 | D2, 2, 3; question 1 |
 | 7 | Optional: `#[mod_api::extension]` cross-target trait calls. | large | 6; an owner decision |
 
-Each stage updates this book page into a how-to and adds rustdoc. None of them touches point machinery before #2242 merges.
+Each stage updates this book page into a how-to and adds rustdoc. None of them touches point machinery before arismoko/horizon#2242 merges.
 
 ## Open questions for root
 

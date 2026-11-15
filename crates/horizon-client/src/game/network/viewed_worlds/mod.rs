@@ -1,4 +1,4 @@
-//! Viewed levels, the client's worlds (#3716, 9c): a world for each level a server opens on
+//! Viewed levels, the client's worlds (arismoko/horizon#3716, 9c): a world for each level a server opens on
 //! `horizon:levels`, as Immersive Portals' `ClientWorldLoader` keeps a `ClientLevel` per
 //! dimension. The server wraps each packet of such a level with it (`PacketRedirection`); here
 //! a `run`'s packets change that level's world and nothing of the player's own: its `World`,

@@ -1,4 +1,4 @@
-"""The mod SDK is published in one file, sdk-publish.yml, which every publisher calls (#4022, #4108)."""
+"""The mod SDK is published in one file, sdk-publish.yml, which every publisher calls (arismoko/horizon#4022, arismoko/horizon#4108)."""
 import unittest
 
 from tests.test_ci_concurrency import ROOT, yaml

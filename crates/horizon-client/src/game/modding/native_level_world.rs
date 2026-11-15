@@ -557,7 +557,7 @@ mod tests {
         });
     }
 
-    /// #3316's case: `example:cap` (8, 0..=64) refuses `/gamerule example:cap 70`, takes 12, and
+    /// arismoko/horizon#3316's case: `example:cap` (8, 0..=64) refuses `/gamerule example:cap 70`, takes 12, and
     /// keeps 12 through a save and load of the rules.
     #[test]
     #[ignore = "daily"]

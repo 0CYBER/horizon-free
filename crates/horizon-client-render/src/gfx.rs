@@ -13376,7 +13376,7 @@ mod tests {
         );
         // These read the world's depth through `textureLoad`; before #9448 their
         // depth binding could not translate, so TAA and the blit never came up. The HUD's
-        // CIT glint sampled one image through two samplers until #2386.
+        // CIT glint sampled one image through two samplers until arismoko/horizon#2386.
         for (file, entry) in [
             ("world_post.wgsl", "fs_taa"),
             ("pack_post.wgsl", "fs_blit"),

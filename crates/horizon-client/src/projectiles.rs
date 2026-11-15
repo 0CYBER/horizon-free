@@ -2673,7 +2673,7 @@ mod tests {
             thrown_type("ruby:late").is_none() && thrown_by_item("minecraft:snowball").is_none()
         );
         // its template's tracking settings, not the builder defaults, as a
-        // living type's are (#4031): a wolf's range of 10 chunks, a cat's and
+        // living type's are (arismoko/horizon#4031): a wolf's range of 10 chunks, a cat's and
         // a parrot's of 8, not 5; the vanilla types' own stay as they are.
         let settings = crate::lan::tracking::settings;
         assert_eq!(settings("ruby:bolt"), settings("minecraft:snowball"));

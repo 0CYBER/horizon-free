@@ -1,4 +1,4 @@
-//! The staged internals view (#589). Source copies only: the working tree keeps its visibility.
+//! The staged internals view (arismoko/horizon#589). Source copies only: the working tree keeps its visibility.
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use sha2::{Digest, Sha256};
@@ -209,7 +209,7 @@ struct Pass {
     /// The conditions of the module being visited.
     cfg: Vec<String>,
     /// Widening only: the items and fields visited are made public and listed nowhere, for a
-    /// lower-crate shape the wasm internals table walks (#589 W).
+    /// lower-crate shape the wasm internals table walks (arismoko/horizon#589 W).
     reaching: bool,
     discovery: bool,
 }

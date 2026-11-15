@@ -1,4 +1,4 @@
-//! The `entity_move` sweep (#2414, Ari's 1b): one entity of every walk
+//! The `entity_move` sweep (arismoko/horizon#2414, Ari's 1b): one entity of every walk
 //! family, one full family round each, and a counting listener that must
 //! hear exactly each family's case - the backstop the clippy ban cannot
 //! give, because a forgotten family moves without any resolve call. The
@@ -47,7 +47,7 @@ struct Families {
 /// One census case: the family (as `EntityHandle`'s Debug names it), the
 /// representative's entity kind, and the fires its own round must produce —
 /// one self move for the walk movers, none for vanilla's `setPos` flyers
-/// (#2414 point 3) and none for the push-only general rows.
+/// (arismoko/horizon#2414 point 3) and none for the push-only general rows.
 struct Case {
     family: &'static str,
     kind: &'static str,
@@ -329,7 +329,7 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
 }
 
 /// Arrows in flight are vanilla `setPos` movers: their own tick fires
-/// nothing; a piston push fires once with the piston cause (#2414 point 3).
+/// nothing; a piston push fires once with the piston cause (arismoko/horizon#2414 point 3).
 #[test]
 #[ignore = "daily"]
 fn an_arrow_in_flight_fires_nothing_and_a_piston_push_fires_once() {
@@ -366,7 +366,7 @@ fn an_arrow_in_flight_fires_nothing_and_a_piston_push_fires_once() {
 }
 
 /// The movers `entity_handles()` never sees — the dragon and the player's
-/// own server simulation — through `entity_ids_off_walk`, as the #2414
+/// own server simulation — through `entity_ids_off_walk`, as the arismoko/horizon#2414
 /// ruling asks: the dragon's physics-less step and the player window's
 /// `move_self` both fire with the self cause. (The bobber and a LAN guest
 /// need their own fixtures - a rod cast and a hosted connection - and stay
@@ -476,7 +476,7 @@ fn the_off_walk_movers_fire_too() {
     });
 }
 
-/// A mob goal's own `Entity.move` — `BreathAirGoal`'s drowning swim-up (#2414
+/// A mob goal's own `Entity.move` — `BreathAirGoal`'s drowning swim-up (arismoko/horizon#2414
 /// «goals 1:1») — fires through the same gate `do_move` arms, with the self
 /// cause: the goal's tick moves the dolphin by itself, beside travel's own
 /// move, exactly the two `Entity.move` invocations vanilla makes.

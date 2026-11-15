@@ -1,4 +1,4 @@
-# Prepared-resource/descriptive-ignore inventory migration for #4451.
+# Prepared-resource/descriptive-ignore inventory migration for arismoko/horizon#4451.
 # PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
 horizon-client-lib advancements::tests::index_on_vanilla_tree lib daily resources
 horizon-client-lib animate_tick::biome_particle_tests::biome_ambient_particle_is_emitted_by_the_animate_tick lib daily resources

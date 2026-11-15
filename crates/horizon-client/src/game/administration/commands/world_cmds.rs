@@ -235,7 +235,7 @@ impl Game<'_> {
     /// kind: the player and mob hurt paths (the direct and causing entity
     /// and the source position kept, the death message and thorns credited
     /// to the causing one), the item, vehicle, dragon and crystal branches.
-    /// False when the kind refuses the damage. `EntityRef::hurt` (#924)
+    /// False when the kind refuses the damage. `EntityRef::hurt` (arismoko/horizon#924)
     /// enters here too — there is no second damage pipeline.
     pub(in crate::game) fn hurt_target(
         &mut self,
@@ -313,7 +313,7 @@ impl Game<'_> {
                     _ => Some(None),
                 };
                 // `DamageSource.isCreativePlayer`: a creative player's hit
-                // passes the victim's invulnerability (#916).
+                // passes the victim's invulnerability (arismoko/horizon#916).
                 let creative_source = self.creative_source_of(cause.or(by));
                 // resolvePlayerResponsibleForDamage: remember the causing player's UUID.
                 let by_player = match cause.or(by) {

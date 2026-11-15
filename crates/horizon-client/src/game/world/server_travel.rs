@@ -644,7 +644,7 @@ impl Game<'_> {
             g.vehicle.is_some(),
         );
         // Entity.checkInsideBlocks: the Nether portal blocks the box is in.
-        // `LivingEntity.canUsePortal` (#943): not a passenger — its vehicle
+        // `LivingEntity.canUsePortal` (arismoko/horizon#943): not a passenger — its vehicle
         // goes through and carries it (`carry_riders_through_portals`) — and
         // not asleep.
         if g.motion

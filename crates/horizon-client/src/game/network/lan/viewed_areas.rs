@@ -1,4 +1,4 @@
-//! The players' viewed areas (#3716, `lan::viewed_levels`) in the level in place: the squares
+//! The players' viewed areas (arismoko/horizon#3716, `lan::viewed_levels`) in the level in place: the squares
 //! `Streaming.extra` keeps loaded for them (`lan_update_streaming`) and their own tickets
 //! (`Sources::viewed`). Neither goes through the forced chunks or the mods' chunk tickets. With no
 //! area on the server both are empty, without allocating.

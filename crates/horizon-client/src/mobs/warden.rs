@@ -343,7 +343,7 @@ impl Warden {
 
 pub fn register(m: &mut Mob) {
     // The brain at construction, with the mob's own type id so a mod part's
-    // behaviors join it (#824).
+    // behaviors join it (arismoko/horizon#824).
     let id = m.kind.id.clone();
     let st = Warden {
         brain: Brain::new(&id, 0),

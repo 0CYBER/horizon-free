@@ -137,7 +137,7 @@ impl Game<'_> {
         f.age = f.age.wrapping_add(1);
         f.velocity.y -= horizon_client::entity_rules::EntityRules::get_gravity(f);
         let wanted = f.velocity;
-        // The falling block's Entity.move goes through the move gate (#2414),
+        // The falling block's Entity.move goes through the move gate (arismoko/horizon#2414),
         // armed before the stuck multiplier of the move itself; PR 1a records
         // the movement unchanged.
         let mut gate = horizon_client::move_gate::armed(

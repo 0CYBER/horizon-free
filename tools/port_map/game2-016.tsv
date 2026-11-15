@@ -3,7 +3,7 @@ SpeleothemBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::
 SpeleothemBlock.getStateForPlacement	port	crates/horizon-world/src/level/place.rs::Sim::placement_class	Speleothem arm picks tip direction and thickness.
 SpeleothemBlock.calculateTipDirection	inline	crates/horizon-world/src/level/place.rs::Sim::placement_class	Tip direction choice is inside the placement arm.
 SpeleothemBlock.isSpeleothemWithDirection	port	crates/horizon-world/src/level/speleothem.rs::Sim::speleothem_with
-SpeleothemBlock.onProjectileHit	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::projectile_breaks_block	ticked in #3516; `SpeleothemBlock.onProjectileHit` is cited at crates/horizon-client/src/game/mobs/creatures/mod.rs:3447 (in a comment, so `where` names the enclosing fn)
+SpeleothemBlock.onProjectileHit	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::projectile_breaks_block	ticked in arismoko/horizon#3516; `SpeleothemBlock.onProjectileHit` is cited at crates/horizon-client/src/game/mobs/creatures/mod.rs:3447 (in a comment, so `where` names the enclosing fn)
 SpeleothemBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	Speleothem arm: a stalagmite that cannot survive breaks, else a falling stalactite starts.
 SpeleothemBlock.isTip	port	crates/horizon-world/src/level/speleothem.rs::Sim::speleothem_is_tip
 SpeleothemBlock.getFluidState	port	crates/horizon-world/src/registry_fluid.rs::RegistryFluidWorld::fluid_state	waterlogged fluid from block data

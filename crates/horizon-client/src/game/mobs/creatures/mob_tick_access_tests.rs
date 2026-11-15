@@ -1,4 +1,4 @@
-//! #795, the mob slice: a handle fired inside a mob's own tick resolves the
+//! arismoko/horizon#795, the mob slice: a handle fired inside a mob's own tick resolves the
 //! mob the tick holds out of the game, without a copy or a placeholder.
 use super::*;
 use crate::game::Dim;

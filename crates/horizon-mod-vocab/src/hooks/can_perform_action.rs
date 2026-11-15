@@ -8,7 +8,7 @@ pub trait Hooks {
     /// vanilla's answer for that ability: the item kind's (shears shear) or the
     /// stack's component (`blocks_attacks`, a shield's, blocks); set it either
     /// way and the stack grants or loses the ability. Loot conditions use the shared
-    /// item defaults; action sites retain their own vanilla answers until #3330. Asked where vanilla checks
+    /// item defaults; action sites retain their own vanilla answers until arismoko/horizon#3330. Asked where vanilla checks
     /// the item for an action: a raised item blocking attacks
     /// (`shield_block`: a granted stack blocks as a bare
     /// `blocks_attacks` component does, a denied one never blocks nor is raised);

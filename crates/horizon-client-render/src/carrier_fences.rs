@@ -1,6 +1,6 @@
 //! Carrier transfer fences: the world cells and carriers locked while
 //! a carrier ownership operation runs between prepared and committed
-//! (issue #2413, slice 2). The set lives on the World so every refusal
+//! (issue arismoko/horizon#2413, slice 2). The set lives on the World so every refusal
 //! point — the player's break, the piston hook, the container gate and
 //! the mod write gate — reads one place. With no operation in flight
 //! every check is one load of an empty set.

@@ -899,7 +899,7 @@ impl Game<'_> {
     /// creative player breaks it, otherwise the first hit wobbles it and a
     /// second within five ticks breaks it.
     pub(super) fn punch_armor_stand(&mut self, i: usize) -> bool {
-        // `Entity.isInvulnerableTo` before ArmorStand's own branches (#916):
+        // `Entity.isInvulnerableTo` before ArmorStand's own branches (arismoko/horizon#916):
         // the saved flag or window refuses the hit — past only for
         // #bypasses_invulnerability damage and a creative player's hit
         // (`DamageSource.isCreativePlayer`).
@@ -1020,7 +1020,7 @@ impl Game<'_> {
             }
             self.armor_stands[i].first_tick = false;
             // Entity.baseTick: the saved invulnerability window counts down
-            // (#916).
+            // (arismoko/horizon#916).
             self.tick_saved_invulnerable_time(self.armor_stands[i].id);
             self.armor_stand_location_effects(i, false);
             // ArmorStand.travel: a marker or a NoGravity stand does not move.

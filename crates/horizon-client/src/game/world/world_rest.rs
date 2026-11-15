@@ -101,7 +101,7 @@ pub(super) fn load_world_rest(
         } else {
             MobTypes::load_for_server(root, catalog)?
         };
-        // #845: the declared sets take their types' rows — the merged rows
+        // arismoko/horizon#845: the declared sets take their types' rows — the merged rows
         // the live attribute map's catalog took in core (the template's with
         // the declared set on top) — as their attribute map and spawn
         // fields, so a mob of the type spawns with what the map answers.
@@ -119,7 +119,7 @@ pub(super) fn load_world_rest(
                 ),
             }
         }
-        // #846: the types mods added attributes to take their grown rows the
+        // arismoko/horizon#846: the types mods added attributes to take their grown rows the
         // same way, so a new mob of the type spawns with them.
         resource_load::take_modified_attribute_rows(
             &mut types.types,
@@ -132,7 +132,7 @@ pub(super) fn load_world_rest(
             .map(|(k, v)| (k, Arc::new(v)))
             .collect();
         let mut mob_data = horizon_client::mobs::MobData::load(resource_root, facts);
-        // #847: the mods' spawn rules (`RegisterSpawnPlacementsEvent`) take
+        // arismoko/horizon#847: the mods' spawn rules (`RegisterSpawnPlacementsEvent`) take
         // their types' placement, heightmap and predicate here, once, so a
         // spawn check reads one table with no pass over the mods.
         for declaration in mod_api::__private::spawn_placement_declarations() {

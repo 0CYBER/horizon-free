@@ -225,7 +225,7 @@ impl Game<'_> {
                         keep[slot] = false;
                         snapshot[slot].alive = false;
                         // `removed` is the view's authoritative gone: a dead body
-                        // that is still in the level keeps resolving (#795).
+                        // that is still in the level keeps resolving (arismoko/horizon#795).
                         snapshot[slot].removed = true;
                         cursor += 1;
                         continue;
@@ -285,7 +285,7 @@ impl Game<'_> {
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 // The handle resolves through the tick's own view:
-                                // the game has lent its mob list to this pass (#795).
+                                // the game has lent its mob list to this pass (arismoko/horizon#795).
                                 let world = MobWorld {
                                     others: snapshot.as_slice(),
                                     others_grid: Some(&grid),
@@ -397,7 +397,7 @@ impl Game<'_> {
                     // the tick only reads it (`&MobWorld`), and it goes back to the
                     // guest's slot straight after. Its identity is captured with
                     // it, once: the player a goal resolves is the one the tick
-                    // sees — a guest on a server, the game's own otherwise (#1077).
+                    // sees — a guest on a server, the game's own otherwise (arismoko/horizon#1077).
                     let lent = seen_guest.and_then(|conn| guests.iter().position(|g| g.0 == conn));
                     let active_player = match (seen_guest, lent) {
                         (None, _) => base.player.take(),

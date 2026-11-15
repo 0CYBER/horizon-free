@@ -3,7 +3,7 @@ fn main() {
         std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     horizon_mod_api_gen::generate_points(&root, &out_dir).expect("generating the points");
-    // One point catalog (#3643): once `horizon-engine-slots` names a `PointId` of its own, this
+    // One point catalog (arismoko/horizon#3643): once `horizon-engine-slots` names a `PointId` of its own, this
     // crate's tests check at compile time that it is the very type this crate exports
     // (`tests/one_point_catalog.rs`), so the two halves of a dispatch can never disagree index for index.
     println!("cargo::rustc-check-cfg=cfg(engine_slots_point_id)");

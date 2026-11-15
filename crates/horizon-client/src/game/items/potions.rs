@@ -2749,7 +2749,7 @@ impl horizon_client::mobs::ModEffectTicks for Game<'_> {
 /// `LivingEntity.tickEffects` on a client: each `MobEffectInstance.tickClient`
 /// counts its effect down, then ticks its `BlendState`. The darkness effect's
 /// is the fade `darkness_lighting` and `darkness_fog` draw; the integrated
-/// level's `tick_sculk_entities` is not run for a server's client (#3393).
+/// level's `tick_sculk_entities` is not run for a server's client (arismoko/horizon#3393).
 fn client_tick_effects(effects: &mut PlayerEffects, darkness: &mut (f32, f32)) {
     for e in &mut effects.list {
         e.tick_client();
@@ -3250,7 +3250,7 @@ mod tests {
 
     /// A server's client (multiplayer and the default single player) fades
     /// the darkness effect in over its 22 blend ticks, holds it, and fades
-    /// it out over the last 22 (#3393).
+    /// it out over the last 22 (arismoko/horizon#3393).
     #[test]
     fn a_servers_client_blends_the_darkness_effect() {
         let mut effects = PlayerEffects::default();

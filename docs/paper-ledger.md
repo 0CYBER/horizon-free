@@ -23,7 +23,7 @@ The Paper/Bukkit references below are public Javadoc, not implementation sources
 For callback signatures, side and current limitations, use [native mods](modding/src/how-to/native-mods.md)
 and the hook declarations under `crates/horizon-mod-vocab/src/hooks/` at the fork revision being targeted.
 
-## Event counterparts: miscellaneous additions (#1015)
+## Event counterparts: miscellaneous additions (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function name.
 Scope: the twenty `misc-add` hooks below.
@@ -64,7 +64,7 @@ Scope: the twenty `misc-add` hooks below.
 [paper-BlockFertilizeEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/block/BlockFertilizeEvent.html
 [paper-AnvilView]: https://jd.papermc.io/paper/26.3/org/bukkit/inventory/view/AnvilView.html
 
-## Event counterparts: base-analog hooks (#1015)
+## Event counterparts: base-analog hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function name.
 Scope: the twenty `base-analog` hooks below.
@@ -108,7 +108,7 @@ Scope: the twenty `base-analog` hooks below.
 [paper-BlockDispenseArmorEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/block/BlockDispenseArmorEvent.html
 [paper-FluidLevelChangeEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/block/FluidLevelChangeEvent.html
 
-## Event counterparts: base block hooks (#1015)
+## Event counterparts: base block hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the hooks below.
 
@@ -152,7 +152,7 @@ Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cite
 [paper-BrewEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/BrewEvent.html
 [paper-BlockFromToEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/block/BlockFromToEvent.html
 
-## Event counterparts: base campfire hooks (#1015)
+## Event counterparts: base campfire hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope is the 20 base-campfire hooks below.
 A key is added only where moment, side, information and result all agree; otherwise the row records the mismatch.
@@ -195,7 +195,7 @@ A key is added only where moment, side, information and result all agree; otherw
 
 [paper-InventoryOpenEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/InventoryOpenEvent.html
 
-## Event counterparts: base world, entity and dragon server hooks (#1015)
+## Event counterparts: base world, entity and dragon server hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function
 name and scope is the base/dragon server hooks below. Rows without a key differ in moment, side, information or result.
@@ -246,7 +246,7 @@ name and scope is the base/dragon server hooks below. Rows without a key differ 
 [paper-EntityAddToWorldEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/entity/EntityAddToWorldEvent.html
 [paper-EntityRemoveFromWorldEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/entity/EntityRemoveFromWorldEvent.html
 
-## Event counterparts: base entity hooks (#1015)
+## Event counterparts: base entity hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only, cited by event name; Horizon hooks are cited by function name.
 Scope: the 20 base-entity hooks below, comparing each Javadoc moment, side, exposed facts and cancel/setter behaviour against the hook's contract.
@@ -292,7 +292,7 @@ Scope: the 20 base-entity hooks below, comparing each Javadoc moment, side, expo
 [paper-FurnaceSmeltEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/FurnaceSmeltEvent.html
 [paper-FurnaceStartSmeltEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/FurnaceStartSmeltEvent.html
 
-## Event counterparts: base hooks (hanging, hopper, inventory, item, block state) (#1015)
+## Event counterparts: base hooks (hanging, hopper, inventory, item, block state) (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function name. Scope: the 19 `base.rs` hooks below.
 A key exists only where the moment, side, facts and outcome all agree; otherwise the row says which part differs.
@@ -332,7 +332,7 @@ A key exists only where the moment, side, facts and outcome all agree; otherwise
 [paper-ItemDespawnEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/entity/ItemDespawnEvent.html
 [paper-EntityPickupItemEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/entity/EntityPickupItemEvent.html
 
-## Event counterparts: base item hooks (#1015)
+## Event counterparts: base item hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only: no Paper server source is used and no Bukkit compatibility layer is proposed. Horizon hooks are cited by function name; scope is the 20 `base-item` hooks below.
 
@@ -370,7 +370,7 @@ Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only: no Pape
 [paper-PlayerStopUsingItemEvent]: https://jd.papermc.io/paper/26.3/io/papermc/paper/event/player/PlayerStopUsingItemEvent.html
 [paper-EntityRegainHealthEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/entity/EntityRegainHealthEvent.html
 
-## Event counterparts: base/living hooks (#1015)
+## Event counterparts: base/living hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the hooks below.
 Decisions follow the documented moment, side, information and result; only Covered rows get a `paper` key.
@@ -410,7 +410,7 @@ Decisions follow the documented moment, side, information and result; only Cover
 [paper-InventoryCloseEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/InventoryCloseEvent.html
 [paper-EntityAddToWorldEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/entity/EntityAddToWorldEvent.html
 
-## Event counterparts: base-on hooks (#1015)
+## Event counterparts: base-on hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the 20 `base-on` hooks below.
 Status is judged on moment, side, information and result; “No key” means no `paper` key is added.
@@ -459,7 +459,7 @@ Status is judged on moment, side, information and result; “No key” means no 
 [paper-PlayerChangedWorldEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerChangedWorldEvent.html
 
 [paper-PlayerCommandPreprocessEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerCommandPreprocessEvent.html
-## Event counterparts: base player hooks (#1015)
+## Event counterparts: base player hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (`26.3.build.244-stable`), public Javadoc only; Horizon cited by hook function name, not line.
 Scope: the 20 `base.rs` player hooks in this batch, each mapped by moment, side, information and result.
@@ -508,7 +508,7 @@ Scope: the 20 `base.rs` player hooks in this batch, each mapped by moment, side,
 [paper-InventoryCloseEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/InventoryCloseEvent.html
 
 [paper-PlayerKickEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerKickEvent.html
-## Event counterparts: base player hooks (#1015)
+## Event counterparts: base player hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function name, never by line, and Paper by event class only.
 Scope = the 20 `base-player` hooks below (join/quit, login, respawn, portal, lectern/loom/sign/recipe stations, map, name tag, pick, arrows, projectile, saved player data); Covered needs the same moment, side, facts and result.
@@ -557,7 +557,7 @@ Scope = the 20 `base-player` hooks below (join/quit, login, respawn, portal, lec
 [paper-PlayerPostRespawnEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/player/PlayerPostRespawnEvent.html
 
 [paper-PlayerLevelChangeEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerLevelChangeEvent.html
-## Event counterparts: base player hooks (#1015)
+## Event counterparts: base player hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the 20 `base.rs` player hooks below, and `player_start_spectating_entity` beside its mirror.
 Server side is assumed except for the two `both` tick hooks; a server-half counterpart could qualify, but Covered still requires moment, information and result to agree, and only Covered rows get a `paper` key.
@@ -607,7 +607,7 @@ Server side is assumed except for the two `both` tick hooks; a server-half count
 [paper-PlayerStatisticIncrementEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerStatisticIncrementEvent.html
 
 [paper-PlayerItemHeldEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerItemHeldEvent.html
-## Event counterparts: base player hooks (#1015)
+## Event counterparts: base player hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function
 name; scope = the hooks below.
@@ -663,7 +663,7 @@ name; scope = the hooks below.
 [paper-Commands]: https://jd.papermc.io/paper/26.3/io/papermc/paper/command/brigadier/Commands.html
 [paper-Raid]: https://jd.papermc.io/paper/26.3/org/bukkit/Raid.html
 
-## Event counterparts: base and resource hooks (#1015)
+## Event counterparts: base and resource hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (`26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the 20 `base.rs` hooks below.
 Paper is server-only, so only the server side of `both` hooks is comparable; no Paper server code or invented event is used.
@@ -703,7 +703,7 @@ Paper is server-only, so only the server side of `both` hooks is comparable; no 
 
 [paper-ServerTickEndEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/server/ServerTickEndEvent.html
 
-## Event counterparts: base-target hooks (#1015)
+## Event counterparts: base-target hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the base-target hooks below.
 Server-only events are compared with the hook's server half; moments with no Paper/Bukkit event are recorded as gaps.
@@ -751,7 +751,7 @@ Server-only events are compared with the hook's server half; moments with no Pap
 
 [paper-BlockDispenseLootEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/block/BlockDispenseLootEvent.html
 
-## Event counterparts: base world border, lifecycle and save hooks (#1015)
+## Event counterparts: base world border, lifecycle and save hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), cited from its public Javadoc only; Horizon hooks are cited by function name, never by line.
 Scope = the four `base.rs` hooks below: two world-border notifications, the server world lifecycle and the completed-save cycle.
@@ -768,7 +768,7 @@ Scope = the four `base.rs` hooks below: two world-border notifications, the serv
 
 [paper-WorldSaveEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/world/WorldSaveEvent.html
 
-## Event counterparts: chunk watching, spawners and misc entity hooks (#1015)
+## Event counterparts: chunk watching, spawners and misc entity hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon cited by function name, never by line number.
 Scope: the twenty misc-chunk hooks below, from `chunk_unwatch` to `entity_change_block_pre`.
@@ -808,7 +808,7 @@ Scope: the twenty misc-chunk hooks below, from `chunk_unwatch` to `entity_change
 [paper-PlayerCustomClickEvent]: https://jd.papermc.io/paper/26.3/io/papermc/paper/event/player/PlayerCustomClickEvent.html
 [paper-EntityTeleportEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/entity/EntityTeleportEvent.html
 
-## Event counterparts: entity lifecycle and interaction (#1015)
+## Event counterparts: entity lifecycle and interaction (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function name, never by line.
 Scope: the 20 entity hooks below. A key is added only where moment, side, information and result all agree; everything else is Partial or Gap.
@@ -846,7 +846,7 @@ Scope: the 20 entity hooks below. A key is added only where moment, side, inform
 [paper-EntityZapEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/entity/EntityZapEvent.html
 [paper-PreCreatureSpawnEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/entity/PreCreatureSpawnEvent.html
 
-## Event counterparts: note blocks, spawning, permissions and player events (#1015)
+## Event counterparts: note blocks, spawning, permissions and player events (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon cited by function name.
 Scope = the 20 hooks below; each status applies the moment, side, information and result rule.
@@ -882,7 +882,7 @@ Scope = the 20 hooks below; each status applies the moment, side, information an
 [paper-SmithItemEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/inventory/SmithItemEvent.html
 
 [paper-PlayerExpChangeEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerExpChangeEvent.html
-## Event counterparts: miscellaneous portal, brewing, recipe and server hooks (#1015)
+## Event counterparts: miscellaneous portal, brewing, recipe and server hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (`26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the 21 hooks below.
 A key is added only where moment, server side, information and result all agree; otherwise the row records the boundary.
@@ -915,7 +915,7 @@ A key is added only where moment, server side, information and result all agree;
 [paper-AsyncChatEvent]: https://jd.papermc.io/paper/26.3/io/papermc/paper/event/player/AsyncChatEvent.html
 [paper-BlockRedstoneEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/block/BlockRedstoneEvent.html
 [paper-GenericGameEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/world/GenericGameEvent.html
-## Event counterparts: experience orb targeting (#1015)
+## Event counterparts: experience orb targeting (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc; Horizon cited by function name; scope = the hook below.
 The comparison is made against the Paper event's documented moment, side, exposed information and result behaviour.
@@ -925,7 +925,7 @@ The comparison is made against the Paper event's documented moment, side, expose
 | `xp_orb_targeting` | **Gap:** none (nearest [`ExperienceOrbMergeEvent`][paper-ExperienceOrbMergeEvent]) | Paper's nearest event fires when two experience orbs are about to merge, not when an orb chooses which player to follow on each tick. It exposes the two orbs rather than the orb, scan distance and selected player, so it cannot carry this hook's decision. No key. |
 
 [paper-ExperienceOrbMergeEvent]: https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/event/entity/ExperienceOrbMergeEvent.html
-## Event counterparts: item, level and living hooks (#1015)
+## Event counterparts: item, level and living hooks (arismoko/horizon#1015)
 
 Paper API 26.3 (`26.3.build.244-stable`), public Javadoc only; Horizon cited by function name, never by position. Scope: the 21 item, level/sound and living hooks below; Paper is server-only, so the client half of a `both` hook has no counterpart by construction.
 
@@ -965,7 +965,7 @@ Paper API 26.3 (`26.3.build.244-stable`), public Javadoc only; Horizon cited by 
 [paper-PlayerMoveEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerMoveEvent.html
 
 [paper-EntityLandEvent]: https://jd.papermc.io/paper/26.3/io/papermc/paper/event/entity/EntityLandEvent.html
-## Event counterparts: living entities and mob lifecycle (#1015)
+## Event counterparts: living entities and mob lifecycle (arismoko/horizon#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Horizon hooks are cited by function name.
 Scope: the 20 hooks below — living motion and projectile values, shield/totem/visibility, menus, minecarts, mob despawn/effects/spawning/splitting and mod configs.
@@ -1000,7 +1000,7 @@ Scope: the 20 hooks below — living motion and projectile values, shield/totem/
 [paper-EntityInsideBlockEvent]: https://jd.papermc.io/paper/26.3/io/papermc/paper/event/entity/EntityInsideBlockEvent.html
 [paper-EntityRemoveEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/entity/EntityRemoveEvent.html
 
-## Event counterparts: client-only hooks (#1015)
+## Event counterparts: client-only hooks (arismoko/horizon#1015)
 
 Paper and Bukkit plugins run on the server; the Paper API has no client events. Each hook below is
 declared `side = "client"`, so it has no Paper counterpart and gets no key. A plugin port that needs

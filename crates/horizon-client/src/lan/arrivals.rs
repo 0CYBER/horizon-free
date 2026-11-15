@@ -2339,7 +2339,7 @@ mod hub_tests {
     }
 
     /// [`import_player`] with `max_health` bounded at `max_health`, as a mod
-    /// that widened it leaves the catalog (#3728).
+    /// that widened it leaves the catalog (arismoko/horizon#3728).
     fn import_player_with(
         hub: &mut Hub,
         max_health: f64,
@@ -3056,7 +3056,7 @@ mod hub_tests {
         }
     }
 
-    /// #3728: a player whose health is past vanilla's 1024, as a mod that
+    /// arismoko/horizon#3728: a player whose health is past vanilla's 1024, as a mod that
     /// widened `max_health` lets one be, is imported where that mod widened it
     /// too, and refused where it did not.
     #[test]

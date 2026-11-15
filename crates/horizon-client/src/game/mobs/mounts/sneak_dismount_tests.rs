@@ -2,7 +2,7 @@
 //! `isShiftKeyDown`), unless an `entity_mount` listener cancels the dismount (NeoForge's
 //! `EntityMountEvent`). Kept on, the mount still reads that tick's input, sneak included
 //! (`LivingEntity.getRiddenInput` reads the controller), on the local player's route and on a
-//! server player's (#2739).
+//! server player's (arismoko/horizon#2739).
 use super::camel_jump_tests::game;
 use crate::game::Game;
 use horizon_client::{mobs::equine, sprint::Keys};

@@ -129,7 +129,7 @@ pub(super) const GOAL_VIEW_READS: &[&str] = &[
     "mob_no_action_time",
 ];
 
-/// The handle types whose backend reads are entity data (#1077): a read taking
+/// The handle types whose backend reads are entity data (arismoko/horizon#1077): a read taking
 /// one first answers the tick's own view of that entity — the snapshot, the
 /// player the tick sees — and is refused where that carries it not. Every
 /// other backend read (a level, a chunk, a block entity, a registry key)
@@ -144,7 +144,7 @@ const GOAL_VIEW_ENTITY_ARGS: &[&str] = &[
     "MerchantRef",
 ];
 
-/// The `Host` methods that find entities (#1077): the goal view answers these
+/// The `Host` methods that find entities (arismoko/horizon#1077): the goal view answers these
 /// by its own rules (the ticking mob, the player the tick sees, the snapshot,
 /// else `None`) instead of forwarding them, so nothing asks the game's taken
 /// mob list. Everything else the view forwards to the game host it carries.
@@ -866,7 +866,7 @@ fn handle_method(
     sig.inputs = rest.into_iter().collect();
     let mut docs = doc_comments(&entry.attrs, name, true)?;
     // The reads a mob's goal tick answers from its view carry the snapshot rule where a mod reads
-    // them (#1077).
+    // them (arismoko/horizon#1077).
     if GOAL_VIEW_READS.contains(&name) {
         docs.push_str("///\n/// In a mob's goal tick ([`GoalContext::host`](crate::GoalContext::host)) this reads\n/// the active mob or a disjoint live mob when available; player reads use the\n/// game host. Other unsupported reads retain their typed refusal.\n");
     }
@@ -995,7 +995,7 @@ pub(super) fn generate(root: &Path) -> Result<(String, String), String> {
     Ok((host, goal_view))
 }
 
-/// The goal view's generated impls (#1077): the backend ones forward the snapshot-backed
+/// The goal view's generated impls (arismoko/horizon#1077): the backend ones forward the snapshot-backed
 /// reads to the engine context's `r_*` methods, refuse their typed refusal for entity data the
 /// tick's view does not carry, and forward every other backend read — the level's own: blocks,
 /// loaded chunks, time, height, weather, block entities — to the real backend of the game host

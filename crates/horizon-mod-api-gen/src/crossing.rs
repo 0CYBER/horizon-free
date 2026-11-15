@@ -1,4 +1,4 @@
-//! How a game internal crosses to a wasm mod (#589 W): one rule for both sides, the mod's generated
+//! How a game internal crosses to a wasm mod (arismoko/horizon#589 W): one rule for both sides, the mod's generated
 //! view and the game's generated table, read from the same `internals.json` signatures.
 //!
 //! - A **copy** is plain data all the way down, at most [`LEAVES`] scalars: it crosses as a value.
@@ -168,7 +168,7 @@ pub enum Foreign {
     Bits,
 }
 
-/// The types of crates outside the workspace that cross by copy (#1409): the key and mouse
+/// The types of crates outside the workspace that cross by copy (arismoko/horizon#1409): the key and mouse
 /// state the input internals take. Their definitions are read from the source Cargo locked for
 /// the game, and listed in `internals.json` like the workspace's.
 pub const CROSSING_FOREIGN: &[(&str, Foreign)] = &[

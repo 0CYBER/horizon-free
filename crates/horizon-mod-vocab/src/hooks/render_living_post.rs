@@ -10,9 +10,9 @@ pub trait Hooks {
     /// geometry to an arm or the head without animating it again; None for a model that isn't
     /// humanoid. The order today: before this hook its model, its vanilla layers and the mods'
     /// layers are drawn; after it, in the frame's later passes, its name tag, its leash, its
-    /// flames and its shadow (the reference draws the leash and the name tag first, #3915). A type
+    /// flames and its shadow (the reference draws the leash and the name tag first, arismoko/horizon#3915). A type
     /// with a mod's registered renderer (`register_entity_renderers`) has its own model's order,
-    /// the renderer in the model's place, so it changes with #3915 and not before. For a player,
+    /// the renderer in the model's place, so it changes with arismoko/horizon#3915 and not before. For a player,
     /// its `render_player_post` follows.
     #[hook(
         side = "client",

@@ -82,7 +82,7 @@ fn join(port: u16, name: &str) -> horizon_protocol::Result<Connection> {
 /// The dedicated server keeps running while a player walks through freshly generated terrain and
 /// sand falls and lands near it:
 /// the whole level tick (entities, falling blocks, the entity residency pass) runs every tick
-/// against real worldgen, not a flat test world. #2845: a pass left unbalanced stopped the
+/// against real worldgen, not a flat test world. arismoko/horizon#2845: a pass left unbalanced stopped the
 /// server about 30 level ticks after a walking bot joined.
 #[test]
 #[ignore = "daily"]
@@ -208,7 +208,7 @@ fn a_dedicated_server_keeps_ticking_while_a_player_walks() {
                 }
             }
             // Once the player is in, the console summons six falling sand blocks just behind it; each
-            // falls and lands, as the gravity blocks the player disturbed did in #2845.
+            // falls and lands, as the gravity blocks the player disturbed did in arismoko/horizon#2845.
             if moves == 20
                 && let Some([x, y, z]) = at
             {

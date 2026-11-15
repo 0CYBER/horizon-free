@@ -5,7 +5,7 @@ Implementation: `crates/horizon-client/src/game/creatures/mob_islands.rs`.
 This is the upstream design reference. On this fork all opt-in parallel phases are disabled at
 `parallel.rs::parallel_tick`. The retained upstream mob sources are behind the nondefault
 `upstream-parallel-mobs` feature: this code is not compiled or tested on the fork.
-Typed hook-aware integration is tracked in [#3491](https://github.com/arismoko/horizon/issues/3491).
+Typed hook-aware integration is tracked in [arismoko/horizon#3491](https://github.com/arismoko/horizon/issues/3491).
 Design approval and normal implementation review are separate gates.
 
 ## Reach is a correctness contract

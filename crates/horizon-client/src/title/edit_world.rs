@@ -1,4 +1,4 @@
-//! EditWorldScreen, and its Horizon opt-in (#2554): when the installed mods' biome regions
+//! EditWorldScreen, and its Horizon opt-in (arismoko/horizon#2554): when the installed mods' biome regions
 //! differ from the ones the world saved, the world's owner may adopt them for new chunks. The
 //! choice is written into the world before it opens again; chunks that exist keep their biomes.
 //! Design: `docs/design/mod-api/mod-biome-regions.md`.

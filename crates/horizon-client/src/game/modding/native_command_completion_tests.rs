@@ -1,7 +1,7 @@
 //! A mod command's path follows the sender's permission everywhere it is visible: the command tree
 //! a player receives keeps only the children they may run, the server's completions answer the same
 //! test, and a registered argument type is asked with the sender, so a provider that completes a
-//! mod's own registry offers only what that sender may use (#4307).
+//! mod's own registry offers only what that sender may use (arismoko/horizon#4307).
 
 use super::Game;
 use super::native_server::{CommandArguments, command_tree, register_dispatcher};

@@ -1,4 +1,4 @@
-//! Engine declarations in the negotiated payload table (#813 step 4a).
+//! Engine declarations in the negotiated payload table (arismoko/horizon#813 step 4a).
 //!
 //! An engine service that sends on a registered channel declares it here, so its channel is
 //! admitted, refused and epoch-bound exactly like a mod's declaration: it is part of every

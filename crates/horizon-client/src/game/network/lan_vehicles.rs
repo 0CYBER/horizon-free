@@ -506,14 +506,14 @@ impl Game<'_> {
         // vehicle.move(PLAYER, target - lastGood) with the vehicle's
         // collisions: where it can't follow the client (a quarter block off,
         // the height aside), it moved wrongly. A Player-cause move through
-        // the move gate (#2414); PR 1a records the movement unchanged.
+        // the move gate (arismoko/horizon#2414); PR 1a records the movement unchanged.
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
             subject: None,
         };
         let wanted = target.subtract(good);
-        // The vehicle's type name only if a listener asks for it (#2414: no
+        // The vehicle's type name only if a listener asks for it (arismoko/horizon#2414: no
         // string on a move nobody listens to).
         let kind = || match (boat, mount) {
             (Some(i), _) => std::borrow::Cow::Owned(self.boats[i].entity_type()),
@@ -529,7 +529,7 @@ impl Game<'_> {
             wanted,
         );
         let wanted = gate.delta();
-        // A listener's decision that is not the request (#2414, ruling 5):
+        // A listener's decision that is not the request (arismoko/horizon#2414, ruling 5):
         // the driver is put back whatever the distance - the flag comes from
         // the gate, not from the numbers.
         let overridden = gate.overridden();

@@ -902,7 +902,7 @@ pub struct Viewer<'a> {
     pub position: [f64; 3],
     pub view_distance: i32,
     pub chunks: &'a crate::fast_hash::FxHashSet<(i32, i32)>,
-    /// A client that views this level from another (#3716): its areas here, centre and radius in
+    /// A client that views this level from another (arismoko/horizon#3716): its areas here, centre and radius in
     /// chunks, which it tracks from in place of its position (`viewed_levels::entities`), and at
     /// most `MAX_ENTITIES` entities. None for a player in the level.
     pub sources: Option<&'a [((i32, i32), i32)]>,

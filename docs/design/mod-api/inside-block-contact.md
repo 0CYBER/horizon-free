@@ -1,6 +1,6 @@
 # Design: inside-block contact shapes
 
-Provisional answer to [#1011](https://github.com/arismoko/horizon/issues/1011):
+Provisional answer to [arismoko/horizon#1011](https://github.com/arismoko/horizon/issues/1011):
 share the sweep decision, with an API-owned shape value and a restricted,
 synchronous level/entity view. This is not an implemented API. No Rust changes
 are proposed for immediate landing; agreement and oracle fixtures precede code.
@@ -130,7 +130,7 @@ not reconstructed from a later callback against a changed block.
 
 ## Baseline and acceptance matrix
 
-Issue #1011 requires unchanged no-override contacts and ordering. That is the
+Issue arismoko/horizon#1011 requires unchanged no-override contacts and ordering. That is the
 required baseline for this feature. Current player motion explicitly skips tripwire
 and end portals (`motion.rs`, `check_inside_blocks`); vanilla queries their shapes.
 Thus exact vanilla parity cannot simultaneously describe the existing baseline.

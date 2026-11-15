@@ -1,6 +1,6 @@
 # Custom payload discard limits
 
-Part of the raw payload transport work tracked by #2882. This change is only the
+Part of the raw payload transport work tracked by arismoko/horizon#2882. This change is only the
 existing codec boundary, not a new registration or negotiation mechanism.
 
 ## Vanilla contract

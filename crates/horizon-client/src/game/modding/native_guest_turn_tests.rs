@@ -299,7 +299,7 @@ fn level_event_excludes_its_source_even_during_another_guests_turn() {
     });
 }
 
-/// Before #228, the host was absent during a guest turn and B and the
+/// Before arismoko/horizon#228, the host was absent during a guest turn and B and the
 /// online list were invisible to native handles.
 #[test]
 #[ignore = "daily"]
@@ -650,7 +650,7 @@ fn another_guests_live_merchant_session_is_visible_during_a_turn() {
     });
 }
 
-/// The passenger walk (horizon-rust/horizon#8383) keeps #228's host visibility.
+/// The passenger walk (horizon-rust/horizon#8383) keeps arismoko/horizon#228's host visibility.
 #[test]
 #[ignore = "daily"]
 fn another_guest_follows_a_vehicle_teleported_during_a_turn() {
@@ -1297,7 +1297,7 @@ fn guest_damage_unwind_restores_and_next_same_connection_hit_lands() {
 #[test]
 #[ignore = "daily"]
 /// A real native panic inside `as_guest_messaged` puts the outer message capture back, and the
-/// same connection's next messaged turn runs and captures nothing outside it (#2244).
+/// same connection's next messaged turn runs and captures nothing outside it (arismoko/horizon#2244).
 fn guest_message_capture_is_restored_after_a_real_native_panic() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -1378,7 +1378,7 @@ impl mod_api::Hooks for PanicOnFood {
 
 /// A native `food_level_changed` listener that panics while `leave_guest` reports the turn's
 /// food change still lets the guest swap be restored and the turn's progress be written back,
-/// and the same connection's next turn runs and is heard (#2240).
+/// and the same connection's next turn runs and is heard (arismoko/horizon#2240).
 #[test]
 #[ignore = "daily"]
 fn a_panic_in_a_turn_end_callback_still_restores_the_guest() {

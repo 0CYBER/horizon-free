@@ -31,7 +31,7 @@ impl Game<'_> {
             return None;
         }
         // A stack whose `projectile_spawned` effects the engine cannot all
-        // apply yet (#2670) is refused before anything is made or drawn,
+        // apply yet (arismoko/horizon#2670) is refused before anything is made or drawn,
         // rather than spawned without some of them.
         if !self.projectile_spawned_effects_applied(stack) {
             return None;

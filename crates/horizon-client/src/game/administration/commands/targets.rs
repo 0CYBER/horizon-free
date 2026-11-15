@@ -1,5 +1,5 @@
 //! Target dispatch: the level, position and type a command's target names,
-//! by family. Moved out of `mod.rs` unchanged (#2791's discipline).
+//! by family. Moved out of `mod.rs` unchanged (arismoko/horizon#2791's discipline).
 use super::*;
 
 impl Game<'_> {

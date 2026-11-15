@@ -30,7 +30,7 @@ from tools.ci import rust_changes  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 
 # One package per shard, balanced on the measured test times of the single-job run this
-# plan replaced (CI run #952, e8752e146f: horizon-client 380s, horizon-client-render
+# plan replaced (CI run arismoko/horizon#952, e8752e146f: horizon-client 380s, horizon-client-render
 # 279s, horizon-client-lib 189s, 16m53s wall); horizon-world and horizon-items joined when every library
 # test started running with the data, not only the #[ignore]d ones. Rebalance by editing this tuple only.
 SHARDS = ("horizon-client", "horizon-client-lib", "horizon-client-render", "horizon-world", "horizon-items")

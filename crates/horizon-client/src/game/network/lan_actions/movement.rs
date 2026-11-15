@@ -136,7 +136,7 @@ impl Game<'_> {
     /// is a full collision box that is also a full render cube
     /// (`BlockBehaviour.isSuffocating`'s default; glass and the like opt
     /// out), as the mobs' check has it. A block sharing volume with one of
-    /// guest `conn`'s collision exclusions is no wall (#3717).
+    /// guest `conn`'s collision exclusions is no wall (arismoko/horizon#3717).
     pub(super) fn in_wall(&self, conn: u32, at: [f64; 3], body: Dimensions) -> bool {
         let y = (at[1] + f64::from(body.eye_height)).floor() as i32;
         let [xs, zs] = eye_columns(at, body);

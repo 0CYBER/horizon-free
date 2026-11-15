@@ -1,4 +1,4 @@
-//! A travel into a viewed level (#3716, 9e): the Respawn of `ServerPlayer.teleport(TeleportTransition)`
+//! A travel into a viewed level (arismoko/horizon#3716, 9e): the Respawn of `ServerPlayer.teleport(TeleportTransition)`
 //! (keep 3, all data) into a level the client views swaps the two worlds, as Immersive Portals'
 //! `ClientTeleportationManager.changePlayerDimension` moves the client's world reference: the
 //! viewed world's columns and block entities become the player's, the player's world becomes the

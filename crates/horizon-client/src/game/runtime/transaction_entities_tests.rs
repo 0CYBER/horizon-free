@@ -1,4 +1,4 @@
-//! Entities added and removed inside a transaction (#796), on a real `Game`: an abort takes
+//! Entities added and removed inside a transaction (arismoko/horizon#796), on a real `Game`: an abort takes
 //! back what the action spawned and undoes what it removed, telling no one; a commit announces
 //! joins and runs removals at the root commit; and a spawn refuses near the end of the ids.
 use std::sync::{

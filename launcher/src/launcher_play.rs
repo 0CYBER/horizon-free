@@ -3,7 +3,7 @@ use super::*;
 
 impl Launcher {
     /// After a crash with no report: when the game's output ends while its Vulkan renderer
-    /// started, a native crash in the graphics driver (#746), switches the game to
+    /// started, a native crash in the graphics driver (arismoko/horizon#746), switches the game to
     /// `backend::vulkan_crash_fallback` (DirectX 12 on Windows, OpenGL on Linux; only where the
     /// player left the graphics API on Auto). The API's label when it did.
     pub(crate) fn switched_from_vulkan(&self) -> Option<&'static str> {

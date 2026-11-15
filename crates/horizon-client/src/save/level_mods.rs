@@ -1,6 +1,6 @@
 //! The mods a world was saved with: the code mods in `level.dat`'s `fml.LoadingModList`, the
 //! list NeoForge keeps, and how it compares with the mods loaded now (`ModMismatchEvent`); and
-//! Horizon's own records beside it, with the check before a world opens (#3856).
+//! Horizon's own records beside it, with the check before a world opens (arismoko/horizon#3856).
 //!
 //! `level.dat`'s root `horizon` compound, beside `fml`, records the content mods the world was
 //! saved with (`ContentModList`, the same `{ModId, ModVersion}` compounds as

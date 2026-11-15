@@ -134,7 +134,7 @@ pub struct LootTool {
 /// loot engine; each is None in the other. A table without a mod's kinds
 /// draws nothing and stays bit-for-bit the same.
 pub struct LootContext<'a> {
-    /// First id wins; written after the root and all nested rolls, before #1270's modifier pass.
+    /// First id wins; written after the root and all nested rolls, before arismoko/horizon#1270's modifier pass.
     /// Unset reads as `UNKNOWN_LOOT_TABLE`; nested rolls never write it.
     pub queried_table_id: Option<String>,
     /// Stack whose data is queried; unchanged through nested rolls, absent in existing callers.

@@ -171,7 +171,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.ticks.take_moving_piston(pos)
     }
     /// The block entity the moving piston at `pos` carried, once it is done
-    /// (#3184): installed at `pos`, where `moved` lands, or, when the block
+    /// (arismoko/horizon#3184): installed at `pos`, where `moved` lands, or, when the block
     /// does not land (`lands` false), installed and removed again with its
     /// removal side effects as for a broken block (`side_effects`), so a
     /// container drops what it held instead of losing it.
@@ -688,7 +688,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             shapes.push(state);
             delete_after.put(PosKey(*pos), state);
             // An allowed block entity travels through the existing carry machinery,
-            // taken out before any source is overwritten (#3184).
+            // taken out before any source is overwritten (arismoko/horizon#3184).
             if b.has_flag(state, super::data::state_flags::BLOCK_ENTITY)
                 || self.level.has_mod_block_entity(*pos)
                 || self.level.has_native_block_entity(state)

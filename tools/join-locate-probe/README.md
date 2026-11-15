@@ -41,10 +41,10 @@ zero in each of the three dispatch arms; all three faults must fail this fixture
 It needs prepared resources and is ignored by the ordinary workspace test run.
 The old ordered-tick lookup test moves into join_seq with expanded take/restore coverage.
 The actual dimension-transfer path's fresh-destination-join regression is owned by
-#1771 (`transfer_arrival_rebinds_only_bound_owners_with_the_same_id`).
+arismoko/horizon#1771 (`transfer_arrival_rebinds_only_bound_owners_with_the_same_id`).
 
 No per-removal metadata, tombstones, compatibility path or new residency protocol.
 The table stores join numbers, not list positions; ordinary structural operations
 retain their existing Vec costs. Out-of-order and absent joins retain the old linear
 fallback. The cost and batching experiments that rejected the position index are
-preserved on the superseded #1772 and #1776 branches, not copied into production.
+preserved on the superseded arismoko/horizon#1772 and arismoko/horizon#1776 branches, not copied into production.

@@ -1,4 +1,4 @@
-//! #3120: a bare name is the declaring mod's own, so a block entity type built with
+//! arismoko/horizon#3120: a bare name is the declaring mod's own, so a block entity type built with
 //! `.blocks(&["press"])` holds the block `press` the same mod declares.
 use std::{collections::BTreeSet, fs, path::Path};
 

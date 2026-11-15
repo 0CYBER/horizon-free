@@ -1,4 +1,4 @@
-//! #3717: a mod's collision exclusions on both sides of a guest's moves. Its client walks through
+//! arismoko/horizon#3717: a mod's collision exclusions on both sides of a guest's moves. Its client walks through
 //! a wall where the boxes are, and the server checks each of those moves through its own copy of
 //! the same boxes: it accepts them, and refuses the move into the wall once the boxes are gone.
 use super::*;

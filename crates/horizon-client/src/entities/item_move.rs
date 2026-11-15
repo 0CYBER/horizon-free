@@ -1,5 +1,5 @@
 //! `ItemEntity`'s `Entity.move`: the tick's move step, its collision through
-//! the move gate (#2414) and the block effects around it, in its own module so
+//! the move gate (arismoko/horizon#2414) and the block effects around it, in its own module so
 //! `entities.rs` keeps its size.
 use super::*;
 impl ItemEntity {
@@ -83,7 +83,7 @@ impl ItemEntity {
         // ItemEntity.tick: skip move 3 of 4 ticks while grounded with no
         // horizontal speed. The idle branch still runs bubble-column push
         // (`applyEffectsFromBlocksForLastMovements`), so lift builds up and
-        // the item moves on the next wake-up (#4558).
+        // the item moves on the next wake-up (arismoko/horizon#4558).
         if !self.on_ground
             || horizontal > 1.0e-5
             || self.ticks.wrapping_add(self.id).is_multiple_of(4)
@@ -95,7 +95,7 @@ impl ItemEntity {
             };
             let from = self.position;
             let wanted = self.velocity;
-            // The item's Entity.move goes through the move gate (#2414): armed
+            // The item's Entity.move goes through the move gate (arismoko/horizon#2414): armed
             // before the move's own handling, no-physics and the stuck
             // multiplier included. PR 1a records the movement unchanged.
             let mut gate = crate::move_gate::armed(

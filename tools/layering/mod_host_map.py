@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 STRANDS = ["loading", "host", "slots", "attachments", "content_render", "hooks"]
-# How each strand is resolved (#2534): phases 2 and 4 are dropped (owner, 2026-11-10); phase 6 is not built.
+# How each strand is resolved (arismoko/horizon#2534): phases 2 and 4 are dropped (owner, 2026-11-10); phase 6 is not built.
 LABEL = {"loading": "phase 1", "host": "stays in the engine", "slots": "phase 3",
          "attachments": "stays in the engine", "content_render": "phase 5", "hooks": "phase 6, not built"}
 HOST_AREAS = ("crates/horizon-client/src/game/modding/", "crates/horizon-client/src/game/native_hooks/")

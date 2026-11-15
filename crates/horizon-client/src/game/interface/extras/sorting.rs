@@ -1,4 +1,4 @@
-//! Sorting (`sort`, `sortKey`; #332, `docs/extras.md`), off by default: a small button by a
+//! Sorting (`sort`, `sortKey`; arismoko/horizon#332, `docs/extras.md`), off by default: a small button by a
 //! menu's storage slots and one by the inventory's (an optional key sorts the part under the
 //! cursor). The clicks come from `inv_sort::plan` and go through the Mouse Tweaks' ordinary slot
 //! clicks (`mouse_tweaks.rs`), so they work wherever vanilla's do.

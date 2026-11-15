@@ -69,7 +69,7 @@ impl ModBehavior {
                 .all(|&(memory, want)| matches(want, memory_present(m, memory)))
     }
     /// Run `op` through the tick's goal host, which builds the behavior's
-    /// context and names the mod in a panic. A panic is contained (#824's
+    /// context and names the mod in a panic. A panic is contained (arismoko/horizon#824's
     /// review condition): the behavior is stopped and dropped, and the tick
     /// it panicked in goes on.
     fn run(&mut self, m: &mut Mob, w: &MobWorld<'_>, op: BehaviorOp) -> Option<bool> {
@@ -328,7 +328,7 @@ pub fn set_walk_target(m: &mut Mob, at: [i32; 3], speed: f64, close: i32) {
 }
 
 /// Whether the species thinks with one of the brains wired for mod behaviors
-/// (#824): where `register_behaviors` runs at the brain's own construction.
+/// (arismoko/horizon#824): where `register_behaviors` runs at the brain's own construction.
 /// The species' brains join commit by commit: the villager, then the
 /// animal five, then the monster pair and the warden.
 pub fn has_brain(s: Species) -> bool {
@@ -346,7 +346,7 @@ pub fn has_brain(s: Species) -> bool {
     )
 }
 
-/// Ask the installed entity parts for the mob's behaviors (#824), each into
+/// Ask the installed entity parts for the mob's behaviors (arismoko/horizon#824), each into
 /// `backend` — the brain module's own, which knows its activities. The parts
 /// are named in a panic the way `register_goals` names them.
 pub fn attach(mob_id: &str, backend: &mut dyn BehaviorRegistrarBackend) {
@@ -374,7 +374,7 @@ pub fn attach(mob_id: &str, backend: &mut dyn BehaviorRegistrarBackend) {
     }
 }
 
-/// `register_behaviors` for a type with no brain (#824): every add refuses
+/// `register_behaviors` for a type with no brain (arismoko/horizon#824): every add refuses
 /// with the typed error, so the mod learns at construction that its behavior
 /// runs nowhere on this type. Asked beside `part_goals::attach` at every
 /// `Mob` construction.
@@ -394,7 +394,7 @@ pub fn attach_refused(mob_id: &str) {
     attach(mob_id, &mut Refused(mob_id));
 }
 
-/// The construction-time half of #824, beside `part_goals::attach`: a type
+/// The construction-time half of arismoko/horizon#824, beside `part_goals::attach`: a type
 /// whose species has no brain gets its `register_behaviors` asked with a
 /// registrar that refuses every add. A brain-driven type registers at its
 /// brain's own construction instead, so nothing is asked or built twice.

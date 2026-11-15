@@ -2882,7 +2882,7 @@ pub(crate) mod tests {
         (clicked, held)
     }
 
-    /// `ArmorSlot.mayPlace` for a guest reads the stack's own `equippable` (#2669): an iron
+    /// `ArmorSlot.mayPlace` for a guest reads the stack's own `equippable` (arismoko/horizon#2669): an iron
     /// helmet goes on the head; with its component removed it is no armour, and a shift-click
     /// fills the inventory; an override for the feet puts it there; an `allowed_entities` without
     /// the player, or an explicitly empty one, keeps it off, and a shift-click then moves nothing

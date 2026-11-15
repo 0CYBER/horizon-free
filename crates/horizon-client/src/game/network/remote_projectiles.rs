@@ -1069,7 +1069,7 @@ mod tests {
     /// ticks, so every tick has to carry the value of the one before it.
     #[test]
     fn a_thrown_item_flies_on_between_the_server_updates() {
-        // A thrown egg, an ender pearl and a wind charge (#1762): the server
+        // A thrown egg, an ender pearl and a wind charge (arismoko/horizon#1762): the server
         // sends their position every 10 ticks, and the client ticks them
         // itself in between, as vanilla's no-op interpolation handler does.
         for kind in [

@@ -92,7 +92,7 @@ pub(super) enum Target {
     Spawner(u32),
     /// A simulated lingering, creeper or dragon area-effect cloud.
     Cloud(u32),
-    /// A general entity row, by its entity id (#792).
+    /// A general entity row, by its entity id (arismoko/horizon#792).
     General(u32),
     /// A cast fishing hook (`minecraft:fishing_bobber`), which lives with the
     /// player who cast it. Only a mod's handle names one.

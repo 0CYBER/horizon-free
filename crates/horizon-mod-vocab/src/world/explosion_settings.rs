@@ -1,5 +1,5 @@
 //! The rest of vanilla's full `Level.explode` overload for `LevelRef::explode`: the damage
-//! type, the damage calculator as data, the particles and the sound (#4009).
+//! type, the damage calculator as data, the particles and the sound (arismoko/horizon#4009).
 
 /// What a mod's blast takes beyond the source, centre, radius, fire and
 /// interaction: vanilla's `Level.explode(source, damageSource, calculator, x,

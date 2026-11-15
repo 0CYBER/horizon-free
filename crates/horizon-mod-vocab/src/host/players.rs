@@ -72,7 +72,7 @@ pub trait PlayersClientHost {
         &mut self,
         boxes: &[[f64; 6]],
     ) -> Result<(), CollisionExclusionsError>;
-    /// Moves the window's player through `passage` (#3775), one its server told it of, as
+    /// Moves the window's player through `passage` (arismoko/horizon#3775), one its server told it of, as
     /// Immersive Portals' client does: its feet, where it was a tick ago (so the frames
     /// between two ticks do not jump), its velocity and its look come out at the far side,
     /// turned with the passage, and the server is told the passage and where the feet were.
@@ -651,7 +651,7 @@ pub trait PlayersBackendMut {
     ) -> Result<Option<i32>, OpenMenuError>;
     /// Side: server.
     /// Backs the container slots of the mod menu `window` that `player_open_mod_menu` opened
-    /// for the player with storage that is not a block entity (#3385; NeoForge's
+    /// for the player with storage that is not a block entity (arismoko/horizon#3385; NeoForge's
     /// `StackCopySlot` and `ResourceHandlerSlot`): `places[n]` is what slot `n` shows. From then
     /// on a click or shift-click on those slots, and an `ItemPlace::MenuSlot` write, go through
     /// that storage's own handler, journalled; the client sees ordinary synced slots, mirrored

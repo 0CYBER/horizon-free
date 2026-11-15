@@ -186,7 +186,7 @@ impl Game<'_> {
     /// host and the other guests.
     /// A player who dies digs and uses nothing any more: the block it was
     /// breaking, or had left to break (`hasDelayedDestroy`), stays, and its
-    /// crack goes. Respawning gives it a new ServerPlayerGameMode (#1315).
+    /// crack goes. Respawning gives it a new ServerPlayerGameMode (arismoko/horizon#1315).
     pub(super) fn guest_forget_digging(&mut self, conn: u32) {
         let Some(play) = self.lan.as_mut().and_then(|host| host.play.get_mut(&conn)) else {
             return;

@@ -112,7 +112,7 @@ impl GuestList {
     }
 
     /// [`Self::tracking_viewers`], then the clients that view level `views.0` from another
-    /// (#3716, `viewed_levels::entities`), each with its view's tracker, chunks and areas and
+    /// (arismoko/horizon#3716, `viewed_levels::entities`), each with its view's tracker, chunks and areas and
     /// one of `views.1`, in the guests' order.
     pub(super) fn tracking_viewers_and_views<'a>(
         &'a mut self,

@@ -1,10 +1,10 @@
 # Design: a mod's biomes inside the Overworld and Nether
 
-Scope 2 of [#2554](https://github.com/arismoko/horizon/issues/2554): how a mod's biomes generate among vanilla's in the Overworld and the Nether. The design below was ruled on in [#2554](https://github.com/arismoko/horizon/issues/2554#issuecomment-6803604498) and built in the stages listed at the end. One part is not built yet and is marked so. Scope 1, a mod's own dimension with its own climate points (`BiomeSourceKind::Points`), is separate and does not need this note.
+Scope 2 of [arismoko/horizon#2554](https://github.com/arismoko/horizon/issues/2554): how a mod's biomes generate among vanilla's in the Overworld and the Nether. The design below was ruled on in [arismoko/horizon#2554](https://github.com/arismoko/horizon/issues/2554#issuecomment-6803604498) and built in the stages listed at the end. One part is not built yet and is marked so. Scope 1, a mod's own dimension with its own climate points (`BiomeSourceKind::Points`), is separate and does not need this note.
 
 ## Starting points
 
-Ari's answer on #2554 set two starting points:
+Ari's answer on arismoko/horizon#2554 set two starting points:
 
 - **Regions with weights.** Each mod lays out its biomes in its own region. A hidden extra parameter decides which region owns an area, and vanilla's layout is one region among them. Ordering between mods is settled by the regions, not by competing for the same climate points.
 - **The mix is fixed when the world is created and saved with the world.** Terrain in an existing world changes only by a recorded, per-world choice.
@@ -19,7 +19,7 @@ The same answer says NeoForge has no API for this: its biome modifiers change bi
 | The game writes the level stem's `biome_source` JSON; the generator decodes and resolves it once per dimension. | `biome_source` in `game/modding/native_dimensions.rs`; `worldgen/biome_source/codec.rs`, `runtime.rs` |
 | A multi-noise source is a list of `(ParameterPoint, biome)` searched for the nearest point to the six climate values and a zero offset. | `worldgen/climate/index.rs` (`ClimateIndex`, `ClimateSearch`) |
 | The Overworld's and the Nether's lists are named presets read from the prepared data, not data a mod can extend. | `GeneratorData::load`, `MultiNoiseBiomeSource::from_quantized_json` |
-| A chunk stores its biomes per section, so a chunk that already exists keeps them whatever the source says later. A saved biome the game lacks is kept by name once #3132 lands. | `decode_column` / `encode_with` in `crates/horizon-client/src/save.rs` |
+| A chunk stores its biomes per section, so a chunk that already exists keeps them whatever the source says later. A saved biome the game lacks is kept by name once arismoko/horizon#3132 lands. | `decode_column` / `encode_with` in `crates/horizon-client/src/save.rs` |
 | Terrain shape never reads the biome: density and the router read only climate. Surface rules and `carver_biome` do read it. | `worldgen/density.rs`, `router.rs`, `generator.rs` |
 | Seeded Overworld and Nether preset output is already compared with the Java oracle. | `tools/test_biome_generation_parity.py` |
 
@@ -88,7 +88,7 @@ The same resource-gated generated-column fixture also saves and reloads both `Te
 
 ## Stages
 
-1. Saved biome ids kept when the game lacks them (#3132).
+1. Saved biome ids kept when the game lacks them (arismoko/horizon#3132).
 2. `BiomeRegion`, `declare_biome_region` and validation, with unit tests and a wire round trip. No generator change. **Built.**
 3. Region selection in the biome source (`ResolvedBiomeSource`), behind "no record means today's path", with the oracle, distribution, order and structure fixtures. **Built.**
 4. The saved record (`crates/horizon-client/src/save/biome_regions.rs`), world create and open, the missing-mod prompt, the server settings and the opt-in, with this acceptance matrix. **Built**, with client adoption on Edit World. Creation on both roles is covered by the ignored `game::world_loading::tests::both_server_roles_record_regions_before_world_generation` fixture.

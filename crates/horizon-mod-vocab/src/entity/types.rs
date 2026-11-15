@@ -1452,7 +1452,7 @@ pub enum Sentiment {
 }
 
 /// Why an entity physically moves (`Entity.move`'s `MoverType`, the
-/// `entity_move` hook of #2308/#2414): itself, the player behind a position
+/// `entity_move` hook of arismoko/horizon#2308/#2414): itself, the player behind a position
 /// packet, a piston, a shulker box lid, a shulker mob's opening lid. Boats
 /// and minecarts pass `SelfMovement`, as vanilla's own kinds do; `Player` is
 /// the server packet sites only.

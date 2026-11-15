@@ -1,6 +1,6 @@
 # Dropped-item writes during mod block-entity ticks
 
-This design implements the port's transactional requirement tracked in #2846, not vanilla or NeoForge behavior. NeoForge adds no event, deferral or drop capture around a block entity's tick; newly spawned item entities join immediately. Its block-break and entity death/shear captures are separate mechanisms. This overlay exists only to keep existing-item host writes atomic with acceptance of the port's mod block-entity snapshot.
+This design implements the port's transactional requirement tracked in arismoko/horizon#2846, not vanilla or NeoForge behavior. NeoForge adds no event, deferral or drop capture around a block entity's tick; newly spawned item entities join immediately. Its block-break and entity death/shear captures are separate mechanisms. This overlay exists only to keep existing-item host writes atomic with acceptance of the port's mod block-entity snapshot.
 
 With no scope open, the engine behaves exactly as vanilla for these item operations: changes are immediate, the overlay remains None, and nothing is staged. New item spawning remains immediate even while the mod tick scope is open.
 

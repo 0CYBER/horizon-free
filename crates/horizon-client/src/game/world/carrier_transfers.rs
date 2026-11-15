@@ -1,7 +1,7 @@
 //! Carrier transfers in the server's game: the fences that hold the
 //! world's cells and the carrier still while an operation is between
 //! prepared and committed, and the assembly that runs at a tick
-//! boundary (issue #2413, slice 2 part C).
+//! boundary (issue arismoko/horizon#2413, slice 2 part C).
 //!
 //! A transfer is one synchronous call on the server's thread at a tick
 //! boundary: no tick runs between `prepared` and `committed`, so routes
@@ -164,7 +164,7 @@ impl Game<'_> {
     ///
     /// Order: preflight; the operation encoded in memory; the affected
     /// chunks forced to disk with the writer's acknowledged barrier
-    /// (before the #2488 obligation, under which saves refuse); a
+    /// (before the arismoko/horizon#2488 obligation, under which saves refuse); a
     /// revalidation that every cell still holds exactly its preflight
     /// state and entity — a mismatch refuses with the world and the
     /// store untouched; then, under the obligation, the operation file
@@ -393,7 +393,7 @@ impl Game<'_> {
         let encoded = encode_operation(&operation).map_err(|_| TransferError::Envelope)?;
 
         // The affected chunks reach the disk, acknowledged, before the
-        // obligation: under #2488 saves refuse, so this must precede the
+        // obligation: under arismoko/horizon#2488 saves refuse, so this must precede the
         // lease. Replay will find its pre-image here.
         store
             .check_admission(OpKind::Assemble, uuid, generation)
@@ -408,7 +408,7 @@ impl Game<'_> {
         self.revalidate_cells(&operation_cells, registry)?;
 
         // From here the path runs forward to `committed`. The lift is
-        // under #2488's obligation, fenced until the barrier confirms.
+        // under arismoko/horizon#2488's obligation, fenced until the barrier confirms.
         let _lease = PassLease::enter();
         // The immutable carrier is published and verified by reading it
         // back BEFORE any intent exists: once `prepared` runs, the
@@ -2304,7 +2304,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Every save route refuses while the #2488 obligation holds —
+    /// Every save route refuses while the arismoko/horizon#2488 obligation holds —
     /// autosave, save-all, requested parked saves and the shutdown
     /// save all enter through `admit_entity_save` — and admits again
     /// the moment the transfer commits. The transfer runs inside one
@@ -2335,7 +2335,7 @@ mod tests {
                 game.levels.request_save(game.dim);
                 game.run_requested_saves();
                 // The requested save was refused while lifted and stays
-                // queued for the next tick, as #2488 defines.
+                // queued for the next tick, as arismoko/horizon#2488 defines.
                 assert!(game.levels.save_pending(game.dim));
             }
             // Committed: the routes admit again (the full save writes
@@ -2474,7 +2474,7 @@ mod tests {
         .unwrap();
     }
 
-    /// The #2488 obligation is what autosave and `save-all` refuse on:
+    /// The arismoko/horizon#2488 obligation is what autosave and `save-all` refuse on:
     /// holding it refuses, releasing it admits again.
     #[test]
     fn the_save_obligation_gates_saves() {

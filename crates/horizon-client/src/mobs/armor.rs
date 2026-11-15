@@ -58,7 +58,7 @@ fn effective(map: Option<&EntityAttributes>, name: &str, base: f64, bonus: f64) 
 /// LivingEntity.getArmorValue floors the effective double before converting
 /// its integer result to float. Toughness converts its effective double directly.
 ///
-/// The live attribute map answers first (#941): the type's base, what
+/// The live attribute map answers first (arismoko/horizon#941): the type's base, what
 /// `/attribute` and the save left, a mod's modifiers, and every worn or held
 /// stack's own `attribute_modifiers`, components included — the same map a
 /// `LivingRef` reads, which the tick's equipment pass keeps current. A
@@ -191,7 +191,7 @@ mod tests {
     }
 
     /// A worn stack's modifiers are the live map's transient rows, whatever
-    /// changed them: a mod's, `/item`'s or `set_equipment`'s (#941).
+    /// changed them: a mod's, `/item`'s or `set_equipment`'s (arismoko/horizon#941).
     fn wear(mob: &mut Mob, catalog: &Arc<Catalog>, amount: f64, operation: Operation) {
         mob.extra
             .live

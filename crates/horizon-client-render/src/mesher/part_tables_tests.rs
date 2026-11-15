@@ -1,4 +1,4 @@
-//! What `fluid::tesselate` draws from the client `BlockPart` tables (#3191): a water source with
+//! What `fluid::tesselate` draws from the client `BlockPart` tables (arismoko/horizon#3191): a water source with
 //! one block beside it, east, and air everywhere else.
 use super::fluid::tesselate;
 use super::part_tables::{FluidTable, PartTables};

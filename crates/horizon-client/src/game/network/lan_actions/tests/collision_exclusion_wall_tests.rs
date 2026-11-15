@@ -1,4 +1,4 @@
-//! #3717: a block sharing volume with one of a player's collision exclusions is no wall: the
+//! arismoko/horizon#3717: a block sharing volume with one of a player's collision exclusions is no wall: the
 //! server's `isInWall` doesn't count it, and the client doesn't push its player out of it.
 use crate::game::Game;
 use horizon_core::geometry::Vec3;

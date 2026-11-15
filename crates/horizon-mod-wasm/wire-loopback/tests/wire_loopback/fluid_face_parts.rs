@@ -1,4 +1,4 @@
-//! The fluid-face `BlockPart` methods (#3191) cross the wire with their arguments and answers
+//! The fluid-face `BlockPart` methods (arismoko/horizon#3191) cross the wire with their arguments and answers
 //! intact: a wasm part sees the state, the direction and the fluid the game asked with, and its
 //! answer comes back to the game.
 use super::*;

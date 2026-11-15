@@ -1,4 +1,4 @@
-//! Viewed levels (#3716): a client that keeps levels besides its own, so that a server can send it
+//! Viewed levels (arismoko/horizon#3716): a client that keeps levels besides its own, so that a server can send it
 //! the chunks and updates of another level, each packet wrapped with that level. One reserved
 //! engine channel carries it, [`CHANNEL`], used by both sides.
 //!
@@ -15,12 +15,12 @@
 //!
 //! | Revision | Feature | Introduced by |
 //! |---|---|---|
-//! | 1 | Viewed levels, stages 9a–9d: channel and play payloads below | #3716 |
-//! | 2 ([`REVISION_2`]) | Switch into a viewed level on Respawn (keep 3), retaining the level left as viewed ([`Answer::switches`]) | #4004 |
-//! | 3 ([`REVISION_3`]) | Viewed levels' sounds ([`SOUNDS`], [`Answer::sounds`]) | #3983 |
-//! | 4 ([`REVISION_4`]) | A level is named by a slot and the epoch of its `open` ([`Level::Bound`], [`Answer::bindings`]), so a level opened after Login can be viewed; `open` carries the server's column cap; `swap` | #4152, #3894 |
+//! | 1 | Viewed levels, stages 9a–9d: channel and play payloads below | arismoko/horizon#3716 |
+//! | 2 ([`REVISION_2`]) | Switch into a viewed level on Respawn (keep 3), retaining the level left as viewed ([`Answer::switches`]) | arismoko/horizon#4004 |
+//! | 3 ([`REVISION_3`]) | Viewed levels' sounds ([`SOUNDS`], [`Answer::sounds`]) | arismoko/horizon#3983 |
+//! | 4 ([`REVISION_4`]) | A level is named by a slot and the epoch of its `open` ([`Level::Bound`], [`Answer::bindings`]), so a level opened after Login can be viewed; `open` carries the server's column cap; `swap` | arismoko/horizon#4152, arismoko/horizon#3894 |
 //!
-//! Pending acts (#3982) take the next free revision when they land. A new message kind is
+//! Pending acts (arismoko/horizon#3982) take the next free revision when they land. A new message kind is
 //! accepted only at its own revision or later; its decoder must land before any sender enables it.
 //!
 //! **Play** (clientbound only): the payload after the channel is a kind byte, then:
@@ -32,7 +32,7 @@
 //! | 2 `close` | level | Every chunk of the level was forgotten: the client drops the world. |
 //! | 3 `swap` | level (revision 4 only) | Right after a travel's Respawn: the level left is bound there. |
 //!
-//! **The column cap** (revision 4, #3894) is the most columns the server sends of that level to
+//! **The column cap** (revision 4, arismoko/horizon#3894) is the most columns the server sends of that level to
 //! that client: its per-player `Loaded` cap. The client refuses a column past it, and an `open`
 //! whose cap passes [`MAX_COLUMNS`], its own ceiling, which a server's setting never passes.
 //! Before revision 4 the cap is [`LEGACY_COLUMNS`], fixed.
@@ -71,9 +71,9 @@ pub const CHANNEL: &str = "horizon:levels";
 /// Revision 2 of the exchange: what a client of it does besides revision 1's is in the module's
 /// list of revisions.
 pub const REVISION_2: u8 = 2;
-/// Revision 3 of the exchange (#3983): see the module's list of revisions.
+/// Revision 3 of the exchange (arismoko/horizon#3983): see the module's list of revisions.
 pub const REVISION_3: u8 = 3;
-/// Revision 4 of the exchange (#4152): see the module's list of revisions.
+/// Revision 4 of the exchange (arismoko/horizon#4152): see the module's list of revisions.
 pub const REVISION_4: u8 = 4;
 /// The capability exchange's revision this build asks and answers.
 pub const REVISION: u8 = REVISION_4;

@@ -1473,7 +1473,7 @@ impl<L: super::signal_access::SignalAccess + ?Sized> Signals<'_, L> {
     /// `RedstoneWireBlock.canSurvive` and `updateShape`'s down face: the block
     /// below is read through `support_state`, since a retracting piston's
     /// `moving_piston` block carries the extended base only through its block
-    /// entity and its exported facts call every face unsupported (#4728).
+    /// entity and its exported facts call every face unsupported (arismoko/horizon#4728).
     fn wire_can_survive_on(&self, pos: BlockPos) -> bool {
         let state = self.support_state(pos);
         self.sturdy(pos, Direction::Up) || self.b.is_block(state, self.b.named.hopper)

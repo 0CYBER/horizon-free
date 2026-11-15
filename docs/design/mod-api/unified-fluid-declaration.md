@@ -1,6 +1,6 @@
 # Design: unified fluid declaration
 
-Provisional proposal for [#2436](https://github.com/arismoko/horizon/issues/2436).
+Provisional proposal for [arismoko/horizon#2436](https://github.com/arismoko/horizon/issues/2436).
 Maintainer approval is required before implementation. No Rust changes land with
 this note.
 
@@ -125,7 +125,7 @@ flow stays O(1), with no mod scan, string creation, allocation or lock; vanilla
 water/lava retain their fast branch. Tags/predicates use resolved membership
 sets, not a second FluidKind or a u128 ceiling that truncates mod identities.
 
-[PR #2453](https://github.com/arismoko/horizon/pull/2453) owns transaction tokens,
+[PR arismoko/horizon#2453](https://github.com/arismoko/horizon/pull/2453) owns transaction tokens,
 close validation and fluid tank write authorization in `native_fluids.rs`,
 `parts/fluids.rs` and the transaction runtime/Wire forms. This proposal consumes
 that authority check; it does not redesign markers, mint authority or duplicate
@@ -156,7 +156,7 @@ and rollback semantics, rebasing against whichever version lands first.
 | Save/reload | Name round trip preserves identity despite changed process ordering; open savepoint refuses save |
 | First upgrade or corrupt schema | Existing world with missing, unreadable or corrupt saved schema refuses before chunk loading or any write; original files remain byte-for-byte unchanged |
 | New world schema | Persist the validated initial schema before allowing chunk publication or saves |
-| Transaction abort | Tank insert followed by abort restores original amount; forged authority follows #2453 refusal |
+| Transaction abort | Tank insert followed by abort restores original amount; forged authority follows arismoko/horizon#2453 refusal |
 
 Tag membership also requires replacing the current vanilla-only mask behavior
 (`crates/horizon-world/src/fluid.rs:258`); custom membership is proposed here.
@@ -183,7 +183,7 @@ against vanilla before treating its NeoForge claims as an oracle.
    Update every caller, sample, fixture, catalog note, docs/mods.md and affected
    modding book pages in that same implementation change.
 3. Resolve world/template/light/model tables and port the upstream physics tests.
-   Preserve transaction ownership from #2453; add native/wasm acceptance fixtures.
+   Preserve transaction ownership from arismoko/horizon#2453; add native/wasm acceptance fixtures.
 
 Migration is a clean break: delete FluidLook and the separate world declaration
 entry point, rewrite existing content and samples to Fluid placement modes, and

@@ -1,6 +1,6 @@
 # Design: vehicle health layout
 
-Provisional implementation contract for #2741; records the provisional answers A and B, with vanilla default sizing preserved.
+Provisional implementation contract for arismoko/horizon#2741; records the provisional answers A and B, with vanilla default sizing preserved.
 Approval admits this note only; public counterpart verification remains a shipping gate.
 Mods supply effective maximum **hearts**, not rows. The engine prepares one immutable
 result per visible HUD frame, before reserving space or drawing any status layer.
@@ -32,7 +32,7 @@ References are against main at `d57e01504e`.
   preceding mod layers, Pre, conditional drawing, then Post. Today Post runs even
   when Pre cancels. Preserve that existing behavior pending verified counterpart evidence.
 
-PR #2697 moves vocabulary `hud_layout.rs`; PR #2586 touches `mounts.rs`. Re-resolve
+PR arismoko/horizon#2697 moves vocabulary `hud_layout.rs`; PR arismoko/horizon#2586 touches `mounts.rs`. Re-resolve
 these owners after they land; do not create a parallel vocabulary or mount path.
 
 ## Vanilla and public counterpart evidence
@@ -159,7 +159,7 @@ frame-to-frame riding changes, one invocation per frame, and no-listener equival
 1. Verify the public NeoForge counterpart and settle the provisional name. Use
    the registered attribute bounds above for implementation.
 2. Add the shared preparation record, catalog/Wire contract and both adapters;
-   update the three consumers together, after reconciling #2697 and #2586.
+   update the three consumers together, after reconciling arismoko/horizon#2697 and arismoko/horizon#2586.
 3. Add focused layout and native/wasm dispatch tests for the matrix, then regenerate
    hook and boundary documentation. This proposal itself changes documentation only.
 

@@ -687,7 +687,7 @@ fn a_mod_screen_on_a_machine_menu_takes_the_stock_layout_out() {
 /// A falling block is drawn moved by its column's model offset, as
 /// `ModelBlockRenderer.tesselateBlock` does with `BlockState.getOffset`
 /// of `BlockPos.containing(x, maxY, z)`: a pointed dripstone that breaks
-/// off stays where it hung instead of jumping to the block's centre (#4102).
+/// off stays where it hung instead of jumping to the block's centre (arismoko/horizon#4102).
 #[test]
 fn a_falling_block_keeps_its_model_offset() {
     let at = Vec3::new(3.5, 70.25, -1.5);
@@ -797,7 +797,7 @@ fn falling_block_does_not_descend_through_scaffolding() {
 }
 
 /// A key bound to key.attack keeps attacking while it is held: each
-/// repeat clicks like the press (#3243).
+/// repeat clicks like the press (arismoko/horizon#3243).
 #[test]
 fn a_held_key_bound_to_a_button_repeats_its_clicks() {
     assert_eq!(keyboard_button(true, KeyAction::Press), Some(true));
@@ -978,7 +978,7 @@ fn selecting_creative_tabs_does_not_drop_the_carried_stack_on_release() {
 }
 
 /// Eyes under water: the ray hits the source the eyes are in, at the eyes
-/// (#3787), whichever way it looks.
+/// (arismoko/horizon#3787), whichever way it looks.
 #[test]
 fn a_ray_starting_inside_a_source_hits_it_at_the_start() {
     let eye = [0.5, 65.62, 0.5];

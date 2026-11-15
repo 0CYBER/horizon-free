@@ -22,7 +22,7 @@ fn validate_in(
             return true;
         };
         let existing = previous.iter().any(|old| old.set == addition.set);
-        // Keep ownership aligned with PartRegistrar::owned_declaration_id (parts/owned_namespaces.rs, #2617).
+        // Keep ownership aligned with PartRegistrar::owned_declaration_id (parts/owned_namespaces.rs, arismoko/horizon#2617).
         let owned = package.map_or(namespace == owner, |package| {
             package.namespaces().any(|owned| owned == namespace)
         });

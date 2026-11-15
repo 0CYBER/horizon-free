@@ -132,7 +132,7 @@ impl Game<'_> {
         b.chest.then_some(b.items.len())
     }
     /// How many equipment slots living entity `entity`'s [`ENTITY_ITEMS`](mod_api::ENTITY_ITEMS)
-    /// answers (#932, NeoForge's `LivingEntityEquipmentWrapper`): a mob's or an armor stand's
+    /// answers (arismoko/horizon#932, NeoForge's `LivingEntityEquipmentWrapper`): a mob's or an armor stand's
     /// seven (main hand, off hand, feet, legs, chest, head and body, by `EquipmentSlot`'s
     /// ordinal; the saddle is not automation's to move), none for any other entity, and on a
     /// client.
@@ -190,7 +190,7 @@ impl Game<'_> {
         if !self.places_simulated() || stack.count == 0 {
             return 0;
         }
-        // A write to a backed mod menu's storage (#3385) is noticed; none is backed in vanilla.
+        // A write to a backed mod menu's storage (arismoko/horizon#3385) is noticed; none is backed in vanilla.
         self.notice_menu_place_write(place);
         if let ItemPlace::Scratch(id) | ItemPlace::ScratchSlots(id) = place {
             return self.scratch_insert(*id, &stack);
@@ -422,11 +422,11 @@ impl Game<'_> {
         });
         took
     }
-    /// Writes mob `entity`'s equipment `slot` (#932): the same write
+    /// Writes mob `entity`'s equipment `slot` (arismoko/horizon#932): the same write
     /// `native_living_set_equipment` makes — stack, attribute map, equip sound and game event
     /// — with the effects waiting for the root commit of the open transaction, so an abort of
     /// it is quiet. The equipment goes back then too (`journal_equipment`).
-    /// The equipment `slot` of living entity `entity` (#932): a mob's
+    /// The equipment `slot` of living entity `entity` (arismoko/horizon#932): a mob's
     /// (`equipment_stacks`, the worn stacks overlaid) or an armor stand's
     /// own, `None` where the slot is empty. None where neither kind is
     /// there — and on a client, whose copy writes nothing.
@@ -440,7 +440,7 @@ impl Game<'_> {
         let stand = self.armor_stands.iter().find(|a| a.id == entity)?;
         Some(stand.equipment.get(slot as usize).cloned())
     }
-    /// The equipment write `set_equipment` makes (#932), deferred: whether it
+    /// The equipment write `set_equipment` makes (arismoko/horizon#932), deferred: whether it
     /// landed. False where the entity is gone or a client's copy refuses.
     fn write_entity_equipment(
         &mut self,
@@ -910,7 +910,7 @@ pub(super) mod tests {
         30
     }
 
-    /// A living entity's [`ENTITY_ITEMS`] is its equipment (#932): seven slots by
+    /// A living entity's [`ENTITY_ITEMS`] is its equipment (arismoko/horizon#932): seven slots by
     /// `EquipmentSlot`'s ordinal, the armour ones taking only what their `equippable`
     /// names for that kind, the writes transactional — an abort puts the equipment back
     /// and stays quiet, a commit is `set_equipment`'s write.
@@ -985,7 +985,7 @@ pub(super) mod tests {
     }
 
     /// A committed equipment write through the handler is `set_equipment`'s: the same
-    /// stacks, and the same attribute map (#941's live map reads the worn armour).
+    /// stacks, and the same attribute map (arismoko/horizon#941's live map reads the worn armour).
     #[test]
     #[ignore = "daily"]
     fn a_committed_equipment_write_matches_set_equipments() {
@@ -1032,7 +1032,7 @@ pub(super) mod tests {
                 b.equipment_stacks().get(4).cloned(),
                 "the same worn stack"
             );
-            // The attribute map answers the same armour for both (#941).
+            // The attribute map answers the same armour for both (arismoko/horizon#941).
             let read = |game: &super::Game<'_>, id: u32| {
                 let living = game.living(game.entity(id).unwrap()).unwrap();
                 let host: &dyn mod_api::Host = game;
@@ -2355,9 +2355,9 @@ pub(super) mod tests {
         });
     }
 
-    /// #932, review: an armor stand's equipment through the same handler —
+    /// arismoko/horizon#932, review: an armor stand's equipment through the same handler —
     /// a hopper dressing a stand — journaled like a mob's, an abort putting
-    /// #932, review: an armor stand's equipment through the same handler —
+    /// arismoko/horizon#932, review: an armor stand's equipment through the same handler —
     /// a hopper dressing a stand — journaled like a mob's, an abort putting
     /// it back and a commit matching `set_equipment`.
     #[test]

@@ -350,7 +350,7 @@ pub(super) fn gameplay_tables(
             let conditions = horizon_world::conditions::LoadConditions::new(inventory.server_ids());
             let mut motion =
                 MotionResources::load_with_conditions(root, assets, &facts, &conditions)?;
-            // #812: the attribute types mods declare come first, appended
+            // arismoko/horizon#812: the attribute types mods declare come first, appended
             // after every vanilla attribute in the sorted catalog order, so
             // the rows below may name a mod's own new attribute and the
             // network ids stay the same on every side running these mods.
@@ -359,17 +359,17 @@ pub(super) fn gameplay_tables(
                 motion.attributes =
                     std::sync::Arc::new(with_mod_attributes(&motion.attributes, declared)?);
             }
-            // #3728: then the bounds mods widen, on vanilla's attributes and
+            // arismoko/horizon#3728: then the bounds mods widen, on vanilla's attributes and
             // the declared ones alike, before anything reads a definition.
             let widenings = mod_api::__private::attribute_bounds_widenings();
             if !widenings.is_empty() {
                 motion.attributes =
                     std::sync::Arc::new(with_mod_widened_bounds(&motion.attributes, widenings)?);
             }
-            // #845: a mod's declared attribute sets
+            // arismoko/horizon#845: a mod's declared attribute sets
             // (`EntityAttributeCreationEvent`) become their entity types' rows
             // in the live attribute map's catalog — the one record the mob
-            // logic and the attribute sync read (#1493) — built from the
+            // logic and the attribute sync read (arismoko/horizon#1493) — built from the
             // template's row, as the type's content row is.
             for declaration in mod_api::__private::entity_attribute_declarations() {
                 motion.attributes = std::sync::Arc::new(
@@ -385,7 +385,7 @@ pub(super) fn gameplay_tables(
                         })?,
                 );
             }
-            // #846: then the attributes mods add to existing types
+            // arismoko/horizon#846: then the attributes mods add to existing types
             // (`EntityAttributeModificationEvent`, fired after the creation
             // event), on the same catalog rows.
             let modifications = mod_api::__private::entity_attribute_modifications();
@@ -409,7 +409,7 @@ pub(super) fn gameplay_tables(
     })
 }
 
-/// The catalog with the attribute types mods declared (#812,
+/// The catalog with the attribute types mods declared (arismoko/horizon#812,
 /// `Registrar::declare_attribute`), appended after every vanilla attribute:
 /// `Catalog::with_attributes` sorts them by declaring mod id, then attribute
 /// id, and refuses a duplicate, naming it.
@@ -463,7 +463,7 @@ pub(super) fn with_mod_attributes(
         .map_err(|error| format!("mod attribute declarations: {error}"))
 }
 
-/// The catalog with the attribute bounds mods widened (#3728,
+/// The catalog with the attribute bounds mods widened (arismoko/horizon#3728,
 /// `Registrar::widen_attribute_bounds`): the union of every ask, whatever the
 /// load order. An unknown attribute, or a range without the attribute's
 /// default, refuses the load, naming the mod.
@@ -486,7 +486,7 @@ pub(super) fn with_mod_widened_bounds(
 }
 
 /// The catalog with the attributes mods add to existing entity types
-/// (#846, `EntityAttributeModificationEvent`), in registration order, so a
+/// (arismoko/horizon#846, `EntityAttributeModificationEvent`), in registration order, so a
 /// later addition of the same attribute wins. An unknown attribute or a type
 /// without a row refuses the load, naming the type.
 pub(super) fn with_mod_attribute_additions(
@@ -509,7 +509,7 @@ pub(super) fn with_mod_attribute_additions(
 
 /// Each mob type mods added attributes to takes its grown catalog row
 /// (`with_mod_attribute_additions`) as its attribute map and spawn fields, as
-/// a declared set's type does (#845), so a new mob of the type spawns with
+/// a declared set's type does (arismoko/horizon#845), so a new mob of the type spawns with
 /// what the live map answers. A type with no mob type (the player) builds
 /// its map from the catalog alone.
 pub(super) fn take_modified_attribute_rows(
@@ -889,7 +889,7 @@ pub(super) fn load_resources(
 /// Write the prepared folder's `horizon-data.bin` when it has none the game
 /// can use: on a thread of its own, at idle priority, once the start is done.
 /// This start has just read the folder's files (they are in the disk cache);
-/// the next starts read them from one file (#1961).
+/// the next starts read them from one file (arismoko/horizon#1961).
 pub(super) fn write_prepared_files(root: PathBuf) {
     use horizon_core::prepared_files;
     if prepared_files::open(&root).is_some() || !root.join("horizon-resources.json").is_file() {

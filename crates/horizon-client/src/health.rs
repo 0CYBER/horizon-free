@@ -751,13 +751,13 @@ pub struct PlayerHealth {
     pub food: FoodData,
     pub hurt: State,
     pub accepted_hit: Option<std::sync::Arc<AcceptedHit>>,
-    /// `Entity.permanentlyInvulnerable` (#916): the NBT `Invulnerable` flag,
+    /// `Entity.permanentlyInvulnerable` (arismoko/horizon#916): the NBT `Invulnerable` flag,
     /// what `Entity.setInvulnerable` writes — a field apart from
     /// `Abilities.invulnerable` (the game mode the client is told about),
     /// which vanilla keeps separately too. Not saved: Horizon's player save
     /// keeps no such field yet.
     pub permanently_invulnerable: bool,
-    /// `Entity.invulnerableTime` (#916): the entity-level invulnerability
+    /// `Entity.invulnerableTime` (arismoko/horizon#916): the entity-level invulnerability
     /// window, its own field — never the damage cooldown (`hurt.cooldown`).
     pub invulnerable_time: i32,
     /// Client hurt animation; fully blocked hits only refresh the server's hurt state.
@@ -860,7 +860,7 @@ impl PlayerHealth {
             self.hurt.cooldown -= 1;
         }
         // Entity.baseTick: the entity-level window counts down too, its own
-        // timer (#916), never the damage cooldown above.
+        // timer (arismoko/horizon#916), never the damage cooldown above.
         if self.invulnerable_time > 0 {
             self.invulnerable_time -= 1;
         }
@@ -944,7 +944,7 @@ impl PlayerMotion {
     /// [`hurt_blocking`](Self::hurt_blocking) from a source whose hit was a
     /// creative player's (`DamageSource.isCreativePlayer`): it passes the
     /// invulnerability the victim has (`Entity.isInvulnerableToBase`'s one
-    /// exception, #916).
+    /// exception, arismoko/horizon#916).
     pub fn hurt_blocking_creative(
         &mut self,
         level: &mut DamageLevel<'_>,
@@ -1026,7 +1026,7 @@ impl PlayerMotion {
             living_cause,
             causing,
             armor_weapon,
-            // The invulnerability refusal's inputs (#916), kept as the hit
+            // The invulnerability refusal's inputs (arismoko/horizon#916), kept as the hit
             // was, for the Environment the pipeline's own rule reads.
             invulnerable: self.invulnerable,
             permanently_invulnerable: self.health.permanently_invulnerable,
@@ -1288,12 +1288,12 @@ pub(crate) struct Environment<'a> {
     /// `Abilities.invulnerable`, the game mode (`Player.hurtServer`'s own
     /// gate answers it, which no creative hit passes).
     pub(crate) invulnerable: bool,
-    /// `Entity.permanentlyInvulnerable` (#916): the NBT flag.
+    /// `Entity.permanentlyInvulnerable` (arismoko/horizon#916): the NBT flag.
     pub(crate) permanently_invulnerable: bool,
-    /// `Entity.invulnerableTime > 0` (#916): the entity-level window.
+    /// `Entity.invulnerableTime > 0` (arismoko/horizon#916): the entity-level window.
     pub(crate) invulnerable_time: bool,
     /// The hit is a creative player's (`DamageSource.isCreativePlayer`,
-    /// #916): it passes the invulnerability below.
+    /// arismoko/horizon#916): it passes the invulnerability below.
     pub(crate) creative_source: bool,
     /// The player's client has loaded the world since its last respawn or
     /// level change (`ServerGamePacketListenerImpl.hasClientLoaded`).
@@ -1361,13 +1361,13 @@ pub struct PausedHurt {
     causing: i32,
     /// The attacker's weapon, for the armour fraction's `armor_effectiveness`.
     armor_weapon: Option<ArmorWeapon>,
-    /// `Abilities.invulnerable` at the hit's start (#916).
+    /// `Abilities.invulnerable` at the hit's start (arismoko/horizon#916).
     invulnerable: bool,
-    /// `Entity.permanentlyInvulnerable` at the hit's start (#916).
+    /// `Entity.permanentlyInvulnerable` at the hit's start (arismoko/horizon#916).
     permanently_invulnerable: bool,
-    /// `Entity.invulnerableTime > 0` at the hit's start (#916).
+    /// `Entity.invulnerableTime > 0` at the hit's start (arismoko/horizon#916).
     invulnerable_time: bool,
-    /// The hit is a creative player's (`isCreativePlayer`, #916).
+    /// The hit is a creative player's (`isCreativePlayer`, arismoko/horizon#916).
     creative_source: bool,
     blocking: Option<Blocking>,
     blocked: f32,

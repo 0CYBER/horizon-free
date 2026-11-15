@@ -1,5 +1,5 @@
 //! The cart's `Entity.move` — `AbstractMinecart.move`'s own tick move through
-//! the move gate (#2414) — in its own module so `minecarts.rs` keeps its size.
+//! the move gate (arismoko/horizon#2414) — in its own module so `minecarts.rs` keeps its size.
 use super::Game;
 use super::minecarts::{CartKind, Minecart};
 use horizon_client::collisions::SceneCollisions;
@@ -8,7 +8,7 @@ impl Game<'_> {
     /// Entity.move for a cart: collisions zero the blocked components, the world border's walls
     /// among them (`CollisionGetter.borderCollision`, asked for every entity).
     pub(super) fn move_cart(&self, c: &mut Minecart, delta: Vec3) {
-        // The cart's own move is a self move (#2414: vanilla's
+        // The cart's own move is a self move (arismoko/horizon#2414: vanilla's
         // `AbstractMinecart.move` passes SELF for its own tick); PR 1a
         // records the movement unchanged.
         let mut gate = horizon_client::move_gate::armed(

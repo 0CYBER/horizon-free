@@ -1,6 +1,6 @@
 # Design: offline players and selection
 
-Provisional answer to [#989](https://github.com/arismoko/horizon/issues/989), including Ari’s release comment: move the existing user cache into each authoritative server Game lifecycle; extract one immutable selector evaluator with an explicit ordering policy. Read-only random selection uses a required caller seed and a temporary RNG, never gameplay RNG. This is an unimplemented design with [provisional maintainer decisions](https://github.com/arismoko/horizon/issues/989#issuecomment-6733678791) on persistence, randomness and paging. No stages have been filed.
+Provisional answer to [arismoko/horizon#989](https://github.com/arismoko/horizon/issues/989), including Ari’s release comment: move the existing user cache into each authoritative server Game lifecycle; extract one immutable selector evaluator with an explicit ordering policy. Read-only random selection uses a required caller seed and a temporary RNG, never gameplay RNG. This is an unimplemented design with [provisional maintainer decisions](https://github.com/arismoko/horizon/issues/989#issuecomment-6733678791) on persistence, randomness and paging. No stages have been filed.
 
 ## Evidence and limits
 
@@ -76,7 +76,7 @@ These are proposed implementation fixtures, not tests executed for this note.
 
 ## Proposed stages
 
-File none. First establish remaining public/vanilla evidence and transport feasibility under the recorded provisional decisions. Then relocate cache ownership and all lookup/admission/shutdown routes. Extract the shared immutable evaluator and verify command parity before adding services. Finally generate API/Wire transport, docs and sample together and implement lifecycle, seeded-order, paging, native/wasm and failure fixtures. Coordinate commands/mod.rs with #2253/#1863; this note changes no Rust.
+File none. First establish remaining public/vanilla evidence and transport feasibility under the recorded provisional decisions. Then relocate cache ownership and all lookup/admission/shutdown routes. Extract the shared immutable evaluator and verify command parity before adding services. Finally generate API/Wire transport, docs and sample together and implement lifecycle, seeded-order, paging, native/wasm and failure fixtures. Coordinate commands/mod.rs with arismoko/horizon#2253/#1863; this note changes no Rust.
 
 ## Remaining evidence
 

@@ -1,4 +1,4 @@
-//! Strict region reads for carrier recovery (issue #2413, slice 2 part B).
+//! Strict region reads for carrier recovery (issue arismoko/horizon#2413, slice 2 part B).
 //!
 //! Recovery does not go through the ordinary chunk loader, which treats
 //! damage as absence and would happily generate terrain. This reader

@@ -14,7 +14,7 @@
 //! watches it (`EnderDragonFight.tick`: level 24 of both kinds on the arena,
 //! so its island ticks out to 7 chunks whatever the watcher's simulation
 //! distance), and drops it when the last watcher goes.
-//! A viewed area (#3716, `lan::viewed_levels`) is a ticket of its own, never a
+//! A viewed area (arismoko/horizon#3716, `lan::viewed_levels`) is a ticket of its own, never a
 //! player's: a `Loaded` one is `PLAYER_LOADING` alone, `FULL` (33) over its
 //! square and no simulation; a `Ticking` one is `PLAYER_SIMULATION` too,
 //! entity ticking (31) over its square, rising by one a ring outward.
@@ -74,7 +74,7 @@ pub struct Sources {
     /// its boss bar has a watcher (`EnderDragonFight.tick`), `None` once none
     /// has (its `removeTicketWithRadius`).
     pub dragon: Option<(i32, i32)>,
-    /// The viewed areas' tickets (#3716): never in `players` or `forced`.
+    /// The viewed areas' tickets (arismoko/horizon#3716): never in `players` or `forced`.
     pub viewed: Vec<ViewedTicket>,
     pub view_distance: i32,
     pub simulation_distance: i32,

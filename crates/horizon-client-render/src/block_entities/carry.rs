@@ -1,4 +1,4 @@
-//! Block entities a moving piston carries (#3184): taken out of the world with
+//! Block entities a moving piston carries (arismoko/horizon#3184): taken out of the world with
 //! their attachments and without removal side effects, held by the moving
 //! piston's position, and installed where their block lands as a new holder.
 //! Each has one owner at a time: it is moved, never cloned, so what it holds

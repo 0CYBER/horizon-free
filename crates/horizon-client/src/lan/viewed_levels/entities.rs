@@ -1,4 +1,4 @@
-//! The entities of a viewed level (#3716, 9d): a client that views the level in place from
+//! The entities of a viewed level (arismoko/horizon#3716, 9d): a client that views the level in place from
 //! another tracks its entities as one more viewer of the level's tracking pass (`Entities::tick`),
 //! with its view's own tracker and chunks, and is sent their packets wrapped in runs.
 //!

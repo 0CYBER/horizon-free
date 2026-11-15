@@ -1,5 +1,5 @@
 //! A dedicated server's check before it opens a world saved with mods that are not loaded now
-//! (#3856): opening it would remove those mods' blocks, and what they hold, for good. The server
+//! (arismoko/horizon#3856): opening it would remove those mods' blocks, and what they hold, for good. The server
 //! refuses, one log line per mod and a last one naming the switch, unless `--allowMissingMods` or
 //! `server.toml`'s `[missing_mods] allow = true` says to open it anyway (off by default).
 

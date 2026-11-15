@@ -1,4 +1,4 @@
-//! Typed state an entity Part keeps on each entity of its type (#796 stage 3).
+//! Typed state an entity Part keeps on each entity of its type (arismoko/horizon#796 stage 3).
 //!
 //! The value lives in the entity's own attachment map, the store every other entity
 //! attachment uses, through the same core as block entity Part state

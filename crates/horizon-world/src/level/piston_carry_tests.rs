@@ -1,4 +1,4 @@
-//! Pistons carry a mod block entity while its block moves (#3184), when the
+//! Pistons carry a mod block entity while its block moves (arismoko/horizon#3184), when the
 //! block's `piston_carries_block_entity` lets it move. The level holds the block entities;
 //! these tests stand in for it with a map. They need the prepared resources,
 //! as the other level tests do.

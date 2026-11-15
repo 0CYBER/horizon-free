@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn managed_launch_from_a_macos_app_bundle_leases_the_installation() {
         // The launcher starts the game on macOS from <version>/Horizon.app/Contents/MacOS, whose
-        // programs are hard links to the version's: the marker stays in the version folder (#3812).
+        // programs are hard links to the version's: the marker stays in the version folder (arismoko/horizon#3812).
         let root = tempfile::tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();
         let data = root_path.join("launcher");

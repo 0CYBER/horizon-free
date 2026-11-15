@@ -1,4 +1,4 @@
-//! A state's `PathType` follows the `isPathfindable(LAND)` answer a mod part gave (#3179). The
+//! A state's `PathType` follows the `isPathfindable(LAND)` answer a mod part gave (arismoko/horizon#3179). The
 //! expected types are vanilla 26.3's `WalkNodeEvaluator.getPathTypeFromState`: air and the
 //! block-specific types come first, then `Blocked` when the state is not land-pathfindable, else
 //! `Water` for a water state, else `Open`.

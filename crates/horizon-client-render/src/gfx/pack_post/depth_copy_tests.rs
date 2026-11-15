@@ -1,7 +1,7 @@
 //! A texture-to-texture copy keeps a depth texture's depth, on one layer and on each layer of an
 //! array: the copies the pack's depth snapshots (`depthtex1`, `depthtex2`) and `shadowtex1` are
 //! made with, here right after a multisampled pass with two colour targets. On OpenGL the copy
-//! read nothing until #2400. Original fixture, no pack files.
+//! read nothing until arismoko/horizon#2400. Original fixture, no pack files.
 use super::depth_test::Gpu;
 use wgpu::{TextureFormat as T, util::DeviceExt};
 

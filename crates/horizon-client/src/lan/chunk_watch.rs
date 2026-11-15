@@ -1,6 +1,6 @@
 //! The chunks each player watches, for the mods' `chunk_watch`, `chunk_sent`
 //! and `chunk_unwatch` (NeoForge's `ChunkWatchEvent`) and for the passages the
-//! server sends with a chunk (#3775). The hub records them only while a mod
+//! server sends with a chunk (arismoko/horizon#3775). The hub records them only while a mod
 //! listens or a passage was registered; the game reads them after the hub's step.
 
 use mod_api::HookId;

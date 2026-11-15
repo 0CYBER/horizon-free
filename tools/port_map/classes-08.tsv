@@ -14,8 +14,8 @@ RedstoneWireEvaluator.getWireSignal	port	crates/horizon-world/src/level/redstone
 SavedDataType	skip:java		equals over the saved-data type record; Horizon keys saved data by name
 WanderingTraderData.setSpawnChance	inline	crates/horizon-client/src/game/mobs/wandering_trader.rs::Game::tick_wandering_trader	field write of spawn_chance inside the tick; no setter
 WanderingTraderData.setSpawnDelay	inline	crates/horizon-client/src/game/mobs/wandering_trader.rs::Game::tick_wandering_trader	field write of spawn_delay inside the tick; no setter
-MapBanner.fromWorld	port	crates/horizon-client/src/game/blocks/banners.rs::Game::map_banner_at	ticked in #3517; `MapBanner.fromWorld` is cited at crates/horizon-client/src/game/blocks/banners.rs:19
-MapBanner.getDecoration	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapBanner::sprite	ticked in #3517; `MapBanner.getDecoration` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:50
+MapBanner.fromWorld	port	crates/horizon-client/src/game/blocks/banners.rs::Game::map_banner_at	ticked in arismoko/horizon#3517; `MapBanner.fromWorld` is cited at crates/horizon-client/src/game/blocks/banners.rs:19
+MapBanner.getDecoration	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapBanner::sprite	ticked in arismoko/horizon#3517; `MapBanner.getDecoration` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:50
 MapBanner.getId	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::toggle_banner	a banner marker is filed under Key::Banner(pos): the id as an enum key, so the map keeps one marker per banner
 MapDecorationTypes	skip:data		registry of map decoration types; maps.rs keeps its own DECORATION_TYPES table
 MapId.addToTooltip	port	crates/horizon-client/src/item_tooltip.rs::PlayerHeadName::map_id_lines	ticked in #3517; `MapId.addToTooltip` is cited at crates/horizon-client/src/item_tooltip.rs:412

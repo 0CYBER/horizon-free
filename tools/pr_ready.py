@@ -143,7 +143,7 @@ def area(path):
 
 
 def scope_warnings(paths):
-    """A pull request keeps to one area; its size is its own concern (#385)."""
+    """A pull request keeps to one area; its size is its own concern (arismoko/horizon#385)."""
     warnings = []
     areas = sorted({area(path) for path in paths} - {None})
     if len(areas) > 1:

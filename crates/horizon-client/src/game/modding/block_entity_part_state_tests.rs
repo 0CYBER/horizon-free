@@ -1,4 +1,4 @@
-//! Part state (#781) on real block entities: one value each, kept with its block entity
+//! Part state (arismoko/horizon#781) on real block entities: one value each, kept with its block entity
 //! through ticks, transactions, replacement, saving and unloading.
 use std::{panic::AssertUnwindSafe, sync::Arc};
 

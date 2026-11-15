@@ -225,7 +225,7 @@ mod mod_parrot_tests {
     use std::sync::Arc;
 
     /// A parrot lands on its owner's shoulder by its class, saved there as
-    /// itself, so a content mod's parrot type (#4031) does too, under its own
+    /// itself, so a content mod's parrot type (arismoko/horizon#4031) does too, under its own
     /// id: it comes back off through the same load as any saved mob, which
     /// `a_mod_tameable_type_saves_and_loads_its_owner` covers for mod types
     /// (this game's resources have none). Only the vanilla parrot gets a

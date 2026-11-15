@@ -416,7 +416,7 @@ enum OrbOrder {
 impl Game<'_> {
     /// The game's own player's uuid and entity id — the identity behind
     /// [`Self::player_view`], so a tick that lends no guest's view names its
-    /// player (#1077). None where the view stands for nobody: no player of
+    /// player (arismoko/horizon#1077). None where the view stands for nobody: no player of
     /// the game's own, a fake one, or a guest's turn acting in its place.
     pub(super) fn player_identity(&self) -> Option<([i32; 4], u32)> {
         if self.lan_acting_fake || self.lan_acting_uuid.is_some() || self.player.is_none() {
@@ -10725,7 +10725,7 @@ mod pearl_tests {
 
     /// A pearl's water test is `Entity.isInWater`: `wasTouchingWater` from the
     /// last `updateFluidInteraction`, water whose surface reaches its 0.25
-    /// box (#3072), not the block at its feet.
+    /// box (arismoko/horizon#3072), not the block at its feet.
     #[test]
     fn a_pearl_feels_the_water_its_box_touches() {
         // The throwable air drag is the float 0.99 widened to a double.

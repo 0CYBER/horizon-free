@@ -1,4 +1,4 @@
-//! The Player-cause sites of `entity_move` (#2414): a cancelling listener on
+//! The Player-cause sites of `entity_move` (arismoko/horizon#2414): a cancelling listener on
 //! the guest's position packet turns the move into «moved wrongly», and the
 //! hub sends the guest back where it was — the correction the ruling asks
 //! for. Built on the real hub: a hosted guest, a `MovePlayerPos` packet in
@@ -161,7 +161,7 @@ fn a_cancelled_player_packet_sends_the_guest_a_correction() {
 /// refuses: the boat keeps its place, the hook heard the player cause, and
 /// the correction is the vehicle put-back packet (`MoveVehicle` back to
 /// where the boat was) — the same ruling the hub's own packet gets, at the
-/// vehicle Player-cause site (#2414).
+/// vehicle Player-cause site (arismoko/horizon#2414).
 #[test]
 #[ignore = "daily"]
 fn a_cancelled_vehicle_packet_sends_the_guest_a_correction() {

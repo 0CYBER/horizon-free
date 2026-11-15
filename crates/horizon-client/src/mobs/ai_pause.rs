@@ -1,4 +1,4 @@
-//! A mob whose AI step a mod paused (`MobRef::set_ai_paused`, #4478): one
+//! A mob whose AI step a mod paused (`MobRef::set_ai_paused`, arismoko/horizon#4478): one
 //! more `LivingEntity.isImmobile` reason, read once at the AI step. The AI
 //! step (`serverAiStep`: the Brain or the goal and target selectors,
 //! navigation and controls) is skipped and `aiStep` zeroes the jump flag and

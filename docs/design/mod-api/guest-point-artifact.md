@@ -1,20 +1,20 @@
 # Design: Source-validated guest point artifact
 
-Provisional proposal for [#2553](https://github.com/arismoko/horizon/issues/2553).
+Provisional proposal for [arismoko/horizon#2553](https://github.com/arismoko/horizon/issues/2553).
 Docs only; this is not approval to skip source validation or a speedup claim.
 The proposed answer is conditional: an SDK-produced, identity-bound artifact can
 replace repeated discovery only when it carries the complete validated point,
 private-type and site input. Keep the full-source generator as an independent
 check. A supplied `--catalog` alone never authorizes this route.
 
-Measure actual-mod cold builds after #2596's interface cache first. Do not
+Measure actual-mod cold builds after arismoko/horizon#2596's interface cache first. Do not
 build or ship an artifact on an estimate; proceed only after the measured
 post-cache baseline demonstrates worthwhile remaining work.
 
 ## What remains after the interface cache
 
-[#2552](https://github.com/arismoko/horizon/pull/2552) and
-[#2596](https://github.com/arismoko/horizon/pull/2596) are merged context.
+[arismoko/horizon#2552](https://github.com/arismoko/horizon/pull/2552) and
+[arismoko/horizon#2596](https://github.com/arismoko/horizon/pull/2596) are merged context.
 The latter already caches source interfaces locally and preserves unchanged
 output timestamps. Repeating the original uncached premise would overstate the
 remaining problem. Verified owners on the current source tree:
@@ -112,7 +112,7 @@ including zero tick scans, allocations and no-listener dispatch changes.
 
 ## Packaging and module identity
 
-Coordinate packaging with open [#2815](https://github.com/arismoko/horizon/pull/2815).
+Coordinate packaging with open [arismoko/horizon#2815](https://github.com/arismoko/horizon/pull/2815).
 Its reviewed diff adds versioned `mod-catalog.json` to SDK/source staging, with
 `schema_version`, `api_version`, hooks and public point descriptions. It is a
 discovery surface, not proof of complete private layouts or site definitions.
@@ -122,9 +122,9 @@ trusted SDK manifest, owned by the same staging pipeline. Avoid a committed
 shared hash that every point change must edit; regenerate and compare in drift
 checks, with feature-scoped fixtures.
 
-Open [#2697](https://github.com/arismoko/horizon/pull/2697) overlaps generator
+Open [arismoko/horizon#2697](https://github.com/arismoko/horizon/pull/2697) overlaps generator
 `build.rs`, `points.rs` and `points/source.rs`; open
-[#2524](https://github.com/arismoko/horizon/pull/2524) overlaps `build.rs`.
+[arismoko/horizon#2524](https://github.com/arismoko/horizon/pull/2524) overlaps `build.rs`.
 Reconcile their final ownership before code work. The interface-cache file and
 point build script are not touched by those reviewed diffs. This note reserves
 no implementation files.
@@ -158,7 +158,7 @@ These are proposed literal fixtures, not executed results.
 | Native and wasm, API and internals | Same applicable validation/refusal behavior; no new runtime restriction or dependency model. |
 
 Measure an actual mod build with representative selected points and private type/site
-use, after #2596. Run **3 cold actual-mod builds per route**: current cached full
+use, after arismoko/horizon#2596. Run **3 cold actual-mod builds per route**: current cached full
 generator, artifact candidate, and narrowed scanner only if implemented. Hold
 engine, source, selected names, toolchain, target/features, profile, machine and
 parallelism constant. Define cold as a fresh Cargo target and generator-interface
@@ -166,7 +166,7 @@ cache for each run; report filesystem/OS cache state and reuse of downloaded
 sources separately. Report all 3 total wall times and all 3 generation times,
 not just averages. Also report artifact production time/size, admission/hash/decode,
 source discovery, emission/formatting and guest compilation time so moving work
-to SDK production is visible. A separate warm-cache series characterizes #2596;
+to SDK production is visible. A separate warm-cache series characterizes arismoko/horizon#2596;
 it must not be mixed into the cold series. Check equivalence before interpreting
 timings. There is no speed threshold until evidence supports one, and historical
 fixture timings establish no actual-mod speedup.
@@ -182,7 +182,7 @@ growth of the over-limit `crates/horizon-client/src/game.rs` for instrumentation
 
 - **Trust anchor and packaging:** recommend a sibling artifact authenticated by
   the engine SDK manifest; agree its manifest owner and local-source verification
-  procedure with #2815 before implementation. A payload digest alone is insufficient.
+  procedure with arismoko/horizon#2815 before implementation. A payload digest alone is insufficient.
 - **Concrete resource limits:** recommend finite byte/count/depth budgets derived
   from the complete current SDK plus measured headroom; choose literal limits
   before shipping. No vanilla capacity is reduced by this build-only proposal.

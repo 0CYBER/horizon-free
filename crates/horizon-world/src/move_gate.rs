@@ -1,4 +1,4 @@
-//! The gate one physical entity move goes through (#2414): what the move's
+//! The gate one physical entity move goes through (arismoko/horizon#2414): what the move's
 //! cause is and what the `entity_move` decision turned out to be, so the game
 //! layer decides once and the kind's physics runs with the answer.
 //!
@@ -20,7 +20,7 @@ pub enum MoveDecision {
     Skip,
 }
 
-/// One physical `Entity.move` invocation (#2414): the mover's cause, the
+/// One physical `Entity.move` invocation (arismoko/horizon#2414): the mover's cause, the
 /// movement it asked for, and the decision taken. Created pending, armed at
 /// the move moment by the client's `move_gate::arm`, and then handed to the
 /// kind's physics, which resolves its collision through the same client
@@ -62,7 +62,7 @@ impl MoveGate {
     /// Whether a listener's decision is not what the move asked for: a
     /// cancel, or a replacement with a different movement. The game layer
     /// reads this flag instead of comparing deltas — the ruling's «a cancel
-    /// or a replacement sends a correction» (#2414) holds however small the
+    /// or a replacement sends a correction» (arismoko/horizon#2414) holds however small the
     /// move, so the sites that send corrections key on it, not on distance.
     pub fn overridden(&self) -> bool {
         match self.decision {

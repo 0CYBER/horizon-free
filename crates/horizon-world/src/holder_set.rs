@@ -3,7 +3,7 @@
 //! (`HolderSetCodec`), and NeoForge's `neoforge:any`, `neoforge:and` /
 //! `neoforge:or` (`values`) and `neoforge:not` (`value`) objects, nested freely
 //! (`AnyHolderSet`, `AndHolderSet`, `OrHolderSet`, `NotHolderSet`).
-//! Mod-defined holder-set types wait on the typed codec foundation (#811).
+//! Mod-defined holder-set types wait on the typed codec foundation (arismoko/horizon#811).
 use serde_json::Value;
 use std::collections::BTreeSet;
 

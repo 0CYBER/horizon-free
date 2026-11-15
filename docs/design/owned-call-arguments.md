@@ -1,6 +1,6 @@
 # Owned arguments at native source call sites
 
-Design proposal for #2871, port mixin row 2; no implementation is authorized by this note.
+Design proposal for arismoko/horizon#2871, port mixin row 2; no implementation is authorized by this note.
 The confirmed source call is `Game::dispense_item(pos: Pos, facing: Direction,
 stack: ItemStack) -> Result<Option<ItemStack>>`, inside `Game::dispense_from`.
 The SDK refuses it with `argument record requires a borrowing or non-Copy field`.

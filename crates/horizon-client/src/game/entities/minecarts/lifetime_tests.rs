@@ -690,7 +690,7 @@ fn a_bound_tnt_cart_keeps_its_join_when_damage_primes_it() {
 
 // A public entity lookup also hides a temporarily extracted row. Check the
 // residency journal itself so a terminal path cannot leave a permanent Taken
-// record that poisons later level queries (#2855).
+// record that poisons later level queries (arismoko/horizon#2855).
 fn assert_vehicle_residency_retired(game: &mut Game<'_>, id: u32) {
     use crate::game::entity_residency::SlotAccess;
     assert_eq!(

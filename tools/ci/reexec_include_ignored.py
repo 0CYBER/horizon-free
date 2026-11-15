@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make every test that reruns its own test executable select the test whatever its ignore state (#4022).
+"""Make every test that reruns its own test executable select the test whatever its ignore state (arismoko/horizon#4022).
 
 A test that reruns a test executable as a child (any `Command::new(...)` passing libtest's `--exact NAME`: its own,
 from `current_exe()`, or a copy of it)

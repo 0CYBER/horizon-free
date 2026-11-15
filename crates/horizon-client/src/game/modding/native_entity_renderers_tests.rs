@@ -1,4 +1,4 @@
-//! `register_entity_renderers` on the client (#860's acceptance): a content mod's thrown type with
+//! `register_entity_renderers` on the client (arismoko/horizon#860's acceptance): a content mod's thrown type with
 //! a renderer draws that renderer's geometry in place of its flying item, one without keeps its
 //! item, a vanilla boat is unchanged, the later registration for a type wins, an unknown type is
 //! refused by name, and a resource reload keeps the registered renderer in use.

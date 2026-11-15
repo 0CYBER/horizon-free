@@ -40,7 +40,7 @@ fn fixture(
                 let fail = n(&f["fail"]);
                 let draw = f["draw"].as_bool().unwrap();
                 let mode = n(&f["result"]);
-                // A positive bound draws nextInt(bound), as a mod callback would (#815).
+                // A positive bound draws nextInt(bound), as a mod callback would (arismoko/horizon#815).
                 let bound = n(&f["draw_bound"]);
                 let result = placer.place_in(
                     &modifiers,

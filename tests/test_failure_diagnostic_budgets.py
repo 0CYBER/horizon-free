@@ -120,7 +120,7 @@ class Budgets(unittest.TestCase):
 
     def test_a_location_in_a_large_tracked_source_of_any_package_is_reported(self):
         # horizon-client-lib's sources live under crates/horizon-client/ through its manifest, and motion.rs is
-        # over 256 KB: its failure's location was withheld (#4028) while smaller horizon-client files were shown.
+        # over 256 KB: its failure's location was withheld (arismoko/horizon#4028) while smaller horizon-client files were shown.
         ci.tracked_rust_paths.cache_clear()
         ci.source_lines.cache_clear()
         for location in ('crates/horizon-client/src/motion.rs:6115:9',

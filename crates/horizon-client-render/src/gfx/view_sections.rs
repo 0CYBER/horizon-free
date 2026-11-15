@@ -1,4 +1,4 @@
-//! Each world view's own section list (#3773): the frame keeps the player camera's culling (the
+//! Each world view's own section list (arismoko/horizon#3773): the frame keeps the player camera's culling (the
 //! caves, occlusion, faces turned away, GPU culling) while views are asked for, and each view
 //! walks the resident columns once more with its own frustum, whose near plane is its clip plane
 //! (`world_views::ViewCamera`). No occlusion graph and no faces left out: a portal's camera

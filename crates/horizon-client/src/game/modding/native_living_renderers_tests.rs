@@ -1,4 +1,4 @@
-//! `register_entity_renderers` for living types (#860 stage 3): a renderer registered for a type
+//! `register_entity_renderers` for living types (arismoko/horizon#860 stage 3): a renderer registered for a type
 //! drawn as a mob draws in place of the type's model and vanilla layers, reading the living
 //! frame; the mods' layers and the render hook pair still run around it, a canceled
 //! `render_living_pre` skips it, and a failing renderer leaves the type its own model until a

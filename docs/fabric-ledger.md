@@ -4,7 +4,7 @@ NeoForge 26.3's transfer API is the specification for parts: Fabric transfer map
 
 This is a porting ledger, not a promise of binary or source compatibility. **Covered** means the named use has a usable counterpart, not that a whole Fabric module is identical. **Planned** means an explicitly identified design or tracker item, not shipped code. **Gap** means the particular semantics have no established equivalent. Multiple statuses on a row distinguish the individual claims.
 
-Reference: Fabric API 26.3 branch at [`2065040b236a0d5ac011bd6a45625dc49579b222`](https://github.com/FabricMC/fabric/tree/2065040b236a0d5ac011bd6a45625dc49579b222) (Apache-2.0); fork main `be1fa0d1ec89d07998e8ea7c72137ce483904d8c` (snapshot, not a current-status guarantee). NeoForge names below refer to its public 26.3 API, not its implementation: [`ResourceHandler`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/ResourceHandler.html), [`Transaction`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/transaction/Transaction.html), [`TransactionContext`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/transaction/TransactionContext.html), and [`SnapshotJournal`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/transaction/SnapshotJournal.html). The fork's parts contract is #41 §7. Paths below are relative to the repository.
+Reference: Fabric API 26.3 branch at [`2065040b236a0d5ac011bd6a45625dc49579b222`](https://github.com/FabricMC/fabric/tree/2065040b236a0d5ac011bd6a45625dc49579b222) (Apache-2.0); fork main `be1fa0d1ec89d07998e8ea7c72137ce483904d8c` (snapshot, not a current-status guarantee). NeoForge names below refer to its public 26.3 API, not its implementation: [`ResourceHandler`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/ResourceHandler.html), [`Transaction`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/transaction/Transaction.html), [`TransactionContext`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/transaction/TransactionContext.html), and [`SnapshotJournal`](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/transfer/transaction/SnapshotJournal.html). The fork's parts contract is arismoko/horizon#41 §7. Paths below are relative to the repository.
 
 ## Transfer: `fabric-transfer-api-v1`
 
@@ -12,18 +12,18 @@ Reference: Fabric API 26.3 branch at [`2065040b236a0d5ac011bd6a45625dc49579b222`
 |---|---|---|---|---|
 | `Storage<T>` | Insert/extract a resource and inspect a storage; capability/support queries and a version hint. | `ResourceHandler<T>` | **Covered in part:** `ResourceHandler<R>` (`crates/horizon-mod-vocab/src/content/resource.rs`), as `ResourceHandler<ItemResource>` for `ITEMS` (`crates/horizon-mod-vocab/src/item/capability.rs`) and `ITEM_ITEMS` (`crates/horizon-mod-vocab/src/block/item_place.rs`), and as `ResourceHandler<FluidResource>` for `FLUIDS` (`crates/horizon-mod-vocab/src/block/fluid_capability.rs`). | Fabric is generic, returns accepted/extracted `long` amounts and requires transaction contexts; NeoForge's `ResourceHandler` also uses `TransactionContext`. Fork handlers take a `&Transaction` and answer moved `u32` amounts, as NeoForge's do, for items and fluids alike; support and version hints have no direct equivalent. No generic Fabric adapter is implied. |
 | `StorageView<T>`, `iterator()`, `nonEmptyIterator()`, `nonEmptyViews()` | Inspect each resource, amount and capacity and extract from a view; nonempty iteration filters blank/zero views. | `ResourceHandler<T>` indexed resource and capacity access | **Covered in part:** `size`, `resource`, `amount` and `capacity` by index on `ResourceHandler` (`resource.rs`); **gap:** Fabric view/iterator contract and underlying-view identity. | Fabric may visit a resource more than once; extraction during iteration must be visible, insertions need not be; a changed iterator may become invalid at outer transaction end. Index traversal and `Option` filtering are an approximation, not those guarantees. Fork capacity asks about a resource at an index; it is not directly a blank view's estimated bound. |
-| `Transaction`, `TransactionContext`, nested `openNested`, commit and abort | Tentative, composable changes across participants; closing without commit aborts, inner commit remains subject to outer abort. | `Transaction`, `TransactionContext`, `SnapshotJournal` | **Covered:** `host.transaction(|host, tx| …)` and `&Transaction` (`crates/horizon-mod-vocab/src/item/transaction.rs`, #41 §7 T1–T3): nested in the open transaction, an `Ok` commits into the outer one and an `Err` aborts, and the game journals the block entities, cauldrons, players' and entities' inventories and item entities a write touches. Every item and fluid write takes `tx`; there is no `simulate`. | A mod's own storage joins by keeping its state where the game journals it, or by being a test host's whole state; there is no public `SnapshotJournal` participant trait yet. Fabric's outer-close callbacks have no counterpart: the game tells the world of changes at the root commit. |
+| `Transaction`, `TransactionContext`, nested `openNested`, commit and abort | Tentative, composable changes across participants; closing without commit aborts, inner commit remains subject to outer abort. | `Transaction`, `TransactionContext`, `SnapshotJournal` | **Covered:** `host.transaction(|host, tx| …)` and `&Transaction` (`crates/horizon-mod-vocab/src/item/transaction.rs`, arismoko/horizon#41 §7 T1–T3): nested in the open transaction, an `Ok` commits into the outer one and an `Err` aborts, and the game journals the block entities, cauldrons, players' and entities' inventories and item entities a write touches. Every item and fluid write takes `tx`; there is no `simulate`. | A mod's own storage joins by keeping its state where the game journals it, or by being a test host's whole state; there is no public `SnapshotJournal` participant trait yet. Fabric's outer-close callbacks have no counterpart: the game tells the world of changes at the root commit. |
 | `FluidVariant`, `ItemVariant` | Resource identity and components separated from the transferred quantity. | `FluidResource`, `ItemResource` | **Covered:** `FluidResource` (`fluid_capability.rs`) and `ItemResource` (`resource.rs`), an id and its components without an amount; `FluidStack` and `ItemStack` are the forms with an amount (`to_stack`, `of`). | There is no blank variant: an empty index answers no resource. Retain component identity when adapting, do not compare only IDs. |
 | `FluidConstants` | Amounts in droplets: 81,000 per bucket. | Fluid quantities in millibuckets | **Covered in part:** `FluidStack.amount` is `u32` mB, 1,000 per bucket (`fluid_capability.rs`). | 81 droplets = 1 mB. Arbitrary droplet amounts, including one droplet, cannot be represented exactly as integer mB; Fabric `long` range also exceeds `u32`. Reject amounts that are not whole mB, never round; silent rounding changes recipes and can create or destroy fluid. |
 | `FluidStorage.SIDED` | Lookup a block storage by position and optional direction; null means unrestricted. | `Capabilities.Fluid.BLOCK` | **Covered in part:** `LevelRef::capability(host, &FLUIDS, pos, side)` and handler calls with `Option<Direction>` (`capability.rs`, `fluid_capability.rs`); mod registration in `parts/`. | Direction is passed to each handler method, not to lookup. The default covers mod tanks and cauldrons; a block capability key is not a Fabric lookup object and does not imply identical provider composition, invalidation or client behavior. |
-| `FluidStorage.ITEM` | Query item fluid storage using a container context; Fabric provides buckets and water potions and supports combined providers. | `Capabilities.Fluid.ITEM`, `ItemAccess` | **Covered in part:** `ITEM_FLUIDS` (`fluid_capability.rs`, #271), a `ResourceHandler<FluidResource>` for the item at an `ItemPlace`, whose writes exchange one item; the game answers it for vanilla's buckets, one tank filled and drained whole. **Gap:** water potions, which Fabric answers and the game doesn't; and Fabric's combined providers, which merge every non-null storage where a first-answer-wins lookup can't. | Providers are asked in order, the first answer winning: those registered `before_game`, the game's own, then the others, each in registration order (`parts/`). Fabric's combined providers compose all non-null storages, so that lookup alone does not reproduce that composition. Exact droplet granularity remains a gap. |
+| `FluidStorage.ITEM` | Query item fluid storage using a container context; Fabric provides buckets and water potions and supports combined providers. | `Capabilities.Fluid.ITEM`, `ItemAccess` | **Covered in part:** `ITEM_FLUIDS` (`fluid_capability.rs`, arismoko/horizon#271), a `ResourceHandler<FluidResource>` for the item at an `ItemPlace`, whose writes exchange one item; the game answers it for vanilla's buckets, one tank filled and drained whole. **Gap:** water potions, which Fabric answers and the game doesn't; and Fabric's combined providers, which merge every non-null storage where a first-answer-wins lookup can't. | Providers are asked in order, the first answer winning: those registered `before_game`, the game's own, then the others, each in registration order (`parts/`). Fabric's combined providers compose all non-null storages, so that lookup alone does not reproduce that composition. Exact droplet granularity remains a gap. |
 | `ContainerItemContext` | Main slot, overflow and additional slots, exchange items transactionally; contexts include hand, cursor, single slot, creative and constant. | `ItemAccess`, particularly `exchange` | **Covered in part:** `ItemPlace`, `PlaceProvider`, `ItemPlace::{insert, extract, exchange}`, `ItemPlace::capability` (`item_place.rs`); **planned:** use with `ITEM_FLUIDS`. | `ItemPlace` locates a stack and is NeoForge's `ItemAccess` over it; hand overflow may drop and a block slot can refuse if no room. This is not Fabric's general transactional main/overflow/additional-slot API or its creative/constant context. Validate the current item before use. |
 | `StorageUtil.move` | Filter resource variants and move up to a `long` total, using nested transactions, with optional enclosing transaction. | `ResourceHandlerUtil.move` | **Covered:** `mod_api::move_resources(host, &from, &to, filter, max, tx)` (`resource.rs`), for items and fluids: a filter over resources, several resources in one call, each move all or nothing in a transaction nested in the caller's `tx`, and a move the target takes only part of tried again with that part. | A handler answering more than it was asked has its move undone and gives `Overanswered`, naming the mod; returned with `?`, it aborts the caller's whole transaction, so nothing is lost or duplicated. Fabric returns the amount and leaves misbehaving storages to the caller. |
 | Team Reborn Energy `EnergyStorage` (separate project, not Fabric API) | Electric energy storage and transfer on Fabric. | `Capabilities.Energy.BLOCK` / `ITEM`, `EnergyHandler` | **Covered in part:** `ENERGY` (`crates/horizon-mod-vocab/src/item/energy_capability.rs`), an `EnergyHandler` written in a transaction, answered by the game for a mod block's registrar-declared `block_energy` buffer as `SimpleEnergyHandler`, and `move_energy` as `EnergyHandlerUtil.move`; `ITEM_ENERGY`, the same handler for the item at an `ItemPlace`, answered only by mods. | Energy is not `fabric-transfer-api-v1`; verify Team Reborn's own version, units and transaction semantics before implementing an adapter. Neither a unit conversion nor transactional parity follows from an energy capability name. |
 
 ### The NeoForge floor
 
-The counterpart for most transfer operations is NeoForge-shaped `ResourceHandler<R>` with index-based contents, component-carrying `ItemResource` and `FluidResource`, and nested `host.transaction` (#41 §7 T1–T3). Fabric-specific differences remain in view iteration, `ContainerItemContext` overflow/additional slots and creative/constant contexts, droplets, and `long` amounts.
+The counterpart for most transfer operations is NeoForge-shaped `ResourceHandler<R>` with index-based contents, component-carrying `ItemResource` and `FluidResource`, and nested `host.transaction` (arismoko/horizon#41 §7 T1–T3). Fabric-specific differences remain in view iteration, `ContainerItemContext` overflow/additional slots and creative/constant contexts, droplets, and `long` amounts.
 
 ### Design recommendations for item fluids and energy
 
@@ -38,16 +38,16 @@ Event counterparts belong on individual hooks; the exceptions are the review not
 
 | Fabric module and key API | Fork mapping and status | Porting boundary |
 |---|---|---|
-| `fabric-registry-sync-v0`: `FabricRegistryBuilder`, `RegistryEntryAddedCallback`, `RegistryIdRemapCallback`, `DynamicRegistries`, `DynamicRegistrySetupCallback` | **Covered in part:** code-declared blocks/items and synced component/particle types (#27 Not started: partly done code-side registration). **Planned:** block-entity type network IDs/builders and broader entity types, same #27 lines. **Gap:** generic custom synced registries, remap callbacks and arbitrary dynamic-registry codec/sync contract are not established by those slices. | Static code registration, datapack registries and a server-to-client remap are different operations. Do not infer full registry sync from matching IDs in one process. |
-| `fabric-model-loading-api-v1`: `ModelLoadingPlugin`, `ModelModifier`, `BlockStateResolver`, `ExtraModelKey`, unbaked/baked wrappers | **Covered in part:** standalone models baked with block models (#27 Not started: model changes at bake time; Done portion). **Planned:** bake-time model changes / `ModelData` (#27 same line, design horizon-rust/horizon#6303). **Gap:** arbitrary Fabric plugin, resolver, wrapper and item/block model replacement contracts. | A standalone model registration does not mean a mod can intercept and replace any baked model. |
+| `fabric-registry-sync-v0`: `FabricRegistryBuilder`, `RegistryEntryAddedCallback`, `RegistryIdRemapCallback`, `DynamicRegistries`, `DynamicRegistrySetupCallback` | **Covered in part:** code-declared blocks/items and synced component/particle types (arismoko/horizon#27 Not started: partly done code-side registration). **Planned:** block-entity type network IDs/builders and broader entity types, same arismoko/horizon#27 lines. **Gap:** generic custom synced registries, remap callbacks and arbitrary dynamic-registry codec/sync contract are not established by those slices. | Static code registration, datapack registries and a server-to-client remap are different operations. Do not infer full registry sync from matching IDs in one process. |
+| `fabric-model-loading-api-v1`: `ModelLoadingPlugin`, `ModelModifier`, `BlockStateResolver`, `ExtraModelKey`, unbaked/baked wrappers | **Covered in part:** standalone models baked with block models (arismoko/horizon#27 Not started: model changes at bake time; Done portion). **Planned:** bake-time model changes / `ModelData` (arismoko/horizon#27 same line, design horizon-rust/horizon#6303). **Gap:** arbitrary Fabric plugin, resolver, wrapper and item/block model replacement contracts. | A standalone model registration does not mean a mod can intercept and replace any baked model. |
 | `fabric-resource-conditions-api-v1`: condition registration and resource condition evaluation | **Covered in part:** `neoforge:conditions` in recipe loaders (`docs/modding/src/how-to/native-mods.md`, Conditional data). **Gap:** Fabric condition schema/custom registration and conditions on tags, loot and advancements; current unsupported conditions fail closed. | Syntax and evaluated resource domains are not interchangeable. |
 | `fabric-api-lookup-api-v1`: `BlockApiLookup`, `ItemApiLookup`, `EntityApiLookup` | **Covered in part:** `CapabilityKey`, `ItemCapabilityKey`, `LevelRef::capability`/`ItemPlace::capability` (`mod_api/capability.rs`, `item_place.rs`, `parts/`). **Gap:** general Fabric lookup provider/fallback/cache composition and entity lookup contract. | — |
 | `fabric-biome-api-v1`: `BiomeModifications`, `BiomeSelectors` | **Gap:** programmatic biome modification phases and selection contract; data-driven biomes alone do not provide these callbacks. | — |
-| `fabric-content-registries-v0`: `FlammableBlockRegistry`, `OxidizableBlocksRegistry`, villager and fluid registries | **Covered in part:** `fire_odds` block part (#41 §2). **Gap:** registry-specific mod additions and their complete reload/order semantics. | — |
+| `fabric-content-registries-v0`: `FlammableBlockRegistry`, `OxidizableBlocksRegistry`, villager and fluid registries | **Covered in part:** `fire_odds` block part (arismoko/horizon#41 §2). **Gap:** registry-specific mod additions and their complete reload/order semantics. | — |
 | `fabric-convention-tags-v2`: `ConventionalItemTags`, `ConventionalBlockTags`, fluid/entity tags | **Covered in part:** data-pack tag loading and game tag queries; **gap:** automatic equivalence of Fabric's conventional tag namespace, contents and tooling. | — |
-| `fabric-data-attachment-api-v1`: `AttachmentRegistry`, `AttachmentType`, sync predicates | **Covered in part:** typed `AttachmentType` and holder data (#41 §1, attachment codecs, save/sync). **Gap:** generic Fabric registry, predicates and lifecycle parity for all holders must be verified separately. | — |
+| `fabric-data-attachment-api-v1`: `AttachmentRegistry`, `AttachmentType`, sync predicates | **Covered in part:** typed `AttachmentType` and holder data (arismoko/horizon#41 §1, attachment codecs, save/sync). **Gap:** generic Fabric registry, predicates and lifecycle parity for all holders must be verified separately. | — |
 | `fabric-data-generation-api-v1`: `FabricDataGenerator`, recipe/loot/language providers | **Gap:** Fabric's provider framework and generator integration. Existing data files or developer tools are not this API. | — |
-| `fabric-object-builder-api-v1`: `FabricBlockEntityTypeBuilder`, `FabricDefaultAttributeRegistry`, `FabricEntityType` | **Covered in part:** code-side block/item declarations (#27 registration line). **Planned:** block-entity builder/network IDs and broader mod entities (#27 Not started: registration and mod entity types). **Gap:** remaining builders and default-attribute registration parity. | — |
+| `fabric-object-builder-api-v1`: `FabricBlockEntityTypeBuilder`, `FabricDefaultAttributeRegistry`, `FabricEntityType` | **Covered in part:** code-side block/item declarations (arismoko/horizon#27 registration line). **Planned:** block-entity builder/network IDs and broader mod entities (arismoko/horizon#27 Not started: registration and mod entity types). **Gap:** remaining builders and default-attribute registration parity. | — |
 | `fabric-recipe-api-v1`: `CustomIngredient`, `CustomIngredientSerializer`, `RecipeSynchronization` | **Covered in part:** `native_ingredient`, `native_ingredient_test` and recipe synchronization (`docs/modding/src/how-to/native-mods.md`, custom ingredients). **Gap:** all Fabric ingredient serializers, synchronization rules and custom recipe forms are not implied. | — |
 | `fabric-serialization-api-v1`: `MoreCodecs`, `FabricValueInput`, `FabricValueOutput` | **Gap:** Fabric's codec/value-input extensions; existing Rust serialization and attachment codecs are different APIs. | — |
 | `fabric-tag-api-v1`: `FabricTagFile`, `ClientTags` | **Covered in part:** vanilla datapack tags and the `tags_updated` notice on both sides, with the server's block, item and fluid tags readable on a client. **Gap:** Fabric's tag-file extensions and the rest of `ClientTags`' semantics. | — |
@@ -58,7 +58,7 @@ Event counterparts belong on individual hooks; the exceptions are the review not
 | Server console and player limit (no single Fabric module) | **Covered in part:** `host.commands().run_command_with_output(line)`, which returns a `CommandResult` (`success` and the console's `feedback` as plain text, capped at 256 lines of 4096 bytes), `host.server_max_players()` and `host.server_set_max_players(n)`, which refuses with `PlayerLimitRefusal` (`NotOpen`, `TooHigh`), as described in `docs/modding/src/how-to/entities/server-services-and-players.md`. **Gap:** Fabric API 26.3 has no module for running a console command with its output or for the player limit, and the `console_line` event is a separate row. | Behaviour follows vanilla's console command path and `max-players`, not a Fabric API. |
 | `fabric-transfer-api-v1`: `PlayerInventoryStorage`; `fabric-data-attachment-api-v1` on a player | **Covered in part:** `player.inventory_slots` / `set_inventory_slot` (0 to 42 by vanilla's numbers), `ender_chest` / `set_ender_chest_slot` (0 to 26), `give_stack`, `persistent_data` / `set_persistent_data` and `host.item_from_snbt`, as described in `docs/modding/src/how-to/entities/server-services-and-players.md`; the refusals (slot out of range, dead player, a stack the item does not allow, data 512 levels deep or more, SNBT that is not exactly one item compound) change nothing. **Gap:** Fabric's transactional, slot-view storage (`Storage<ItemVariant>`, insertion and extraction with rollback) is a different surface; these calls write a slot or give a stack outright. Attachments are the typed route for mod data on a player; the persistent compound is one untyped compound. | Behaviour follows vanilla's `Inventory`, `/give` and the saved player file, not a Fabric API. |
 
-## Event counterparts: client lifecycle and ticks (#1014)
+## Event counterparts: client lifecycle and ticks (arismoko/horizon#1014)
 
 Checked against Fabric API 26.3 at `2065040b236a0d5ac011bd6a45625dc49579b222`
 (Apache-2.0, including the headers of the files below). **Covered** here means a
@@ -104,7 +104,7 @@ The host argument is generated by `host_param` in `crates/horizon-mod-api-gen/sr
 empty hook declarations do not mean the listener lacks client context. This change
 adds metadata only: no dispatch, tick-time work, adapter, alias or gameplay changes.
 
-## Event counterparts: effects, interaction, damage and chat (#1014)
+## Event counterparts: effects, interaction, damage and chat (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -161,7 +161,7 @@ Horizon cancel that answers `Pass` still skips vanilla.
 [connection-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-networking-api-v1/src/main/java/net/fabricmc/fabric/mixin/networking/ConnectionMixin.java
 [network-addon]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-networking-api-v1/src/main/java/net/fabricmc/fabric/impl/networking/AbstractNetworkAddon.java
 
-## Event counterparts: server ticks, levels and chunks (#1014)
+## Event counterparts: server ticks, levels and chunks (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -204,7 +204,7 @@ adapter, alias or gameplay change.
 [chunk-status-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/ChunkStatusTasksMixin.java
 [chunk-map-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/ChunkMapMixin.java
 
-## Event counterparts: player connection (#1014)
+## Event counterparts: player connection (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -241,7 +241,7 @@ only: no dispatch, tick-time work, adapter, alias or gameplay change.
 
 [network-player-list]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-networking-api-v1/src/main/java/net/fabricmc/fabric/mixin/networking/PlayerListMixin.java
 
-## Event counterparts: loot and drops (#1014)
+## Event counterparts: loot and drops (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -287,7 +287,7 @@ tick-time work, adapter, alias or gameplay change.
 [loot-player-death-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-entity-events-v1/src/main/java/net/fabricmc/fabric/mixin/entity/event/ServerPlayerMixin.java
 [loot-equipment-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/LivingEntityMixin.java
 
-## Event counterparts: item models, tints and tooltips (#1014)
+## Event counterparts: item models, tints and tooltips (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -330,7 +330,7 @@ change.
 [item-tooltip-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/client/java/net/fabricmc/fabric/mixin/item/client/ItemStackMixin.java
 [block-color-registry]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/api/client/rendering/v1/BlockColorRegistry.java
 
-## Event counterparts: entity lifecycle and equipment (#1014)
+## Event counterparts: entity lifecycle and equipment (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -367,7 +367,7 @@ dispatch, tick-time work, adapter, alias or gameplay change.
 [tracking-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-networking-api-v1/src/main/java/net/fabricmc/fabric/api/networking/v1/EntityTrackingEvents.java
 [tracking-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-networking-api-v1/src/main/java/net/fabricmc/fabric/mixin/networking/ServerEntityMixin.java
 
-## Event counterparts: commands (#1014)
+## Event counterparts: commands (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -404,7 +404,7 @@ work, adapter, alias or gameplay change.
 [smsg-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-message-api-v1/src/main/java/net/fabricmc/fabric/api/message/v1/ServerMessageEvents.java
 [client-suggestion-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-command-api-v2/src/client/java/net/fabricmc/fabric/mixin/command/client/ClientSuggestionProviderMixin.java
 
-## Event counterparts: block and item interaction (#1014)
+## Event counterparts: block and item interaction (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -446,7 +446,7 @@ dispatch, tick-time work, adapter, alias or gameplay change.
 [mpgm-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/client/java/net/fabricmc/fabric/mixin/event/interaction/client/MultiPlayerGameModeMixin.java
 [player-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/main/java/net/fabricmc/fabric/mixin/event/interaction/PlayerMixin.java
 
-## Event counterparts: screen input posts (#1014)
+## Event counterparts: screen input posts (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -480,7 +480,7 @@ only: no dispatch, tick-time work, adapter, alias or gameplay change.
 [screen-keyboard-events]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-screen-api-v1/src/client/java/net/fabricmc/fabric/api/client/screen/v1/ScreenKeyboardEvents.java
 [screen-keyboard-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-screen-api-v1/src/client/java/net/fabricmc/fabric/mixin/screen/KeyboardHandlerMixin.java
 
-## Event counterparts: data and resource reload and save (#1014)
+## Event counterparts: data and resource reload and save (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -515,7 +515,7 @@ proven by the mixin; the missing `force` argument independently establishes the 
 The change is metadata only: no
 dispatch, tick-time work, adapter, alias or gameplay change.
 
-## Event counterparts: block events (#1014)
+## Event counterparts: block events (arismoko/horizon#1014)
 
 Checked against the same Fabric API 26.3 revision,
 `2065040b236a0d5ac011bd6a45625dc49579b222`. Fabric line numbers below are at that
@@ -576,7 +576,7 @@ is metadata only: no dispatch, tick-time work, adapter, alias or gameplay change
 [data-adv-load]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-advancement-api-v1/src/main/java/net/fabricmc/fabric/mixin/advancement/ReloadableServerRegistriesMixin.java
 [data-loot-load]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-loot-api-v3/src/main/java/net/fabricmc/fabric/mixin/loot/ReloadableServerRegistriesMixin.java
 
-## Event counterparts: block entities (#1014)
+## Event counterparts: block entities (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b…`. Horizon call sites are named
 by function. Fabric's only block entity events are the two load/unload pairs below;
@@ -609,7 +609,7 @@ gameplay change.
 [item-storage]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-transfer-api-v1/src/main/java/net/fabricmc/fabric/api/transfer/v1/item/ItemStorage.java
 [fluid-storage]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-transfer-api-v1/src/main/java/net/fabricmc/fabric/api/transfer/v1/fluid/FluidStorage.java
 
-## Event counterparts: screen and HUD rendering (#1014)
+## Event counterparts: screen and HUD rendering (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b…`. Horizon call sites are named
 by function. Fabric's screen render events are per-screen events registered on one
@@ -642,7 +642,7 @@ gameplay change.
 [hud-element]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/api/client/rendering/v1/hud/HudElement.java
 [hud-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/mixin/client/rendering/HudMixin.java
 
-## Event counterparts: item drawing, tooltips and default components (#1014)
+## Event counterparts: item drawing, tooltips and default components (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b…`. Horizon call sites are named
 by function. Scope: the remaining item hooks in `hooks/base.rs` that concern how an
@@ -672,7 +672,7 @@ change.
 [default-item-component-impl]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/main/java/net/fabricmc/fabric/impl/item/DefaultItemComponentImpl.java
 [default-item-component-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/main/java/net/fabricmc/fabric/mixin/item/DataComponentInitializersPendingComponentsMixin.java
 
-## Event counterparts: taming, anvils, armor wear and other misc hooks (#1014)
+## Event counterparts: taming, anvils, armor wear and other misc hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the eight `misc-add` hooks `add_attribute_tooltips`,
@@ -695,7 +695,7 @@ change.
 
 [misc-add-entity-manager]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/PersistentEntitySectionManagerMixin.java
 
-## Event counterparts: base visuals, zoom, minimap and Horizon's own screens (#1014)
+## Event counterparts: base visuals, zoom, minimap and Horizon's own screens (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the eleven `base` hooks `visuals`, `emissive`, `zoom`, `minimap`,
@@ -716,7 +716,7 @@ and `menu_button`. All eleven record a gap; no keys are added.
 | `screen_tooltip` | **Gap:** `ItemTooltipCallback.EVENT` (partial) | [The item tooltip API][item-tooltip-api] line 33 declares the item-stack tooltip event, fired by [its mixin][item-tooltip-mixin] line 40 at `ItemStack.getTooltipLines` `RETURN` ordinal 1; [the client tooltip component callback][client-tooltip-component-api] line 37 only maps a `TooltipComponent` to a client component. Horizon's `Game::native_screen_tooltip` is a client collect hook asked by `draw_native_screen_tooltip` with the block id, data slots and cursor position when no item is under the cursor, appending plain lines that Horizon draws. The stack argument and the firing point differ: gap. |
 | `menu_button` | **Gap:** none; nearest `ItemClickBehaviorCallback.EVENT` (different moment) | [The item click callback][item-click-api] is fired by [its container menu mixin][item-click-mixin] at `AbstractContainerMenu.tryItemClickBehaviourOverride` `HEAD` for a slot click, with the hovered stack, slot, carried stack, slot access, click action and player. Horizon's `Game::native_menu_button` is a server listen hook asked by `api_menu_button` from the container's `clickMenuButton` path with a `MenuButtonContext`, a mutable block entity (out of the world) and the clicking player's carried stack, then writing the block entity snapshot back. No Fabric event fires at that moment or allows those mutations: gap. |
 
-## Event counterparts: base menus, mobs and player gear (#1014)
+## Event counterparts: base menus, mobs and player gear (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the ten `base` hooks `menu_clicked`, `menu_closed`,
@@ -745,7 +745,7 @@ change.
 [item-click-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/main/java/net/fabricmc/fabric/api/item/v1/ItemClickBehaviorCallback.java
 [item-click-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/main/java/net/fabricmc/fabric/mixin/item/AbstractContainerMenuMixin.java
 
-## Event counterparts: base-is block signals, entity interaction, effects and rendering (#1014)
+## Event counterparts: base-is block signals, entity interaction, effects and rendering (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `is_signal_source`, `health_hud`,
@@ -767,7 +767,7 @@ sites are named by function. Scope: the twelve `base` hooks `is_signal_source`, 
 | `world_drawn` | **Gap:** `LevelRenderEvents.END_MAIN` (different firing point) | [The level render events][level-render-events] lines 160-169 declare `END_MAIN`, fired by [the level renderer mixin][level-renderer-mixin] line 131 at the end of the main pass after terrain, entities, block entities and particles but before clouds, weather, late debug and the fabulous combine. Horizon's `mod_render::render::world_drawn` is called from the client renderer after the whole world pass, weather and the world post pass included, with a `WorldDrawn` giving the drawn world's depth and camera. Weather and post-processing are already drawn at Horizon's moment: gap. |
 | `render_needs` | **Gap:** none; nearest `LevelRenderEvents.COLLECT_SUBMITS` | [The level render events][level-render-events] line 71 declare `COLLECT_SUBMITS`, fired by [the level renderer mixin][level-renderer-mixin] line 92 at `LevelRenderer.submitFeatures` `RETURN`, with a `LevelRenderContext` for submitting render work rather than collecting render requirements. Horizon's `mod_render::render::render_needs` is asked by `needs` as a frame is built, with a mutable `RenderNeeds` (entity spans and world depth) that several mods may set. No Fabric event fires at that moment or offers that out: gap. |
 
-## Event counterparts: base block queries, dispense, survival, placement, bone meal, step-on, consume and enchant effects (#1014)
+## Event counterparts: base block queries, dispense, survival, placement, bone meal, step-on, consume and enchant effects (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `has_analog_output`, `analog_output`,
@@ -790,7 +790,7 @@ twelve record a gap; no keys are added.
 | `state_for_placement` | **Gap:** none | Fabric API 26.3 declares no event for `Block.getStateForPlacement`, and the nearest [use-block event][use-block-api] lines 28-55 receives the player, level, hand and hit result, not a `BlockPlaceContext`; [its server mixin][spgm-mixin] lines 85-87 fires at `useItemOn` `HEAD` before placement. Horizon's `GameLevel::native_state_for_placement` is asked by `before_state_for_placement` on the authoritative server with the block's default state, the placement context, the fluid at the target position and a mutable `Option<Option<BlockStateId>>` that chooses a state or refuses the placement. No Fabric event fires at that query or returns a state. No key. |
 | `enchant_effect` | **Gap:** none | The pinned index has no hit-effect or post-attack entry: [the enchantment events][base-has-enchantment-api] lines 54, 84 and 107 cover enchantment eligibility and definition modification (`ALLOW_ENCHANTING`, `MODIFY`, `MODIFY_WITH_LOOKUP`), not the effects a carried enchantment applies on a hit, and [the effect events][effect-api] lines 79-86 and 136-143 report status-effect addition and removal. Horizon's `Game::native_enchant_effect` is fired by `post_attack` in the enchantment-effect code once for each `minecraft:post_attack` entry of a mod's own kind, with the enchantment id, the kind, the effect JSON, the level and the victim's id. No Fabric event fires at that moment or carries those arguments. No key. |
 
-## Event counterparts: screen mouse input, camera shake, shader parameters, block outline, hand render and item-use queries (#1014)
+## Event counterparts: screen mouse input, camera shake, shader parameters, block outline, hand render and item-use queries (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `screen_mouse_button_pressed_pre`,
@@ -826,7 +826,7 @@ change.
 [level-extraction-events]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/api/client/rendering/v1/level/LevelExtractionEvents.java
 [level-extractor-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/mixin/client/rendering/LevelExtractorMixin.java
 
-## Event counterparts: base screen input, camera, fog and respawn hooks (#1014)
+## Event counterparts: base screen input, camera, fog and respawn hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `screen_key_pressed_pre`,
@@ -855,7 +855,7 @@ change.
 [sleep-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-entity-events-v1/src/main/java/net/fabricmc/fabric/api/entity/event/v1/EntitySleepEvents.java
 [level-change-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-entity-events-v1/src/main/java/net/fabricmc/fabric/api/entity/event/v1/ServerEntityLevelChangeEvents.java
 
-## Event counterparts: base screen release, music, containers and item use (#1014)
+## Event counterparts: base screen release, music, containers and item use (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `screen_key_released_pre`, `music`,
@@ -877,7 +877,7 @@ sites are named by function. Scope: the twelve `base` hooks `screen_key_released
 | `experience_orb_merge` | **Gap:** none | Fabric API 26.3 declares no experience-orb merge event; the pinned index lists none. Horizon's `native_experience_orb_merge` is fired by `orb_merges` after the merge was allowed and before one orb absorbs the other, with the dimension, both orb ids, both orbs' values and counts and a cancel. No Fabric event fires at that absorption: gap. No key. |
 | `menu_slot_rules` | **Gap:** none | Fabric API 26.3 declares no slot-placement or stack-limit event; the pinned index lists nothing for `Slot.mayPlace` or `mayPickup`. Horizon's `native_menu_slot_rules` is called by `apply_menu_slot_rules` with the loop context, menu name, backing slot index, stack, and mutable placement and maximum, on both the server and client prediction. No Fabric event fires at that query or carries the menu context: gap. No key. |
 | `living_entity_use_item_tick` | **Gap:** none (nearest `UseItemCallback`, a different moment) | [Fabric's item-use callback][use-item-api] lines 27-53 handles an attempted use with player, level and hand and an `InteractionResult`; [the server interaction mixin][interaction-server] lines 96-104 fires it at `ServerPlayerGameMode.useItem` HEAD, not on each tick of `LivingEntity.updatingUsingItem`. The pinned index lists no item-use tick event. Horizon's `native_living_entity_use_item_tick` is fired by `use_item_ticked` every tick of a use with the stack, hand, remaining duration and a cancel. No Fabric event fires at that tick or carries the duration: gap. No key. |
-## Event counterparts: base item use, client levels, projectiles, mounts, interaction, maps and data (#1014)
+## Event counterparts: base item use, client levels, projectiles, mounts, interaction, maps and data (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `on_use_tick`,
@@ -906,7 +906,7 @@ change.
 [hotbar-scroll-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/client/java/net/fabricmc/fabric/api/event/client/player/ClientHotbarScrollEvents.java
 [hotbar-scroll-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/client/java/net/fabricmc/fabric/mixin/event/interaction/client/MouseHandlerMixin.java
 
-## Event counterparts: block and item declaration, entity ticks, player and mob rendering, signs and menus (#1014)
+## Event counterparts: block and item declaration, entity ticks, player and mob rendering, signs and menus (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call
 sites are named by function. Scope: the twelve `base` hooks `blocks`, `items`, `entity_tick_pre`,
@@ -924,19 +924,19 @@ record a gap; no keys are added.
 | `sign_changed` | **Gap:** none | Fabric API 26.3 has no sign-editing event; the pinned index lists none, and NeoForge has no counterpart either. Horizon's `native_sign_changed` is called by `lan_sign_update` on the server once a player's `SignUpdate` has passed vanilla's editing, reach and wax checks, with the dimension, position, side, mutable lines and a cancel. No Fabric event fires at that point or carries the text. No key. |
 | `standalone_models` | **Gap:** `BuiltInBlockModelsCallback.EVENT` (built-in block models, not file-backed standalone ids/forms) | [BuiltInBlockModelsCallback.java:26-46][builtin-block-models-api] gives listeners a `BuiltInBlockModels.Builder` and is fired by [BuiltInBlockModelsMixin.java:35-40][builtin-block-models-mixin] before `BuiltInBlockModels.createBlockModels` calls `build`, so mods add constructed `BlockModel.Unbaked` values for block states. Horizon's `native_standalone_models` contract version 2 is asked once by `mods/standalone.rs::collect_standalone_models` for plain model ids and bake-time rotated/UV-locked or combined file dependencies, rebaked beside block models on every resource load, with no block state and no arbitrary mod-typed model object; NeoForge's `ModelEvent.RegisterStandalone` is the event it mirrors. The registration point and data handed over differ. No key. |
 | `player_container_open`, `player_container_close` | **Gap:** none | Fabric API 26.3 declares no server-side menu open or close event; the pinned index lists no event at `ServerPlayer.openMenu` or `doCloseContainer`, and NeoForge's `PlayerContainerEvent` has no counterpart. Horizon's `native_player_container_open` and `native_player_container_close` are fired by `player_menu_opened` and `player_menu_closed` with the player's id and name, dimension, menu type name and optional block position. No Fabric event fires at either moment or carries those arguments. No key. |
-## Event counterparts: flight toggle, anvil damage, bow release, beacon, bell, block break/burn/cook, damage abort, dispense and fade (#1014)
+## Event counterparts: flight toggle, anvil damage, bow release, beacon, bell, block break/burn/cook, damage abort, dispense and fade (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites
 are named by function. Scope: the twelve `base` hooks `player_toggle_flight`, `anvil_damaged`, `arrow_loose`,
 `beacon_state_change`, `bell_ring`, `block_break_progress_update`, `block_burn`, `block_cook`,
 `block_damage_abort`, `block_dispense_armor`, `block_fade` and `block_failed_dispense`; all twelve record a
-## Event counterparts: compost, crafter, creeper, critical hits, difficulty and other base hooks (#1014)
+## Event counterparts: compost, crafter, creeper, critical hits, difficulty and other base hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites
 are named by function. Scope: the twelve `base` hooks `compost_item`, `crafter_craft`, `creeper_ignite`,
 `creeper_power`, `critical_hit`, `difficulty_changed`, `dragon_egg_form`, `enchant_item`,
 `ender_pearl_teleport`, `entity_break_door`, `entity_breed` and `entity_change_block`; all twelve record a
-## Event counterparts: entity drops, portals, taming, teleports and other base entity hooks (#1014)
+## Event counterparts: entity drops, portals, taming, teleports and other base entity hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites
 are named by function. Scope: the twelve `base` hooks `entity_drop_item`, `entity_enter_block`,
@@ -958,13 +958,13 @@ gap and no keys are added.
 | `block_dispense_armor` | **Gap:** none | Fabric API 26.3 has no dispense event; the pinned index lists nothing at `DispenseItemBehavior` or `DefaultDispenseItemBehavior`, and NeoForge has none either. Horizon's `native_block_dispense_armor` is fired by `dispense_equipment` after a dispenser has equipped the item on a player, mob or armour stand, with the dimension, position, item id and target kind. Firing point, arguments and the completed equip have no Fabric counterpart. No key. |
 | `block_fade` | **Gap:** none | Fabric API 26.3 has no block-fade or random-block-tick event; neither the pinned index nor NeoForge has one. Horizon's `native_block_fade` is fired by `allow_block_fade` on an authoritative server with the dimension, position, the `from` and `to` state ids and a `cancel` that keeps the block. No Fabric event fires at that state transition or carries both states. No key. |
 | `block_failed_dispense` | **Gap:** none | Fabric API 26.3 has no dispenser event, failed or otherwise; the pinned index lists nothing at `DispenseItemBehavior.dispense`. Horizon's `native_block_failed_dispense` is fired by `dispense_item` after a mod's dispense answer is `FAIL`, with the dimension, position and item id. No Fabric event fires on a failed dispense or carries the item. No key. |
-## Event counterparts: block formation, ignition, brewing, campfire and cauldron, and server broadcast (#1014)
+## Event counterparts: block formation, ignition, brewing, campfire and cauldron, and server broadcast (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites
 are named by function. Scope: the twelve `base` hooks `block_form`, `block_ignite`, `block_lock_check`,
 `block_receive_game`, `block_shear_entity`, `brewing_complete`, `brewing_fuel`, `brewing_start`,
 `broadcast_message`, `campfire_start`, `cauldron_level_changed` and `item_consumption_teleport`; all twelve
-## Event counterparts: base mending, explosions, fire, furnaces and hoppers (#1014)
+## Event counterparts: base mending, explosions, fire, furnaces and hoppers (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites
 are named by function. Scope: the twelve hooks `xp_repair_ratio`, `explosion_prime`, `fire_odds`,
@@ -1020,7 +1020,7 @@ record a gap and no keys are added.
 | `furnace_smelt` | **Gap:** none | Fabric API 26.3 declares no smelting-complete event, and the pinned index lists none. Horizon's `native_furnace_smelt` is fired by `tick_furnace` when the output slot's count grew, with the position, the input item id and the result id. No Fabric event fires at that moment. No key. |
 | `furnace_start_smelt` | **Gap:** none | Fabric API 26.3 declares no event for cooking starting, and the pinned index lists none. Horizon's `native_furnace_start_smelt` is fired by `tick_furnace` when the cooking timer advanced from zero, with the position and the input item id. No Fabric event fires at that moment. No key. |
 | `hopper_inventory_search` | **Gap:** none | Fabric API 26.3 declares no hopper or inventory-search event, and the pinned index lists none; the pinned tree's only hopper mixin is the transfer module's item-storage lookup, not an event. Horizon's `native_hopper_inventory_search` is fired by `hopper_eject` and `suck_from_container` once a container or entity target was selected, with the hopper position and exactly one of the container position or entity id. No Fabric event fires at that decision. No key. |
-## Event counterparts: base hopper, inventory, item and block hooks (#1014)
+## Event counterparts: base hopper, inventory, item and block hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites
 are named by function. Scope: the twelve `base` hooks `hopper_pickup_item`, `ingredient`,
@@ -1073,7 +1073,7 @@ change.
 [fire-block-hooks]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-content-registries-v0/src/main/java/net/fabricmc/fabric/impl/content/registry/FireBlockHooks.java
 [hopper-lifecycle-impl]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/impl/event/lifecycle/LifecycleEventsImpl.java
 
-## Event counterparts: base anvil, armor-stand, bucket, menu and player hooks (#1014)
+## Event counterparts: base anvil, armor-stand, bucket, menu and player hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites are named
 by function. Scope: the eleven `base` hooks `anvil_craft_post`, `anvil_craft_pre`, `armor_stand_manipulate`,
@@ -1098,7 +1098,7 @@ The change is docs only: no keys, dispatch, tick-time work, adapter, alias or ga
 
 [sp-events-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-entity-events-v1/src/main/java/net/fabricmc/fabric/mixin/entity/event/ServerPlayerMixin.java
 
-## Event counterparts: base player hooks (#1014)
+## Event counterparts: base player hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Horizon call sites are named
 by function. Scope: the twelve `base` hooks `player_destroy_item`, `player_fish`, `player_flower_pot_manipulate`,
@@ -1120,7 +1120,7 @@ all twelve record a gap and no keys are added.
 | `player_swap_hands` | **Gap:** none; nearest `UseItemCallback.EVENT` (different action) | [Use item API][use-item-api] lines 28-51 and [the server game-mode mixin][interaction-server] lines 96-103 fire for `useItem`, not for `SWAP_ITEM_WITH_OFFHAND`, and there is no hand-swap event in Fabric API 26.3. Horizon's `lan_guest_packet` fires before the main and off hand swap, with a cancel that restores the client's slots. No key. |
 | `player_take_lectern_book` | **Gap:** none | Fabric API 26.3 declares no lectern event; `UseItemCallback` only fires when an item is used, not when the lectern button takes the book. Horizon's `take_lectern_book` fires after the menu and block entity changed, with the position and removed book id. No Fabric event fires there. No key. |
 | `player_teleported` | **Gap:** `ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL` (different trigger, objects instead of ids) | [Level change API][level-change-api] line 59 declares it as `(ServerPlayer player, ServerLevel origin, ServerLevel destination)`, fired at `respawn` TAIL when levels differ by [the player-list mixin][sp-mixin] lines 36-42 and at `triggerDimensionChangeTriggers` TAIL by [the server-player mixin][sp-events-mixin] lines 84-86. It covers cross-level moves (including cross-level respawns), not a `/tp` inside one level, and passes player and level objects. Horizon's `flush_teleport_notes` and `run_level_teleports` fire after any command teleport with the uuid, name, from/to coordinates and dimension id. No key. |
-## Event counterparts: base player hooks, batch 3 (#1014)
+## Event counterparts: base player hooks, batch 3 (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`; Horizon call sites are named by function, never by line. Scope: the twelve `base` hooks `player_totem`, `resource_pack_status`, `spawn_change`, `tnt_primed`, `vehicle_create`, `vehicle_damage`, `vehicle_destroy`, `vehicle_moved`, `world_border_bounds_changed`, `world_border_center_changed`, `player_advancement_done` and `player_advancement_progress`. All twelve record a gap and no keys are added.
 
@@ -1140,7 +1140,7 @@ Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc4957
 | `player_advancement_progress` | **Gap:** none | The same load-time `AdvancementEvents` never see a criterion granted or revoked, and Fabric API 26.3 declares no progress or criteria event. Horizon's `advancement_progress` and `run_native_advancement_grants` fire after one criterion changed and before any rewards, with the player uuid and entity id, the advancement and criterion, grant or revoke and an owned snapshot of every criterion. No Fabric event fires at that mutation or carries it. No key. |
 
 [base-player-3-entity-manager]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/PersistentEntitySectionManagerMixin.java
-## Event counterparts: base player hooks, batch 4 (#1014)
+## Event counterparts: base player hooks, batch 4 (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`; Horizon call sites are named by function, never by line. Scope: the twelve `base` hooks `player_arm_swing`, `player_attack_cooldown_reset`, `player_bed_enter`, `player_bed_leave`, `player_bucket_entity`, `player_bundle_item_select`, `player_change_beacon_effect`, `player_deep_sleep`, `player_edit_book`, `player_egg_throw`, `player_elytra_boost` and `player_exp_cooldown_change`. All twelve record a gap and no keys are added.
 
@@ -1160,7 +1160,7 @@ Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc4957
 | `player_exp_cooldown_change` | **Gap:** none | Fabric API 26.3 declares no experience-orb pickup or pickup-cooldown event, and the tick and entity lifecycle events do not supply a pickup-cooldown change or its new value. Horizon's `guest_orbs` fires after the guest's experience delay was decremented, with the uuid, name and the new tick count. No key. |
 
 [sleep-player-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-entity-events-v1/src/main/java/net/fabricmc/fabric/mixin/entity/event/PlayerMixin.java
-## Event counterparts: base player hooks, batch 5 (#1014)
+## Event counterparts: base player hooks, batch 5 (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`; Horizon call sites are named by function, never by line. Scope: the twelve `base` hooks `player_input`, `player_item_cooldown`, `player_switch_hotbar_slot_pre`, `player_switch_hotbar_slot_post`, `player_jump`, `player_launch_projectile`, `player_level_change`, `player_loom_pattern_select`, `player_map_filled`, `player_name_entity`, `player_open_sign` and `player_pick_item`. All twelve record a gap and no keys are added.
 
@@ -1183,7 +1183,7 @@ Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc4957
 | `player_pick_item` | **Gap:** `PlayerPickItemEvents.BLOCK` and `.ENTITY` | [The pick-item API][base-player-pick-api] lines 36-66 and 69-93 declares the server callbacks and nullable stack result; [the server packet mixin][use-entity-server-mixin] lines 55-80 invokes the two events at `BlockState.getCloneItemStack` and `Entity.getPickResult` inside `handlePickItemFromBlock` and `handlePickItemFromEntity`, passing the player alongside the position and state or the entity, and replacing the picked stack. Horizon's `guest_pick_item` uses one hook for both cases after the stack was resolved, with the uuid, name, a `from_entity` flag, integer position and entity id and a veto. Split events, object-versus-id arguments and replace-versus-veto control differ. No key. |
 
 [base-player-pick-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/main/java/net/fabricmc/fabric/api/event/player/PlayerPickItemEvents.java
-## Event counterparts: base player hooks, batch 6 (#1014)
+## Event counterparts: base player hooks, batch 6 (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`; Horizon call sites are named by function, never by line. Scope: the eleven `base` hooks `player_pickup_arrow`, `player_ready_arrow`, `player_recipe_book_click`, `player_recipe_book_settings_change`, `player_recipe_discovered`, `player_riptide`, `player_shear_entity`, `player_shield_disable`, `player_stat_award`, `player_stonecutter_recipe_select` and `player_stop_spectating_entity`, with `player_start_spectating_entity` beside its mirror. All twelve record a gap and no keys are added.
 
@@ -1202,7 +1202,7 @@ Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc4957
 | `player_stop_spectating_entity` | **Gap:** nearest `EntityTrackingEvents.STOP_TRACKING` | [The tracking API][tracking-api] lines 41-49 and 63-70 declares `STOP_TRACKING`, invoked at `removePairing` HEAD in [the server entity mixin][tracking-mixin] lines 43-46 when a player stops tracking an entity; it fires for every tracking removal, including chunk unloads, carries the entity and player objects, and is not the spectate camera. Horizon's `guest_set_camera` fires when the guest's camera returns to their own entity, with the uuid, name and the previously watched entity id, listen-only. Moment, guards and arguments differ. No key. |
 | `player_start_spectating_entity` | **Gap:** nearest `EntityTrackingEvents.START_TRACKING` | [The tracking API][tracking-api] lines 30-39 declares `START_TRACKING`, invoked in [the server entity mixin][tracking-mixin] lines 38-41 after a player started tracking an entity and its spawn packet was sent; it fires for every new pairing, carries the entity and player objects, and is not the spectate camera. Horizon's `guest_set_camera` fires after the guest's camera moved to another entity and the client was told, with the uuid, name and the watched entity id, listen-only. Moment, guards and arguments differ. No key. |
 
-## Event counterparts: base player hooks, batch 7 (#1014)
+## Event counterparts: base player hooks, batch 7 (arismoko/horizon#1014)
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`; Horizon call sites are named by function, never by line. Scope: the twelve `base` hooks `player_stop_using_item`, `player_swap_with_equipment_slot`, `player_teleport_end_gateway`, `player_toggle_entity_age_lock`, `player_toggle_sneak`, `player_trade`, `player_unleash_entity`, `player_velocity`, `portal_create`, `potion_splash`, `prepare_hopper_transfer` and `prepare_item_craft`. All twelve record a gap and no keys are added.
 
@@ -1221,7 +1221,7 @@ Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc4957
 | `prepare_hopper_transfer` | **Gap:** none | Fabric API 26.3 declares no hopper or block-entity transfer event; its only `prepare`-named event, `PermissionEvents.PREPARE_OFFLINE_PLAYER`, prepares a permission context and is unrelated. Horizon's `hopper_try_move_items` fires after the cooldown, enabled and view guards and before pushing or pulling items, with the hopper position, listen-only. No key. |
 | `prepare_item_craft` | **Gap:** none; nearest `ClientRecipeSynchronizedEvent.EVENT` | [The recipe-sync API][recipe-sync-api] lines 25-39 describes a client-side event reporting the synchronized recipe set, not a crafting result, and Fabric API 26.3 declares no crafting-result or result-slot event. Horizon's `guest_craft_result` and `lan_inventory_click` call `native_prepare_item_craft` on the server with the uuid, name, the crafting-table position (`None` for the inventory grid) and a mutable result stack before it is sent, replace contract. Side, moment and arguments differ. No key. |
 
-## Event counterparts: base prepare hooks (#1014)
+## Event counterparts: base prepare hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the twelve `base` hooks `prepare_item_enchant`, `prepare_smithing`, `projectile_launch`, `raid_spawn_wave`, `raid_state_change`, `sculk_bloom`, `sleep_finished_time`, `sponge_absorb`, `target_hit`, `thunder_change`, `time_skip` and `trade_select`. All twelve record a gap and no keys are added.
 
@@ -1242,7 +1242,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 
 [enchant-events-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/main/java/net/fabricmc/fabric/api/item/v1/EnchantmentEvents.java
 
-## Event counterparts: base trade and vault hooks (#1014)
+## Event counterparts: base trade and vault hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the ten `base` hooks `trade_with_villager`, `vault_change_state`, `vault_loot`, `weather_change`, `whitelist_state_update`, `world_border_bounds_change_finish`, `living_drown`, `living_fall`, `living_heal` and `living_jump`. All ten record a gap and no keys are added.
 
@@ -1259,7 +1259,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `living_heal` | **Gap:** none | Fabric API 26.3 declares no heal or health-gain event; `ServerLivingEntityEvents` covers damage, death and conversion only. `peaceful_regeneration` and `heal` call `native_living_heal` with the entity id, a mutable amount and a cancel flag, inside the tick's health update, where a deferred call would reorder vanilla's effects. No key. |
 | `living_jump` | **Gap:** none | Fabric API 26.3 declares no jump event; no movement, velocity or tick event fires at a living entity's jump. `jump_from_ground` and `camel::dash` call `native_living_jump` after the velocity write, with the entity id and kind string, listen-only, with player notifications suppressed on replayed ticks. No key. |
 
-## Event counterparts: block hooks (#1014)
+## Event counterparts: block hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the four `block` hooks `block_speed_factor`, `block_grow_feature`, `block_render_visibility` and `block_tool_modification`. All four record a gap and no keys are added.
 
@@ -1270,7 +1270,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `block_render_visibility` | **Gap:** none | Fabric API 26.3 declares no event that resolves a persistent per-state mesh-visibility table. The client rendering event `LevelRenderEvents.AFTER_SOLID_FEATURES` instead observes a frame after solid feature geometry is drawn ([the API][level-render-events] lines 77-85; [the mixin][level-renderer-mixin] lines 95-98), without a mutable hidden flag. `refresh_render_visibility` asks `native_block_render_visibility` once for every registry state on world join and explicit refresh, before remeshing with the resulting table, with the state id and a mutable hidden flag; firing point, arguments and control differ. No key. |
 | `block_tool_modification` | **Gap:** nearest `UseBlockCallback.EVENT` | [The callback API][use-block-api] lines 28-54 passes the player, level, hand and hit result: `PASS` continues vanilla, while a non-`PASS` result ends processing, including success as well as failure. It fires at server `useItemOn` HEAD ([server mixin][interaction-server] lines 85-94) and before client prediction after a spectator guard ([client mixin][interaction-client] lines 98-115), before tool transformations, with no tool ability or mutable final state. `native_block_tool_modification` runs inside the tool-action path (axe strip, scrape and wax-off; shovel flatten; hoe till) and in `modified_campfire`, with the item stack, a `ToolUse` (player, hand, position, face, click point, ability, simulated) and a mutable final state plus cancel. Moment, arguments and control differ. No key. |
 
-## Event counterparts: landing, bone meal, camera and sleep hooks (#1014)
+## Event counterparts: landing, bone meal, camera and sleep hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `fall_on`, `bounce_on`, `bonemeal`, `calculate_player_turn`, `camera_pose`, `camera_type_cycle`, `can_continue_sleeping` and `can_player_sleep`. All eight record a gap and no keys are added.
 
@@ -1284,7 +1284,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `camera_type_cycle` | **Gap:** none | Fabric API 26.3 declares no camera-type or perspective event, so nothing fires when `Minecraft.handleKeybinds` cycles `Options.setCameraType` on the F5 press. `native_camera_type_cycle` fires on the client before the type changes, with the previous type and a mutable next type that may skip or keep a type. No key. |
 | `can_continue_sleeping` | **Gap:** nearest `EntitySleepEvents.ALLOW_BED`; also `START_SLEEPING` and `STOP_SLEEPING` | [The sleep API][sleep-api] lines 98-120 declares `ALLOW_BED`, fired at `checkBedExists` RETURN with the living entity, sleeping position, block state and vanilla boolean ([the living entity mixin][living-mixin] lines 111-124); it overrides bed validity, not the combined sleep problem including the player's daytime rule. `native_can_continue_sleeping` asks each tick whether a sleeping player, villager or wandering trader may stay asleep, with the uuid, name, kind, bed position, the vanilla problem and a mutable may-continue answer; arguments and decision scope differ. `START_SLEEPING` and `STOP_SLEEPING` instead notify one-shot transitions at `startSleeping` RETURN and guarded `stopSleeping` HEAD (mixin lines 94-109). No key. |
 | `can_player_sleep` | **Gap:** nearest `EntitySleepEvents.ALLOW_SLEEPING` | `ALLOW_SLEEPING` injects at `startSleepInBed` HEAD and only returns a `BedSleepingProblem` veto before the vanilla problem exists ([the API][sleep-api] lines 53-68, [the player mixin][sleep-player-mixin] lines 32-40); `ALLOW_NEARBY_MONSTERS` redirects the monster-list check alone and `ALLOW_SETTING_SPAWN` wraps `setRespawnPosition` ([the server player mixin][base-block-server-player-mixin] lines 102-118). `native_can_player_sleep` fires after vanilla computed its first problem and lets a mod clear or replace it, with the uuid, name, bed position and mutable problem. Moment, arguments and control differ. No key. |
-## Event counterparts: chat completion, chunk watching, raw packets and client pause hooks (#1014)
+## Event counterparts: chat completion, chunk watching, raw packets and client pause hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `chat_suggestion_applied`, `chunk_watch`, `chunk_sent`, `chunk_unwatch`, `client_packet`, `client_packet_send`, `client_pause_change_pre` and `client_pause_change_post`. All eight record a gap and no keys are added.
 
@@ -1298,7 +1298,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `client_packet_send` | **Gap:** none; nearest `ClientSendMessageEvents.CHAT` and `ALLOW_CHAT` | `ALLOW_CHAT`/`CHAT` fire at `ClientPacketListener.sendChat` HEAD with only the chat string, and `ALLOW_CHAT` can veto that one message ([the send API][send-api] lines 29-37 and 100-106, [the send mixin][send-mixin] lines 34-42). `native_client_packet_send` runs from `client_packet_send_canceled` before play-phase serverbound packets sent by the window's game, excluding network-thread and connection-internal sends, with a packet view and a mutable cancel flag; a string-only chat veto cannot stand in for arbitrary packets and their data. No key. |
 | `client_pause_change_pre` | **Gap:** none | Fabric API 26.3 declares no client pause or game-pause event. `native_client_pause_change_pre` fires in `handle_window_event_inner` when `pauses_game()` differs from the current pause, before the new state is stored, with the proposed pause and a mutable cancel; nothing in Fabric sits at that decision. No key. |
 | `client_pause_change_post` | **Gap:** none | As above, Fabric API 26.3 declares no pause-change event. `native_client_pause_change_post` fires in the same `handle_window_event_inner` branch right after `self.pause` was updated and before the integrated server is told, with the new pause value; no Fabric event carries that notification. No key. |
-## Event counterparts: miscellaneous client, menu and block-query hooks (#1014)
+## Event counterparts: miscellaneous client, menu and block-query hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `client_player_change_game_type`, `client_player_clone`, `client_disconnecting`, `menu_background`, `clone_item_stack`, `compute_fov_modifier`, `connects_to` and `contents_changed`. All eight record a gap and no keys are added.
 
@@ -1317,7 +1317,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 [pick-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/main/java/net/fabricmc/fabric/api/event/player/PlayerPickItemEvents.java
 [pick-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/main/java/net/fabricmc/fabric/mixin/event/interaction/ServerGamePacketListenerImplMixin.java
 
-## Event counterparts: misc create, crop-growth, custom-spawner and boss-overlay hooks (#1014)
+## Event counterparts: misc create, crop-growth, custom-spawner and boss-overlay hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `create_fluid_source`, `create_spawn_position`, `crop_grow_pre`, `crop_grow_post`, `custom_click_action`, `modify_custom_spawners`, `custom_spawner_tick` and `customize_boss_event_progress`. All eight record a gap and no keys are added.
 
@@ -1332,7 +1332,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `custom_spawner_tick` | **Gap:** none | This hook is already beyond NeoForge: a `SpawnerKey` stands in for a `CustomSpawner` object, and `native_custom_spawner_tick` is fired once per tick per mod key with the dimension and `spawn_enemies`. Fabric API 26.3 exposes no event for ticking entries in a level's custom-spawner list. No key. |
 | `customize_boss_event_progress` | **Gap:** none | Fabric API 26.3 declares no boss-bar layout event (the index has no boss-bar entry); its `HudElement.extractRenderState` callback receives only graphics and timing context ([the HUD element API][hud-element] lines 28-36), with no per-bar position or increment. `native_customize_boss_event_progress` is asked once per frame per boss bar before drawing, with mutable x, y and increment plus a cancel that suppresses just that bar. The moment and the mutable layout arguments have no Fabric counterpart. No key. |
 
-## Event counterparts: misc customize hooks (#1014)
+## Event counterparts: misc customize hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `customize_chat_overlay`, `debug_entry_lines`, `debug_renderer_draw`, `effect_particle_modification`, `enchanted_block_loot`, `enchanted_entity_loot`, `enchantment_level_set` and `ender_entity_teleport`. All eight record a gap and no keys are added.
 
@@ -1349,7 +1349,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 
 [enchant-util]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-item-api-v1/src/main/java/net/fabricmc/fabric/impl/item/EnchantmentUtil.java
 
-## Event counterparts: misc enderman hooks (#1014)
+## Event counterparts: misc enderman hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `enderman_anger`, `entity_change_block_pre`, `entity_constructing`, `entity_inside`, `entity_interact_specific`, `entity_mob_griefing`, `entity_outline` and `entity_place`. All eight record a gap and no keys are added.
 
@@ -1366,7 +1366,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 
 [usecb-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/main/java/net/fabricmc/fabric/api/event/player/UseEntityCallback.java
 [usecb-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-events-interaction-v0/src/main/java/net/fabricmc/fabric/mixin/event/interaction/ServerGamePacketListenerImplMixin.java
-## Event counterparts: misc entity hooks (#1014)
+## Event counterparts: misc entity hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the nine hooks `entity_struck_by_lightning`, `entity_travel_to_dimension`, `explosion_knockback`, `explosion_start`, `extract_block_screen_effect`, `farmland_trample`, `finalize_spawn`, `fluid_flow` and `fluid_place_block`. All nine record a gap and no keys are added.
 
@@ -1381,7 +1381,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `finalize_spawn` | **Gap:** none; nearest `ServerEntityEvents.ENTITY_LOAD` | `ENTITY_LOAD` receives the entity and level after the entity is already in the level ([sentity-api] lines 35-46), firing at `onTrackingStart` TAIL ([sentity-callbacks-mixin] lines 38-40). `finalize_spawn_lent` asks Horizon's hook before a mob is finalized, with the dimension, kind, reason, position, spawner, mutable difficulty, the mob, group, and cancel/skip answers. The moment and the mutable spawn data do not match. No key. |
 | `fluid_flow` | **Gap:** none; nearest `FluidFlowEvents.ALLOW` | `ALLOW` is declared in [fluid-flow-api] lines 26-30 (listener line 62) and fired at `spreadTo` HEAD in [fluid-flow-mixin] lines 40-48 and [lava-fluid-mixin] lines 36-44, with another veto at `shouldSpreadLiquid` HEAD ([liquid-block-mixin] lines 39-43), before the liquid block checks its neighbours. The event receives a fluid state, level and one position and can only veto further handling. `native_fluid_flow` instead fires from `pushing_flow` after `flow_at` computes `FlowingFluid.getFlow`, with the fluid name, position and a mutable flow vector, so mods edit the push applied to an entity. Moment, arguments and the veto-versus-listen contract differ. No key. |
 | `fluid_place_block` | **Gap:** none; nearest `FluidFlowEvents.ALLOW` | The same `ALLOW` event ([fluid-flow-api] lines 26-30, listener line 62; [fluid-flow-mixin] lines 40-48 and [lava-fluid-mixin] lines 36-44) vetoes `spreadTo` before a fluid flows into a position, and also fires at `shouldSpreadLiquid` HEAD ([liquid-block-mixin] lines 39-43), before neighbour-driven liquid block formation is determined. `fluid_place_block` fires Horizon's hook when liquid at `liquid_pos` is about to place `state` at `pos`, with both positions, the state and a mutable replacement state plus a cancel. `ALLOW` carries no target block state and cannot replace it. No key. |
-## Event counterparts: misc gather hooks (#1014)
+## Event counterparts: misc gather hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `gather_skipped_attribute_tooltips`, `gather_effect_screen_tooltips`, `game_rule_changed`, `game_shutting_down`, `get_arm_pose`, `get_enchantment_level`, `grindstone_place` and `grindstone_take`. All eight record a gap and no keys are added.
 
@@ -1400,7 +1400,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 [gamerule-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-game-rule-api-v1/src/main/java/net/fabricmc/fabric/mixin/gamerule/MinecraftServerMixin.java
 [server-lifecycle-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/api/event/lifecycle/v1/ServerLifecycleEvents.java
 [server-lifecycle-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/MinecraftServerMixin.java
-## Event counterparts: misc hand hooks (#1014)
+## Event counterparts: misc hand hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `damage_item`, `hand_drawn`, `ingredient_test`, `is_pathfindable`, `item_after_vertical_collision`, `item_attribute_modifier`, `item_fished` and `item_interact_mob`, plus the registrar's item-container declaration. All record a gap and no keys are added.
 
@@ -1422,7 +1422,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 [hand-custom-ingredient-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-recipe-api-v1/src/main/java/net/fabricmc/fabric/api/recipe/v1/ingredient/CustomIngredient.java
 [hand-path-type-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-content-registries-v0/src/main/java/net/fabricmc/fabric/api/registry/LandPathTypeRegistry.java
 
-## Event counterparts: misc item hooks (#1014)
+## Event counterparts: misc item hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `item_smelted`, `item_stacked_on_other`, `item_toss`, `key_mapping_pre`, `left_click_empty`, `level_save`, `play_level_sound_at_position` and `play_level_sound_at_entity`. All eight record a gap and no keys are added.
 
@@ -1437,7 +1437,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `play_level_sound_at_position` | **Gap:** none | The event index has no level-sound or sound-play entry. `ask_level_sound` calls `native_play_level_sound_at_position` for both server and client requests, passing the level and position with the sound, source, volume and pitch all mutable, the original volume and pitch, and a cancel; no Fabric callback runs at that moment or carries those arguments. No key. |
 | `play_level_sound_at_entity` | **Gap:** none | The same absence applies to the entity overload: the index lists no sound event, and the `ClientPlayConnectionEvents` entries the name search surfaced are connection lifecycle events. `ask_level_sound` calls `native_play_level_sound_at_entity` when an emitter resolves, with the entity, mutable sound, source, volume and pitch, the originals and a cancel; Fabric has no counterpart at that moment. No key. |
 | `viewed_level_sound` | **Gap:** none | Fabric API 26.3 has no other level on a client and no level-sound event; Immersive Portals' own replay (`CrossPortalSound`) is a mod's. Horizon's client asks it for each sound of a level the server opened for viewing (`horizon:levels` revision 3), with the viewed level, the sound, its source, position, volume, pitch and seed, and an out `play_at` that places it in the player's level. No key. |
-## Event counterparts: living entity hooks (#1014)
+## Event counterparts: living entity hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eleven hooks `living_conversion_post`, `living_conversion_pre`, `living_damage_pre`, `living_destroy_block`, `living_get_projectile`, `living_jump_power`, `living_speed`, `living_flying_speed`, `living_shield_block`, `living_use_totem` and `living_visibility`. All eleven record a gap and no keys are added.
 
@@ -1456,7 +1456,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `living_visibility` | **Gap:** none | The event index has no visibility, targeting-range or `getVisibilityPercent` entry. `living_visibility` calls `native_living_visibility` with a `LivingRef`, an optional looking `EntityRef` and a mutable `f64` from the mob targeting path; no Fabric event fires at that moment or carries those arguments. No key. |
 
 [mob-conversion-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-entity-events-v1/src/main/java/net/fabricmc/fabric/mixin/entity/event/MobMixin.java
-## Event counterparts: misc menu, mob spawn, split and config hooks (#1014)
+## Event counterparts: misc menu, mob spawn, split and config hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `menu_extra_data`, `minecart_pass`, `mob_despawn`, `mob_spawn_placement_check`, `mob_spawn_position_check`, `mob_split`, `register_configs` and `config_loading`. All eight record a gap and no keys are added.
 
@@ -1472,7 +1472,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `config_loading` | **Gap:** none | The event index has no config-load entry, and Fabric offers no callback when a mod's config file is read. `native_configs_load` calls `native_config_loading` once per file that `NativeConfigs::load` returned, before a `Server` file's world start. No Fabric event fires there or carries the config's owner, path and text. No key. |
 
 [misc-menu-load-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-lifecycle-events-v1/src/main/java/net/fabricmc/fabric/mixin/event/lifecycle/PersistentEntitySectionManagerMixin.java
-## Event counterparts: misc config, model layer, input, note block and world notice hooks (#1014)
+## Event counterparts: misc config, model layer, input, note block and world notice hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the eight hooks `config_reloading`, `config_unloading`, `register_layer_definitions`, `movement_input`, `note_block_change`, `potential_spawns`, `village_siege` and `neighbor_notify`. All eight record a gap and no keys are added.
 
@@ -1487,7 +1487,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `village_siege` | **Gap:** none | The event index has no village, siege or `VillageSiegeEvent` entry. `try_to_setup_siege` loops over non-spectator players in villages and, after drawing and finding a spawn position, calls `native_village_siege` with the dimension, player UUID, attempted position and a mutable cancel; cancel aborts the siege attempt. No Fabric event runs at that moment. No key. |
 | `neighbor_notify` | **Gap:** none | The event index has no neighbour-notify, block-update or `NeighborNotifyEvent` entry. `neighbor_notify` runs on the authoritative server only when the hook is listened, reads the block state, and calls `native_neighbor_notify` with the dimension, position, state, skipped side and a mutable cancel, on both the all-six-sides and the skip-one-side update paths. No Fabric event fires per neighbour notification. No key. |
 
-## Event counterparts: note block, item use, permissions, break speed, brewing, enchanting, fall, harvest, heart, smithing, name format and spawn hooks (#1014)
+## Event counterparts: note block, item use, permissions, break speed, brewing, enchanting, fall, harvest, heart, smithing, name format and spawn hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the twelve hooks `note_block_play`, `on_item_use_first`, `permissions_changed`, `player_break_speed`, `player_brewed_potion`, `player_enchant_item`, `player_flyable_fall`, `player_harvest_check`, `player_heart_type`, `player_item_smithed`, `player_name_format` and `player_set_spawn`. All twelve record a gap and no keys are added.
 
@@ -1507,7 +1507,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `player_set_spawn` | **Gap:** nearest `EntitySleepEvents.ALLOW_SETTING_SPAWN` | `ALLOW_SETTING_SPAWN` only vetoes the `setRespawnPosition` call made from `startSleepInBed` ([sleep-api] lines 170-175; [base-block-server-player-mixin] lines 102-110), and it sees the sleeping player and sleeping position. `spawn_point_change` and `guest_respawn` fire once for every vanilla `setRespawnPosition` call (every sleep, a new anchor, `/spawnpoint`, the respawn copy) with the dimension, position, `forced` and a mutable cancel. One sleeping-only veto cannot stand for those calls. No key. |
 
 [permission-events-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-permission-api-v1/src/main/java/net/fabricmc/fabric/api/permission/v1/PermissionEvents.java
-## Event counterparts: phantom spawn, ground surface, tab list name and experience hooks (#1014)
+## Event counterparts: phantom spawn, ground surface, tab list name and experience hooks (arismoko/horizon#1014)
 
 Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the five hooks `player_spawn_phantoms`, `player_stays_on_ground_surface`, `player_tab_list_name_format`, `player_xp_change` and `player_xp_level_change`. All five record a gap and no keys are added.
 
@@ -1521,7 +1521,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 
 [player-creative-tab-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-creative-tab-api-v1/src/main/java/net/fabricmc/fabric/api/creativetab/v1/CreativeModeTabEvents.java
 [player-creative-tab-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-creative-tab-api-v1/src/main/java/net/fabricmc/fabric/mixin/creativetab/CreativeModeTabMixin.java
-## Event counterparts: portal spawn, brewing, recipe, registration and rendering hooks (#1014)
+## Event counterparts: portal spawn, brewing, recipe, registration and rendering hooks (arismoko/horizon#1014)
 
 The pinned Fabric revision is `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the twenty hooks in the `misc-portal` dossier, from `portal_spawn` to `render_tooltip_pre`. All twenty are gaps, so no `fabric` keys are added.
 
@@ -1554,7 +1554,7 @@ The pinned Fabric revision is `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabri
 [misc-portal-level-api]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/api/client/rendering/v1/level/LevelRenderEvents.java
 [misc-portal-level-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-rendering-v1/src/client/java/net/fabricmc/fabric/mixin/client/rendering/LevelRendererMixin.java
 
-## Event counterparts: misc render, screen, sound, power and geometry hooks (#1014)
+## Event counterparts: misc render, screen, sound, power and geometry hooks (arismoko/horizon#1014)
 
 The pinned Fabric revision is `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon call sites are named by function, never by line. Scope: the twenty hooks of the `misc-render` dossier, from `render_tooltip_texture` to `tick_target_millis`. All twenty are gaps, so no `fabric` keys are added.
 
@@ -1585,7 +1585,7 @@ The pinned Fabric revision is `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabri
 [misc-render-minecraft-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-screen-api-v1/src/client/java/net/fabricmc/fabric/mixin/screen/MinecraftMixin.java
 [misc-render-screen-mixin]: https://github.com/FabricMC/fabric/blob/2065040b236a0d5ac011bd6a45625dc49579b222/fabric-screen-api-v1/src/client/java/net/fabricmc/fabric/mixin/screen/ScreenMixin.java
 
-## Event counterparts: client toasts, chunk-ticket validation, vanilla game events, wind bursts, window resizes and XP orb targeting (#1014)
+## Event counterparts: client toasts, chunk-ticket validation, vanilla game events, wind bursts, window resizes and XP orb targeting (arismoko/horizon#1014)
 
 Pinned Fabric revision `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Horizon is cited by function name, never by line. Scope: the six hooks of the `misc-toast` dossier, from `toast_add` to `xp_orb_targeting`. All six are gaps, so no `fabric` keys are added.
 

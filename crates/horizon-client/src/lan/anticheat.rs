@@ -454,7 +454,7 @@ impl Hub {
         };
         let down = Vec3::new(0.0, -0.1, 0.0);
         // A support probe — is the feet's 0.1 down blocked? — not an
-        // `Entity.move` (#2414): the gate is for moves, this asks the blocks.
+        // `Entity.move` (arismoko/horizon#2414): the gate is for moves, this asks the blocks.
         #[allow(clippy::disallowed_methods)]
         let held = scene
             .resolve(feet, down, 0.0, false)

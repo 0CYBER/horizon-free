@@ -110,7 +110,7 @@ fn entity_pass_falls_through_but_success_stops_the_apple() {
                 ));
                 assert!(game.remote_use_targets_entity());
                 // Zombie interaction passes; the awake adult villager succeeds.
-                // Entity CONSUME prediction belongs to #2931 and is deliberately excluded.
+                // Entity CONSUME prediction belongs to arismoko/horizon#2931 and is deliberately excluded.
                 *observer.0.lock().unwrap() = Controls {
                     air_answer: Some(Answer::Fail),
                     ..Controls::default()

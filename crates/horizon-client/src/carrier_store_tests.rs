@@ -1,4 +1,4 @@
-//! Carrier ownership store tests (slice 2 part A, issue #2413): the
+//! Carrier ownership store tests (slice 2 part A, issue arismoko/horizon#2413): the
 //! two-slot journal, first use, the opening table, cleanup, the operation
 //! codec's envelope and crash injection at the file level. Every test
 //! runs on a throwaway world folder, never through `Game`.

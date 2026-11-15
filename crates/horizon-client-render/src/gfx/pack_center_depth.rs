@@ -4,7 +4,7 @@
 //! the GPU (as `timing.rs` reads its timestamps); `FrameUniforms` smooths the latest value.
 //! The target holds the depth's bits, not the float: OpenGL renders to `R32Uint` everywhere
 //! (GLES 3.0 core), while an `R32Float` target needs `EXT_color_buffer_float`, which llvmpipe
-//! and some drivers lack (#2386).
+//! and some drivers lack (arismoko/horizon#2386).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};

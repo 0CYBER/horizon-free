@@ -11,7 +11,7 @@ use std::{
 };
 
 /// `getEntityInsideCollisionShape` as the shared walk sees it: the whole block, boxes
-/// to sweep the move against, or nothing. This is the one point #1011 adds the Part's
+/// to sweep the move against, or nothing. This is the one point arismoko/horizon#1011 adds the Part's
 /// own shape at.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InsideShape {

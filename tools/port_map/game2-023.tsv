@@ -55,7 +55,7 @@ MapItemSavedData.<init>	port	crates/horizon-client/src/game/blocks/maps/mod.rs::
 MapItemSavedData.createForClient	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::remote_map_item_data	the client map is created from the packet (fresh map, locked flag from the packet)
 MapItemSavedData.mapMatcher	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	the carried maps are the map ids in the inventory and offhand, which is what the matcher finds
 MapItemSavedData.tickCarriedBy	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	gap: player: no framed-map marker when the map hangs in an item frame, and no removal of a player who wears map-invisibility gear
-MapItemSavedData.hasMapInvisibilityItemEquipped	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Holder::new	ticked in #3517; `MapItemSavedData.hasMapInvisibilityItemEquipped` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:161
+MapItemSavedData.hasMapInvisibilityItemEquipped	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Holder::new	ticked in arismoko/horizon#3517; `MapItemSavedData.hasMapInvisibilityItemEquipped` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:161
 MapItemSavedData.removeDecoration	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	decorations are rebuilt each tick (holder markers kept, the rest replaced) instead of removed by key
 MapItemSavedData.addDecoration	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	gap: player: only the item target decorations go through here; banner and frame markers never reach it
 MapItemSavedData.calculateDecorationLocationAndType	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	player branch and item branch both done inline, with clamping
@@ -64,9 +64,9 @@ MapItemSavedData.isInsideMap	inline	crates/horizon-client/src/game/blocks/maps/m
 MapItemSavedData.decorationTypeForPlayerOutsideMap	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	off-map and off-limits sprite choice inline
 MapItemSavedData.setColorsDirty	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_color	the holders dirty rectangle is updated in update_color
 MapItemSavedData.getHoldingPlayer	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::holder	-
-MapItemSavedData.toggleBanner	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::toggle_banner	ticked in #3517; `MapItemSavedData.toggleBanner` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:403
-MapItemSavedData.checkBanners	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::check_banners	ticked in #3517; `MapItemSavedData.checkBanners` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:443
-MapItemSavedData.removedFromFrame	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::removed_from_frame	ticked in #3517; `MapItemSavedData.removedFromFrame` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:387
+MapItemSavedData.toggleBanner	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::toggle_banner	ticked in arismoko/horizon#3517; `MapItemSavedData.toggleBanner` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:403
+MapItemSavedData.checkBanners	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::check_banners	ticked in arismoko/horizon#3517; `MapItemSavedData.checkBanners` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:443
+MapItemSavedData.removedFromFrame	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::removed_from_frame	ticked in arismoko/horizon#3517; `MapItemSavedData.removedFromFrame` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:387
 MapItemSavedData.setColor	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_color	-
 MapItemSavedData.addClientSideDecorations	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::remote_map_item_data	decorations are replaced from the packet list
 MapItemSavedData.HoldingPlayer.createPatch	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_packet	the dirty rectangle is copied into the patch

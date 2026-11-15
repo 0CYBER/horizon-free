@@ -1,4 +1,4 @@
-//! The design's storage, persistence, copy and replace acceptance cases (#2415).
+//! The design's storage, persistence, copy and replace acceptance cases (arismoko/horizon#2415).
 use super::*;
 use crate::recipe_book::{BookType, Settings};
 

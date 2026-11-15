@@ -126,7 +126,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
 # Source retention only: not compiled/tested on the fork; incompatible with typed residency.
-# Do not enable (including via --all-features); integration is tracked in #3491.
+# Do not enable (including via --all-features); integration is tracked in arismoko/horizon#3491.
 upstream-parallel-mobs = []
 default = ["audio", "controllers", "horizon-extras"]
 # Scoped trait-mod installation for a mod's own tests.
@@ -150,7 +150,7 @@ friends = ["dep:horizon-friends"]
 rng-trace = ["horizon-core/rng-trace", "horizon-client-lib/rng-trace"]
 # Rust's allocations go to the system heap instead of mimalloc, where heap profilers that replace
 # malloc (heaptrack, valgrind's massif) see them. Also the Windows and macOS prebuilt archives' allocator
-# (tools/prebuilt_game.py, #2394, #3877): there std's shared library keeps its own allocator. Otherwise mimalloc is faster.
+# (tools/prebuilt_game.py, arismoko/horizon#2394, arismoko/horizon#3877): there std's shared library keeps its own allocator. Otherwise mimalloc is faster.
 system-allocator = ["horizon-threads/system-allocator"]
 # mimalloc that counts each thread's allocations and frees (`stats` replies with `alloc`).
 alloc-count = ["horizon-threads/alloc-count"]

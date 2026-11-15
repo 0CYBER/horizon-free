@@ -105,7 +105,7 @@ fn wrapped(min: i32, max: i32, behavior: Box<dyn Behavior>) -> mobs::mod_behavio
     })
 }
 
-/// The mob's brain-tick shape, as the goal tests lend it (#1077): the mob
+/// The mob's brain-tick shape, as the goal tests lend it (arismoko/horizon#1077): the mob
 /// lifted out of the game, the world with the goal host beside it, and a
 /// level random the test owns, all handed to `drive` together.
 fn with_mob_world(
@@ -333,7 +333,7 @@ fn a_type_with_no_brain_is_refused_at_construction() {
     });
 }
 
-// ---- The villager brain (#824's first wiring) ---------------------------
+// ---- The villager brain (arismoko/horizon#824's first wiring) ---------------------------
 
 /// Values the villager behaviors read back, for the journal.
 static READS: Mutex<Vec<String>> = Mutex::new(Vec::new());

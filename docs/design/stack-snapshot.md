@@ -1,6 +1,6 @@
 # Scoped whole-stack rollback for internals mods
 
-Proposal for [#1407](https://github.com/arismoko/horizon/issues/1407); this note does not authorize an implementation. TreeFall needs to retain a whole stack while trying a step and put it back if that step fails. The issue does not establish a need to keep snapshots across callbacks or ticks.
+Proposal for [arismoko/horizon#1407](https://github.com/arismoko/horizon/issues/1407); this note does not authorize an implementation. TreeFall needs to retain a whole stack while trying a step and put it back if that step fails. The issue does not establish a need to keep snapshots across callbacks or ticks.
 
 ## Decision for review
 
@@ -22,7 +22,7 @@ Use distinguishable, wire-safe results rather than a false success: `Unsupported
 
 A savepoint is a value **within** the existing item-place transaction, not a second rollback journal. Capture reads the transaction's current view, including prior pending writes; restore stages a write in that same journal. A nested transaction's accepted changes remain subject to the outer transaction, and an outer abort discards them. Restore cannot commit the transaction, undo unrelated effects, or make immediate host writes transactional by itself.
 
-[#2846](https://github.com/arismoko/horizon/issues/2846) is separately designing a block-entity-tick journal and a reads-own-writes overlay for dropped-item writes and removal; it is not implemented by this proposal. Where that overlay applies, capture must read its effective pending stack and restore must stage into the same overlay, with its level/incarnation and stale-item checks. If no common transaction/overlay view exists for a place, refuse it until one does. Do not add another dropped-item rollback mechanism or claim that effects outside the #2846 boundary become atomic.
+[arismoko/horizon#2846](https://github.com/arismoko/horizon/issues/2846) is separately designing a block-entity-tick journal and a reads-own-writes overlay for dropped-item writes and removal; it is not implemented by this proposal. Where that overlay applies, capture must read its effective pending stack and restore must stage into the same overlay, with its level/incarnation and stale-item checks. If no common transaction/overlay view exists for a place, refuse it until one does. Do not add another dropped-item rollback mechanism or claim that effects outside the arismoko/horizon#2846 boundary become atomic.
 
 ## Evidence required before landing
 
@@ -30,4 +30,4 @@ A savepoint is a value **within** the existing item-place transaction, not a sec
 - Exercise native calls against real Game storage and real wasm-to-Game calls against the same supported place: exact full-stack and empty-stack restoration, opaque wire-field preservation, prior pending writes, nested commit/outer abort, and no partial change on refusal. Both targets must have identical contracts, including refusals and consumption on successful restore.
 - Cover native panic/unwind, wasm trap and world close while a savepoint is live: pending restore writes are discarded, the retained value is released and copied tokens remain permanently invalid.
 - Cover moved/replaced holders, slot changes, same numeric ID with a new incarnation, another level, closed transactions, repeated capture, read-only and provider-owned places; prove provider refusal never writes through to game storage.
-- Compose with the accepted #2846 overlay design and test reads-own-writes, stale item and rejected block-entity writeback once that contract exists. No claim of #2846 implementation is made here.
+- Compose with the accepted arismoko/horizon#2846 overlay design and test reads-own-writes, stale item and rejected block-entity writeback once that contract exists. No claim of arismoko/horizon#2846 implementation is made here.

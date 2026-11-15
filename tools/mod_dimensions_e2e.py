@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Levels a data pack or a native mod adds, end to end in the real game (#1042).
+"""Levels a data pack or a native mod adds, end to end in the real game (arismoko/horizon#1042).
 
 The game runs headless and horizon-ctl drives it, on single player's server thread: the window is a
 client of that server, so a block is read from both sides.

@@ -1,4 +1,4 @@
-//! The view pass (#3716): a level that only viewed `Loaded` areas name is not ticked, but its
+//! The view pass (arismoko/horizon#3716): a level that only viewed `Loaded` areas name is not ticked, but its
 //! chunks are loaded, generated and sent to the players whose clients view it.
 //!
 //! After the ticked levels, `tick_server` runs a pass for each such level: it enters the level,
@@ -806,7 +806,7 @@ pub(in crate::game) mod tests {
     }
 
     /// A mod's sound in the Nether, a level nobody is in, reaches the viewer whose client holds
-    /// its chunk, wrapped, through `tick_server` (#3983).
+    /// its chunk, wrapped, through `tick_server` (arismoko/horizon#3983).
     #[test]
     #[ignore = "daily"]
     fn a_sound_in_a_viewed_level_reaches_its_viewer_through_tick_server() {
@@ -830,7 +830,7 @@ pub(in crate::game) mod tests {
     }
 
     /// A mod's sound bound to a pig in the viewed Nether reaches the viewer whose view tracks the
-    /// pig, wrapped, bound to the same entity, through `tick_server` (#3983).
+    /// pig, wrapped, bound to the same entity, through `tick_server` (arismoko/horizon#3983).
     #[test]
     #[ignore = "daily"]
     fn a_sound_bound_to_a_viewed_entity_reaches_the_view_tracking_it() {

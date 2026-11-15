@@ -17,7 +17,7 @@ impl Game<'_> {
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         // LevelChunk.setBlockState removes the block entity of a block
         // that changes: the moving piston the client's moveBlocks made
-        // stops when the server places what it moved (#3002).
+        // stops when the server places what it moved (arismoko/horizon#3002).
         let facts = self.res.facts();
         let moving = |s: BlockStateId| &*facts.get(s).name == "minecraft:moving_piston";
         if moving(previous) && !moving(state) {

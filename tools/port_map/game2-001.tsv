@@ -93,7 +93,7 @@ ArmorStand.interact	port	crates/horizon-client/src/game/entities/armor_stands.rs
 ArmorStand.getClickedSlot	inline	crates/horizon-client/src/game/entities/armor_stands.rs::Game::interact_armor_stand	click height picks feet, chest, legs, head or offhand
 ArmorStand.isDisabled	inline	crates/horizon-client/src/game/entities/armor_stands.rs::Game::interact_armor_stand	gap: minor: disabled-slot bits are not read; hands gated by show_arms only
 ArmorStand.handleEntityEvent	inline	crates/horizon-client/src/game/entities/armor_stands.rs::Game::attack_armor_stand	event 32 becomes the wobble timer and the hit sound
-ArmorStand.showBreakingParticles	port	crates/horizon-client/src/game/entities/armor_stands.rs::Game::show_breaking_particles	ticked in #3514; `ArmorStand.showBreakingParticles` is cited at crates/horizon-client/src/game/entities/armor_stands.rs:616
+ArmorStand.showBreakingParticles	port	crates/horizon-client/src/game/entities/armor_stands.rs::Game::show_breaking_particles	ticked in arismoko/horizon#3514; `ArmorStand.showBreakingParticles` is cited at crates/horizon-client/src/game/entities/armor_stands.rs:616
 ArmorStand.causeDamage	port	crates/horizon-client/src/entities.rs::ArmorStand::environment_tick	gap: minor: fire damage only (4 per second burning, 0.15 per contact); hit and explosion paths are elsewhere
 ArmorStand.brokenByPlayer	inline	crates/horizon-client/src/game/entities/armor_stands.rs::Game::attack_armor_stand	stand item dropped, then the equipment
 ArmorStand.brokenByAnything	inline	crates/horizon-client/src/game/entities/armor_stands.rs::Game::attack_armor_stand	the hand-break path ends in break_armor_stand_with_source, whose broken_armor_stand_equipment leaves out vanishing-curse items as the burn path does

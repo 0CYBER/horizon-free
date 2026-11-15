@@ -1,4 +1,4 @@
-//! The player's collision exclusions (#3717) in its collision checks: `Entity.collide` reads them
+//! The player's collision exclusions (arismoko/horizon#3717) in its collision checks: `Entity.collide` reads them
 //! in `MotionWorld::collide`, `Level.noCollision` here.
 use super::*;
 use horizon_world::world_movement::CollisionCheckRequest;

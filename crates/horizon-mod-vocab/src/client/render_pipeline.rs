@@ -87,7 +87,7 @@ pub enum PipelineTexture {
     /// is `assets/powah/textures/block/energy_charge.png` as the `minecraft:blocks` atlas holds
     /// it, `minecraft:item/diamond` an item sprite. An animated sprite animates. A sprite in
     /// neither atlas refuses the pipeline ([`PipelineTextureError::NoSuchSprite`]). A texture
-    /// file of the mod's own, packed into the runtime atlas's slot pool (#4438) and drawn the
+    /// file of the mod's own, packed into the runtime atlas's slot pool (arismoko/horizon#4438) and drawn the
     /// same way, follows once that pool exists.
     Sprite(Identifier),
 }

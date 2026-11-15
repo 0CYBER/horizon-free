@@ -2,7 +2,7 @@ use super::*;
 
 impl Game<'_> {
     /// The authoritative tick of one general entity row of type `kind`
-    /// (`mymod:robot`) with ID `entity` (#792 stage 4): `ServerLevel
+    /// (`mymod:robot`) with ID `entity` (arismoko/horizon#792 stage 4): `ServerLevel
     /// .tickNonPassenger`'s `entity.tick()` for a row the type registry owns,
     /// its rider subtree ticked after it. Read and change the row's data
     /// through its attachments; a part hears only the type it is attached

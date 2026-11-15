@@ -1,4 +1,4 @@
-//! General entity rows (#792 stage 2): the record codec for mod-declared
+//! General entity rows (arismoko/horizon#792 stage 2): the record codec for mod-declared
 //! entity types. The record is the save format's unit: common fields every
 //! kind shares, plus the type envelope (namespaced key, payload schema
 //! version, payload bytes) and the passenger tree. Validation runs every
@@ -534,7 +534,7 @@ pub fn general_type_catalog() -> &'static GeneralTypeCatalog {
     })
 }
 
-/// The engine's live general rows (#792): identity, join identity, type
+/// The engine's live general rows (arismoko/horizon#792): identity, join identity, type
 /// slot, common state and the attachment holder. No runtime slot or pointer
 /// persists; identity-to-row lookup stays with `EntityTable`
 /// (`entity_lookup`, `server_entity_lookup`), never a second index here.
@@ -566,7 +566,7 @@ pub struct GeneralRow {
     /// The row whose vehicle this one rides (`None` for a root): a rider
     /// saves inside its root's record, never as its own.
     pub mount: Option<u32>,
-    /// The entity-owned attachment registration lifetime (#796: the sole
+    /// The entity-owned attachment registration lifetime (arismoko/horizon#796: the sole
     /// Part-data store; there is no parallel entity data map).
     pub attachment_lifetime: horizon_mod_runtime::attachments::AttachmentLifetime,
 }

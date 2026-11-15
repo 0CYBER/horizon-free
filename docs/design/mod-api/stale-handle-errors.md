@@ -1,6 +1,6 @@
 # Design: stale handle errors
 
-Provisional answer to [#1644](https://github.com/arismoko/horizon/issues/1644): **typed stale errors for ordinary handle reads and writes**. This question is small enough for an issue comment proposing the answer, as Ari permits; this short page records that proposal for review, not implemented behavior.
+Provisional answer to [arismoko/horizon#1644](https://github.com/arismoko/horizon/issues/1644): **typed stale errors for ordinary handle reads and writes**. This question is small enough for an issue comment proposing the answer, as Ari permits; this short page records that proposal for review, not implemented behavior.
 
 ## Proposed contract
 

@@ -16,7 +16,7 @@
 //! times 100,000 real dispatches; 20 warm-up samples precede 100 reported samples.
 //! Loading, initialization, subscription installation and the host are outside timing.
 //! These are in-memory dispatches, not server teardown or world ticks.
-// Generated fixtures exercise every shape; TODO(#2273): make the generator emit clippy-clean code.
+// Generated fixtures exercise every shape; TODO(arismoko/horizon#2273): make the generator emit clippy-clean code.
 #![allow(clippy::all, unused_comparisons, unreachable_patterns, dead_code)]
 #[path = "support/no_hooks.rs"]
 mod no_hooks;

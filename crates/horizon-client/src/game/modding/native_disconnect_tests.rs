@@ -1,4 +1,4 @@
-//! A client mod leaves the world (#3451). The server half is `native_player_disconnect`.
+//! A client mod leaves the world (arismoko/horizon#3451). The server half is `native_player_disconnect`.
 use super::native_entity_refs::tests::with_client_game;
 use horizon_client::title::Mode;
 use mod_api::{ClientHost, DisconnectError, Text};

@@ -41,7 +41,7 @@ pub struct AddedAttribute {
     pub tooltip: super::Tooltip,
 }
 /// A mod's ask to widen an existing attribute's bounds, as the game hands it
-/// to [`Catalog::with_widened_bounds`] (#3728).
+/// to [`Catalog::with_widened_bounds`] (arismoko/horizon#3728).
 #[derive(Clone, Debug)]
 pub struct WidenedBounds {
     /// The asking mod's id, which a refusal names.
@@ -260,12 +260,12 @@ impl Catalog {
         )
     }
     /// A copy of the catalog with new attribute types appended
-    /// (`Registrar::declare_attribute`, #812): after every attribute the
+    /// (`Registrar::declare_attribute`, arismoko/horizon#812): after every attribute the
     /// export listed, in order sorted by declaring mod id, then attribute id
     /// — the network order every side running the same mods builds, since
     /// [`AttributeId::registry_id`](Self::attribute)'s number is the index.
     /// Vanilla ids never shift. Every entity's default row grows to the new
-    /// width, so a row resolved later (#845's `with_entity_row`, #846's
+    /// width, so a row resolved later (arismoko/horizon#845's `with_entity_row`, arismoko/horizon#846's
     /// additions) may name an attribute a mod added. A duplicate id — one
     /// the export already listed, or one two mods declared — refuses,
     /// naming the id.
@@ -310,7 +310,7 @@ impl Catalog {
         })
     }
     /// A copy of the catalog with the bounds mods asked to widen
-    /// (`Registrar::widen_attribute_bounds`, #3728): each attribute's bounds
+    /// (`Registrar::widen_attribute_bounds`, arismoko/horizon#3728): each attribute's bounds
     /// become the union of its own and every ask's, whatever their order, so
     /// an ask narrower than the result changes nothing. Defaults, ids and
     /// entity rows stay. An unknown attribute, or an ask whose range leaves
@@ -560,7 +560,7 @@ mod row_tests {
         .unwrap()
     }
 
-    /// #3728: asks to widen bounds join as their union, in either order; a
+    /// arismoko/horizon#3728: asks to widen bounds join as their union, in either order; a
     /// narrower ask changes nothing; the default stays; an unknown attribute
     /// or a range without the default refuses, naming the mod.
     #[test]
@@ -614,7 +614,7 @@ mod row_tests {
     }
 
     /// A declared row starts from its template's, as a content row does and
-    /// `Zombie.createAttributes` does for the event's supplier (#845).
+    /// `Zombie.createAttributes` does for the event's supplier (arismoko/horizon#845).
     #[test]
     fn a_declared_row_starts_from_its_templates() {
         let catalog = catalog();
@@ -676,7 +676,7 @@ mod row_tests {
     }
 
     /// Additions put attributes on a type's own row
-    /// (`EntityAttributeModificationEvent.add`, #846): one it lacks joins the
+    /// (`EntityAttributeModificationEvent.add`, arismoko/horizon#846): one it lacks joins the
     /// row, with its base or the attribute's default; one it has takes the
     /// new base; the rest of the row stays.
     #[test]
@@ -711,7 +711,7 @@ mod row_tests {
     }
 
     /// Mod attributes append after every vanilla attribute, sorted by
-    /// declaring mod id then attribute id (#812): the order is the network
+    /// declaring mod id then attribute id (arismoko/horizon#812): the order is the network
     /// id's, the same whatever order the mods declared in, and vanilla ids
     /// never shift.
     #[test]

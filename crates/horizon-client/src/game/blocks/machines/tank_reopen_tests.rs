@@ -1,4 +1,4 @@
-//! A committed mod tank survives a complete world save, close and reopen (#2412): the
+//! A committed mod tank survives a complete world save, close and reopen (arismoko/horizon#2412): the
 //! create-mekanism capability audit's undetermined persistence row. The tanks are the game's
 //! own (`native_block_entity_fluids`), filled through `LevelRef::capability(FLUIDS)` in a
 //! committed transaction; an aborted transaction's insert must not reach the disk.

@@ -1,6 +1,6 @@
 # Design: server read tier for handles
 
-Proposed contract for [#2809](https://github.com/arismoko/horizon/issues/2809).
+Proposed contract for [arismoko/horizon#2809](https://github.com/arismoko/horizon/issues/2809).
 This is a design, not an implemented guarantee. Recommend option A: immutable
 server reads take `&dyn ServerHost`; shared reads retain `&dyn Host`.
 
@@ -26,7 +26,7 @@ Players illustrate the hole: `crates/horizon-mod-vocab/src/host/players.rs:42`
 declares PlayersBackend, and line 48 declares `player_recipe_book_settings` under
 `Side: server`. PlayersServerHost at line 22 supplies services, not a distinct
 immutable handle backend. Moving a label alone cannot change the generated
-receiver. [PR #2784](https://github.com/arismoko/horizon/pull/2784) motivates the
+receiver. [PR arismoko/horizon#2784](https://github.com/arismoko/horizon/pull/2784) motivates the
 level/dimension example, but those additions are not in this main snapshot;
 they must join the same inventory if merged before implementation.
 

@@ -436,11 +436,11 @@ is out as soon as main's checks and parity-main pass. Meanwhile a player can pic
 Versions page (the last week's `nightly-<date>`, or a `vX.Y.Z`), and `horizon-server update --version <tag>` does
 the same for a server.
 
-## Prebuilt SDK retention design (horizon-rust/horizon, #3011)
+## Prebuilt SDK retention design (horizon-rust/horizon, arismoko/horizon#3011)
 
 **Proposed for review, not enabled.** This is an availability policy, not an implementation or an instruction to
 build an SDK. Automated SDK pruning stays removed until this design is reviewed. SDK signing and authentication
-of downloads or caches belong to #3009; retaining a release does not authenticate it.
+of downloads or caches belong to arismoko/horizon#3009; retaining a release does not authenticate it.
 
 ### Current publication contract
 
@@ -792,6 +792,6 @@ Releases ship often, so nothing they leave behind may grow without bound.
   (`MAX_PACKS`) into few. Update the copies after changing the scripts (git-slim.sh goes beside runner-gc.sh):
   `ssh macmini 'cd ~/.actions-runners && for f in runner-gc.sh git-slim.sh; do curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/tools/ci/$f -o $f; done'`.
 
-Guest-stack release note (#3232): game and server executables reserve 136 MiB
+Guest-stack release note (arismoko/horizon#3232): game and server executables reserve 136 MiB
 for their main stack through MSVC `/STACK` or Apple `-stack_size` linker arguments;
 Linux raises RLIMIT_STACK and re-execs before initialization.

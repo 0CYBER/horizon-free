@@ -193,7 +193,7 @@ mod sweep_tests {
 
     /// The part's mods, installed with their parts as a game's open does, before
     /// `with_game`: the game that opens then publishes the block index itself (the
-    /// #824 parts-resolution order).
+    /// arismoko/horizon#824 parts-resolution order).
     fn install_inside_mod(name: &'static str, part: &InsidePart) -> mod_api::Mods {
         let entry =
             |part: &InsidePart| mod_api::ModEntry::new(name, Box::new(InsideMod(part.clone())));
@@ -676,7 +676,7 @@ mod sweep_tests {
 
     /// A panicking part inside the item batch: the staged fire contains it, the
     /// lent level goes back, and the lifted row the batch holds returns to the
-    /// level's list (#2194's and #2213's carrier discipline).
+    /// level's list (arismoko/horizon#2194's and arismoko/horizon#2213's carrier discipline).
     #[test]
     #[ignore = "daily"]
     fn a_panicking_part_leaves_the_item_batch_restored() {

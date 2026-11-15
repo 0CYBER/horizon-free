@@ -1,12 +1,12 @@
 # Design: per-type batched block entity ticks
 
 **Provisional; implementation waits for a maintainer decision.** This answers
-[#2759](https://github.com/arismoko/horizon/issues/2759).
+[arismoko/horizon#2759](https://github.com/arismoko/horizon/issues/2759).
 The recommendation is contiguous same-type runs in the existing ticker order,
 with each entity committed before the next one starts. This reduces outer calls
 where runs exist; it does not promise one call per type across a whole level.
 
-**Implemented separately in #3669:** the existing individual tick now has
+**Implemented separately in arismoko/horizon#3669:** the existing individual tick now has
 `BlockEntityTickReply::{Changed, Unchanged}` on native and wasm. Set
 `*event.reply = BlockEntityTickReply::Unchanged` to omit that Part's reply snapshot
 entirely. Each Part starts with `Changed` and sees only preceding accepted edits;
@@ -133,7 +133,7 @@ revision, position and state. Recommend a full saved-data snapshot on cache miss
 and a compact validity record on hit. `NeedFull` supplies that same entry's full
 snapshot once without advancing the cursor or executing a second tick. Recheck
 versions after host writes; a stale reply refuses rather than recomputing or
-writing over another entity. The saved-data revision owner is unresolved: #2794 is the outside-engine
+writing over another entity. The saved-data revision owner is unresolved: arismoko/horizon#2794 is the outside-engine
 JVM/language-host workstream, not this prerequisite. Identify the actual revision
 owner and audit every saved-data and inventory mutation path before implementation;
 cache reuse is gated on complete mutation coverage.
@@ -170,7 +170,7 @@ mark solely for ticking or receiving a delta. A real write marks the owning
 chunk and emits required container/comparator effects once through existing
 owners. A listener's independent Host write still has its own normal dirty
 effects. The individual Unchanged path implements the first piece of
-[#1780](https://github.com/arismoko/horizon/issues/1780); delta/caching semantics remain proposed.
+[arismoko/horizon#1780](https://github.com/arismoko/horizon/issues/1780); delta/caching semantics remain proposed.
 
 API-owned Wire records must represent cursor tokens, holder/revision metadata,
 full snapshots and results; no engine NBT types, guest pointers or native-only
@@ -198,7 +198,7 @@ before implementation claims parity. A lifted root abort can still undo A1.
 
 A mod may keep a bounded, evictable cache in its own memory, never saved or synced;
 losing it only causes a rebuild. Persistent typed per-holder data must use
-#796/#781's attachment-backed contract. No new engine cache store or generation
+arismoko/horizon#796/#781's attachment-backed contract. No new engine cache store or generation
 is introduced. Invalidation notices may be an optimization of existing holder
 lifecycle notices, never necessary for correctness. A 4096-entry LRU is the
 external experiment's policy, not an engine or vanilla limit.
@@ -212,7 +212,7 @@ Do not scan every mod or serialize data to discover whether someone listens.
 Subscribed cost is linear in processed entries and changed bytes, with bounded
 buffer reuse; alternating types may offer no batching gain.
 
-[reservedbytes' measurements on #2759](https://github.com/arismoko/horizon/issues/2759)
+[reservedbytes' measurements on arismoko/horizon#2759](https://github.com/arismoko/horizon/issues/2759)
 are external input, **not re-measured here**. Their 1000 cooking entities ran on
 a Ryzen 9 9950X, Ubuntu 26.04, pinned to eight physical cores on a loaded box
 (load 40–58), fork `964de9d3f`, Wasmtime 50.0.1, a custom single-store runtime
@@ -274,7 +274,7 @@ The individual Unchanged subset is implemented; this note adds no batching runti
    hook, generator, adapters, all callers and coverage in one clean break while
    retaining the plural eligibility moment.
 4. Implement and test native/wasm matrix cases through the real holders and
-   transaction owners; integrate changed-only apply with #1780.
+   transaction owners; integrate changed-only apply with arismoko/horizon#1780.
 5. Measure both existing benchmark paths and real ordered world scenes,
    including GC and unused-path costs, before claiming batching support.
 
@@ -283,8 +283,8 @@ The individual Unchanged subset is implemented; this note adds no batching runti
 - **Execution shape:** approve the cursor and singleton scheduling for multiple
   listeners. Recommendation: preserve exact order even at reduced batching gain;
   an eventual reply list cannot satisfy immediate visibility.
-- **Revision completeness:** identify the actual saved-data revision owner and coordinate #1780;
-  #2794 does not own revisions. Recommendation: require
+- **Revision completeness:** identify the actual saved-data revision owner and coordinate arismoko/horizon#1780;
+  arismoko/horizon#2794 does not own revisions. Recommendation: require
   saved-data/items revision coverage and atomic checked apply before enabling
   cache reuse; never treat generation as a revision.
 - **Replacement and faults:** confirm wrapper rebinding and native recovery,

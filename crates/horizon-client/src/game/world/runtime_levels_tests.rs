@@ -1308,7 +1308,7 @@ fn a_level_the_player_left_in_single_player_still_unloads_and_deletes() {
 
 /// Opening and unloading one id again and again, with a new seed each time, leaks its names,
 /// facts and level table once: every later open hands the game the same copies, and the level
-/// reads the seed of the open it is in (#4019).
+/// reads the seed of the open it is in (arismoko/horizon#4019).
 #[test]
 #[ignore = "daily"]
 fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {

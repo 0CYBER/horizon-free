@@ -570,7 +570,7 @@ impl Game<'_> {
                 p.auto_spin_attack_item = spin_stack;
             }
             // `player.move(SELF, (0, 1.1999999, 0))` when on the ground: the lift
-            // stops at a ceiling. A self move through the move gate (#2414);
+            // stops at a ceiling. A self move through the move gate (arismoko/horizon#2414);
             // PR 1a records the movement unchanged.
             let lift = self
                 .player

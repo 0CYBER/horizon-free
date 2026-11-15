@@ -116,7 +116,7 @@ pub struct Hook {
     pub collect_validator: Option<String>,
     /// A global cancel hook whose dispatch runs every listener inside `catch_unwind`: one that
     /// unwinds is switched off for this hook for the session, and the outputs it had written roll
-    /// back to what the game requested (#2414 ruling).
+    /// back to what the game requested (arismoko/horizon#2414 ruling).
     pub isolate: bool,
     pub scope: Option<PartScope>,
     pub host: Option<HostAccess>,
@@ -362,7 +362,7 @@ impl Hook {
             return Err(CatalogError::InvalidContract(name));
         }
         // Isolation is the cancel loop's own: a listener that unwinds rolls the outputs back
-        // to the requested ones and is skipped for the hook for the session (#2414 ruling).
+        // to the requested ones and is skipped for the hook for the session (arismoko/horizon#2414 ruling).
         let isolate = api.isolate.unwrap_or(false);
         if isolate && (api.contract != Contract::Cancel || scope.is_some()) {
             return Err(CatalogError::InvalidHook {

@@ -1,4 +1,4 @@
-//! `on_caught_fire` heard by a block Part (#3185): the listener gets the burned block's old state
+//! `on_caught_fire` heard by a block Part (arismoko/horizon#3185): the listener gets the burned block's old state
 //! and the face toward the fire, and what it writes through its level is in the world.
 use super::native_entity_refs::tests::with_game;
 use horizon_core::{geometry::Direction, position::BlockPos};

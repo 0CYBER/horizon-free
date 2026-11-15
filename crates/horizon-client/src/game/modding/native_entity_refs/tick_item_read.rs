@@ -56,7 +56,7 @@ mod general_handle_tests {
         }
     }
 
-    /// #792's stale-handle row, as the id counter really behaves: a removed
+    /// arismoko/horizon#792's stale-handle row, as the id counter really behaves: a removed
     /// row's handle refuses, and the next row never reuses the id — ids come
     /// from the game's one monotonic counter (`take_entity_id`,
     /// game/network/lan_entities.rs:25: `next_entity += 1`, never decreased,

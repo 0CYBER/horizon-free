@@ -221,7 +221,7 @@ mod inside_walk_tests {
 
     /// A panicking part is contained mid-walk: the mob's tick answers, its
     /// state keeps what it had, and the level host still answers after (the
-    /// lifted rows themselves are #2285's restoration, its own tests'; the
+    /// lifted rows themselves are arismoko/horizon#2285's restoration, its own tests'; the
     /// item batch test proves the lifted pair end to end).
     #[test]
     #[ignore = "daily"]
@@ -759,7 +759,7 @@ pub fn brain_target(mob: &Mob) -> Option<Option<Who>> {
 }
 
 /// Whether `Brain.setMemory(ATTACK_TARGET, ...)` reaches what the mob's
-/// brain acts on (#934): every species [`brain_target`] reads but the frog,
+/// brain acts on (arismoko/horizon#934): every species [`brain_target`] reads but the frog,
 /// whose target belongs to its running tongue attack.
 pub fn writes_brain_target(mob: &Mob) -> bool {
     match mob.species() {
@@ -769,7 +769,7 @@ pub fn writes_brain_target(mob: &Mob) -> bool {
     }
 }
 
-/// `Brain.setMemory(ATTACK_TARGET, target)` / `eraseMemory` (#934): the
+/// `Brain.setMemory(ATTACK_TARGET, target)` / `eraseMemory` (arismoko/horizon#934): the
 /// memory each brain keeps it in, non-expiring, with `ai.target` mirrored
 /// where the brain mirrors it. No species setter side effects. False when
 /// [`writes_brain_target`] is false.

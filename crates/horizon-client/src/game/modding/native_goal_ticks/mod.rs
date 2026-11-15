@@ -47,7 +47,7 @@ pub(super) struct GoalCx<'a, 'w> {
 /// What a handle names in the goal view: the ticking mob itself, the player
 /// the tick sees, another mob in the snapshot, or the separately simulated
 /// dragon. The ticking mob's own id never consults the taken list — the
-/// exception that makes any mob handle resolve in its own tick (#29's limit).
+/// exception that makes any mob handle resolve in its own tick (arismoko/horizon#29's limit).
 enum Resolved<'a> {
     Own,
     Player,
@@ -396,7 +396,7 @@ impl GoalCxBackend for GoalCx<'_, '_> {
 
     fn set_target(&mut self, target: Option<LivingRef>) -> bool {
         // The write handle's own setter refusals, the one rule it asks too
-        // (#1175): the brain-backed species and the three whose setter side
+        // (arismoko/horizon#1175): the brain-backed species and the three whose setter side
         // effects are not modeled.
         if self.m.refuses_set_target() {
             return false;
@@ -424,7 +424,7 @@ impl GoalCxBackend for GoalCx<'_, '_> {
                 }
                 Some(Resolved::Player) => {
                     // The write handle's player rules over the tick's view,
-                    // through the same valid-target rule set (#1175).
+                    // through the same valid-target rule set (arismoko/horizon#1175).
                     let Some(p) = self.w.selected_player() else {
                         return false;
                     };
@@ -805,7 +805,7 @@ impl mobs::part_goals::GoalHost for Game<'_> {
             BehaviorOp::Tick => "behavior_tick",
             BehaviorOp::Stop => "behavior_stop",
         };
-        // The same view a goal runs on (#824): one boundary, the brain's
+        // The same view a goal runs on (arismoko/horizon#824): one boundary, the brain's
         // memories typed on top.
         let mut gcx = GoalCx { m, w, host: self };
         let mut context = mod_api::BehaviorCx::new(&mut gcx);
@@ -837,7 +837,7 @@ impl mobs::part_goals::GoalHost for Game<'_> {
 
 impl Game<'_> {
     /// Tell `mob_despawn` for a mob the tick holds out of the game. The handle
-    /// resolves through the tick's own read view (#795) — the ticking mob
+    /// resolves through the tick's own read view (arismoko/horizon#795) — the ticking mob
     /// itself, the player it sees and the snapshot of the others — because the
     /// game has lent its mob list to the tick and `Game` itself would answer
     /// nothing for any of them.
@@ -941,7 +941,7 @@ impl Game<'_> {
 }
 
 pub(super) mod generated {
-    // The mob tick's read view (#1077), as the game generates it: the
+    // The mob tick's read view (arismoko/horizon#1077), as the game generates it: the
     // snapshot-backed reads forward to the context's own methods, every other
     // backend read answers its typed refusal.
     include!(concat!(env!("OUT_DIR"), "/mod_api_goal_view_generated.rs"));

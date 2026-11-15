@@ -1,6 +1,6 @@
 # Design: pending children
 
-Provisional answer to [#825](https://github.com/arismoko/horizon/issues/825): the engine owns an action-local ordered collection of fully constructed, unspawned children. Listeners borrow editors; the engine validates and consumes the final collection exactly once at the original insertion boundary. This is a proposal, not an implemented API or an issue decision. Ari's side posts the decision on the issue. No implementation stages have been filed.
+Provisional answer to [arismoko/horizon#825](https://github.com/arismoko/horizon/issues/825): the engine owns an action-local ordered collection of fully constructed, unspawned children. Listeners borrow editors; the engine validates and consumes the final collection exactly once at the original insertion boundary. This is a proposal, not an implemented API or an issue decision. Ari's side posts the decision on the issue. No implementation stages have been filed.
 
 ## Evidence and limits
 
@@ -10,7 +10,7 @@ The issue names NeoForge 26.3 MobSplitEvent.getChildren and BabyEntitySpawnEvent
 
 ## Ownership and callback contract
 
-Construct the complete vanilla list first, drawing inheritance, child yaw and other initialization randomness once in vanilla order. Do not finalizeSpawn or insert these children. Each entry owns its complete Mob, including opaque goal state; cloning a Mob is not an ownership transfer. Construction uses the existing unspawned-mob machinery shared with #840/#838, not a second mob store.
+Construct the complete vanilla list first, drawing inheritance, child yaw and other initialization randomness once in vanilla order. Do not finalizeSpawn or insert these children. Each entry owns its complete Mob, including opaque goal state; cloning a Mob is not an ownership transfer. Construction uses the existing unspawned-mob machinery shared with arismoko/horizon#840/#838, not a second mob store.
 
 Provide ServerHost and a scoped collection receiver with construct, edit, replace, append and remove operations. Construct returns an unattached pending child owned by the action arena. Append/replace consumes its ownership token; it cannot be attached twice. Removal destroys the removed pending object and invalidates its editor. Unattached objects are destroyed when the callback action closes. Replacement preserves the list position, not the removed object's identity. Never accept a resident mob as a pending child. BabyEntitySpawn has a zero-or-one child slot; it supports replacement/removal, while multiple children belong to MobSplit's collection. A second baby is an error, not silently dropped.
 
@@ -24,7 +24,7 @@ Cancellation means zero children. Preserve the vanilla construction RNG draws al
 
 Distinguish that veto from an enclosing transaction abort: following [multi-block placement](multi-block-placement.md), an outer abort restores its action journal, including RNG and parent mutations. Listener Host writes and accepted apply belong to one action savepoint under that coordinator. A veto discards listener writes and pending attachments while preserving the specified pre-callback vanilla construction/parent effects. A stale refusal or recoverable callback failure uses the same child suppression policy. This requires explicit savepoint boundaries; blanket rewind to before breeding is incorrect for a veto.
 
-Follow [#1606](https://github.com/arismoko/horizon/issues/1606): pending children have no resident row, tracker entry, join number, save visibility or published attachment holder. Pending attachment data lives with its owned object using existing attachment machinery. Install it at successful residency commit; discard it on removal/veto without emitting resident Remove. On outer rollback, retire tentative residency and restore prior holders according to the placement journal. Do not publish joins or sends before root commit. Ordinary join vetoes must have an explicitly tested per-child outcome; they cannot trigger list replay.
+Follow [arismoko/horizon#1606](https://github.com/arismoko/horizon/issues/1606): pending children have no resident row, tracker entry, join number, save visibility or published attachment holder. Pending attachment data lives with its owned object using existing attachment machinery. Install it at successful residency commit; discard it on removal/veto without emitting resident Remove. On outer rollback, retire tentative residency and restore prior holders according to the placement journal. Do not publish joins or sends before root commit. Ordinary join vetoes must have an explicitly tested per-child outcome; they cannot trigger list replay.
 
 ## Owning routes and hook migration
 
@@ -44,7 +44,7 @@ Paths and line numbers are inspected Horizon owners at this note's base. Vanilla
 
 Change mob_split and baby_entity_spawn in place, once per vanilla moment. Delete count/kind-only transport, obsolete helpers and the stale “handle does not exist” prose in both declarations, hook notes, generated native/wasm bindings and samples together. Retain parent/player metadata. Do not add parallel legacy hooks or a second post-construction hook.
 
-Coordinate with open [#2285](https://github.com/arismoko/horizon/pull/2285) (pending output FIFO, nested consumer frames and reset lifetime), [#2227](https://github.com/arismoko/horizon/pull/2227) (completed outputs across unwind), and [#2112](https://github.com/arismoko/horizon/pull/2112) (borrowed tick restoration). These are overlapping ownership/recovery foundations, not proof of atomic staged-spawn support. Their PR descriptions explicitly retain recovery limits; do not assume any supplies this collection contract.
+Coordinate with open [arismoko/horizon#2285](https://github.com/arismoko/horizon/pull/2285) (pending output FIFO, nested consumer frames and reset lifetime), [arismoko/horizon#2227](https://github.com/arismoko/horizon/pull/2227) (completed outputs across unwind), and [arismoko/horizon#2112](https://github.com/arismoko/horizon/pull/2112) (borrowed tick restoration). These are overlapping ownership/recovery foundations, not proof of atomic staged-spawn support. Their PR descriptions explicitly retain recovery limits; do not assume any supplies this collection contract.
 
 ## Trust, panic and cost
 
@@ -82,5 +82,5 @@ File none. First verify the public counterpart and remaining vanilla routes and 
 - Exact NeoForge 26.3 cancellation and null-child behavior? Recommend verify public Javadoc before implementation; retain the explicit proposed parent/RNG policy until Ari decides.
 - Are all live births in scope, including villager and armadillo paths? Recommend trace exact owners and counterpart call moments first; do not quietly inherit today's exclusions as proven parity.
 - How does a downstream residency veto affect a multi-child list? Recommend preserve the existing per-child join refusal contract and record each completion once, while buffering externally visible effects until root commit.
-- Which recovery foundation is ready? Recommend coordinate #2285/#2227/#2112 before activating pending producers; require real nested and partial-consumer tests, not an inferred blanket unwind guarantee.
+- Which recovery foundation is ready? Recommend coordinate arismoko/horizon#2285/#2227/#2112 before activating pending producers; require real nested and partial-consumer tests, not an inferred blanket unwind guarantee.
 - Limits and child type restrictions? Recommend 64 split children, one baby, same dimension, registered mob kinds and species-valid state; permit cross-species replacement with an explicitly baby-initialized breeding child.

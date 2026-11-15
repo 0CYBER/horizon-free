@@ -252,7 +252,7 @@ impl Title {
                     )
                     .does(crate::widgets::Action::Cancel),
                 ];
-                // Horizon's opt-in (#2554), in the row vanilla leaves empty above Save.
+                // Horizon's opt-in (arismoko/horizon#2554), in the row vanilla leaves empty above Save.
                 if *adopt_regions {
                     buttons.push(b(
                         x,

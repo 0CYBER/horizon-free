@@ -1,4 +1,4 @@
-//! The question before a world opens that was saved with mods that are not loaded now (#3856):
+//! The question before a world opens that was saved with mods that are not loaded now (arismoko/horizon#3856):
 //! opening it removes their blocks, and what those blocks hold, for good. Don't Open is the
 //! default (and Escape); Back Up and Open opens only once the backup exists; Open Without a
 //! Backup opens at once. The game asks (`Game::open_world`), since a `mod_mismatch` listener may

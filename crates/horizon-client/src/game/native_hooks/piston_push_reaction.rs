@@ -1,7 +1,7 @@
 use super::*;
 
 impl Game<'_> {
-    // See #3242: fold with resolve_block_paths when it lands
+    // See arismoko/horizon#3242: fold with resolve_block_paths when it lands
     pub(in crate::game) fn resolve_piston_reactions(&self) {
         let asked = mod_api::__private::has_scoped_hook(mod_api::HookId::PistonPushReaction);
         self.res.behaviours().resolve_piston_reactions(|state| {

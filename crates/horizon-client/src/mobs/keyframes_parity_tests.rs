@@ -1,5 +1,5 @@
 //! The game's own animations sample exactly as they did before the sampling moved into `mod_api`
-//! (#2607): every exported vanilla definition, every channel, at a grid of times and scales,
+//! (arismoko/horizon#2607): every exported vanilla definition, every channel, at a grid of times and scales,
 //! bit for bit against the pre-move sampler kept here as the oracle.
 use super::*;
 

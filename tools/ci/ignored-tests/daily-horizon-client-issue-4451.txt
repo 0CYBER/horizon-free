@@ -1,4 +1,4 @@
-# Prepared-resource/descriptive-ignore inventory migration for #4451.
+# Prepared-resource/descriptive-ignore inventory migration for arismoko/horizon#4451.
 # PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
 horizon-client game::advancements::custom_data_equipment_tests::actual_mob_equipment_projects_typed_custom_data_into_named_predicate_evaluation lib daily resources
 horizon-client game::advancements::inventory_changed_tests::a_changed_inventory_is_heard_once_with_its_41_slots lib daily resources

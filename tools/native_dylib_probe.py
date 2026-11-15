@@ -67,7 +67,7 @@ def pe_symbols(path):
 
 def windows_allocator(images, game, evidence):
     """Windows binds each import to the named DLL (no ELF interposition): exactly one image may export the Rust
-    allocator, and every image calling it must import it from that one (#2394)."""
+    allocator, and every image calling it must import it from that one (arismoko/horizon#2394)."""
     rows = {}
     for image in images:
         exported, imported = pe_symbols(image)
@@ -176,7 +176,7 @@ def main():
     report = subprocess.run([str(counting_exe)], env=runtime_env(counting), capture_output=True, text=True)
     (counting / "report.txt").write_text(report.stdout + report.stderr)
     print(f"counting allocator (exit {report.returncode}):\n{report.stdout}{report.stderr}")
-    # On Windows this records #2394's cause: a `#[global_allocator]` in a dylib beside std's DLL splits from it.
+    # On Windows this records arismoko/horizon#2394's cause: a `#[global_allocator]` in a dylib beside std's DLL splits from it.
     # The shipped route's checks below decide the result.
     if report.returncode != 0 or ("ONE ALLOCATOR" not in report.stdout and not windows):
         failures.append("cross-image allocations do not all go through the game's counting allocator (allocator/report.txt)")

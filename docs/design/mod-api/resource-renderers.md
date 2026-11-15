@@ -1,6 +1,6 @@
 # Design: resource-backed special item renderers
 
-Provisional answer to [#876](https://github.com/arismoko/horizon/issues/876):
+Provisional answer to [arismoko/horizon#876](https://github.com/arismoko/horizon/issues/876):
 what resource-backed baked geometry and typed stack-derived state may a special
 renderer submit? Geometry belongs in resources; callbacks select and pose baked
 parts only where ordinary item-model properties cannot express the behavior.
@@ -39,7 +39,7 @@ says otherwise, this section wins; "ours" marks what Horizon adds.
   naming the id, and the item draws the missing model; a decode or bake failure
   loses only that item. The callback gets a `ClientHost` (every hook gets a host).
 - **Out of scope.** The block side is a separate reference registration that runs
-  on every reload, not part of #876.
+  on every reload, not part of arismoko/horizon#876.
 - **Matrix rows 5 and 7** each need their own test; a test that the callback never
   runs inside a lifted pass shows row 6 only.
 - **When it runs.** Preparation (the renderer's callback) and draws run on the
@@ -51,7 +51,7 @@ says otherwise, this section wins; "ours" marks what Horizon adds.
   a reload, and they are released once, when the last state holding them drops.
 - **Colour.** A part's tint is packed vanilla-space ARGB, as an item model's
   `tints` are, decoded once by the frame. A value above 1 has no input until a
-  typed HDR tint exists (the limit `WorldQuad::color` has); it is not part of #876.
+  typed HDR tint exists (the limit `WorldQuad::color` has); it is not part of arismoko/horizon#876.
 
 ## Reference and boundary
 
@@ -73,7 +73,7 @@ those details; the contract below is proposed Horizon policy, not asserted parit
 No foreign renderer source was read.
 
 `level-extracted-state.md` is absent from `arismoko/main` at this worktree's base
-`ff35cdee95`. [PR #2357](https://github.com/arismoko/horizon/pull/2357) is an
+`ff35cdee95`. [PR arismoko/horizon#2357](https://github.com/arismoko/horizon/pull/2357) is an
 adjacent proposal only; this design neither copies it nor requires its contents.
 
 ## Proposed registration, bake and preparation

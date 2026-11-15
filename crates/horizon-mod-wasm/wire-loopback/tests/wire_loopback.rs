@@ -1,5 +1,5 @@
 //! Exercise the generated proxies and service against the real guest dispatcher, without wasm.
-// Generated fixtures exercise every shape; TODO(#2273): make the generator emit clippy-clean code.
+// Generated fixtures exercise every shape; TODO(arismoko/horizon#2273): make the generator emit clippy-clean code.
 #![allow(clippy::all, unused_comparisons, unreachable_patterns, dead_code)]
 #![allow(dead_code, unused_variables, unused_mut, unsafe_op_in_unsafe_fn)]
 use mod_api::wire::{Id, Reader, WireError, Writer, guest};

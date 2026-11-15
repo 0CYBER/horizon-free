@@ -1,4 +1,4 @@
-//! Default item abilities, shared by loot and future action-site queries (#3330).
+//! Default item abilities, shared by loot and future action-site queries (arismoko/horizon#3330).
 use crate::items::Items;
 use horizon_world::loot::LootTags;
 

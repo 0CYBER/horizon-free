@@ -473,7 +473,7 @@ pub struct Hub {
     /// after vanilla's; the key the game last set them for.
     mod_commands: (serde_json::Value, Option<u64>),
     selector_tokens: Vec<horizon_client_core::registries::SelectorToken>,
-    /// Players' areas in other levels and what their clients view of them (#3716).
+    /// Players' areas in other levels and what their clients view of them (arismoko/horizon#3716).
     pub viewed: super::viewed_levels::ViewedLevels,
 }
 
@@ -4787,7 +4787,7 @@ impl Hub {
             super::chunk_watch::unwatch_all(&mut self.chunk_watches, g);
             // PlayerList.respawn: into the level in place (the respawn level).
             g.dimension = self.config.dimension.clone();
-            // A new player: a mod's collision exclusions were the dead one's (#3717).
+            // A new player: a mod's collision exclusions were the dead one's (arismoko/horizon#3717).
             g.collision_exclusions.clear();
             // restartClientLoadTimerAfterRespawn: the client loads a whole new level before it
             // reports it loaded.
@@ -4943,7 +4943,7 @@ impl Hub {
             super::chunk_watch::unwatch_all(&mut self.chunk_watches, g);
             g.dimension = self.config.dimension.clone();
             g.level_entered = self.ticks;
-            // A mod's collision exclusions were the old level's (#3717).
+            // A mod's collision exclusions were the old level's (arismoko/horizon#3717).
             g.collision_exclusions.clear();
             // The load timer is not restarted: vanilla resets the client's loaded state on death and
             // respawn only, and covers a level change with its separate `isChangingDimension` term.
@@ -4959,7 +4959,7 @@ impl Hub {
                 keep: 3,
             }));
         });
-        // Its chunks, queues and entities left behind, or kept as a viewed level (#3716).
+        // Its chunks, queues and entities left behind, or kept as a viewed level (arismoko/horizon#3716).
         self.leave_level(i, &left);
         self.guests[i].send(&C::ChangeDifficulty(play::ChangeDifficulty {
             difficulty: ctx.difficulty,

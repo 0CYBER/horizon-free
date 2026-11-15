@@ -1,7 +1,7 @@
 //! The `viewed_level_sound` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// A sound of a level the server opened for viewing (#3716) reached this client, and the
+    /// A sound of a level the server opened for viewing (arismoko/horizon#3716) reached this client, and the
     /// client asks where in the player's own level to play it. `level` is the viewed level's
     /// handle (what `host.level` gives for it) and `position` the sound's position there; `sound`,
     /// `source` and `seed` are the server's. `play_at` starts as None, and a sound left None is not

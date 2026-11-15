@@ -1,4 +1,4 @@
-//! Viewed areas and their caps (#3716): squares of chunks a mod asks for one player in any level,
+//! Viewed areas and their caps (arismoko/horizon#3716): squares of chunks a mod asks for one player in any level,
 //! each `Loaded` (kept loaded and sent, nothing ticks for it) or `Ticking` (as a player's
 //! simulation ticket). A call that breaks a cap changes nothing and names the cap it hit.
 use crate::fast_hash::FxHashSet;

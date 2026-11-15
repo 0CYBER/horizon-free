@@ -1,4 +1,4 @@
-//! Typed payloads (#813 step 4b-1) on the real routes: the integrated server over memory and a
+//! Typed payloads (arismoko/horizon#813 step 4b-1) on the real routes: the integrated server over memory and a
 //! published server over TCP. The values are decoded by the typed adapter and encoded by the
 //! token sends; the expected bodies are written out by hand.
 use horizon_protocol::packets::{configuration as cfg, play};

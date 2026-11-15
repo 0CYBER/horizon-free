@@ -75,7 +75,7 @@ pub(crate) fn prepare(registry: &BlockRegistry) -> Result<Arc<Index>, String> {
     Ok(Arc::new(Index { forward, reverse }))
 }
 #[cfg(test)]
-#[allow(clippy::items_after_test_module)] // TODO(#2273): move the module to the end of the file.
+#[allow(clippy::items_after_test_module)] // TODO(arismoko/horizon#2273): move the module to the end of the file.
 mod tests {
     use super::*;
     #[test]

@@ -1,4 +1,4 @@
-//! `living_equipment_change` for a server's players (#3417): a hotbar selection, a pickup into
+//! `living_equipment_change` for a server's players (arismoko/horizon#3417): a hotbar selection, a pickup into
 //! the selected slot and a helmet put on are each one change on the next tick, and nothing is
 //! told while no mod sets `living_equipment_listened`.
 use std::sync::{Arc, Mutex};

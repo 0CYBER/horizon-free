@@ -1835,7 +1835,7 @@ mod tests {
         });
     }
 
-    /// #4094: `BLOCK_BREAK_SPEED` is a multiplier on the destroy speed.
+    /// arismoko/horizon#4094: `BLOCK_BREAK_SPEED` is a multiplier on the destroy speed.
     #[test]
     fn block_break_speed_is_a_destroy_speed_multiplier() {
         assert_eq!(block_break_speed_factor(None), 1.0);

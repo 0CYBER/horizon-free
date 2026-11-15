@@ -1,6 +1,6 @@
 //! `MobRef::set_ai_paused` and `MobRef::ai_paused` from a native and a
 //! wasm mod reach the server's backend with the mob and the flag intact, and
-//! each named refusal comes back as the native call returns it (#4478).
+//! each named refusal comes back as the native call returns it (arismoko/horizon#4478).
 use super::*;
 use mod_api::__private::game::{BackendMutRefOf, BackendRefOf};
 use mod_api::{EntityRef, MobAiPauseRefusal, MobRef, WorldEpoch};

@@ -1,4 +1,4 @@
-//! Main-thread fault isolation on one raw channel (#3209), through a published server and a
+//! Main-thread fault isolation on one raw channel (arismoko/horizon#3209), through a published server and a
 //! vanilla-shaped TCP peer that never answers the Horizon payload query: the first declaring
 //! mod stages a write and fails, the second commits its own; the first's write is rolled back
 //! before the second runs, each runs once per message in load order, and the connection stays.

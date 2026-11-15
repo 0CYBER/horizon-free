@@ -1,6 +1,6 @@
 # Design: general entity types
 
-Provisional answer to [#792](https://github.com/arismoko/horizon/issues/792): register a type once, store each instance in a game-owned general entity row, and dispatch its catalog-generated EntityPart behavior through a resolved type slot. The row owns identity, residency, persistence and tracking. It must never create a throwable or other template entity. This is a proposal for Ari's decision on the issue, not implemented API or a closure claim.
+Provisional answer to [arismoko/horizon#792](https://github.com/arismoko/horizon/issues/792): register a type once, store each instance in a game-owned general entity row, and dispatch its catalog-generated EntityPart behavior through a resolved type slot. The row owns identity, residency, persistence and tracking. It must never create a throwable or other template entity. This is a proposal for Ari's decision on the issue, not implemented API or a closure claim.
 
 ## Implemented stage 2 API
 
@@ -61,7 +61,7 @@ Freeze a namespaced entity-type registry before worlds or connections open. A de
 
 Use one dense general-entity store per level, with constant-time identity-to-slot lookup and generation validation; removal may swap rows while updating the index. A row contains type slot, UUID, runtime network id, incarnation/join identity, dimension, pose, velocity, lifecycle flags and attachment holder. Never persist runtime slots, network ids or pointers. EntityRef validates world epoch, dimension and incarnation before exposing a row. Reusing id 42 cannot make an old handle address its replacement. UUID continuity on reload does not revive an old live handle.
 
-EntityPart is shared behavior, not mutable per-instance storage. Follow [PR #2328](https://github.com/arismoko/horizon/pull/2328), the provisional #796 state design: existing attachments are the sole Part-data store, with typed authoring erased at registration, snapshot reads and checked transactional edits. Do not introduce a parallel entity data map. #779 supplies entity scope and scoped moments; it does not by itself supply entity ownership. Generate new methods only for named verified moments, with ServerHost or ClientHost and the existing dependency dispatch order. No Game references escape.
+EntityPart is shared behavior, not mutable per-instance storage. Follow [PR arismoko/horizon#2328](https://github.com/arismoko/horizon/pull/2328), the provisional arismoko/horizon#796 state design: existing attachments are the sole Part-data store, with typed authoring erased at registration, snapshot reads and checked transactional edits. Do not introduce a parallel entity data map. arismoko/horizon#779 supplies entity scope and scoped moments; it does not by itself supply entity ownership. Generate new methods only for named verified moments, with ServerHost or ClientHost and the existing dependency dispatch order. No Game references escape.
 
 ## Tick and residency
 
@@ -69,7 +69,7 @@ At the authoritative entity phase, walk eligible general rows once in stable joi
 
 Join ordering and next-phase spawn visibility are proposed Horizon choices pending vanilla oracle comparison. They must not reorder existing vanilla families incidentally. Client interpolation/render updates never execute authoritative behavior.
 
-Use #1606's residency journal and visibility boundary for insert, lift, restore, move and retirement. Unloaded or parked entities persist but do not tick; ordinary entities do not acquire chunk tickets merely by existing. Temporary lift is not removal and cannot retire attachments or emit a tracking despawn. Commit publishes changes once; abort restores the original join identity, row and attachments. Save refuses while a lifted pass or entity transaction is open. Dimension transfer preserves UUID and data, invalidates source-scoped handles, removes source tracking and creates destination tracking atomically. World close invalidates its epoch.
+Use arismoko/horizon#1606's residency journal and visibility boundary for insert, lift, restore, move and retirement. Unloaded or parked entities persist but do not tick; ordinary entities do not acquire chunk tickets merely by existing. Temporary lift is not removal and cannot retire attachments or emit a tracking despawn. Commit publishes changes once; abort restores the original join identity, row and attachments. Save refuses while a lifted pass or entity transaction is open. Dimension transfer preserves UUID and data, invalidates source-scoped handles, removes source tracking and creates destination tracking atomically. World close invalidates its epoch.
 
 ## Save, load and missing mods
 
@@ -81,7 +81,7 @@ For a missing type/mod or unsupported payload version, preserve the original bou
 
 Negotiate required type/schema/features before joining. A client missing a required entity implementation is refused with a clear reason before world state is sent. Map stable keys to connection-local protocol slots; server ids alone are insufficient. Interest entry sends one bounded spawn snapshot (identity, type, pose and explicitly synchronized fields); subsequent revisioned deltas follow declared update cadence. Late join receives current state, not replayed ticks. Interest exit, removal and dimension departure send one removal; reconnect gets a fresh snapshot. Ignore stale-incarnation deltas and request a bounded resnapshot after revision gaps.
 
-Persistence does not imply synchronization: only declared fields cross the network. #813's shared payload transport should own attachment synchronization rather than adding a competing channel. Decode into client-owned tracked rows. Hand immutable render snapshots to a client type renderer through the existing drawing context; no server Part tick or mutable simulation access during drawing. Missing optional visual assets use a diagnostic visual; missing required behavior refuses connection. Resource reload disposes cached render resources without replacing entity identity.
+Persistence does not imply synchronization: only declared fields cross the network. arismoko/horizon#813's shared payload transport should own attachment synchronization rather than adding a competing channel. Decode into client-owned tracked rows. Hand immutable render snapshots to a client type renderer through the existing drawing context; no server Part tick or mutable simulation access during drawing. Missing optional visual assets use a diagnostic visual; missing required behavior refuses connection. Resource reload disposes cached render resources without replacing entity identity.
 
 The [moving-structures carrier](moving-structures.md) remains a game-owned specialized type and does not depend on general registration. Share identity, residency, tracking and save boundaries; its cell ownership, swept collision and assembly journal remain specialized. Never create two carrier tickers or serialize its cells twice.
 
@@ -151,5 +151,5 @@ Run the scene on integrated, LAN and dedicated servers for both targets. Pin ord
 - Must general ticks share one order with all vanilla families immediately? Recommendation: maintain stable general join order initially and require oracle evidence before migrating existing family scheduling.
 - Missing-mod recovery versus fail-open world load? Recommendation: quarantine losslessly with visible diagnostics; malformed/oversized records require explicit recovery, never silent deletion.
 - Which exact bounds are acceptable? Recommendation: start with the provisional limits above, measure valid workloads and agree aggregate world/connection quotas before enablement.
-- Which EntityPart moments ship first? Recommendation: authoritative tick plus required lifecycle/codec integration only after matching existing named moments; do not invent parallel join/remove hooks. Coordinate with #779 and #796 before API generation.
+- Which EntityPart moments ship first? Recommendation: authoritative tick plus required lifecycle/codec integration only after matching existing named moments; do not invent parallel join/remove hooks. Coordinate with arismoko/horizon#779 and arismoko/horizon#796 before API generation.
 - How does a vanilla client connect? Recommendation: refuse when required general types exist; approve a separate explicit protocol decision before advertising any vanilla-client representation.

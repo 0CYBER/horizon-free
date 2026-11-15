@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! `on_chunk_unloaded` through a real game (#3145): a chunk with two mod block entities and a
+//! `on_chunk_unloaded` through a real game (arismoko/horizon#3145): a chunk with two mod block entities and a
 //! vanilla chest leaves the world when its `/forceload` ticket goes, through the game's own
 //! streaming, save and unload; the chunk comes back from its saved data; then the world closes.
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};

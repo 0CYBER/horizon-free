@@ -1,4 +1,4 @@
-//! Shears and entity parts (NeoForge's `IShearable`, #3351): a player's shears and a dispenser's
+//! Shears and entity parts (NeoForge's `IShearable`, arismoko/horizon#3351): a player's shears and a dispenser's
 //! ask the mob's entity parts first (`EntityPart::is_shearable`), and a part that says yes
 //! shears it (`EntityPart::on_sheared`) in place of the species' own shearing.
 use super::api_values::{TryIntoApi, TryIntoEngine};

@@ -30,7 +30,7 @@ mob's death loot; on other rolls `place` is `None`.
 `queried_table_id` reports the caller's first supplied id, or
 `neoforge:unknown_loot_table` until the root and every nested table finish.
 Only the root then sets its id (an unnamed root sets the fallback), before the
-future global modifier pass (#1270). Nested tables share all parameters and
+future global modifier pass (arismoko/horizon#1270). Nested tables share all parameters and
 never write the id. Consequently `neoforge:loot_table_id` inside a table normally
 matches the fallback, rather than the root's name.
 
@@ -51,7 +51,7 @@ Defaults are `sword_sweep` from `minecraft:swords`, `shovel_douse` from
 `shears_trim`), `fishing_rod_cast`, `trident_throw`, `brush_brush`,
 `firestarter_light` for flint and steel or fire charge, and `spyglass_scope`.
 All other defaults are false. Existing action sites retain their own vanilla
-answers until #3330 adopts the shared table.
+answers until arismoko/horizon#3330 adopts the shared table.
 
 Engine callers can scope a shared `horizon_world::loot::query::LootQuery` with
 `with_query`. Call `set_id` before rolling to supply the first id, and read

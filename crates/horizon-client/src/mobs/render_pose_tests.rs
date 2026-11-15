@@ -106,7 +106,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
     assert!(cow_parts.is_none(), "a cow is no humanoid");
 
     // `render_living_pre` hides a part of any model by its name, on the CPU and on the GPU
-    // (#2957): a leg's one face goes; an unknown name is refused.
+    // (arismoko/horizon#2957): a leg's one face goes; an unknown name is refused.
     let mut leg = mod_api::HiddenParts::default();
     leg.hide_named("right_hind_leg").unwrap();
     let mut absent = mod_api::HiddenParts::default();

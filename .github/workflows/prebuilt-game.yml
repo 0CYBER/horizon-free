@@ -1,5 +1,5 @@
 name: prebuilt game
-# The prebuilt game (#589): horizon-client as a Rust dylib plus every crate's metadata, so the launcher builds native
+# The prebuilt game (arismoko/horizon#589): horizon-client as a Rust dylib plus every crate's metadata, so the launcher builds native
 # mods against it with rustc alone, in seconds, instead of rebuilding the game. Built with the pinned Rust
 # (tools/ci/rust-version, which the launcher builds native mods with), because rustc reads only metadata from its own
 # version. Only compiler outputs go in: tools/prebuilt_game.py refuses anything else, and nothing here reads vanilla

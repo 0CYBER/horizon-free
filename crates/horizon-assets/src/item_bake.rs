@@ -409,7 +409,7 @@ fn side_faces(mask: &SpriteMask, material: &Material, layer: i32) -> Result<Vec<
 /// that reaches the sprite's last column is drawn (NeoForge closes a run only on a
 /// transparent pixel, so such a run loses its front and back), and growing down tests
 /// only the run's own columns (NeoForge also tests the transparent pixel that closed the
-/// run). Both were agreed on review of #2707.
+/// run). Both were agreed on review of arismoko/horizon#2707.
 fn mask_rect_faces(shape: &SpriteMask, material: &Material, layer: i32) -> Result<Vec<ModelQuad>> {
     let (width, height) = (shape.width, shape.height);
     let mut opaque = shape.union();

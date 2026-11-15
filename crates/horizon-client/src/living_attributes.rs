@@ -182,7 +182,7 @@ pub fn apply_saved(attributes: &mut Live, saved: Option<&Tag>) -> Result<()> {
     Ok(())
 }
 
-/// A saved base as a load takes it (#3728): one outside the attribute's
+/// A saved base as a load takes it (arismoko/horizon#3728): one outside the attribute's
 /// bounds, saved while a mod had widened them, is clamped into them, and the
 /// first such base of each attribute in a world load is logged
 /// ([`LOAD_CLAMPS`]). Any other base, NaN included, stays as saved, as
@@ -213,7 +213,7 @@ fn loaded_base_in(log: &ClampLog, name: &str, definition: Definition, base: f64)
 /// attribute in each world load, and each world open starts a new load.
 pub static LOAD_CLAMPS: ClampLog = ClampLog::new();
 
-/// The attributes whose saved base one load has clamped and logged (#3728).
+/// The attributes whose saved base one load has clamped and logged (arismoko/horizon#3728).
 pub struct ClampLog(std::sync::Mutex<std::collections::BTreeSet<String>>);
 impl ClampLog {
     pub const fn new() -> Self {
@@ -589,7 +589,7 @@ mod tests {
         new_live(&catalog, "minecraft:player").unwrap()
     }
 
-    /// #3728: with a mod's widened bounds, a base past vanilla's survives a
+    /// arismoko/horizon#3728: with a mod's widened bounds, a base past vanilla's survives a
     /// save and a load; without them, the load clamps the base itself.
     #[test]
     fn a_saved_base_past_the_bounds_survives_only_with_them() {
@@ -614,7 +614,7 @@ mod tests {
         assert!(loaded_base(id, definition, f64::NAN).is_nan());
     }
 
-    /// #3728: a clamped saved base warns once per attribute in each load,
+    /// arismoko/horizon#3728: a clamped saved base warns once per attribute in each load,
     /// and a second load warns again.
     #[test]
     fn a_clamped_base_warns_once_per_attribute_in_each_load() {
@@ -638,7 +638,7 @@ mod tests {
         }
     }
 
-    /// Held items apply their main-hand and off-hand modifiers (#4118, #4777).
+    /// Held items apply their main-hand and off-hand modifiers (arismoko/horizon#4118, arismoko/horizon#4777).
     #[test]
     fn equipment_modifiers_follow_their_slot_group() {
         assert!(modifier_applies("mainhand", "mainhand"));

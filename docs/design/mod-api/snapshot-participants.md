@@ -1,12 +1,12 @@
 # Design: snapshot participants
 
-Provisional proposal for [#999](https://github.com/arismoko/horizon/issues/999), not an implemented guarantee. Named question: **what native-and-wasm participant contract can preserve synchronous rollback given reentry?**
+Provisional proposal for [arismoko/horizon#999](https://github.com/arismoko/horizon/issues/999), not an implemented guarantee. Named question: **what native-and-wasm participant contract can preserve synchronous rollback given reentry?**
 
 Recommend runtime-owned transactional participant values, with generated typed access, and callback-free rollback. Arbitrary mutable guest fields with snapshot/restore callbacks remain unsupported until the runtime can prove equivalent guarantees on both targets. An exported participant resource alone does not solve reentry. This recommendation narrows the requested arbitrary-state contract and requires maintainer approval before implementation.
 
 ## Evidence and counterpart limits
 
-The issue body and all three comments were read, including Ari's release explanation and our claim. The original same-group reentry diagnosis is historical: `crates/horizon-mod-wasm/src/runtime.rs:536` now admits resumed synchronous calls at :557, but :547 refuses guest execution during native panic. Normal reentry is therefore insufficient evidence for unwind restoration. The component-model boundary discussed historically in [#1903](https://github.com/arismoko/horizon/issues/1903) is already gone; generated shared-memory Wire is the current boundary. Nothing here requires WIT, lifting/lowering, a particular store API, guest pointers, or a particular memory layout.
+The issue body and all three comments were read, including Ari's release explanation and our claim. The original same-group reentry diagnosis is historical: `crates/horizon-mod-wasm/src/runtime.rs:536` now admits resumed synchronous calls at :557, but :547 refuses guest execution during native panic. Normal reentry is therefore insufficient evidence for unwind restoration. The component-model boundary discussed historically in [arismoko/horizon#1903](https://github.com/arismoko/horizon/issues/1903) is already gone; generated shared-memory Wire is the current boundary. Nothing here requires WIT, lifting/lowering, a particular store API, guest pointers, or a particular memory layout.
 
 Vanilla has no Horizon participant interface. The pinned 26.3 `ItemStack.copy` bytecode was requested with `python3 tools/rea_vanilla.py method net.minecraft.world.item.ItemStack copy`; it returns EMPTY for empty stacks, otherwise copies count and components and preserves pop time. Stack copying cannot establish mod participant callback ordering.
 
@@ -67,10 +67,10 @@ Proposed future tests, on both native and wasm; these are not runtime tests run 
 
 ## Proposed stages
 
-Filed stages: **none**. First verify public 26.3 ordering and approve the narrowed state ownership contract and limits. Then implement one runtime/coordinator slice proving callback-free unwind/trap rollback on both targets. Finally expose generated typed declarations/access, update the coordinator's no-mod-state header and #41 restriction, catalog, docs and sample together, and run the matrix. No stage may export native-only participants or depend on the current wasm transport implementation.
+Filed stages: **none**. First verify public 26.3 ordering and approve the narrowed state ownership contract and limits. Then implement one runtime/coordinator slice proving callback-free unwind/trap rollback on both targets. Finally expose generated typed declarations/access, update the coordinator's no-mod-state header and arismoko/horizon#41 restriction, catalog, docs and sample together, and run the matrix. No stage may export native-only participants or depend on the current wasm transport implementation.
 
 ## Open questions
 
-- **Can a converted mod's providers use runtime-owned values?** Recommend this as the first contract; arbitrary guest state remains refused. Require a representative translated provider before claiming the arbitrary-state request fulfilled. If translation requires live fields, commission the runtime design before claiming #999 implemented.
+- **Can a converted mod's providers use runtime-owned values?** Recommend this as the first contract; arbitrary guest state remains refused. Require a representative translated provider before claiming the arbitrary-state request fulfilled. If translation requires live fields, commission the runtime design before claiming arismoko/horizon#999 implemented.
 - **What exact ordering does NeoForge 26.3 promise?** Recommend obtaining public SnapshotJournal/TransactionContext documentation and encoding its release/root-notice trace as independent fixtures before code. Current proposed ordering is not certified equivalent.
 - **Which budgets are acceptable?** Recommend the mod-only limits above with explicit registration/runtime errors and no reduction of vanilla capacity; approve using real translated provider sizes.

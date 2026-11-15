@@ -29,7 +29,7 @@ impl fmt::Display for SettingError {
 }
 impl std::error::Error for SettingError {}
 
-/// A compile limit and its provenance. Compilation is parallel: issue #3673 measured
+/// A compile limit and its provenance. Compilation is parallel: issue arismoko/horizon#3673 measured
 /// a 30 MB module at about 30 s on one thread and 3 s on eight. We allow ten times
 /// the one-thread measurement plus a 5 s fixed allowance: `5 + 300 / threads`.
 /// Eight threads get 42.5 s, above the old 37.743749290 s Ryzen 7 5700X limit

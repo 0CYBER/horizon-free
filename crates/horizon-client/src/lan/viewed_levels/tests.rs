@@ -873,7 +873,7 @@ fn wrapped_sounds(got: &[Got]) -> Vec<(i32, horizon_protocol::packets::play::Sou
         .collect()
 }
 
-/// A sound in the Nether (#3983) reaches, wrapped, a viewer of revision 3 whose sent chunks hold
+/// A sound in the Nether (arismoko/horizon#3983) reaches, wrapped, a viewer of revision 3 whose sent chunks hold
 /// its chunk and one of whose areas has its centre chunk within the sound's broadcast distance
 /// plus 16 blocks of it. A viewer without the chunk, one beyond the distance and a client of
 /// revision 2 get nothing; nothing is sent plain.

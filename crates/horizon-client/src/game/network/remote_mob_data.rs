@@ -1025,7 +1025,7 @@ mod tests {
         assert!(!m.is_invisible());
     }
 
-    /// #2920: a server's horse is moved by its rider's client, which jumps
+    /// arismoko/horizon#2920: a server's horse is moved by its rider's client, which jumps
     /// it by the type's jump strength (`createBaseHorseAttributes`,
     /// `createBaseChestedHorseAttributes`) until the server syncs its own.
     #[test]

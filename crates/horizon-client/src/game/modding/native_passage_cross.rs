@@ -1,4 +1,4 @@
-//! Crossing a passage within a level (#3775, docs/modding/src/how-to/passages.md): the client
+//! Crossing a passage within a level (arismoko/horizon#3775, docs/modding/src/how-to/passages.md): the client
 //! moves its own player through (`ClientHost::cross_passage`) and tells its server the passage
 //! and where it crossed from; the server checks that move as any move (the hub,
 //! `lan/hub/passage_cross.rs`), finds the passage, asks the mods (`player_passage_cross`),
@@ -174,7 +174,7 @@ impl Game<'_> {
     /// Guest `gi`'s crossing of `id` from `from`: the whole check, the veto, the whole
     /// check again (a listener that removed the passage, moved the player or made it
     /// ineligible refuses the crossing), and only then where the player comes out, whose
-    /// chunk must be loaded and tracked too (ruling 10 on #3775: the server computes `to`
+    /// chunk must be loaded and tracked too (ruling 10 on arismoko/horizon#3775: the server computes `to`
     /// after the veto).
     fn decide_passage_cross(
         &mut self,

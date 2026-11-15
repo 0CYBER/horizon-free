@@ -2138,7 +2138,7 @@ mod tests {
         );
     }
 
-    /// A content mod's tameable type (#4031) is its template's mob: a wolf, a
+    /// A content mod's tameable type (arismoko/horizon#4031) is its template's mob: a wolf, a
     /// cat or a parrot, tamed and sitting, saves its owner, sitting and its
     /// template's own field (a collar's colour, a parrot's variant) under its
     /// own id and loads back as itself with all of them.
@@ -2206,10 +2206,10 @@ mod tests {
         }
     }
 
-    /// A mod's declared attribute set (#845, `EntityAttributeCreationEvent`)
+    /// A mod's declared attribute set (arismoko/horizon#845, `EntityAttributeCreationEvent`)
     /// reaches everything a mob of the type is: the fields it spawns with,
     /// the finalize defaults and the live attribute map's catalog row —
-    /// built from the template's, so the reads of #1469 and #1493 answer the
+    /// built from the template's, so the reads of arismoko/horizon#1469 and arismoko/horizon#1493 answer the
     /// declared values with no second copy.
     #[test]
     #[ignore = "daily"]
@@ -2275,7 +2275,7 @@ mod tests {
         );
     }
 
-    /// #812: a mod's declared attribute type joins the catalog before the
+    /// arismoko/horizon#812: a mod's declared attribute type joins the catalog before the
     /// rows resolve (a mod entity's set names its own new attribute), and
     /// the live map, an item's modifier, the saves and the sync set carry it
     /// by string id — a guest's catalog built from the same mods decodes the
@@ -2328,7 +2328,7 @@ mod tests {
             grown.id("minecraft:max_health"),
             catalog.id("minecraft:max_health")
         );
-        // A mod entity's row names its own new attribute (#845's rows
+        // A mod entity's row names its own new attribute (arismoko/horizon#845's rows
         // resolve after the attributes join).
         let merged = grown
             .with_entity_row(
@@ -2426,7 +2426,7 @@ mod tests {
     /// A declared set's merged row — the template's with the declared set on
     /// top — is the type's one record: a content row's own value (the
     /// ghoul's 40 health) gives way to the template's, so a mob of the type
-    /// spawns with what the live attribute map answers (#845, review).
+    /// spawns with what the live attribute map answers (arismoko/horizon#845, review).
     #[test]
     #[ignore = "daily"]
     fn a_declared_type_spawns_with_its_merged_row_not_its_content_row() {
@@ -2471,7 +2471,7 @@ mod tests {
         );
     }
 
-    /// A mod that adds an attribute vanilla zombies lack (#846,
+    /// A mod that adds an attribute vanilla zombies lack (arismoko/horizon#846,
     /// `EntityAttributeModificationEvent`) changes the zombie type's default:
     /// a zombie spawned after load answers it through the live attribute map
     /// and carries it in its finalize defaults, while the rest of its row

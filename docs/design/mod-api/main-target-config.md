@@ -1,6 +1,6 @@
 # Design: main target configuration
 
-Provisional answer to [#869](https://github.com/arismoko/horizon/issues/869):
+Provisional answer to [arismoko/horizon#869](https://github.com/arismoko/horizon/issues/869):
 configure one renderer-owned main colour attachment and mandatory depth attachment,
 before allocation, through `configure_main_render_target` with `ClientHost`.
 The initial supported change proposed here is adding stencil through a typed

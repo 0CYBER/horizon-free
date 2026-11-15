@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mechanical first pass for the villager food owner (#3546; run from repo root).
+"""Mechanical first pass for the villager food owner (arismoko/horizon#3546; run from repo root).
 
 Hand corrections for the registry owners (bindings, owner fields, fixtures) follow
 separately. Every `Mob::seen` snapshot and the villager food calls gain an item

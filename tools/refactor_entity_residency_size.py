@@ -1,4 +1,4 @@
-"""Scripted placement of #2533 additions; --moves performs only approved helper moves."""
+"""Scripted placement of arismoko/horizon#2533 additions; --moves performs only approved helper moves."""
 import argparse
 from pathlib import Path
 

@@ -923,9 +923,9 @@ reproducible by anyone, and show the same gameplay on both sides.
 
   Horizon sent 2–4 times the chunks per second in every multi-bot run.
 - **Equal-work run (2026-10-17,** `benchmarks/server-equal-work-2026-10-17/`, on the ThinkPad with the bots
-  on the Mac mini). Horizon now checks moves and paces chunks as vanilla does (#586), the bots wait for the
+  on the Mac mini). Horizon now checks moves and paces chunks as vanilla does (arismoko/horizon#586), the bots wait for the
   chunk they stand in, an `--explore-speed` pass keeps both servers at the same rate, and vanilla runs with
-  `gamerule locator_bar false` (Horizon had no locator bar when this ran; since #692, merged the same day,
+  `gamerule locator_bar false` (Horizon had no locator bar when this ran; since arismoko/horizon#692, merged the same day,
   it sends one to vanilla clients). Results:
   - Memory: Horizon's RSS is 1.9 to 2.6 times smaller in every run (vanilla's heap is fixed at 4 GB).
   - Walking near spawn: Horizon's tick is shorter with 1 and 10 bots (5.5 against 18.3 ms, 11.5 against
@@ -934,8 +934,8 @@ reproducible by anyone, and show the same gameplay on both sides.
     20.2 against 37.0 at 25).
   - At 100 bots: vanilla's watchdog stops it in every pass; Horizon runs at 9 to 11 TPS.
 
-  Two server costs were found and fixed on the way: every chunk section was encoded once per player (#623),
-  and every packet woke its connection's writer thread (#649). Together they took the 50-bot walking tick
+  Two server costs were found and fixed on the way: every chunk section was encoded once per player (arismoko/horizon#623),
+  and every packet woke its connection's writer thread (arismoko/horizon#649). Together they took the 50-bot walking tick
   from 281 ms to 31 ms. At 25 walking bots most of what remains is the engine's streaming and block entity
   ticks, both of which grow with players (the README has the profile).
 - **Mixed bots, as installed (2026-10-18,** `benchmarks/server-mixed-2026-10-18/`, the first published
@@ -965,7 +965,7 @@ reproducible by anyone, and show the same gameplay on both sides.
 - **Four servers, equal work (2026-10-19,** `benchmarks/server-four-way-2026-10-19/`). The same load
   against vanilla, Paper (build 205, its defaults except the connection throttle, which refused bots that
   share an address) and vanilla on Fabric with Lithium. Horizon was release v2026.10.19, which spawns mobs
-  and ticks blocks around every player as vanilla does (#950, #931), so it now does vanilla's work away
+  and ticks blocks around every player as vanilla does (arismoko/horizon#950, arismoko/horizon#931), so it now does vanilla's work away
   from spawn too. Results, on the ThinkPad (the desktop didn't wake):
   - The work was equal on all four at every count (chunks a second within 4 %).
   - Horizon's RSS was 3.8 to 4.8 times smaller (0.72 to 1.11 GB). It started in 8.2 to 8.5 s, against
@@ -1021,15 +1021,15 @@ In order, each one small and shippable alone:
 2. **`horizon-server`**, stacked in three parts:
    - a. The crate, the vanilla files moved out of the client unchanged (`horizon-server-files`),
      `server.toml` with import, `init`, `run` (crash restart, clean stop on Ctrl-C and SIGTERM), and `op`
-     and `whitelist` for a stopped server: #551.
+     and `whitelist` for a stopped server: arismoko/horizon#551.
    - b. The control API on 127.0.0.1 with its token, `start`, `stop`, `restart`, `status`, `cmd` and
      `logs`, plus the engine status endpoint. That endpoint is about 30 additive lines in
      `game/interface/dedicated/mod.rs` plus a new `game/interface/dedicated/status.rs`. perf-ticks-2's branches touch
      `dedicated.rs` elsewhere (`listen: true`), so the edits don't overlap. It also makes the dedicated loop
-     record its tick times, so `/tick query` reports them: #552.
-   - c. Backups, restore and automatic backups: #553.
-3. **Install scripts, Docker and services** (`service install`), and `horizon-server` in the releases: #554.
-4. **Web panel MVP:** #555.
-5. **Bots and the first benchmark against vanilla:** #556.
+     record its tick times, so `/tick query` reports them: arismoko/horizon#552.
+   - c. Backups, restore and automatic backups: arismoko/horizon#553.
+3. **Install scripts, Docker and services** (`service install`), and `horizon-server` in the releases: arismoko/horizon#554.
+4. **Web panel MVP:** arismoko/horizon#555.
+5. **Bots and the first benchmark against vanilla:** arismoko/horizon#556.
 
 Each PR is stacked on the one before. Merging them in order keeps every step shippable alone.

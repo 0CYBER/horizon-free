@@ -2,7 +2,7 @@
 //! The development scene has no entities, block entities or world border.
 //! Entity-dependent rules use the defaults for players and the supported mobs.
 // The defining module of the collide entries: they delegate to each other and
-// the border tests exercise them directly; the `clippy.toml` ban (#2414)
+// the border tests exercise them directly; the `clippy.toml` ban (arismoko/horizon#2414)
 // targets their callers elsewhere, not this file.
 #![allow(clippy::disallowed_methods)]
 use crate::{Result, world::World};

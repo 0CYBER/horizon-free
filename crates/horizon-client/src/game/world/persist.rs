@@ -636,7 +636,7 @@ impl Game<'_> {
         }
         extras.last_update = time;
         // PistonMovingBlockEntity.saveAdditional: a block caught mid-move is
-        // saved with its chunk (#3310).
+        // saved with its chunk (arismoko/horizon#3310).
         for (p, piston) in &self.block_ticks.moving_pistons {
             if (p.x >> 4, p.z >> 4) != (chunk.x, chunk.z) {
                 continue;
@@ -729,7 +729,7 @@ impl Game<'_> {
             }
         }
         // PistonMovingBlockEntity.loadAdditional: blocks saved mid-move carry
-        // on moving; later saves take them from the level (#3310).
+        // on moving; later saves take them from the level (arismoko/horizon#3310).
         let pistons: Vec<_> = saved.as_deref().map_or_else(Vec::new, |s| {
             s.block_entities
                 .iter()

@@ -567,7 +567,7 @@ impl Text {
         self.replace_component(c);
         // The cached spans take the style underneath their own, as a fresh render of the
         // component above would give them. Rendering it again instead would translate existing
-        // content anew, in whatever language is current now (#2493).
+        // content anew, in whatever language is current now (arismoko/horizon#2493).
         for span in &mut self.rendered.spans {
             span.inherit_style(style);
             if style.inline_object.is_some() {
@@ -1672,7 +1672,7 @@ mod tests {
     }
 
     /// Styling translated text where its language isn't loaded keeps the translation it was
-    /// built with and gains the style; its spans keep their origins (#2493).
+    /// built with and gains the style; its spans keep their origins (arismoko/horizon#2493).
     #[test]
     fn styling_keeps_the_translation_it_was_built_with() {
         let language = lang::Language::of(

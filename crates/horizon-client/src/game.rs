@@ -67,7 +67,7 @@ macro_rules! arm_points {
     () => {};
 }
 
-/// The game's side of the injection points (#589), whose slots and listeners live above the engine.
+/// The game's side of the injection points (arismoko/horizon#589), whose slots and listeners live above the engine.
 #[doc(hidden)]
 pub mod points {
     /// A `side = "both"` point's host, out of line: each point's listener call stays a few bytes.
@@ -4690,7 +4690,7 @@ impl Game<'_> {
             span("mod_viewers", || self.tick_mod_container_viewers());
             // The mobile kinds' entities that joined before the earliest
             // general row still to tick go first, in join order; then the
-            // general rows (#792), then the mobile kinds' remainder.
+            // general rows (arismoko/horizon#792), then the mobile kinds' remainder.
             self.ordered_before(ordered_tick::Batch::General)?;
             horizon_client::spans::time("tick_general", || self.tick_general())?;
             // Orbs, primed TNT and falling blocks still to tick, in join order.
@@ -7864,7 +7864,7 @@ impl Game<'_> {
                 map.insert("Air".into(), horizon_core::nbt::Tag::Short(p.air as i16));
                 // Entity.saveWithoutId: the `Invulnerable` flag always, its
                 // `invulnerable_time` window only while open, like a mob's
-                // save (#916).
+                // save (arismoko/horizon#916).
                 map.insert(
                     "Invulnerable".into(),
                     horizon_core::nbt::Tag::Byte(i8::from(p.health.permanently_invulnerable)),

@@ -199,7 +199,7 @@ impl Game<'_> {
 
     /// The guest `conn`'s real identity — the uuid its lent view carries and
     /// its entity id — when the guest is a player the tick can name: a fake
-    /// guest resolves as none, as the write handle refuses it (#1077).
+    /// guest resolves as none, as the write handle refuses it (arismoko/horizon#1077).
     pub(super) fn guest_identity(&self, conn: u32) -> Option<([i32; 4], u32)> {
         let guest = self
             .lan
@@ -618,7 +618,7 @@ mod tests {
         );
     }
 
-    /// #3806 cases 1 to 3: a mob's player target, host or guest, is kept tick
+    /// arismoko/horizon#3806 cases 1 to 3: a mob's player target, host or guest, is kept tick
     /// after tick while it stays valid, however near the other players are,
     /// and the guests' order or a guest joining changes nothing. Each tick
     /// feeds the binding back in, as the mob loop does.

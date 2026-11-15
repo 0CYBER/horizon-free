@@ -109,7 +109,7 @@ impl Game<'_> {
         })? {
             return Ok(());
         }
-        // A world saved with mods that are not loaded now asks first (#3856), unless the player
+        // A world saved with mods that are not loaded now asks first (arismoko/horizon#3856), unless the player
         // already chose to open it anyway; the question reads the world and writes nothing.
         if create.is_none() {
             let dir = std::env::current_dir()?.join("saves").join(folder);

@@ -230,7 +230,7 @@ impl Game<'_> {
             // A ServerPlayer travels on the server too
             // (MoveSimulationType.AUTHORITATIVE_SIDE_AND_SERVER), so every tick
             // on a ladder or vine LivingEntity.handleOnClimbable resets its fall
-            // distance: climbing down doesn't hurt where it lands (#1255).
+            // distance: climbing down doesn't hurt where it lands (arismoko/horizon#1255).
             if w.climbable().unwrap_or(false) {
                 w.player.fall_distance = 0.0;
             }
@@ -242,7 +242,7 @@ impl Game<'_> {
             let delta_y = w.player.velocity.y;
             w.player.impulse.landed_in_liquid(delta_y, liquid);
             // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
-            // lit campfires and grown sweet berry bushes hurt (#1305).
+            // lit campfires and grown sweet berry bushes hurt (arismoko/horizon#1305).
             w.player.shift_key_down = sneaking;
             let _ = w.player.set_sleeping(sleeping);
             w.player.leather_boots = leather_boots;
@@ -257,7 +257,7 @@ impl Game<'_> {
             // copy too, or it would stay in the spin pose (eye 0.4) for good.
             // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
             // ends with updatePlayerPose — or, for a passenger, the rideTick
-            // path that clears a swim (#4509 / #3308).
+            // path that clears a swim (arismoko/horizon#4509 / arismoko/horizon#3308).
             let _ = if riding {
                 w.passenger_pose_tick()
             } else {
@@ -376,7 +376,7 @@ impl Game<'_> {
                 }) => self.guest_damage_broadcast(conn, source),
                 // LivingEntity.playHurtSound: the server's `Entity.playSound`
                 // reaches every player around but the hurt one, whose own
-                // client plays it from handleDamageEvent (#4149).
+                // client plays it from handleDamageEvent (arismoko/horizon#4149).
                 MotionEvent::HurtSound(sound) => self.guest_hurt_sound(conn, sound),
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {

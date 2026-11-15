@@ -1517,7 +1517,7 @@ fn login_and_configure(
             return Ok(None);
         }
     }
-    // The mods' datapack registries this client has, or the reason it cannot play (#811).
+    // The mods' datapack registries this client has, or the reason it cannot play (arismoko/horizon#811).
     match crate::datapack_net::server_step(brand == "horizon", datapack_offer.as_deref()) {
         crate::datapack_net::Step::Nothing => {}
         crate::datapack_net::Step::Send(data) => {
@@ -2490,7 +2490,7 @@ mod tests {
     }
     use super::*;
 
-    /// #3209: a client may announce its channels while the server waits on a configuration
+    /// arismoko/horizon#3209: a client may announce its channels while the server waits on a configuration
     /// task (here the code of conduct). With no typed declaration the wait reads packets
     /// itself; the list must still be kept.
     #[test]

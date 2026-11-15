@@ -1,4 +1,4 @@
-//! One point catalog (#3643): when `horizon-engine-slots` has a `PointId` of its own, it is
+//! One point catalog (arismoko/horizon#3643): when `horizon-engine-slots` has a `PointId` of its own, it is
 //! `mod_points`' very type, re-exported, never a second generation, or this test does not
 //! compile. Today the engine crate has none (`build.rs` sets `engine_slots_point_id` once it
 //! does), so `mod_points`' generated enum is the only one.

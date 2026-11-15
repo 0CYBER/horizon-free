@@ -55,7 +55,7 @@ reasons. It accepts `HORIZON_GAME_DISCOVERY=/absolute/path/to/horizon-game-disco
 otherwise it builds/runs only that lightweight package. Comments, examples in strings and unreferenced source
 copies are not treated as runnable tests.
 
-The #4451 source inventory found 3,996 actual Rust ignore attributes in 1,139 files, including 3,022 non-daily
+The arismoko/horizon#4451 source inventory found 3,996 actual Rust ignore attributes in 1,139 files, including 3,022 non-daily
 descriptive attributes in 853 files (not string/comment examples). Of those, 3,021 have runnable canonical
 identities: 2,896 become daily rows (2,872 `resources`, 24 `child-process`), and 125 retain exact documented
 exceptions: 77 manual/measurement cases, 22 parity-harness steps, 23 separately supplied inputs, and three

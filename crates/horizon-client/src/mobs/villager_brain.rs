@@ -378,7 +378,7 @@ impl Brain {
         };
         b.list = packages(baby, shuffle_seed, farmer);
         // The parts' behaviors join before the sort, so each lands after
-        // vanilla's of its priority and activity (#824). Nothing joins a
+        // vanilla's of its priority and activity (arismoko/horizon#824). Nothing joins a
         // type no part attached to, and nothing is asked or built then.
         let before = b.list.len();
         attach_behaviors(mob_id, &mut b.list);
@@ -1228,7 +1228,7 @@ enum B {
         what: LookAt,
     },
     UpdateActivity(bool),
-    /// A mod's behavior (#824), wrapped by `mod_behaviors`.
+    /// A mod's behavior (arismoko/horizon#824), wrapped by `mod_behaviors`.
     Mod(super::mod_behaviors::ModBehavior),
     WorkAtPoi {
         t: Timed,
@@ -4276,7 +4276,7 @@ fn packages(baby: bool, seed: i64, farmer: bool) -> Vec<Entry> {
 
 // ---- Mod behaviors ------------------------------------------------------
 
-/// The parts' behaviors for this villager's brain (#824): each joins the
+/// The parts' behaviors for this villager's brain (arismoko/horizon#824): each joins the
 /// list with its activity and priority, refused where the villager brain has
 /// no such activity.
 fn attach_behaviors(mob_id: &str, list: &mut Vec<Entry>) {

@@ -1,4 +1,4 @@
-/// The `entity_move` hook's cause (#2414), as the fixture's stand-in for
+/// The `entity_move` hook's cause (arismoko/horizon#2414), as the fixture's stand-in for
 /// the mod API's own `MoveCause`: vanilla's five mover names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MoveCause {

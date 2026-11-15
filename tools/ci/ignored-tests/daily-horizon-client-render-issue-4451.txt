@@ -1,4 +1,4 @@
-# Prepared-resource/descriptive-ignore inventory migration for #4451.
+# Prepared-resource/descriptive-ignore inventory migration for arismoko/horizon#4451.
 # PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
 horizon-client-render assets::tests::archive_world_override_loads_over_real_prepared_tables_without_unpacking lib daily resources
 horizon-client-render audio::tests::archive_sound_decodes_like_the_original_without_unpacking lib daily resources

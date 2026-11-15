@@ -146,7 +146,7 @@ impl Game<'_> {
 
 /// Whether the HUD atlas packs the mod image slot (`horizon/modimage`): whenever a client mod is
 /// loaded, native or wasm, since any of them can call `ClientHost::mod_image`, with no mixin and
-/// no opt-in (#4437). A game with no mod pays none of its 4 MiB. Read where the atlas is built:
+/// no opt-in (arismoko/horizon#4437). A game with no mod pays none of its 4 MiB. Read where the atlas is built:
 /// at the first load and on a resource reload.
 pub(in crate::game) fn mod_image_slot() -> bool {
     !mod_api::__private::mods().is_empty()

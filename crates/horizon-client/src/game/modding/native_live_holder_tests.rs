@@ -250,7 +250,7 @@ fn data_slot_sizing_after_creation_and_load_joins_the_existing_journal() {
     });
 }
 
-/// The two block entity types of #2051's fixture: `tick_paths:both` is
+/// The two block entity types of arismoko/horizon#2051's fixture: `tick_paths:both` is
 /// named by both paths (a `block_entity_type` declaration and a Registrar
 /// part carrying the ticker), `tick_paths:bare` is a declaration alone.
 const BOTH_BLOCK: &str = "tick_paths:press";
@@ -288,7 +288,7 @@ impl BlockEntityPart for BothPaths {
     }
 }
 
-/// #2051: the one decision whether a mod block entity ticks is its type's
+/// arismoko/horizon#2051: the one decision whether a mod block entity ticks is its type's
 /// own ticker, whichever path named the type — a type both a declaration
 /// and a Registrar part carry ticks exactly once per tick, and a bare
 /// declaration, whose type declares no ticker, never reaches the level's

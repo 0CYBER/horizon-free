@@ -1,4 +1,4 @@
-//! #968/#3720: crack effects wait for commit; explicit block-update requests survive abort.
+//! arismoko/horizon#968/#3720: crack effects wait for commit; explicit block-update requests survive abort.
 use super::native_entity_refs::tests::with_game;
 use horizon_client::chunk::Chunk;
 use mod_api::HostTransaction;

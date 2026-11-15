@@ -1,4 +1,4 @@
-//! Transactional carrier ownership store: slice 2, part A (issue #2413).
+//! Transactional carrier ownership store: slice 2, part A (issue arismoko/horizon#2413).
 //!
 //! The store owns the world's carrier files flat in the existing `data/`
 //! directory — no new folders are ever created:

@@ -1194,7 +1194,7 @@ impl Game<'_> {
         self.level.position = None;
         // DedicatedServer.initServer: worldData.setGameType; forceDifficulty.
         // `load_world` restored difficulty from level.dat; server.properties wins
-        // (vanilla's forceDifficulty), including health_rules used for despawn (#4694).
+        // (vanilla's forceDifficulty), including health_rules used for despawn (arismoko/horizon#4694).
         self.set_default_game_mode(game_mode);
         // MinecraftServer.setDifficulty: a hardcore world is always hard.
         self.ui.difficulty = if self.level.hardcore {
@@ -1393,7 +1393,7 @@ impl Game<'_> {
             }
             host.hub.set_anticheat(anticheat);
             host.hub.set_chat_filter(chat_filter);
-            // The viewed areas' chunk caps (#3716): server.toml's `max_viewed_*` settings.
+            // The viewed areas' chunk caps (arismoko/horizon#3716): server.toml's `max_viewed_*` settings.
             let (caps, clamped) = viewed::ViewedCaps::from_properties(|key| props.raw.get(key));
             if let Some(asked) = clamped {
                 let max = viewed::MAX_LOADED_PER_PLAYER;

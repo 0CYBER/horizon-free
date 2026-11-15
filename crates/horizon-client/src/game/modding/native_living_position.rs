@@ -1,4 +1,4 @@
-//! `LivingRef` line of sight, random teleport and the box of a pose (#944):
+//! `LivingRef` line of sight, random teleport and the box of a pose (arismoko/horizon#944):
 //! the engine's own clip and `randomTeleport` paths, for players and mobs
 //! alike.
 use super::{Game, commands::Target};

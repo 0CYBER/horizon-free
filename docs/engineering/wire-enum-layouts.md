@@ -11,7 +11,7 @@ matching entries from both fixture files in the SAME PR as the source change and
 record the identity in the manifest's `retired_identities`. Retiring an enum that
 still derives fieldless Wire is rejected. The retirement list is not a type
 registry and is never extended for new enums. The two keyframe animation enums
-intentionally became non-Wire in #2983; their obsolete pins are now retired.
+intentionally became non-Wire in arismoko/horizon#2983; their obsolete pins are now retired.
 There are 148 absolute hash pins plus a same-source equivalence guard for HookId.
 HookId is the only fieldless enum among these 151 defined in generator output;
 the other generated provider/host enums have payloads and are not in this set.
@@ -98,7 +98,7 @@ guard against mechanically captured implementation mistakes.
 
 ## Intentional ingredient-shape contract change
 
-Issue #3737 adds `Shape::CustomDisplay` at ordinal 3. Compound, intersection and
+Issue arismoko/horizon#3737 adds `Shape::CustomDisplay` at ordinal 3. Compound, intersection and
 difference retain ordinals 0, 1 and 2; `ingredient_shape_contract_keeps_existing_tags_and_adds_custom_display_at_three`
 checks their literal bytes. The Shape pin records the approved four-variant
 contract, independently mixing the literal variant names with the original
@@ -107,7 +107,7 @@ The other frozen pins and the identity inventory remain unchanged.
 
 ## Intentional explosion-interaction contract change
 
-Issue #3929 gives `ExplosionInteraction` vanilla's five values in vanilla's
+Issue arismoko/horizon#3929 gives `ExplosionInteraction` vanilla's five values in vanilla's
 order: `None` 0, `Block` 1, `Mob` 2, `Tnt` 3 (was 2) and `Trigger` 4, a clean
 break with the host call that takes it. `explosion_interactions_cross_in_vanillas_order`
 checks their literal bytes. The pin records the five-variant contract,

@@ -1,4 +1,4 @@
-//! A viewed level's sounds (#3983, gap 12), as Immersive Portals' `CrossPortalSound` replays a
+//! A viewed level's sounds (arismoko/horizon#3983, gap 12), as Immersive Portals' `CrossPortalSound` replays a
 //! far level's sound through a portal: the engine only delivers the sound; a client mod's
 //! `viewed_level_sound` says where in the player's own level it plays (`play_at`), and with
 //! which volume and pitch. Nothing plays it otherwise, and nothing of it reaches the player's

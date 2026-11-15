@@ -1,4 +1,4 @@
-//! Pistons carry a mod block entity while its block moves (#3184), when the
+//! Pistons carry a mod block entity while its block moves (arismoko/horizon#3184), when the
 //! block's part lets it move (`piston_carries_block_entity`): the game's side of the level's
 //! `carry_block_entity` and `land_block_entity`, the carried block entity in
 //! its moving piston's saved tag, and a client's copy. `BlockEntities` holds

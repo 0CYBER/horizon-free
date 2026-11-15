@@ -1680,7 +1680,7 @@ impl Game<'_> {
             _ => None,
         };
         // `Entity.isInvulnerableToBase` over the saved flag and window
-        // (#916), with the attacker's creative mode as `isCreativePlayer`,
+        // (arismoko/horizon#916), with the attacker's creative mode as `isCreativePlayer`,
         // before the dragon's own borrow of the game.
         let creative = self.creative_source_of(cause.or(by));
         let saved = self.saved_refuses_damage(id, ty, creative);
@@ -2671,7 +2671,7 @@ impl Game<'_> {
     /// `EnderDragon.aiStep` (and `tickDeath`) for the dragon.
     fn tick_dragon(&mut self) {
         // Entity.baseTick: the saved invulnerability window counts down
-        // (#916), before the dragon's own borrow of the game.
+        // (arismoko/horizon#916), before the dragon's own borrow of the game.
         if let Some(id) = self.dragon.as_ref().map(|d| d.id) {
             self.tick_saved_invulnerable_time(id);
         }
@@ -2805,7 +2805,7 @@ impl Game<'_> {
             d.velocity.x += f64::from(speed) * f64::from(trig::sin(r));
             d.velocity.z += -f64::from(speed) * f64::from(trig::cos(r));
             let step = if d.in_wall { 0.800000011920929 } else { 1.0 };
-            // The dragon's Entity.move is this physics-less step (#2414): it
+            // The dragon's Entity.move is this physics-less step (arismoko/horizon#2414): it
             // goes through the move gate like every other move, self cause,
             // before the position is written.
             let gate = horizon_client::move_gate::armed(

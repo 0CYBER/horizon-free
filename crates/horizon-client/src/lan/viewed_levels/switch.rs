@@ -1,4 +1,4 @@
-//! A travel into a viewed level (#3716, 9e): `ServerPlayer.teleport(TeleportTransition)`'s
+//! A travel into a viewed level (arismoko/horizon#3716, 9e): `ServerPlayer.teleport(TeleportTransition)`'s
 //! Respawn (keep 3) into a level the player's client views swaps the two on both sides, as
 //! Immersive Portals moves the client's world reference with no loading screen. The chunks of the
 //! level entered that its client was sent stay sent, now as its own; the level left becomes a

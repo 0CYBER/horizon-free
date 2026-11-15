@@ -1,4 +1,4 @@
-//! Carrier recovery tests (slice 2 part B, issue #2413): the strict
+//! Carrier recovery tests (slice 2 part B, issue arismoko/horizon#2413): the strict
 //! region reader, the before/after image replay and the committed
 //! journal step, on real region files under throwaway folders. The
 //! single-owner invariant runs through every scenario: a chest's items

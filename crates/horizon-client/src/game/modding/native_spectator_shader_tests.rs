@@ -1,4 +1,4 @@
-//! `register_entity_spectator_shaders` (#889) end to end: a mod maps an entity type to a post
+//! `register_entity_spectator_shaders` (arismoko/horizon#889) end to end: a mod maps an entity type to a post
 //! chain at start, spectating one puts it on the screen, and the third-person view or the entity
 //! leaving takes it off; vanilla's mobs keep their own chains.
 use super::Game;

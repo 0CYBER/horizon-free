@@ -1,4 +1,4 @@
-//! Typed state a block entity Part keeps on each block entity of its type (#781, #796).
+//! Typed state a block entity Part keeps on each block entity of its type (arismoko/horizon#781, arismoko/horizon#796).
 //!
 //! The value lives in the block entity's own attachment map, the store every other
 //! attachment uses: it saves with the chunk through the type's codec, is kept by

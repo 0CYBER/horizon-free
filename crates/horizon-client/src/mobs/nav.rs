@@ -1286,7 +1286,7 @@ mod supplied_path_tests {
     /// A walking node at the top of the `i32` range is classified and followed
     /// without overflowing: the floor under it takes the walk classifier
     /// through its neighbour scan, whose `x + 1` saturated badly in a checked
-    /// build (#4443). A finite coordinate is never refused, and the node is
+    /// build (arismoko/horizon#4443). A finite coordinate is never refused, and the node is
     /// neither moved nor clamped.
     #[test]
     #[ignore = "daily"]
@@ -1332,7 +1332,7 @@ mod supplied_path_tests {
 
     /// A flying node in void air at the top of the `i32` range is classified
     /// and followed without overflowing: the fly classifier adds a neighbour
-    /// (`x + 1`) to the node itself, the exact addition of #4443.
+    /// (`x + 1`) to the node itself, the exact addition of arismoko/horizon#4443.
     #[test]
     #[ignore = "daily"]
     fn an_extreme_flying_node_is_classified_and_followed() {

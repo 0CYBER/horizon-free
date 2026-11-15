@@ -6,7 +6,7 @@ use horizon_core::position::BlockPos;
 /// passenger): a corner inside a suffocating block sets a 0.1 speed towards the nearest side that is
 /// free, on that side's axis; a later corner overwrites an earlier one. Suffocating is a full
 /// collision cube that is also a full render cube, as `in_wall` has it, outside the player's
-/// collision exclusions (#3717).
+/// collision exclusions (arismoko/horizon#3717).
 pub(crate) fn closest_space_nudge(
     p: &PlayerMotion,
     world: &World,

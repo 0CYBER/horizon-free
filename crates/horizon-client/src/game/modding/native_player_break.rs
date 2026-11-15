@@ -320,7 +320,7 @@ mod tests {
         }
     }
 
-    /// The issue's acceptance (#2953): a vein miner breaks N blocks as the player and gathers
+    /// The issue's acceptance (arismoko/horizon#2953): a vein miner breaks N blocks as the player and gathers
     /// their drops, merged within stack sizes, and their experience at the origin, with no
     /// drop or orb anywhere else. The pickaxe wears once per block, as the player's own breaks.
     #[test]

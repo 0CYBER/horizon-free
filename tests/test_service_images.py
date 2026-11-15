@@ -7,7 +7,7 @@ sees it (2026-11-09: both services failed after horizon-addresses and horizon-re
 
 A build script can read more than its own crate. horizon-mod-vocab's runs the mod API generator
 (horizon-mod-api-gen), which reads the game's hook sources and the crate each hook target names, so an image whose
-lockfile has horizon-mod-vocab copies every crate (`COPY crates crates`) and rebuilds when any of them changes (#3474).
+lockfile has horizon-mod-vocab copies every crate (`COPY crates crates`) and rebuilds when any of them changes (arismoko/horizon#3474).
 """
 
 import json

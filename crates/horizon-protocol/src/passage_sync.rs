@@ -1,4 +1,4 @@
-//! Passage sync (#3775): the passages a native mod registered in a level, sent by a Horizon
+//! Passage sync (arismoko/horizon#3775): the passages a native mod registered in a level, sent by a Horizon
 //! server to the Horizon clients that hold their chunk, their removal, and the server's
 //! refusal of a client's crossing (docs/modding/src/how-to/passages.md). A client crosses on
 //! its own serverbound channel, [`CROSS_CHANNEL`].

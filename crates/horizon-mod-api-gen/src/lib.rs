@@ -471,8 +471,8 @@ fn rustfmt(code: &str) -> Result<Vec<u8>, String> {
 /// The doc of [`BlockPart`], the first part trait in the generated file.
 const PART_DOCS: &str = "/// A block's part: code attached through [`Registrar`] to one block, a mod's own or vanilla's.\n/// Its methods are the scoped hooks', asked only for the blocks it is attached to: a scoped\n/// hook has no [`Hooks`] method. They may run on the window's thread or the server thread.\n/// Annotate each part trait implementation with [`horizon_part`] to derive its subscriptions.\n";
 
-/// The doc of [`EntityPart`], the goal- and behavior-registering part trait (#1077, #824),
-/// which the general entity tick moment (#792) also scopes hooks to.
+/// The doc of [`EntityPart`], the goal- and behavior-registering part trait (arismoko/horizon#1077, arismoko/horizon#824),
+/// which the general entity tick moment (arismoko/horizon#792) also scopes hooks to.
 const ENTITY_PART_DOCS: &str = "/// An entity type's part (arismoko/horizon#1077): code attached through\n/// `RegistrationContext::entity_part` to one entity type, a mod's own or vanilla's\n/// (`minecraft:zombie`). Its `register_goals` runs at every `Mob` construction of that\n/// type, spawned or loaded, right after the species' own goals — vanilla's `registerGoals`\n/// moment — and the goals it adds join the mob's two selectors beside vanilla's, same\n/// priorities and interruption. Its `register_behaviors` runs wherever a brain-driven\n/// species' brain is built (#824). Its `spawn_cluster_size` answers how large a spawn group of the\n/// type may grow. Its `general_entity_tick` runs for one general entity row's authoritative\n/// tick (#792). Annotate each part trait implementation with\n/// [`horizon_part`] to derive its subscriptions; the goal, behavior and spawn-size methods\n/// are not hooks, so they subscribe nothing whatever they override.\n";
 
 /// The crate whose generated sources are being built.

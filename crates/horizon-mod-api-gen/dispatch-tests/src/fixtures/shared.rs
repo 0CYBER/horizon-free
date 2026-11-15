@@ -230,7 +230,7 @@ trait Registrar {}
 struct GoalRegistrar<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
-/// The behavior registrar of the generated `EntityPart` (#824), as the
+/// The behavior registrar of the generated `EntityPart` (arismoko/horizon#824), as the
 /// fixture sees it: like [`GoalRegistrar`], only its type is asked for.
 #[expect(dead_code)]
 struct BehaviorRegistrar<'a> {

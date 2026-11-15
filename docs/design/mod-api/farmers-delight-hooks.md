@@ -1,11 +1,11 @@
 # Farmer's Delight's calls against existing hooks
 
-The open rows of the map of Farmer's Delight's mixins (#1027; the full 34-point table is
+The open rows of the map of Farmer's Delight's mixins (arismoko/horizon#1027; the full 34-point table is
 reservedbytes' comment on that issue), each exercised against the hook Horizon already has. Each
 row names what Farmer's Delight's injection does at its vanilla method, the hook's contract and the
 test that runs it. No Farmer's Delight-specific hook is proposed. The three contract mismatches the
-map found have their own issues: `can_eat` changing the answer (#1897), the attack strength at the
-blow (#1898) and the dispenser's behaviour by the facing block (#1899).
+map found have their own issues: `can_eat` changing the answer (arismoko/horizon#1897), the attack strength at the
+blow (arismoko/horizon#1898) and the dispenser's behaviour by the facing block (arismoko/horizon#1899).
 
 Prefix **API** = `crates/horizon-mod-vocab/src/`; **Game** = `crates/horizon-client/src/game/`.
 
@@ -27,12 +27,12 @@ keeps vanilla hunger and creative-mode behavior.
 ## Gaps
 
 The `living_knockback` hook fires once per full-entry call. Its read-only `entry` value is
-`Short` for a delegated short-entry push and `Full` for a direct full-entry push (#3107).
+`Short` for a delegated short-entry push and `Full` for a direct full-entry push (arismoko/horizon#3107).
 A listener may apply its strength rewrite twice for `Short` and once for `Full`. This is not
 an extra event: two non-commuting listeners run in dispatch order, each completing its
 rewrites before the next listener, rather than two separate passes over all listeners.
-#2767 tracks cross-target API admission. For hearing refused
+arismoko/horizon#2767 tracks cross-target API admission. For hearing refused
 damage attempts without changing the amount, use the existing
-[invulnerability observation](../../modding/src/how-to/entities/refused-damage-attempts.md), with its explicit vanilla exclusions (#2752).
+[invulnerability observation](../../modding/src/how-to/entities/refused-damage-attempts.md), with its explicit vanilla exclusions (arismoko/horizon#2752).
 `living_incoming_damage` already allows amount changes before the cooldown comparison; no new
 amount-bearing entry event is needed for that use case.

@@ -376,7 +376,7 @@ fn killing_blow(cancel: bool) -> (Vec<(&'static str, i64)>, f32) {
 }
 
 /// Horizon's order, not NeoForge's (whose Post follows the death processing): a killing blow's
-/// Post fires once, then the death hooks, as the maintainers ruled on #3963.
+/// Post fires once, then the death hooks, as the maintainers ruled on arismoko/horizon#3963.
 #[test]
 #[ignore = "daily"]
 fn a_killing_blows_post_fires_once_before_the_death_hooks() {

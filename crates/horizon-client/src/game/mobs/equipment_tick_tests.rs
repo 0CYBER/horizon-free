@@ -1,5 +1,5 @@
 //! `LivingEntity.aiStep` -> `EntityEquipment.tick` -> `CompassItem.inventoryTick` for mobs, and
-//! the compass-only rule a player's `Inventory.tick` shares with them (#3221).
+//! the compass-only rule a player's `Inventory.tick` shares with them (arismoko/horizon#3221).
 use super::Game;
 use horizon_client::{items::ItemStack, motion::PlayerMotion};
 use horizon_core::{geometry::Vec3, nbt::Tag, position::BlockPos};

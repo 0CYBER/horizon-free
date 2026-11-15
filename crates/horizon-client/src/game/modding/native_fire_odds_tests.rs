@@ -1,4 +1,4 @@
-//! `fire_odds` answered by a block Part with the asked block's position and face (#3185): the
+//! `fire_odds` answered by a block Part with the asked block's position and face (arismoko/horizon#3185): the
 //! Part's answer for one face makes the fire beside that face valid, and the other faces keep
 //! vanilla's table.
 use super::native_entity_refs::tests::with_game;

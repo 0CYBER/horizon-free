@@ -1,5 +1,5 @@
 //! Compare the generated borrowed encoder with the owned snapshot conversion.
-// Generated fixtures exercise every shape; TODO(#2273): make the generator emit clippy-clean code.
+// Generated fixtures exercise every shape; TODO(arismoko/horizon#2273): make the generator emit clippy-clean code.
 #![allow(clippy::all, unused_comparisons, unreachable_patterns, dead_code)]
 #[path = "support/no_hooks.rs"]
 mod no_hooks;

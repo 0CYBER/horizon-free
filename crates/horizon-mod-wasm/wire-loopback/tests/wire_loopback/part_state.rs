@@ -1,4 +1,4 @@
-//! Block entity Part state (#781) through the generated transport: a guest Part's tick finds its
+//! Block entity Part state (arismoko/horizon#781) through the generated transport: a guest Part's tick finds its
 //! block entity and edits its state in transactions, every call crossing.
 use super::*;
 use mod_api::{

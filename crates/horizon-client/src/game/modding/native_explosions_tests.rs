@@ -1,7 +1,7 @@
 //! `LevelRef::explode`'s contract through both mod targets: a native call of the handle method
 //! and a wasm guest's call through the generated forwarder, each on a fresh game, on the stack
-//! a wasm guest runs on. The source and interactions are #3929's; the damage type, the
-//! calculator, the effects and the unbounded radius #4009's.
+//! a wasm guest runs on. The source and interactions are arismoko/horizon#3929's; the damage type, the
+//! calculator, the effects and the unbounded radius arismoko/horizon#4009's.
 #![cfg(test)]
 use crate::game::Game;
 use crate::game::native_entity_refs::tests::{bind_local_player, run_on_guest_stack, with_game};

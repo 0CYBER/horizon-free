@@ -302,7 +302,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
         food_tick_timer: level.food_tick_timer,
         ticks_frozen: short("TicksFrozen", 0),
         // The `Invulnerable` flag and its window, as the host's own load
-        // reads them (#916).
+        // reads them (arismoko/horizon#916).
         invulnerable: extra
             .and_then(|t| crate::save::number(t.get("Invulnerable")))
             .is_some_and(|v| v != 0),
@@ -619,7 +619,7 @@ pub fn store(guest: &Guest, level: &mut Level, vehicle: Option<Tag>) {
                 map.remove(&"TicksFrozen".into());
             }
             // The `Invulnerable` flag always, its `invulnerable_time` window
-            // only while open, as the host's own save keeps them (#916).
+            // only while open, as the host's own save keeps them (arismoko/horizon#916).
             map.insert(
                 "Invulnerable".into(),
                 horizon_core::nbt::Tag::Byte(i8::from(body.invulnerable)),
@@ -1253,7 +1253,7 @@ mod tests {
         assert_eq!(back.loaded_body, g.loaded_body);
     }
 
-    /// #916, coderabbit: a guest's `Invulnerable` flag and its window ride
+    /// arismoko/horizon#916, coderabbit: a guest's `Invulnerable` flag and its window ride
     /// the file as the host's own do — saved with the body, read back for
     /// the next one; a window closed since goes.
     #[test]

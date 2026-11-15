@@ -1,8 +1,8 @@
 # Design: section meshing
 
-Proposal for [#1508](https://github.com/arismoko/horizon/issues/1508), requiring
+Proposal for [arismoko/horizon#1508](https://github.com/arismoko/horizon/issues/1508), requiring
 maintainer approval before code. Implementation follows R2 GPU instancing
-([#808](https://github.com/arismoko/horizon/issues/808)); this page does not claim
+([arismoko/horizon#808](https://github.com/arismoko/horizon/issues/808)); this page does not claim
 that prerequisite is complete. No Rust API is implemented here.
 
 ## Scope and reference
@@ -80,7 +80,7 @@ of subscribed states/positions. Geometry callbacks emit bounded section batches
 before the ordinary block loop; that loop reads concrete data only, with no
 per-block trait objects, wasm calls or dynamic listener lookup.
 
-[#2305](https://github.com/arismoko/horizon/pull/2305)'s biome colour resolvers
+[arismoko/horizon#2305](https://github.com/arismoko/horizon/pull/2305)'s biome colour resolvers
 already require worker colour execution. Preserve that declared worker-safe
 capability: capture resolver state and lifetime with the job, use the existing
 tint evaluation/cache path, and forbid live mutable world access. Its colour
@@ -108,7 +108,7 @@ faces; translucent neighbours do not acquire opaque occlusion automatically.
 Shader packs consume the same material attributes as vanilla terrain; a mod
 cannot choose a raw pipeline, blend mode or frame format here.
 
-Follow [#1498](https://github.com/arismoko/horizon/issues/1498) and
+Follow [arismoko/horizon#1498](https://github.com/arismoko/horizon/issues/1498) and
 [the colour design](../hdr-linear-light.md): shader API 0.2 colour
 is linear light with BT.709 primaries, paper white 1.0, and values above 1.0
 retained. Existing packed ARGB tint/light inputs remain vanilla-space inputs;
@@ -201,7 +201,7 @@ These are future implementation tests, not results of this documentation change.
 
 - Final R2b geometry identity and R2 self-draw extraction type are still moving.
   Recommend binding the proposed keys/skip bit to those approved types after
-  #808, retaining the generation and lifetime rules above.
+  arismoko/horizon#808, retaining the generation and lifetime rules above.
 - Limits need representative mod scenes before implementation approval.
   Recommend the explicit bounds above as initial ceilings, then measure dense
   connected geometry and wasm batches before increasing them; do not ship an

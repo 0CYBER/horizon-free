@@ -66,7 +66,7 @@ def corpus():
                 for index,modifiers in enumerate(definitions()):
                     layer=any(v.get('type')=='count_on_every_layer' for v in modifiers)
                     if layer and context[0]!=-64:continue
-                    # nextInt(1) still consumes a draw; the following modifier and feature draws pin it (#815).
+                    # nextInt(1) still consumes a draw; the following modifier and feature draws pin it (arismoko/horizon#815).
                     for fail,draw,result,bound in [(-1,False,0,0),(-1,True,1,0),(-1,True,2,0),(0,False,1,0),(2,True,2,0),(5,True,1,0),(-1,True,1,1),(-1,True,2,16)]:
                         yield {'layer_world':layer,'modifiers':modifiers,'context':context,'legacy':legacy,'seed':seed,'positions':positions,'fail':fail,'draw':draw,'draw_bound':bound,'result':result,'height_mode':index%2,'query_fail':1 if index%3==0 and fail==2 else -1,'world_min':max(-2**31,min(2**31-1,context[0]+[-8,0,8][index%3]))}
 

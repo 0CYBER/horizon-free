@@ -1,4 +1,4 @@
-//! The game's injection points (#589), for mods that listen at them. Every engine function the
+//! The game's injection points (arismoko/horizon#589), for mods that listen at them. Every engine function the
 //! staging pass admits with an API record is a point: a mod listens at its head (before the body
 //! runs), at its return (after), or replaces its outcome
 //! through manifest `[[inject]]` functions, with no game rebuild. Each listener gets the

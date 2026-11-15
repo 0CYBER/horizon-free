@@ -18,7 +18,7 @@ pub struct Seen {
     /// level (`alive` false, `removed` false) has to keep resolving.
     pub removed: bool,
     /// `Entity.isInvulnerable` (the ability flag or the temporary window,
-    /// #916), which `asValidTarget` refuses a target by (#1175): a
+    /// arismoko/horizon#916), which `asValidTarget` refuses a target by (arismoko/horizon#1175): a
     /// valid-target rule the tick's view asks.
     pub invulnerable: bool,
     pub baby: bool,

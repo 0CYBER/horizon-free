@@ -521,7 +521,7 @@ mod vanilla_entity_tests {
 
     /// `Entity.shouldRenderAtSqrDistance`: a chicken's box (0.4 by 0.7 by
     /// 0.4) is drawn up to 48 blocks away at the vanilla defaults, not the
-    /// 32 blocks a missing view scale leaves (#2273).
+    /// 32 blocks a missing view scale leaves (arismoko/horizon#2273).
     #[test]
     fn a_chicken_is_drawn_forty_eight_blocks_away() {
         let range = default_range(glam::DVec3::new(0.4, 0.7, 0.4), entity_view_scale(12, 1.0));

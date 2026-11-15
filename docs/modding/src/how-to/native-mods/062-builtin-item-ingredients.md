@@ -81,7 +81,7 @@ true. Displays retain canonical byte 0 or 1.
 `dyed_color` accepts packed integer colors or three numeric RGB channels,
 matching the decoded values without copying candidate payloads.
 The other 54 persistent registered built-ins use stored-value matching while their shared
-decoders are added incrementally in **#3875**. Their absence is not a load refusal.
+decoders are added incrementally in **arismoko/horizon#3875**. Their absence is not a load refusal.
 The transient types `creative_slot_lock`, `additional_trade_cost` and
 `map_post_processing` are refused as stored component values, not matched as opaque NBT.
 They may still be named by `tooltip_display.hidden_components`.

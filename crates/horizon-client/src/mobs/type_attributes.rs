@@ -29,7 +29,7 @@ impl MobType {
     /// The spawn fields an entity type's attribute row carries (its
     /// `entity-types.json` row): the one map from an attribute to the field
     /// a mob of the type spawns with, over the loader's own fallback. The
-    /// json's parser and the rest loader of a declared set (#845) both take
+    /// json's parser and the rest loader of a declared set (arismoko/horizon#845) both take
     /// it, so the fields cannot drift from the row they read.
     pub(crate) fn attribute_fields(value: impl Fn(&str) -> Option<f64>) -> MobTypeAttributeFields {
         let attr = |k: &str| value(&format!("minecraft:{k}"));
@@ -66,7 +66,7 @@ impl MobType {
         })
     }
 
-    /// Takes the type's row from the live attribute map's catalog (#845):
+    /// Takes the type's row from the live attribute map's catalog (arismoko/horizon#845):
     /// the merged row the map itself answers (the template's with the
     /// declared set on top), as its attribute map and its spawn fields, and
     /// the catalog's bounds, so the records cannot diverge. Bases stay raw

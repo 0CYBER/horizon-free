@@ -489,7 +489,7 @@ impl Game<'_> {
         stack: &functions::PackStack,
         root: &std::path::Path,
     ) -> Result<()> {
-        // A new world load: a saved base clamped into its bounds warns again (#3728).
+        // A new world load: a saved base clamped into its bounds warns again (arismoko/horizon#3728).
         horizon_client::living_attributes::LOAD_CLAMPS.begin_load();
         let (tables, health, registries) = self.stage_world_tables(stack, false, root)?;
         self.world_tables = tables;

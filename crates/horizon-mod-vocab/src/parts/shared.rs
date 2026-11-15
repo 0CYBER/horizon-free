@@ -28,17 +28,17 @@ impl<P: ?Sized> Attached<P> {
             part,
         }
     }
-    // hidden: the game's goal registration reads these (#1077)
+    // hidden: the game's goal registration reads these (arismoko/horizon#1077)
     #[doc(hidden)]
     pub fn mod_id(&self) -> &'static str {
         self.mod_id
     }
-    // hidden: the game's goal registration reads these (#1077)
+    // hidden: the game's goal registration reads these (arismoko/horizon#1077)
     #[doc(hidden)]
     pub fn type_name(&self) -> &'static str {
         self.type_name
     }
-    // hidden: the game's goal registration reads these (#1077)
+    // hidden: the game's goal registration reads these (arismoko/horizon#1077)
     #[doc(hidden)]
     pub fn part(&self) -> &Arc<P> {
         &self.part

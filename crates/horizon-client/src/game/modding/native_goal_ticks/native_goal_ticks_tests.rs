@@ -2,7 +2,7 @@
 //! priorities and interruption, per-mob state and random streams, the read
 //! view, `set_target`, and the no-mod-goals fast path.
 //!
-//! The `zombie` fixture is shared with the behavior tests (#824).
+//! The `zombie` fixture is shared with the behavior tests (arismoko/horizon#824).
 use super::super::creatures;
 use super::super::native_entity_refs::tests::with_game;
 use horizon_client::mobs::{self, Mob, goals::Cx};
@@ -147,7 +147,7 @@ fn tick_goals(game: &mut super::super::Game<'_>, index: usize) {
 
 /// The same tick with a player view lent, as a server's mob tick lends a
 /// guest's, and the identity captured beside it — what a goal resolves
-/// (#1077): the real guest's uuid and entity id, never a scan per read. A
+/// (arismoko/horizon#1077): the real guest's uuid and entity id, never a scan per read. A
 /// lent view with no identity is a fake player's: nothing resolves.
 fn tick_goals_as(
     game: &mut super::super::Game<'_>,
@@ -440,7 +440,7 @@ fn the_host_answers_without_panicking() {
             let stone = host.block_state_id("minecraft:stone");
             let tagged = host.entity_type_in_tag("minecraft:zombie", "minecraft:undead");
             // The time of day through the level handle, the canonical route
-            // since the Host rebuild (#1158): the handle's own backend read
+            // since the Host rebuild (arismoko/horizon#1158): the handle's own backend read
             // forwards through the view to the real backend.
             let day_time = host
                 .level("minecraft:overworld")
@@ -959,7 +959,7 @@ fn the_player_the_tick_sees_resolves_by_its_captured_identity() {
 }
 
 /// What one mod-goal tick costs against a plain engine goal, in nanoseconds:
-/// printed once for the PR body (#1077). Run with `--ignored --nocapture`.
+/// printed once for the PR body (arismoko/horizon#1077). Run with `--ignored --nocapture`.
 #[test]
 #[ignore = "cost probe"]
 fn mod_goal_tick_cost() {

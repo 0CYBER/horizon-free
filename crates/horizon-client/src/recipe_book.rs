@@ -1219,7 +1219,7 @@ pub struct Settings {
     pub recipes: BTreeSet<String>,
     /// Recipes not yet shown in the book (`toBeDisplayed`): they animate once.
     pub to_be_displayed: BTreeSet<String>,
-    /// The flags of mods' own books, beside the four vanilla pairs (#2415).
+    /// The flags of mods' own books, beside the four vanilla pairs (arismoko/horizon#2415).
     pub custom: CustomBooks,
 }
 impl Settings {

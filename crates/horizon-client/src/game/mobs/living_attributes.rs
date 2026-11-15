@@ -117,7 +117,7 @@ impl Game<'_> {
 
     /// `collectEquipmentChanges` of the mob `id` right away: equipment a mod
     /// wrote through a handle takes its attribute modifiers on the live map
-    /// at once — its armor and the reads of #940 — not at the tick's pass.
+    /// at once — its armor and the reads of arismoko/horizon#940 — not at the tick's pass.
     /// The tick's own pass remains the safety net for the other writers.
     pub(super) fn collect_mob_equipment_attributes(&mut self, id: u32) {
         if self.remote.is_some() || self.options.execution_role.is_client() {
@@ -319,7 +319,7 @@ impl Game<'_> {
         // A finalize write drops the mob's live map (its seed changed), which
         // takes the equipment's modifiers with it: collect them again at
         // once, so the next read — a hit's armor, the attribute sync — sees
-        // them (#941).
+        // them (arismoko/horizon#941).
         if let Target::Mob(id) = t {
             self.collect_mob_equipment_attributes(id);
         }
@@ -497,7 +497,7 @@ mod tests {
     }
 
     /// A held stack with its own `attribute_modifiers` hits by them, not by
-    /// its item type's defaults (#941).
+    /// its item type's defaults (arismoko/horizon#941).
     #[test]
     #[ignore = "daily"]
     fn a_changed_held_stack_hits_by_its_own_modifiers() {
@@ -541,7 +541,7 @@ mod tests {
         });
     }
 
-    /// The mob's attribute packet is its live map's instances (#941): base
+    /// The mob's attribute packet is its live map's instances (arismoko/horizon#941): base
     /// and each modifier once — the equipment's own rows and `/attribute`'s
     /// writes among them — with no modifier applied twice, and no instance
     /// for an attribute nothing created.
@@ -675,7 +675,7 @@ mod tests {
         });
     }
 
-    /// The armor a hit reads follows the live map at once (#941): a stack a
+    /// The armor a hit reads follows the live map at once (arismoko/horizon#941): a stack a
     /// mod or `/item` changed protects by its own `attribute_modifiers`, a
     /// `/attribute` write takes effect without a tick, a horse's body piece
     /// armors it by its stack's rows, and the save keeps a written base and

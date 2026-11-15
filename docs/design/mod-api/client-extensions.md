@@ -1,6 +1,6 @@
 # Design: client extensions
 
-Provisional answer for [#895](https://github.com/arismoko/horizon/issues/895).
+Provisional answer for [arismoko/horizon#895](https://github.com/arismoko/horizon/issues/895).
 This proposes ownership and registration, not an implemented API or a completed
 NeoForge parity audit. Implementation requires review first.
 
@@ -39,15 +39,15 @@ mesher, generation counter or draw bus.
 
 | Category and proposed complete capability families | Owner and disposition |
 | --- | --- |
-| Item arm/use poses and first-person hand transforms | Existing get_arm_pose and item declarations; register into those owners, not a second callback at their moment. Humanoid extraction remains #1024. |
+| Item arm/use poses and first-person hand transforms | Existing get_arm_pose and item declarations; register into those owners, not a second callback at their moment. Humanoid extraction remains arismoko/horizon#1024. |
 | Item GUI/held/ground/frame/equipment geometry, special rendering and model selection | Baked-model preparation and existing DrawContext submission; refuse capabilities requiring unapproved renderer interfaces. |
 | Item equipment textures/models, fonts and presentation overrides | Typed resource references resolved at reload; refuse UnsupportedClientExtensionCapability until each consumer and public counterpart are audited. |
 | Block hit/break particles and particle sprites | Existing block particle/Part paths; preserve vanilla fallback and existing particle ownership. |
 | Block model data, terrain geometry, tint and special block-entity drawing | Baked models, section meshing and R2 respectively; reference their registrations rather than wrapping them with a duplicate event. |
-| Fluid still/flow/overlay textures, tint, light and world appearance | Existing fluid appearance plus terrain fluid consumer; resolve resources before frozen worker input. Fluid world behaviour remains #793. |
+| Fluid still/flow/overlay textures, tint, light and world appearance | Existing fluid appearance plus terrain fluid consumer; resolve resources before frozen worker input. Fluid world behaviour remains arismoko/horizon#793. |
 | Fluid camera overlay, fog and other view effects | Existing view-effect extraction/draw owners; refuse until their typed consumer contract is approved. |
 | Effect inventory/HUD visibility, icon and custom drawing | Separate effect-keyed presentation capability; ordinary HUD and inventory consumers must both be audited before support. Never key by EntityKey. |
-| Entity renderer factory, layers, extraction, model/texture and visibility | Existing entity rendering, #896/#897 and general entity design; no entity builder masquerading as the effect counterpart. Unsupported general renderer requests explicitly refuse. |
+| Entity renderer factory, layers, extraction, model/texture and visibility | Existing entity rendering, arismoko/horizon#896/#897 and general entity design; no entity builder masquerading as the effect counterpart. Unsupported general renderer requests explicitly refuse. |
 
 ## Current route census
 
@@ -59,7 +59,7 @@ owners, not proof that proposed dispatch already exists.
 | Item declaration and humanoid pose | `crates/horizon-mod-vocab/src/content/content_declarations.rs:228`; `crates/horizon-mod-vocab/src/hooks/get_arm_pose.rs:23` | Reuse one resolved pose path for player and humanoid consumers. |
 | Block particle sprite and destroy particles | `crates/horizon-client/src/game/blocks/block_particles.rs:47`, `:83` | Resolve block extension through the existing particle owner; hit route still needs caller audit. |
 | Fluid box drawing and appearance lookup | `crates/horizon-client/src/game/modding/native_fluid_render.rs:15`, `:40` | Reuse appearance; this box route alone does not establish terrain/camera coverage. |
-| Mob/player geometry and layers | `crates/horizon-client/src/game/modding/native_mob_draw.rs:57`, `:74`, `:97`, `:119` | Preserve existing entity submission; non-mob families require #896/#897 audit. |
+| Mob/player geometry and layers | `crates/horizon-client/src/game/modding/native_mob_draw.rs:57`, `:74`, `:97`, `:119` | Preserve existing entity submission; non-mob families require arismoko/horizon#896/#897 audit. |
 | Terrain workers, reload, cancellation and upload | Section meshing's verified route table | Same frozen plan, leases and stale-result checks; no live registrar callbacks on workers. |
 | Item baking and GUI/hand/ground/frame/equipment submission | Baked-model design's route table | Complete its explicitly outstanding caller audit before claiming coverage. |
 | Effect inventory/HUD; fluid camera and fog | Concrete complete owners not verified | Registration refuses these capabilities pending owner/caller audit; do not claim coverage. |

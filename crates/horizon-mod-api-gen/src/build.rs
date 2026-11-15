@@ -64,7 +64,7 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
             }),
             ("game_host_modules.rs", game_host_modules(root)?),
             ("mod_api_fire_generated.rs", generated.fire),
-            // The mob tick's goal read view (#1077), included beside the
+            // The mob tick's goal read view (arismoko/horizon#1077), included beside the
             // engine's `GoalCx` in `mobs/part_goals.rs`.
             ("mod_api_goal_view_generated.rs", generated.goal_view),
         ],

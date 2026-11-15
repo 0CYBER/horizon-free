@@ -41,7 +41,7 @@ DecoratedPotBlock.useWithoutItem	port	crates/horizon-client/src/game/blocks/deco
 DecoratedPotBlock.createBlockStateDefinition	skip:data		facing, waterlogged and cracked properties come from the block state tables
 DecoratedPotBlock.getFluidState	skip:data		waterlogged water source comes from the per-state fluid facts table (Level::fluid)
 DecoratedPotBlock.onProjectileHit	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::projectile_breaks_block	the pot is cracked first, then shattered
-DecoratedPotBlock.getCloneItemStack	port	crates/horizon-client/src/game/blocks/block_items.rs::Game::picked_stack	ticked in #3516; `DecoratedPotBlock.getCloneItemStack` is cited at crates/horizon-client/src/game/blocks/block_items.rs:135 (in a comment, so `where` names the enclosing fn)
+DecoratedPotBlock.getCloneItemStack	port	crates/horizon-client/src/game/blocks/block_items.rs::Game::picked_stack	ticked in arismoko/horizon#3516; `DecoratedPotBlock.getCloneItemStack` is cited at crates/horizon-client/src/game/blocks/block_items.rs:135 (in a comment, so `where` names the enclosing fn)
 DecoratedPotBlock.rotate	skip:data		rotation results come from the exported BlockState rotate table (worldgen/structure.rs)
 DetectorRailBlock.entityInside	port	crates/horizon-world/src/level/hooks.rs::Sim::entity_inside	when not powered, checks for minecarts inside the search box
 DetectorRailBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	when powered, rechecks the minecart presence

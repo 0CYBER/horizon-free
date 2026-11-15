@@ -1,4 +1,4 @@
-//! Passages within one level (#3775): an opening a mod's server side registers with
+//! Passages within one level (arismoko/horizon#3775): an opening a mod's server side registers with
 //! `LevelRef::register_passage`, which the engine tells the clients that hold its chunk
 //! (docs/modding/src/how-to/passages.md).
 use crate::{DimensionKey, Vec3};

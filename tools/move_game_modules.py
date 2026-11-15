@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot #1455 move. Run --move on the old layout; --verify BASE proves the move."""
+"""One-shot arismoko/horizon#1455 move. Run --move on the old layout; --verify BASE proves the move."""
 import argparse
 from collections import Counter
 import os

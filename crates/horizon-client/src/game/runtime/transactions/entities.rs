@@ -1,4 +1,4 @@
-//! Entities a transaction adds and removes (#796). An abort takes out every entity that joined
+//! Entities a transaction adds and removes (arismoko/horizon#796). An abort takes out every entity that joined
 //! since the transaction opened, with its attachment map, residency and saved memory, and tells
 //! no one. A removal inside one only marks the entity, whose handle reads stale at once; the root
 //! commit removes it as a removal outside one does, and an abort unmarks it. While one is open in

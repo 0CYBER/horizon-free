@@ -57,7 +57,7 @@ impl Game<'_> {
                 self.predict_blocks(&changes, seq);
             }
             // `BucketItem.emptyContents` / evaporate: `playSound(player, …)` on
-            // this client; the server leaves the actor out (#4684).
+            // this client; the server leaves the actor out (arismoko/horizon#4684).
             for (pos, sound, volume, pitch) in sounds {
                 let at = [
                     f64::from(pos.x) + 0.5,

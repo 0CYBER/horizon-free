@@ -158,7 +158,7 @@ fn a_special_type_draws_by_its_renderer_or_fails_by_name() {
 
 /// A node type no mod registered is an error naming it, so the item definition holding it isn't
 /// loaded and the item draws the missing model, whatever keys the node has. NeoForge's own
-/// types are no exception, except `neoforge:fluid_container`, which the engine decodes (#2606).
+/// types are no exception, except `neoforge:fluid_container`, which the engine decodes (arismoko/horizon#2606).
 #[test]
 fn an_unregistered_node_type_fails_by_name() {
     for json in [

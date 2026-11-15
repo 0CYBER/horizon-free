@@ -46,7 +46,7 @@ pub(super) struct GuestPlay {
     /// The block that clock is for (ServerPlayerGameMode.destroyPos). A START is the only writer
     /// that names one (death, a new ServerPlayerGameMode, clears it), so an abort, or a STOP that
     /// arrives out of reach, leaves it: the STOP of a dig resumed on the same block is still
-    /// measured from the first START's ticks (#4124).
+    /// measured from the first START's ticks (arismoko/horizon#4124).
     destroy_pos: Option<[i32; 3]>,
     /// A block the client stopped digging before the server's time was up: it breaks once
     /// its progress since `dig_start` is complete (ServerPlayerGameMode.hasDelayedDestroy).
@@ -262,14 +262,14 @@ impl GuestPlay {
     }
     /// The `ServerPlayerGameMode.destroyProgressStart` a STOP on `pos` is measured from: the clock
     /// belongs to the block the START named (`destroyPos`), and only a START writes either, so a
-    /// dig resumed after a fall still runs on the first START's ticks (#4124).
+    /// dig resumed after a fall still runs on the first START's ticks (arismoko/horizon#4124).
     fn dig_start_for(&self, pos: [i32; 3]) -> Option<u64> {
         (self.destroy_pos == Some(pos)).then_some(self.dig_start)
     }
     /// A dig that ends without a break, an abort or a STOP from out of reach: the guest holds
     /// attack no more (`digging` is `as_guest`'s left button and `tick_mining`'s `forced_hit`),
     /// while the clock `destroy_pos` names stays for the STOP that comes when the guest is back
-    /// in reach (#4124).
+    /// in reach (arismoko/horizon#4124).
     fn dig_ended(&mut self) {
         self.digging = None;
         self.mining = None;
@@ -441,7 +441,7 @@ enum StopDig {
 
 /// The STOP branch's decision: a STOP is measured from the START that named its block
 /// (`destroyPos`, which an abort or a STOP from out of reach leaves alone), whose ticks times
-/// `getDestroyProgress` decide between the break and the delayed dig (#4124).
+/// `getDestroyProgress` decide between the break and the delayed dig (arismoko/horizon#4124).
 fn stop_dig(play: &GuestPlay, pos: [i32; 3], air: bool, ticks: u64, per_tick: f32) -> StopDig {
     match play.dig_start_for(pos) {
         None => StopDig::Other,
@@ -1960,7 +1960,7 @@ mod tests {
         assert_eq!(copied_respawn_point(true, Some([0.5, 64.0, 0.5])), None);
     }
 
-    /// #4124: a STOP is measured from the START that named its block (`destroyPos`) — an abort, or
+    /// arismoko/horizon#4124: a STOP is measured from the START that named its block (`destroyPos`) — an abort, or
     /// a STOP from out of reach, ends the dig the guest's button held but leaves that clock — and
     /// breaks the block at 70 % of the dig, or the server finishes it alone from the same START.
     /// A guest that reaches a block only at a jump's apex keeps its dig this way, and no other
@@ -2002,7 +2002,7 @@ mod tests {
         assert_eq!(stop_dig(&play, pos, false, 1015, 0.05), StopDig::Other);
     }
 
-    /// #3684: a player shrunk to `minecraft:scale` 0.1 who stands 0.05 from a
+    /// arismoko/horizon#3684: a player shrunk to `minecraft:scale` 0.1 who stands 0.05 from a
     /// wall has eyes 0.048 wide, which don't reach into it: they don't
     /// suffocate there, as a full-sized player 0.3 from the wall doesn't.
     #[test]

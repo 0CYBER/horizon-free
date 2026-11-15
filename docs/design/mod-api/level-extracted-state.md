@@ -1,6 +1,6 @@
 # Design: level extracted state
 
-Provisional answer to [#866](https://github.com/arismoko/horizon/issues/866):
+Provisional answer to [arismoko/horizon#866](https://github.com/arismoko/horizon/issues/866):
 use a typed, frame-owned extension store, freeze it after base extraction and
 `extract_level_render_state`, and lend immutable values to drawing through a
 snapshot-only `DrawContext`. This is a design proposal, not an implemented API

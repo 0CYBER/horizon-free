@@ -1,4 +1,4 @@
-//! `host.transaction` (#41 §7): NeoForge 26.3's `Transaction` and `SnapshotJournal`, kept by
+//! `host.transaction` (arismoko/horizon#41 §7): NeoForge 26.3's `Transaction` and `SnapshotJournal`, kept by
 //! the game at the storage level, so a mod's handlers hold no state and write no journal.
 //!
 //! A capability write applies in place and keeps its storage's first before-image per depth.
@@ -119,7 +119,7 @@ pub(super) struct Level {
     /// Each entity's inventory (`entity_slots`) before this transaction first wrote it.
     entities: HashMap<u32, Vec<Option<ItemStack>>>,
     /// Each mob's or armor stand's equipment before this transaction first
-    /// wrote it (#932), told apart for the way back.
+    /// wrote it (arismoko/horizon#932), told apart for the way back.
     equipment: HashMap<u32, KeptEquipment>,
     /// Each chested mob's item list's length before `entity_slots` first grew it to its slots
     /// in this transaction.
@@ -230,7 +230,7 @@ struct KeptPlayer {
 }
 
 /// A mob's or an armor stand's equipment as a transaction first wrote it
-/// (#932): the same eight slots, restored their own way.
+/// (arismoko/horizon#932): the same eight slots, restored their own way.
 #[derive(Clone)]
 enum KeptEquipment {
     Mob(Vec<Option<ItemStack>>),
@@ -285,7 +285,7 @@ pub(super) enum After {
     Emptied(u32),
     /// `LivingEntity.onEquipItem`'s sound and equip/unequip game event, at the entity `who`
     /// is: what an equipment write through a transaction tells the world only at the root
-    /// commit, so an abort stays quiet (#932).
+    /// commit, so an abort stays quiet (arismoko/horizon#932).
     Equip {
         at: [f64; 3],
         sound: Option<String>,
@@ -867,7 +867,7 @@ impl Game<'_> {
             level.entities.entry(id).or_insert(slots);
         }
     }
-    /// Keeps mob `id`'s equipment as it is, if a transaction is open and hasn't yet (#932):
+    /// Keeps mob `id`'s equipment as it is, if a transaction is open and hasn't yet (arismoko/horizon#932):
     /// an abort puts every slot back and makes the attribute map over again.
     pub(super) fn journal_equipment(&mut self, id: u32) {
         let Some(level) = self.transactions.last_mut() else {
@@ -1087,7 +1087,7 @@ impl Game<'_> {
         // Discard deferred effects before undoing tentative action storage.
         level.after.clear();
         // Each mob's equipment goes back as it was, and the attribute map is
-        // made over it again (#932).
+        // made over it again (arismoko/horizon#932).
         let equipment = std::mem::take(&mut level.equipment);
         for (id, kept) in equipment {
             match kept {
@@ -2016,7 +2016,7 @@ mod tests {
         assert!(game.transactions.is_empty());
 
         // A transaction decoded from bytes, which the game never handed out, names no open
-        // transaction (#2424): a write given it changes nothing, and a close given it ends
+        // transaction (arismoko/horizon#2424): a write given it changes nothing, and a close given it ends
         // nothing, so the game's own transaction still puts back everything at its abort.
         let forged: mod_api::Transaction =
             mod_api::wire::Reader::decode(&0u64.to_le_bytes()).unwrap();

@@ -727,7 +727,7 @@ pub(super) struct Remote {
     destroying_item: Option<ItemStack>,
     /// `MultiPlayerGameMode.isDestroying`: a break is running. `destroying` keeps the target after
     /// one ends (`destroyBlockPos` is written only when a break starts), so a dig resumed on the
-    /// same block and item sends no new START and the server keeps its clock (#4124).
+    /// same block and item sends no new START and the server keeps its clock (arismoko/horizon#4124).
     is_destroying: bool,
     /// Per-hand swing policy, restored when the current input attempt ends.
     pub(in crate::game) interaction_swing: [bool; 2],
@@ -1566,7 +1566,7 @@ impl Game<'_> {
         self.close_dialogs();
         // Gui.setScreen -> KeyMapping.releaseAll: the title or disconnect
         // screen releases every held key. Its release goes to that screen,
-        // so a key kept here would still be down in the next world (#3246).
+        // so a key kept here would still be down in the next world (arismoko/horizon#3246).
         self.keys.clear();
         self.left = false;
         self.right = false;
@@ -2792,7 +2792,7 @@ impl Game<'_> {
         }
         if let Some(t) = mob_type {
             // The window's copy of the server's mob: no mod part goals —
-            // their `register_goals` ran on the authoritative side (#1077).
+            // their `register_goals` ran on the authoritative side (arismoko/horizon#1077).
             let mut mob = Mob::new_remote(id as u32, t, at, head);
             super::remote_mob_data::client_defaults(&mut mob);
             (mob.yaw, mob.previous_yaw) = (yaw, yaw);
@@ -2835,7 +2835,7 @@ impl Game<'_> {
         // The dragon is drawn from its own state (game/mobs/dragon.rs), which
         // tick_remote_dragon eases to the server's moves through `lerps`. Its
         // copy in the mob list draws nothing: given the move, it kept the
-        // dragon where it spawned (#2083).
+        // dragon where it spawned (arismoko/horizon#2083).
         let dragon = self.dragon.as_ref().is_some_and(|d| d.id as i32 == id);
         let driven = self.driven_mount().is_some_and(|m| m.id as i32 == id);
         let mob = self
@@ -3919,7 +3919,7 @@ impl Game<'_> {
                             // it: the speed modifier and wasSprinting stay).
                             // Its invisible bit (Entity.isInvisible): the
                             // Invisibility effect's, or a plugin's that hides
-                            // the real body under a pose (#3788).
+                            // the real body under a pose (arismoko/horizon#3788).
                             (0, Value::Byte(flags)) => {
                                 if let Some(pl) = self.player.as_mut() {
                                     pl.sprinting = flags & 0x08 != 0;
@@ -4195,7 +4195,7 @@ impl Game<'_> {
             // the damage type's effects) at `getSoundVolume` and
             // `Player.getVoicePitch`, which is 1.0 for every player. The
             // server's sound packet reaches every other player around, never
-            // this one (#4149), and that copy is played at 1.0.
+            // this one (arismoko/horizon#4149), and that copy is played at 1.0.
             // This player's own hurt tilt and flash come from the server too
             // (sent to the player itself): its own moves never hurt it.
             C::DamageEvent(p) => {
@@ -6788,7 +6788,7 @@ impl Game<'_> {
         }
         // EntityFluidInteraction.update for the entities this window only displays: the
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
-        // tropical fish lie on their side without `in_water`, #1591).
+        // tropical fish lie on their side without `in_water`, arismoko/horizon#1591).
         // A frozen level ticks only the players, as below.
         // Entity.isInRain for the wolves, which dry off by their own `Wolf.tick`.
         let (mut fluids, mut rain, mut standings, mut water_fx) = {
@@ -7669,7 +7669,7 @@ impl Game<'_> {
     /// `MultiPlayerGameMode.stopDestroyBlock`: aborts the break and starts the attack strength
     /// again, if one is running (`if (!isDestroying) return;`), and says whether it did. Only the
     /// progress goes: `destroyBlockPos` and `destroyingItem` keep the target, so a dig resumed on
-    /// the same block sends no START and the server's clock runs on (#4124).
+    /// the same block sends no START and the server's clock runs on (arismoko/horizon#4124).
     pub(super) fn stop_remote_mining(&mut self) -> bool {
         let kept = self.remote.as_mut().and_then(|r| {
             if !std::mem::take(&mut r.is_destroying) {
@@ -7758,14 +7758,14 @@ impl Game<'_> {
         // startDestroyBlock leaves only a break that is still running alone (`isDestroying &&
         // sameDestroyTarget`); a click on the block a stopped break still names starts it again,
         // so the server re-anchors its clock. A held button carries the same target on, and that
-        // one keeps the clock (#4124).
+        // one keeps the clock (arismoko/horizon#4124).
         let running = self.remote.as_ref().is_some_and(|r| r.is_destroying);
         if start && same && running {
             return true;
         }
         // The server's own getDestroyProgress: under water, off the ground,
         // with haste, fatigue and efficiency, so the client stops digging
-        // when the server is done too (#1254).
+        // when the server is done too (arismoko/horizon#1254).
         let progress = self.destroy_progress(hit.pos);
         if !same || start {
             let proposed = if progress >= 1.0 { 1.0 } else { 0.0 };
@@ -9085,7 +9085,7 @@ impl Game<'_> {
             // CreativeModeInventoryScreen.slotClicked: the Survival Inventory tab clicks the
             // player's own InventoryMenu, and its CreativeInventoryListener sends each slot that
             // changed (SetCreativeModeSlot). No ContainerClick: a server holding the carried
-            // stack would give it back after the Destroy Item slot cleared it (#3307).
+            // stack would give it back after the Destroy Item slot cleared it (arismoko/horizon#3307).
             self.click_open_inventory(Some(internal), i32::from(right), input);
             return;
         }
@@ -14718,7 +14718,7 @@ pub(crate) mod tests {
 
     /// `handleMovePlayer` moves the player's pitch and the model's old pitch
     /// (`xRotO`) alike: a relative change keeps the ease a tick began, each
-    /// end clamped on its own, and an absolute one snaps both (#3844).
+    /// end clamped on its own, and an absolute one snaps both (arismoko/horizon#3844).
     #[test]
     fn a_position_packet_moves_both_pitch_ends() {
         use super::position_packet_pitch as pitch;
@@ -14742,7 +14742,7 @@ pub(crate) mod tests {
 
     /// The hurt sound of `ClientboundDamageEventPacket` follows its damage
     /// type (`Player.getHurtSound`: the type's effects), with the codec's
-    /// `hurt` default for an unknown type (#4149).
+    /// `hurt` default for an unknown type (arismoko/horizon#4149).
     #[test]
     fn the_hurt_sound_follows_the_damage_events_type() {
         use super::hurt_sound_for;
@@ -14968,7 +14968,7 @@ pub(crate) mod tests {
         assert!(super::entity_sound_state(7, None, None, &tracked, Some((7, [99.0; 3]))).is_none());
     }
 
-    /// Q over a slot of the inventory on a server (#3357): the predicted THROW
+    /// Q over a slot of the inventory on a server (arismoko/horizon#3357): the predicted THROW
     /// drops the stack, so the player's hand swings, as `LivingEntity.drop`
     /// does for `Prediction.PREDICTED`; a plain pick up drops nothing.
     #[test]
@@ -15273,7 +15273,7 @@ pub(crate) mod tests {
     }
 
     /// `FireworkRocketItem.use` is SUCCESS while gliding: the main hand's
-    /// rocket ends the click and the off hand's shield is not raised (#3424).
+    /// rocket ends the click and the off hand's shield is not raised (arismoko/horizon#3424).
     /// On foot it passes, so the off hand still gets its turn.
     #[test]
     fn a_rocket_used_while_gliding_ends_the_click() {

@@ -60,9 +60,9 @@ impl Game<'_> {
     /// `Entity.isPermanentlyInvulnerable`: the `Invulnerable` flag, which
     /// only damage that bypasses invulnerability (the void, `/kill`) or a
     /// creative player gets past. Mobs keep it on themselves (saved with
-    /// them), players on their body (#916, not saved: Horizon's player save
+    /// them), players on their body (arismoko/horizon#916, not saved: Horizon's player save
     /// keeps no such field yet), the other kinds in the saved `Invulnerable`
-    /// tag of their entity data (#916) — the tag the item damage path
+    /// tag of their entity data (arismoko/horizon#916) — the tag the item damage path
     /// already refuses by.
     pub(super) fn entity_permanently_invulnerable(&self, entity: EntityRef) -> Option<bool> {
         match self.native_entity_target(entity)? {
@@ -101,7 +101,7 @@ impl Game<'_> {
         }
     }
 
-    /// The saved `Invulnerable` tag of a non-mob entity's data (#916):
+    /// The saved `Invulnerable` tag of a non-mob entity's data (arismoko/horizon#916):
     /// `false` where its entity data has none. None for a kind that keeps
     /// none (a frame, a painting, a fang).
     fn saved_invulnerable_flag(&self, t: Target) -> Option<bool> {
@@ -112,7 +112,7 @@ impl Game<'_> {
         Some(self.saved_invulnerability(id).0)
     }
     /// Writes the `Invulnerable` tag into a non-mob entity's saved data
-    /// (#916), the compound its own save builds on.
+    /// (arismoko/horizon#916), the compound its own save builds on.
     fn set_saved_invulnerable_flag(&mut self, t: Target, invulnerable: bool) -> bool {
         use horizon_core::nbt::Tag;
         let id = match t {
@@ -128,7 +128,7 @@ impl Game<'_> {
         true
     }
 
-    /// `Entity.invulnerableTime` (#916): the entity-level invulnerability
+    /// `Entity.invulnerableTime` (arismoko/horizon#916): the entity-level invulnerability
     /// window, its own field on a mob and a player — never the living damage
     /// cooldown — and the saved `invulnerable_time` tag for the other kinds.
     /// Counted down by the base tick; `isTemporarilyInvulnerable` is it above
@@ -142,7 +142,7 @@ impl Game<'_> {
             t => self.saved_invulnerable_time(t),
         }
     }
-    /// `Entity.setInvulnerableTime` (#916): the write side of
+    /// `Entity.setInvulnerableTime` (arismoko/horizon#916): the write side of
     /// [`native_entity_invulnerable_time`](Self::native_entity_invulnerable_time).
     /// False where the entity is gone or keeps no such field.
     pub(super) fn entity_set_invulnerable_time(&mut self, entity: EntityRef, ticks: i32) -> bool {
@@ -166,7 +166,7 @@ impl Game<'_> {
         }
     }
 
-    /// A non-mob kind's saved invulnerability (#916), the one parse of its
+    /// A non-mob kind's saved invulnerability (arismoko/horizon#916), the one parse of its
     /// entity data: the `Invulnerable` flag and the `invulnerable_time`
     /// window. `(false, 0)` where its data has neither.
     fn saved_invulnerability(&self, id: u32) -> (bool, i32) {
@@ -182,7 +182,7 @@ impl Game<'_> {
             _ => (false, 0),
         }
     }
-    /// The saved `invulnerable_time` tag of a non-mob entity's data (#916):
+    /// The saved `invulnerable_time` tag of a non-mob entity's data (arismoko/horizon#916):
     /// 0 where its entity data has none. None for a kind that keeps none.
     fn saved_invulnerable_time(&self, t: Target) -> Option<i32> {
         let id = match t {
@@ -192,7 +192,7 @@ impl Game<'_> {
         Some(self.saved_invulnerability(id).1)
     }
     /// `Entity.isInvulnerableToBase` over a non-mob kind's saved flag and
-    /// window (#916) — the one place that refusal is decided: past only for
+    /// window (arismoko/horizon#916) — the one place that refusal is decided: past only for
     /// `#bypasses_invulnerability` damage and a creative player's hit
     /// (`isCreativePlayer`). False where the saved state has neither.
     pub(in crate::game) fn saved_refuses_damage(
@@ -211,7 +211,7 @@ impl Game<'_> {
             .is_some_and(|kind| registry.in_tag(kind, "minecraft:bypasses_invulnerability"));
         !(bypass || creative_source)
     }
-    /// `DamageSource.isCreativePlayer` (#916): the causing player's creative
+    /// `DamageSource.isCreativePlayer` (arismoko/horizon#916): the causing player's creative
     /// mode, the host's own or a guest's; false for anything else. The one
     /// decision every invulnerability gate shares with `/damage`'s and the
     /// dragon's.
@@ -223,7 +223,7 @@ impl Game<'_> {
         }
     }
     /// Writes the `invulnerable_time` tag into a non-mob entity's saved data
-    /// (#916).
+    /// (arismoko/horizon#916).
     fn set_saved_invulnerable_time(&mut self, t: Target, ticks: i32) -> bool {
         use horizon_core::nbt::Tag;
         let id = match t {
@@ -239,7 +239,7 @@ impl Game<'_> {
         true
     }
     /// `Entity.baseTick`'s countdown of a non-mob kind's saved
-    /// `invulnerable_time` (#916): one less each tick while it runs, so the
+    /// `invulnerable_time` (arismoko/horizon#916): one less each tick while it runs, so the
     /// window an entity carries in its saved data closes like a mob's and a
     /// player's do.
     pub(in crate::game) fn tick_saved_invulnerable_time(&mut self, id: u32) {
@@ -284,7 +284,7 @@ impl Game<'_> {
         Some(self.hurt_target(target, amount, damage_type, direct, causing, from))
     }
 
-    /// `Entity.isInvulnerableTo` for a source of `damage_type`: #842's own
+    /// `Entity.isInvulnerableTo` for a source of `damage_type`: arismoko/horizon#842's own
     /// decision, the guard every mob damage hook runs after — dead or
     /// removed, fire immunity, or the `Invulnerable` flag nothing but
     /// `#bypasses_invulnerability` gets past. None for a stale handle or a
@@ -370,7 +370,7 @@ impl Game<'_> {
     /// `Entity.isInvulnerableToPiercingWeapon` (`isInvulnerable`): the
     /// `Entity.isInvulnerable()`: the `Invulnerable` flag or the window
     /// `Entity.invulnerableTime` keeps open — a mob's own fields, a player's
-    /// health, the saved tags for the other kinds (#916). None for a stale
+    /// health, the saved tags for the other kinds (arismoko/horizon#916). None for a stale
     /// handle.
     pub(super) fn entity_invulnerable_to_piercing_weapon(&self, entity: EntityRef) -> Option<bool> {
         match self.native_entity_target(entity)? {
@@ -664,7 +664,7 @@ mod tests {
         });
     }
 
-    /// #916: the permanent flag reaches players and non-mob kinds, and a
+    /// arismoko/horizon#916: the permanent flag reaches players and non-mob kinds, and a
     /// player's damage is really refused by it.
     #[test]
     #[ignore = "daily"]
@@ -737,7 +737,7 @@ mod tests {
         }
     }
 
-    /// #916: `Entity.invulnerableTime` is its own field — never the living
+    /// arismoko/horizon#916: `Entity.invulnerableTime` is its own field — never the living
     /// damage cooldown — on a mob and a player alike, and both survive a
     /// save and load.
     #[test]
@@ -745,7 +745,7 @@ mod tests {
     fn the_entity_timer_never_shares_the_living_cooldown() {
         use horizon_client::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_game(|game| {
-            // The #170 recipe: two zombies on a lit stone floor, kept from
+            // The arismoko/horizon#170 recipe: two zombies on a lit stone floor, kept from
             // despawning while their tick runs.
             let zombie = game
                 .res
@@ -805,7 +805,7 @@ mod tests {
         });
     }
 
-    /// #916, review: the window really refuses. A mod sets the timer and the
+    /// arismoko/horizon#916, review: the window really refuses. A mod sets the timer and the
     /// entity no longer takes damage — nothing but what bypasses
     /// invulnerability — and enemies no longer see it as a target, until the
     /// window closes.
@@ -815,7 +815,7 @@ mod tests {
         use horizon_client::mobs::{Damage, DamageKind, Mob};
         use horizon_core::geometry::Vec3;
         super::super::native_entity_refs::tests::with_game(|game| {
-            // The #170 recipe: two zombies on a lit stone floor, kept from
+            // The arismoko/horizon#170 recipe: two zombies on a lit stone floor, kept from
             // despawning while their tick runs.
             let zombie = game
                 .res
@@ -870,7 +870,7 @@ mod tests {
         });
     }
 
-    /// #916, review round 2: `Entity.setInvulnerable` on a player is the
+    /// arismoko/horizon#916, review round 2: `Entity.setInvulnerable` on a player is the
     /// permanent flag, apart from `Abilities.invulnerable` — the abilities
     /// stay untouched, a survival hit is refused and a creative player's
     /// passes the flag (`isInvulnerableToBase`'s one exception), while the
@@ -940,7 +940,7 @@ mod tests {
         });
     }
 
-    /// #916, review: a non-mob's saved window counts down each tick, and the
+    /// arismoko/horizon#916, review: a non-mob's saved window counts down each tick, and the
     /// item damage path refuses by it.
     #[test]
     #[ignore = "daily"]
@@ -964,7 +964,7 @@ mod tests {
         });
     }
 
-    /// #916, coderabbit: an item outside the entity-ticking chunks does not
+    /// arismoko/horizon#916, coderabbit: an item outside the entity-ticking chunks does not
     /// tick, so its saved window does not count down in that pass — while
     /// one the pass reaches does.
     #[test]
@@ -999,7 +999,7 @@ mod tests {
         });
     }
 
-    /// #916, review round 2: the piercing query is `Entity.isInvulnerable()`
+    /// arismoko/horizon#916, review round 2: the piercing query is `Entity.isInvulnerable()`
     /// — the flag or the open window — for every kind that keeps either.
     #[test]
     #[ignore = "daily"]
@@ -1029,7 +1029,7 @@ mod tests {
         });
     }
 
-    /// #916, review round 2: a player the flag or the window covers is no
+    /// arismoko/horizon#916, review round 2: a player the flag or the window covers is no
     /// mob's target — the write handle's facts, the goal view, and
     /// `asValidTarget` behind both.
     #[test]
@@ -1071,7 +1071,7 @@ mod tests {
         });
     }
 
-    /// #916, review round 2: a stand the flag or the window covers refuses a
+    /// arismoko/horizon#916, review round 2: a stand the flag or the window covers refuses a
     /// survival punch — no wobble, no break — while a creative player's hit
     /// passes both, as `DamageSource.isCreativePlayer` does.
     #[test]
@@ -1098,7 +1098,7 @@ mod tests {
         });
     }
 
-    /// #916, review round 2: the player's flag and window ride the save —
+    /// arismoko/horizon#916, review round 2: the player's flag and window ride the save —
     /// `sync_level` writes them, `load_saved_state_once` reads them back.
     #[test]
     #[ignore = "daily"]
@@ -1140,7 +1140,7 @@ mod tests {
         });
     }
 
-    /// #916, review round 2: the dragon's saved flag refuses `/damage`
+    /// arismoko/horizon#916, review round 2: the dragon's saved flag refuses `/damage`
     /// except from a creative player — the one refusal every saved kind
     /// shares (`saved_refuses_damage`).
     #[test]

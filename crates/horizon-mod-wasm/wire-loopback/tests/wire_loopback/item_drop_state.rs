@@ -1,4 +1,4 @@
-//! `ItemDrop`'s item-entity state crosses the `living_drops` boundary both ways (#3423): the guest
+//! `ItemDrop`'s item-entity state crosses the `living_drops` boundary both ways (arismoko/horizon#3423): the guest
 //! reads the full-width values the host sent, and the values it writes come back.
 use super::*;
 

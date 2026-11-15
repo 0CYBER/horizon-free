@@ -23,7 +23,7 @@ pub trait LivingAirWorld {
     fn suppressing_ladder_slide(&mut self) -> Result<bool, Self::Error>;
     fn is_player_class(&self) -> bool;
     /// Bind to Entity.move(SELF, movement), including collision and landing.
-    /// The `gate` is the invocation's move gate (#2414): the caller received
+    /// The `gate` is the invocation's move gate (arismoko/horizon#2414): the caller received
     /// it armed with the decision, and the mover applies what it decided.
     fn move_self(&mut self, gate: &mut MoveGate, movement: Vec3) -> Result<(), Self::Error>;
     fn horizontal_collision(&self) -> bool;

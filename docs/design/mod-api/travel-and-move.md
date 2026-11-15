@@ -1,6 +1,6 @@
 # Design: travel and move hooks
 
-Proposal for [#1009](https://github.com/arismoko/horizon/issues/1009), not an implemented API.
+Proposal for [arismoko/horizon#1009](https://github.com/arismoko/horizon/issues/1009), not an implemented API.
 This is a clean-room Horizon design from vanilla 26.3 and the requested use cases.
 There is no NeoForge counterpart. No other project's source informs this proposal.
 Code follows agreement on this note.
@@ -11,7 +11,7 @@ Declare exactly two catalog moments: `living_travel` and `entity_move`. Travel
 uses `HostSide` with typed `ServerHost` or `ClientHost` access, never an
 unchecked side flag granting server writes. Entity reads and authoritative
 writes belong on typed entity/player handles; do not add entity-id movement
-methods to Host. `entity_move` is ruled otherwise (#2414 maintainer ruling): a
+methods to Host. `entity_move` is ruled otherwise (arismoko/horizon#2414 maintainer ruling): a
 loop-context hook **without a host**, like `ender_entity_teleport` — there is
 nothing at that point in the reference for the hook to mirror, so the listener
 only decides the delta: continue, cancel or replace.
@@ -93,7 +93,7 @@ immutable decision, the game dispatches with Host, and apply revalidates entity
 existence, level epoch, position, velocity, attributes and collision/environment
 revision in the same transaction as listener writes. A changed precondition
 refuses the decision and rolls back that transaction; never recompute against
-changed state mid-callback. `entity_move`, ruled hostless (#2414), reduces to
+changed state mid-callback. `entity_move`, ruled hostless (arismoko/horizon#2414), reduces to
 result validation: the armed gate holds the requested delta, a listener result
 that passes the budget replaces it, malformed output falls back to it, and
 cancellation skips the invocation. A panic keeps the requested delta while its

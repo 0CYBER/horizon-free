@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot #1456 move; --check BASE proves the scoped statements and residual sources."""
+"""One-shot arismoko/horizon#1456 move; --check BASE proves the scoped statements and residual sources."""
 import argparse
 from collections import defaultdict
 from pathlib import Path

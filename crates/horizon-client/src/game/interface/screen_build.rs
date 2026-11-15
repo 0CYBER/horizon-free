@@ -1,7 +1,7 @@
 //! A screen's built state (`Screen.init`): made when the screen opens, remade
 //! when the window or the GUI scale resizes it, dropped when it closes.
 //!
-//! Step 1 of #903 put the seam in: every screen built `BuildLayout::Empty`,
+//! Step 1 of arismoko/horizon#903 put the seam in: every screen built `BuildLayout::Empty`,
 //! with the window's rectangle and nothing a screen drew or hit-tested.
 //! Step 2 moves the container screens onto it (`BuildLayout::Container`): the
 //! panel, the book and effect panels beside it, the creative tab rows and

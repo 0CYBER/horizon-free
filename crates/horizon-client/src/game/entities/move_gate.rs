@@ -1,4 +1,4 @@
-//! The game layer's door of the move gate (#2414): who is moving, and the one
+//! The game layer's door of the move gate (arismoko/horizon#2414): who is moving, and the one
 //! `Game::entity_move` the pushers and family ticks arm a move through. PR 1a
 //! carries no hook — every decision is `Run` and the tick cost is one branch;
 //! PR 1b fires the `entity_move` hook inside the client `move_gate::arm` this
@@ -21,7 +21,7 @@ pub(in crate::game) enum MoveWho {
 }
 
 impl Game<'_> {
-    /// Arm one physical `Entity.move` invocation (#2414) for `who` with `cause`
+    /// Arm one physical `Entity.move` invocation (arismoko/horizon#2414) for `who` with `cause`
     /// and hand back its gate: the caller then runs the kind's physics with
     /// the movement the gate decided (`delta`), and skips it when the gate
     /// says so. A pusher arms before its own restrictions — the piston limit
@@ -33,7 +33,7 @@ impl Game<'_> {
         delta: Vec3,
     ) -> MoveGate {
         let entity = self.move_who_id(who);
-        // The type name is built only if a listener asks for it (#2414: a
+        // The type name is built only if a listener asks for it (arismoko/horizon#2414: a
         // move nobody listens to costs one branch and no string).
         horizon_client::move_gate::armed_with(
             &self.loop_context,

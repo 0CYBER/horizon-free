@@ -1,5 +1,5 @@
 //! `entity_move` crosses to the guest and back with its decision intact
-//! (#2414): the same hook the native listener sees, through the generator's
+//! (arismoko/horizon#2414): the same hook the native listener sees, through the generator's
 //! own wire proxies — no second route.
 use super::*;
 

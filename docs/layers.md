@@ -194,7 +194,7 @@ The mod interface follows that split too: `horizon-mod-vocab` is an engine crate
 procedural macros and point-shape parser are engine dependencies of that interface. Horizon's launcher
 reaches the generator and point-shape parser through `horizon-platform`'s optional `mod-build` feature.
 The initial extraction also carries dispatch's crash markers, profiling, resource codec, phase access,
-and Parts registration state; it is not yet a stateless or unsafe-free interface ([#2587](https://github.com/arismoko/horizon/issues/2587)).
+and Parts registration state; it is not yet a stateless or unsafe-free interface ([arismoko/horizon#2587](https://github.com/arismoko/horizon/issues/2587)).
 
 | I add... | Layer | Where |
 |---|---|---|

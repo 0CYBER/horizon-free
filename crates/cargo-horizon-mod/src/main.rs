@@ -291,7 +291,7 @@ fn update(dir: &Path, horizon: Option<&str>, accept: &[&str]) -> Result<(), Stri
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let horizon = pin(horizon)?;
     if !manifest.internals.is_empty() || manifest.inject.iter().any(|i| i.hash.is_none()) {
-        // #2593: these become the pinned catalogs with the mod's own modules applied.
+        // arismoko/horizon#2593: these become the pinned catalogs with the mod's own modules applied.
         let old = internals::load(dir, &native.horizon)?;
         let new = internals::load(dir, &horizon)?;
         let (reports, refused) = inject::update::pin_moves(&manifest, &old, &new, accept);

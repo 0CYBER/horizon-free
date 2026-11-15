@@ -1,8 +1,8 @@
 # Registered payloads and the typed-payload design
 
-The registered **raw** transport implements [#2882](https://github.com/arismoko/horizon/issues/2882).
+The registered **raw** transport implements [arismoko/horizon#2882](https://github.com/arismoko/horizon/issues/2882).
 Typed registration and token binding over it are [below](#typed-registration-and-tokens-813-step-4b-1);
-configuration snapshots remain work for [#813](https://github.com/arismoko/horizon/issues/813).
+configuration snapshots remain work for [arismoko/horizon#813](https://github.com/arismoko/horizon/issues/813).
 The transport contract is detailed in [Registered raw custom payload transport](../raw-custom-payload-transport.md).
 
 ## Register raw payloads once
@@ -204,7 +204,7 @@ impl Hooks for MyMod {
 
 ## Stage 2: the value codec
 
-`crates/horizon-mod-vocab/src/content/payload_codec.rs` holds the pure codec half of stage 2, exported from `mod_api`, and `#[derive(PayloadCodec)]` writes a type's codec from its fields. It is the part that touches neither registration nor delivery, so it stands apart from the raw transport of [#2882](https://github.com/arismoko/horizon/issues/2882). The typed handler adapter decodes a received body with it, and the token sends encode one.
+`crates/horizon-mod-vocab/src/content/payload_codec.rs` holds the pure codec half of stage 2, exported from `mod_api`, and `#[derive(PayloadCodec)]` writes a type's codec from its fields. It is the part that touches neither registration nor delivery, so it stands apart from the raw transport of [arismoko/horizon#2882](https://github.com/arismoko/horizon/issues/2882). The typed handler adapter decodes a received body with it, and the token sends encode one.
 
 | Item | Contract |
 | --- | --- |
@@ -221,12 +221,12 @@ impl Hooks for MyMod {
 
 A length is read as a signed VarInt and checked for sign and bound before anything is reserved or copied; strings and byte arrays are borrowed from the body. A boolean other than 0 or 1 is refused (vanilla reads any non-zero byte as true). `finite_f32` and `finite_f64` are how a schema declares a finite float. No decode path indexes, and none panics on any input.
 
-Two things this stage does not do. The bounded field kinds of [#811](https://github.com/arismoko/horizon/issues/811) (`DatapackFieldKind`) are not merged with this reader: they describe JSON entries the game decodes, are named for datapacks, and their issue is in flight; a shared name for the two belongs to whoever lands second. And the budget counts what the reader's own primitives allocate, not what a hand-written codec allocates beside them; native code has to obey the contract, as the section above says.
+Two things this stage does not do. The bounded field kinds of [arismoko/horizon#811](https://github.com/arismoko/horizon/issues/811) (`DatapackFieldKind`) are not merged with this reader: they describe JSON entries the game decodes, are named for datapacks, and their issue is in flight; a shared name for the two belongs to whoever lands second. And the budget counts what the reader's own primitives allocate, not what a hand-written codec allocates beside them; native code has to obey the contract, as the section above says.
 
 
 Strings use a 4096 UTF-8 byte default, not a character count. A schema may pass 3N bytes to `str_within` for a vanilla N-character limit. Each box, list and present option consumes one of 64 nesting levels; boxes charge their inner allocation size before decoding.
 
-## Typed registration and tokens (#813 step 4b-1)
+## Typed registration and tokens (arismoko/horizon#813 step 4b-1)
 
 A typed payload is an ordinary raw declaration whose body is exactly `encode_payload(&value)`.
 There is no second route and no envelope: the typed layer is registration, a token and two sends.
@@ -271,7 +271,7 @@ fn register(r: &mut dyn Registrar) {
 | Wasm | The same declarations, adapter and tokens: the guest decodes and runs its handler; the token crosses the Wire ABI as data and the host checks it as it does a native one |
 | Cost | Registration and reading a token as a type walk the schema. A declared payload with no traffic makes no codec call; a send or reply checks its token with two `u64` compares and one table lookup, with no schema walk and no allocation before it encodes |
 
-## Remaining typed work in #813
+## Remaining typed work in arismoko/horizon#813
 
 The earlier accepted design is amended by the raw transport's actual codec and
 framing contracts above: its generic registered-body ceilings, typed application
@@ -280,10 +280,10 @@ layer above keeps registration and helpers outside object-safe Host dispatch, de
 to the same raw transport and binds its token to the checked declaration, type,
 protocol, direction and load.
 
-Share schema/value codec primitives with #811. Wire is an ABI representation, not
+Share schema/value codec primitives with arismoko/horizon#811. Wire is an ABI representation, not
 permission to serialize Rust pointers, memory layouts, or `Any`. A typed value needs
 `PayloadCodec` only: it never crosses Wire, only its encoded body and its token do
-(the contract amendment on #813). Structured
+(the contract amendment on arismoko/horizon#813). Structured
 codecs must check signed lengths, overflow, remaining bytes, cumulative allocation,
 depth, discriminants, and registry references before allocating; require complete
 consumption. Per-schema bounds must not silently reinstate a lower generic transport
@@ -312,14 +312,14 @@ an un-negotiated one, or one in the wrong direction or protocol, is a session re
 | Recipients | Placed players whose play epoch has the channel negotiated, then the holder's trackers as before |
 | Send | Prepared against the connection's current epoch, published at root commit after the player's held packets; rollback publishes none, a stale epoch publishes nothing |
 | Format | Unchanged, byte for byte (holder, replace, changes) |
-| Size | The connection's frame limits (#3087); the former 1,048,576-byte body cap is removed |
+| Size | The connection's frame limits (arismoko/horizon#3087); the former 1,048,576-byte body cap is removed |
 | Refusals | Past the frame limits or unencodable: the typed `PayloadSendError` logged once per connection epoch, message not sent, player stays joined. `Backpressure` closes the connection, as a full queue did before |
 | Removed | The `brand == "horizon"` gate and the direct write to the connection |
 
-Attachment sync keeps its message format. #796 stage 2 (tracked Part state) adds, on
+Attachment sync keeps its message format. arismoko/horizon#796 stage 2 (tracked Part state) adds, on
 top of this route, scoped incarnation, schema and committed revision, authorised tracking
 snapshots, stale-update rejection, revision-gap handling and visibility-loss cleanup,
-with #796's world/dimension, residency join, full-before-delta ordering, bounded assembly
+with arismoko/horizon#796's world/dimension, residency join, full-before-delta ordering, bounded assembly
 and rollback proofs.
 
 Acceptance for those future layers must exercise native and wasm over the real

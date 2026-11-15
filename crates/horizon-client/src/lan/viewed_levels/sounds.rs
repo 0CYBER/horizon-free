@@ -1,4 +1,4 @@
-//! A viewed level's sounds (#3983, gap 12). Besides vanilla's broadcast in their own level, the
+//! A viewed level's sounds (arismoko/horizon#3983, gap 12). Besides vanilla's broadcast in their own level, the
 //! sounds at a position go wrapped to the players whose clients view that level and hold its
 //! chunk, within the broadcast distance plus 16 blocks of the view's centre chunk. The client
 //! asks its mods where in its own level to play

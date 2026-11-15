@@ -1,6 +1,6 @@
 # Read-only equipment predicates inside menu loops
 
-Implemented boundary for #2669 and #3549. The historical conversion analysis below
+Implemented boundary for arismoko/horizon#2669 and arismoko/horizon#3549. The historical conversion analysis below
 explains why the engine stack and API stack remain distinct owned types.
 
 ## Can we just borrow the existing stack?
@@ -70,7 +70,7 @@ applied under one immutable borrow, through a Host adapter that offers observati
 (no commands, storage writes, scheduling or random draws), so nothing can change in
 between and a revision token would compare a value with itself. The recheck stays required
 wherever deciding and applying are separated in time or state: (1) the prepared wasm
-crossing (#3549), where a payload prepared once is reused across candidates: a stack
+crossing (arismoko/horizon#3549), where a payload prepared once is reused across candidates: a stack
 mutation invalidates it and a stale preparation refuses; (2) any path that keeps an answer
 beyond the call (a cache, a predicted answer applied later). A stale or missing entity
 handle refuses on every path.
@@ -81,7 +81,7 @@ handles, slot and scalar answer per candidate. No engine pointers cross; release
 handles at decision end. This requires a reusable prepared Wire call path, not the
 ordinary owned-stack encode/decode on every slot. Unsupported capabilities refuse at
 registration/load with a named reason on both targets; no silent wasm skip.
-The generator layer of #3549 implements prepared ownership per participating guest instance,
+The generator layer of arismoko/horizon#3549 implements prepared ownership per participating guest instance,
 borrowed token-based asks, generation/release checks and load/registration refusal for missing
 prepared exports. Slot and entity-kind names are prepared outside traversal and asks carry IDs.
 Gameplay hoists preparation across candidates for one dispense, menu input scope and

@@ -1,6 +1,6 @@
 # Design: chunk attachment disk hooks
 
-Provisional proposal for [#857](https://github.com/arismoko/horizon/issues/857); no implementation or adopted guarantee. This answers the worker Host versus server-thread snapshot question: retain the existing server-thread capture seams, but execute mod load, save and persistence codec callbacks on a chunk worker with a restricted Host. Do not pass Game to a worker or silently relocate the requested callbacks to the server thread.
+Provisional proposal for [arismoko/horizon#857](https://github.com/arismoko/horizon/issues/857); no implementation or adopted guarantee. This answers the worker Host versus server-thread snapshot question: retain the existing server-thread capture seams, but execute mod load, save and persistence codec callbacks on a chunk worker with a restricted Host. Do not pass Game to a worker or silently relocate the requested callbacks to the server thread.
 
 ## Evidence and limits
 
@@ -28,7 +28,7 @@ Forced saves, periodic saves, dimension transitions and shutdown must be traced 
 
 ## Proposed contract
 
-Capture only committed attachment state on the server thread under the existing world visibility/save lease. An open action savepoint refuses saves through the #2211 save gate, including forced, unload and shutdown saves; do not serialize tentative state or take a second private transaction snapshot. Defer unload when the gate refuses. Reuse the existing lifecycle AttachmentHolder/ChunkRef and residency owner, scoped to world and dimension; do not introduce another chunk generation. A snapshot capability expires at callback return and never resolves back to the live world.
+Capture only committed attachment state on the server thread under the existing world visibility/save lease. An open action savepoint refuses saves through the arismoko/horizon#2211 save gate, including forced, unload and shutdown saves; do not serialize tentative state or take a second private transaction snapshot. Defer unload when the gate refuses. Reuse the existing lifecycle AttachmentHolder/ChunkRef and residency owner, scoped to world and dimension; do not introduce another chunk generation. A snapshot capability expires at callback return and never resolves back to the live world.
 
 A job owns its isolated attachment store. Save dispatch runs after capture and before encoding. Listener writes affect that store only. Capture 7, listener writes 8, live world changes to 9: disk gets 8, live remains 9. Use immutable shared encoded values or deep owned copies; never share mutable typed values or hold a world lock across mod code. Dependency-ordered listeners run sequentially for a job. Serialize jobs for a chunk in capture order, reject stale completions after residency/world retirement, and never allow an older write to replace a newer successful save.
 

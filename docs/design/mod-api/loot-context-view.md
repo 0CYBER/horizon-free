@@ -1,6 +1,6 @@
 # Design: Read-only typed loot context
 
-Provisional proposal for [#2647](https://github.com/arismoko/horizon/issues/2647). Docs only; approval precedes code. Broaden the existing `LootContext` snapshot at the condition/function evaluation boundary. Do not provide a mutable Host, live world access, or another loot hook. [#2648](https://github.com/arismoko/horizon/issues/2648) owns the narrow tags view. [PR #2595](https://github.com/arismoko/horizon/pull/2595) owns `LevelRef::roll_loot` and its FISHING-shaped input; this proposal neither expands that input nor changes random ownership.
+Provisional proposal for [arismoko/horizon#2647](https://github.com/arismoko/horizon/issues/2647). Docs only; approval precedes code. Broaden the existing `LootContext` snapshot at the condition/function evaluation boundary. Do not provide a mutable Host, live world access, or another loot hook. [arismoko/horizon#2648](https://github.com/arismoko/horizon/issues/2648) owns the narrow tags view. [PR arismoko/horizon#2595](https://github.com/arismoko/horizon/pull/2595) owns `LevelRef::roll_loot` and its FISHING-shaped input; this proposal neither expands that input nor changes random ownership.
 
 ## Evidence and current routes
 
@@ -82,7 +82,7 @@ Run every fixture through an actual custom condition and function on native and 
 | Stone at (2,70,4), bare-hand block roll | BLOCK origin=[2.5,70.5,4.5], block_state resolves `minecraft:stone`, TOOL present as empty instance; block_entity/radius absent. |
 | Same block with explosion decay radius 4 | Radius=Some(4.0), never absent or zero substitution. |
 | Broken named container | Saved block-entity Tag equals pre-removal metadata including custom name; subsequent removal does not alter snapshot. |
-| FISHING roll with explicit stick and no entity | Origin equals supplied coordinates; TOOL item=`minecraft:stick`, count=1 and exact components; this absent. PR #2595 retains ownership of roll API semantics. |
+| FISHING roll with explicit stick and no entity | Origin equals supplied coordinates; TOOL item=`minecraft:stick`, count=1 and exact components; this absent. PR arismoko/horizon#2595 retains ownership of roll API semantics. |
 | Deferred enchantment/trade/custom key registration | Exact `UnsupportedLootParameter`, `UnsupportedLootParameterSet`, or custom refusal; identical native/wasm result before evaluation. |
 | Missing BLOCK state / false / Unit | Missing required state refuses before callback; future false bool returns Some(false); future trade token returns Some(()) versus None. |
 | Malformed and excessive inputs | NaN/infinite origin, negative radius, oversized nested data refuse without callback or partial output; legal depth-512 data and largest vanilla fixture fit shared bounds. |

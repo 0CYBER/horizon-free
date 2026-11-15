@@ -61,7 +61,7 @@ pub(crate) fn call_refused<E: From<(mod_api::Identifier, String)>>() -> E {
 /// silent skip past a subscription nothing would ever call.
 pub(crate) fn native_only_hook(name: &str) -> Option<&'static str> {
     match name {
-        // Stage 4a of #792 ships the general entity tick's native dispatch
+        // Stage 4a of arismoko/horizon#792 ships the general entity tick's native dispatch
         // only; the wasm adapter is stage 4b.
         "general_entity_tick" => Some(
             "general_entity_tick: general entity ticks are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",

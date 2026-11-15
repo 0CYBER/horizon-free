@@ -1,4 +1,4 @@
-//! PURPOSE: the general entity rows' authoritative tick (#792 stage 4): one
+//! PURPOSE: the general entity rows' authoritative tick (arismoko/horizon#792 stage 4): one
 //! pass over the rows in join order, each root's rider subtree inside its
 //! tick.
 //! WHY: vanilla `ServerLevel.tick` walks `entityTickList.forEach`, and

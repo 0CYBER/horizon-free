@@ -48,7 +48,7 @@ pub(super) struct Strike {
     /// The attacking guest, kept after their turn through `as_guest` ends.
     attacker: Option<u32>,
     /// The attacker's creative mode: their hit passes the victim's
-    /// invulnerability (`DamageSource.isCreativePlayer`, #916).
+    /// invulnerability (`DamageSource.isCreativePlayer`, arismoko/horizon#916).
     creative: bool,
     amount: f32,
     scale: f32,
@@ -124,7 +124,7 @@ pub(super) struct Sweep {
     /// The attacking guest (none: the host).
     attacker: Option<u32>,
     /// The attacker's creative mode: their hit passes the victim's
-    /// invulnerability (`DamageSource.isCreativePlayer`, #916).
+    /// invulnerability (`DamageSource.isCreativePlayer`, arismoko/horizon#916).
     creative: bool,
     from: [f64; 3],
     /// The damage after the enchantments and the attack strength.

@@ -134,7 +134,7 @@ pub fn damage_bonus(levels: &[(Arc<str>, u32)], target: Option<Species>) -> f32 
 /// value plus the `attack_damage` modifiers of the stack in its main hand
 /// (an iron axe adds 8, a sword 4 to 7, a trident 8) — the stack's own
 /// `attribute_modifiers`, components included, or its item's, as
-/// `item_attribute_modifier` leaves them (#941). Vanilla applies them to the
+/// `item_attribute_modifier` leaves them (arismoko/horizon#941). Vanilla applies them to the
 /// attribute map when the item is equipped; the live map reads the same rows.
 pub fn attack_damage(m: &Mob, items: Option<&crate::items::Items>) -> f32 {
     let base = f64::from(m.attrs.attack_damage);

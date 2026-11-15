@@ -1044,7 +1044,7 @@ impl Game<'_> {
                         s.banner_at = None;
                         s.patrol_leader = true;
                         s.patrolling = true;
-                        // wear_banner: head id + ominous stack for SetEquipment (#4567).
+                        // wear_banner: head id + ominous stack for SetEquipment (arismoko/horizon#4567).
                         raider::wear_banner(m);
                     }
                 }

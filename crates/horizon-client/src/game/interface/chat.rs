@@ -2685,7 +2685,7 @@ mod tests {
         });
     }
 
-    /// A native mod's command is in the tree the chat box uses (#456): known
+    /// A native mod's command is in the tree the chat box uses (arismoko/horizon#456): known
     /// rather than red, and offered as it types. With no mod claiming one the
     /// tree is the game's own, as it was before the mods were asked.
     #[test]

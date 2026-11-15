@@ -162,8 +162,8 @@ Each mob and player in view gets the render hook pair once a frame, NeoForge's
 
 The order today: the model and the layers are drawn before the post hooks; the entity's name tag, leash, flames
 and shadow are drawn in the frame's later passes, after them. The reference draws the leash and the name tag
-before the post (and queues the flames and the shadow after it): tracked in #3915. A type with a registered
-renderer has the same order, the renderer in the model's place, so it changes with #3915 too.
+before the post (and queues the flames and the shadow after it): tracked in arismoko/horizon#3915. A type with a registered
+renderer has the same order, the renderer in the model's place, so it changes with arismoko/horizon#3915 too.
 
 `draw` starts at the entity's feet, turned with its body (+z the way it faces, +x its left, +y up,
 in blocks), and keeps what each hook draws. Setting `canceled` in a pre hook skips everything else

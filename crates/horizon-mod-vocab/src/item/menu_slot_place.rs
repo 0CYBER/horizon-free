@@ -1,7 +1,7 @@
 //! Storage that is not a block entity behind a mod menu's slots (arismoko/horizon#3385):
 //! NeoForge 26.3's `StackCopySlot` (a stack held inside another item) and `ResourceHandlerSlot`
 //! (an index of an item handler). A mod opens its menu type with `PlayerRef::open_mod_menu`
-//! (#3384) and then backs its container slots with [`PlayerRef::back_mod_menu_slots`]; a click
+//! (arismoko/horizon#3384) and then backs its container slots with [`PlayerRef::back_mod_menu_slots`]; a click
 //! or shift-click on such a slot, and an [`ItemPlace::MenuSlot`] write to it, go through that
 //! storage's own handler in one journalled transaction, as a block entity's slots do.
 use crate::{

@@ -1,4 +1,4 @@
-"""Find a Rust function by name, wherever it lives under `crates/` (#4026).
+"""Find a Rust function by name, wherever it lives under `crates/` (arismoko/horizon#4026).
 
 Tests that paste a real function into a Rust fixture ask for it by name, not by file path,
 so moving the function to another file breaks no test. These fixtures are a stopgap until

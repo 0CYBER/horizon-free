@@ -1,4 +1,4 @@
-//! Collision exclusions (#3717): boxes of an entity's own level in which that level's blocks do
+//! Collision exclusions (arismoko/horizon#3717): boxes of an entity's own level in which that level's blocks do
 //! not stop it, for a mod's portal in a wall. The part of a block's collision shape inside a box
 //! is cut away, `Shapes.join(shape, box, ONLY_FIRST)`, as Immersive Portals'
 //! `PortalCollisionHandler.processThisSideCollisionShape` does for the portals an entity collides

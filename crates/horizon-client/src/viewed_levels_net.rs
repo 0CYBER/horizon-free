@@ -1,4 +1,4 @@
-//! Viewed levels, client side (#3716): the answer to a Horizon server's `horizon:levels` query in
+//! Viewed levels, client side (arismoko/horizon#3716): the answer to a Horizon server's `horizon:levels` query in
 //! configuration (`horizon_protocol::viewed_levels`), sent before the client acknowledges
 //! `FinishConfiguration`. The server sends a client nothing more on the channel than its answer
 //! allows; the game keeps a world for each level it opens (`game::viewed_worlds`).

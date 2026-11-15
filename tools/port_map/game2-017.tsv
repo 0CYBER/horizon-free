@@ -125,8 +125,8 @@ SignBlockEntity.resolveLine	missing		same as SignBlockEntity.resolveLines: no pe
 SignBlockEntity.updateText	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::lan_sign_update	guest's sign write
 SignBlockEntity.updateMessages	missing		a sign write goes straight to the block entity's lines (`sign_edit.rs::lan_sign_update`, `close_sign_editor`); nothing resolves them first
 SignBlockEntity.setText	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::sign_write
-SignBlockEntity.canExecuteClickCommands	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::sign_can_execute_click_commands	ticked in #3516; `SignBlockEntity.canExecuteClickCommands` is cited at crates/horizon-client/src/game/interface/sign_edit.rs:97
-SignBlockEntity.executeClickCommandsIfPresent	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::execute_sign_click_commands	ticked in #3516; `SignBlockEntity.executeClickCommandsIfPresent` is cited at crates/horizon-client/src/game/interface/sign_edit.rs:139
+SignBlockEntity.canExecuteClickCommands	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::sign_can_execute_click_commands	ticked in arismoko/horizon#3516; `SignBlockEntity.canExecuteClickCommands` is cited at crates/horizon-client/src/game/interface/sign_edit.rs:97
+SignBlockEntity.executeClickCommandsIfPresent	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::execute_sign_click_commands	ticked in arismoko/horizon#3516; `SignBlockEntity.executeClickCommandsIfPresent` is cited at crates/horizon-client/src/game/interface/sign_edit.rs:139
 SignBlockEntity.createCommandSourceStack	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::sign_command_source	the acting player at the sign's centre, rotation zero, game master level, silent; run_sign_command runs the click command from it
 SignBlockEntity.markUpdated	port	crates/horizon-client/src/game/mobs/trial_spawner.rs::Game::mark_block_entity_updated
 SignBlockEntity.setWaxed	port	crates/horizon-client/src/game/interface/sign_edit.rs::Game::use_sign_applicator	honeycomb wax

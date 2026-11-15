@@ -1,4 +1,4 @@
-"""The mod API's public structs are built by mods or only received (#2862)."""
+"""The mod API's public structs are built by mods or only received (arismoko/horizon#2862)."""
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory

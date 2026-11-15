@@ -2610,7 +2610,7 @@ capabilities = ["registries"]
                 "data/ruby/horizon/entity_type/merchant.json",
                 br#"{"template": "minecraft:wandering_trader"}"#,
             ),
-            // The tameable ones (#4031).
+            // The tameable ones (arismoko/horizon#4031).
             (
                 "data/ruby/horizon/entity_type/hound.json",
                 br#"{"template": "minecraft:wolf", "attributes": {"minecraft:max_health": 20}}"#,

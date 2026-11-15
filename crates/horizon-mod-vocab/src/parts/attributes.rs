@@ -31,7 +31,7 @@ pub fn attribute_declarations() -> &'static [AttributeDeclaration] {
 }
 
 /// A mod's ask to widen an existing attribute's bounds, as the game reads it
-/// when it grows the attribute catalog (#3728).
+/// when it grows the attribute catalog (arismoko/horizon#3728).
 #[derive(Clone, Debug, Default, PartialEq)]
 // exhaustive: only registration builds it; the game reads it
 #[derive(horizon_mod_api_macros::Wire)]

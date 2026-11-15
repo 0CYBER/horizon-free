@@ -1,4 +1,4 @@
-//! Entity Part state (#796 stage 3) on real entities: one value each, kept with its entity
+//! Entity Part state (arismoko/horizon#796 stage 3) on real entities: one value each, kept with its entity
 //! through edits, transactions, removal, unloading, reloading and changes of level.
 use std::{collections::HashSet, panic::AssertUnwindSafe, sync::Arc};
 

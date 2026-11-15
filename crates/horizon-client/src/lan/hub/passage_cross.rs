@@ -1,4 +1,4 @@
-//! The hub's half of a guest's crossing of a passage within its level (#3775,
+//! The hub's half of a guest's crossing of a passage within its level (arismoko/horizon#3775,
 //! docs/modding/src/how-to/passages.md): the move to where the client crossed from, checked
 //! as any move; the position packet that accepts the crossing; and a refusal. The game finds
 //! the passage, asks the mods and works out where the player comes out, in between.

@@ -39,7 +39,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   resources, boots the game, starts a child process, uses the network or a compiled wasm fixture, or takes 2 s or
   more is `#[ignore]`d with a row in `tools/ci/ignored-tests/`; say in the PR when you could not run it. A daily red
   becomes an issue listing the suspect PRs, fixed by an ordinary PR. Existing tests still in `verify` that need
-  resources, a child process or the network are being moved by the next change of #4022. Builds: nightly (a commit of main with checks and parity-main green,
+  resources, a child process or the network are being moved by the next change of arismoko/horizon#4022. Builds: nightly (a commit of main with checks and parity-main green,
   published with its mod SDK), release (cut from a nightly).
 - **No hardcoded user-facing strings.** Keep UI translation-ready from the start. In the launcher (`launcher/`), wrap visible text with `tr("...")` or `trf("... {arg} ...", &[("arg", &val)])` from `crate::i18n` instead of raw string literals or `format!`. In the game, use translation keys (`Text::tr`, `lang::get`), never hardcoded English strings.
 - **Claim before you start**: comment `/claim` on the issue (no issue yet: open one, then claim it). An assigned
@@ -55,7 +55,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 ## Mod API on this fork: the clean break
 
 This repository is where the native mod API is built: hooks, the `Host`, handles, Parts,
-attachments and mod loading. Tracker: #26 (design), #44 (milestones). The mod API is taking **one clean
+attachments and mod loading. Tracker: arismoko/horizon#26 (design), arismoko/horizon#44 (milestones). The mod API is taking **one clean
 break**, and every change to it follows these rules. Reviews block a PR that breaks any of them.
 
 - **No compatibility paths.** No aliases, shims, deprecated names, migration or fallback code, version

@@ -1,5 +1,5 @@
-//! #792 stage 4: the general rows' tick pass through the game fixture. The
-//! fixture part advances a per-row counter attachment (#796: the sole
+//! arismoko/horizon#792 stage 4: the general rows' tick pass through the game fixture. The
+//! fixture part advances a per-row counter attachment (arismoko/horizon#796: the sole
 //! per-entity store) and records the callback trace; the tests pin the
 //! acceptance matrix's ordering, residency and containment rows against the
 //! pass's own contract, with the vanilla orderings cited where they hold.
@@ -533,7 +533,7 @@ fn a_row_discarded_from_an_earlier_pre_ticks_nothing() {
 /// map's end, and a level's entities re-enter ticking through the section
 /// callbacks when their chunk loads again, so a row that left and returned
 /// ticks after a row that joined later and never left. Horizon's join order
-/// is that insertion order (Ari's #792 ruling); the row's fresh admission on
+/// is that insertion order (Ari's arismoko/horizon#792 ruling); the row's fresh admission on
 /// reload is its re-entry.
 #[test]
 #[ignore = "daily"]
@@ -861,7 +861,7 @@ fn five_hundred_part_free_trees_walk_each_edge_once_and_allocate_nothing() {
     });
 }
 
-/// #3458's first uncovered test, on the tick's own fixture: a row of a
+/// arismoko/horizon#3458's first uncovered test, on the tick's own fixture: a row of a
 /// missing mod quarantines byte for byte, survives a second save unchanged,
 /// and reinstating the mod restores the row with its counter — 41 resumed,
 /// 42 on the next tick.
@@ -903,7 +903,7 @@ fn quarantine_then_reinstall_restores_the_counter() {
     });
 }
 
-/// #3458's second uncovered test: a summon's insertion of a general type —
+/// arismoko/horizon#3458's second uncovered test: a summon's insertion of a general type —
 /// the path `/summon` drives, `spawn_entity_from_nbt` — answers a target
 /// whose network id and position read back (a general row's network id is
 /// its own id, until stage 5's tracking gives it a connection-local one).

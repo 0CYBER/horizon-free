@@ -5,7 +5,7 @@ use mod_api::{MobRef, MoveToPathError, PathType};
 /// The numbers a mod hands a mob's navigation (`moveTo(x, y, z, speed)`): a
 /// finite speed, and finite coordinates small enough for the pathfinder's
 /// block arithmetic. The mob handles' boundary, shared with a goal tick's own
-/// `move_to` (#1077) — one check, not a copy per caller.
+/// `move_to` (arismoko/horizon#1077) — one check, not a copy per caller.
 pub(super) fn navigation_move_accepts(at: [f64; 3], speed: f64) -> bool {
     speed.is_finite()
         && at
@@ -44,7 +44,7 @@ pub(super) fn supplied_path_accepts(nodes: &[mod_api::PathNode], speed: f64) -> 
 /// The refusal a `false` from `nav_move_to_supplied` stands for once the
 /// numbers and the mob are known to be fine: `PathNavigation.moveTo(Path)`
 /// refuses a path with no node left, an empty one or one the trim emptied.
-/// One conversion, shared by the handle and by a goal tick's view (#4410).
+/// One conversion, shared by the handle and by a goal tick's view (arismoko/horizon#4410).
 pub(super) fn supplied_path_refusal(followed: bool) -> Result<(), MoveToPathError> {
     if followed {
         Ok(())
@@ -437,7 +437,7 @@ mod tests {
     }
 
     /// A refusal names its cause, so a mod tells an invalid number from a mob
-    /// that is not there and from a path with nothing left to follow (#4443).
+    /// that is not there and from a path with nothing left to follow (arismoko/horizon#4443).
     #[test]
     #[ignore = "daily"]
     fn a_supplied_path_refusal_names_its_cause() {

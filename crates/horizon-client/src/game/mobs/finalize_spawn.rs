@@ -330,7 +330,7 @@ mod tests {
         });
     }
 
-    /// #2783: `/summon`, eggs, spawners and natural spawns run
+    /// arismoko/horizon#2783: `/summon`, eggs, spawners and natural spawns run
     /// `WitherSkeleton.finalizeSpawn`: attack damage base 4.0, not the
     /// default 2.0.
     #[test]
@@ -345,7 +345,7 @@ mod tests {
         });
     }
 
-    /// #2783: runtime spawns run `Mob.finalizeSpawn`: the follow range
+    /// arismoko/horizon#2783: runtime spawns run `Mob.finalizeSpawn`: the follow range
     /// bonus and 5 percent left-handed mobs, drawn from the level random.
     #[test]
     #[ignore = "daily"]

@@ -1,4 +1,4 @@
-//! Injection points (#589): every function of the game module that [`point_shape::eligible`]
+//! Injection points (arismoko/horizon#589): every function of the game module that [`point_shape::eligible`]
 //! admits and the API can carry is a point, and so is each such function marked `#[horizon_mod_api_macros::replaceable]` in
 //! the crates below it. The staging pass ([`stage`]) puts `#[point]` on each in a staged copy of the
 //! game's source, the copy the prebuilt game builds compile;

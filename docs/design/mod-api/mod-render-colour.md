@@ -1,13 +1,13 @@
 # Mod render colour
 
-[The adopted rule (#1498)](https://github.com/arismoko/horizon/issues/1498#issuecomment-6691333172)
+[The adopted rule (arismoko/horizon#1498)](https://github.com/arismoko/horizon/issues/1498#issuecomment-6691333172)
 is shared by mod pipelines, mod passes and shader packs:
 
 Colours are linear light, 1.0 is vanilla's white at paper white, and values above
 1 are allowed. Horizon's generated entry code converts to and from the frame,
 as it does for 0.2 pack stages, so mod shader code only sees linear light. Mod
 code never assumes the frame's format and leaves the frame's alpha to the
-renderer. #869's typed configuration doesn't offer the colour format.
+renderer. arismoko/horizon#869's typed configuration doesn't offer the colour format.
 
 This is a Horizon contract, with no NeoForge counterpart. The upstream basis is
 horizon-rust/horizon#9600 (HDR), horizon-rust/horizon#9930 (shader API 0.2) and
@@ -25,9 +25,9 @@ noise textures also stay data (`docs/api/shaders.md:171`).
 
 The existing pack generator supplies the conversion helpers in
 `crates/horizon-shader-api/src/stages.rs:133`, frame-storage conversion at
-`:510`, and linear post-chain entry code at `:610`. Mod pipelines (#884,
+`:510`, and linear post-chain entry code at `:610`. Mod pipelines (arismoko/horizon#884,
 [Drawing with your own render pipeline](../../modding/src/how-to/client/render-pipelines.md)) reuse the
-helpers at `:133` in their generated entry points; mod passes (#867, #869) do not
+helpers at `:133` in their generated entry points; mod passes (arismoko/horizon#867, arismoko/horizon#869) do not
 exist yet. The current
 experimental serving limits are in `docs/api/shaders.md:163`: 0.2 needs
 `HORIZON_HDR_FRAME=float`; linear frame blending is not yet served.
@@ -36,14 +36,14 @@ Instance inputs remain vanilla-space inputs: `ModelInstance::tint` is packed
 `0xAARRGGBB`, and block and sky light are each `0..=15`
 (`crates/horizon-mod-vocab/src/client/model_instance.rs:1`). The engine owns their
 conversion. Do not pre-decode these inputs just because shader colours are
-linear. R2 instance drawing (#808) must preserve this distinction.
+linear. R2 instance drawing (arismoko/horizon#808) must preserve this distinction.
 `WorldQuad::color` remains a `u32` ARGB colour with 8-bit channels, including
 coverage alpha (`crates/horizon-mod-vocab/src/client/world_draw.rs:40`). It cannot express
 RGB above 1; HDR-range quad colours would need a later typed addition.
 
 ## Applying the rule
 
-The planned R5 work (#884, #867, #869 and #889) must use the same generated
+The planned R5 work (arismoko/horizon#884, arismoko/horizon#867, arismoko/horizon#869 and arismoko/horizon#889) must use the same generated
 entry/exit boundary for mod pipelines and passes. Material, sky, weather and
 scene-texture colour must arrive linear and leave linear; data textures must
 not acquire colour decoding. Coexistence with a selected shader pack must not
@@ -69,7 +69,7 @@ layering plan is in `docs/design/hdr-linear-light.md`, under “The HUD”.
 
 ## Review checklist
 
-For #884, #867, #869, #889 and R2 instance drawing:
+For arismoko/horizon#884, arismoko/horizon#867, arismoko/horizon#869, arismoko/horizon#889 and R2 instance drawing:
 
 - Check material, sky, weather and sampled scene colour at both generated
   boundaries; check that data textures remain data.

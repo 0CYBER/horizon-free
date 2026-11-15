@@ -4,7 +4,7 @@ pub trait Hooks {
     /// The authoritative tick of one general entity row of type `kind`
     /// (`mymod:robot`), with ID `entity`, in the server level's entity phase:
     /// `ServerLevel.tickNonPassenger`'s `entity.tick()` for a row the type
-    /// registry owns (#792 stage 4). The row's common bookkeeping has run
+    /// registry owns (arismoko/horizon#792 stage 4). The row's common bookkeeping has run
     /// (its previous position is its current one); a rider is ticked after
     /// its vehicle inside the vehicle's own tick, depth-first as
     /// `tickPassenger` recurses, and is never ticked as a root. Rows that

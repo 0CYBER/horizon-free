@@ -12,7 +12,7 @@ the vanilla [parity harnesses](parity-workflow.md). It never edits ledger rows.
 
 The executable contract is [paper_parity_scenarios.json](../tools/paper_parity_scenarios.json).
 Main currently has `chunk_load`; the hotbar/moisture extension in
-[PR #2355](https://github.com/arismoko/horizon/pull/2355) adds the other two,
+[PR arismoko/horizon#2355](https://github.com/arismoko/horizon/pull/2355) adds the other two,
 allow/cancel runs, `--scenario` and `--startup-timeout`.
 
 | Scenario | Compared observations | Tolerance |

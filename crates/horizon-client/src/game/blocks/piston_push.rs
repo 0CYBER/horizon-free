@@ -797,7 +797,7 @@ impl Game<'_> {
             }
             let dy = added.collide(Axis::Y, body.bounds.move_by(Vec3::new(0.0, 1.0, 0.0)), -1.0);
             // `teleportRelative`, a position assignment the design excludes
-            // from `entity_move` (#2414): a pending gate, never armed.
+            // from `entity_move` (arismoko/horizon#2414): a pending gate, never armed.
             self.apply_push(&mut MoveGate::new(), target, Vec3::new(0.0, 1.0 + dy, 0.0));
         }
     }
@@ -902,7 +902,7 @@ impl Game<'_> {
 
     /// `Entity.move(MoverType.PISTON, movement)` for one pushed entity: the
     /// per-tick piston limit, then the block and world border collision scan.
-    /// The move gate (#2414) is armed first, so a cancelled move spends none
+    /// The move gate (arismoko/horizon#2414) is armed first, so a cancelled move spends none
     /// of the piston budget for this tick.
     fn move_pushed(
         &mut self,
@@ -1267,7 +1267,7 @@ fn shulker_lid(facing: u8, lid: [f64; 6]) -> (Vec3, Aabb) {
 /// it makes. The world's blocks stop it, and so does the world border:
 /// `Entity.collectCollidersIgnoringWorldBorder` adds the border's walls when
 /// the body is inside close to the border, as ordinary movement does. The
-/// `gate` is the push's armed move gate (#2414); the resolve goes through it.
+/// `gate` is the push's armed move gate (arismoko/horizon#2414); the resolve goes through it.
 fn pushed_movement<W>(
     gate: &mut MoveGate,
     blocks: W,
@@ -1476,8 +1476,8 @@ mod order_tests {
         assert!(moved[1] < 0.02, "far stone still in the way: {}", moved[1]);
     }
 
-    /// A cancelled push spends none of the piston budget (#2414, design
-    /// #2308: the hook fires before `limit_piston`). A listener cancels the
+    /// A cancelled push spends none of the piston budget (arismoko/horizon#2414, design
+    /// arismoko/horizon#2308: the hook fires before `limit_piston`). A listener cancels the
     /// first push of a tick - the TNT does not move - and then lets the
     /// second push of the same tick through: it still travels the whole
     /// per-tick budget, which a spent one would have clamped to almost

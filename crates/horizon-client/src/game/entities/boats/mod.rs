@@ -893,7 +893,7 @@ impl Game<'_> {
         }
         // Entity.move: collisions zero the blocked components, the world border's
         // among them (`CollisionGetter.borderCollision`). The boat's own move
-        // is a self move (#2414: vanilla's `AbstractBoat.tick` passes SELF);
+        // is a self move (arismoko/horizon#2414: vanilla's `AbstractBoat.tick` passes SELF);
         // PR 1a records the movement unchanged.
         let mut scene = EntityCollisions {
             blocks: scene,

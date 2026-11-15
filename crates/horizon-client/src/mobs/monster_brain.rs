@@ -177,7 +177,7 @@ pub fn init(m: &mut Mob, shuffle_seed: i64) {
         (creaking_packages(shuffle_seed), Act::Idle)
     };
     // The parts' behaviors join before the sort, so each lands after
-    // vanilla's of its priority (#824); the stable sort keeps vanilla's own
+    // vanilla's of its priority (arismoko/horizon#824); the stable sort keeps vanilla's own
     // order. Nothing joins a type no part attached to, and nothing is asked
     // or built then.
     let before = list.len();
@@ -503,7 +503,7 @@ enum B {
         breeze: bool,
         positives_left: i32,
     },
-    /// A mod's behavior (#824), wrapped by `mod_behaviors`.
+    /// A mod's behavior (arismoko/horizon#824), wrapped by `mod_behaviors`.
     Mod(super::mod_behaviors::ModBehavior),
     RunOne(Box<RunOne>),
     DoNothing(Timed),
@@ -1406,7 +1406,7 @@ fn sorted(mut v: Vec<(i32, Act, B)>) -> Vec<Entry> {
 
 // ---- Mod behaviors ------------------------------------------------------
 
-/// The parts' behaviors for this brain (#824): each joins the list with its
+/// The parts' behaviors for this brain (arismoko/horizon#824): each joins the list with its
 /// activity and priority, refused where this brain has no such activity.
 fn attach_behaviors(mob_id: &str, list: &mut Vec<Entry>) {
     struct Reg<'a> {

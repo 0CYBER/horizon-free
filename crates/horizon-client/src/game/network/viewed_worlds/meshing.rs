@@ -1,4 +1,4 @@
-//! The viewed levels' sections meshed while a world view names them (#4187): `wanted` holds the
+//! The viewed levels' sections meshed while a world view names them (arismoko/horizon#4187): `wanted` holds the
 //! levels the frame's views name, and each frame `mesh_frame` hands the open levels to
 //! `ViewedMeshing`, which meshes them into a set per level after the player's own level's work.
 //! No view names one yet, so nothing is meshed: `wanted` stays empty until views of other levels

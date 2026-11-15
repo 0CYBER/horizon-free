@@ -1548,7 +1548,7 @@ mod tests {
         });
     }
 
-    /// #4449: the mods' commands are in the tree before functions load, from the first world open
+    /// arismoko/horizon#4449: the mods' commands are in the tree before functions load, from the first world open
     /// on, so a plain line and a macro line naming one both load and run; an unknown command is
     /// refused as before, and a command the mods stop registering is refused after a reload.
     #[test]

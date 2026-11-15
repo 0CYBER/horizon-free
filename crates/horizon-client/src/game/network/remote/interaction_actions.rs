@@ -222,7 +222,7 @@ impl Game<'_> {
         } else {
             // `stopDestroyBlock` returns at once for a break that is not running: a pick that
             // missed once a break stopped ends nothing, so the dig's accumulated progress stays
-            // and goes on growing on the jumps that follow (#4124).
+            // and goes on growing on the jumps that follow (arismoko/horizon#4124).
             if self.stop_remote_mining() {
                 self.mining = None;
             }

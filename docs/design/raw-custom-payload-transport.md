@@ -1,7 +1,7 @@
 # Registered raw custom payload transport
 
-This is the raw transport below the typed payload work in #813, implementing
-#2882. The codec prerequisite is #2951. Names and contracts are based on
+This is the raw transport below the typed payload work in arismoko/horizon#813, implementing
+arismoko/horizon#2882. The codec prerequisite is arismoko/horizon#2951. Names and contracts are based on
 NeoForge 26.3's public payload API and the room's written clean-room specification;
 no NeoForge implementation source was read by this implementation's author.
 
@@ -11,7 +11,7 @@ Replace the legacy envelope transport, its broadcast hooks, old send methods, br
 30,000-byte envelope bound and 32-message counters outright. Application packets
 use their declared namespaced custom-payload channel and exact opaque body bytes.
 There is no Horizon application envelope and no second path for typed payloads.
-Attachment synchronization rides this transport as an engine declaration (#813 step 4a;
+Attachment synchronization rides this transport as an engine declaration (arismoko/horizon#813 step 4a;
 see the typed-payload design note).
 
 Registration runs in dependency order during mod loading. `PayloadRegistrar`
@@ -110,9 +110,9 @@ publication or rollback. Pooled server receivers retry on their existing tick;
 dedicated client and configuration receivers use timed condition-variable wakes,
 so progress requires neither another network frame nor a detached worker.
 
-## Acceptance and the amendment to #813
+## Acceptance and the amendment to arismoko/horizon#813
 
-Replace #813's proposed 32-per-tick cap and its “33 sends” acceptance row: vanilla
+Replace arismoko/horizon#813's proposed 32-per-tick cap and its “33 sends” acceptance row: vanilla
 has no such cap. The replacement checks byte-bounded pressure, explicit local
 Backpressure, bounded flood memory and progress for more than 32 legal messages.
 Its registered-body limit wording must distinguish discard limits from the actual

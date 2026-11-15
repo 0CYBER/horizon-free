@@ -1,4 +1,4 @@
-//! Splitscreen (in parts; #3541): more players on this computer in P1's world, each its own `Game`
+//! Splitscreen (in parts; arismoko/horizon#3541): more players on this computer in P1's world, each its own `Game`
 //! in this process that joins P1's server thread through memory. Every player renders offscreen
 //! on one device and the window's compositor copies their frames into their views (halves for
 //! two, `split_layout`). Keyboard and mouse drive the player whose view was clicked last (Esc

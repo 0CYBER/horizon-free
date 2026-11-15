@@ -1,4 +1,4 @@
-//! The open and filter flags of mods' own recipe books (#2415), beside the four vanilla
+//! The open and filter flags of mods' own recipe books (arismoko/horizon#2415), beside the four vanilla
 //! `RecipeBookType` pairs of [`Settings`](super::Settings): one map from a book's namespaced id
 //! to its two flags. A book missing from it reads `(false, false)`. The map is saved in the
 //! player's `recipeBook` compound under [`EXTENSION`]. Its entries are kept while their mod is

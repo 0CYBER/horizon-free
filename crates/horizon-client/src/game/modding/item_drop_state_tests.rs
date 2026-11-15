@@ -1,4 +1,4 @@
-//! `ItemDrop`'s item-entity state (#3423): `thrower`, `target`, `no_gravity` and `age` set by a
+//! `ItemDrop`'s item-entity state (arismoko/horizon#3423): `thrower`, `target`, `no_gravity` and `age` set by a
 //! drop hook reach the item entity that joins the level and behave as vanilla's do; a drop left
 //! as it was joins as before.
 use std::sync::{

@@ -1376,7 +1376,7 @@ mod tests {
     fn a_shield_is_used_for_the_vanilla_s_time() {
         // Item.getUseDuration: an item with `blocks_attacks` (a shield) is
         // used for 72000 ticks, so its use animation (the arm held up)
-        // runs instead of ending at once (#2289).
+        // runs instead of ending at once (arismoko/horizon#2289).
         let mut shield = Components::new();
         shield.insert("minecraft:blocks_attacks".into(), json!({}));
         assert_eq!(use_duration(ComponentsView::of(&shield)), 72_000);

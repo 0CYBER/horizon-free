@@ -1,10 +1,10 @@
 # Design: baked models and ModelData
 
-Provisional answer to [#861](https://github.com/arismoko/horizon/issues/861):
+Provisional answer to [arismoko/horizon#861](https://github.com/arismoko/horizon/issues/861):
 the engine owns immutable modified baked results for each resource generation;
 mods own bounded edit descriptions, never mutable renderer models. Evaluate
 ModelData on the client world-owning thread before freezing geometry selection.
-Workers read concrete results from [section meshing](section-meshing.md)'s #1508
+Workers read concrete results from [section meshing](section-meshing.md)'s arismoko/horizon#1508
 plan. This extends that plan's input boundary; its scheduling, halo, publication,
 geometry limits and rendering rules remain authoritative. No Rust API is
 implemented; every stage below has file **none** pending design approval.
@@ -48,7 +48,7 @@ Keep standalone registration unchanged.
 API-owned proposed representations: `BakedModelKeyWire` (resource generation,
 resolved slot and block/item kind), `BakedModelEditWire`, `BakedModelRecipeWire`,
 `ModelDataSchemaWire`, `ModelDataValueWire`, `ModelEvaluationInputWire`, and
-`ModelEvaluationResultWire`. Reuse #1508's prepared model/material/quad Wire
+`ModelEvaluationResultWire`. Reuse arismoko/horizon#1508's prepared model/material/quad Wire
 values rather than introduce another geometry format. Recipes select bounded
 prepared variants or validated replacement geometry, with explicit particle,
 lighting, culling and item transform metadata. Wire is a mod boundary, not network
@@ -67,7 +67,7 @@ unknown-id no-ops retain their behavior.
 Build generation B from B's original baked inputs, never from modified A. Publish
 block and item tables atomically. Shared immutable engine references lease A until
 old jobs and item draw snapshots release it; A cannot publish into B. Mods receive
-scoped keys, not ownership of engine allocations. Teardown follows #1508's job
+scoped keys, not ownership of engine allocations. Teardown follows arismoko/horizon#1508's job
 lease/drain ordering before unloading native code or wasm stores.
 
 ## ModelData evaluation boundary and routes
@@ -75,7 +75,7 @@ lease/drain ordering before unloading native code or wasm stores.
 Registered providers receive a read-only captured evaluation input plus
 `ClientHost` at owner-thread preparation. Their result is a typed property value
 set, not a callback stored in the model. World writes are forbidden during this
-preparation moment. Block inputs use #1508's radius-one snapshot and explicit
+preparation moment. Block inputs use arismoko/horizon#1508's radius-one snapshot and explicit
 Missing cells; model selection freezes deterministic seeds, data revision,
 resource generation and prepared geometry keys into state recipes/sparse overrides.
 The mesher receives those through the existing proposed SectionMeshPlanWire.
@@ -87,7 +87,7 @@ Cache by model key, typed input revisions and seed. Block/state, neighbour,
 block-entity data, light/biome dependencies and provider invalidations dirty the
 applicable plans; never poll arbitrary mod state per frame. Reload invalidates all
 old data keys. Providers explicitly request invalidation on changed source data.
-Missing data uses declared defaults. Stale data refuses publication using #1508's
+Missing data uses declared defaults. Stale data refuses publication using arismoko/horizon#1508's
 tokens. Items evaluate during owner-thread item preparation using captured stack
 components, display context, optional level/owner and seed; freeze output before
 drawing. A block item does not inherit world-position ModelData implicitly.
@@ -114,7 +114,7 @@ not acquire a terrain callback. Dedicated servers neither bake nor evaluate.
 
 Proposed ceilings: 64 properties per schema, 256 elements per vector, 16 KiB
 encoded and decoded ModelData per evaluation, 256 variants per recipe. Checked
-length arithmetic precedes allocation; count captured values against #1508's
+length arithmetic precedes allocation; count captured values against arismoko/horizon#1508's
 32 MiB section and 128 MiB in-flight budgets. Geometry obeys that page's quad,
 coordinate, UV, colour and material bounds. Reject NaN/infinity, invalid tags,
 stale keys, duplicate properties and values outside declared scalar ranges before
@@ -158,7 +158,7 @@ Future implementation tests, not results of this docs change:
    types, registration refusals and native/wasm codecs together.
 3. Baking and owner-thread evaluation (file none): implement one transactional
    moment, reload leases and provider invalidation with focused fixtures.
-4. Frozen-plan and item integration (file none): wire #1508 and item preparation,
+4. Frozen-plan and item integration (file none): wire arismoko/horizon#1508 and item preparation,
    then run the matrix and measure empty-path cost before enabling registration.
 
 ## Open questions

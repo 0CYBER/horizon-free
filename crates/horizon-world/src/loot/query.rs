@@ -36,7 +36,7 @@ impl LootQuery {
     /// Root-only completion point, after all nested tables. Nested rolls never call this.
     pub fn finish(&self, id: Option<&str>) {
         self.set_id(id.unwrap_or(UNKNOWN_LOOT_TABLE));
-        // #1270: the global loot modifier pass belongs here.
+        // arismoko/horizon#1270: the global loot modifier pass belongs here.
     }
 }
 thread_local! { static QUERY: RefCell<Option<Rc<LootQuery>>> = const { RefCell::new(None) }; }

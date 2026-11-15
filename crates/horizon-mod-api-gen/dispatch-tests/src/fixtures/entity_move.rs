@@ -1,5 +1,5 @@
 //! The `entity_move` fixture: the isolated dispatch a global cancel hook with
-//! `isolate` generates (#2414 ruling) — one listener per `catch_unwind`, the
+//! `isolate` generates (arismoko/horizon#2414 ruling) — one listener per `catch_unwind`, the
 //! requested outputs surviving an unwind, and the poison skipping that one
 //! listener on the next dispatch.
 

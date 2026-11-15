@@ -1,6 +1,6 @@
 //! A level's capability generations: a number per block position that a provider advances
 //! (`level_invalidate_capabilities`) when its answer there changes with no block change, which a
-//! kept capability (`BlockCapabilityCache`) compares to know it must look again (#3446).
+//! kept capability (`BlockCapabilityCache`) compares to know it must look again (arismoko/horizon#3446).
 //!
 //! Only positions a provider invalidated have an entry; every other position reads the level's
 //! floor. Entries go with their chunk. Every number, an entry's or the floor's, is drawn once

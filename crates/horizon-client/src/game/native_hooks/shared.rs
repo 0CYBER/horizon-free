@@ -1555,7 +1555,7 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
         },
         inside_fire: |level, dimension, entity, kind, state, pos, precise, staged, writes| {
             // The whole callback is staged: a panic is contained and the walk
-            // keeps the caller's collector and write list as they were (#2247's
+            // keeps the caller's collector and write list as they were (arismoko/horizon#2247's
             // rule: a mod's panic never breaks the model).
             let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 HitLevel(level.reborrow()).native_entity_inside(

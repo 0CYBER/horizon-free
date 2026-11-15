@@ -370,7 +370,7 @@ impl Game<'_> {
                     button,
                     mode,
                 } => {
-                    // A click a mod's backed slots answer (#3385); any other goes to the mods.
+                    // A click a mod's backed slots answer (arismoko/horizon#3385); any other goes to the mods.
                     if !self.place_menu_click(uuid, window, slot, button, mode) {
                         self.native_menu_clicked(uuid, window, slot, button, mode);
                     }
@@ -379,7 +379,7 @@ impl Game<'_> {
                     self.menu_places_closed(uuid, window);
                     self.native_menu_closed(uuid, window);
                 }
-                // A write to a backed menu's storage (#3385): its slots looked at again.
+                // A write to a backed menu's storage (arismoko/horizon#3385): its slots looked at again.
                 NativeMenuEvent::PlacesChanged { uuid, window } => {
                     self.menu_places_changed(uuid, window)
                 }

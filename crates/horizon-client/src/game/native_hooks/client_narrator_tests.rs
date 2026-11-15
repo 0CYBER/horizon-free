@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! `ClientNarratorClientHost::narrate` (#4532): `Now` interrupts and `Queued`
+//! `ClientNarratorClientHost::narrate` (arismoko/horizon#4532): `Now` interrupts and `Queued`
 //! does not, through the game's `GameNarrator`; an empty line, an option that
 //! does not narrate system messages and missing speech are refused by name,
 //! with nothing said or logged.

@@ -1,6 +1,6 @@
 //! `horizon-stage ROOT POINTS_JSON INTERNALS_JSON COMMIT`: expose internals, mark points and give functions their replacement slots in a staged
 //! source copy, then write the build data (`points.json`, `internals.json`, `loops.json`) with the
-//! header naming COMMIT, the source's full commit sha (#589). Never run on a working tree.
+//! header naming COMMIT, the source's full commit sha (arismoko/horizon#589). Never run on a working tree.
 //!
 //! `horizon-stage surface ROOT OUT`: write the surface export (`surface.json`) of the source tree
 //! at ROOT to OUT, and nothing else. It only reads the tree, so a working tree is fine.

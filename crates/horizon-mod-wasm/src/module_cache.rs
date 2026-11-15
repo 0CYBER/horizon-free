@@ -9,7 +9,7 @@ use wasmtime::{Engine, Module};
 
 /// The budget for current-engine entries: 1 GiB holds 30 copies of the largest measured
 /// `.cwasm` (34,039,320 bytes, from a 12.5 MB wasm module) plus headroom. 30 modules is
-/// an allowance, not a measured pack; see #2896.
+/// an allowance, not a measured pack; see arismoko/horizon#2896.
 const LIMIT: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,7 +62,7 @@ impl ModuleCache {
     /// Unix checks folder ownership and write permissions without following a symlink.
     /// Each opened entry must be regular, owned by this user, not group/other writable,
     /// and have exactly one link. Windows caching is disabled until owner, DACL and
-    /// inheritance trust can be established for folders and opened entries (#2901).
+    /// inheritance trust can be established for folders and opened entries (arismoko/horizon#2901).
     pub(crate) fn new(root: PathBuf) -> Self {
         Self::new_for_platform(root, cfg!(windows))
     }
@@ -191,7 +191,7 @@ impl ModuleCache {
                 }
                 .into());
             }
-            // Only a bounded child compile reports why caching is off; Windows has none (#2901).
+            // Only a bounded child compile reports why caching is off; Windows has none (arismoko/horizon#2901).
             #[cfg(not(unix))]
             let _ = why;
             return Module::new(engine, bytes).map(|module| (module, Source::Compiled));
@@ -200,7 +200,7 @@ impl ModuleCache {
         if let Some(module) = self.load_cached(engine, &path) {
             return Ok((module, Source::Cached));
         }
-        // Windows caching is disabled before this point (#2901).
+        // Windows caching is disabled before this point (arismoko/horizon#2901).
         #[cfg(not(unix))]
         let _ = child;
         #[cfg(unix)]

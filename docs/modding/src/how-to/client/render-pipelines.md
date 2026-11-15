@@ -128,7 +128,7 @@ event.pipelines.push(
 `example:block/charge` is `assets/example/textures/block/charge.png` as the `minecraft:blocks`
 atlas holds it, `minecraft:item/diamond` an item sprite. An animated sprite animates. A pipeline
 always samples a rectangle of the atlas, never a texture of its own. A texture file of your mod's
-own, packed into the runtime atlas's slot pool (#4438) and drawn the same way, follows once that
+own, packed into the runtime atlas's slot pool (arismoko/horizon#4438) and drawn the same way, follows once that
 pool exists.
 
 The shader then has one more function:

@@ -557,7 +557,7 @@ pub struct PlayerMotion {
     /// The level's world border, whose walls stop the player's movement
     /// from inside (the game keeps it current; None: no border).
     pub border: Option<horizon_core::geometry::border::BorderGeometry>,
-    /// A mod's boxes in which the level's blocks don't stop this player (#3717).
+    /// A mod's boxes in which the level's blocks don't stop this player (arismoko/horizon#3717).
     pub collision_exclusions: horizon_world::collision_exclusions::CollisionExclusions,
 }
 impl PlayerMotion {
@@ -597,7 +597,7 @@ impl PlayerMotion {
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
             // Entity.saveWithoutId's `Invulnerable` flag and its
-            // `invulnerable_time` window (#916).
+            // `invulnerable_time` window (arismoko/horizon#916).
             self.health.permanently_invulnerable = extra
                 .and_then(|t| crate::save::number(t.get("Invulnerable")))
                 .is_some_and(|v| v != 0);
@@ -1375,7 +1375,7 @@ impl MotionWorld<'_, '_, '_> {
     /// then gliding, then air), keeping 0.6 of the vertical speed while flying.
     fn player_travel(&mut self, input: Vec3) -> Result<()> {
         // The player's one physical move this tick goes through the move gate
-        // (#2414): whichever travel branch runs, `move_self` arms the gate it
+        // (arismoko/horizon#2414): whichever travel branch runs, `move_self` arms the gate it
         // receives here.
         let mut gate = MoveGate::new();
         if self.player.swimming {
@@ -2034,7 +2034,7 @@ impl MotionWorld<'_, '_, '_> {
         entity_move::move_entity(self, mover, gate.delta())
     }
     /// `LocalPlayer.move`: the move, then `updateAutoJump` with the float
-    /// horizontal displacement. The gate is this invocation's (#2414), armed
+    /// horizontal displacement. The gate is this invocation's (arismoko/horizon#2414), armed
     /// here before the move's own handling, no-physics included.
     pub fn move_self(&mut self, gate: &mut MoveGate, movement: Vec3) -> Result<()> {
         crate::move_gate::arm(
@@ -2924,7 +2924,7 @@ impl crate::block_contact::InsideWalk for PlayerInside<'_, '_, '_, '_> {
         p: BlockPos,
     ) -> crate::block_contact::InsideShape {
         use crate::block_contact::InsideShape;
-        // A block a mod's collision exclusions reach is none to be inside (#3717).
+        // A block a mod's collision exclusions reach is none to be inside (arismoko/horizon#3717).
         if self.m.player.collision_exclusions.spares(p) {
             return InsideShape::Empty;
         }

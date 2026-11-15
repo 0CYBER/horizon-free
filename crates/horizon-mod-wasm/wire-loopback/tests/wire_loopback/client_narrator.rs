@@ -1,6 +1,6 @@
 //! `ClientNarratorClientHost::narrate` from a wasm mod reaches the client's
 //! narrator with the line and its `Narration` intact, and each named refusal
-//! comes back as the native call returns it (#4532).
+//! comes back as the native call returns it (arismoko/horizon#4532).
 use super::*;
 use mod_api::prelude::*;
 use mod_api::{NarrateError, Narration, Text, TextFormError};

@@ -27,7 +27,7 @@ impl Game<'_> {
     }
     /// [`mob_hits_player`](Self::mob_hits_player) whose hit was a creative
     /// player's, which passes the victim's invulnerability
-    /// (`DamageSource.isCreativePlayer`, #916).
+    /// (`DamageSource.isCreativePlayer`, arismoko/horizon#916).
     pub(in crate::game) fn mob_hits_player_from(
         &mut self,
         amount: f32,

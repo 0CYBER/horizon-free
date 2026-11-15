@@ -2321,7 +2321,7 @@ impl RestitutionWorld for MobRestitution<'_, '_, '_> {
     }
 }
 
-/// `LivingEntity.randomTeleport(x, y, z, true, avoid)` for a mob (#944), the
+/// `LivingEntity.randomTeleport(x, y, z, true, avoid)` for a mob (arismoko/horizon#944), the
 /// path an enderman's own teleport takes: the target is clamped into the
 /// world border, then drops to the first block in
 /// `minecraft:entities_can_teleport_to` below it, losing a block of height per

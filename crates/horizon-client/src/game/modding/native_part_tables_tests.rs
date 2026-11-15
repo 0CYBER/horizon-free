@@ -1,4 +1,4 @@
-//! The client `BlockPart` tables the fluid mesher reads (#3191), resolved on the client thread:
+//! The client `BlockPart` tables the fluid mesher reads (arismoko/horizon#3191), resolved on the client thread:
 //! with no part there are none, and a part's answers land per state, fluid and direction.
 use super::native_entity_refs::tests::with_client_game;
 use horizon_client::mesher::part_tables::PartTables;

@@ -1,4 +1,4 @@
-//! Small moves through the `entity_move` gate (#2414, ruling 5): a listener's
+//! Small moves through the `entity_move` gate (arismoko/horizon#2414, ruling 5): a listener's
 //! cancel or replacement sends the correction whatever the distance. A walk's
 //! step is under «moved wrongly»'s quarter block, and the live run watched a
 //! cancelled guest walk 69 steps with no rollback — the threshold let every

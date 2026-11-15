@@ -232,7 +232,7 @@ fn mob_variant_meta(
         }
         // Rabbit.DATA_TYPE_ID (after AgeableMob's two) and
         // Parrot.DATA_VARIANT_ID (after TamableAnimal's two and its flags and
-        // owner). The fox's type goes with its flags (#2538).
+        // owner). The fox's type goes with its flags (arismoko/horizon#2538).
         "minecraft:rabbit" | "minecraft:parrot" => {
             let index = if kind == "minecraft:parrot" { 20 } else { 18 };
             if e.variant != 0 {
@@ -2417,7 +2417,7 @@ impl Game<'_> {
     /// Handle this level's player packets before scheduled block ticks
     /// (`ServerGamePacketListenerImpl` ahead of `ServerLevel`'s block phase).
     /// A sand place in the same tick as another sand's fall schedule still
-    /// sees the support (#4510). `tick_lan` then syncs the level; a paused
+    /// sees the support (arismoko/horizon#4510). `tick_lan` then syncs the level; a paused
     /// tick that never calls this still drains inside `tick_lan`.
     pub(in crate::game) fn tick_lan_packets(&mut self) {
         if self.level_pass.packets_drained {
@@ -3398,7 +3398,7 @@ impl Game<'_> {
         // whatever the player asked for; levels rise by one a chunk, so FULL (33) reaches two
         // chunks past it. An extra area finishes its chunks out to its radius + 1. That covers what
         // the player tracks (`ChunkTrackingView`, within its view distance + 1) and those chunks'
-        // lit neighbours. The viewed areas (#3716) are squares of their own.
+        // lit neighbours. The viewed areas (arismoko/horizon#3716) are squares of their own.
         let radius = host.hub.config.view_distance + 1;
         let rule = self
             .ui

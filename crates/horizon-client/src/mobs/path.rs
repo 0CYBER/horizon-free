@@ -11,7 +11,7 @@ use crate::fast_hash::FxHashMap;
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_core::position::BlockPos;
 
-/// The node kinds, moved to `mod_api` so mods can name them (#944).
+/// The node kinds, moved to `mod_api` so mods can name them (arismoko/horizon#944).
 pub use mod_api::PathType;
 pub const PATH_TYPES: usize = PathType::COUNT;
 
@@ -27,7 +27,7 @@ impl MobWorld<'_> {
     /// WalkNodeEvaluator.getPathTypeStatic.
     /// A mod's supplied path is classified through here, so every block step
     /// saturates: a finite coordinate at `i32::MIN` or `i32::MAX` is never
-    /// refused, and never overflows a checked build either (#4443).
+    /// refused, and never overflows a checked build either (arismoko/horizon#4443).
     pub fn path_type_static(&self, x: i32, y: i32, z: i32) -> PathType {
         let t = self.path_type_from_state(x, y, z);
         if t == PathType::Open && y > self.world.bottom_y() {
@@ -49,7 +49,7 @@ impl MobWorld<'_> {
     }
     /// WalkNodeEvaluator.checkNeighbourBlocks: the first neighbour that gives a node a type
     /// (`getAdjacentBlockPathType`) decides it. The neighbour step saturates, so a
-    /// node at the edge of the `i32` range still reads its eight neighbours (#4443).
+    /// node at the edge of the `i32` range still reads its eight neighbours (arismoko/horizon#4443).
     pub fn check_neighbours(&self, x: i32, y: i32, z: i32, t: PathType) -> PathType {
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -97,7 +97,7 @@ impl MobWorld<'_> {
     }
     /// WalkNodeEvaluator.getFloorLevel(level, pos). Saturating, as the
     /// neighbour step is: a follower asking under a node at `i32::MIN` lands on
-    /// the same block instead of overflowing (#4443).
+    /// the same block instead of overflowing (arismoko/horizon#4443).
     pub fn floor_level(&self, x: i32, y: i32, z: i32) -> f64 {
         let below = y.saturating_sub(1);
         f64::from(below) + f64::from(self.data.state(self.world.block(x, below, z)).top)

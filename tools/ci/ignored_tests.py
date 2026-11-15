@@ -728,7 +728,7 @@ def run(package, skip, number=None, count=None, only=None):
             # Worldgen must meet its real-time deadlines without disabling test assertions.
             env["CARGO_PROFILE_TEST_OPT_LEVEL"] = "3"
         # --no-fail-fast: a target with accepted known failures must not stop the targets after it.
-        # Owner-approved stopgap; #2944 removes this when the legs run under 15 minutes.
+        # Owner-approved stopgap; arismoko/horizon#2944 removes this when the legs run under 15 minutes.
         client_half = package == "horizon-client" and count == 2 and number in (1, 2)
         command = ["cargo", "test", "-p", package, "--lib", *(["--bins", "--tests"] if package in INTEGRATION_TESTS else []), "--no-fail-fast"]
         workspace = "."

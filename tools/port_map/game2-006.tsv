@@ -71,8 +71,8 @@ AbstractArrow.isNoPhysics	inline	crates/horizon-client/src/arrows.rs::Ticker::ti
 AbstractArrow.getSlot	missing		an arrow's pickup stack is not addressable as an entity slot, so item commands on an arrow do nothing
 AbstractArrow.Pickup.byOrdinal	port	crates/horizon-client/src/arrows.rs::Pickup::from_byte	out of range is DISALLOWED
 Arrow.updateColor	port	crates/horizon-client/src/projectiles.rs::Projectile::arrow_effect_color	the tipped arrow's opaque potion colour for its flight and hit particles (-1 for none)
-Arrow.makeParticle	port	crates/horizon-client/src/game/network/remote_projectiles.rs::Game::arrow_makeparticle	ticked in #3514; `Arrow.makeParticle` is cited at crates/horizon-client/src/game/network/remote_projectiles.rs:218
-Arrow.handleEntityEvent	port	crates/horizon-client/src/game/network/remote_projectiles.rs::Game::remote_arrow_puff	ticked in #3514; `Arrow.handleEntityEvent` is cited at crates/horizon-client/src/game/network/remote_projectiles.rs:242
+Arrow.makeParticle	port	crates/horizon-client/src/game/network/remote_projectiles.rs::Game::arrow_makeparticle	ticked in arismoko/horizon#3514; `Arrow.makeParticle` is cited at crates/horizon-client/src/game/network/remote_projectiles.rs:218
+Arrow.handleEntityEvent	port	crates/horizon-client/src/game/network/remote_projectiles.rs::Game::remote_arrow_puff	ticked in arismoko/horizon#3514; `Arrow.handleEntityEvent` is cited at crates/horizon-client/src/game/network/remote_projectiles.rs:242
 ThrownTrident.defineSynchedData	skip:java		loyalty and foil synced fields; Horizon keeps loyalty on the trident struct
 ThrownTrident.isAcceptibleReturnOwner	port	crates/horizon-client/src/game/items/trident.rs::Game::tick_tridents	the loyalty return needs the owner's eye position; gap: minor: no separate alive or spectator check
 ThrownTrident.findHitEntities	port	crates/horizon-client/src/arrows.rs::Ticker::step_move_and_hit	one entity hit per trident, none once it has dealt damage

@@ -183,8 +183,8 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
     let id = format_ident!("HookId");
     let ids = format_ident!("hook_ids");
     let subscribed_name = format_ident!("{}", part.unwrap_or("subscribed"));
-    // Entity parts (#1077) carry plain methods beside their scoped hooks
-    // (#792): the goal, behavior and spawn-size registrars are not hooks, so
+    // Entity parts (arismoko/horizon#1077) carry plain methods beside their scoped hooks
+    // (arismoko/horizon#792): the goal, behavior and spawn-size registrars are not hooks, so
     // their names subscribe nothing.
     if name == "EntityPart" {
         const ENTITY_PART_PLAIN: [&str; 5] = [
@@ -363,7 +363,7 @@ pub fn horizon_part(_attribute: TokenStream, input: TokenStream) -> TokenStream 
 }
 
 /// `#[point(side = "server" | "client" | "both", name = "…", slot = N, free, api(…), mirror(…))]`
-/// on a function: an injection point (#589), where mods listen through the API. The staging pass
+/// on a function: an injection point (arismoko/horizon#589), where mods listen through the API. The staging pass
 /// that builds the prebuilt game puts it on each replaceable function with an API record, with
 /// the function's replacement cell (`slot`); a function without a record is refused by this
 /// attribute, naming it. The source tree carries none. The function's head is its cell's one load

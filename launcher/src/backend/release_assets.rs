@@ -14,7 +14,7 @@ pub const PLATFORMS: [(&str, &str, &str, &str); 5] = [
         "horizon-macos-arm64.zip",
         "horizon-launcher-macos-arm64.zip",
     ),
-    // Intel Macs (#1161).
+    // Intel Macs (arismoko/horizon#1161).
     (
         "macos",
         "x86_64",

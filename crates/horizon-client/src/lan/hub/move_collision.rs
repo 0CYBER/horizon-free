@@ -1,5 +1,5 @@
 //! The collision part of `ServerGamePacketListenerImpl.handlePlayerPositionChange`, through the
-//! guest's collision exclusions (#3717): a mod's boxes in which the level's blocks don't stop the
+//! guest's collision exclusions (arismoko/horizon#3717): a mod's boxes in which the level's blocks don't stop the
 //! player are the same boxes its client moves it through.
 use super::{Guest, Hub, TickCtx};
 use crate::collisions::SceneCollisions;
@@ -34,7 +34,7 @@ impl Hub {
             binding,
             subject: None,
         };
-        // A Player-cause move through the move gate (#2414); the gate records the movement
+        // A Player-cause move through the move gate (arismoko/horizon#2414); the gate records the movement
         // unchanged and its delta is what the collision resolves.
         let requested = Vec3::new(
             to[0] - g.position[0],
@@ -49,7 +49,7 @@ impl Hub {
             requested,
         );
         let movement = gate.delta();
-        // A listener's decision that is not the request (#2414, ruling 5): the
+        // A listener's decision that is not the request (arismoko/horizon#2414, ruling 5): the
         // flag comes from the gate, not from comparing deltas here — a walk's
         // step is below «moved wrongly»'s threshold, and its cancel must
         // correct the guest all the same.
@@ -119,7 +119,7 @@ where
     // **requested** move against what happened, as vanilla measures the
     // packet's target - a cancelled move that went nowhere is the full
     // discrepancy. A decision that is not the request fails whatever the
-    // distance (#2414, ruling 5): a cancel or a replacement always sends the
+    // distance (arismoko/horizon#2414, ruling 5): a cancel or a replacement always sends the
     // guest a correction, so a walk's small step cannot slip under the
     // threshold and keep going. Vanilla's exemptions - a creative guest, and
     // the unobstructed-start check below - belong to the distance test alone

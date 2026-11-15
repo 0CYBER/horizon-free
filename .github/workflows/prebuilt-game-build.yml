@@ -1,5 +1,5 @@
 name: prebuilt game build
-# The prebuilt game's build (#589), every OS, called by nightly-build.yml (the Nightly's commit) and by prebuilt-game.yml
+# The prebuilt game's build (arismoko/horizon#589), every OS, called by nightly-build.yml (the Nightly's commit) and by prebuilt-game.yml
 # (a hand dispatch). Each leg builds, smokes and packs the SDK's assets (tools/prebuilt_game.py pack: its
 # `runtime-`, `api-` and `engine-<target>[-server].tar.xz`, build-data.tar.xz and surface.json) as this run's
 # artifact `sdk-leg-<leg>`, which sdk-publish.yml gathers and publishes: no job here writes anything, so a read-only
@@ -94,7 +94,7 @@ jobs:
         run: python tools/prebuilt_game.py smoke prebuilt
       # Runs what smoke built, installed as the launcher installs it, with no game data: it loads the game's
       # libraries and sets up the mods' runtime, and must stop cleanly at the missing prepared files. A crash
-      # there (two allocators, #3877) fails this OS's leg, so its archive never publishes.
+      # there (two allocators, arismoko/horizon#3877) fails this OS's leg, so its archive never publishes.
       - name: The game executable starts and loads the game's libraries
         timeout-minutes: 10
         run: python tools/prebuilt_game.py start prebuilt

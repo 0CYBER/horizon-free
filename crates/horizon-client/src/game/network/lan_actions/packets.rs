@@ -219,7 +219,7 @@ impl Game<'_> {
                     // ServerPlayerGameMode.handleBlockBreakAction: a creative START
                     // destroys the block at once (destroyAndAck "creative destroy"),
                     // so a UseItemOn sent behind it in the same tick (both buttons
-                    // at once, #3006) replaces the air it left. A survival START
+                    // at once, arismoko/horizon#3006) replaces the air it left. A survival START
                     // attacks the block at once, so a tap released in the same tick
                     // still plays a note. The dig is marked begun for tick_mining.
                     let pos = a.pos;
@@ -303,7 +303,7 @@ impl Game<'_> {
                         // Too far (handleBlockBreakAction's "too far"): the ack has the client
                         // undo its prediction, and only the dig drops — `destroy_pos` and the
                         // ticks since its START stay, so a STOP for the same block after the
-                        // guest comes back into reach counts them (#4124).
+                        // guest comes back into reach counts them (arismoko/horizon#4124).
                         host.play.entry(conn).or_default().dig_ended();
                         return;
                     }
@@ -315,7 +315,7 @@ impl Game<'_> {
                     };
                     host.hub.ack(conn, a.sequence);
                     // ServerPlayerGameMode.abortDestroyBlock clears the dig and the crack; the
-                    // clock `destroy_pos` names is left to the next START (#4124).
+                    // clock `destroy_pos` names is left to the next START (arismoko/horizon#4124).
                     host.play.entry(conn).or_default().dig_ended();
                     let state = self.world.block(a.pos[0], a.pos[1], a.pos[2]).0 as i32;
                     host.hub.send_to(
@@ -715,7 +715,7 @@ impl Game<'_> {
             }
             S::SelectBundleItem(p) => {
                 // ServerGamePacketListenerImpl.handleBundleItemSelectedPacket: the slot
-                // is the open menu's (#4436).
+                // is the open menu's (arismoko/horizon#4436).
                 let own = self
                     .lan_crafting_table_own_slots(conn)
                     .or_else(|| self.lan_station_own_slots(conn));

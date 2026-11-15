@@ -1,4 +1,4 @@
-//! `is_fire_source` answered by a block Part (#3185): stone keeps a fire burning, netherrack
+//! `is_fire_source` answered by a block Part (arismoko/horizon#3185): stone keeps a fire burning, netherrack
 //! refuses what the overworld's infiniburn tag gives it, and other blocks leave the tag to answer.
 use super::native_entity_refs::tests::with_game;
 use horizon_core::position::BlockPos;

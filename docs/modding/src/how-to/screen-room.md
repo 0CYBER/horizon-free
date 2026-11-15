@@ -1,6 +1,6 @@
 # Room beside a container
 
-`Hooks::screen_room` lets a client mod reserve room for a panel to the right of an open container. This is a layout query, not a drawing or cancellation hook. It does not add recipe properties, slot membership or ghost-placement APIs (Refs #3194).
+`Hooks::screen_room` lets a client mod reserve room for a panel to the right of an open container. This is a layout query, not a drawing or cancellation hook. It does not add recipe properties, slot membership or ghost-placement APIs (Refs arismoko/horizon#3194).
 
 The API is right-only because the existing recipe book occupies the left of the container; mod panels reserve the right. Left reservations are not part of this API.
 

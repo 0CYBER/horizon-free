@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The prebuilt game (#589): horizon-client as a Rust dylib plus every crate's metadata, so the launcher builds
+"""The prebuilt game (arismoko/horizon#589): horizon-client as a Rust dylib plus every crate's metadata, so the launcher builds
 native trait mods against it with rustc alone, in seconds, without the game's source or a game build.
 
     python3 tools/prebuilt_game.py build OUT [--server]   # build and collect the folder, write horizon-prebuilt.json
@@ -49,7 +49,7 @@ SMOKE = "prebuilt-smoke"
 SMOKE_API = "prebuilt-smoke-api"
 EXECUTABLE = "horizon-client.exe" if sys.platform == "win32" else "horizon-client"
 # The furthest a game started without its prepared files gets (game.rs `missing_resources`): past loading the
-# game's libraries and the mods' runtime environment (`entry::main_with`), where a split allocator aborts (#3877).
+# game's libraries and the mods' runtime environment (`entry::main_with`), where a split allocator aborts (arismoko/horizon#3877).
 NO_RESOURCES = "Horizon's prepared game files are missing"
 # The MinGW runtime the game's GNU DLLs import on Windows, installed beside the executable.
 MINGW_RUNTIME = ("libgcc_s_seh-1.dll", "libwinpthread-1.dll")
@@ -147,7 +147,7 @@ def head() -> str:
 
 
 def stage(target_dir: Path, stage_tool: Path | None = None) -> Path:
-    """A copy of HEAD's tracked source with the staging pass run over it (#589): every point method gets its
+    """A copy of HEAD's tracked source with the staging pass run over it (arismoko/horizon#589): every point method gets its
     `#[point]`, internals become public, and the build data is written with HEAD's commit in its header.
     The copy is the commit's own bytes ([`tracked_blobs`]), never the working tree's, which is never rewritten."""
     setup_started = time.monotonic()
@@ -177,7 +177,7 @@ def cargo_features(server: bool, platform: str) -> list[str]:
     """The game crate's features for this archive. The archive's std is a shared library with its own
     default-allocator `__rust_alloc`, and the wasm runtime's library, below the game, binds to it. Only ELF's
     dynamic linker (Linux) resolves every library's `__rust_alloc` to the first definition, the game's mimalloc.
-    Windows (#2394) and macOS (#3877) bind each import to the library it was linked against, so a game allocator
+    Windows (arismoko/horizon#2394) and macOS (arismoko/horizon#3877) bind each import to the library it was linked against, so a game allocator
     there leaves the wasm runtime, the mods' executable and std's own code on std's heap beside it, and a block
     freed on the other heap aborts. So everywhere but Linux the game keeps no allocator of its own and every
     library shares std's (the system heap)."""
@@ -704,8 +704,8 @@ def start(out: Path) -> None:
     """Start two installations of the fixed executable (with smoke's two libraries and without mods),
     each as a dedicated server with no game data: it loads the game's libraries
     and sets up the mods' runtime, then stops at the missing prepared files. Fails on a crash, a hang or any other
-    stop, so an archive whose libraries disagree (two allocators, #3877) cannot ship. On Windows it runs without
-    MinGW on PATH, as on a player's computer, so a runtime DLL the launcher would not install fails here (#3521)."""
+    stop, so an archive whose libraries disagree (two allocators, arismoko/horizon#3877) cannot ship. On Windows it runs without
+    MinGW on PATH, as on a player's computer, so a runtime DLL the launcher would not install fails here (arismoko/horizon#3521)."""
     # Run as a script, so lab sits on the path beside it; tests import this module without running `start`.
     import lab
 
@@ -911,7 +911,7 @@ def export_count(library: Path) -> int:
 
 
 def exports(out: Path) -> None:
-    """Report every DLL's Windows export count (#589), the separate wasm runtime included; warn on one past 80% of
+    """Report every DLL's Windows export count (arismoko/horizon#589), the separate wasm runtime included; warn on one past 80% of
     the limit and fail, after reporting them all, on any past 90%."""
     over = []
     for library in sorted((out / "deps").glob("*.dll")):

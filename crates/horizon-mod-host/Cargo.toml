@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
-description = "The mod host above the engine: loading, Host implementations, registries and hook dispatch (#2534)"
+description = "The mod host above the engine: loading, Host implementations, registries and hook dispatch (arismoko/horizon#2534)"
 
 [dependencies]
 mod-render = { package = "horizon-mod-render", path = "../horizon-mod-render" }

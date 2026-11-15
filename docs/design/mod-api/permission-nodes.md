@@ -1,6 +1,6 @@
 # Permission nodes and handlers: proposed design
 
-**Status: the approved design for #1034 (merged in #2876); the build is #1034 and is not done.** The two gather hooks and the query API described here do not exist yet; the build follows this document. It does not change sound hooks or existing permissions.
+**Status: the approved design for arismoko/horizon#1034 (merged in arismoko/horizon#2876); the build is arismoko/horizon#1034 and is not done.** The two gather hooks and the query API described here do not exist yet; the build follows this document. It does not change sound hooks or existing permissions.
 
 ## Boundary and existing contracts
 
@@ -39,7 +39,7 @@ A mod command may declare a **per-path requirement** that consults the typed ser
 
 Answer order for a command that declares a node: a configured handler's answer decides; with no handler configured the usage's operator level decides, as in vanilla; a handler error denies and is logged, and never falls back to the level. Vanilla's own commands, and mod commands without a node, are unchanged.
 
-One server host method resends a player's command tree (vanilla already resends it on join, respawn, dimension change and an operator change); a handler calls it when its answers change. The server rechecks on every run, so a stale tree affects suggestions only. This is built on top of the typed service (#3609).
+One server host method resends a player's command tree (vanilla already resends it on join, respawn, dimension change and an operator change); a handler calls it when its answers change. The server rechecks on every run, so a stale tree affects suggestions only. This is built on top of the typed service (arismoko/horizon#3609).
 
 ## Example mod (contract sketch)
 

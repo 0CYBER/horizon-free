@@ -14,7 +14,7 @@ pub const JUMP: u8 = 4;
 pub const TARGET: u8 = 8;
 
 /// The facts of a target one mob may take, as far as [`Mob::valid_target`]
-/// reads them (#1175): another mob — what a tick's snapshot carries, or the
+/// reads them (arismoko/horizon#1175): another mob — what a tick's snapshot carries, or the
 /// game's own state — or a player. One rule set; both the write handle and a
 /// goal tick's view fill these from where they stand.
 pub enum TargetFacts {
@@ -850,9 +850,9 @@ impl Mob {
             }
         }
     }
-    /// The setter's own refusal (#1175), one rule both the write handle and
+    /// The setter's own refusal (arismoko/horizon#1175), one rule both the write handle and
     /// a goal tick's `set_target` ask: a brain-backed species' target is its
-    /// brain's to write (`getTarget` overrides it, #934). The read path does
+    /// brain's to write (`getTarget` overrides it, arismoko/horizon#934). The read path does
     /// not ask this — it reads a brain's own target back.
     pub fn refuses_set_target(&self) -> bool {
         super::ai::brain_target(self).is_some()
@@ -867,7 +867,7 @@ impl Mob {
         change
     }
     /// `Mob.asValidTarget` and the modeled `canAttack` overrides over the
-    /// target's facts (#1175): one rule set both the write handle and a goal
+    /// target's facts (arismoko/horizon#1175): one rule set both the write handle and a goal
     /// tick's view ask — the facts of the target, not where they were read.
     /// The warden's own override (`Warden.canTargetEntity`) reads the
     /// scoreboard and the world border, so the write handle answers it around

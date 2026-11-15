@@ -1,11 +1,11 @@
 # Design: mesh visibility
 
-Provisional answer to [#772](https://github.com/arismoko/horizon/issues/772):
+Provisional answer to [arismoko/horizon#772](https://github.com/arismoko/horizon/issues/772):
 freeze section-wide and per-cell face decisions before worker dispatch, expose
 raw immutable section input, and invalidate by captured revisions and epochs.
 Ari's side posts the decision on the issue; this note implements no Rust API.
-It extends the [section meshing plan](section-meshing.md) for #1508 and shares
-its input, budgets and publication boundary with #864, rather than introducing
+It extends the [section meshing plan](section-meshing.md) for arismoko/horizon#1508 and shares
+its input, budgets and publication boundary with arismoko/horizon#864, rather than introducing
 another meshing context or worker event bus.
 
 ## Vanilla and NeoForge 26.3
@@ -37,20 +37,20 @@ Client-lib captures input, game dispatches with ClientHost on the client
 world-owning thread, then validates and applies in one transaction. Refuse
 changed preconditions and reschedule; never recompute inside apply. Workers
 consume concrete frozen arrays only, with no new mod dispatch, live Host or
-world access. #1508's explicitly declared worker-safe geometry/tint capability
+world access. arismoko/horizon#1508's explicitly declared worker-safe geometry/tint capability
 is separate and does not authorize visibility callbacks on workers.
 
 A section decision is Keep or HideTerrain. HideTerrain emits zero block-model,
-fluid and #864 terrain-contribution quads and contributes no occlusion. It does
+fluid and arismoko/horizon#864 terrain-contribution quads and contributes no occlusion. It does
 not suppress independently drawn block entities, entities or collision. Keep
 permits per-position decisions: block-model visibility, fluid visibility and a
 six-bit directional face mask, ordered down, up, north, south, west, east.
 Default mask is 63. Suppression composes by intersection in dependency order;
 no listener can restore another listener's hidden geometry. Section suppression
 wins. Unculled decorative quads follow the position's model visibility, not an
-invented directional classification. #864 unassociated section contributions
+invented directional classification. arismoko/horizon#864 unassociated section contributions
 follow section visibility; position-associated quads follow their position and
-declared cull face. Replacement and append retain #1508's conflict rules.
+declared cull face. Replacement and append retain arismoko/horizon#1508's conflict rules.
 
 Face bits filter eligible geometry after normal culling; they do not force
 normally occluded faces to appear. A wholly hidden cell is nonoccluding, as in
@@ -63,7 +63,7 @@ filter emitted fluid directions without changing the captured fluid simulation.
 
 Raw means API-owned state ids and immutable captured values before visibility
 substitution, not palette internals, mutable chunks, pointers or GPU buffers.
-Reuse #1508's 18 cubed snapshot: 5832 cells including edges and corners, with
+Reuse arismoko/horizon#1508's 18 cubed snapshot: 5832 cells including edges and corners, with
 light, biome, availability, section coordinates and deterministic seeds.
 Reads are bounded to local [-1,16] on each axis; outside reads refuse. Missing
 is distinct from air but acts nonoccluding/nonmatching for decisions; outside
@@ -90,7 +90,7 @@ below are integration points, not claims that the proposed epochs already exist.
 Chunk arrival also invalidates surviving sections that captured Missing; use
 the streaming column installation boundary shared with replacement. Every plan,
 job and pending upload carries section lifetime/revision, halo revisions,
-resource, mod and visibility-policy epochs (and #1508 tint generation).
+resource, mod and visibility-policy epochs (and arismoko/horizon#1508 tint generation).
 Check again immediately before upload. Unload/reload at identical coordinates
 has a new lifetime; cancellation alone is insufficient. Old resources stay
 leased until old jobs finish, but old results publish zero uploads. Arbitrary
@@ -103,7 +103,7 @@ identical integer masks; no borrowed game representation crosses either ABI.
 Reject invalid tags, unknown/stale ids, duplicate coordinates, masks above 63,
 and positions outside [0,15]. No floating-point visibility values are accepted.
 Use at most 4096 position records and 64 KiB encoded visibility output per
-section, checked before allocation; charge decoded storage against #1508's
+section, checked before allocation; charge decoded storage against arismoko/horizon#1508's
 32 MiB section and 128 MiB in-flight ceilings. Admission waits at the global
 limit. Snapshot sharing counts storage once, leases remain charged until drop.
 
@@ -131,7 +131,7 @@ Future implementation tests, not results of this note:
 | Same cube, mask 61 (up removed) | 5 model quads |
 | Two adjacent opaque cubes, default | 10 exterior quads |
 | One cube wholly hidden beside another | 0 hidden quads, 6 remaining cube quads |
-| HideTerrain with fluid and one #864 quad | 0 terrain quads; independent block-entity draw retained |
+| HideTerrain with fluid and one arismoko/horizon#864 quad | 0 terrain quads; independent block-entity draw retained |
 | Hidden state in raw snapshot | Original state id unchanged |
 | Border neighbour Missing, arrives, unloads | Exposed cube faces 6, then 5, then 6 |
 | Write at local (15,15,15), neighbours loaded | Exactly 8 radius-one sections dirtied |
@@ -145,8 +145,8 @@ Future implementation tests, not results of this note:
 
 File none: do not file implementation issues until Ari posts the decision.
 First approve granularity, raw input and occlusion semantics. Then implement
-shared snapshot/epoch infrastructure with #1508, followed by generated native
-and wasm preparation adapters together. Finally integrate #864 contribution
+shared snapshot/epoch infrastructure with arismoko/horizon#1508, followed by generated native
+and wasm preparation adapters together. Finally integrate arismoko/horizon#864 contribution
 masking and exercise the route matrix, counters and throughput benchmark.
 
 ## Open questions
@@ -155,10 +155,10 @@ masking and exercise the route matrix, counters and throughput benchmark.
   preserve R2 lifecycle ownership and make a separate explicit lifecycle choice.
 - Should masks force faces visible? Recommend suppression only; whole-cell hiding
   already exposes neighbours and avoids contradictory occlusion declarations.
-- Can mods read beyond one block of halo? Recommend no, matching #1508; a future
+- Can mods read beyond one block of halo? Recommend no, matching arismoko/horizon#1508; a future
   radius extension requires explicit dependency and admission budgets.
 - Are the proposed output limits sufficient? Recommend 4096 records/64 KiB as
   initial ceilings and representative native/wasm measurements before raising them.
 - What exact public name and refresh receiver should ship? Recommend one section
   visibility preparation contract and a natural client-world handle refresh,
-  finalized with #1508 rather than a broad new Host service.
+  finalized with arismoko/horizon#1508 rather than a broad new Host service.

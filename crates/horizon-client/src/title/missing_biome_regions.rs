@@ -1,5 +1,5 @@
 //! The question before a world opens whose saved biome regions name mods that are not
-//! installed (#2554): open it with vanilla's biomes where those regions were, recorded in the
+//! installed (arismoko/horizon#2554): open it with vanilla's biomes where those regions were, recorded in the
 //! world, or do not open it.
 use super::*;
 

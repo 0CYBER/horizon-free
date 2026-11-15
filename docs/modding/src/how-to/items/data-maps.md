@@ -114,7 +114,7 @@ loot tables are resource identifiers. Compostability is boolean.
 Builtin reads return canonical NBT compounds with the field above, rather than the
 input's shorthand: distances are `Float`, frequencies `Int`, compostability `Byte`, and
 identifiers `String`. Infinity remains an NBT Float, never JSON null. Biome values
-are queryable through `BiomeKey`; typed game-event coverage remains in #4199.
+are queryable through `BiomeKey`; typed game-event coverage remains in arismoko/horizon#4199.
 Registering these stores and firing `data_maps_updated` does not sync them to clients.
 
 The gameplay readers and structure generation use immutable world-owned snapshots.
@@ -157,7 +157,7 @@ back to a block it already passed. Lightning's waxed check, the carved pumpkin a
 keep vanilla's own lists. A block the maps don't name keeps vanilla's behaviour.
 
 `generate_block_transform`, `neoforge:transformables` and `block_transform_appenders` are not read
-yet ([#3359](https://github.com/arismoko/horizon/issues/3359)).
+yet ([arismoko/horizon#3359](https://github.com/arismoko/horizon/issues/3359)).
 
 `host.biome_key("minecraft:plains")` resolves a `BiomeKey` in the installed
 server world registry. Its `id(host)` returns `Ok(canonical_id)`, and

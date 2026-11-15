@@ -1226,7 +1226,7 @@ impl ExperienceOrb {
         // `double fallSpeed = getDeltaMovement().y`, taken after the stuck
         // push and before the move.
         let wanted = self.velocity;
-        // The orb's Entity.move goes through the move gate (#2414); PR 1a
+        // The orb's Entity.move goes through the move gate (arismoko/horizon#2414); PR 1a
         // records the movement unchanged.
         let mut gate = crate::move_gate::armed(
             context,
@@ -2276,7 +2276,7 @@ impl ArmorStand {
         }
         let mut velocity = wanted;
         let mut horizontal_collision = false;
-        // The stand's Entity.move goes through the move gate (#2414); PR 1a
+        // The stand's Entity.move goes through the move gate (arismoko/horizon#2414); PR 1a
         // records the movement unchanged.
         let mut gate = crate::move_gate::armed(
             context,
@@ -2376,7 +2376,7 @@ impl ArmorStand {
             ..scene
         };
         // The lid's `Entity.move(mover, delta)` goes through the
-        // move gate (#2414); PR 1a records the movement unchanged.
+        // move gate (arismoko/horizon#2414); PR 1a records the movement unchanged.
         let mut gate =
             crate::move_gate::armed(context, self.id, "minecraft:armor_stand", mover, delta);
         let delta = gate.delta();

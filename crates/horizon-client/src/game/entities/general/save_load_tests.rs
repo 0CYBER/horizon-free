@@ -1,4 +1,4 @@
-//! #792 stage 3: the general record's live load and save, through the game
+//! arismoko/horizon#792 stage 3: the general record's live load and save, through the game
 //! fixture. The record codec's own tests (`general.rs`) cover the format;
 //! these cover what the game does with it: publish a tree through the same
 //! join boundary a fresh spawn takes, remember its identities, save one

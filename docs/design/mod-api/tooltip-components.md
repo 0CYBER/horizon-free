@@ -1,15 +1,15 @@
 # Design: tooltip components in full
 
-Provisional contract for #2927. This page proposes an API, not an implemented
-feature. The issue and maintainer's contract supplied in the #3129 review govern this
+Provisional contract for arismoko/horizon#2927. This page proposes an API, not an implemented
+feature. The issue and maintainer's contract supplied in the arismoko/horizon#3129 review govern this
 proposal. Public NeoForge evidence is distinguished from that supplied contract;
 no NeoForge implementation source or patches are needed to adopt the contract.
 
 ## Current owners and baseline
 
 Every file:line below was re-verified against fetched fork main `4ee6ab60696fda68c1d99b05ffd972edec0b9a74`.
-`TooltipImageSource` is not on that main. This design depends on PR #2974
-landing first; the #2927 build must come after it. PR #2974
+`TooltipImageSource` is not on that main. This design depends on PR arismoko/horizon#2974
+landing first; the arismoko/horizon#2927 build must come after it. PR arismoko/horizon#2974
 (`fix/bundle-tooltip-element`): `TooltipImage.stack` becomes
 `source: TooltipImageSource { ItemPart(ItemStack), Bundle(ItemStack) }`.
 The bundle enters the same ordered list at `components.isEmpty() ? 0 : 1`;
@@ -136,7 +136,7 @@ the widest text element (components contribute zero), applies screen fitting,
 then a positive maximum-width cap. The maintainers have supplied the screen-fit
 complete rule below; no screen-fit arithmetic remains open.
 Pre's font controls final measurement and drawing.
-These are accepted contract facts from the #3129 review, not a claim to have
+These are accepted contract facts from the arismoko/horizon#3129 review, not a claim to have
 independently verified NeoForge internals. No NeoForge source or patches were
 consulted. The [public GUI tooltip documentation](https://docs.neoforged.net/docs/gui/tooltips/)
 was inaccessible; this does not leave the supplied contract open.
@@ -160,7 +160,7 @@ Gather may insert the same type with different payloads anywhere in the list.
 
 Replace `TooltipImageSource::ItemPart` with a registered component source carrying
 an API-owned type key and opaque Wire-encoded payload. Keep bundle as the built-in
-source from #2974 until it can use the same internal dispatch without changing its
+source from arismoko/horizon#2974 until it can use the same internal dispatch without changing its
 vanilla result. A typed registrar hides byte encoding from mod authors; arbitrary
 user data means any supported Wire schema, not native pointers, Java objects or
 unbounded allocation. New keys, payload envelopes, selected-font references,
@@ -347,7 +347,7 @@ there is no pending overflow-boundary row.
 
 ## Stages
 
-1. Land #2974 first, then implement #2927 on that ordered-source shape using
+1. Land arismoko/horizon#2974 first, then implement arismoko/horizon#2927 on that ordered-source shape using
    the complete supplied screen-fit contract.
 2. Add the once-only client registrar before first resource load, Wire envelope,
    font reference and prepared component interface on native and wasm together.
@@ -359,7 +359,7 @@ there is no pending overflow-boundary row.
 
 ## Build issue
 
-The #2927 implementation starts only after #2974 lands, and carries stages 2–4
+The arismoko/horizon#2927 implementation starts only after arismoko/horizon#2974 lands, and carries stages 2–4
 as one complete native/wasm contract: registrar, Wire data envelope, font reference,
 prepared component, removal of both old parts with every caller and the catalog,
 shared item/text-only preparation, a no-listener fast path that is vanilla apart from the screen-fit wrap, and a book

@@ -201,7 +201,7 @@ impl Game<'_> {
         motion.invulnerable = abilities.invulnerable || g.handover.is_some();
         // `ServerPlayer.isInvulnerableTo`'s connection term, as of now.
         motion.client_loaded = g.client_loaded();
-        // The mods' collision exclusions are the guest's (#3717).
+        // The mods' collision exclusions are the guest's (arismoko/horizon#3717).
         motion
             .collision_exclusions
             .clone_from(&g.collision_exclusions);
@@ -263,7 +263,7 @@ impl Game<'_> {
         }
         // The window's screens are the host's: a sign, book, command block or
         // mount menu the guest's action opens is not drawn over the host's
-        // world (#687). The guest's client opens its own.
+        // world (arismoko/horizon#687). The guest's client opens its own.
         let screen = std::mem::replace(&mut self.screen, Screen::Playing);
         let host_sign = self.sign_edit.take();
         let host_book = self.book.take();
@@ -500,7 +500,7 @@ impl Game<'_> {
             .unwrap_or_default();
         // The callbacks a turn ends with (combat, armor, the totem, the food hook) can reach a
         // mod and panic. The swap is still restored below and the guest's progress written
-        // back; the panic resumes at the end (#2240). `as_guest_at` calls this after catching a
+        // back; the panic resumes at the end (arismoko/horizon#2240). `as_guest_at` calls this after catching a
         // panic of the turn itself, so a panic here then goes on in place of that one.
         let callbacks = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if !turn_events.is_empty() {
@@ -1070,7 +1070,7 @@ impl Game<'_> {
 
     /// `LivingEntity.playHurtSound` for a guest: the server's `Entity.playSound`
     /// reaches every player around but the hurt one, whose own client plays it
-    /// from `handleDamageEvent` (#4149).
+    /// from `handleDamageEvent` (arismoko/horizon#4149).
     pub(super) fn guest_hurt_sound(&mut self, conn: u32, sound: &str) {
         let Some(at) = self
             .lan

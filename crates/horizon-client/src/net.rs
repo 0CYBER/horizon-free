@@ -1457,7 +1457,7 @@ fn configure(
                             &horizon_protocol::mod_list::local(),
                         ),
                     }))?;
-                    // And the mods' datapack registries it has (#811).
+                    // And the mods' datapack registries it has (arismoko/horizon#811).
                     if let Some(data) = crate::datapack_net::offer() {
                         reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
                             channel: crate::datapack_net::OFFER_CHANNEL.into(),
@@ -2354,7 +2354,7 @@ mod tests {
         );
     }
 
-    /// #3716: a client asked about viewed levels answers in configuration, before its
+    /// arismoko/horizon#3716: a client asked about viewed levels answers in configuration, before its
     /// acknowledgement, that it views two levels besides its own.
     #[test]
     fn configuration_answers_the_viewed_levels_query_with_its_cap() {
@@ -2401,7 +2401,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// #3384: a client asked which `horizon:menu_extra` layout it reads answers its revision
+    /// arismoko/horizon#3384: a client asked which `horizon:menu_extra` layout it reads answers its revision
     /// in configuration, and keeps it for play (a server that never asked serves the legacy layout).
     #[test]
     fn configuration_answers_the_menu_extra_revision_query() {

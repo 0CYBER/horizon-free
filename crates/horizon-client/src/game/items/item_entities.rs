@@ -80,7 +80,7 @@ impl Game<'_> {
                 // where the item can reach this tick.
                 obstacles.near(ahead::reach(item), &mut nearby);
                 // ItemEntity.tick's noPhysics (servers only): out of a block, a solid entity
-                // or the border, placed or closed on it, towards the closest open side (#1252).
+                // or the border, placed or closed on it, towards the closest open side (arismoko/horizon#1252).
                 let no_physics = merging
                     && item.inside_block(
                         &self.world,

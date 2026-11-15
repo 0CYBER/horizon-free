@@ -1,10 +1,10 @@
-//! The client door of the move gate (#2414): the one function that arms a
+//! The client door of the move gate (arismoko/horizon#2414): the one function that arms a
 //! physical entity move, and the only code allowed to reach the collide
 //! entries. A family that resolves its own movement goes through a [`MoveGate`]
 //! here; `clippy.toml` bans calling the `resolve*` entries anywhere else, so a
 //! forgotten family cannot compile around the gate.
 //!
-//! [`arm`] is also where the `entity_move` hook fires (#2414, design #2308):
+//! [`arm`] is also where the `entity_move` hook fires (arismoko/horizon#2414, design arismoko/horizon#2308):
 //! decide, fire, apply — in that one function, on the authoritative side, only
 //! when a listener subscribes (one branch otherwise: no snapshot, no
 //! allocation, no mod scan).
@@ -20,7 +20,7 @@ use mod_api::MoveCause;
 use std::borrow::Cow;
 use std::io;
 
-/// The `entity_move` hook's target (#2414): the generated dispatch the
+/// The `entity_move` hook's target (arismoko/horizon#2414): the generated dispatch the
 /// catalog's generator requires of a target, with the loop's own reader as
 /// the context. Its declaration carries `isolate`, so the same generated
 /// walk is the one the move gate dispatches through — no alias, no second
@@ -37,7 +37,7 @@ pub fn native_entity_move(
     mod_api::dispatch_entity_move(&reader.context(), entity, kind, cause, delta, canceled);
 }
 
-/// The cause the mod API names for a `MoverType` (`entity_move` of #2414):
+/// The cause the mod API names for a `MoverType` (`entity_move` of arismoko/horizon#2414):
 /// vanilla's five mover names, one for one.
 fn cause_of(cause: MoverType) -> MoveCause {
     match cause {
@@ -49,7 +49,7 @@ fn cause_of(cause: MoverType) -> MoveCause {
     }
 }
 
-/// Arm one physical `Entity.move` invocation (#2414): the entity `entity` is
+/// Arm one physical `Entity.move` invocation (arismoko/horizon#2414): the entity `entity` is
 /// about to move by `delta` for `cause`'s sake. The `entity_move` hook fires
 /// here — in this one function — on the authoritative side, and only when a
 /// listener subscribes; with none, or on a client's own prediction, the
@@ -100,7 +100,7 @@ pub fn arm_with<'k>(
         gate.skip();
         return;
     }
-    // Design #2308: replacement components lie in ±64 blocks and are finite;
+    // Design arismoko/horizon#2308: replacement components lie in ±64 blocks and are finite;
     // a malformed result is rejected whole — like the requested delta would
     // be — never clamped.
     if replaced.iter().all(|v| v.is_finite() && v.abs() <= 64.0) {
@@ -148,7 +148,7 @@ pub fn armed(
     armed_with(context, entity, || Cow::Borrowed(kind), cause, delta)
 }
 
-/// The collide entries: the move gate's own (#2414). The `clippy.toml` ban
+/// The collide entries: the move gate's own (arismoko/horizon#2414). The `clippy.toml` ban
 /// targets their callers; these wrappers are the one caller-side exception,
 /// and everything else resolves through them.
 #[allow(clippy::disallowed_methods)]

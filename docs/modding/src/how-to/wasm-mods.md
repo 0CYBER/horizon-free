@@ -251,7 +251,7 @@ when saving its options; no launcher rebuild or game argument is needed.
 
 The unset default is `5 + 300 / available_threads` seconds (at least one thread):
 **1 → 305 s; 2 → 155 s; 8 → 42.5 s; 64 → 9.6875 s**.
-Issue #3673 measured a 30 MB module at roughly 30 s on one thread and 3 s on eight.
+Issue arismoko/horizon#3673 measured a 30 MB module at roughly 30 s on one thread and 3 s on eight.
 The 300 s single-thread allowance is ten times the former, plus 5 s fixed headroom.
 The eight-thread default remains above the previous 37.743749290 s limit, which
 was ten times a 3.774374929 s compile of a 67,998,240-byte module on a Ryzen 7 5700X.

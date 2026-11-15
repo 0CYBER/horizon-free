@@ -413,7 +413,7 @@ pub fn init(m: &mut Mob, shuffle_seed: i64) {
         Kind::Tadpole => tadpole_package(shuffle_seed),
     };
     // The parts' behaviors join before the sort, so each lands after
-    // vanilla's of its priority (#824); the stable sort keeps vanilla's own
+    // vanilla's of its priority (arismoko/horizon#824); the stable sort keeps vanilla's own
     // hand-written order. Nothing joins a type no part attached to, and
     // nothing is asked or built then.
     let before = b.list.len();
@@ -456,7 +456,7 @@ pub fn set_transport_cooldown(m: &mut Mob, ticks: i32) {
 /// The happy ghast grew up (`adultGhastSetup`): every running behaviour
 /// stops (`Brain.stopAll`) and the memories are cleared; the brain no
 /// longer ticks. A running mod behavior stops with its `stop` callback,
-/// as `Brain.stopAll` reaches every running behavior's (#824); the
+/// as `Brain.stopAll` reaches every running behavior's (arismoko/horizon#824); the
 /// vanilla entries keep the port's own state reset.
 pub fn grown_up(m: &mut Mob, w: &MobWorld<'_>) {
     let Some(b) = m.extra.animal_brain.as_deref_mut() else {
@@ -989,7 +989,7 @@ enum B {
         running: bool,
         player: bool,
     },
-    /// A mod's behavior (#824), wrapped by `mod_behaviors`.
+    /// A mod's behavior (arismoko/horizon#824), wrapped by `mod_behaviors`.
     Mod(super::mod_behaviors::ModBehavior),
     Gate(Box<Gate>),
     /// `CountDownCooldownTicks(GAZE_COOLDOWN_TICKS)` and
@@ -2793,7 +2793,7 @@ fn tadpole_package(seed: i64) -> Vec<Entry> {
 
 // ---- Mod behaviors ------------------------------------------------------
 
-/// The parts' behaviors for this brain (#824): each joins the list with its
+/// The parts' behaviors for this brain (arismoko/horizon#824): each joins the list with its
 /// activity and priority, refused where this brain has no such activity.
 fn attach_behaviors(mob_id: &str, list: &mut Vec<Entry>) {
     struct Reg<'a> {

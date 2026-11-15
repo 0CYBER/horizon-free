@@ -94,7 +94,7 @@ pub trait GoalHost {
     ) -> Option<bool>;
     /// Run `behavior`'s `op` on the mob in hand with the tick's `MobWorld`,
     /// naming `mod_id`'s `part` in a panic, over the same mob-tick view a
-    /// goal gets (#824). None where this side runs no mod behaviors.
+    /// goal gets (arismoko/horizon#824). None where this side runs no mod behaviors.
     fn run_behavior(
         &self,
         behavior: &mut Box<dyn mod_api::Behavior>,
@@ -121,7 +121,7 @@ pub enum GoalOp {
     Tick,
 }
 
-/// One mod behavior call the ported brains make (#824), as [`GoalOp`] names
+/// One mod behavior call the ported brains make (arismoko/horizon#824), as [`GoalOp`] names
 /// a goal's.
 #[derive(Clone, Copy, Debug)]
 pub enum BehaviorOp {
@@ -137,7 +137,7 @@ pub enum BehaviorOp {
     Stop,
 }
 
-/// Ask the installed entity parts for the mob's mod goals (#1077), right after
+/// Ask the installed entity parts for the mob's mod goals (arismoko/horizon#1077), right after
 /// the species' own `ai::register` — vanilla's `registerGoals` moment, which a
 /// mob loaded from a chunk passes through as a spawned one does.
 pub fn attach(m: &mut Mob) {

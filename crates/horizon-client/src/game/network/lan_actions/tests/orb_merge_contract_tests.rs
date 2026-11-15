@@ -1,4 +1,4 @@
-//! The issue #3977 merge contract through a real `Game`: `3 x 2` and `5 x 1` become
+//! The issue arismoko/horizon#3977 merge contract through a real `Game`: `3 x 2` and `5 x 1` become
 //! `11 x 1`, which saves unchanged and pays 11 once on pickup.
 use crate::game::native_entity_refs::tests::with_game;
 use crate::game::native_item_places::tests::{guest, open_to_lan};

@@ -1,5 +1,5 @@
 //! `LivingEntity.updatingUsingItem` and `releaseUsingItem` go on only while the
-//! hand holds the item the use began with (`ItemStack.isSameItem`), as #3211 asks.
+//! hand holds the item the use began with (`ItemStack.isSameItem`), as arismoko/horizon#3211 asks.
 use super::item_use::interact_vibration_tests::with_game;
 use super::*;
 

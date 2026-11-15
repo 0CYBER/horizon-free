@@ -393,7 +393,7 @@ pub(super) fn emit<'a>(
         let mut inits = Vec::new();
         let mut write_back = String::new();
         // The fields an isolated dispatch rolls back to the requested values on a listener's
-        // unwind (#2414 ruling), each with whether the event holds it behind a `&mut`.
+        // unwind (arismoko/horizon#2414 ruling), each with whether the event holds it behind a `&mut`.
         let mut rollback: Vec<(String, bool)> = Vec::new();
         let stack_outputs: Vec<_> = args
             .iter()
@@ -887,7 +887,7 @@ pub(super) fn emit<'a>(
         } else {
             mod_item.clone()
         };
-        // The #2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
+        // The arismoko/horizon#2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
         // **requested** outputs — not one an earlier listener had proposed — is skipped by this
         // hook for the session, and no later listener runs on this invocation.
         let (isolate_snapshot, isolate_restore) = if hook.isolate {

@@ -1,4 +1,4 @@
-//! Entity Part state (#796 stage 3) on the game side: where a handle's entity is now, and
+//! Entity Part state (arismoko/horizon#796 stage 3) on the game side: where a handle's entity is now, and
 //! which entity types keep Part state, checked once every type is known.
 use super::Game;
 use horizon_client::join_seq::residency::table::EntityLookup;

@@ -1,4 +1,4 @@
-//! Expected outcomes below are literal values from #784's accepted matrix.
+//! Expected outcomes below are literal values from arismoko/horizon#784's accepted matrix.
 //! This harness substitutes resource loading and network publication only; it
 //! runs the production coordinator, versioned storage, journal merge and undo.
 use super::*;

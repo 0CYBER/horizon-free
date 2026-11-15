@@ -19,7 +19,7 @@ impl Hub {
     /// Handle the players in this level's packets (`ServerGamePacketListenerImpl`
     /// for each), before the level's scheduled block ticks so a place landed in
     /// the same tick as a falling block's schedule still sees the support
-    /// (#4510). `tick_level` then syncs what those packets (and the block ticks)
+    /// (arismoko/horizon#4510). `tick_level` then syncs what those packets (and the block ticks)
     /// changed.
     pub fn drain_packets(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         let mut events = Vec::new();

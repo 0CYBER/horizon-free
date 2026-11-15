@@ -1,4 +1,4 @@
-//! Block entity Part state (#781), shared by the native and the compiled wasm run of the game
+//! Block entity Part state (arismoko/horizon#781), shared by the native and the compiled wasm run of the game
 //! test.
 use mod_api::*;
 use std::sync::Arc;

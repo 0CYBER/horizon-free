@@ -70,7 +70,7 @@ pub(crate) struct Installed {
     pub(crate) subscribers: horizon_mod_runtime::subscribers::Subscribers,
     pub(crate) disabled: Box<[std::sync::atomic::AtomicBool]>,
     /// The poison sets of the hooks whose dispatch isolates every listener
-    /// (#2414 ruling): a listener that unwound is skipped by that one hook
+    /// (arismoko/horizon#2414 ruling): a listener that unwound is skipped by that one hook
     /// for the rest of the session. One set per hook, filled only on a panic;
     /// `poison_free` answers through one atomic load, so a dispatch with no
     /// poison pays nothing.
@@ -149,7 +149,7 @@ pub(crate) fn install(mods: Mods) -> &'static Installed {
     }
 }
 
-/// Mark `id`'s listener of `hook` poisoned for the session (#2414 ruling):
+/// Mark `id`'s listener of `hook` poisoned for the session (arismoko/horizon#2414 ruling):
 /// it is skipped by that one hook alone — its other hooks and Parts are
 /// untouched, unlike a whole-mod disable. Called only from a listener's
 /// `catch_unwind` handler, so an installation is always in place.

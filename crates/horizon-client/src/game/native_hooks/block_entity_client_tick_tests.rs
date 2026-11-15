@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! `block_entity_client_tick` (#3611), through a client's real frames (`client_tick_steps` after
+//! `block_entity_client_tick` (arismoko/horizon#3611), through a client's real frames (`client_tick_steps` after
 //! the frame's `update_world` drain): a client's copies of a type that declared client ticks are
 //! told once per client tick each, between `client_tick_pre`, the level's pre and its post, and
 //! `client_tick_post`, in the ticker list's order, with the data the frame's drain merged; not

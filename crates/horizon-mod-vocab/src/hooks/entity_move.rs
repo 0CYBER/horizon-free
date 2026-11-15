@@ -1,7 +1,7 @@
 //! The `entity_move` hooks and helpers: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// One physical `Entity.move` invocation (#2414, design #2308, the
+    /// One physical `Entity.move` invocation (arismoko/horizon#2414, design arismoko/horizon#2308, the
     /// maintainer ruling of the same issue): the entity `entity` of `kind`
     /// (`minecraft:zombie`) is about to move by `delta` (blocks this tick) for
     /// `cause`'s sake - itself, the player behind a position packet, a piston,

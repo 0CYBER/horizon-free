@@ -382,7 +382,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             // block is already replaced, so only the entity goes away. The
             // extended base is MovingPistonBlock.destroy's, which only the
             // player-break path calls (player_destroy). A block entity it
-            // carried (#3184) goes too, with its removal side effects.
+            // carried (arismoko/horizon#3184) goes too, with its removal side effects.
             if let Some(piston) = self.remove_moving_piston(pos) {
                 let side_effects = update_flags & flags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS == 0;
                 self.land_carried(pos, piston.moved_state, false, side_effects);

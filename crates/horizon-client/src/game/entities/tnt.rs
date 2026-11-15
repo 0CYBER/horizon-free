@@ -215,7 +215,7 @@ impl PrimedTnt {
         self.previous = self.position;
         self.velocity.y -= self.get_gravity();
         let wanted = self.velocity;
-        // The TNT's Entity.move goes through the move gate (#2414), armed
+        // The TNT's Entity.move goes through the move gate (arismoko/horizon#2414), armed
         // before the stuck multiplier of the move itself; PR 1a records the
         // movement unchanged.
         let mut gate = horizon_client::move_gate::armed(

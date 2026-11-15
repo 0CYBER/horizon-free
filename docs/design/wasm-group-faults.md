@@ -1,6 +1,6 @@
 # What happens to a wasm dependency group after a trap or an interruption
 
-Design note for #2766 (interruption counted by work, not by wall clock) and #2761 (one failing mod shouldn't
+Design note for arismoko/horizon#2766 (interruption counted by work, not by wall clock) and arismoko/horizon#2761 (one failing mod shouldn't
 disable its whole group). Both come down to one question: when a call into a group fails, what is still safe to run?
 This note answers that question. It changes no code. The facts below are from `crates/horizon-mod-wasm` at main
 fbf4f06490, except where a line says a stage has landed.
@@ -63,13 +63,13 @@ fbf4f06490, except where a line says a stage has landed.
   and shows that a finite nested call afterwards stops the group.
 - **A stopped Part goes quiet.** The generated `WasmHandler` falls back to `NoAnswer` (`wire/host.rs:244`). The
   block-entity tick (`block_entity_ticks.rs:19-94` → `tick_mod_block_entity`, `native_hooks/shared.rs:3371-3420`)
-  keeps iterating and saving the entity, so its mod logic silently never runs again. That silence is #2766's bug.
+  keeps iterating and saving the entity, so its mod logic silently never runs again. That silence is arismoko/horizon#2766's bug.
 - **What a trap skips in the guest.** `wire_guest::run` pushes a `Keep` and takes a per-depth reply buffer, then
   pops and returns them when the call ends. A trap skips the pop. It also skips every `Drop` and every `RefCell`
   borrow release in the frames it unwinds, and an allocation that was mid-update in the std member's allocator
   stays mid-update. The group state (`horizon_group_state`: the handler table, the cache budget, the eviction
   callbacks) belongs to the std member, so every member shares it.
-- **What a fault can't leave half-done on the host.** Under the #1909 boundary, the host decodes a reply completely
+- **What a fault can't leave half-done on the host.** Under the arismoko/horizon#1909 boundary, the host decodes a reply completely
   before writing any field back, and point records do the same. So a call that faults applies none of its reply.
   What it already did through imports before the fault stays done. The native resource scope and `FrameScope`
   unwind correctly, and the group is marked stopped before held native objects drop (`PoisonOnPanic`).
@@ -77,7 +77,7 @@ fbf4f06490, except where a line says a stage has landed.
   `content/crash.rs`. Wasm stopping only the faulting group is already more lenient. This note keeps that difference,
   because it comes from the sandbox, not from the API.
 
-## 1. Interruption by guest work (#2766)
+## 1. Interruption by guest work (arismoko/horizon#2766)
 
 The runaway check should fire when the guest itself does too much work. Waiting on the host or on the OS scheduler
 must not count, and a busy server must give the same outcome as an idle one.
@@ -99,8 +99,8 @@ tank, and a guest that empties it traps with `Trap::OutOfFuel`.
   budget is set from measurement: the most fuel any ordinary call and any `Load` call uses in the in-tree samples and
   fixtures (horizon-machine-sample, the wasm fixture, the group fixtures), with a margin stated next to the
   constant. The 100-epoch value is not evidence for any particular fuel number.
-- **Cost.** Fuel instruments guest code. #1780's profile shows guest dispatch glue, codecs and allocation are a large
-  share of the remaining wasm tick, so the overhead is measured on #1780's scene before fuel replaces epochs (see
+- **Cost.** Fuel instruments guest code. arismoko/horizon#1780's profile shows guest dispatch glue, codecs and allocation are a large
+  share of the remaining wasm tick, so the overhead is measured on arismoko/horizon#1780's scene before fuel replaces epochs (see
   "What to measure"). Wasmtime's `fuel_async_yield_interval` and async features are not used.
 
 **Fallback, only if fuel's cost is rejected: a best-effort wall-clock heuristic.** It keeps epochs and a deadline
@@ -116,7 +116,7 @@ That heuristic still charges descheduled guest time, so a starved finite call ca
 and the acceptance rows for the fallback say so too. It is not offered as a guest-work budget, and no CPU-time check
 is added on top of it.
 
-## 2. After an interruption or a trap (#2766, #2761)
+## 2. After an interruption or a trap (arismoko/horizon#2766, arismoko/horizon#2761)
 
 | Failure | Guest code | Group | Call answers | Diagnostic |
 |---|---|---|---|---|
@@ -135,7 +135,7 @@ stopped by policy, but that is a choice to make, not a requirement for safety (o
 **Why a fault stops the group:** see §4. A stopped group is skipped before any work, which costs one relaxed load,
 as today.
 
-## 3. Attributing a fault to a member (#2761)
+## 3. Attributing a fault to a member (arismoko/horizon#2761)
 
 Today the log names only `self.id`, the member whose hook was entered. That is wrong whenever the fault happens in a
 library the addon called, or in a nested callback into another member.
@@ -153,7 +153,7 @@ library the addon called, or in a nested callback into another member.
 - **A guest panic's message.** The panic hook already sends the text through `HOST_LOG` before the trap. The fault
   report attaches that message to the innermost member, not to `cx.module`.
 
-## 4. What is safe to keep running (#2761)
+## 4. What is safe to keep running (arismoko/horizon#2761)
 
 **The constraint:** all members of a group share one linear memory, one std member (with its allocator and handler
 table) and one copy of each library. A trap can stop:
@@ -168,7 +168,7 @@ The trap gives no proof that it avoided all of these. So, after a fault:
 - **Resuming any member of the faulted instance is unsafe.** That includes members that "had nothing to do with
   it": the allocator and the handler table are theirs too.
 - **Splitting the group to contain faults is rejected.** Giving each addon its own copy of the library would break
-  the one-copy model (#1909) and make wasm's dependency model differ from native's.
+  the one-copy model (arismoko/horizon#1909) and make wasm's dependency model differ from native's.
 - **Rolling back to a snapshot before each call is rejected for hot paths.** It means copying or tracking writes to
   the group's memory on every outermost call. Wasmtime offers no copy-on-write checkpoint of a live memory, so the
   cost would be per call. It stays an open question for cold calls (`Load`).
@@ -191,13 +191,13 @@ The trap gives no proof that it avoided all of these. So, after a fault:
   library.
 - **The same dependency model for native and wasm.** Dropping a faulting member's dependents follows the load-time
   rule for a missing required dependency. No wasm-only packaging unit or grouping is added.
-- **The #1909 boundary is unchanged.** Wire bytes in, a reply decoded whole before write-back, and refusals at load
+- **The arismoko/horizon#1909 boundary is unchanged.** Wire bytes in, a reply decoded whole before write-back, and refusals at load
   for what can't cross.
 - **No silent skip.** Every stop, refusal and rebuild is reported, and the Mods page shows the group's state.
 
 ## What to measure and test
 
-All measurements run on the same frozen main, with the same scene as #1780's runs: a local bench scene, 1,000
+All measurements run on the same frozen main, with the same scene as arismoko/horizon#1780's runs: a local bench scene, 1,000
 `machine_sample:machine`, a flat dedicated world, 15 s warmup and 20 s report, three repetitions, with the CPU named.
 
 | Measurement | Compared | Acceptance |
@@ -217,7 +217,7 @@ All measurements run on the same frozen main, with the same scene as #1780's run
 ## Open questions
 
 1. **If fuel costs too much, which way?** Accept the cost, take the best-effort fallback and live with load-dependent
-   interruptions, or cut guest work first (#1780) and measure again. That choice goes to the owner with the numbers.
+   interruptions, or cut guest work first (arismoko/horizon#1780) and measure again. That choice goes to the owner with the numbers.
 2. **When is the rebuild allowed?** Between any two ticks, or only at a save point, or on an operator command? A
    rebuild mid-session drops guest-memory state, which some mods may not expect.
 3. **Should repeated refusals stop a listener?** For example, after 100 consecutive refusals of the same listener,
@@ -226,6 +226,6 @@ All measurements run on the same frozen main, with the same scene as #1780's run
 4. **Snapshots for `Load`.** A checkpoint before each `Load` call could let a fault there drop only the faulting
    member without a full rebuild. Is that worth the extra path, or is the rebuild enough?
 5. **Writes outside any transaction.** Decision 8 leaves them applied. Should more hooks run their imports inside a
-   transaction so a fault can undo them? That belongs to #796 and #781's transaction contract.
+   transaction so a fault can undo them? That belongs to arismoko/horizon#796 and arismoko/horizon#781's transaction contract.
 6. **Who sees the report in multiplayer?** Server log and operators, certainly. Should players get a chat line when
    a group whose content they're interacting with stops?

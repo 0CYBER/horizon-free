@@ -126,7 +126,7 @@ impl MapRegistries for WorldRegistries<'_> {
         }
         // A mod-declared datapack registry the command ids do not list: the
         // world's loaded entries are the authority, and an id not held is
-        // refused (#3357's unknown-id rejection).
+        // refused (arismoko/horizon#3357's unknown-id rejection).
         if self.declared(registry) {
             return self
                 .datapack_entries(registry)

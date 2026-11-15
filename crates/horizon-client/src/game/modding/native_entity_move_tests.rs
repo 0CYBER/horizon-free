@@ -1,5 +1,5 @@
 //! The `entity_move` hook's contract at its one firing point,
-//! `move_gate::arm` (#2414, design #2308): what a listener may decide for one
+//! `move_gate::arm` (arismoko/horizon#2414, design arismoko/horizon#2308): what a listener may decide for one
 //! physical move, what is refused, and what a panic leaves behind.
 use horizon_core::geometry::Vec3;
 use horizon_world::entity_move::MoverType;
@@ -117,7 +117,7 @@ fn a_replacement_delta_is_armed() {
 }
 
 /// A replacement outside the ±64-block budget, or one that is not a finite
-/// number, is refused whole: the movement stands as it was (design #2308:
+/// number, is refused whole: the movement stands as it was (design arismoko/horizon#2308:
 /// reject, never clamp).
 #[test]
 fn a_malformed_replacement_is_refused_whole() {
@@ -139,7 +139,7 @@ fn a_malformed_replacement_is_refused_whole() {
 /// A listener that unwinds keeps the **requested** delta — its writes die
 /// with it — and the poison skips **this hook** of its mod for the session:
 /// the next move runs without it, and neither move panics out of the gate
-/// (#2414 maintainer ruling). The same mod's other hooks still run, and a
+/// (arismoko/horizon#2414 maintainer ruling). The same mod's other hooks still run, and a
 /// panic anywhere else does not poison anyone — the two tests below.
 #[test]
 fn a_panicking_listener_keeps_the_requested_move_and_is_disabled() {
@@ -176,7 +176,7 @@ fn a_panicking_listener_keeps_the_requested_move_and_is_disabled() {
 }
 
 /// The requested delta, not an earlier listener's replacement, is what a
-/// later panicking listener leaves behind (#2414 maintainer ruling: «A panic
+/// later panicking listener leaves behind (arismoko/horizon#2414 maintainer ruling: «A panic
 /// keeps the requested delta (not a replaced one)»).
 #[test]
 fn a_panic_after_a_replacement_keeps_the_requested_delta() {
@@ -217,7 +217,7 @@ fn a_panic_after_a_replacement_keeps_the_requested_delta() {
 }
 
 /// With no listener the movement is armed unchanged: the same decision a move
-/// without the hook produces, for the no-listener oracle of design #2308.
+/// without the hook produces, for the no-listener oracle of design arismoko/horizon#2308.
 #[test]
 fn without_listeners_the_move_stands() {
     let mut gate = MoveGate::new();
@@ -239,7 +239,7 @@ fn without_listeners_the_move_stands() {
 }
 
 /// A mod whose `entity_move` listener panicked keeps every other hook: the
-/// poison skips this hook alone (#2414 ruling), so its `entity_tick_pre`
+/// poison skips this hook alone (arismoko/horizon#2414 ruling), so its `entity_tick_pre`
 /// still hears the same entity on the same session.
 #[test]
 fn a_poisoned_move_listener_keeps_its_other_hooks() {
@@ -300,7 +300,7 @@ fn a_poisoned_move_listener_keeps_its_other_hooks() {
 }
 
 /// A panic outside `entity_move` — another hook of the same mod, unwound by
-/// its own caller, as Parts' panics are (#3685) — poisons nobody: the next
+/// its own caller, as Parts' panics are (arismoko/horizon#3685) — poisons nobody: the next
 /// move still reaches the mod's listener.
 #[test]
 fn a_panic_elsewhere_does_not_poison_the_move_listener() {
@@ -332,7 +332,7 @@ fn a_panic_elsewhere_does_not_poison_the_move_listener() {
     mod_platform::testing::with_mods(mods, || {
         let context = server_context();
         // The other hook unwinds; its caller catches it, as the game catches
-        // a Part's panic (#3685).
+        // a Part's panic (arismoko/horizon#3685).
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             struct World;
             impl mod_api::Host for World {}

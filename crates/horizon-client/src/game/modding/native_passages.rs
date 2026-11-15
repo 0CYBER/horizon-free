@@ -1,4 +1,4 @@
-//! Passages within one level (#3775, docs/modding/src/how-to/passages.md): the server's
+//! Passages within one level (arismoko/horizon#3775, docs/modding/src/how-to/passages.md): the server's
 //! registry a mod fills through `LevelRef::register_passage`, its sync to the Horizon
 //! clients that hold each passage's chunk (`horizon:passage_sync`, sent with the chunk
 //! through the hub's chunk watches), and the copy a client keeps until it forgets the chunk.
@@ -14,7 +14,7 @@ use mod_api::{
 /// this bounds its copy and what the server sends it whatever the view distance.
 const MAX_PER_LEVEL: u32 = 256;
 /// Passages one chunk holds at most: what the server sends with the chunk, and the
-/// passages a client looks through around a moving player (#3775).
+/// passages a client looks through around a moving player (arismoko/horizon#3775).
 const MAX_PER_CHUNK: u32 = 8;
 /// The longest side of an opening, in blocks: an opening stays within 23 blocks of its
 /// centre, so the chunk holding the centre finds it.

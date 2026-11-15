@@ -1,4 +1,4 @@
-//! Chunk areas a server mod asks for one player (#3716, "viewed levels"): squares of chunks in any
+//! Chunk areas a server mod asks for one player (arismoko/horizon#3716, "viewed levels"): squares of chunks in any
 //! level that the engine keeps loaded, or ticking, and sends to that player's client, as
 //! Immersive Portals' `ChunkLoader` does for what a portal shows. `PlayerRef::set_chunk_areas`
 //! sets them (docs/modding/src/how-to/entities/chunk-areas.md).

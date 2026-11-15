@@ -429,7 +429,7 @@ impl Game<'_> {
     /// a player's (alive, nobody's passenger, not asleep: the engine's own
     /// `player_can_use_portal`, the one gate the client's portal entry, the
     /// guest trip and this read answer), a mob's walk gate
-    /// (`mob_can_use_portal`, #1275's read: not a boss that never travels,
+    /// (`mob_can_use_portal`, arismoko/horizon#1275's read: not a boss that never travels,
     /// not a creaking bound to its heart, not asleep in its bed, riding
     /// nothing, carrying no one this side holds back). None for a stale
     /// handle, an armor stand or the dragon: the portal walk carries
@@ -437,7 +437,7 @@ impl Game<'_> {
     pub(super) fn living_can_use_portal(&self, living: LivingRef) -> Option<bool> {
         match self.native_living_read_target(living)? {
             // The engine's own gate, the one the client's portal entry runs
-            // (`player_can_use_portal`, #943).
+            // (`player_can_use_portal`, arismoko/horizon#943).
             Target::Player => Some(self.player_can_use_portal()),
             Target::Guest(conn) => {
                 let g = self.command_guest(conn)?;
@@ -941,7 +941,7 @@ impl Game<'_> {
     ) -> bool {
         self.write_living_equipment(living, slot, stack, false)
     }
-    /// The write `native_living_set_equipment` makes (#932): with `defer`,
+    /// The write `native_living_set_equipment` makes (arismoko/horizon#932): with `defer`,
     /// its equip sound and game event wait for the root commit of the open
     /// transaction — an abort stays quiet — while the equipment and the
     /// attribute map change at once, as later steps of the same transaction
@@ -1001,7 +1001,7 @@ impl Game<'_> {
                 }
             }
             // The stack's attribute modifiers go on the live map at once, so
-            // the next read — a hit's armor, a `LivingRef`'s — sees them (#941).
+            // the next read — a hit's armor, a `LivingRef`'s — sees them (arismoko/horizon#941).
             self.collect_mob_equipment_attributes(id);
             return true;
         }
@@ -2696,7 +2696,7 @@ mod tests {
             assert!(!names[..i].contains(n), "{n} named twice");
         }
     }
-    /// The living reads of #943 answer the engine's own decisions.
+    /// The living reads of arismoko/horizon#943 answer the engine's own decisions.
     #[test]
     #[ignore = "daily"]
     fn the_engines_own_portal_melee_freeze_and_air_answers() {
@@ -2835,7 +2835,7 @@ mod tests {
         });
     }
 
-    /// A sleeper's bed orientation is the bed block's own facing (#943):
+    /// A sleeper's bed orientation is the bed block's own facing (arismoko/horizon#943):
     /// the block at the sleeping position, where it is one of `#minecraft:beds`.
     #[test]
     #[ignore = "daily"]
@@ -2921,7 +2921,7 @@ mod tests {
         });
     }
 
-    /// #943, review: a guest answers the same one portal rule over their
+    /// arismoko/horizon#943, review: a guest answers the same one portal rule over their
     /// body and vehicle (`can_use_portal_of`), not a hand-rolled copy.
     #[test]
     #[ignore = "daily"]

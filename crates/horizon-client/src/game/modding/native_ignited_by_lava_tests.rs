@@ -1,4 +1,4 @@
-//! `ignited_by_lava` answered by a block Part with the asked block's face (#3185): the Part's
+//! `ignited_by_lava` answered by a block Part with the asked block's face (arismoko/horizon#3185): the Part's
 //! answer replaces the state's `IGNITED_BY_LAVA` flag either way.
 use super::native_entity_refs::tests::with_game;
 use horizon_core::{geometry::Direction, position::BlockPos};

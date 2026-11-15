@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot #1459 move; --verify BASE checks exact items, order and moved lines.
+"""One-shot arismoko/horizon#1459 move; --verify BASE checks exact items, order and moved lines.
 
 Declared edits: repeated trait/impl/module envelopes, one generated include, the
 shared support comment, and rustfmt whitespace. No body or signature substitutions.

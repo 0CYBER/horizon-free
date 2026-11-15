@@ -1,4 +1,4 @@
-//! The entities of a viewed level (#3716, 9d): what its wrapped entity packets leave on the client,
+//! The entities of a viewed level (arismoko/horizon#3716, 9d): what its wrapped entity packets leave on the client,
 //! as `ClientPacketListener` handles them with that level current. They live in their viewed
 //! world only: nothing reaches the player's own entities, the renderer, sounds or a mod's hooks
 //! (drawing a viewed level is gap 13).

@@ -25,7 +25,7 @@ LightningBolt.getStrikePosition	inline	crates/horizon-client/src/game/entities/l
 LightningBolt.spawnFire	port	crates/horizon-client/src/game/entities/lightning.rs::Game::bolt_fire	asks ServerLevel.canSpreadFireAround (the fire_spread_radius_around_player rule, can_spread_fire_around) at the bolt before any fire or random draw
 LightningBolt.randomWalkCleaningCopper	inline	crates/horizon-world/src/level/tick.rs::Sim::lightning_clear_copper	3 to 5 walks of up to 8 steps
 LightningBolt.randomStepCleaningCopper	inline	crates/horizon-world/src/level/tick.rs::Sim::lightning_clear_copper	up to 10 random blocks in the 3x3x3 cube, first weathering copper steps back
-LightningBolt.shouldRenderAtSqrDistance	port	crates/horizon-client/src/game/entities/lightning.rs::Game::bolt_instances	ticked in #3514; `LightningBolt.shouldRenderAtSqrDistance` is cited at crates/horizon-client/src/game/entities/lightning.rs:591
+LightningBolt.shouldRenderAtSqrDistance	port	crates/horizon-client/src/game/entities/lightning.rs::Game::bolt_instances	ticked in arismoko/horizon#3514; `LightningBolt.shouldRenderAtSqrDistance` is cited at crates/horizon-client/src/game/entities/lightning.rs:591
 LinearInterpolationHandler.create	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::move_entity	3 steps (lerps.insert); only on a server's client, a local game moves boats, carts and bobbers directly
 LinearInterpolationHandler.startInterpolating	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::move_entity	target kept as Lerp with steps 3
 LinearInterpolationHandler.doInterpolate	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	gap: minor: position eased by 1/steps; a boat's or minecart's yaw is set at once, not eased

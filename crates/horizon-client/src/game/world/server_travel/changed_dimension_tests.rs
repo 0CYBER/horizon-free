@@ -1,5 +1,5 @@
 //! `player_changed_dimension` is heard on every logical server: the integrated server that runs
-//! single player and the LAN world opened from it, and a dedicated server (#3250).
+//! single player and the LAN world opened from it, and a dedicated server (arismoko/horizon#3250).
 //! All three tests are daily resource tests registered in `daily-horizon-client.txt`.
 use super::Dim;
 use crate::game::{

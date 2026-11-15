@@ -1,4 +1,4 @@
-"""Census of the mod API's public structs by construction kind (#2862).
+"""Census of the mod API's public structs by construction kind (arismoko/horizon#2862).
 
 Every mod-facing public struct in `horizon-mod-api` and `horizon-mod-vocab` is
 one of two kinds:

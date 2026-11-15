@@ -1596,7 +1596,7 @@ pub(super) mod tests {
     }
 
     /// The server thread keeps guest headroom, and a larger `RUST_MIN_STACK` still
-    /// reaches it (#2430).
+    /// reaches it (arismoko/horizon#2430).
     #[test]
     fn the_server_thread_stack_keeps_guest_headroom_and_larger_overrides() {
         let minimum = 136 * 1024 * 1024;

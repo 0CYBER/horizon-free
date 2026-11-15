@@ -964,7 +964,7 @@ mod tests {
     use horizon_world::registry::BlockStateId;
     use std::sync::Arc;
 
-    /// #3810: under a stone roof more than 64 blocks above the camera, as in a
+    /// arismoko/horizon#3810: under a stone roof more than 64 blocks above the camera, as in a
     /// deep excavation, MOTION_BLOCKING is the roof, so no rain splash lands on
     /// the floor; with the roof gone, it does.
     #[test]

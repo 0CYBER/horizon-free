@@ -2961,11 +2961,11 @@ mod tests {
 
     // The mods' post hooks' posed parts are kept from the body's own draw, on every entry the game draws
     // a mob or player through (CPU, GPU, layers only), and keeping them changes nothing drawn
-    // (#2060, #2464).
+    // (arismoko/horizon#2060, arismoko/horizon#2464).
     include!("render_pose_tests.rs");
 
     /// A part `render_player_pre` hid leaves the body, after Skin Customization, while the armour
-    /// layered on it keeps the part (#2060, part 2).
+    /// layered on it keeps the part (arismoko/horizon#2060, part 2).
     #[test]
     fn a_hidden_part_leaves_the_body_but_not_its_armour() {
         let (mob, data) = humanoid_zombie();
@@ -3019,7 +3019,7 @@ mod tests {
         );
 
         // `render_living_post` reads the parts as the body drew them: the hidden arm doesn't draw, and
-        // nothing else changed (#2464).
+        // nothing else changed (arismoko/horizon#2464).
         let (_, shown) = draw_parts(hide(&[]), &[]);
         let (_, armless) = draw_parts(hide(&[mod_api::HumanoidPart::RightArm]), &[]);
         for part in mod_api::HumanoidPart::ALL {

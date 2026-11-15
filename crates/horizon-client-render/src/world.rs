@@ -75,7 +75,7 @@ pub struct World {
     /// `flush_attachment_sync` sends.
     pub attachment_syncs: FxHashSet<horizon_mod_runtime::attachments::Holder>,
     /// Block entities a moving piston landed since the last flush, whose
-    /// synced attachments `flush_attachment_sync` sends whole (#3184).
+    /// synced attachments `flush_attachment_sync` sends whole (arismoko/horizon#3184).
     pub attachment_landings: FxHashSet<horizon_mod_runtime::attachments::Holder>,
     /// The capability generations mods' providers advanced here
     /// (`level_invalidate_capabilities`), which kept capabilities compare.

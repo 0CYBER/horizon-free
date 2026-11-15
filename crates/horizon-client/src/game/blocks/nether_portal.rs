@@ -887,7 +887,7 @@ impl Game<'_> {
         self.portals.entities.entry(id).or_default().cooldown = delay;
     }
     /// `LivingEntity.canUsePortal` over a player's body and its transport
-    /// (#943): `Entity.canUsePortal(false)` (alive, nobody's passenger) and
+    /// (arismoko/horizon#943): `Entity.canUsePortal(false)` (alive, nobody's passenger) and
     /// not asleep (`isSleeping`). The one rule the client's portal entry,
     /// the player in place and the guest arm of the `LivingRef` read answer
     /// — a parity fix: the client's own entry used to skip the sleep half
