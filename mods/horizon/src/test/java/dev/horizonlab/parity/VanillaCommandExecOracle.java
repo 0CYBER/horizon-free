@@ -1056,12 +1056,42 @@ public final class VanillaCommandExecOracle {
                         BlockPos pos = new BlockPos(p.get(0).getAsInt(), p.get(1).getAsInt(), p.get(2).getAsInt());
                         // ThreadedLevelLightEngine runs the checkBlock tasks a /fill queues at most 1000 per update,
                         // so after a large fill the light lags by many ticks on a loaded runner (command_reinforcements
-                        // read block light 10 in its sealed room, 2026-11-07). Read it once the tasks queued so far ran.
-                        var pending = player.level().getChunkSource().getLightEngine().waitForPendingTasks(
-                            pos.getX() >> 4, pos.getZ() >> 4);
+                        // read block light 10 in its sealed room, 2026-11-07). Read it once the tasks queued across
+                        // the neighbourhood and pending engine work have drained and the expected light holds.
+                        var light = (net.minecraft.server.level.ThreadedLevelLightEngine) player.level().getChunkSource().getLightEngine();
+                        int cx = pos.getX() >> 4, cz = pos.getZ() >> 4;
                         long lightDeadline = System.nanoTime() + 120_000_000_000L;
-                        while (!pending.isDone()) {
-                            if (System.nanoTime() > lightDeadline) throw new IllegalStateException("light updates did not finish");
+                        Integer expBlock = op.has("expect_light") ? op.getAsJsonArray("expect_light").get(0).getAsInt() : null;
+                        Integer expSky = op.has("expect_light") ? op.getAsJsonArray("expect_light").get(1).getAsInt() : null;
+                        int settled = 0;
+                        while (System.nanoTime() < lightDeadline) {
+                            var tasks = new java.util.ArrayList<java.util.concurrent.CompletableFuture<?>>();
+                            for (int dx = -2; dx <= 2; dx++) {
+                                for (int dz = -2; dz <= 2; dz++) {
+                                    tasks.add(light.waitForPendingTasks(cx + dx, cz + dz));
+                                }
+                            }
+                            for (var task : tasks) {
+                                while (!task.isDone()) {
+                                    if (System.nanoTime() > lightDeadline) throw new IllegalStateException("light updates did not finish");
+                                    tick();
+                                    try { Thread.sleep(5); } catch (InterruptedException e) { throw new RuntimeException(e); }
+                                }
+                            }
+                            boolean matches = true;
+                            if (expBlock != null && player.level().getBrightness(net.minecraft.world.level.LightLayer.BLOCK, pos) != expBlock) {
+                                matches = false;
+                            }
+                            if (expSky != null && player.level().getBrightness(net.minecraft.world.level.LightLayer.SKY, pos) != expSky) {
+                                matches = false;
+                            }
+                            if (!light.hasLightWork() && matches) {
+                                if (++settled >= 5) {
+                                    break;
+                                }
+                            } else {
+                                settled = 0;
+                            }
                             tick();
                             try { Thread.sleep(5); } catch (InterruptedException e) { throw new RuntimeException(e); }
                         }
@@ -1387,7 +1417,7 @@ public final class VanillaCommandExecOracle {
                         ready = level.areEntitiesActuallyLoadedAndTicking(new net.minecraft.world.level.ChunkPos(cx + dx, cz + dz));
                     }
                 }
-                if (ready && i >= 5) {
+                if (ready && !level.getChunkSource().getLightEngine().hasLightWork() && i >= 5) {
                     return;
                 }
                 try { Thread.sleep(5); } catch (InterruptedException e) { throw new RuntimeException(e); }
