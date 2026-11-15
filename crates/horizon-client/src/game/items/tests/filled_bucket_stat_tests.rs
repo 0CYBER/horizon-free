@@ -18,6 +18,13 @@ fn cauldron_game<'a>(
 ) -> Game<'a> {
     let mut game = server_game(resources);
     game.creative = false;
+    game.player = Some(
+        horizon_client::motion::PlayerMotion::new(
+            game.motion,
+            horizon_core::geometry::Vec3::new(2.5, 4.0, 2.5),
+        )
+        .unwrap(),
+    );
     let block = game
         .pack
         .assets
