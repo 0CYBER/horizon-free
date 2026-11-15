@@ -1921,7 +1921,7 @@ struct Game<'a> {
     lan_acting: Option<u32>,
     /// A mod asked for the command trees again (`native_refresh_commands`):
     /// the next server tick asks every mod for its commands and resends them.
-    native_commands_refresh: bool,
+    native_commands: native_server::NativeCommandState,
     /// The abilities of the server player whose turn it is (`as_guest`): their record's
     /// copy, which the turn reads and writes and `leave_guest` stores. None outside a turn.
     acting_abilities: Option<horizon_client::lan::abilities::PlayerAbilities>,
@@ -11144,7 +11144,7 @@ impl<'a> Game<'a> {
             lid_openers: HashMap::new(),
             lan_acting: None,
             acting_abilities: None,
-            native_commands_refresh: false,
+            native_commands: Default::default(),
             lan_building_boxes: Default::default(),
             save_after_guest_turn: false,
             lan_guest_swaps: Vec::new(),

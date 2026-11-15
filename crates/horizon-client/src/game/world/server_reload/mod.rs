@@ -124,14 +124,13 @@ impl Game<'_> {
         &mut self,
         prepared: PreparedServerReload,
         stack: &PackStack,
-        enabled_features: &[String],
     ) {
         let phase = self.mod_phase.clone();
         let _reload = phase
             .reloading()
             .expect("server apply on its owning thread");
         apply_listeners(prepared.steps, "server_reload_apply", |store| {
-            self.admit_store(*store, stack, enabled_features);
+            self.admit_store(*store, stack);
         });
         self.reload_resources = prepared.resources;
         self.structure_templates.clear();

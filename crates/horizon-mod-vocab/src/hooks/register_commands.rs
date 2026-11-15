@@ -3,11 +3,13 @@
 
 pub trait Hooks {
     /// The commands native mods add to the server's command tree: push
-    /// yours. Asked once when a world opens to players (a dedicated
-    /// server, a LAN host, single player's server thread); every player's
-    /// chat box then completes them as vanilla's, within their level. A
-    /// name vanilla has is left out. Asked again after a mod calls
-    /// `host.commands().refresh_commands()`. Each executable usage keeps its own
+    /// yours. Asked whenever the server builds its command tree, as the reference loader's
+    /// `Commands` does: when a world opens (a dedicated server, a LAN host, single player's
+    /// server thread), before its functions load, so a function line may name your command;
+    /// on each `/reload` and data pack change, so a command you stop pushing is refused by the
+    /// next functions loaded; and after a mod calls `host.commands().refresh_commands()`.
+    /// Every player's chat box completes them as vanilla's, within their level. A
+    /// name vanilla has is left out. Each executable usage keeps its own
     /// permission level; a lower-level child only opens traversal through a
     /// shared prefix, not execution of that prefix. An argument's kind is one
     /// of `word`, `text`, `integer`, `number`, `boolean`, `player`, `item`,
@@ -20,7 +22,8 @@ pub trait Hooks {
         side = "server",
         contract = "collect",
         out = "commands",
-        neoforge = "RegisterCommandsEvent"
+        neoforge = "RegisterCommandsEvent",
+        version = 2
     )]
     fn register_commands();
 }
