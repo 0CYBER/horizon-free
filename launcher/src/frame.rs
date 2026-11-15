@@ -56,6 +56,10 @@ pub struct Rail {
     since: Option<Instant>,
     from: f32,
     at: f32,
+    /// The instance list's scroll, for the cue that more rows sit below.
+    list: gpui::ScrollHandle,
+    /// The web links shown in full while the instance list overflows (they fold into one row).
+    links_open: bool,
 }
 
 impl Rail {
@@ -480,6 +484,7 @@ impl Launcher {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.rail.list)
             .children(self.glass_instances(open, label, cx));
 
         // The player's hosted servers, one more section under the instances.
@@ -539,9 +544,12 @@ impl Launcher {
             );
         }
         let list = list.child(server_rows);
-        // More rows than the rail shows: a fade at the list's foot says it scrolls.
+        // More rows than the rail shows: the web links fold into one row, and while rows sit
+        // below the list's foot a fade and a "More" pill say so; the pill scrolls to them.
         let rows = self.instances.list.len() + servers.len();
         let overflows = 52. * rows as f32 > f32::from(window.viewport_size().height) - 420.;
+        let scroll = self.rail.list.clone();
+        let below = scroll.max_offset().y + scroll.offset().y > px(2.);
         let list = div()
             .relative()
             .flex()
@@ -549,19 +557,47 @@ impl Launcher {
             .flex_1()
             .min_h_0()
             .child(list)
-            .when(overflows, |d| {
+            .when(below, |d| {
                 d.child(
                     div()
                         .absolute()
                         .left_0()
                         .right_0()
                         .bottom_0()
-                        .h(px(32.))
+                        .h(px(56.))
+                        .flex()
+                        .items_end()
+                        .justify_center()
+                        .pb(px(4.))
                         .bg(gpui::linear_gradient(
                             180.,
                             gpui::linear_color_stop(gpui::black().opacity(0.), 0.),
-                            gpui::linear_color_stop(gpui::black().opacity(0.45), 1.),
-                        )),
+                            gpui::linear_color_stop(gpui::black().opacity(0.35), 0.8),
+                        ))
+                        .child(
+                            div()
+                                .id("rail-more")
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .h(px(24.))
+                                .px(px(if open { 10. } else { 6. }))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(white(ui::edge::STRONG))
+                                .bg(white(fill::ACTIVE))
+                                .cursor_pointer()
+                                .child(ui::icon("chevron-down", 14., white(ink::STRONG)))
+                                .when(open, |d| {
+                                    d.child(
+                                        ui::text(12., FontWeight::MEDIUM, ink::STRONG)
+                                            .whitespace_nowrap()
+                                            .child(tr("More")),
+                                    )
+                                })
+                                .when(!open, |d| d.tooltip(ui::tip(tr("More instances below"))))
+                                .on_click(move |_, _, _| scroll.scroll_to_bottom()),
+                        ),
                 )
             });
 
@@ -677,8 +713,25 @@ impl Launcher {
                 self.links.website.clone(),
             ),
         ];
+        // While the instances overflow, the links fold into one row the player can open.
+        let folded = overflows && !self.rail.links_open;
+        if overflows && links.iter().any(|(.., url)| !url.is_empty()) {
+            let (name, icon) = if folded {
+                (tr("More links"), "more-horizontal")
+            } else {
+                (tr("Fewer links"), "chevron-down")
+            };
+            foot = foot.child(
+                button("rail-links".into(), icon, name.into(), false).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.rail.links_open = !this.rail.links_open;
+                        cx.notify();
+                    },
+                )),
+            );
+        }
         for (id, name, icon, url) in links {
-            if url.is_empty() {
+            if url.is_empty() || folded {
                 continue;
             }
             foot = foot.child(
