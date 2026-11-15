@@ -2089,7 +2089,7 @@ fn disconnected_layout(h: f32, lines: usize, retry: bool) -> DisconnectedLayout 
 /// language. The screen keeps the component itself (`Screen::Disconnected::reason`), so it is
 /// decoded again here, at the moment it draws and narrates, as `DisconnectedScreen` renders its
 /// own component every frame.
-fn reason_plain(reason: &Text) -> String {
+pub fn reason_plain(reason: &Text) -> String {
     match reason.source_component() {
         // The resolver `Text::from(Value)` uses: a selector reads as its own text.
         Some(source) => crate::component::to_text(source, &mut |s| Text::literal(s)).plain(),
