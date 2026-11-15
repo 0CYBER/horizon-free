@@ -896,6 +896,8 @@ impl<H: LevelHost> NaturalLevel for Level<'_, H> {
     fn potential_spawns(&self, category: Category, pos: [i32; 3], entries: &mut Vec<SpawnEntry>) {
         self.game.potential_spawns(category, pos, entries);
     }
+    // `Level.getMinY` and `getMaxY`: the level's own range (0..255 in vanilla's
+    // Nether and End), not the widened column its chunks hold.
     fn min_y(&self) -> i32 {
         self.w.world.shape.min_y
     }
