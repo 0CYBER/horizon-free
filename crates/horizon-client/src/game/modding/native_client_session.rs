@@ -243,6 +243,26 @@ pub(super) mod tests {
         assert_eq!(list.entries[0].name, "p000");
         assert_eq!(list.entries[79].name, "p079");
         assert_eq!(list.header, None);
+        let mut overlay = horizon_client::tab_list::TabList::default();
+        overlay.header = Some(EngineText::literal("Header"));
+        overlay.footer = Some(EngineText::literal("Footer"));
+        let set = tab_list(
+            &[],
+            &board,
+            overlay.header.as_ref(),
+            overlay.footer.as_ref(),
+        );
+        assert_eq!(set.header.as_ref().map(plain).as_deref(), Some("Header"));
+        assert_eq!(set.footer.as_ref().map(plain).as_deref(), Some("Footer"));
+        overlay.reset();
+        let cleared = tab_list(
+            &[],
+            &board,
+            overlay.header.as_ref(),
+            overlay.footer.as_ref(),
+        );
+        assert_eq!(cleared.header, None);
+        assert_eq!(cleared.footer, None);
     }
 
     pub(in crate::game) fn logged_client(
