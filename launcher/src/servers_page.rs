@@ -87,39 +87,6 @@ pub(super) enum Field {
     WindowHeight,
 }
 
-impl Field {
-    const ALL: [Field; 28] = [
-        Field::Name,
-        Field::Seed,
-        Field::Players,
-        Field::Command,
-        Field::AddPlayer,
-        Field::Motd,
-        Field::Port,
-        Field::Token,
-        Field::Email,
-        Field::InstanceName,
-        Field::InstanceGroup,
-        Field::InstanceVersion,
-        Field::InstanceModsFilter,
-        Field::ServerName,
-        Field::ServerAddress,
-        Field::ConsoleSearch,
-        Field::PreLaunch,
-        Field::Wrapper,
-        Field::LaunchEnv,
-        Field::PostExit,
-        Field::MemoryLimit,
-        Field::DeleteServer,
-        Field::AccentHex,
-        Field::ShopGift,
-        Field::WardrobeSearch,
-        Field::JavaArgs,
-        Field::WindowWidth,
-        Field::WindowHeight,
-    ];
-}
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Tab {
     Overview,
@@ -368,9 +335,11 @@ impl Servers {
         if let Some(h) = self.focus_soon.take().and_then(|f| self.focus.get(&f)) {
             window.focus(h, cx);
         }
-        self.focused = Field::ALL
-            .into_iter()
-            .find(|f| self.focus.get(f).is_some_and(|h| h.is_focused(window)));
+        self.focused = self
+            .focus
+            .iter()
+            .find(|(_, h)| h.is_focused(window))
+            .map(|(f, _)| *f);
         if self.focused.is_some() && self.focused != self.selected {
             self.selected = None;
         }
