@@ -7,6 +7,9 @@ mod wire;
 ///
 /// `#[payload(crate = ::mod_vocab)]` selects the contract crate for
 /// lower-layer crates. The default is `::mod_api`.
+/// Self-recursive types are supported; mutually recursive types must provide
+/// a manual `PayloadCodec` implementation because their bounds cannot be
+/// inferred from one derive.
 #[proc_macro_derive(PayloadCodec, attributes(payload))]
 pub fn derive_payload_codec(input: TokenStream) -> TokenStream {
     payload::expand(syn::parse_macro_input!(input as syn::DeriveInput))

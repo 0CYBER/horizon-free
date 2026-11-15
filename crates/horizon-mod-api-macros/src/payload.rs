@@ -6,17 +6,31 @@ use syn::{Data, DeriveInput, Fields, parse_quote};
 
 struct UsedTypeParams<'a> {
     params: &'a std::collections::HashSet<String>,
+    self_type: &'a str,
     found: bool,
+    recursive: bool,
+    used_params: std::collections::HashSet<String>,
 }
 
 impl<'ast> syn::visit::Visit<'ast> for UsedTypeParams<'_> {
     fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
-        self.found |= path
+        self.recursive |= path
             .path
             .segments
-            .first()
-            .is_some_and(|segment| self.params.contains(&segment.ident.to_string()));
+            .iter()
+            .any(|segment| segment.ident == self.self_type);
+        if let Some(segment) = path.path.segments.first() {
+            let ident = segment.ident.to_string();
+            if self.params.contains(&ident) {
+                self.found = true;
+                self.used_params.insert(ident);
+            }
+        }
         syn::visit::visit_type_path(self, path);
+    }
+
+    fn visit_macro(&mut self, _mac: &'ast syn::Macro) {
+        self.found = true;
     }
 }
 
@@ -65,34 +79,56 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         }
     }
     let c = contract.unwrap_or_else(|| parse_quote!(::mod_api));
-    let type_params: std::collections::HashSet<_> = input
+    let generic_params: Vec<_> = input
         .generics
         .type_params()
-        .map(|param| param.ident.to_string())
+        .map(|param| param.ident.clone())
         .collect();
-    let mut field_types = Vec::new();
+    let type_params: std::collections::HashSet<_> =
+        generic_params.iter().map(ToString::to_string).collect();
+    let mut field_types: Vec<syn::Type> = Vec::new();
     match &input.data {
-        Data::Struct(data) => field_types.extend(data.fields.iter().map(|field| &field.ty)),
+        Data::Struct(data) => field_types.extend(data.fields.iter().map(|field| field.ty.clone())),
         Data::Enum(data) => field_types.extend(
             data.variants
                 .iter()
-                .flat_map(|variant| variant.fields.iter().map(|field| &field.ty)),
+                .flat_map(|variant| variant.fields.iter().map(|field| field.ty.clone())),
         ),
         Data::Union(_) => {}
     }
     let mut predicates = std::collections::HashSet::new();
+    let self_type = input.ident.to_string();
     for ty in field_types {
         let mut used = UsedTypeParams {
             params: &type_params,
+            self_type: &self_type,
             found: false,
+            recursive: false,
+            used_params: std::collections::HashSet::new(),
         };
-        syn::visit::Visit::visit_type(&mut used, ty);
-        if used.found && predicates.insert(quote!(#ty).to_string()) {
-            input
-                .generics
-                .make_where_clause()
-                .predicates
-                .push(parse_quote!(#ty: #c::PayloadCodec));
+        syn::visit::Visit::visit_type(&mut used, &ty);
+        if used.recursive {
+            for param in &generic_params {
+                if used.used_params.contains(&param.to_string()) {
+                    let predicate = quote!(#param: #c::PayloadCodec);
+                    if predicates.insert(predicate.to_string()) {
+                        input
+                            .generics
+                            .make_where_clause()
+                            .predicates
+                            .push(parse_quote!(#param: #c::PayloadCodec));
+                    }
+                }
+            }
+        } else if used.found {
+            let predicate = quote!(#ty: #c::PayloadCodec);
+            if predicates.insert(predicate.to_string()) {
+                input
+                    .generics
+                    .make_where_clause()
+                    .predicates
+                    .push(parse_quote!(#ty: #c::PayloadCodec));
+            }
         }
     }
     let name = &input.ident;

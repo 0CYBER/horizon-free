@@ -3,6 +3,17 @@ use super::*;
 #[derive(Debug, PartialEq)]
 struct NoCodec;
 
+macro_rules! ident_ty {
+    ($t:ty) => {
+        $t
+    };
+}
+
+#[derive(horizon_mod_api_macros::PayloadCodec)]
+struct MacroField<T> {
+    value: ident_ty!(T),
+}
+
 #[derive(Debug, PartialEq)]
 struct Opaque<T>(u8, std::marker::PhantomData<T>);
 
@@ -354,6 +365,43 @@ fn a_derived_codec_does_not_bound_generic_parameters_its_fields_do_not_need() {
         decode_payload::<OpaqueEnvelope<NoCodec>>(&[42]),
         Ok(OpaqueEnvelope {
             value: Opaque(42, std::marker::PhantomData),
+        })
+    );
+}
+
+#[test]
+fn a_derived_codec_bounds_a_type_parameter_hidden_in_a_type_macro() {
+    let value = MacroField { value: 42_u8 };
+    let bytes = [42];
+    assert_eq!(encode_payload(&value, 1), Ok(bytes.to_vec()));
+    assert_eq!(decode_payload::<MacroField<u8>>(&bytes).unwrap().value, 42);
+}
+
+#[derive(Debug, PartialEq, horizon_mod_api_macros::PayloadCodec)]
+struct GenericTree<T> {
+    value: T,
+    children: Vec<GenericTree<T>>,
+}
+
+#[test]
+fn a_derived_generic_recursive_tree_uses_the_generic_bound() {
+    let tree = GenericTree {
+        value: 1_u8,
+        children: vec![GenericTree {
+            value: 2_u8,
+            children: vec![],
+        }],
+    };
+    let bytes = [1, 1, 2, 0];
+    assert_eq!(encode_payload(&tree, 4), Ok(bytes.to_vec()));
+    assert_eq!(
+        decode_payload::<GenericTree<u8>>(&bytes),
+        Ok(GenericTree {
+            value: 1,
+            children: vec![GenericTree {
+                value: 2,
+                children: vec![],
+            }],
         })
     );
 }
