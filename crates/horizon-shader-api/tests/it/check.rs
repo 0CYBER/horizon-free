@@ -625,7 +625,11 @@ const SHADOWED: &str = "fn post(input: PostInput) -> vec4<f32> {
     let bent = hit.tangent.xyz * n.x + cross(hit.normal, hit.tangent.xyz) * hit.tangent.w * n.y;
     let rough = select(0.5, 1.0 - hit_specular_map(hit).r, block_pbr_maps());
     let own = hit.albedo.rgb * hit.emission * f32(hit.fluid + u32(hit.translucent)) * rough + bent;
-    return vec4<f32>(lit * open + own + hit.position * hit.uv.x * hit.distance, f32(hit.material + hit.tags));
+    // The first water or glass on the way to the sun, and whether anything at all is.
+    let glass = trace_layers(p, frame.sun_direction, 64.0, RAY_TRANSLUCENT);
+    let any = trace_any_layers(p, frame.sun_direction, 64.0, RAY_SOLID | RAY_TRANSLUCENT);
+    let tinted = glass.albedo.rgb * glass.albedo.a * f32(glass.translucent) * f32(any);
+    return vec4<f32>(lit * open + own + tinted + hit.position * hit.uv.x * hit.distance, f32(hit.material + hit.tags));
 }
 ";
 
@@ -829,7 +833,14 @@ fn a_discard_reachable_from_material_needs_pack_coverage() {
 
 #[test]
 fn a_traced_pack_s_own_hit_helper_is_refused_as_its_own_trace_is() {
-    for name in ["trace_any", "hit_normal_map", "block_pbr_maps"] {
+    let names = [
+        "trace_any",
+        "trace_layers",
+        "RAY_TRANSLUCENT",
+        "hit_normal_map",
+        "block_pbr_maps",
+    ];
+    for name in names {
         let own = format!(
             "fn {name}(c: vec4<f32>) -> vec4<f32> {{ return c; }}
              fn post(input: PostInput) -> vec4<f32> {{ return {name}(input.color); }}
@@ -918,6 +929,17 @@ fn a_traced_material_stage_is_checked_without_the_scene_and_with_it() {
     let source = material.scene_source.as_deref().unwrap();
     assert!(source.starts_with("enable wgpu_ray_query;\n"));
     assert!(!material.source.contains("enable wgpu_ray_query"));
+    // A stage that names only the functions that take layers traces as well.
+    let layered = REFLECTING
+        .replace("trace(input.position,", "trace_layers(input.position,")
+        .replace("input.normal), 64.0)", "input.normal), 64.0, RAY_SOLID)")
+        .replace(
+            "trace_any(input.position, frame.sun_direction, 64.0)",
+            "trace_any_layers(input.position, frame.sun_direction, 64.0, RAY_TRANSLUCENT)",
+        );
+    assert!(!layered.contains("trace(") && !layered.contains("trace_any("));
+    let report = traced_material(&layered, "", &[]).unwrap();
+    assert!(report.stages[0].scene.is_some());
 }
 
 #[test]
@@ -959,7 +981,7 @@ fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
 #[test]
 fn a_ray_from_a_vertex_shader_is_refused() {
     let reached = |problems: &[Problem], name: &str| {
-        let needle = format!("`{name}` reaches `trace` or `trace_any`: it runs in a vertex shader");
+        let needle = format!("`{name}` reaches a trace function: it runs in a vertex shader");
         problems
             .iter()
             .filter(|p| p.message.contains(&needle))
@@ -986,6 +1008,23 @@ fn a_ray_from_a_vertex_shader_is_refused() {
     assert_eq!(
         reached(&problems, "vertex"),
         [("vertex.wgsl".to_owned(), 1)],
+        "{problems:#?}"
+    );
+    // The functions that take layers are no way around it.
+    let layered = vertex.replace("8.0)", "8.0, RAY_TRANSLUCENT)");
+    let layered = layered.replace("trace(", "trace_layers(");
+    let problems = traced_material(MATERIAL, keys, &[("vertex.wgsl", &layered)]).unwrap_err();
+    assert_eq!(
+        reached(&problems, "vertex"),
+        [("vertex.wgsl".to_owned(), 1)],
+        "{problems:#?}"
+    );
+    let layered = displaced.replace("8.0)", "8.0, RAY_SOLID | RAY_TRANSLUCENT)");
+    let layered = layered.replace("trace_any(", "trace_any_layers(");
+    let problems = traced_material(&layered, "[displacement]\n", &[]).unwrap_err();
+    assert_eq!(
+        reached(&problems, "displacement"),
+        [("material.wgsl".to_owned(), 3)],
         "{problems:#?}"
     );
     // The material's own rays beside both are its to trace.

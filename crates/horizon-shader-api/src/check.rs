@@ -68,7 +68,7 @@ pub struct CheckedStage {
     pub module: naga::Module,
     pub info: ModuleInfo,
     /// A post stage of a pack with `[ray_tracing]`, or its material stage where that calls
-    /// `trace` or `trace_any`, built against the scene (`compose_scene`): what the renderer runs
+    /// a trace function, built against the scene (`compose_scene`): what the renderer runs
     /// while it binds the scene, on a device with ray queries. `module` is the same stage with a
     /// `trace` that misses, which every device takes.
     pub scene: Option<naga::Module>,
@@ -408,7 +408,7 @@ fn ray_queries(own: &Composed) -> Vec<Problem> {
                     own,
                     Some(range.start + at),
                     format!(
-                        "`{name}`: a pack traces rays with `trace` and `trace_any`; ray queries and the scene are Horizon's"
+                        "`{name}`: a pack traces rays with `trace` and `trace_layers`; ray queries and the scene are Horizon's"
                     ),
                 ));
             }
@@ -452,7 +452,7 @@ fn vertex_rays(
                 composed,
                 at,
                 format!(
-                    "`{name}` reaches `trace` or `trace_any`: it runs in a vertex shader, and only `material` traces rays"
+                    "`{name}` reaches a trace function: it runs in a vertex shader, and only `material` traces rays"
                 ),
             ));
         }

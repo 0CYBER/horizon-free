@@ -967,6 +967,14 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
             "output \"trace\" is not a free WGSL name",
         ),
         (
+            named.replace("\"trace\"", "\"trace_any_layers\"") + "[ray_tracing]\n",
+            "output \"trace_any_layers\" is not a free WGSL name",
+        ),
+        (
+            named.replace("\"trace\"", "\"RAY_TRANSLUCENT\"") + "[ray_tracing]\n",
+            "output \"RAY_TRANSLUCENT\" is not a free WGSL name",
+        ),
+        (
             named.replace("\"trace\"", "\"hit_normal_map\"") + "[ray_tracing]\n",
             "output \"hit_normal_map\" is not a free WGSL name",
         ),

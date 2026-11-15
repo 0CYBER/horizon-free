@@ -43,7 +43,8 @@ impl<'a> TraceShape<'a> {
 
 /// What a stage built against the scene reads besides the TLAS and the store.
 pub(in crate::gfx) struct Rays {
-    /// The prelude's `horizon_ray_space`: the camera in the scene's space, then `split`.
+    /// The prelude's `horizon_ray_space`: the camera in the scene's space, `split`, then the
+    /// scene's count of solid instances.
     space: wgpu::Buffer,
     /// The prelude's `horizon_ray_layers`.
     layers: wgpu::Buffer,
@@ -257,7 +258,7 @@ fn with_scene<T>(
     let rays = Rays {
         space: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Native shader pack ray space"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }),
@@ -276,11 +277,13 @@ fn with_scene<T>(
 }
 
 impl Rays {
-    /// Writes where the camera is in `scene`, and returns this frame's `frame.ray_distance`.
+    /// Writes where the camera is in `scene` and which of its instances are solid terrain's,
+    /// and returns this frame's `frame.ray_distance`.
     fn write(&self, queue: &wgpu::Queue, scene: &Traced<'_>) -> f32 {
-        let mut space = [0u8; 16];
+        let mut space = [0u8; 20];
         space[..12].copy_from_slice(bytemuck::cast_slice(&scene.camera));
-        space[12..].copy_from_slice(&self.split.to_ne_bytes());
+        space[12..16].copy_from_slice(&self.split.to_ne_bytes());
+        space[16..].copy_from_slice(&scene.solid_instances.to_ne_bytes());
         queue.write_buffer(&self.space, 0, &space);
         scene.distance
     }

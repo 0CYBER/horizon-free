@@ -269,6 +269,15 @@ draws them itself (the material stage covers terrain only). The first-person han
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
   temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
   A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
+- 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
+  stained glass, ice) in a second layer. Where `trace` is, the prelude gets
+  `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the
+  constants `RAY_SOLID` and `RAY_TRANSLUCENT` to name the layers with; `trace` and `trace_any` keep reading solid
+  terrain alone, so a picture made with them doesn't change. A hit in the translucent layer has `translucent` true
+  and `fluid` 1 on water; a ray stops there at any texel but a clear one (alpha below 0.01), as the translucent pass
+  draws. The check refuses a pack's own function, constant or post `output` by the four names there, and a
+  `displacement` or `vertex` that reaches the new functions, as `trace`'s. Packs without `[ray_tracing]` are built
+  from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (**breaking**, experimental): the material stage keeps the engine's coverage unless the pack
   declares it, with `[material] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` solid and cutout
   terrain's alpha test reads the texture's alpha, not the returned one, translucent terrain is cut on the texture's

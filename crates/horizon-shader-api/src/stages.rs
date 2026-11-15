@@ -489,7 +489,7 @@ pub enum Tracing {
     /// The pack didn't ask: none of it.
     None,
     /// The pack asked and the scene isn't there (a GPU without ray queries, ray tracing off):
-    /// `trace` and `trace_any` that miss, and nothing a device without ray queries refuses.
+    /// trace functions that miss, and nothing a device without ray queries refuses.
     Stub,
     /// The pack asked and the renderer binds the scene.
     Scene,
@@ -500,28 +500,53 @@ pub enum Tracing {
 pub const RAY_SCENE_BINDING: u32 = 48;
 /// Every traced section's quads as the mesher's vertices (six words each, four a quad).
 pub const RAY_STORE_BINDING: u32 = 49;
-/// `horizon_RaySpace`, 16 bytes: the camera in the scene's space (three floats), then how many
-/// layers a sprite array holds (a `u32`).
+/// `horizon_RaySpace`, 32 bytes: the camera in the scene's space (three floats), how many
+/// layers a sprite array holds (a `u32`), then how many of the scene's instances, its first
+/// ones, are solid terrain's (a `u32`).
 pub const RAY_SPACE_BINDING: u32 = 50;
 /// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
 pub const RAY_LAYERS_BINDING: u32 = 51;
 /// The first of the `RAY_SPRITE_ARRAYS` block sprite arrays, the others after.
 pub const RAY_SPRITES_BINDING: u32 = 52;
 pub const RAY_SPRITE_ARRAYS: u32 = 8;
+/// The scene's layers, as `RAY_LAYERS` declares them to a pack: the bit of each in a ray's cull
+/// mask, which the renderer gives the layer's instances as their mask.
+pub const RAY_SOLID: u32 = 1;
+pub const RAY_TRANSLUCENT: u32 = 2;
 
 /// The directive the scene's prelude starts with: WGSL takes it before any declaration.
 const RAY_ENABLE: &str = "enable wgpu_ray_query;\n";
 
-/// `trace` and `trace_any` without the scene: every ray misses.
-const RAY_STUB: &str = "\
-// The nearest surface from the camera-relative `origin` along the unit vector `direction`,
-// within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is 0): a miss.
+/// The scene's layers and the functions that read solid terrain alone, with the scene or without
+/// it: `trace_layers` and `trace_any_layers` come before (`RAY_SCENE`, `RAY_STUB`).
+const RAY_LAYERS: &str = "\
+// The scene's layers, to OR together for `trace_layers` and `trace_any_layers`: solid terrain
+// (cut-outs too), and what the translucent pass draws (water, stained glass, ice).
+const RAY_SOLID: u32 = 1u;
+const RAY_TRANSLUCENT: u32 = 2u;
+// The nearest solid surface from the camera-relative `origin` along the unit vector `direction`,
+// within `max_distance` blocks; `distance` is negative where there is none.
 fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
+    return trace_layers(origin, direction, max_distance, RAY_SOLID);
+}
+// Whether solid terrain lies within `max_distance` blocks of `origin` along `direction`: a
+// shadow ray, which stops at the first surface it finds.
+fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
+    return trace_any_layers(origin, direction, max_distance, RAY_SOLID);
+}
+";
+
+/// `trace_layers` and `trace_any_layers` without the scene: every ray misses.
+const RAY_STUB: &str = "\
+// The nearest surface of `layers` from the camera-relative `origin` along the unit vector
+// `direction`, within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is
+// 0): a miss.
+fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit {
     return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
         vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
 }
-// Whether anything lies within `max_distance` blocks of `origin` along `direction`.
-fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
+// Whether anything of `layers` lies within `max_distance` blocks of `origin` along `direction`.
+fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool {
     return false;
 }
 ";
@@ -618,14 +643,17 @@ fn hit_specular_map(hit: RayHit) -> vec4<f32> {
 }
 ";
 
-/// `trace` and `trace_any` through the scene the renderer binds (gfx/ray_scene.rs): a hit is a
-/// triangle of a quad in the store, read as terrain.wgsl reads the mesher's vertices.
+/// `trace_layers` and `trace_any_layers` through the scene the renderer binds
+/// (gfx/ray_scene.rs): a hit is a triangle of a quad in the store, read as terrain.wgsl reads
+/// the mesher's vertices.
 const RAY_SCENE: &str = "\
 struct horizon_RaySpace {
     // The camera in the scene's space: from the corner of the scene's anchor column, in blocks.
     camera: vec3<f32>,
     // The layers one sprite array holds (terrain.wgsl's `SPRITE_SPLIT`).
     sprite_split: u32,
+    // The scene's instances of solid terrain, its first ones: the others are translucent terrain.
+    solid_instances: u32,
 }
 @group(3) @binding(48) var horizon_ray_scene: acceleration_structure;
 // Every traced section's quads as `TerrainVertex` (six words: the position, the uv's two u16,
@@ -722,21 +750,27 @@ fn horizon_ray_tangent(t: horizon_RayTriangle, e1: vec3<f32>, e2: vec3<f32>, nor
     let tangent = normalize(along);
     return vec4<f32>(tangent, select(-1.0, 1.0, dot(cross(normal, tangent), dv) >= 0.0));
 }
-// Whether a triangle stops the ray where it crosses it: terrain's cutout test. Bit 15 of the
-// layer marks a quad over opaque texels; another stops it where its texel's alpha is 0.5 or more.
+// Whether a triangle stops the ray where it crosses it, as its pass draws the texel there. Solid
+// terrain's cutout test: bit 15 of the layer marks a quad over opaque texels; another stops it
+// where its texel's alpha is 0.5 or more. Translucent terrain's (terrain.wgsl's
+// `fs_translucent`): every texel but a clear one, alpha below 0.01, stops it.
 fn horizon_ray_stops(c: RayIntersection) -> bool {
     let t = horizon_ray_triangle(c.instance_custom_data, c.primitive_index, c.barycentrics);
     let layer = horizon_ray_word(t.corners.x, 4u) & 0xffffu;
+    if c.instance_index >= horizon_ray_space.solid_instances {
+        return horizon_ray_texel(layer & 0x7fffu, horizon_ray_uv(t)).a >= 0.01;
+    }
     if (layer & 0x8000u) != 0u {
         return true;
     }
     return horizon_ray_texel(layer, horizon_ray_uv(t)).a >= 0.5;
 }
-// The nearest triangle that stops the ray, or with `first` any of them.
-fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, first: bool) -> RayIntersection {
+// The nearest triangle of `layers` that stops the ray, or with `first` any of them: an
+// instance's mask is its layer's bit.
+fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32, first: bool) -> RayIntersection {
     var query: ray_query;
     let flags = select(RAY_FLAG_NONE, RAY_FLAG_TERMINATE_ON_FIRST_HIT, first);
-    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, 0xffu, 0.0,
+    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, layers & 3u, 0.0,
         max(max_distance, 0.0), origin + horizon_ray_space.camera, direction));
     while rayQueryProceed(&query) {
         if horizon_ray_stops(rayQueryGetCandidateIntersection(&query)) {
@@ -745,10 +779,11 @@ fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, 
     }
     return rayQueryGetCommittedIntersection(&query);
 }
-// The nearest surface from the camera-relative `origin` along the unit vector `direction`,
-// within `max_distance` blocks; `distance` is negative where there is none.
-fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
-    let hit = horizon_ray_cast(origin, direction, max_distance, false);
+// The nearest surface of `layers` (`RAY_SOLID`, `RAY_TRANSLUCENT` or both) from the
+// camera-relative `origin` along the unit vector `direction`, within `max_distance` blocks;
+// `distance` is negative where there is none.
+fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit {
+    let hit = horizon_ray_cast(origin, direction, max_distance, layers, false);
     if hit.kind == RAY_QUERY_INTERSECTION_NONE {
         return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
             vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
@@ -783,8 +818,8 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
     let flags = horizon_ray_word(t.corners.x, 5u) >> 24u;
     let high = flags >> 4u;
     let fluid_quad = high >= 8u && (high & 7u) < 6u;
-    // The scene holds solid terrain only: water and lava's kind as the solid pass resolves it.
-    let translucent = false;
+    // Water is in the translucent layer and lava in the solid one, as their passes draw them.
+    let translucent = hit.instance_index >= horizon_ray_space.solid_instances;
     let fluid = select(0u, select(2u, 1u, translucent), fluid_quad);
     let code = 15u - (flags & 15u);
     let tier = select(code, code - 4u, code > 4u);
@@ -794,10 +829,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
         min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags, emission, fluid,
         translucent, horizon_ray_tangent(t, e1, e2, normal), layer);
 }
-// Whether anything lies within `max_distance` blocks of `origin` along `direction`: a shadow
-// ray, which stops at the first surface it finds.
-fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
-    return horizon_ray_cast(origin, direction, max_distance, true).kind != RAY_QUERY_INTERSECTION_NONE;
+// Whether anything of `layers` lies within `max_distance` blocks of `origin` along `direction`.
+fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool {
+    return horizon_ray_cast(origin, direction, max_distance, layers, true).kind
+        != RAY_QUERY_INTERSECTION_NONE;
 }
 ";
 
@@ -1143,15 +1178,16 @@ impl StageKind {
     }
 
     /// `prelude` with what `tracing` holds of the scene: in every stage the frame's two fields
-    /// for it, and in the post and material stages `RayHit`, `trace`, `trace_any`,
-    /// `hit_normal_map` and `hit_specular_map` (and in the post stage `block_pbr_maps`).
+    /// for it, and in the post and material stages `RayHit`, `trace`, `trace_any`, their
+    /// `_layers` forms with `RAY_SOLID` and `RAY_TRANSLUCENT`, `hit_normal_map` and
+    /// `hit_specular_map` (and in the post stage `block_pbr_maps`).
     pub fn prelude_traced(self, api: Api, tracing: Tracing) -> String {
         let rays = matches!(self, StageKind::Post | StageKind::Material);
         self.prelude_rays(api, tracing, rays)
     }
 
     /// `prelude_traced`, with the ray names only where `rays`: a material stage that calls
-    /// neither `trace` nor `trace_any` is built as it was before them.
+    /// none of the trace functions is built as it was before them.
     fn prelude_rays(self, api: Api, tracing: Tracing, rays: bool) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1204,6 +1240,7 @@ impl StageKind {
                 Tracing::Scene => RAY_SCENE,
                 _ => RAY_STUB,
             };
+            out += RAY_LAYERS;
             // The material stage's renderer, or the check's stand-in, reads the LabPBR maps.
             if self == StageKind::Post {
                 out += match tracing {
@@ -1367,8 +1404,8 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
 }
 
 /// `compose` for a pack with `[ray_tracing]` where the renderer binds the scene: its post
-/// stage traces it, and its material stage where that calls `trace` or `trace_any`. Such a
-/// module needs a device with ray queries.
+/// stage traces it, and its material stage where that calls a trace function (`TRACE_NAMES`).
+/// Such a module needs a device with ray queries.
 pub fn compose_scene(pack: &Pack, kind: StageKind, file: &str) -> Composed {
     compose_traced(pack, kind, file, true)
 }
@@ -1409,10 +1446,13 @@ pub(crate) fn identifiers(text: &str) -> Vec<(usize, &str)> {
     names
 }
 
-/// Whether a material stage's files, `texts`, name `trace` or `trace_any`: only then does its
-/// prelude have them and the renderer build its terrain against the scene.
+/// The functions that trace a ray.
+const TRACE_NAMES: [&str; 4] = ["trace", "trace_any", "trace_layers", "trace_any_layers"];
+
+/// Whether a material stage's files, `texts`, name a trace function: only then does its prelude
+/// have them and the renderer build its terrain against the scene.
 fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
-    let ray = |(_, name): &(usize, &str)| *name == "trace" || *name == "trace_any";
+    let ray = |(_, name): &(usize, &str)| TRACE_NAMES.contains(name);
     texts.any(|text| identifiers(text).iter().any(ray))
 }
 

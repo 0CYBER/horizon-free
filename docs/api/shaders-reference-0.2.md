@@ -304,43 +304,55 @@ pass reads a blank one in place of the target it writes).
 ### Ray tracing
 
 With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post
-stage's prelude also has `RayHit`, `trace`, `trace_any` and the helpers below, so does the material stage's where
-its files name `trace` or `trace_any`, and the `Frame` of every stage of the pack has `has_ray_tracing` and
-`ray_distance`. A pack without the key has none of them, and a material stage that names neither function is built
-as without it.
+stage's prelude also has `RayHit` and the functions and constants below, so does the material stage's where its
+files name one of the four trace functions, and the `Frame` of every stage of the pack has `has_ray_tracing` and
+`ray_distance`. A pack without the key has none of them, and a material stage that names no trace function is
+built as without it.
 
 The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it
 ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a
 pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1`
 asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off.
 
-- `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest surface from
-  `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within
+- `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest solid surface
+  from `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within
   `max_distance` blocks.
-- `fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool`: whether any surface is in
-  the way: a shadow ray, which stops at the first it finds and reads nothing of it.
+- `fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool`: whether any solid surface
+  is in the way: a shadow ray, which stops at the first it finds and reads nothing of it.
+- `const RAY_SOLID: u32`, `const RAY_TRANSLUCENT: u32`: the scene's two layers, bits to OR together. Solid
+  terrain, with cut-outs (leaves, plants) and lava; and what the translucent pass draws: water, glass, stained
+  glass, ice, slime and honey blocks, any block whose texture has partly see-through texels.
+- `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and
+  `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`
+  and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no
+  layer named every ray misses.
 - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource
   packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`
   and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.
 - In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material
   stage's.
 
-A ray starts at `origin` itself, so move a point off its own surface before tracing from it. It passes through
-the clear texels of a cut-out texture (leaves, plants), as terrain's alpha test does: a texel stops it from alpha
-0.5 up. The scene is Horizon's: the solid terrain around the camera, out to `frame.ray_distance` at least. While
+A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what
+the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,
+plants), as terrain's alpha test does: a texel stops it from alpha 0.5 up. In the translucent layer every texel
+stops it, however faint, except a clear one (alpha below 0.01), which the translucent pass doesn't draw either;
+the hit's `albedo.a` is the texel's alpha and its `translucent` is true. A ray over both layers stops at the
+nearest surface of either: to go on through a translucent one, trace again from just behind the hit. The scene is
+Horizon's: the terrain around the camera, out to `frame.ray_distance` at least, without entities, particles,
+clouds or distant terrain. While
 the game doesn't trace (`frame.has_ray_tracing` is 0) the pack is built and runs all the same, and every ray
 misses. Your files name no ray query of their own (`ray_query`, `acceleration_structure`, `RayDesc`,
 `RayIntersection`, a `rayQuery` function, `enable wgpu_ray_query`): the check refuses them, and an `output`
 named as one of these functions.
 
 In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share
-its module, run in vertex shaders, and the check refuses a pack where either reaches `trace` or `trace_any`.
+its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.
 `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for
 translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.
 
 ### `RayHit`
 
-The nearest surface along a ray, from `trace`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).
+The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -354,8 +366,8 @@ The nearest surface along a ray, from `trace`. Its `albedo`, `tint`, `light`, `u
 | `material` | `u32` | The `[[materials]]` id of the surface's sprite (0 when no entry names it). |
 | `tags` | `u32` | The pack's sprite tags the surface's sprite has: bit i for the manifest's i-th `[[tags]]`. |
 | `emission` | `f32` | How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks (as `MaterialInput.emission`). |
-| `fluid` | `u32` | 0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`). |
-| `translucent` | `bool` | A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`. The scene holds no translucent terrain yet: false for every hit. |
+| `fluid` | `u32` | 0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`). Water is in the `RAY_TRANSLUCENT` layer, lava in `RAY_SOLID`. |
+| `translucent` | `bool` | A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`: a hit in the `RAY_TRANSLUCENT` layer, so false for every hit of `trace`. |
 | `tangent` | `vec4<f32>` | The surface's tangent, as `MaterialInput.tangent`: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). It follows `normal`, which faces the ray's origin. With `normal` it turns `hit_normal_map`'s normals into world axes. |
 | `horizon_sprite` | `u32` | Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer. |
 
