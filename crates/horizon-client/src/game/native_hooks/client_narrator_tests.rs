@@ -67,8 +67,8 @@ fn each_refusal_is_named_and_says_and_logs_nothing() {
     for (status, inactive, line, refusal) in cases {
         for when in [Narration::Now, Narration::Queued] {
             let recorder = Recorder {
+                said: Arc::new(Mutex::new(Vec::new())),
                 inactive,
-                ..Recorder::default()
             };
             let mut narrator = narrator(status, &recorder);
             let answer = say_for_mod(&mut narrator, line, when);
