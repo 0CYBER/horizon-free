@@ -35,14 +35,20 @@ impl Minecart {
             map.remove(&JavaString::from("explosion_power"));
             map.remove(&JavaString::from("explosion_speed_factor"));
             crate::game::boats::put_ticks_frozen(map, self.ticks_frozen);
+            let loaded_fire = map
+                .get(&JavaString::from("Fire"))
+                .and_then(horizon_client::nbt_path::int_value)
+                .unwrap_or(0) as i16;
             let mut put = |k: &str, v: Tag| {
                 map.insert(JavaString::from(k), v);
             };
             put("FlippedRotation", Tag::Byte(i8::from(self.flipped)));
-            // AbstractMinecart saves firstTick as HasTicked. A cart never burns:
-            // Entity.move sets -getFireImmuneTicks(), 0 for all but players.
+            // AbstractMinecart saves firstTick as HasTicked. A cart that is not
+            // on fire never burns: Entity.move sets -getFireImmuneTicks(), 0 for
+            // all but players. One loaded on fire stays so, with no baseTick to
+            // count its fire ticks down.
             put("HasTicked", Tag::Byte(i8::from(self.first_tick)));
-            put("Fire", Tag::Short(0));
+            put("Fire", Tag::Short(loaded_fire.max(0)));
             // addAdditionalSaveData: the offset only off its default, the state only when set.
             if let Some(offset) = self.custom_offset
                 && f64::from(offset) != default_display_offset(self.kind)

@@ -1294,6 +1294,21 @@ impl Game<'_> {
             );
         }
     }
+    /// `Entity.clearFire` for a cart. The only fire a cart has here is the
+    /// `Fire` it was loaded with, which its save writes back.
+    fn clear_cart_fire(&mut self, id: u32) {
+        if let Some(horizon_world::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id) {
+            map.remove(&"Fire".into());
+        }
+    }
+    fn cart_loaded_on_fire(&self, id: u32) -> bool {
+        self.persist
+            .raw
+            .get(&id)
+            .and_then(|raw| raw.get("Fire"))
+            .and_then(horizon_client::nbt_path::int_value)
+            .is_some_and(|fire| fire > 0)
+    }
     /// Runs `push_from_cart` for the cart being ticked (`c` is a copy of the
     /// stored one, kept at `slot`): the stored cart is replaced by `c` for the
     /// push and `c` takes back what the push changed. The rolled loot stays
@@ -1400,6 +1415,13 @@ impl Game<'_> {
         // updateFluidInteraction: being in water resets the fall distance.
         if c.in_water {
             c.fall_distance = 0.0;
+        }
+        // Entity.move: water (WaterFluid.entityInside) and rain put a burning
+        // entity out. (Powder snow and a water cauldron do too; not here yet.)
+        if self.cart_loaded_on_fire(c.id)
+            && (c.in_water || self.in_rain(c.position, c.position.y + HEIGHT))
+        {
+            self.clear_cart_fire(c.id);
         }
         // Entity.checkInsideBlocks runs once after the cart tick, sweeping every
         // movement through powder snow. PowderSnowBlock uses getKnownMovement,
