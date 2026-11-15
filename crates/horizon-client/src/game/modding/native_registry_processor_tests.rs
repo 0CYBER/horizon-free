@@ -10,7 +10,7 @@ fn write(path: &Path, bytes: impl AsRef<[u8]>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn generic_processor_and_referencing_pool_accept_pillar_block_properties() {
     let _publication = horizon_client::datapack_net::isolate_server_publication();
     let scratch = tempfile::tempdir().unwrap();

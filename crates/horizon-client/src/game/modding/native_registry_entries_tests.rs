@@ -52,7 +52,7 @@ fn id(value: &str) -> mod_api::Identifier {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn generic_entries_follow_real_server_tables_and_atomic_reload() {
     let _publication = horizon_client::datapack_net::isolate_server_publication();
     let scratch = tempfile::tempdir().unwrap();
@@ -266,7 +266,7 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
     let _publication = horizon_client::datapack_net::isolate_server_publication();
     mod_platform::testing::with_mods(
@@ -418,7 +418,7 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator() {
     use horizon_world::worldgen::{
         generator::GeneratorData, live::LiveFeatures, overrides::WorldgenOverrides,

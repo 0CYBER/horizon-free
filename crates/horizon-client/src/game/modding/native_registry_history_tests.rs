@@ -21,7 +21,7 @@ fn assert_preset_unavailable(game: &super::Game<'_>, data: &GeneratorData) {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn world_preset_availability_does_not_depend_on_shared_generator_history() {
     let _publication = horizon_client::datapack_net::isolate_server_publication();
     let scratch = tempfile::tempdir().unwrap();

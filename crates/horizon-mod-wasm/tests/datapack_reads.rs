@@ -93,7 +93,7 @@ impl mod_api::prelude::LevelsBackend for World {
 impl ServerHost for World {}
 mod_api::impl_server_host_areas!(World);
 #[test]
-#[ignore = "requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree"]
+#[ignore = "daily"]
 fn real_wasm_datapack_reads_preserve_values_and_ordering() {
     crate::test_stack::on_guest_stack(|| {
         struct Logger;
