@@ -35,12 +35,12 @@ impl Game<'_> {
             )
         })
     }
-    /// The executing entity for argument-less forms (the player).
+    /// The executing entity for argument-less forms (`getEntityOrException`).
     fn living_targets(&mut self, ctx: &Context) -> R<Vec<Target>> {
         if ctx.get("targets").is_some() {
             self.entities(ctx, "targets", false)
         } else {
-            Ok(vec![self.implied_player()])
+            Ok(vec![self.implied(false)?])
         }
     }
     /// `EffectCommands.giveEffect`.

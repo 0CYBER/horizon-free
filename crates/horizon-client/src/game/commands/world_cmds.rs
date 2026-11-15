@@ -578,11 +578,7 @@ impl Game<'_> {
         let targets = if ctx.get("targets").is_some() {
             self.entities(ctx, "targets", false)?
         } else {
-            vec![
-                self.command_source
-                    .and_then(|s| s.entity)
-                    .unwrap_or(Target::Player),
-            ]
+            vec![self.implied(false)?]
         };
         let mut tracker = Tracker::default();
         for t in targets {

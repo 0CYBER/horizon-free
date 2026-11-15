@@ -16,6 +16,24 @@ impl Target {
     }
 }
 
+/// The target of a command whose target is optional and left out. `CommandSourceStack.getEntityOrException`
+/// (`player_only` false: `kill`, `effect clear`, `swing`) takes the source's entity, whatever it is;
+/// `getPlayerOrException` (`player_only` true: `gamemode`, `clear`, `spawnpoint`) only a player. `source` is the
+/// command's source entity: None when there is no source at all, a command the player in place typed, which acts
+/// on that player; Some(None) for a source without an entity (a command block, a function run as the server, the
+/// console), which is refused.
+pub(in crate::game) fn implied_target(
+    source: Option<Option<Target>>,
+    player_only: bool,
+) -> Result<Target, &'static str> {
+    match source {
+        None => Ok(Target::Player),
+        Some(Some(t)) if !player_only || t.is_player() => Ok(t),
+        Some(_) if player_only => Err("permissions.requires.player"),
+        Some(_) => Err("permissions.requires.entity"),
+    }
+}
+
 /// GameType.getName for a guest's game mode id.
 fn mode_name(id: i32) -> &'static str {
     match id {
@@ -50,6 +68,12 @@ impl Game<'_> {
             Some(s) => s.entity,
             None => self.player.is_some().then_some(Target::Player),
         }
+    }
+
+    /// [`implied_target`] for this command's source: the entity a command with no target acts on.
+    pub(in crate::game) fn implied(&self, player_only: bool) -> super::R<Target> {
+        implied_target(self.command_source.map(|s| s.entity), player_only)
+            .map_err(|key| super::err(key, &[]))
     }
 
     /// `CommandSourceStack.getPlayerOrException` for the commands whose
@@ -260,5 +284,148 @@ impl Game<'_> {
         }
         self.lan = Some(host);
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Target, implied_target};
+
+    /// `getEntityOrException` and `getPlayerOrException` for a command with no target: the source's entity (a
+    /// player only, for the player forms); a source without an entity, or a non-player one for a player form, is
+    /// refused; no source at all (the player in place typed it) stays that player.
+    #[test]
+    fn a_command_with_no_target_acts_on_its_source_as_vanilla_does() {
+        for player_only in [false, true] {
+            assert_eq!(implied_target(None, player_only), Ok(Target::Player));
+            for player in [Target::Player, Target::Guest(2)] {
+                assert_eq!(implied_target(Some(Some(player)), player_only), Ok(player));
+            }
+        }
+        let pig = Target::Mob(5);
+        assert_eq!(implied_target(Some(Some(pig)), false), Ok(pig));
+        assert_eq!(
+            implied_target(Some(Some(Target::Cart(6))), false),
+            Ok(Target::Cart(6))
+        );
+        assert_eq!(
+            implied_target(Some(Some(pig)), true),
+            Err("permissions.requires.player")
+        );
+        assert_eq!(
+            implied_target(Some(None), false),
+            Err("permissions.requires.entity")
+        );
+        assert_eq!(
+            implied_target(Some(None), true),
+            Err("permissions.requires.player")
+        );
+    }
+}
+
+#[cfg(test)]
+mod game_tests {
+    use super::Target;
+    use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
+    use horizon_client::chunk::Chunk;
+    use horizon_core::position::ChunkPos;
+    use std::sync::Arc;
+
+    /// Runs `command` and returns whether it worked and every message it printed, as JSON text.
+    fn run(game: &mut Game<'_>, command: &str) -> (bool, String) {
+        game.chat_capture = Some(Vec::new());
+        let ok = game.run_command(command);
+        let said = game.chat_capture.take().unwrap_or_default();
+        let said = said
+            .iter()
+            .map(|t| t.component().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (ok, said)
+    }
+
+    /// A command with no target acts on its source, as vanilla's `getEntityOrException` and
+    /// `getPlayerOrException` do: `execute as <pig> run kill` kills the pig, not the player in place; a source
+    /// without an entity (the server's) or a pig for a player form is refused.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    fn a_command_with_no_target_acts_on_its_source_not_the_player_in_place() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
+        );
+        let settings = Settings::default();
+        let loaded = load_resources(
+            root.clone(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            true,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&root),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+        let server = Some(crate::game::commands::execute::Source {
+            silent: false,
+            ..game.server_source()
+        });
+        game.command_source = server;
+        assert!(game.run_command("summon pig 4.5 200 4.5 {NoAI:1b}"));
+        assert!(game.run_command("execute if entity @e[type=minecraft:pig]"));
+        // As the pig, a bare `kill` kills the pig.
+        let (ok, said) = run(&mut game, "execute as @e[type=minecraft:pig] run kill");
+        assert!(ok && said.contains("entity.minecraft.pig"), "{said}");
+        assert!(!game.run_command("execute if entity @e[type=minecraft:pig]"));
+        // The server's own source has no entity.
+        for (command, key) in [
+            ("kill", "permissions.requires.entity"),
+            ("gamemode creative", "permissions.requires.player"),
+            ("clear", "permissions.requires.player"),
+        ] {
+            let (ok, said) = run(&mut game, command);
+            assert!(!ok && said.contains(key), "{command}: {said}");
+        }
+        // A pig is no player: the player forms refuse it (set as the source directly, as a failed command run
+        // through `execute as` prints nothing here).
+        assert!(game.run_command("summon pig 6.5 200 6.5 {NoAI:1b}"));
+        let pig = game
+            .mobs
+            .iter()
+            .map(|m| m.id)
+            .next()
+            .expect("the second pig");
+        game.command_source = server.map(|s| crate::game::commands::execute::Source {
+            entity: Some(Target::Mob(pig)),
+            ..s
+        });
+        let (ok, said) = run(&mut game, "gamemode creative");
+        assert!(
+            !ok && said.contains("permissions.requires.player"),
+            "{said}"
+        );
     }
 }

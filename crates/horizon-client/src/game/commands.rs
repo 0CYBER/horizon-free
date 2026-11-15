@@ -1266,7 +1266,7 @@ impl Game<'_> {
         let targets = if ctx.get("target").is_some() {
             self.entities(ctx, "target", true)?
         } else {
-            vec![self.implied_player()]
+            vec![self.implied(true)?]
         };
         let mut count = 0;
         for t in targets {
@@ -2367,7 +2367,7 @@ impl Game<'_> {
         let targets = if ctx.get("targets").is_some() {
             without_knots(self.entities(ctx, "targets", false)?)?
         } else {
-            vec![self.implied_player()]
+            vec![self.implied(false)?]
         };
         let mut names: Vec<Text> = Vec::new();
         for &t in &targets {
@@ -3548,7 +3548,7 @@ impl Game<'_> {
         let targets = if ctx.get("targets").is_some() {
             self.entities(ctx, "targets", true)?
         } else {
-            vec![Target::Player]
+            vec![self.implied(true)?]
         };
         let pos = if ctx.get("pos").is_some() {
             self.spawnable_pos_arg(ctx, "pos")?
@@ -3815,7 +3815,7 @@ impl Game<'_> {
         let targets = if ctx.get("targets").is_some() {
             self.entities(ctx, "targets", true)?
         } else {
-            vec![Target::Player]
+            vec![self.implied(true)?]
         };
         let predicate = match ctx.get("item") {
             Some(Arg::Item(i)) => i.clone(),
