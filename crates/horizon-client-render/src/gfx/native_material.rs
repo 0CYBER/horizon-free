@@ -10,6 +10,7 @@
 
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
+use super::displace::{Displacement, MAX_SECTIONS, Near};
 use super::native_post::trace::{TerrainTrace, Traced};
 use super::native_post::{NativeFrame, present_constants};
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
@@ -771,6 +772,78 @@ impl super::native_pack::NativePack {
         if let Some(color) = color {
             self.frame.copy_opaque(device, encoder, color);
         }
+    }
+
+    /// Whether `[displacement]`'s grid takes its quads from the frame's visible sections, which
+    /// GPU culling doesn't list.
+    pub fn displaces(&self) -> bool {
+        self.displacement.is_some()
+    }
+
+    /// Writes out the solid quads of the sections `[displacement]` reaches and picks this
+    /// frame's grid (none on the title screen, where the renderer hands over no sections).
+    pub fn prepare_displacement<'s>(
+        &mut self,
+        prepare: DisplacementPrepare<'_, impl Iterator<Item = Near<'s>>>,
+    ) {
+        let Some(d) = &mut self.displacement else {
+            return;
+        };
+        let near: smallvec::SmallVec<[Near<'_>; MAX_SECTIONS]> = prepare
+            .sections
+            .filter(|n| {
+                let o = glam::Vec3::from(n.origin);
+                let closest = glam::Vec3::ZERO.clamp(o, o + 16.0);
+                closest.length() < d.distance
+            })
+            .collect();
+        let DisplacementPrepare {
+            device,
+            queue,
+            encoder,
+            view_proj,
+            ..
+        } = prepare;
+        d.prepare(device, queue, encoder, &near, view_proj);
+    }
+
+    /// `[displacement]`'s grid, drawn by `layers`' displaced layer; none without either.
+    pub fn displaced_grid<'a>(&'a self, layers: TerrainLayers<'a>) -> Option<DisplacedGrid<'a>> {
+        Some(DisplacedGrid {
+            displacement: self.displacement.as_ref()?,
+            pipeline: layers.displaced?,
+            layers,
+        })
+    }
+}
+
+/// What the renderer hands `[displacement]` once a frame, after the visibility walk
+/// (`NativePack::prepare_displacement`).
+pub struct DisplacementPrepare<'a, I> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The visible sections with solid quads, nearest first.
+    pub sections: I,
+    pub view_proj: glam::Mat4,
+}
+
+/// `[displacement]`'s grid of the solid terrain near the camera and the layer that draws it
+/// (`NativePack::displaced_grid`).
+#[derive(Clone, Copy)]
+pub struct DisplacedGrid<'a> {
+    displacement: &'a Displacement,
+    pipeline: &'a wgpu::RenderPipeline,
+    layers: TerrainLayers<'a>,
+}
+
+impl DisplacedGrid<'_> {
+    /// Draws the grid over the flat quads it took over, writing its depth, in a terrain pass
+    /// with the renderer's group 0 bound.
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.layers.bind(pass);
+        let d = self.displacement;
+        d.draw(pass, &d.view, self.pipeline);
     }
 }
 

@@ -91,6 +91,45 @@ impl Renderer {
         };
         pack_timing::TimedFrames { own, pack }
     }
+    /// The running shader pack's timer, of either kind, follows `set_pass_timing`,
+    /// `set_pass_timing_gap` and `set_keep_timed_frames`, before the world passes.
+    pub(super) fn set_up_pack_timing(&mut self) {
+        match (&mut self.pack_post, &mut self.native) {
+            (Some((_, Some(post))), _) => {
+                let timer = &mut post.timing;
+                if timer.is_some() != self.pass_timing {
+                    *timer = self
+                        .pass_timing
+                        .then(|| pack_timing::PassTiming::new(&self.device, &self.queue))
+                        .flatten();
+                }
+                if let Some(t) = timer {
+                    t.gap = self.pass_timing_gap;
+                    t.keep_frames(self.keep_timed_frames);
+                }
+            }
+            (_, Some(native)) => native.set_up_timing(native_pack::TimingSetup {
+                device: &self.device,
+                queue: &self.queue,
+                on: self.pass_timing,
+                gap: self.pass_timing_gap,
+                keep_frames: self.keep_timed_frames,
+            }),
+            _ => {}
+        }
+    }
+    /// The running shader pack's timer, of either kind: the frame it timed was submitted.
+    pub(super) fn pack_timing_submitted(&mut self) {
+        match (&mut self.pack_post, &mut self.native) {
+            (Some((_, Some(post))), _) => {
+                if let Some(timer) = &mut post.timing {
+                    timer.submitted(&self.queue);
+                }
+            }
+            (_, Some(native)) => native.timing_submitted(&self.queue),
+            _ => {}
+        }
+    }
     /// The running shader pack's timer, of either kind.
     pub(super) fn pass_timer<'a>(
         pack: &'a mut Option<(i32, Option<pack_post::PackPost>)>,

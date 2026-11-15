@@ -483,6 +483,80 @@ impl NativePack {
         });
         true
     }
+
+    /// The post stage in place of the renderer's own finish of the world: its passes over the
+    /// world's scaled target, the last onto the screen, with the history reset still pending.
+    pub fn run_post(&mut self, post: WorldPost<'_>) {
+        let WorldPost {
+            device,
+            encoder,
+            world: (color, depth),
+            screen,
+            size,
+            scene,
+        } = post;
+        let history_reset = self.frame.take_history_reset();
+        self.post.run(
+            device,
+            encoder,
+            (color, depth, &self.frame.surface_view),
+            screen,
+            size,
+            history_reset,
+            self.timing.as_mut(),
+            scene,
+        );
+    }
+
+    /// Whether the pack's `[tonemap]` takes the place of Horizon's tone curve.
+    pub fn tonemaps(&self) -> bool {
+        self.post.tonemaps()
+    }
+
+    /// Times the pack's passes, or stops, as the renderer's settings say, before its world
+    /// passes.
+    pub fn set_up_timing(&mut self, setup: TimingSetup<'_>) {
+        if self.timing.is_some() != setup.on {
+            self.timing = setup
+                .on
+                .then(|| PassTiming::new(setup.device, setup.queue))
+                .flatten();
+        }
+        if let Some(t) = &mut self.timing {
+            t.gap = setup.gap;
+            t.keep_frames(setup.keep_frames);
+        }
+    }
+
+    /// The frame with the pack's timed passes was submitted.
+    pub fn timing_submitted(&mut self, queue: &wgpu::Queue) {
+        if let Some(timer) = &mut self.timing {
+            timer.submitted(queue);
+        }
+    }
+}
+
+/// What the renderer hands the pack's post stage (`NativePack::run_post`).
+pub struct WorldPost<'a> {
+    pub device: &'a wgpu::Device,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The world's scaled target (colour, depth), of `size`.
+    pub world: (&'a wgpu::TextureView, &'a wgpu::TextureView),
+    /// The window's frame, which the last pass draws.
+    pub screen: &'a wgpu::TextureView,
+    pub size: [u32; 2],
+    /// The ray scene and the camera, when the game traces rays.
+    pub scene: Option<(&'a RayScene, glam::DVec3)>,
+}
+
+/// The renderer's pass timing settings (`NativePack::set_up_timing`).
+pub struct TimingSetup<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    /// `set_pass_timing`, `set_pass_timing_gap` and `set_keep_timed_frames`.
+    pub on: bool,
+    pub gap: std::time::Duration,
+    pub keep_frames: bool,
 }
 
 /// What the renderer hands the pack before its world passes (`NativePack::start_frame`).
