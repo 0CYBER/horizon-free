@@ -301,6 +301,33 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    /// docs/server.md section 6: a login link's code is "good for 10 minutes", and wrong codes are counted
+    /// over a minute ("after 10 failed logins in a minute, logins are refused for a while").
+    #[test]
+    fn a_login_code_lasts_ten_minutes_and_failures_count_for_one() {
+        let ago = |seconds| {
+            Instant::now()
+                .checked_sub(Duration::from_secs(seconds))
+                .unwrap()
+        };
+        let status = |r: Result<String, Response>| r.map_err(|e| e.status);
+        let mut auth = Auth {
+            address: Some("127.0.0.1:8130".parse().unwrap()),
+            ..Auth::default()
+        };
+        // A code a second short of ten minutes old still signs in; one a second past does not.
+        auth.codes.push(("fresh".into(), ago(599)));
+        auth.codes.push(("stale".into(), ago(601)));
+        assert!(auth.redeem("fresh").is_ok());
+        assert_eq!(status(auth.redeem("stale")), Err(403));
+        // Ten failures in the last minute refuse the eleventh try with 429, even a wrong one...
+        auth.failures = (0..FAILURES_PER_MINUTE).map(|_| ago(59)).collect();
+        assert_eq!(status(auth.redeem("nope")), Err(429));
+        // ...and failures older than a minute no longer count.
+        auth.failures = (0..FAILURES_PER_MINUTE).map(|_| ago(61)).collect();
+        assert_eq!(status(auth.redeem("nope")), Err(403));
+    }
+
     #[test]
     fn hosts() {
         let local: SocketAddr = "127.0.0.1:8130".parse().unwrap();

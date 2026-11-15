@@ -26,7 +26,7 @@ here.
 - **Prerequisites:** Rust (stable), Python 3.11+, JDK 25, git 2.38 or newer, and on Linux the ALSA and udev headers
   (`libasound2-dev libudev-dev`).
 - **Resources:** Horizon never downloads the game; it prepares its resources from your own copy of Minecraft 26.3, as
-  described in [Build from source](README.md#build-from-source).
+  described in [Build from source](docs/native-client.md#run-from-a-checkout).
 - **Commands:**
 
   ```sh
@@ -165,6 +165,8 @@ including examples. The dependency scope includes optional, platform, build and 
 library, binary, integration and doc tests without building unrelated example executables. Shared Cargo
 configuration and toolchain changes select the whole workspace; CI also keeps its workspace-wide checks.
 
+For a quick check while you work, `python3 tools/check_changed.py` runs rustfmt, clippy and tests for only the crates your branch changed and the crates that depend on them (`--dry-run` lists the commands).
+
 ### Translations
 
 Most translations are machine-written and remain unreviewed until a speaker checks them. See [docs/translations.md](docs/translations.md). Never mark machine-written text as reviewed.
@@ -221,8 +223,7 @@ How agents, checks, releases and signed updates keep this safe: [security](docs/
 
 ### Large pull requests
 
-500 lines of code ([what counts](#pull-requests)) stays the default. A pull request that can't be split below it
-starts from a spec:
+A change too big to review as one concern starts from a spec:
 
 1. **Open an issue with the spec** before the code: what changes, the files it touches, the behaviour players and
    other code will see, and the tests or harnesses that prove it.

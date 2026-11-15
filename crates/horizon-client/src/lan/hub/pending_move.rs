@@ -138,8 +138,7 @@ impl Hub {
             g.client_is_floating = floating;
             // Entity.move's verticalCollisionBelow, which the check above reads of the last move.
             g.rests_on_ground = stands;
-            g.previous_position = g.position;
-            g.position = to;
+            g.accept_move(to);
             // ServerChunkCache.move: its pairs are checked again.
             g.moved = true;
             let moved = [0, 1, 2].map(|k| g.position[k] - g.previous_position[k]);

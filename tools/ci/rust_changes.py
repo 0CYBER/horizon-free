@@ -4,6 +4,7 @@
 The default answers Rust selection; --launcher uses the launcher's dependency paths.
 --all emits the shared Rust, launcher and tooling decisions for dyna-checks (the machine sample is a daily leg,
 machine-sample.yml, so dyna-checks selects nothing for it).
+server_build: whether verify's clippy of the server build has anything new to check (needs_server_build).
 """
 
 import argparse
@@ -33,6 +34,17 @@ def needs_rust(paths):
         path.startswith("docs/") or path.endswith(".md")
         or path.startswith(("tools/", "tests/")) and path.endswith(".py") and path not in RUST_DECIDES
     ) for path in paths)
+
+
+# verify's second clippy, the server build (horizon-client without default features): what it checks differently from
+# the first is the feature-gated code of the client crates and the features the manifests choose. Pull requests that
+# change neither skip it; main's pushes and the merge queue always run it.
+SERVER_BUILD_CHECK = {".github/workflows/ci.yml", "tools/ci/rust_changes.py"}
+
+
+def needs_server_build(paths):
+    return any(path.startswith("crates/horizon-client") or path.endswith("Cargo.toml") or path in ROOT_RUST
+               or path.startswith(".cargo/") or path in SERVER_BUILD_CHECK for path in paths)
 
 
 def needs_launcher(paths):
@@ -110,3 +122,4 @@ if __name__ == "__main__":
         needs = needs_launcher if args.launcher else needs_rust
         print(f"required={str(needs(paths)).lower()}")
         print(f"sample={str(needs_sample(paths)).lower()}")
+        print(f"server_build={str(needs_server_build(paths)).lower()}")

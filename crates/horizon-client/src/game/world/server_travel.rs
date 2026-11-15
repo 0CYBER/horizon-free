@@ -237,6 +237,12 @@ impl Trip {
     pub(super) fn is(&self, conn: u32) -> bool {
         self.conn == conn
     }
+
+    /// Respawn searches, like command arrivals, must finish before the client can leave
+    /// their loading area. `hold` alone names a command's already-placed body.
+    fn holds_movement(&self) -> bool {
+        self.hold || self.respawn.is_some() || self.world_spawn
+    }
 }
 
 impl Game<'_> {
@@ -279,12 +285,9 @@ impl Game<'_> {
             left: None,
         });
     }
-    /// Before the arrivals: a hold follows the player where a mod sent them (`native_player_teleport` may cancel
-    /// a `tp` or send the player elsewhere: the guest stands where the hub put them, not at the hold's target),
-    /// and a hold that ended without its arrival (replaced by a `tp` to lit land, a trip to another level, a
-    /// respawn, a death) lets their client's moves be heard again. A portal's trip still waiting for the player
-    /// lands them itself.
-    fn release_held_arrivals(&mut self) {
+    /// A command hold follows the player where a mod sent them (`native_player_teleport` may
+    /// cancel or redirect it). A respawn keeps its own destination and stand-up search.
+    fn follow_command_arrivals(&mut self) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
@@ -302,6 +305,11 @@ impl Game<'_> {
         for (conn, at) in moved {
             self.hold_for_chunks(conn, at);
         }
+    }
+
+    /// Release movement after completed or replaced arrivals. A spawn search can requeue
+    /// itself while a candidate chunk loads: that still owns the hold until it finishes.
+    fn release_held_arrivals(&mut self) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -311,7 +319,11 @@ impl Game<'_> {
                 continue;
             }
             let conn = g.conn;
-            if self.server_trips.iter().any(|t| t.is(conn) && t.hold) {
+            if self
+                .server_trips
+                .iter()
+                .any(|t| t.is(conn) && t.holds_movement())
+            {
                 continue;
             }
             let landing = self
@@ -1140,7 +1152,7 @@ impl Game<'_> {
     /// around their target: the exit (the Nether portal found or built, the
     /// End platform, the Overworld's spawn column) and the teleport there.
     fn arrive_server_trips(&mut self) {
-        self.release_held_arrivals();
+        self.follow_command_arrivals();
         let mut k = 0;
         while k < self.server_trips.len() {
             let trip = &self.server_trips[k];
@@ -1156,7 +1168,7 @@ impl Game<'_> {
                 (trip.target.x.floor() as i32) >> 4,
                 (trip.target.z.floor() as i32) >> 4,
             );
-            if trip.hold {
+            if trip.holds_movement() {
                 self.lan.as_mut().unwrap().hub.guests.update(i, |g| {
                     g.landing = true;
                     g.tp_held = true;
@@ -1173,12 +1185,6 @@ impl Game<'_> {
                 continue;
             }
             let mut trip = self.server_trips.remove(k);
-            if trip.hold {
-                self.lan.as_mut().unwrap().hub.guests.update(i, |g| {
-                    g.landing = false;
-                    g.tp_held = false;
-                });
-            }
             if trip.placed {
                 self.tell_mods_changed_dimension(trip.conn, trip.left, trip.dim);
                 continue;
@@ -1363,6 +1369,7 @@ impl Game<'_> {
             }
             self.tell_mods_changed_dimension(trip.conn, trip.left, trip.dim);
         }
+        self.release_held_arrivals();
     }
 
     /// The vehicle the player rode arrives with it, at the point the player

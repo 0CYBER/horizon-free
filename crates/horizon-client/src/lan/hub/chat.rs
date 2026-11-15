@@ -423,6 +423,18 @@ impl Hub {
         }
     }
 
+    /// `PlayerList.broadcastSystemMessage` to everyone but `except`, whose
+    /// copy travels with its command's captured output (as `/say`'s).
+    pub fn system_message_except(&self, content: Tag, except: u32) {
+        self.broadcast_except(
+            except,
+            &C::SystemChat(play::SystemChat {
+                content,
+                overlay: false,
+            }),
+        );
+    }
+
     /// A chat line as a player who is on, disguised: no signature, named as the player is shown,
     /// to the players who show chat (a mod's character or a bot's line). `message` is the
     /// component. False when the player isn't on.

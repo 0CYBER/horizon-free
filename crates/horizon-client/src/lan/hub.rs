@@ -2110,6 +2110,7 @@ impl Hub {
         let ticks = self.ticks;
         self.guests.update(i, |g| {
             g.teleport_tick = ticks;
+            g.held_ticket_chunk = Some(g.ticket_chunk()); // teleport has no move
             g.pending_move = None;
             if let Some(p) = position {
                 g.position = p;
@@ -3107,7 +3108,7 @@ impl Hub {
                 options.scale,
             )),
             T::Effect | T::InstantEffect => Some(ParticleData::ColorPower(rgb, options.scale)),
-            T::EntityEffect | T::TintedLeaves => Some(ParticleData::Color(
+            T::EntityEffect | T::TintedLeaves | T::Flash => Some(ParticleData::Color(
                 (((c[3].clamp(0.0, 1.0) * 255.0).round() as i32) << 24) | rgb,
             )),
             T::DragonBreath | T::SculkCharge => Some(ParticleData::Scalar(options.scale)),
@@ -4436,6 +4437,7 @@ impl Hub {
             // A passenger only turns: its vehicle carries it (absSnapTo where it is).
             if g.vehicle.is_some() {
                 (g.yaw, g.pitch) = (yaw, pitch);
+                g.release_tickets();
                 return std::ops::ControlFlow::Break(false);
             }
             let d = [0, 1, 2].map(|k| to[k] - g.first_good[k]);
@@ -4811,8 +4813,7 @@ impl Hub {
             // The new player faces the level's respawn direction (snapTo), or
             // the one its TeleportTransition carries.
             [g.yaw, g.pitch] = rotation.unwrap_or(ctx.spawn_angle);
-            g.position = at;
-            g.previous_position = at;
+            g.place(at);
             g.send(&C::Respawn(play::Respawn {
                 spawn: info,
                 keep: 0,
@@ -4944,8 +4945,7 @@ impl Hub {
             if let Some(pitch) = pitch {
                 g.pitch = pitch;
             }
-            g.position = at;
-            g.previous_position = at;
+            g.place(at);
             g.send(&C::Respawn(play::Respawn {
                 spawn: info,
                 // ClientboundRespawnPacket.KEEP_ALL_DATA.
@@ -5013,6 +5013,7 @@ impl Hub {
             let value = false;
             self.guests.update(i, |guest| guest.landing = value);
         }
+        self.guests.update(i, |g| g.place(at)); // hold the exit chunk
         self.teleport(i, Some(at));
         let g = &self.guests[i];
         g.send(&C::GameEvent(play::GameEvent {
@@ -7816,5 +7817,42 @@ mod tests {
         // The same id again, with nothing awaited: disconnected.
         tick_packet(&mut hub, &mut world, accept(id));
         assert!(!hub.guests[0].left_reason.is_empty());
+    }
+    /// A guest's `/tp`: `ServerGamePacketListenerImpl.teleport` does not call `ServerChunkCache.move`,
+    /// so its tickets stay at the chunk it left (also over a second teleport) until the client's
+    /// ack of the teleport (`handleAcceptTeleportPacket` -> `handlePlayerPositionChange`) moves them.
+    /// A camera change moves them at once (`ServerPlayer.setCamera`), also back to the player.
+    #[test]
+    fn a_teleported_guests_tickets_stay_where_it_left_until_the_teleport_is_acked() {
+        let (mut hub, _rx) = hub_with_a_guest();
+        let mut world = floor_at(0);
+        let left = hub.guests[0].chunk();
+        hub.teleport(0, Some([104.5, 70.0, 8.5]));
+        assert_eq!(hub.guests[0].ticket_chunk(), left);
+        hub.teleport(0, Some([200.5, 70.0, 8.5]));
+        assert_eq!(
+            (hub.guests[0].chunk(), hub.guests[0].ticket_chunk()),
+            ((12, 0), left)
+        );
+        let id = hub.guests[0].teleport_counter;
+        tick_packet(
+            &mut hub,
+            &mut world,
+            S::AcceptTeleportation(play::AcceptTeleportation {
+                id,
+                x: 200.5,
+                y: 70.0,
+                z: 8.5,
+                yaw: 0.0,
+                pitch: 0.0,
+            }),
+        );
+        assert_eq!(hub.guests[0].ticket_chunk(), (12, 0));
+        // `guest_set_camera`: watching, the teleport to the camera, the tickets released.
+        hub.guests.update(0, |g| g.watching = true);
+        hub.teleport(0, Some([8.5, 70.0, 8.5]));
+        hub.guests.update(0, |g| g.release_tickets());
+        hub.guests.update(0, |g| g.watching = false);
+        assert_eq!(hub.guests[0].ticket_chunk(), left);
     }
 }

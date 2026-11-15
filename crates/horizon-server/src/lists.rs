@@ -391,6 +391,8 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn edits_the_lists_while_stopped() {
+        // The lock is held below without a server behind it: do not wait the full 5 s for its endpoint.
+        crate::api::ENDPOINT_WAIT.with(|w| w.set(Some(std::time::Duration::from_millis(300))));
         let dir = std::env::temp_dir().join(format!("horizon-server-lists-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

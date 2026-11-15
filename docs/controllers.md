@@ -51,7 +51,7 @@ once per loop iteration next to winit's events.
 | Action | Xbox | PlayStation | Mapping |
 |---|---|---|---|
 | Move | Left stick | Left stick | analog `key.forward/back/left/right` |
-| Look | Right stick | Right stick | camera |
+| Look | Right stick | Right stick | camera; the cinematic camera eases it as it does the mouse |
 | Jump / fly up | A | ✕ | `key.jump` |
 | Drop item | D-pad down | D-pad down | `key.drop` |
 | Swap offhand | X | □ | `key.swapOffhand` |

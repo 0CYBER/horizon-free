@@ -93,10 +93,12 @@ fn the_bonus_float_is_drawn_once_at_the_end_and_only_below_scale_two() {
                 let mut reference = LegacyRandom::new(seed);
                 let scale = reference.next_int_bound(3).unwrap();
                 let roll = (scale < 2).then(|| reference.next_float());
+                // `setSpawnSize` draws from the level's random.
                 let mut m = cube(types, "minecraft:slime", seed);
-                super::finalize(&mut m, multiplier);
+                let mut level = LegacyRandom::new(seed);
+                super::finalize(&mut m, multiplier, &mut level);
                 assert_eq!(
-                    m.random.state(),
+                    level.state(),
                     reference.state(),
                     "seed {seed}, multiplier {multiplier}"
                 );

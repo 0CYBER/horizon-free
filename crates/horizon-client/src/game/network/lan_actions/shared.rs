@@ -314,17 +314,6 @@ pub(super) fn guest_within_entity_range(
     let range = if g.creative() { 5.0 } else { 3.0 } + buffer;
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
 }
-fn direction(face: i32) -> [i32; 3] {
-    match face {
-        0 => [0, -1, 0],
-        1 => [0, 1, 0],
-        2 => [0, 0, -1],
-        3 => [0, 0, 1],
-        4 => [-1, 0, 0],
-        _ => [1, 0, 0],
-    }
-}
-
 fn building_player(g: &horizon_client::lan::guest::Guest) -> BuildingPlayer {
     BuildingPlayer {
         conn: Some(g.conn),
@@ -2352,6 +2341,7 @@ mod pickup_xp_tests {
                 age: 0,
                 on_ground: true,
                 count: 1,
+                fire_ticks: 0,
                 ticks: 0,
                 air: 300,
                 health: 5,

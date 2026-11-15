@@ -203,7 +203,7 @@ impl Game<'_> {
                     {
                         return;
                     }
-                    let face = direction(i32::from(a.direction));
+                    let face = crate::game::hit::direction(i32::from(a.direction));
                     // Native mods, once the dig may start: a canceled click
                     // attacks, digs and breaks nothing (the ack puts the
                     // block back on the client).
@@ -527,16 +527,7 @@ impl Game<'_> {
                     return;
                 };
                 host.hub.ack(conn, p.sequence);
-                let hit = Hit {
-                    pos: p.pos,
-                    face: direction(p.face),
-                    point: [
-                        f64::from(p.pos[0]) + f64::from(p.cursor[0]),
-                        f64::from(p.pos[1]) + f64::from(p.cursor[1]),
-                        f64::from(p.pos[2]) + f64::from(p.cursor[2]),
-                    ],
-                    inside: p.inside,
-                };
+                let hit = Hit::from_use_item_on(&p);
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let _ = self.guest_use_item_on(conn, gi, hit, hand);
             }

@@ -109,7 +109,7 @@ class AllowTests(unittest.TestCase):
         do("/close", login="ludovic111")
 
     def test_stranger_refused(self):
-        with self.assertRaisesRegex(tc.Refused, "Only Ludovic"):
+        with self.assertRaisesRegex(tc.Refused, "Only the council"):
             do("/close", login="someone")
 
     def test_paused(self):
@@ -123,7 +123,7 @@ class AllowTests(unittest.TestCase):
         self.assertEqual(Path(tc.ns.__file__).resolve(), Path(ns.__file__).resolve())  # one parser for all three
 
     def test_a_reclaimed_login_is_nobody(self):
-        with self.assertRaisesRegex(tc.Refused, "Only Ludovic"):
+        with self.assertRaisesRegex(tc.Refused, "Only the council"):
             tc.run(Fake(), tc.parse("/close"), ns.Actor("kacpherek", 555), 5, URL, LIST, NOW)
         # Ludovic's threads are recognised by his ID, not by a login someone else may hold.
         api = Fake({5: {"state": "open", "user": {"login": "ludovic111", "id": 555}, "labels": [], "locked": False}})
@@ -194,7 +194,7 @@ class RefusalTests(unittest.TestCase):
         for text in ("/close", "/label bug", "/unlabel bug", "/reopen"):
             for t in (thread(user="ludovic111", state="closed" if text == "/reopen" else "open"),
                       thread(user="Ludovic111", pr=True)):
-                with self.assertRaisesRegex(tc.Refused, "Ludovic's"):
+                with self.assertRaisesRegex(tc.Refused, "a council member's"):
                     do(text, Fake({5: t}))
 
     def test_merged_pr(self):

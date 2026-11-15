@@ -33,6 +33,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/CODEOWNERS
+            .github/council.txt
             .github/trusted-reviewers.txt
             tools/ci/nightly_set.py
           sparse-checkout-cone-mode: false

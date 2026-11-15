@@ -7,6 +7,7 @@ use super::{
     mcpr::{Marker, McprReader, McprWriter, Metadata, TimestampedPacket},
     spline::CameraTrack,
 };
+use crate::packet_source::PacketSource;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -51,21 +52,6 @@ impl ReplayDriver {
         })
     }
 
-    /// Current timeline position in milliseconds.
-    pub fn position_ms(&self) -> u32 {
-        self.cursor_ms as u32
-    }
-
-    /// Total recording duration in milliseconds.
-    pub fn duration_ms(&self) -> u32 {
-        self.metadata.duration
-    }
-
-    /// Total number of indexed packets in the recording stream.
-    pub fn packet_count(&self) -> usize {
-        self.reader.total_packets()
-    }
-
     /// Camera keyframes saved alongside the packet stream, if present.
     pub fn camera_track(&self) -> Option<&CameraTrack> {
         self.reader.camera_track.as_ref()
@@ -96,9 +82,22 @@ impl ReplayDriver {
         self.reader.camera_track = (!track.is_empty()).then(|| track.clone());
         Ok(())
     }
+}
 
-    /// Current playback progress as a fraction from 0.0 to 1.0.
-    pub fn progress(&self) -> f32 {
+impl PacketSource for ReplayDriver {
+    fn position_ms(&self) -> u32 {
+        self.cursor_ms as u32
+    }
+
+    fn duration_ms(&self) -> u32 {
+        self.metadata.duration
+    }
+
+    fn packet_count(&self) -> usize {
+        self.reader.total_packets()
+    }
+
+    fn progress(&self) -> f32 {
         if self.metadata.duration == 0 {
             0.0
         } else {
@@ -106,43 +105,35 @@ impl ReplayDriver {
         }
     }
 
-    /// Current playback speed multiplier (e.g. 0.25, 1.0, 2.0).
-    pub fn speed(&self) -> f64 {
+    fn speed(&self) -> f64 {
         self.speed
     }
 
-    /// Set playback speed multiplier. Clamped between 0.01x and 20.0x.
-    pub fn set_speed(&mut self, speed: f64) {
+    fn set_speed(&mut self, speed: f64) {
         self.speed = speed.clamp(0.01, 20.0);
     }
 
-    /// Check if playback is paused.
-    pub fn is_paused(&self) -> bool {
+    fn is_paused(&self) -> bool {
         self.paused
     }
 
-    /// Set paused state.
-    pub fn set_paused(&mut self, paused: bool) {
+    fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
     }
 
-    /// Toggle paused state.
-    pub fn toggle_pause(&mut self) {
+    fn toggle_pause(&mut self) {
         self.paused = !self.paused;
     }
 
-    /// Set whether replay should loop when reaching the end.
-    pub fn set_looping(&mut self, looping: bool) {
+    fn set_looping(&mut self, looping: bool) {
         self.looping = looping;
     }
 
-    /// Check if playback reached the end of the recording.
-    pub fn is_finished(&self) -> bool {
+    fn is_finished(&self) -> bool {
         self.finished
     }
 
-    /// Advance virtual time by `delta` and collect all packets scheduled up to the new time.
-    pub fn advance(&mut self, delta: Duration) -> io::Result<Vec<TimestampedPacket>> {
+    fn advance(&mut self, delta: Duration) -> io::Result<Vec<TimestampedPacket>> {
         if self.paused || self.finished {
             return Ok(Vec::new());
         }
@@ -176,8 +167,7 @@ impl ReplayDriver {
         Ok(ready)
     }
 
-    /// Seek directly to a specific timestamp in milliseconds.
-    pub fn seek(&mut self, target_ms: u32) -> io::Result<()> {
+    fn seek(&mut self, target_ms: u32) -> io::Result<()> {
         let clamped_ms = target_ms.min(self.metadata.duration);
         self.cursor_ms = clamped_ms as f64;
         self.finished = false;
@@ -187,10 +177,7 @@ impl ReplayDriver {
         Ok(())
     }
 
-    /// Seek from the beginning and return all packets needed to reconstruct the
-    /// replay state at `target_ms`. The first packet after the target remains
-    /// cached for normal playback.
-    pub fn seek_and_collect(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
+    fn seek_and_collect(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
         let target_ms = target_ms.min(self.metadata.duration);
         self.reader.seek_to_timestamp(0)?;
         self.next_packet_cache = self.reader.next_packet()?;
@@ -210,8 +197,7 @@ impl ReplayDriver {
         Ok(packets)
     }
 
-    /// Move forward from the current cursor and return the newly crossed packets.
-    pub fn seek_forward(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
+    fn seek_forward(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
         let target_ms = target_ms.min(self.metadata.duration);
         if (target_ms as f64) < self.cursor_ms {
             return Err(io::Error::new(
@@ -235,9 +221,16 @@ impl ReplayDriver {
         Ok(packets)
     }
 
-    /// Rewind playback to the beginning.
-    pub fn restart(&mut self) -> io::Result<()> {
+    fn restart(&mut self) -> io::Result<()> {
         self.seek(0)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

@@ -32,6 +32,16 @@ impl Game<'_> {
                 (boundary - origin[i]) / dir[i]
             };
         }
+        // `VoxelShape.clip`'s inside test: the start nudged along the ray, and
+        // the sweep that gives the face of a hit there.
+        let start = Vec3::new(origin[0], origin[1], origin[2]);
+        let sweep = Vec3::new(
+            origin[0] + dir[0] * reach,
+            origin[1] + dir[1] * reach,
+            origin[2] + dir[2] * reach,
+        )
+        .subtract(start);
+        let nudged = start.add_vector(sweep.scale(0.001));
         let mut face = [0; 3];
         let mut t = 0.0;
         while t <= reach {
@@ -52,8 +62,14 @@ impl Game<'_> {
                 )
             {
                 // The nearest entry into one of the outline's boxes (slab method).
+                let boxes = self.outline_boxes(pos);
+                // `VoxelShape.clip`: a ray that starts inside the outline hits
+                // it there, facing the way the look comes from.
+                if let Some(hit) = inside_hit(nudged, sweep, &boxes, pos) {
+                    return Some(hit);
+                }
                 let mut best: Option<(f64, [i32; 3])> = None;
-                for b in self.outline_boxes(pos) {
+                for b in boxes {
                     let (mut t0, mut t1, mut axis_in, mut sign) = (0.0f64, f64::INFINITY, None, 0);
                     let mut miss = false;
                     for a in 0..3 {
@@ -135,7 +151,9 @@ impl Game<'_> {
                         origin[1] + dir[1] * t,
                         origin[2] + dir[2] * t,
                     ],
-                    inside: face == [0; 3],
+                    // A fluid hit's inside flag is never read: a placement
+                    // onto a fluid aims at the block above it.
+                    inside: false,
                 });
             }
             let axis = if t_max[0] < t_max[1] {
@@ -153,4 +171,18 @@ impl Game<'_> {
         }
         None
     }
+}
+
+/// `VoxelShape.clip`'s inside case: the start point nudged along the ray lies in
+/// one of the outline's boxes, so the hit is there, facing the look.
+fn inside_hit(nudged: Vec3, sweep: Vec3, boxes: &[[f64; 6]], pos: [i32; 3]) -> Option<Hit> {
+    let inside = boxes.iter().any(|b| {
+        Aabb::new(Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5])).contains(nudged)
+    });
+    inside.then(|| Hit {
+        pos,
+        face: Direction::approximate_nearest(sweep).opposite().normal(),
+        point: nudged.components(),
+        inside: true,
+    })
 }

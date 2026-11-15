@@ -20,6 +20,7 @@ fn orb(id: u32, value: i32, count: u32) -> ExperienceOrb {
         age: 0,
         on_ground: true,
         count,
+        fire_ticks: 0,
         ticks: 0,
         health: 5,
         air: 300,

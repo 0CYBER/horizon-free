@@ -7,12 +7,10 @@ use horizon_client::{
     Result, block_entity_item, block_entity_nbt, containers::BlockEntity, item_data,
     items::ItemStack, save,
 };
-use {
-    horizon_core::nbt::{Compound, JavaString, Tag},
-    horizon_world::{
-        level::{Behaviours, classes::Class},
-        registry::BlockStateId,
-    },
+use horizon_core::nbt::{Compound, JavaString, Tag};
+use horizon_world::{
+    level::{Behaviours, classes::Class, flags},
+    registry::BlockStateId,
 };
 
 /// The component patch of `stack`.
@@ -304,7 +302,8 @@ impl Game<'_> {
         let props: Vec<(&str, &str)> = props.iter().map(|(k, v)| (&**k, &**v)).collect();
         match self.with_props(state, &props) {
             Some(new) if !props.is_empty() && new != state => {
-                self.level_set(pos, new)?;
+                // `level.setBlock(pos, modifiedState, 2)`: no neighbour pass.
+                self.level_set_with_flags(pos, new, flags::UPDATE_CLIENTS)?;
                 Ok(new)
             }
             _ => Ok(state),
@@ -973,3 +972,7 @@ mod styled_name_model_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "tests/item_block_state_tests.rs"]
+mod item_block_state_tests;

@@ -7,7 +7,7 @@ PointedDripstoneBlock.getCauldronFillFluidType	inline	crates/horizon-world/src/l
 PointedDripstoneBlock.animateTick	port	crates/horizon-client/src/animate_tick.rs::dripstone_drip	the free-hanging gate, the 0.12 roll and the drip of the fluid above the root
 PointedDripstoneBlock.getFluidAboveStalactite	inline	crates/horizon-client/src/animate_tick.rs::dripstone_drip	the ten-block root climb and the fluid above it folded into the drip
 PointedDripstoneBlock.canFillCauldron	inline	crates/horizon-client/src/animate_tick.rs::dripstone_drip	water or lava by fluid type, source or flowing, passes the 2% roll
-PointedDripstoneBlock.canGrow	inline	crates/horizon-world/src/level/speleothem.rs::Sim::speleothem_grow	gap: minor: checks the fluid two blocks above is water, not that it is a source block
+PointedDripstoneBlock.canGrow	inline	crates/horizon-world/src/level/speleothem.rs::Sim::speleothem_grow	the fluid two blocks above must be FluidKind::Water, the source form (flowing and falling water are FluidKind::FlowingWater), as FluidState.is(WATER) with isSource is; level::tests::a_dripstone_tip_grows_only_under_a_water_source guards it
 PointedDripstoneBlock.getDripParticle	port	crates/horizon-client/src/game/interface/level_particles.rs::Game::dripstone_drip_particle
 PotentSulfurBlock.isSourceIfFluid	inline	crates/horizon-world/src/level/shapes.rs::Sim::potent_sulfur_state	source_if_fluid check inside the state rule
 PotentSulfurBlock.onPlace	port	crates/horizon-world/src/level/shapes.rs::Sim::potent_sulfur_on_place	ticked in #3516; `PotentSulfurBlock.onPlace` is cited at crates/horizon-world/src/level/shapes.rs:878

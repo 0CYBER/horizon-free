@@ -4,10 +4,14 @@
 //! view follows that entity while the player stands still and sends no moves
 //! (`LocalPlayer.isControlledCamera`); the server keeps its player on the
 //! camera and lets go when the player sneaks.
+#[cfg(test)]
+#[path = "tests/remote_camera_tests.rs"]
+mod camera_tests;
+
 use super::Game;
 use horizon_client::{
     camera::{CameraEntity, LivingCamera},
-    entities::ArmorStand,
+    entities::{ArmorStand, ItemFrame},
     mobs::Mob,
 };
 
@@ -83,6 +87,107 @@ pub(super) fn stand_camera_entity(a: &ArmorStand) -> CameraEntity {
     }
 }
 
+/// `Camera.alignWithEntity`'s view of a boat, which is not living (no
+/// `getScale`, no camera distance): its interpolated position and `Entity`'s
+/// view rotation, with `EntityType.BOAT`'s `eyeHeight(0.5625F)`.
+pub(super) fn boat_camera_entity(b: &super::boats::Boat) -> CameraEntity {
+    CameraEntity {
+        position: [b.position.x, b.position.y, b.position.z],
+        previous: [b.previous.x, b.previous.y, b.previous.z],
+        x_rot: b.pitch,
+        y_rot: b.yaw,
+        x_rot_o: b.pitch,
+        y_rot_o: b.previous_yaw,
+        eye_height: 0.5625_f32,
+        living: None,
+        mount: None,
+    }
+}
+/// `Camera.alignWithEntity`'s view of an item frame: a hanging entity sits at
+/// the centre of its box, the block's centre pulled 0.46875 out of the wall
+/// (`HangingEntity.recalculateBoundingBox` of `ItemFrame.createBoundingBox`),
+/// does not move, and has `EntityType.ITEM_FRAME`'s zero eye height.
+/// `ItemFrame.setDirection` turns it: `get2DDataValue() * 90` in yaw (south 0,
+/// west 1, north 2, east 3), or `-90 * getAxisDirection().getStep()` in pitch
+/// on the floor and ceiling.
+pub(super) fn frame_camera_entity(f: &ItemFrame) -> CameraEntity {
+    let step = f.step().map(f64::from);
+    let at: [f64; 3] = std::array::from_fn(|i| f64::from(f.pos[i]) + 0.5 - step[i] * 0.46875);
+    let (y_rot, x_rot) = match f.facing {
+        0 => (0.0, 90.0),
+        1 => (0.0, -90.0),
+        2 => (180.0, 0.0),
+        4 => (90.0, 0.0),
+        5 => (270.0, 0.0),
+        _ => (0.0, 0.0),
+    };
+    CameraEntity {
+        position: at,
+        previous: at,
+        x_rot,
+        y_rot,
+        x_rot_o: x_rot,
+        y_rot_o: y_rot,
+        eye_height: 0.0,
+        living: None,
+        mount: None,
+    }
+}
+/// `Camera.alignWithEntity`'s view of primed TNT: its interpolated position
+/// and `Entity`'s view rotation (priming never changes it), with
+/// `EntityType.TNT`'s `eyeHeight(0.15F)`.
+pub(super) fn tnt_camera_entity(t: &super::tnt::PrimedTnt) -> CameraEntity {
+    CameraEntity {
+        position: [t.position.x, t.position.y, t.position.z],
+        previous: [t.previous.x, t.previous.y, t.previous.z],
+        x_rot: t.rotation[1],
+        y_rot: t.rotation[0],
+        x_rot_o: t.rotation[1],
+        y_rot_o: t.rotation[0],
+        eye_height: 0.15,
+        living: None,
+        mount: None,
+    }
+}
+
+/// The entity lists a server's camera can name (`Level.getEntity`): the kinds
+/// this client can follow.
+pub(super) struct CameraEntities<'a> {
+    pub mobs: &'a [Mob],
+    pub stands: &'a [ArmorStand],
+    pub boats: &'a [super::boats::Boat],
+    pub frames: &'a [ItemFrame],
+    pub tnts: &'a [super::tnt::PrimedTnt],
+}
+
+impl CameraEntities<'_> {
+    /// `ClientboundSetCameraPacket.getEntity`: the level holds the id.
+    pub(super) fn holds(&self, id: u32) -> bool {
+        self.mobs.iter().any(|m| m.id == id)
+            || self.stands.iter().any(|a| a.id == id)
+            || self.boats.iter().any(|b| b.id == id)
+            || self.frames.iter().any(|f| f.id == id)
+            || self.tnts.iter().any(|t| t.id == id)
+    }
+    /// `Camera.alignWithEntity`: the view out of the entity, `None` when the
+    /// level does not hold it.
+    pub(super) fn view(&self, id: u32) -> Option<CameraEntity> {
+        if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+            return Some(mob_camera_entity(m));
+        }
+        if let Some(a) = self.stands.iter().find(|a| a.id == id) {
+            return Some(stand_camera_entity(a));
+        }
+        if let Some(b) = self.boats.iter().find(|b| b.id == id) {
+            return Some(boat_camera_entity(b));
+        }
+        if let Some(f) = self.frames.iter().find(|f| f.id == id) {
+            return Some(frame_camera_entity(f));
+        }
+        self.tnts.iter().find(|t| t.id == id).map(tnt_camera_entity)
+    }
+}
+
 /// `GameRenderer.checkEntityPostEffect`: the chain a spectated creeper, spider or
 /// enderman puts on the screen, or one a mod registered for its own entity type
 /// (`Hooks::register_entity_spectator_shaders`).
@@ -94,8 +199,7 @@ impl Game<'_> {
     /// `ClientPacketListener.handleSetCamera`.
     pub(in crate::game) fn remote_set_camera(&mut self, camera_id: i32) {
         let id = camera_id as u32;
-        let in_level =
-            self.mobs.iter().any(|m| m.id == id) || self.armor_stands.iter().any(|a| a.id == id);
+        let in_level = self.camera_entities().holds(id);
         let player = self
             .remote
             .as_ref()
@@ -130,16 +234,20 @@ impl Game<'_> {
         self.mobs.iter().find(|m| m.id == id)
     }
     /// The view of the entity a server attached the camera to, while the
-    /// level still holds it: a mob or an armor stand.
+    /// level still holds it.
     pub(super) fn spectated_camera_snapshot(&self) -> Option<CameraEntity> {
-        if let Some(m) = self.camera_mob() {
-            return Some(mob_camera_entity(m));
-        }
         let id = self.remote_camera_id()?;
-        self.armor_stands
-            .iter()
-            .find(|a| a.id == id)
-            .map(stand_camera_entity)
+        self.camera_entities().view(id)
+    }
+    /// The level's entities a server camera may name.
+    fn camera_entities(&self) -> CameraEntities<'_> {
+        CameraEntities {
+            mobs: &self.mobs,
+            stands: &self.armor_stands,
+            boats: &self.boats,
+            frames: &self.item_frames,
+            tnts: &self.tnts,
+        }
     }
     /// The entity under a spectator's crosshair (`Minecraft.hitResult` as an
     /// `EntityHitResult`): the nearest mob or object before any block.

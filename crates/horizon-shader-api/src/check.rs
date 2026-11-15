@@ -277,6 +277,17 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
         })?;
     let (expressions, texture_reads) = cost(&module);
     let mut problems = Vec::new();
+    let engine = kind == StageKind::Material && pack.manifest.coverage == crate::Coverage::Engine;
+    if engine && let Some(at) = reachable_discard(&module, kind.function()) {
+        problems.push(located(
+                &composed,
+                at.to_range().map(|r| r.start),
+                "`discard` reachable from `material`: under `[material] coverage = \"engine\"` (the \
+                 default) Horizon's alpha test on the texture decides what is drawn; a pack that cuts \
+                 its own holes sets `coverage = \"pack\"`"
+                    .into(),
+            ));
+    }
     if expressions > MAX_EXPRESSIONS {
         problems.push(problem(
             file,
@@ -527,6 +538,53 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
         }
     }
     problems
+}
+
+/// Where a `discard` is that the function `name` can reach: in its own body, its nested blocks,
+/// or a function it calls, however deep.
+fn reachable_discard(module: &naga::Module, name: &str) -> Option<naga::Span> {
+    fn walk(
+        block: &naga::Block,
+        calls: &mut Vec<naga::Handle<naga::Function>>,
+    ) -> Option<naga::Span> {
+        for (statement, span) in block.span_iter() {
+            let found = match statement {
+                naga::Statement::Kill => return Some(*span),
+                naga::Statement::Block(b) => walk(b, calls),
+                naga::Statement::If { accept, reject, .. } => {
+                    walk(accept, calls).or_else(|| walk(reject, calls))
+                }
+                naga::Statement::Switch { cases, .. } => {
+                    cases.iter().find_map(|c| walk(&c.body, calls))
+                }
+                naga::Statement::Loop {
+                    body, continuing, ..
+                } => walk(body, calls).or_else(|| walk(continuing, calls)),
+                naga::Statement::Call { function, .. } => {
+                    calls.push(*function);
+                    None
+                }
+                _ => None,
+            };
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+    let (start, _) = module
+        .functions
+        .iter()
+        .find(|(_, f)| f.name.as_deref() == Some(name))?;
+    let (mut calls, mut seen) = (vec![start], HashSet::new());
+    while let Some(f) = calls.pop() {
+        if seen.insert(f)
+            && let Some(span) = walk(&module.functions[f].body, &mut calls)
+        {
+            return Some(span);
+        }
+    }
+    None
 }
 
 /// Each `override` is an option of its type, or has a default of its own.

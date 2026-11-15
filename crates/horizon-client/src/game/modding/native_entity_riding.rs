@@ -466,16 +466,13 @@ impl Game<'_> {
         match rider {
             Target::Player => {
                 match vehicle {
-                    Target::Boat(id) => {
-                        if let Some(boat) = self.boats.iter().find(|b| b.id == id) {
-                            self.yaw = boat.yaw;
-                        }
-                    }
+                    // `ServerPlayer.startRiding` teleports with `Relative.ROTATION`: the
+                    // rider keeps their view, whatever the vehicle's yaw.
+                    Target::Boat(_) => {}
                     Target::Mob(id) => {
                         if let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id) {
                             mob.extra.flag = false;
                             mob.extra.counter = 0;
-                            self.yaw = mob.yaw;
                         }
                         self.mount.jump_ticks = 0;
                         self.mount.jump_scale = 0.0;
@@ -1017,6 +1014,7 @@ mod tests {
         use horizon_client::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.yaw = 10.0;
             game.boats
                 .push(Boat::new(60, "oak".into(), Vec3::ZERO, 45.0));
             assert!(game.interact_boat(Some(InteractTarget {
@@ -1024,7 +1022,7 @@ mod tests {
                 location: [0.0; 3]
             })));
             assert_eq!(game.riding, Some(60));
-            assert_eq!(game.yaw, 45.0);
+            assert_eq!(game.yaw, 10.0, "mounting keeps the rider's view");
             game.riding = None;
             game.carts
                 .push(Minecart::new(61, CartKind::Rideable, Vec3::ZERO));

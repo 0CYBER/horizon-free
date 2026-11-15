@@ -386,9 +386,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::Azalea => b.in_set(ground, &t.supports_azalea),
                 Class::CactusFlower => {
+                    // `isFaceSturdy(level, pos, UP, CENTER)` asks the live block: a
+                    // shulker box's support shape comes from its block entity, where
+                    // the cached center fact only knows a closed box.
                     let below = self.state(ground_pos);
                     b.in_set(below, &t.support_override_cactus_flower)
-                        || b.is_face_sturdy_center(below, Direction::Up)
+                        || self.can_support_center(ground_pos, Direction::Up)
                 }
                 Class::Crop | Class::PitcherCrop => b.in_set(ground, &t.supports_crops),
                 Class::DryVegetation => b.in_set(ground, &t.supports_dry_vegetation),

@@ -6,7 +6,7 @@
 //! (`Kind::Mount`) with the mount's saddle, body item and chest copied in and
 //! written back, and the slots go to the client after each change, as
 //! `broadcastChanges` does.
-use super::{Game, lan_crafting::input};
+use super::{Game, lan_actions::guest_within_entity_range, lan_crafting::input};
 use horizon_client::{
     items::ItemStack,
     menu::{Kind, Menu},
@@ -196,20 +196,14 @@ impl Game<'_> {
         closed
     }
 
-    /// `AbstractMountInventoryMenu.stillValid`: the mount is alive and within
-    /// the entity interaction range (3) plus 4 of the guest's eyes.
+    /// `AbstractMountInventoryMenu.stillValid`: the mount is alive and the
+    /// guest's eyes are within the entity interaction range (3, 5 in creative)
+    /// plus 4 of its box (`Player.isWithinEntityInteractionRange(mount, 4.0)`).
     pub(super) fn lan_mount_valid(&self, g: &horizon_client::lan::guest::Guest, mob: u32) -> bool {
-        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-        self.mobs.iter().find(|m| m.id == mob).is_some_and(|m| {
-            let (w, h) = (f64::from(m.width()) / 2.0, f64::from(m.height()));
-            let p = [m.position.x, m.position.y, m.position.z];
-            let lo = [p[0] - w, p[1], p[2] - w];
-            let hi = [p[0] + w, p[1] + h, p[2] + w];
-            let d: f64 = (0..3)
-                .map(|k| (eye[k] - eye[k].clamp(lo[k], hi[k])).powi(2))
-                .sum();
-            m.alive() && d < 7.0 * 7.0
-        })
+        self.mobs
+            .iter()
+            .find(|m| m.id == mob)
+            .is_some_and(|m| m.alive() && guest_within_entity_range(g, &m.bounds(), 4.0))
     }
 
     /// Each tick: a mount menu whose mount died or is out of reach closes

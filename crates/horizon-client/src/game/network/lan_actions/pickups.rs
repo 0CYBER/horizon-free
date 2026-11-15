@@ -344,7 +344,8 @@ impl Game<'_> {
             host.hub.take_item(orb.id as i32, id, 1, at);
         }
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.
-        let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
+        let mut random = horizon_client::random_source::create(); // the listener's own stream
+        let pitch = (random.next_float() - random.next_float()) * 0.35 + 0.9;
         let p = orb.position;
         self.audio.play(
             "minecraft:entity.experience_orb.pickup",

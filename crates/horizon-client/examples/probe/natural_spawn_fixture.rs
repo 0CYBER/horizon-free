@@ -946,7 +946,7 @@ fn spawner_case(
         let mut events = Vec::new();
         let mut spawned = std::collections::VecDeque::new();
         let mut spawn =
-            |l: &World, r: &SpawnerSpawn, _: &mut LegacyRandom| -> Option<SpawnerAdded> {
+            |l: &World, _: &mut LegacyRandom, r: &SpawnerSpawn| -> Option<SpawnerAdded> {
                 let t = l.s.types.types.get(r.id)?;
                 let [x, y, z] = r.position;
                 let bounds = spawn_box(x, y, z, t.width as f32, t.height as f32);
@@ -1053,7 +1053,7 @@ fn trial_case(
         let mut events = Vec::new();
         let mut spawned = std::collections::VecDeque::new();
         let mut items = Vec::new();
-        let mut spawn = |l: &World, r: &SpawnerSpawn, _: &mut LegacyRandom| {
+        let mut spawn = |l: &World, _: &mut LegacyRandom, r: &SpawnerSpawn| {
             let t = l.s.types.types.get(r.id)?;
             // Slime.readAdditionalSaveData: size Size + 1, clamped to 1..=127.
             let size = match r.entity.get(&horizon_core::nbt::JavaString::from("Size")) {

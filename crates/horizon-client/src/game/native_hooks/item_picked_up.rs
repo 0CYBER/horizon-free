@@ -204,8 +204,9 @@ impl Game<'_> {
             crate::game::pickups::Collector::Player,
         );
         // handleTakeItemEntity: the random pitch of a full pickup.
-        let pitch =
-            ((self.world.random.next_float() - self.world.random.next_float()) * 0.7 + 1.0) * 2.0;
+        // `ClientPacketListener.random`, the listener's own stream, never the level's.
+        let mut random = horizon_client::random_source::create();
+        let pitch = ((random.next_float() - random.next_float()) * 0.7 + 1.0) * 2.0;
         self.audio
             .play("minecraft:entity.item.pickup", Some(feet), 0.2, pitch);
     }

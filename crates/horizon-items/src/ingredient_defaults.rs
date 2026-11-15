@@ -27,6 +27,7 @@ impl Items {
             block_tag_order: load_tag_lists(root, "block", overlay)?,
             fluid_tag_order: load_tag_lists(root, "fluid", overlay)?,
             loot: Default::default(),
+            predicates: Default::default(),
             songs: HashMap::new(),
             instruments: HashMap::new(),
             enchantments,

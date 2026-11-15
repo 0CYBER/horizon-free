@@ -52,17 +52,11 @@ pub(super) fn projectile_predicate_supported(tag: &horizon_core::nbt::Tag) -> bo
 }
 /// `InventoryScreen.containerTick`: a survival inventory left open when the
 /// player gains infinite materials becomes the creative one, so the player
-/// stays in a menu. A spectator's inventory is closed (`Playing`), which is
-/// what Horizon did for every mode before; vanilla has no spectator branch
-/// and leaves it open.
-fn inventory_after_mode(screen: Screen, creative: bool, spectator: bool) -> Screen {
-    if screen != Screen::Inventory {
-        return screen;
-    }
-    if creative {
+/// stays in a menu. Vanilla has no other branch: a spectator's open inventory
+/// stays open too.
+fn inventory_after_mode(screen: Screen, creative: bool) -> Screen {
+    if screen == Screen::Inventory && creative {
         Screen::Creative
-    } else if spectator {
-        Screen::Playing
     } else {
         screen
     }
@@ -73,7 +67,7 @@ impl Game<'_> {
     /// open follows the mode. (`CreativeModeInventoryScreen.containerTick`, the way back
     /// to survival, is not ported yet.)
     fn mode_changed_under_inventory(&mut self) {
-        match inventory_after_mode(self.screen, self.creative, self.spectator()) {
+        match inventory_after_mode(self.screen, self.creative) {
             Screen::Creative => {
                 if let Some(c) = self.carried.take() {
                     let _ = self.add_stack_to_inventory(c);
@@ -297,7 +291,12 @@ impl Game<'_> {
         if self.spectator() {
             return true;
         }
-        !self.may_build() && !self.adventure_predicate("minecraft:can_break", pos)
+        !self.may_build() && !self.can_break_in_adventure(pos)
+    }
+    /// `ItemStack.canBreakBlockInAdventureMode`: an adventure player may break,
+    /// or prime TNT at, only a block their held stack's `can_break` matches.
+    pub(super) fn can_break_in_adventure(&self, pos: [i32; 3]) -> bool {
+        self.adventure_predicate("minecraft:can_break", pos)
     }
     /// `ItemStack.useOn` in adventure mode: the used item's `can_place_on`
     /// matches the clicked block (`Player.mayUseItemAt`).
@@ -320,6 +319,20 @@ impl Game<'_> {
                 "minecraft:can_place_on",
                 relative(pos, face.opposite()),
             )
+    }
+    /// `ItemStack.canPlaceOnBlockInAdventureMode` of the stack a use names.
+    pub(super) fn stack_can_place_on_in_adventure(
+        &self,
+        stack: &ItemStack,
+        clicked: [i32; 3],
+    ) -> bool {
+        self.stack_adventure_predicate(stack, "minecraft:can_place_on", clicked)
+    }
+    /// `ItemStack.useOn`'s gate before any item's own `useOn`: a player who
+    /// may build, or an adventure player whose held item's `can_place_on`
+    /// matches the clicked block.
+    pub(super) fn may_use_on(&self, clicked: [i32; 3]) -> bool {
+        self.may_build() || self.can_place_on_in_adventure(clicked)
     }
     /// `ServerPlayer.setGameMode(SPECTATOR)`: `stopRiding`.
     fn dismount_for_spectator(&mut self) {
@@ -345,6 +358,10 @@ fn relative(pos: [i32; 3], face: horizon_core::geometry::Direction) -> [i32; 3] 
         pos[2].wrapping_add(dz),
     ]
 }
+
+#[cfg(test)]
+#[path = "tests/adventure_gate_tests.rs"]
+mod adventure_gate_tests;
 
 #[cfg(test)]
 mod tests {
@@ -410,13 +427,11 @@ mod tests {
     /// screen is left where it is.
     #[test]
     fn a_survival_inventory_becomes_the_creative_one() {
-        assert!(inventory_after_mode(Screen::Inventory, true, false) == Screen::Creative);
-        let stays = inventory_after_mode(Screen::Inventory, false, false);
+        assert!(inventory_after_mode(Screen::Inventory, true) == Screen::Creative);
+        let stays = inventory_after_mode(Screen::Inventory, false);
         assert!(stays == Screen::Inventory, "survival keeps its inventory");
-        // A spectator's inventory is closed, which is what Horizon did for
-        // both before; vanilla has no spectator branch and leaves it open.
-        let closed = inventory_after_mode(Screen::Inventory, false, true);
-        assert!(closed == Screen::Playing);
+        // Vanilla's only branch is `hasInfiniteMaterials`: a spectator's open
+        // inventory stays open.
         for screen in [
             Screen::Playing,
             Screen::Creative,
@@ -424,7 +439,7 @@ mod tests {
             Screen::Stats,
             Screen::Advancements,
         ] {
-            assert!(inventory_after_mode(screen, true, false) == screen);
+            assert!(inventory_after_mode(screen, true) == screen);
         }
     }
 

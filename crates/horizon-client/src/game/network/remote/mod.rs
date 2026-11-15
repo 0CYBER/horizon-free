@@ -4374,10 +4374,11 @@ impl Game<'_> {
                     }
                     (None, None) => None,
                 };
+                // `ClientPacketListener.random`, the listener's own stream: a
+                // pickup pitch is never a draw of the level's.
                 if let Some(o) = orb_at {
-                    let pitch = (self.world.random.next_float() - self.world.random.next_float())
-                        * 0.35
-                        + 0.9;
+                    let mut r = horizon_client::random_source::create();
+                    let pitch = (r.next_float() - r.next_float()) * 0.35 + 0.9;
                     self.audio.play(
                         "minecraft:entity.experience_orb.pickup",
                         Some([o.x, o.y, o.z]),
@@ -4385,10 +4386,8 @@ impl Game<'_> {
                         pitch,
                     );
                 } else if let Some(at) = at {
-                    let pitch = ((self.world.random.next_float() - self.world.random.next_float())
-                        * 0.7
-                        + 1.0)
-                        * 2.0;
+                    let mut r = horizon_client::random_source::create();
+                    let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
                     self.audio
                         .play("minecraft:entity.item.pickup", Some(at), 0.2, pitch);
                 }
@@ -6088,10 +6087,10 @@ impl Game<'_> {
         let at = Vec3::new(p[0], p[1], p[2]);
         // ItemEntity's constructor draws bobOffs from the item's own random.
         let mut random = horizon_client::mobs::entity_random(id as u32, at);
-        let bob_offset = random.next_float() * std::f32::consts::PI * 2.0;
+        let bob = super::item_entities::bob_offset(at, random.next_float(), self.clock.still());
         self.dropped.push(ItemEntity {
             random,
-            ..ItemEntity::new(id as u32, stack, at, velocity, bob_offset)
+            ..ItemEntity::new(id as u32, stack, at, velocity, bob)
         });
     }
     /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
@@ -8202,7 +8201,11 @@ impl Game<'_> {
     /// firework rocket wherever it may be used, and the server launches it.
     /// Whether the item's use succeeded, which ends the click.
     /// The caller has selected Item.useOn after cooldown and adventure gates.
-    fn predict_item_on_block(&mut self, stack: &ItemStack, hit: &super::Hit) -> bool {
+    pub(in crate::game) fn predict_item_on_block(
+        &mut self,
+        stack: &ItemStack,
+        hit: &super::Hit,
+    ) -> bool {
         // FireworkRocketItem.useOn: SUCCESS unless gliding, when Item.use
         // boosts instead. The phase's cooldown/adventure gates already ran.
         if &*stack.item == "minecraft:firework_rocket" {
@@ -8480,20 +8483,21 @@ impl Game<'_> {
     /// Run BlockItem.place on a disposable level: where it placed and the
     /// blocks it set. The real level supplies collision shapes and
     /// building-blocking entities; random draws, scheduled ticks and events
-    /// stay in the preview.
+    /// stay in the preview. `ItemStack.useOn` runs it in adventure mode only
+    /// when the used stack's `can_place_on` names the clicked block.
     pub(super) fn remote_can_place(
         &mut self,
         hit: &super::Hit,
         stack: &ItemStack,
     ) -> Option<DryPlace> {
-        if !self.may_build() {
+        if !self.may_build() && !self.stack_can_place_on_in_adventure(stack, hit.pos) {
             return None;
         }
         let ctx = horizon_world::level::PlaceContext {
             clicked_pos: horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
             face: horizon_core::geometry::Direction::ALL[face_direction(hit.face) as usize],
             hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-            inside: hit.face == [0; 3],
+            inside: hit.inside,
             yaw: self.yaw,
             pitch: self.pitch,
             sneaking: self.remote_shift_down(),
@@ -9622,10 +9626,10 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             r.menu
                 .set(Some((container, "minecraft:merchant".to_owned())));
-            r.set_menu_title(Some(text));
+            r.set_menu_title(Some(text.clone()));
         }
         let session = horizon_client::merchant::Session::new(Vec::new(), true);
-        self.open_remote_merchant(session, (!title.is_empty()).then_some(title));
+        self.open_remote_merchant(session, (!title.is_empty()).then_some(text));
     }
     /// ClientboundMerchantOffersPacket.
     fn remote_merchant_offers(&mut self, p: play::MerchantOffers) {

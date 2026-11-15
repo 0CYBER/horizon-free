@@ -4,6 +4,7 @@
 use super::Game;
 use super::entity::{Blast, Entity as _, for_each_entity_mut};
 use horizon_client::advancements::EntityView;
+use horizon_client::chunk::LevelShape;
 use horizon_client::join_seq::Joined as _;
 use horizon_client::{
     Result,
@@ -60,18 +61,86 @@ pub(super) struct Burst {
     center: [f64; 3],
     radius: f32,
     multiplier: f32,
+    src: Source,
+}
+/// The burst's sound: the breeze's own for its charges and for a Wind Charged
+/// mob's death, the player's charge's for a wind charge and a mace's Wind Burst.
+const BREEZE_BURST: &str = "minecraft:entity.breeze.wind_burst";
+const WIND_CHARGE_BURST: &str = "minecraft:entity.wind_charge.wind_burst";
+
+/// What set a burst off, as much of `ServerExplosion`'s source as the burst
+/// reads: the sound `ServerLevel.explode` was given, whether the source is a
+/// breeze's charge (`canTriggerBlocks` needs mob griefing for that one alone),
+/// whether it is a wind charge (`ServerPlayer.onExplosionHit`'s fall), whether
+/// a mob is the indirect source (`VehicleEntity.ignoreExplosion`), and whether
+/// the source is silent (`ServerLevel.explode`'s `playSound`).
+#[derive(Clone, Copy)]
+pub(super) struct Source {
+    sound: &'static str,
     breeze: bool,
     wind_charge: bool,
-    cause: BurstCause,
+    mob: bool,
+    silent: bool,
+    pub(super) cause: BurstCause,
 }
-/// Who a burst's `ServerExplosion` names, as entity ids: the entity that
-/// bursts (`getDirectSourceEntity`: a wind charge, the bearer of Wind
-/// Charged, a mace's wielder with `attribute_to_user`) and its living
-/// `getIndirectSourceEntity` (the charge's thrower, the bearer or wielder).
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct BurstCause {
     pub source: Option<u32>,
     pub owner: Option<u32>,
+}
+
+impl Source {
+    pub(super) fn with_cause(self, cause: BurstCause) -> Self {
+        Self { cause, ..self }
+    }
+    /// `WindCharge.explode` and `BreezeWindCharge.explode`: the charge itself
+    /// is the source, and a breeze's charge's indirect source is its breeze.
+    pub(super) fn charge(breeze: bool, silent: bool) -> Self {
+        Self {
+            sound: if breeze {
+                BREEZE_BURST
+            } else {
+                WIND_CHARGE_BURST
+            },
+            breeze,
+            wind_charge: !breeze,
+            mob: breeze,
+            silent,
+            cause: BurstCause {
+                source: None,
+                owner: None,
+            },
+        }
+    }
+    /// `WindChargedMobEffect.onMobRemoved`: the dying mob is the source, so it
+    /// makes the breeze's sound while its blocks react whatever mob griefing
+    /// says and vehicles stay put when it is off; a `Silent` mob's is mute.
+    pub(super) fn wind_charged(player: bool, silent: bool) -> Self {
+        Self {
+            sound: BREEZE_BURST,
+            breeze: false,
+            wind_charge: false,
+            mob: !player,
+            silent,
+            cause: BurstCause {
+                source: None,
+                owner: None,
+            },
+        }
+    }
+    /// The `minecraft:explode` of the Wind Burst enchantment: the attacker is
+    /// the source, so it makes the wind charge's sound and its blocks react.
+    pub(super) const WIND_BURST: Self = Self {
+        sound: WIND_CHARGE_BURST,
+        breeze: false,
+        wind_charge: false,
+        mob: false,
+        silent: false,
+        cause: BurstCause {
+            source: None,
+            owner: None,
+        },
+    };
 }
 /// Whether a wind push must wait for the entity's own tick: it joined before
 /// the charge (`id` below the charge's), so vanilla has ticked it already this
@@ -95,6 +164,14 @@ pub(super) fn reverse(p: &mut Projectile) {
         owner,
         false,
     );
+}
+/// `AbstractWindCharge.tick`: a charge whose block Y is above the level's
+/// `getMaxY() + 30` bursts where it is, whatever it would have met. `shape`
+/// is the level's own height, not the chunks' widened column
+/// (`LevelShape::max_y` is `getMaxY() + 1`), and `getBlockY` is
+/// `floor(y)`, so `floor(y) > getMaxY() + 30` is `y >= max_y + 30`.
+pub(super) fn above_the_top(shape: LevelShape, y: f64) -> bool {
+    y >= f64::from(shape.max_y() + 30)
 }
 /// Whether a block reacts to a wind charge's burst by being used.
 fn triggers(name: &str) -> bool {
@@ -209,7 +286,16 @@ impl Game<'_> {
             owner,
         };
         self.creatures.wind_source = Some(p.join_seq());
-        let burst = self.wind_burst(center, radius, knockback, breeze, !breeze, cause);
+        let silent = self.entity_silent(p.id);
+        let burst = self.wind_burst(
+            center,
+            radius,
+            knockback,
+            Source {
+                cause,
+                ..Source::charge(breeze, silent)
+            },
+        );
         self.creatures.wind_source = None;
         burst
     }
@@ -264,8 +350,8 @@ impl Game<'_> {
         // The first run of this tick already gave these.
         again.take_shoot_event();
         again.bubble_surfaces.clear();
-        // AbstractWindCharge.tick: out of the world's top it bursts.
-        if keep && again.position.y > 350.0 {
+        // AbstractWindCharge.tick: above the world's top it bursts.
+        if keep && above_the_top(self.world.shape, again.position.y) {
             keep = false;
             hit = Hit::Block {
                 pos: [0; 3],
@@ -309,8 +395,10 @@ impl Game<'_> {
                 self.hurt_vehicle(p, id, 1.0);
             }
             Who::Mob(id) => {
+                // AbstractWindCharge.onHitEntity: `damageSources().windCharge`
+                // (`minecraft:wind_charge`, whose message id is `mob`).
                 let source = Damage {
-                    kind: DamageKind::Thrown,
+                    kind: DamageKind::WindCharge,
                     attacker: p.owner,
                     from: Some([p.previous.x, p.previous.y, p.previous.z]),
                     attacker_species: owner_breeze.then_some(Species::Breeze),
@@ -409,13 +497,12 @@ impl Game<'_> {
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
-        breeze: bool,
-        wind_charge: bool,
+        src: Source,
         blocks: &[[i32; 3]],
     ) -> Vec<(u32, [f64; 3])> {
         // ServerExplosion.shouldAffectBlocklikeEntities
-        let blocklike = !breeze
-            && !wind_charge
+        let blocklike = !src.breeze
+            && !src.wind_charge
             && self
                 .ui
                 .rules
@@ -441,7 +528,7 @@ impl Game<'_> {
         // The player, then every other player in the level (LAN guests),
         // each swapped in as the player. In a guest's turn (a mace's wind
         // burst) the player is that guest.
-        let own = self.wind_push_player(center, radius, multiplier, breeze, wind_charge, blocks);
+        let own = self.wind_push_player(center, radius, multiplier, src, blocks);
         let mut pushed: Vec<_> = self.lan_acting.zip(own).into_iter().collect();
         if let Some(host) = self.lan.as_ref() {
             let guests: Vec<u32> = host
@@ -453,7 +540,7 @@ impl Game<'_> {
                 .collect();
             for conn in guests {
                 let push = self.as_guest(conn, |g| {
-                    g.wind_push_player(center, radius, multiplier, breeze, wind_charge, blocks)
+                    g.wind_push_player(center, radius, multiplier, src, blocks)
                 });
                 if let Some(Some(push)) = push {
                     pushed.push((conn, push));
@@ -466,7 +553,7 @@ impl Game<'_> {
         // out where its `ignoreExplosion` says (items and visible stands for a
         // charge, vehicles for a mob's burst with mob griefing off).
         let burst = Blast {
-            vehicles_ignore: breeze
+            vehicles_ignore: src.mob
                 && !self
                     .ui
                     .rules
@@ -539,8 +626,7 @@ impl Game<'_> {
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
-        breeze: bool,
-        wind_charge: bool,
+        src: Source,
         blocks: &[[i32; 3]],
     ) -> Option<[f64; 3]> {
         if self.spectator() {
@@ -592,12 +678,12 @@ impl Game<'_> {
         // ServerPlayer.onExplosionHit: a wind charge's burst cancels the
         // fall; any other burst ends the grace of the last impulse.
         let at = p.position;
-        p.impulse.set_ignore_fall_damage(wind_charge, Some(at));
+        p.impulse.set_ignore_fall_damage(src.wind_charge, Some(at));
         // The cause is the charge that burst (`ServerExplosion.source`); a mace's
         // burst has none.
-        let cause = if wind_charge {
+        let cause = if src.wind_charge {
             Some("minecraft:wind_charge")
-        } else if breeze {
+        } else if src.breeze {
             Some("minecraft:breeze_wind_charge")
         } else {
             None
@@ -616,9 +702,7 @@ impl Game<'_> {
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
-        breeze: bool,
-        wind_charge: bool,
-        cause: BurstCause,
+        src: Source,
     ) -> Result<()> {
         // In a guest's turn (their charge landing, their mace's burst) the
         // host holds the other players (`as_guest`): the burst waits for the
@@ -628,12 +712,11 @@ impl Game<'_> {
                 center,
                 radius,
                 multiplier,
-                breeze,
-                wind_charge,
-                cause,
+                src,
             });
             return Ok(());
         }
+        let cause = src.cause;
         if self.serving.is_some() || self.options.dedicated.is_some() {
             let start = mod_api::ExplosionStart::from(mod_api::__private::built::ExplosionStart {
                 dimension: self.dim.id(),
@@ -658,11 +741,11 @@ impl Game<'_> {
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.wind_positions(center, radius);
-        let pushed = self.wind_knockback(center, radius, multiplier, breeze, wind_charge, &targets);
+        let pushed = self.wind_knockback(center, radius, multiplier, src, &targets);
         self.wind_burst_knockback(center, radius, multiplier, &targets);
         let block_count = targets.len();
         // Explosion.canTriggerBlocks: a breeze's charge needs mob griefing.
-        if !breeze
+        if !src.breeze
             || self
                 .ui
                 .rules
@@ -679,15 +762,14 @@ impl Game<'_> {
                 self.wind_trigger_block(pos)?;
             }
         }
-        let sound = if breeze {
-            "minecraft:entity.breeze.wind_burst"
-        } else {
-            "minecraft:entity.wind_charge.wind_burst"
-        };
-        let pitch = (1.0
-            + (super::explosion::client_float() - super::explosion::client_float()) * 0.2)
-            * 0.7;
-        self.audio.play(sound, Some(center), 4.0, pitch);
+        // `ServerLevel.explode`'s `playSound`: a silent source's burst is mute,
+        // and the pitch's two client draws only happen when it is heard.
+        if !src.silent {
+            let pitch = (1.0
+                + (super::explosion::client_float() - super::explosion::client_float()) * 0.2)
+                * 0.7;
+            self.audio.play(src.sound, Some(center), 4.0, pitch);
+        }
         // Explosion.isSmall: below a radius of 2.
         let ty = if radius < 2.0 {
             ParticleType::GustEmitterSmall
@@ -696,21 +778,14 @@ impl Game<'_> {
         };
         self.particles
             .add(&ParticleOptions::simple(ty), center, [1.0, 0.0, 0.0]);
-        self.lan_wind_burst(center, radius, sound, block_count, &pushed);
+        self.lan_wind_burst(center, radius, src.sound, block_count, &pushed);
         Ok(())
     }
     /// The bursts guests' turns put off.
     pub(super) fn flush_wind_bursts(&mut self) -> Result<()> {
         self.flush_smash_pushes();
         for b in std::mem::take(&mut self.creatures.wind_bursts) {
-            self.wind_burst(
-                b.center,
-                b.radius,
-                b.multiplier,
-                b.breeze,
-                b.wind_charge,
-                b.cause,
-            )?;
+            self.wind_burst(b.center, b.radius, b.multiplier, b.src)?;
         }
         Ok(())
     }
@@ -874,6 +949,10 @@ impl Game<'_> {
         }
     }
 }
+#[cfg(test)]
+#[path = "tests/wind_charged_tests.rs"]
+mod wind_charged_tests;
+
 #[cfg(test)]
 #[path = "tests/wind_dragon_tests.rs"]
 mod wind_dragon_tests;

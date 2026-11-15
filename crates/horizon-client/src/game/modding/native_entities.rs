@@ -6,7 +6,7 @@
 //! `dimension` (`minecraft:overworld`) as `native_set_block` does.
 use super::{
     Game,
-    commands::{Target, place_summoned},
+    commands::{Target, place_summoned, strip_finalize_tree},
 };
 use horizon_core::geometry::Vec3;
 use horizon_core::nbt::{Compound, Tag};
@@ -93,9 +93,13 @@ impl Game<'_> {
         }
         let mut tag = nbt;
         tag.insert("id".into(), Tag::String(kind.into()));
+        // As `/summon <kind> <pos> <nbt>` takes it: with an NBT argument vanilla
+        // does not finalize the mob (`SummonCommand.createEntity`), so a
+        // `horizon:finalize` in it is not the caller's to set.
+        let mut tag = Tag::Compound(tag);
+        strip_finalize_tree(&mut tag);
         // As `/summon` does: every entity of the stack, passengers included,
         // stands at `pos`.
-        let mut tag = Tag::Compound(tag);
         place_summoned(&mut tag, pos);
         let from = self.mobs.len();
         let first = self.next_entity + 1;

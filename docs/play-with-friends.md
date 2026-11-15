@@ -165,7 +165,9 @@ shows the address the relay sees for you: behind a proxy that hides client addre
 platforms' TCP proxies), set `RELAY_PER_ADDRESS_LIMITS=0`. Run **one** instance per address: codes live
 in its memory.
 
-Settings, all optional:
+Settings, all optional (an empty variable counts as unset; one that is set and does not parse, such as
+`RELAY_PER_ADDRESS_LIMITS=false` (a flag is a number, `0` for off), stops the relay at start with a
+message that names it):
 
 | Variable | Default | |
 | --- | --- | --- |

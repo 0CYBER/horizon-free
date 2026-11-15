@@ -488,7 +488,7 @@ impl Game<'_> {
             if root == Some(c.id) || !meets(c.bounds()) {
                 i += 1;
             } else {
-                self.break_cushion_by(i, false, None);
+                self.break_cushion_by(i, None);
             }
         }
     }

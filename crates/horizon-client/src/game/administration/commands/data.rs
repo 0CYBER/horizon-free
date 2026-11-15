@@ -29,6 +29,17 @@ fn set_key(tag: &mut Tag, key: &str, value: Tag) {
         c.insert(JavaString::from(key), value);
     }
 }
+/// `SummonCommand.spawnEntity`'s name for a kind no command target stands for:
+/// its entity type's. An item is the exception: `EntityType`'s factory leaves
+/// `ItemStack.EMPTY`, which `ItemEntity.readAdditionalSaveData` discards, and
+/// `ItemEntity.getName` reads that empty stack's `getItemName` — an empty
+/// component, not the type's name.
+pub(super) fn summon_type_name(kind: &str) -> Text {
+    if kind.trim_start_matches("minecraft:") == "item" {
+        return Text::empty();
+    }
+    Text::translate(&super::entity_name_key(kind), &[])
+}
 /// `EntityType.loadEntityRecursive` snaps every entity of the stack,
 /// passengers included, to the position (`/summon`, `summon`).
 pub(in crate::game) fn place_summoned(tag: &mut Tag, pos: [f64; 3]) {
@@ -398,6 +409,11 @@ impl Game<'_> {
     /// `TypedEntityData.loadInto` is: a spawn egg's data on the mob it spawned.
     pub(in crate::game) fn apply_entity_nbt(&mut self, t: Target, mut tag: Tag) -> R<()> {
         let stale = || err("commands.data.merge.failed", &[]);
+        // `Entity.load` keeps only the fields it reads, so vanilla drops a key it
+        // does not know on `EntityDataAccessor.setData` (and on
+        // `TypedEntityData.loadInto`). `horizon:finalize` is worldgen's, and
+        // `Game::load_mob` would run the finalize it asks for on the next load.
+        strip_finalize_tree(&mut tag);
         // Entity.load does not read Passengers: the riders stay, and so do the
         // passengers the load kept raw (none, when it kept none).
         let kept_passengers = match t {
@@ -465,6 +481,12 @@ impl Game<'_> {
                     slot.extra.boarding_cooldown = old.extra.boarding_cooldown;
                     slot.rider = old.rider;
                     // Runtime-only state (AI, animation) carries over.
+                    // Reset saved armadillo sensors from the resident random.
+                    if slot.species() == horizon_client::mobs::Species::Armadillo
+                        && tag.get("Brain").is_some()
+                    {
+                        horizon_client::mobs::armadillo::delay_sensors(slot);
+                    }
                     // Entity.load keeps the unsaved Allay.jukeboxPos and
                     // DATA_DANCING of the entity it loads into.
                     if slot.species() == horizon_client::mobs::Species::Allay {
@@ -976,9 +998,41 @@ impl Game<'_> {
             });
             return true;
         }
+        if let Target::Spawner(id) = t {
+            let Some(i) = self.ominous_spawners.iter().position(|s| s.id == id) else {
+                return false;
+            };
+            self.ominous_spawners.update(i, |spawner| {
+                let raw = &mut **spawner.raw.get_or_insert_with(|| Box::new(empty()));
+                if tags.is_empty() {
+                    if let Tag::Compound(map) = raw {
+                        map.remove(&"Tags".into());
+                    }
+                } else {
+                    set_key(
+                        raw,
+                        "Tags",
+                        Tag::List(
+                            tags.iter()
+                                .map(|s| Tag::String(s.as_str().into()))
+                                .collect(),
+                        ),
+                    );
+                }
+            });
+            return true;
+        }
         let Some(raw) = self.raw_mut(t) else {
             return false;
         };
+        // `Entity.saveWithoutId` writes `Tags` only for a nonempty live set:
+        // removing the last tag leaves no key.
+        if tags.is_empty() {
+            if let Tag::Compound(map) = raw {
+                map.remove(&"Tags".into());
+            }
+            return true;
+        }
         let list = tags
             .iter()
             .map(|s| Tag::String(s.as_str().into()))
@@ -1470,6 +1524,28 @@ impl Game<'_> {
                 return Ok(0);
             };
             vec![horizon_client::command::snbt::parse_fully(text)?]
+        } else if ctx.get("provider").is_some() {
+            // `LootContextSources`' compute source: the provider's value in the
+            // command's loot context, as a one-tag source.
+            let compute = self.compute_context(ctx)?;
+            let integer = ctx.literals.iter().any(|l| l == "integer");
+            let registry = if integer {
+                "minecraft:context_int_provider"
+            } else {
+                "minecraft:context_float_provider"
+            };
+            let (_, provider) = self.provider_arg(ctx, registry)?;
+            if integer {
+                // ContextIntProvider.getInt: an ArithmeticException reads as 0.
+                let value = self.provider_int(&provider, &compute, 0).unwrap_or(0);
+                vec![Tag::Int(value)]
+            } else {
+                // ContextFloatProvider.getFloat: a failure or a non-finite
+                // value reads as 0.
+                let value = self.provider_float(&provider, &compute, 0).unwrap_or(0.0);
+                let value = if value.is_finite() { value } else { 0.0 };
+                vec![Tag::Float(value.to_bits())]
+            }
         } else {
             let source = self.data_ref(ctx, 1)?;
             let data = self.data_of(&source)?;
@@ -1635,9 +1711,12 @@ impl Game<'_> {
                                 .collect(),
                         )
                     };
+                    // `TagCommand.listTags` tracks each entity's tag count and
+                    // sends with `sendFeedback`'s default element type, NON_ZERO:
+                    // the single form names the one entity that has tags.
                     tracker
                         .message(
-                            true,
+                            false,
                             None,
                             |h, _| {
                                 Text::translate(
@@ -1654,7 +1733,9 @@ impl Game<'_> {
                         )?
                         .0
                 };
-                self.feedback(message);
+                // `TagCommand.listTags` reports with `sendFeedback(source, false, …)`:
+                // the operators are not told, unlike `addTag`/`removeTag` (`true`).
+                self.feedback_unbroadcast(message);
                 return Ok(count as i32);
             }
         }?;
@@ -1743,6 +1824,11 @@ impl Game<'_> {
         if !matches!(tag, Tag::Compound(_)) {
             return Err(err("argument.nbt.expected.compound", &[]));
         }
+        // SummonCommand.createEntity with an NBT argument passes
+        // `finalize = false`: the mob is what its compound says, and the
+        // `horizon:finalize` marker worldgen leaves on a structure mob is not
+        // the player's to set.
+        strip_finalize_tree(&mut tag);
         set_key(&mut tag, "id", Tag::String(kind.into()));
         // Turtle.readAdditionalSaveData chooses its home before SummonCommand's snapTo.
         // Preserve that load-stage default while the shared loader receives the final Pos.
@@ -1775,6 +1861,22 @@ impl Game<'_> {
             return Err(err("commands.summon.failed.uuid", &[]));
         }
         Ok(target)
+    }
+}
+
+/// `horizon:finalize` off `tag` and off the riders under its `Passengers`:
+/// only worldgen leaves it, for a structure mob the game finishes when its
+/// chunk loads (`Game::load_mob`), never for a player to ask for. Taken off the
+/// compounds a player's NBT arrives in: `/summon`'s argument, `/data`'s and the
+/// `minecraft:entity_data` component's (`Game::apply_entity_nbt`), and
+/// `native_summon`, which takes `/summon`'s argument.
+pub(in crate::game) fn strip_finalize_tree(tag: &mut Tag) {
+    let Tag::Compound(c) = tag else { return };
+    c.remove(&"horizon:finalize".into());
+    if let Some(Tag::List(passengers)) = c.get_mut(&"Passengers".into()) {
+        for passenger in passengers {
+            strip_finalize_tree(passenger);
+        }
     }
 }
 
@@ -2310,6 +2412,9 @@ mod loot_table_tests {
         assert!(saved.get("Items").is_none());
     }
 }
+
+#[cfg(test)]
+mod compute_tests;
 
 #[cfg(test)]
 mod saved_tag_tests;
@@ -3038,3 +3143,7 @@ mod vehicle_container_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "finalize_marker_tests.rs"]
+mod finalize_marker_tests;

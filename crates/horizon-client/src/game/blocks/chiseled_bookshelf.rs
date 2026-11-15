@@ -88,19 +88,24 @@ impl Game<'_> {
         if !occupied {
             return Some(Answer::Consume);
         }
+        // removeBook: the book goes to the inventory, or is dropped. A slot the
+        // state calls occupied but that holds nothing still plays the pickup
+        // and posts `BLOCK_CHANGE`; only `removeItem`'s update needs a book.
         let retrieved = self.bookshelf_items(pos)?[slot].take();
-        self.chiseled_bookshelf_update_state(pos, slot);
+        if retrieved.is_some() {
+            self.chiseled_bookshelf_update_state(pos, slot);
+        }
         let sound = if retrieved
             .as_ref()
-            .is_some_and(|s| &*s.item == "minecraft:enchanted_book")
+            .is_some_and(|book| &*book.item == "minecraft:enchanted_book")
         {
             "minecraft:block.chiseled_bookshelf.pickup.enchanted"
         } else {
             "minecraft:block.chiseled_bookshelf.pickup"
         };
         self.audio.play(sound, Some(centre), 1.0, 1.0);
-        if let Some(retrieved) = retrieved {
-            self.give_or_drop(retrieved);
+        if let Some(book) = retrieved {
+            self.give_or_drop(book);
         }
         self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
         Some(Answer::Success)
@@ -132,7 +137,7 @@ impl Game<'_> {
     /// `ChiseledBookShelfBlockEntity.updateState`: `slot` becomes the last
     /// one touched, the block state takes the slots' occupancy
     /// (`setBlockAndUpdate`) and `BLOCK_CHANGE` goes out.
-    fn chiseled_bookshelf_update_state(&mut self, pos: [i32; 3], slot: usize) {
+    pub(super) fn chiseled_bookshelf_update_state(&mut self, pos: [i32; 3], slot: usize) {
         let key = (pos[0], pos[1], pos[2]);
         let Some(BlockEntity::ChiseledBookshelf(b)) = self.world.block_entities.get_mut(&key)
         else {
@@ -188,3 +193,7 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/chiseled_bookshelf_tests.rs"]
+mod tests;

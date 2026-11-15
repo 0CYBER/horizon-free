@@ -118,8 +118,8 @@ def touched_crates(paths, packages):
         if "horizon-client-lib" in packages and path.startswith("crates/horizon-client/"):
             relative = path.removeprefix("crates/horizon-client/")
             gameplay = relative in {"Cargo.toml", "build.rs", "windows-segment-heap.manifest",
-                                    "src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs", "tests/launch_api.rs"} \
-                or relative.startswith("src/game/")
+                                    "src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs"} \
+                or relative.startswith(("src/game/", "tests/it/"))
             crates.add("horizon-client" if gameplay else "horizon-client-lib")
             continue
         owners = [name for name, directory in packages.items() if path.startswith(directory.rstrip("/") + "/")]

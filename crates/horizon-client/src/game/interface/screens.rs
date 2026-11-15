@@ -84,6 +84,13 @@ impl Screen {
             | Self::HudEditor => true,
         }
     }
+    /// `Screen.isAllowedInPortal`: `LocalPlayer.handlePortalTransitionEffect`
+    /// leaves a screen that allows it open. The class default is
+    /// `isPauseScreen`, and only `ChatScreen`, `DeathScreen` and `WinScreen`
+    /// override it true (the win screen whatever its poem says).
+    pub(super) fn allowed_in_portal(self) -> bool {
+        matches!(self, Self::Chat | Self::Dead | Self::Win) || self.is_pause_screen()
+    }
     /// Screen.extractBackground for non-isInGameUi screens, and
     /// PauseScreen.extractBackground only when showPauseMenu is true.
     pub(super) fn blurs_background(self, pause_menu: bool) -> bool {

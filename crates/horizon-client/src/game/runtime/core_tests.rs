@@ -1286,3 +1286,154 @@ mod knot_command_view_tests;
 fn the_debug_crosshair_gives_way_to_the_radial_menu() {
     assert!(!debug_crosshair_drawn(true, true, false, false, true));
 }
+
+/// Wind charges: where they burst, and what their hit deals.
+mod wind_charge_burst_tests {
+    use super::*;
+    use crate::game::wind::above_the_top;
+    use horizon_client::{
+        chunk::{Chunk, LevelShape},
+        mobs::Who,
+        projectiles::{Hit, Projectile, ProjectileKind},
+    };
+    use horizon_core::position::ChunkPos;
+    use std::sync::Arc;
+
+    fn with_game(test: impl FnOnce(&mut Game<'_>)) {
+        let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            Instant::now(),
+            false,
+            crate::game::execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.game_dir =
+            Some(std::env::temp_dir().join(format!("horizon-wind-charge-{}", std::process::id())));
+        options.execution_role = execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.to_path_buf(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.creative = true;
+        assert!(game.run_command("forceload add 0 0"));
+        assert!(game.run_command("tick freeze"));
+        assert!(game.run_command("fill 0 198 0 15 199 15 stone"));
+        test(&mut game);
+    }
+
+    /// `AbstractWindCharge.tick`: `getBlockY() > level.getMaxY() + 30`, i.e. block
+    /// Y 350 in the Overworld and 286 in the Nether and the End.
+    #[test]
+    fn a_charge_bursts_thirty_blocks_above_its_dimensions_top() {
+        for (shape, top) in [
+            (LevelShape::OVERWORLD, 350.0),
+            (LevelShape::NETHER, 286.0),
+            (LevelShape::END, 286.0),
+        ] {
+            assert!(!above_the_top(shape, top - 1.0), "{shape:?} just below");
+            assert!(!above_the_top(shape, top - 0.5), "{shape:?} below");
+            assert!(above_the_top(shape, top), "{shape:?} at the top");
+            assert!(above_the_top(shape, top + 0.5), "{shape:?} above");
+        }
+    }
+
+    /// The same at play: a charge 44 blocks above the Nether's top, but below the
+    /// Overworld's, bursts where it is and is spent.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_nether_charge_bursts_above_the_nethers_top() {
+        with_game(|game| {
+            game.world.shape = LevelShape::NETHER;
+            game.audio.capture = Some(Vec::new());
+            let at = Vec3::new(2.5, 300.5, 2.5);
+            game.add_projectile(Projectile::new(
+                ProjectileKind::WindCharge,
+                at,
+                Some(Who::Player),
+            ));
+            game.ticked_entities_through = game.next_entity;
+            let id = game.creatures.projectiles.last().unwrap().id;
+            game.tick_projectiles().unwrap();
+            let bursts: Vec<_> = game
+                .audio
+                .capture
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.event == "minecraft:entity.wind_charge.wind_burst")
+                .collect();
+            assert_eq!(bursts.len(), 1, "the charge bursts once");
+            assert_eq!(bursts[0].position, [at.x, at.y, at.z]);
+            assert!(
+                !game.creatures.projectiles.iter().any(|p| p.id == id),
+                "the charge is spent"
+            );
+        });
+    }
+
+    /// `AbstractWindCharge.onHitEntity` hurts with `damageSources().windCharge`,
+    /// so a mob it kills records `minecraft:wind_charge` (message id `mob`), not
+    /// `minecraft:thrown`.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_wind_charge_kill_of_a_mob_deals_the_wind_charge_damage_type() {
+        with_game(|game| {
+            assert!(game.run_command(
+                "summon pig 2.5 200.5 2.5 {UUID:[I;116,0,0,97],NoAI:1b,NoGravity:1b,Health:1f}"
+            ));
+            let id = game.mobs.last().expect("the pig").id;
+            let at = Vec3::new(2.5, 200.5, 2.5);
+            let mut p = Projectile::new(ProjectileKind::WindCharge, at, Some(Who::Player));
+            p.previous = at;
+            game.wind_charge_hit(
+                &p,
+                Hit::Entity {
+                    who: Who::Mob(id),
+                    at,
+                },
+            )
+            .unwrap();
+            let pig = game.mobs.iter().find(|m| m.id == id).expect("the pig");
+            assert!(!pig.alive(), "a point of damage kills 1 health");
+            let hit = pig.combat.entries.last().expect("the hit").source;
+            assert_eq!(
+                crate::game::creatures::source_damage_type(hit),
+                "minecraft:wind_charge"
+            );
+            let def = game
+                .health_resources
+                .damage
+                .id("minecraft:wind_charge")
+                .and_then(|id| game.health_resources.damage.definition(id))
+                .expect("the wind charge damage type");
+            assert_eq!(def.message_id, "mob", "death.attack.mob");
+        });
+    }
+}

@@ -71,8 +71,11 @@ start); the hedge places and its recipe crafts 4.
 
 ## Checks on every download
 
-- The file must come from Modrinth's or CurseForge's file servers (`cdn.modrinth.com`, `edge.forgecdn.net`,
-  `mediafilez.forgecdn.net`), over HTTPS.
+- The file must come, over HTTPS, from Modrinth's or CurseForge's file servers (`cdn.modrinth.com`,
+  `edge.forgecdn.net`, `mediafilez.forgecdn.net`) or, for Horizon's registry, from its release assets
+  (`horizon_mods::index::FILE_HOST`; the same files at the address they had before the move to the horizon-rust
+  organisation; and the release assets of the repository a registry entry names:
+  `browser::download::github_release_asset`).
 - Its name must be one plain file name (no folders, `..`, hidden names or reserved characters).
 - It is written as `.<name>.part`, hashed as it arrives, and renamed into place only when its size and checksum match
   what the source lists: SHA-512 on Modrinth, SHA-1 on CurseForge (the strongest hash CurseForge publishes). Anything
@@ -123,8 +126,9 @@ newest file for 1.21 or later, as **Show everything** does. Changing tabs clears
 is coming soon; its source already maps the order and the game version.
 
 **Icons and gallery images** are the projects' own, fetched at run time from the source's image server
-(`browser::images`): HTTPS from `cdn.modrinth.com` (or CurseForge's `media.forgecdn.net` / `edge.forgecdn.net`) only,
-at most 8 MB each, decoded (PNG, JPEG, WebP, GIF, at most 8192 pixels a side), scaled (icons 128 px, list rows 80 px,
+(`browser::images`): HTTPS from the hosts listed there only (`cdn.modrinth.com`, CurseForge's `media.forgecdn.net` and
+`edge.forgecdn.net`, Fabric's and Forge's own icons, and the registry's GitHub Pages), at most 8 MB each, decoded
+(PNG, JPEG, WebP, GIF, at most 8192 pixels a side), scaled (icons 128 px, list rows 80 px,
 gallery 960 px) and kept as PNGs in `mod-browser/images/` under the launcher's data folder, which is kept under 128 MB
 by dropping the oldest files. After a week an image is asked for again with its server's `ETag` and `Last-Modified`:
 an unchanged one costs a 304 and is kept; offline, the cached one stays. A plate with the project's initial stands in
@@ -218,7 +222,7 @@ Modrinth asks.
 
 CurseForge support is coming soon. Its API (`api.curseforge.com/v1`) needs a paid key, so for now the launcher
 doesn't use it: the Mods page shows **CurseForge (coming soon)** beside the Modrinth switch, disabled, and no search
-or install goes to CurseForge (`browser::sources()` is Modrinth only; `horizon-launcher mods ... --source curseforge`
+or install goes to CurseForge (`browser::sources()` holds Modrinth and Horizon's registry; `horizon-launcher mods ... --source curseforge`
 says it is coming soon). The CurseForge source (`browser/curseforge.rs`) is kept for when it comes.
 
 A CurseForge modpack zip or instance the player already has still imports, since that needs no key: its jars come

@@ -189,8 +189,11 @@ impl Game<'_> {
     pub(super) fn mount_menu_columns(&self) -> Option<usize> {
         self.mount_menu.open.as_ref().map(|o| o.columns)
     }
-    /// The menu ends when the mount dies or is more than 4 blocks away
-    /// (`AbstractMountInventoryMenu.stillValid`).
+    /// The menu ends when the mount dies or its box leaves the entity
+    /// interaction range plus 4 of the player's eyes
+    /// (`AbstractMountInventoryMenu.stillValid` with
+    /// `Player.isWithinEntityInteractionRange(mount, 4.0)`: 7 blocks away, 9
+    /// in creative).
     pub(super) fn tick_mount_menu(&mut self) {
         // A server's menu ends when the server closes it.
         if self.remote.is_some() {
@@ -199,15 +202,14 @@ impl Game<'_> {
         let Some(open) = self.mount_menu.open.as_ref() else {
             return;
         };
-        let valid = self.mount_mob_index(open.mob).is_some_and(|i| {
-            let m = &self.mobs[i];
-            let c = m.center();
-            m.alive()
-                && self.eye_position().is_some_and(|e| {
-                    let d = (e[0] - c[0]).powi(2) + (e[1] - c[1]).powi(2) + (e[2] - c[2]).powi(2);
-                    d <= 16.0 + 4.0
-                })
-        });
+        let mob = open.mob;
+        let mount = self
+            .mount_mob_index(mob)
+            .map(|i| (self.mobs[i].alive(), self.mobs[i].bounds()));
+        let valid = match mount {
+            Some((true, bounds)) => self.within_entity_interaction_range(&bounds, 4.0),
+            _ => false,
+        };
         if !valid {
             self.close_container();
             self.set_screen(Screen::Playing);
@@ -615,6 +617,10 @@ impl Game<'_> {
         batch.clip_since(start, x0, y0, x1, y1);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/mount_menu_reach_tests.rs"]
+mod reach_tests;
 
 #[cfg(test)]
 mod tests {

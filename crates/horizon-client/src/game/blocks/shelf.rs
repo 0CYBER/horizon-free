@@ -236,12 +236,26 @@ impl Game<'_> {
             let packed = BlockPos::new(key.0, key.1, key.2).pack() as u64;
             let seed = (packed ^ (packed >> 32)) as i32;
             let light = vertex_light(self.world.light(key.0, key.1, key.2));
+            // `ShelfRenderer.extractRenderState` hands the items the shelf as their
+            // `ItemOwner`, the only block entity renderer that does:
+            // `ShelfBlockEntity.position()` is the block's centre and
+            // `getVisualRotationYInDegrees()` the facing's opposite yaw, so a compass
+            // on a shelf points from the shelf's block.
+            let owner = super::item_draw::owner_at(
+                [
+                    f64::from(key.0) + 0.5,
+                    f64::from(key.1) + 0.5,
+                    f64::from(key.2) + 0.5,
+                ],
+                shelf_owner_yaw(facing),
+                "",
+            );
             for (slot, stack) in shelf.items.iter().enumerate() {
                 let Some(stack) = stack else { continue };
                 let item = self.resolve_item(
                     stack,
                     DisplayContext::OnShelf,
-                    None,
+                    Some(&owner),
                     seed.wrapping_add(slot as i32),
                 );
                 if item.is_empty() {
@@ -282,3 +296,19 @@ mod stack_limit_tests {
         assert!(super::accepts(Some(10), Some(&stack)));
     }
 }
+
+/// `ShelfBlockEntity.getVisualRotationYInDegrees`: `facing.getOpposite().toYRot()`,
+/// where `Direction.toYRot` is `(data2d & 3) * 90` and `data2d` is north 2, south 0,
+/// west 1, east 3. A shelf's facing is always horizontal; anything else reads north.
+fn shelf_owner_yaw(facing: &str) -> f32 {
+    match facing {
+        "south" => 180.0,
+        "west" => 270.0,
+        "east" => 90.0,
+        _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/shelf_compass_tests.rs"]
+mod shelf_compass_tests;
