@@ -349,6 +349,7 @@ impl Launcher {
             .py(px(6.))
             .rounded(px(radius::CONTROL))
             .bg(gpui::black().opacity(0.28))
+            .self_start()
             .flex()
             .flex_wrap()
             .gap(px(4.))
