@@ -7,6 +7,11 @@ values through `command.argument(name)` and `CommandArgumentValue`. An integer i
 already an `i32`; a player argument is a live `PlayerRef`, not selector text.
 Return `Flow::Cancel` when your listener handles the command.
 
+Literal words use lowercase letters, digits, `_` and `-`. Only the first word may
+additionally begin with one `/`: register `/set <x:word>` and type `//set stone` in chat.
+The command's literals retain `/set`. A slash alone, repeated leading slashes and
+slashes in later literal words are refused.
+
 The server parses and checks permissions before resolving arguments or calling a
 listener. Omitted optional arguments are absent, including an omitted optional
 player: they do not silently select the source player. `player` selects exactly one
