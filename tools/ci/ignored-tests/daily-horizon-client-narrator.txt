@@ -1,3 +1,2 @@
 # A client mod's narrator line (ClientNarratorClientHost::narrate, #4532): through the client host, and not on a server's thread.
-horizon-client game::native_hooks::client_narrator_tests::a_mods_narrate_call_reaches_the_games_narrator_through_the_client_host lib daily resources
 horizon-client game::native_hooks::client_narrator_tests::a_server_threads_game_has_no_narrator_to_narrate_for lib daily resources

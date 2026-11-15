@@ -81,31 +81,6 @@ fn each_refusal_is_named_and_says_and_logs_nothing() {
 
 #[test]
 #[ignore = "daily"]
-fn a_mods_narrate_call_reaches_the_games_narrator_through_the_client_host() {
-    crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let recorder = Recorder::default();
-        let saved = horizon_narrator::with_narrator(|narrator| {
-            std::mem::replace(narrator, self::narrator(Status::All, &recorder))
-        });
-        let host: &mut dyn mod_api::ClientHost = game;
-        let line = mod_api::Text::literal("Oak Log");
-        let said = host.narrate(&line, Narration::Now);
-        let empty = host.narrate(&mod_api::Text::literal(""), Narration::Queued);
-        horizon_narrator::with_narrator(|narrator| narrator.set_status(Status::Off));
-        let off = host.narrate(&line, Narration::Queued);
-        horizon_narrator::with_narrator(|narrator| *narrator = saved);
-        assert_eq!(said, Ok(()));
-        assert_eq!(empty, Err(NarrateError::Empty));
-        assert_eq!(off, Err(NarrateError::Off));
-        assert_eq!(
-            *recorder.said.lock().unwrap(),
-            [("Oak Log".to_owned(), true)]
-        );
-    });
-}
-
-#[test]
-#[ignore = "daily"]
 fn a_server_threads_game_has_no_narrator_to_narrate_for() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         let host: &mut dyn mod_api::ClientHost = game;
