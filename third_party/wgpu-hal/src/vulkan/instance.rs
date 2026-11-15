@@ -457,7 +457,15 @@ impl super::Instance {
             unsafe { w_loader.create_wayland_surface(&info, None) }.expect("WaylandSurface failed")
         };
 
-        Ok(self.create_surface_from_vk_surface_khr(surface, None))
+        // Horizon: a Wayland surface is marked, for its acquire fence on NVIDIA
+        // (swapchain/native.rs, `acquire_on_cpu`).
+        let native_surface =
+            crate::vulkan::swapchain::NativeSurface::from_vk_surface_khr(self, surface, None)
+                .on_wayland();
+        Ok(super::Surface {
+            swapchain: RwLock::new(None),
+            inner: Box::new(native_surface),
+        })
     }
 
     fn create_surface_android(

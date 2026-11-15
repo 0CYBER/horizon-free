@@ -46,7 +46,9 @@ original classes, game shaders, textures or prepared resources are distributed h
 `third_party/wgpu-hal` is [wgpu-hal](https://github.com/gfx-rs/wgpu) 30.0.1 by the gfx-rs
 developers, with upstream fixes applied
 ([gfx-rs/wgpu#10124](https://github.com/gfx-rs/wgpu/pull/10124),
-[gfx-rs/wgpu#10714](https://github.com/gfx-rs/wgpu/pull/10714)). Its GL backend also reports
+[gfx-rs/wgpu#10714](https://github.com/gfx-rs/wgpu/pull/10714)). On NVIDIA with a Wayland surface
+its Vulkan backend also waits for each swapchain image on the CPU (an acquire fence), so no frame
+waits on the GPU for an image the compositor still holds. Its GL backend also reports
 the context's sampled textures and samplers per shader stage (usually 32 on desktop GL,
 where WebGL2's minimum 16 was reported before), so a pipeline layout the driver accepts is
 not refused. It is licensed under MIT or Apache-2.0; both licenses are in that folder

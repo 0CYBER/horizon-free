@@ -79,6 +79,10 @@ large_enum_variant = "allow"
 # And gfx-rs/wgpu#10714: on Windows, Vulkan waits for the acquire fence only in
 # FIFO (VSync), where it was meant to pace frames; with VSync off it made every
 # frame wait for the GPU to finish the one before (#4604).
+# Horizon's own change: on NVIDIA with a Wayland surface it waits for swapchain
+# images on the CPU (swapchain/native.rs, `acquire_on_cpu`): a frame that waited for
+# one on the GPU while the compositor held it (screen capture running, KDE Wayland)
+# hung the GPU until the kernel's Xid 109 timeout lost the device.
 # Drop this and the folder once a wgpu release has these fixes.
 [patch.crates-io]
 wgpu-hal = { path = "third_party/wgpu-hal" }
