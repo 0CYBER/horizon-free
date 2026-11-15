@@ -635,6 +635,19 @@ impl Config {
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
+        // `config set` refuses a `backups.keep` outside this range (settings::range); a file edited by
+        // hand must not get past it with 0, which deletes every automatic backup right after it is made
+        // (`backup::prune`), the new one included. `backups.every = "0"` is how automatic backups go off.
+        if let Some(range) = crate::settings::range("backups", "keep")
+            && !range.contains(&i64::from(self.backups.keep))
+        {
+            return Err(format!(
+                "backups.keep is {}: use {} to {} (to stop automatic backups, set backups.every = \"0\")",
+                self.backups.keep,
+                range.start(),
+                range.end()
+            ));
+        }
         if let Some((section, field, key)) =
             TYPED.iter().find(|t| self.properties.contains_key(t.2))
         {
@@ -943,6 +956,29 @@ mod tests {
             p.put(k, (*v).to_owned());
         }
         p
+    }
+
+    /// `server.toml` is checked as `config set` checks `backups.keep`: 0 would make the supervisor delete
+    /// every automatic backup (the one it just made too), so it is refused with the same range.
+    #[test]
+    fn backups_keep_is_checked_as_config_set_checks_it() {
+        let with = |keep: u32| {
+            Config::parse(&format!(
+                "[backups]
+keep = {keep}
+"
+            ))
+        };
+        let err = with(0).unwrap_err();
+        assert!(
+            err.contains("backups.keep is 0: use 1 to 1000"),
+            "got {err:?}"
+        );
+        assert!(with(1001).is_err());
+        assert!(with(1).is_ok() && with(1000).is_ok());
+        assert_eq!(Config::default().backups.keep, 12);
+        let table = toml::Table::try_from(Config::default()).unwrap();
+        assert!(crate::settings::parse_change(&table, "backups.keep=0").is_err());
     }
 
     #[test]

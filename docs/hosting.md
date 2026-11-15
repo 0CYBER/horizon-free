@@ -585,7 +585,7 @@ horizon-server restore before-the-update
 
 A backup zips the world, vanilla's files and `server.toml` into `backups/`. A running server saves first and
 stays up: players don't notice. Automatic backups run on the `[backups] every` schedule while the server runs,
-and the oldest automatic ones beyond `keep` are deleted. Backups you make by hand are never deleted.
+and the oldest automatic ones beyond `keep` (1 to 1000) are deleted. Backups you make by hand are never deleted.
 
 `restore` takes a backup's file name, a unique start of it, or the name you gave it. It moves the current
 world aside to `backups/replaced-<time>/` (never deleted), puts the backup in place, and restarts the server if

@@ -138,7 +138,7 @@ pub fn parse_change(
 }
 
 /// The values vanilla uses for the numbers it clamps (`ChunkMap` keeps both distances within 2 to 32).
-fn range(section: &str, field: &str) -> Option<std::ops::RangeInclusive<i64>> {
+pub(crate) fn range(section: &str, field: &str) -> Option<std::ops::RangeInclusive<i64>> {
     match (section, field) {
         ("server", "view_distance" | "simulation_distance") => Some(2..=32),
         ("server", "max_view_distance") => Some(0..=32),
