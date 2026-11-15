@@ -676,9 +676,14 @@ mod tests {
                 ..Default::default()
             };
             let session = sampler::start(config, |n| n == "spans-id-test").unwrap();
+            // The sampler's timer runs on this thread's CPU clock, so a sample needs CPU time, not
+            // wall time: on a loaded machine a wall-clock loop is descheduled and gets far fewer.
             let busy = |ms| {
-                let until = Instant::now() + Duration::from_millis(ms);
-                while Instant::now() < until {
+                let start = super::thread_cpu().unwrap();
+                let wall = Instant::now();
+                while super::thread_cpu().unwrap() - start < Duration::from_millis(ms)
+                    && wall.elapsed() < Duration::from_secs(30)
+                {
                     std::hint::black_box(0);
                 }
             };
