@@ -58,7 +58,7 @@ NowPlayingToast.showToast	port	crates/horizon-client/src/toasts.rs::NowPlayingTo
 NowPlayingToast.update	port	crates/horizon-client/src/toasts.rs::NowPlayingToast::update	the slide, the hide when the song ends and the notes ticking
 RecipeToast.update	port	crates/horizon-client/src/game/advancements.rs::Toast::wants_show	recipe toast visibility; the cycling index is Toast::displayed_recipe
 RecipeToast.extractRenderState	port	crates/horizon-client/src/game/advancements.rs::Game::draw_toast	recipe branch: station at 0.6 scale over the cycling result
-SystemToast.height	missing		minor: no multi-line height; a system toast always takes one 32 px slot
+SystemToast.height	inline	crates/horizon-client/src/toasts.rs::background	the toast's 32 px slot: background() draws the 28 px top and the 4 px bottom strip, and a title alone sits 12 px down inside it
 SystemToast.extractRenderState	port	crates/horizon-client/src/toasts.rs::SystemToast::draw	gap: minor: one line per title and message, no wrapping
 SystemToast.extractTextLines	inline	crates/horizon-client/src/toasts.rs::SystemToast::draw	text lines drawn in draw
 SystemToast.recalculateWidth	inline	crates/horizon-client/src/toasts.rs::SystemToast::draw	width from the widest line, at least 160, plus 30
@@ -75,7 +75,7 @@ ToastManager.ToastInstance.calculateVisiblePortion	port	crates/horizon-client/sr
 ToastManager.ToastInstance.extractRenderState	port	crates/horizon-client/src/game/advancements.rs::Game::draw_toast	slide x and slot y; system toasts slide in SystemToast::draw
 TutorialToast.update	inline	crates/horizon-client/src/game/tutorial.rs::Game::draw_tutorial_toasts	per frame: a toast whose hint is no longer wanted hides (slide out) and goes, the shown one takes the hint's progress, and the progress bar smooths toward it by the shown portion
 TutorialToast.extractRenderState	port	crates/horizon-client/src/game/tutorial.rs::Game::draw_tutorial_toasts	tutorial/toast/tutorial nine slice 160 wide, the hint icon at (6, 6), the title lines in purple and the description in black from x + 30, and the 154 px progress bar at the bottom in green or red
-AtlasGlyphProvider.Instance.renderSprite	missing		minor: sprite-font glyphs (atlas sprite objects in text) are not parsed
+AtlasGlyphProvider.Instance.renderSprite	port	crates/horizon-client-render/src/hud/gui_sprite.rs::HudAtlas::inline_object_sprite	the sprite an inline atlas object names, from minecraft:gui's gui/sprites tree or the missing sprite, and HudBatch::draw_inline_object draws it 8 px square at the pen
 CodepointMap.get	skip:java		codepoint lookup table; Horizon uses HashMap and BTreeSet
 CodepointMap.put	skip:java		codepoint lookup table; Horizon uses HashMap and BTreeSet
 CodepointMap.computeIfAbsent	skip:java		codepoint lookup table; Horizon uses HashMap and BTreeSet
@@ -91,7 +91,7 @@ FontManager.getFontOptions	port	crates/horizon-client/src/game/options.rs::Game:
 FontManager.apply	port	crates/horizon-client-render/src/hud.rs::HudAtlas::pack	new font sets replace the old ones with the atlas
 FontManager.updateOptions	port	crates/horizon-client/src/game/options.rs::Game::apply_ui_settings	sets the Font uniform and japanese flags when they change (options.rs:299-301)
 FontManager.loadResourceStack	inline	crates/horizon-client-render/src/font.rs::providers	gap: minor: one fonts.json per font id from the resource root, not a stack of packs
-FontManager.getSpriteFont	missing		minor: atlas sprite fonts (sprite objects in text) are not parsed; they draw the missing box
+FontManager.getSpriteFont	inline	crates/horizon-client-render/src/hud.rs::HudBatch::draw_inline_object	sprite objects in text are drawn straight from the HUD atlas at the pen (8 px square, the missing sprite when the atlas lacks it), so no font set is looked up for them
 FontManager.close	skip:java		Rust drop frees the atlas, font sets and providers
 FontManager.BuilderResult.resolve	port	crates/horizon-client-render/src/font.rs::providers	reference builders expanded in place
 FontManager.BuilderResult.mergeFilters	inline	crates/horizon-client-render/src/font.rs::providers	the reference's filter merged onto each expanded provider
@@ -116,8 +116,8 @@ GlyphRenderTypes.select	port	crates/horizon-client/src/game/names.rs::Game::name
 GlyphStitcher.reset	port	crates/horizon-client-render/src/font.rs::Font::reset_cache	atlas cursor rewound
 GlyphStitcher.stitch	port	crates/horizon-client-render/src/font.rs::Region::place	rectangle placed in the atlas region
 PlainTextRenderable.render	port	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	shadow pass first, then the front text
-PlayerGlyphProvider.Instance.renderSprite	missing		minor: player-head text objects are not parsed
-PlayerGlyphProvider.Instance.renderQuad	missing		minor: no player-head glyphs (same gap)
+PlayerGlyphProvider.Instance.renderSprite	port	crates/horizon-client-render/src/hud.rs::HudBatch::draw_inline_object	the face is the resolved skin's 8x8 head sprite (profile id first, then name, else the default skin), drawn at the text pen
+PlayerGlyphProvider.Instance.renderQuad	port	crates/horizon-client-render/src/hud.rs::HudBatch::draw_inline_object	the second quad is the same skin 32 texels right for the hat layer, drawn only when the object asks for the hat
 TextFieldHelper.charTyped	inline	crates/horizon-client/src/game/sign_edit.rs::Game::sign_input	typed-text branch; EditBox::insert_text filters the text
 TextFieldHelper.moveBy	inline	crates/horizon-client-render/src/ui.rs::EditBox::key	arrow keys; Ctrl moves by word
 TextFieldHelper.moveByChars	inline	crates/horizon-client-render/src/ui.rs::EditBox::key	arrow keys, Home and End
