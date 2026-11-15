@@ -74,7 +74,7 @@ fn usage_nodes(
     let mut out = Vec::new();
     let mut optional_seen = false;
     let mut greedy_seen = false;
-    for word in usage.split_whitespace() {
+    for (index, word) in usage.split_whitespace().enumerate() {
         if greedy_seen {
             return Err(format!("`{usage}`: a text argument must be last"));
         }
@@ -86,11 +86,7 @@ fn usage_nodes(
             if optional_seen {
                 return Err(format!("`{usage}`: `{word}` follows an optional argument"));
             }
-            let literal = !word.is_empty()
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-".contains(c));
-            if !literal {
+            if !argument_kinds::command_word(word, index == 0) {
                 return Err(format!("`{usage}`: `{word}` is not a command word"));
             }
             out.push((word.to_owned(), json!({"type": "literal"}), false));
@@ -4119,6 +4115,39 @@ mod tests {
         );
         let (none, levels, _) = tree(&[]);
         assert!(none.is_null() && levels.is_empty());
+    }
+
+    /// WorldEdit-style `//set`: the usage `/set <x:word>` (typed `//set` with the chat slash) is a
+    /// root literal `/set` with its argument, and the server dispatches it as typed.
+    #[test]
+    fn a_first_word_may_start_with_one_slash() {
+        let (t, levels, problems) = tree(&[mod_api::Command::new("/set <x:word>")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(levels.keys().collect::<Vec<_>>(), ["/set"]);
+        assert_eq!(t["children"]["/set"]["type"], "literal");
+        assert_eq!(t["children"]["/set"]["children"]["x"]["type"], "argument");
+        for refused in ["//x", "/", "/ <x:word>", "a /b", "a /"] {
+            let (_, levels, problems) = tree(&[mod_api::Command::new(refused)]);
+            assert!(levels.is_empty(), "{refused}");
+            assert!(
+                problems.len() == 1 && problems[0].contains("is not a command word"),
+                "{refused}: {problems:?}"
+            );
+        }
+        let arguments = command_arguments();
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &t, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+        let parsed = dispatcher.parse("/set stone", &registries);
+        let (context, _) = parsed.executable().expect("`//set stone` runs");
+        assert_eq!(context.literals, ["/set"]);
+        assert_eq!(context.get("x"), Some(&Arg::Str("stone".into())));
+        assert!(
+            dispatcher
+                .parse("set stone", &registries)
+                .executable()
+                .is_err()
+        );
     }
 }
 

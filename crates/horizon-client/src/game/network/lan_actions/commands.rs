@@ -1,9 +1,9 @@
 use super::*;
 
 impl Game<'_> {
-    /// Commands.performCommand for a guest with command access.
     /// Commands.performCommand for a guest, with the message arguments it
-    /// signed (none after an unsigned command packet).
+    /// signed (none after an unsigned command packet). The packet's command has no chat slash, and
+    /// vanilla parses it as sent: a leading `/` is part of the command (a mod's `//set` is `/set`).
     pub(in crate::game) fn guest_command(
         &mut self,
         conn: u32,
@@ -19,13 +19,7 @@ impl Game<'_> {
             .and_then(|host| host.hub.guest(conn))
             .map(|g| (g.uuid, g.name.clone()))
         {
-            self.native_player_command(
-                uuid,
-                &name,
-                command.trim_start_matches('/'),
-                &mut canceled,
-                &mut replies,
-            );
+            self.native_player_command(uuid, &name, command, &mut canceled, &mut replies);
         }
         let Some(host) = self.lan.as_ref() else {
             return;
@@ -46,7 +40,7 @@ impl Game<'_> {
             return;
         }
         // ListPlayersCommand needs no permission and lists every player.
-        let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
+        let words: Vec<&str> = command.split(' ').collect();
         let Some(host) = self.lan.as_ref() else {
             return;
         };
@@ -86,13 +80,13 @@ impl Game<'_> {
             return;
         };
         let integrated = host.hub.config.integrated;
-        if let Some(level) = Self::native_command_level(host, command.trim_start_matches('/'))
+        if let Some(level) = Self::native_command_level(host, command)
             && let Some(permission) = host.hub.guest(conn).map(|g| g.permission)
             && permission >= level
         {
             host.commands.push(GuestCommand {
                 conn,
-                command: command.trim_start_matches('/').to_owned(),
+                command: command.to_owned(),
                 permission,
                 integrated,
                 quiet: false,
@@ -120,7 +114,7 @@ impl Game<'_> {
         };
         host.commands.push(GuestCommand {
             conn,
-            command: command.trim_start_matches('/').to_owned(),
+            command: command.to_owned(),
             permission,
             integrated,
             quiet: false,
