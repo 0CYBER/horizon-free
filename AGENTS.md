@@ -54,7 +54,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 
 ## Mod API on this fork: the clean break
 
-This fork (arismoko/horizon) is where the native mod API is built: hooks, the `Host`, handles, Parts,
+This fork (horizon-rust/horizon) is where the native mod API is built: hooks, the `Host`, handles, Parts,
 attachments and mod loading. Tracker: #26 (design), #44 (milestones). The mod API is taking **one clean
 break**, and every change to it follows these rules. Reviews block a PR that breaks any of them.
 

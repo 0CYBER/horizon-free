@@ -38,7 +38,7 @@ the game's own types, such as `Game` and its fields, and these change between bu
 - To move to a new build, change `horizon` and rebuild. A target that was renamed or moved fails the build
   with an error naming your mod.
 - A change elsewhere in a target's body is not reported. Reread the functions you target on each new build.
-- Read the game's source at your `horizon` commit on [GitHub](https://github.com/arismoko/horizon). Every
+- Read the game's source at your `horizon` commit on [GitHub](https://github.com/horizon-rust/horizon). Every
   target path, field and type on these pages comes from it.
 - This code runs with the player's rights. It is not sandboxed.
 

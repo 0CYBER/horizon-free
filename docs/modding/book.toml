@@ -66,8 +66,8 @@ before = ["links"]
 default-theme = "light"
 preferred-dark-theme = "coal"
 additional-css = ["theme/horizon.css"]
-git-repository-url = "https://github.com/arismoko/horizon"
-edit-url-template = "https://github.com/arismoko/horizon/edit/main/docs/modding/{path}"
+git-repository-url = "https://github.com/horizon-rust/horizon"
+edit-url-template = "https://github.com/horizon-rust/horizon/edit/main/docs/modding/{path}"
 
 # The how-to groups are long: show each part's top chapters, open one to see its pages.
 [output.html.fold]

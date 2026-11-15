@@ -1,6 +1,6 @@
 # Native mods
 
-Native mod docs live in the modding book: [native mods](modding/src/how-to/native-mods.md), [trait mods, Parts and attachments](modding/src/concepts/parts.md), [injections](modding/src/concepts/injections.md) and the [hook notes](https://arismoko.github.io/horizon/reference/hook-notes.html).
+Native mod docs live in the modding book: [native mods](modding/src/how-to/native-mods.md), [trait mods, Parts and attachments](modding/src/concepts/parts.md), [injections](modding/src/concepts/injections.md) and the [hook notes](https://horizon-rust.github.io/horizon/reference/hook-notes.html).
 
 ## Living death version 2
 

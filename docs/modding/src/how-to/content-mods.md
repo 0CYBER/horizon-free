@@ -7,9 +7,9 @@ Create a project, edit its JSON files, then build and run it.
 
 ```sh
 # A prebuilt binary for Linux x86_64/aarch64, macOS x86_64/arm64 or Windows x86_64:
-cargo binstall --git https://github.com/arismoko/horizon cargo-horizon-mod
+cargo binstall --git https://github.com/horizon-rust/horizon cargo-horizon-mod
 # Or build it from source, without cargo-binstall:
-cargo install --git https://github.com/arismoko/horizon cargo-horizon-mod
+cargo install --git https://github.com/horizon-rust/horizon cargo-horizon-mod
 cargo horizon-mod new my-mod        # a content mod: manifest, one block with its model, loot and recipe
 cd my-mod
 cargo horizon-mod run               # build my-mod.hmod, then start the game with it turned on
@@ -148,7 +148,7 @@ A jar reference supplies assets and data, not the original Java behavior: port t
 
 A content mod has capability `registries` and carries `assets/` and `data/` in the `.hmod`. It adds blocks and items
 by declaring them in `data/<id>/horizon/block/*.json` and `data/<id>/horizon/item/*.json`, each copying a vanilla
-template ([modpacks.md](https://github.com/arismoko/horizon/blob/main/docs/modpacks.md#registries-02-data-driven-blocks-items-and-mob-effects)), and creative tabs, mob
+template ([modpacks.md](https://github.com/horizon-rust/horizon/blob/main/docs/modpacks.md#registries-02-data-driven-blocks-items-and-mob-effects)), and creative tabs, mob
 effects, entity types and menu types (each below) in `creative_tab/`, `mob_effect/`, `entity_type/` and `menu/` beside
 them. `fluid/` gives a fluid a client look (`sprite`, an atlas sprite id, and `tint`, `0xAARRGGBB`, both optional), as
 NeoForge's `IClientFluidTypeExtensions`; the fluid needs no block, and a recipe page draws its well from it. Its `world`
@@ -754,8 +754,8 @@ container's faces and `inputs`, so leave result slots out of `inputs`. The data 
 mod's own screen (`screen`); without one it closes again. Clients join a server only with the same mods' menu
 types, as with its blocks, and a client that isn't Horizon's is never sent one: the block opens nothing for it. Its
 clicks run on the server's vanilla menu engine (`menu::Kind::Mod`), shift-clicks routed as `ChestMenu`'s, and a native
-mod can decide what a slot takes in code with `menu_slot_rules` ([hook notes](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/menu_slot_rules.rs))
-and how far away the menu stays open with `menu_still_valid` ([hook notes](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/menu_still_valid.rs)).
+mod can decide what a slot takes in code with `menu_slot_rules` ([hook notes](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/menu_slot_rules.rs))
+and how far away the menu stays open with `menu_still_valid` ([hook notes](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/menu_still_valid.rs)).
 The declaration specifies per-slot rules through `results`; clicks are handled by the server.
 
 ##### Lending ingredients and linking containers
@@ -827,7 +827,7 @@ The namespace collision fence applies. `minecraft`, `c` and
 the other's): the game keeps the first in load order and leaves the other's content out, with "mods A and B both use
 the namespace N; turn one of them off" in the log. Paths use vanilla's resource characters, at most 65,536 files, 16
 MiB each and 512 MiB in all. A mod whose content is refused is left out, with the reason in the log. The game reads
-this content into its block and item tables (`horizon_client::mod_content`, [modpacks.md](https://github.com/arismoko/horizon/blob/main/docs/modpacks.md)). A tag entry
+this content into its block and item tables (`horizon_client::mod_content`, [modpacks.md](https://github.com/horizon-rust/horizon/blob/main/docs/modpacks.md)). A tag entry
 naming an id nobody registers (a block a port left out, another mod's item) is dropped, so the rest of the tag
 loads; vanilla would drop the whole tag.
 
@@ -970,7 +970,7 @@ file and attribute. A client plays these from the biome data the server sends. I
 three ambient sound fields together make the one `ambient_sounds` value, and a value out of range refuses the mods at
 startup.
 
-**When they apply.** Modifiers are applied while the world's worldgen data is loaded, before any chunk is generated: the content build writes the modified biomes into the content root, and when a world opens, `horizon_client::vanillagen::biome_modifiers_over_packs` applies them again over the world's data packs (`shared_data_with` for the generator, `packed_biomes` for the game's biome table), so a pack that replaces a vanilla biome keeps the mods' changes and a pack's own biome a tag selects gets them. Modifiers a mod declares in code (`Registrar::declare_biome_modifier`) register before any world opens and are read at the same moment. The generator's data is loaded once per bundle and set of packs and shared by the world's dimensions, so a modifier never applies halfway through a world. The dedicated server is the same game run headless (`horizon-client --dedicated`, [server.md](https://github.com/arismoko/horizon/blob/main/docs/server.md)), so it takes this path too; `horizon-server` only supervises it.
+**When they apply.** Modifiers are applied while the world's worldgen data is loaded, before any chunk is generated: the content build writes the modified biomes into the content root, and when a world opens, `horizon_client::vanillagen::biome_modifiers_over_packs` applies them again over the world's data packs (`shared_data_with` for the generator, `packed_biomes` for the game's biome table), so a pack that replaces a vanilla biome keeps the mods' changes and a pack's own biome a tag selects gets them. Modifiers a mod declares in code (`Registrar::declare_biome_modifier`) register before any world opens and are read at the same moment. The generator's data is loaded once per bundle and set of packs and shared by the world's dimensions, so a modifier never applies halfway through a world. The dedicated server is the same game run headless (`horizon-client --dedicated`, [server.md](https://github.com/horizon-rust/horizon/blob/main/docs/server.md)), so it takes this path too; `horizon-server` only supervises it.
 
 A biome holder set can also use Horizon's own `horizon:climate` type, alone or nested in those boolean sets; it is not
 a NeoForge format. It filters each biome's base `temperature` and `downfall` (the names in

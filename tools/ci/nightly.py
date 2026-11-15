@@ -18,7 +18,7 @@ in their order and pushed as nightly/build-<date>-<n>; with no set, main alone. 
 this repository's checks passed (`checks` and `parity-main`), as for a release
 (release_train.green_main_head), or NIGHTLY_BASE when the caller gives that commit. It is published as the
 `nightly` pre-release; the previous one stays a week as nightly-<date>.
-On arismoko/horizon the Nightly is exactly main's commit (PR picks are refused), and the SDK built for that commit
+On horizon-rust/horizon the Nightly is exactly main's commit (PR picks are refused), and the SDK built for that commit
 (`sdk-<sha>`, published first by nightly-build.yml) is its pair: its sdk.json goes into the Nightly's signed sums.
 Its notes list what reached main since the previous nightly, then the picked pull requests. Runs from main's
 checkout with `gh`; it reads and merges the branches with git and never runs anything from them.
@@ -190,7 +190,7 @@ def build_set(main: Ref, prs: list[dict], left_out: list[str], today: str, force
         state, _, _ = ns.load_state()
         asked_in = issue or next((x["issue"] for x in reversed(state.get("log", [])) if x.get("issue")), "")
         stop(repo, asked_in, f"the build stopped: {c.text()}")
-    if repo == "arismoko/horizon" and sha != main.sha:
+    if repo == "horizon-rust/horizon" and sha != main.sha:
         stop(repo, issue, f"the build stopped: final source {sha} is not main's commit {main.sha}, the one an SDK is built for.")
     previous = git("ls-remote", "--tags", "origin", "refs/tags/nightly").split("\t")[0] or None
     build = force or previous != sha
@@ -247,7 +247,7 @@ SDK_ASSETS = SDK_ARCHIVES + (SDK_INDEX, "SHA256SUMS", "SHA256SUMS.sig")
 def ready_sdk_shas() -> set[str]:
     """Snapshot of the complete published `sdk-<sha>` releases; API failures fail closed."""
     releases = train.gh_json("api", "--paginate", "--slurp",
-                             f"repos/arismoko/horizon/releases?per_page=100")
+                             f"repos/horizon-rust/horizon/releases?per_page=100")
     return {release["tag_name"].removeprefix("sdk-")
             for page in releases for release in page
             if not release["draft"] and re.fullmatch(r"sdk-[0-9a-f]{40}", release["tag_name"])
@@ -272,7 +272,7 @@ def signature_check(sha: str, folder: Path, names: list[str]) -> list[str]:
     """The command that checks sdk-<sha>'s SHA256SUMS signature in `folder` as the launcher does (horizon-release-sign,
     with the fork's keys and the tag the signature must name), and the bytes of `names` against it."""
     return ["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign", "--", "verify",
-            "--repository", "arismoko/horizon", "--tag", f"sdk-{sha}",
+            "--repository", "horizon-rust/horizon", "--tag", f"sdk-{sha}",
             *(argument for name in names for argument in ("--only", name)), str(folder)]
 
 
@@ -280,7 +280,7 @@ def released(sha: str, name: str) -> bytes:
     """The asset `name` of sdk-<sha>, once its SHA256SUMS signature is the fork's for `sdk-<sha>` and its bytes match
     them ([`signature_check`])."""
     with tempfile.TemporaryDirectory() as folder:
-        gh("release", "download", f"sdk-{sha}", "--repo", "arismoko/horizon", "--dir", folder,
+        gh("release", "download", f"sdk-{sha}", "--repo", "horizon-rust/horizon", "--dir", folder,
            "--pattern", name, "--pattern", "SHA256SUMS", "--pattern", "SHA256SUMS.sig")
         data = (Path(folder) / name).read_bytes()
         if not listed(name, data, (Path(folder) / "SHA256SUMS").read_text()):
@@ -329,7 +329,7 @@ def previous_sdk(sha: str) -> str:
 
 def require_sdk(sha: str) -> None:
     """Refuse before rotating/publishing Nightly if its SDK disappeared or its index is not this build's."""
-    if os.environ.get("GITHUB_REPOSITORY") == "arismoko/horizon":
+    if os.environ.get("GITHUB_REPOSITORY") == "horizon-rust/horizon":
         if not sdk_ready(sha):
             raise SystemExit(f"Nightly publication refused: {sha} has no complete published sdk-{sha} release")
         published_index(sha)
@@ -359,7 +359,7 @@ def pick(force: bool) -> None:
     repo, token = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("GH_TOKEN", "")
     main = green_base(repo, os.environ.get("NIGHTLY_ISSUE", ""))
     dry_run = os.environ.get("DRY_RUN") == "true"
-    if repo == "arismoko/horizon":
+    if repo == "horizon-rust/horizon":
         if os.environ.get("NIGHTLY_PRS", "").strip():
             stop(repo, os.environ.get("NIGHTLY_ISSUE", ""), "fork Nightlies build main's commit, which their SDK is built for, not PR picks")
         return build_set(main, [], [], today, force, dry_run)

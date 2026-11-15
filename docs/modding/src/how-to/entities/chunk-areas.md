@@ -35,7 +35,7 @@ let _ = player.set_chunk_areas(host, &[]);
   - `TooManyLevels { asked, cap }`: more levels besides the player's own than its client can view. `cap` is the client's own answer: 2 for a Horizon client, 0 for vanilla or an older Horizon.
   - `TooManyChunks { cap, level, asked, limit }`: more chunks in `level` than the server setting `cap` allows; `limit` is its value now.
   - `Unavailable`: a level handle of an earlier open of the world, or a call from outside any mod's hook (the engine keeps each mod's areas apart by its id).
-- **The chunk caps** are server settings ([hosting](https://github.com/arismoko/horizon/blob/main/docs/hosting.md#other-levels-a-mod-shows-a-player-max_viewed_)). Chunks are counted as the union of every mod's areas, by mode. A `Loaded` area loads one ring past its radius, so it counts (2r + 3)² chunks; a `Ticking` area's square counts as ticking and the two rings it loads around it as loaded.
+- **The chunk caps** are server settings ([hosting](https://github.com/horizon-rust/horizon/blob/main/docs/hosting.md#other-levels-a-mod-shows-a-player-max_viewed_)). Chunks are counted as the union of every mod's areas, by mode. A `Loaded` area loads one ring past its radius, so it counts (2r + 3)² chunks; a `Ticking` area's square counts as ticking and the two rings it loads around it as loaded.
 
   | `ChunkCap` | Setting | Default |
   |---|---|---|

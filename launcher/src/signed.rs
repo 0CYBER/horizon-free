@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn metadata_cannot_escape_the_fork_download_path() {
         assert_eq!(asset_url("v1/../../other?x#y", "a%b.zip"),
-            "https://github.com/arismoko/horizon/releases/download/v1%2F..%2F..%2Fother%3Fx%23y/a%25b.zip");
+            "https://github.com/horizon-rust/horizon/releases/download/v1%2F..%2F..%2Fother%3Fx%23y/a%25b.zip");
     }
 
     #[test]
@@ -114,7 +114,7 @@ mod tests {
         )
         .is_some());
         assert!(horizon_release_sign::legacy_digest_for(
-            "arismoko/horizon",
+            "horizon-rust/horizon",
             "v2026.10.12",
             "horizon-linux-x86_64.tar.gz"
         )
@@ -135,7 +135,7 @@ mod tests {
         let signature = key.sign("v2099.01.01", sums.as_bytes());
         // GitHub as it answers for a signed release (any tag: the files are what a replay would serve).
         let signed = |url: &str| -> Result<Option<Vec<u8>>, String> {
-            assert!(url.starts_with("https://github.com/arismoko/horizon/releases/download/"));
+            assert!(url.starts_with("https://github.com/horizon-rust/horizon/releases/download/"));
             Ok(Some(
                 if url.ends_with(".sig") {
                     signature.clone()

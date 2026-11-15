@@ -11,7 +11,7 @@ fn scratch(name: &str) -> PathBuf {
 const T0: u64 = 1_800_000_000;
 const LATER: u64 = T0 + FRESH_SECS;
 
-const RELEASES: &str = "https://api.github.com/repos/arismoko/horizon/releases?per_page=100";
+const RELEASES: &str = "https://api.github.com/repos/horizon-rust/horizon/releases?per_page=100";
 
 fn list(tag: &str) -> serde_json::Value {
     serde_json::json!([{ "tag_name": tag }])
@@ -26,27 +26,27 @@ fn mirror_serves_only_horizons_repository() {
     let base = "https://mcp.example/github/public";
     assert_eq!(
         mirror_url_with(RELEASES, base).as_deref(),
-        Some("https://mcp.example/github/public/repos/arismoko/horizon/releases?per_page=100")
+        Some("https://mcp.example/github/public/repos/horizon-rust/horizon/releases?per_page=100")
     );
     assert_eq!(
         mirror_url_with(
-            "https://api.github.com/repos/arismoko/horizon/releases/tags/launcher@0.2.33",
+            "https://api.github.com/repos/horizon-rust/horizon/releases/tags/launcher@0.2.33",
             &format!("{base}/")
         )
         .as_deref(),
-        Some("https://mcp.example/github/public/repos/arismoko/horizon/releases/tags/launcher@0.2.33")
+        Some("https://mcp.example/github/public/repos/horizon-rust/horizon/releases/tags/launcher@0.2.33")
     );
     assert_eq!(
         mirror_url_with("https://api.github.com/repos/someone/mod/commits/abc", base),
         None
     );
     assert_eq!(
-        mirror_url_with("https://github.com/arismoko/horizon/releases", base),
+        mirror_url_with("https://github.com/horizon-rust/horizon/releases", base),
         None
     );
     for url in [
         "https://api.github.com/repos/horizon-rust/horizon/releases",
-        "https://api.github.com/repos/arismoko/horizon-extra/releases",
+        "https://api.github.com/repos/horizon-rust/horizon-extra/releases",
     ] {
         assert_eq!(mirror_url_with(url, base), None);
     }
@@ -148,7 +148,7 @@ fn etag_is_kept_and_a_304_reads_the_saved_copy() {
     );
     assert_eq!(back.unwrap(), Some(list("v9")));
     // Another URL doesn't read this one's copy.
-    let other = "https://api.github.com/repos/arismoko/horizon/releases/latest";
+    let other = "https://api.github.com/repos/horizon-rust/horizon/releases/latest";
     let etag_sent = RefCell::new(Some(String::new()));
     let _ = json_with(
         other,
@@ -183,7 +183,7 @@ fn rate_limited_reads_go_through_the_mirror() {
         .borrow()
         .as_deref()
         .unwrap()
-        .ends_with("/github/public/repos/arismoko/horizon/releases?per_page=100"));
+        .ends_with("/github/public/repos/horizon-rust/horizon/releases?per_page=100"));
     // The mirror's answer is kept like GitHub's.
     let kept = json_with(RELEASES, &cache, T0 + 1, |_, _| panic!("fresh"), no_mirror);
     assert_eq!(kept.unwrap(), Some(list("nightly")));
@@ -202,7 +202,7 @@ fn rate_limited_reads_go_through_the_mirror() {
 #[test]
 fn a_404_is_not_retried_on_the_mirror() {
     let cache = scratch("404");
-    let latest = "https://api.github.com/repos/arismoko/horizon/releases/latest";
+    let latest = "https://api.github.com/repos/horizon-rust/horizon/releases/latest";
     let absent = json_with(
         latest,
         &cache,

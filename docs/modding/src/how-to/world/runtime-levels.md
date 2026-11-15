@@ -140,6 +140,6 @@ of it; the areas stay, and show the level again once it is open again.
 A server keeps at most 64 runtime levels open or waiting, whichever mods opened them: the
 65th `open` is `CapReached`. A server sets another number with `horizon-max-runtime-levels` in
 `server.properties`; a server run by `horizon-server` sets it under `[properties]` in `server.toml`
-([hosting](https://github.com/arismoko/horizon/blob/main/docs/hosting.md)). An unloaded or deleted level frees its place when the request is applied; the idle close does not free it.
+([hosting](https://github.com/horizon-rust/horizon/blob/main/docs/hosting.md)). An unloaded or deleted level frees its place when the request is applied; the idle close does not free it.
 
 Every refusal is also logged with the name of the mod that asked.

@@ -52,7 +52,7 @@ const matrix = context(state.matrix), vars = context(state.vars), inputs = state
 const expression = state.expression, fromJSON = JSON.parse, toJSON = JSON.stringify;
 console.log(JSON.stringify(eval(expression)));
 """
-        def evaluate(expression, matrix, trusted, repository="arismoko/horizon"):
+        def evaluate(expression, matrix, trusted, repository="horizon-rust/horizon"):
             result = subprocess.run(["node", "-e", script], input=json.dumps({"expression": expression, "matrix": matrix, "inputs": {"trusted": trusted}, "vars": variables, "github": {"repository": repository}}), text=True, capture_output=True, check=True)
             return json.loads(result.stdout)
         default_mac = ["self-hosted", "macOS", "horizon-nightly"]

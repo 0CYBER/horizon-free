@@ -6,29 +6,29 @@ Rules for code: implement `mod_api::Hooks` at the crate root with `#[mod_api::ho
 
 ## Getting started
 
-- [Installing and using mods](https://arismoko.github.io/horizon/start/installing.html)
-- [Your first content mod](https://arismoko.github.io/horizon/start/first-content-mod.html)
-- [Your first native mod](https://arismoko.github.io/horizon/start/first-mod.html)
-- [Your first WebAssembly mod](https://arismoko.github.io/horizon/start/first-wasm-mod.html)
-- [Writing hooks](https://arismoko.github.io/horizon/start/writing-hooks.html): the crate root, events, hosts and listener order.
+- [Installing and using mods](https://horizon-rust.github.io/horizon/start/installing.html)
+- [Your first content mod](https://horizon-rust.github.io/horizon/start/first-content-mod.html)
+- [Your first native mod](https://horizon-rust.github.io/horizon/start/first-mod.html)
+- [Your first WebAssembly mod](https://horizon-rust.github.io/horizon/start/first-wasm-mod.html)
+- [Writing hooks](https://horizon-rust.github.io/horizon/start/writing-hooks.html): the crate root, events, hosts and listener order.
 
 ## Concepts
 
-- [Hooks and the Host](https://arismoko.github.io/horizon/concepts/hooks-and-the-host.html)
-- [Load phases and access](https://arismoko.github.io/horizon/concepts/load-phases.html)
-- [Parts](https://arismoko.github.io/horizon/concepts/parts.html), [Capabilities](https://arismoko.github.io/horizon/concepts/capabilities.html), [Attachments](https://arismoko.github.io/horizon/concepts/attachments.html), [Transactions](https://arismoko.github.io/horizon/concepts/transactions.html)
-- [Registry keys](https://arismoko.github.io/horizon/concepts/registry-keys.html), [Wire types](https://arismoko.github.io/horizon/concepts/wire-types.html), [Dependencies between mods](https://arismoko.github.io/horizon/concepts/dependencies.html)
-- [Injections](https://arismoko.github.io/horizon/concepts/injections.html) and [the native route](https://arismoko.github.io/horizon/concepts/native-route.html)
+- [Hooks and the Host](https://horizon-rust.github.io/horizon/concepts/hooks-and-the-host.html)
+- [Load phases and access](https://horizon-rust.github.io/horizon/concepts/load-phases.html)
+- [Parts](https://horizon-rust.github.io/horizon/concepts/parts.html), [Capabilities](https://horizon-rust.github.io/horizon/concepts/capabilities.html), [Attachments](https://horizon-rust.github.io/horizon/concepts/attachments.html), [Transactions](https://horizon-rust.github.io/horizon/concepts/transactions.html)
+- [Registry keys](https://horizon-rust.github.io/horizon/concepts/registry-keys.html), [Wire types](https://horizon-rust.github.io/horizon/concepts/wire-types.html), [Dependencies between mods](https://horizon-rust.github.io/horizon/concepts/dependencies.html)
+- [Injections](https://horizon-rust.github.io/horizon/concepts/injections.html) and [the native route](https://horizon-rust.github.io/horizon/concepts/native-route.html)
 
 ## How-to
 
-- [Content mods](https://arismoko.github.io/horizon/how-to/content-mods.html), [Native mods: building and shipping](https://arismoko.github.io/horizon/how-to/native-mods.html), [WebAssembly mods](https://arismoko.github.io/horizon/how-to/wasm-mods.html), [Publishing](https://arismoko.github.io/horizon/how-to/publish.html)
-- [Levels, dimensions and blocks](https://arismoko.github.io/horizon/how-to/world.html), [Items, recipes and loot](https://arismoko.github.io/horizon/how-to/items.html), [Entities, players and commands](https://arismoko.github.io/horizon/how-to/entities.html), [Client, rendering and sound](https://arismoko.github.io/horizon/how-to/client.html)
+- [Content mods](https://horizon-rust.github.io/horizon/how-to/content-mods.html), [Native mods: building and shipping](https://horizon-rust.github.io/horizon/how-to/native-mods.html), [WebAssembly mods](https://horizon-rust.github.io/horizon/how-to/wasm-mods.html), [Publishing](https://horizon-rust.github.io/horizon/how-to/publish.html)
+- [Levels, dimensions and blocks](https://horizon-rust.github.io/horizon/how-to/world.html), [Items, recipes and loot](https://horizon-rust.github.io/horizon/how-to/items.html), [Entities, players and commands](https://horizon-rust.github.io/horizon/how-to/entities.html), [Client, rendering and sound](https://horizon-rust.github.io/horizon/how-to/client.html)
 
 ## Reference
 
-- [The manifest and the package](https://arismoko.github.io/horizon/reference/manifest.html)
-- [The registry index and `.hpack`](https://arismoko.github.io/horizon/reference/registry-index.html)
-- [The mod API reference (rustdoc)](https://arismoko.github.io/horizon/reference/api.html): every hook, event, Part and `Host` method.
-- [Hook notes](https://arismoko.github.io/horizon/reference/hook-notes.html)
-- [NeoForge counterparts](https://arismoko.github.io/horizon/reference/neoforge-counterparts.html)
+- [The manifest and the package](https://horizon-rust.github.io/horizon/reference/manifest.html)
+- [The registry index and `.hpack`](https://horizon-rust.github.io/horizon/reference/registry-index.html)
+- [The mod API reference (rustdoc)](https://horizon-rust.github.io/horizon/reference/api.html): every hook, event, Part and `Host` method.
+- [Hook notes](https://horizon-rust.github.io/horizon/reference/hook-notes.html)
+- [NeoForge counterparts](https://horizon-rust.github.io/horizon/reference/neoforge-counterparts.html)

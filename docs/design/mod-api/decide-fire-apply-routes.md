@@ -2,7 +2,7 @@
 
 **Stage 1 of [#784](https://github.com/arismoko/horizon/issues/784): evidence and inventory only.**
 This stage adds no runtime code, tokens or admissions. References below identify the existing owners in this worktree
-(`feat/decide-fire-apply`, from `arismoko/horizon` main `f84b4be037`); the older numbers in
+(`feat/decide-fire-apply`, from `horizon-rust/horizon` main `f84b4be037`); the older numbers in
 [decide, fire, apply](decide-fire-apply.md) are corrected here. Vanilla 26.3 was queried with
 `python tools/rea_vanilla.py method <class> <method>`; its decompiled text is not reproduced, only
 described. NeoForge could not be checked (see [NeoForge](#neoforge)), so no counterpart contract is

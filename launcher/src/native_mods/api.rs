@@ -723,7 +723,7 @@ mod tests {
                 None,
             ),
             (
-                "{ git = 'https://github.com/arismoko/horizon', rev = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }",
+                "{ git = 'https://github.com/horizon-rust/horizon', rev = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }",
                 Some("example: E_SDK_SOURCE: horizon-mod-api: the SDK is no longer named by git; write horizon-mod-api = { path = \".horizon/sdk/api/crates/horizon-mod-api\" }"),
             ),
             (

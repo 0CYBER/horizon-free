@@ -1,6 +1,6 @@
 # Writing the modding book
 
-The modding book (`docs/modding`, published at <https://arismoko.github.io/horizon/>) is the manual for mod
+The modding book (`docs/modding`, published at <https://horizon-rust.github.io/horizon/>) is the manual for mod
 authors: it describes what the game does on main, nothing else. Designs, proposals, plans, trackers and coverage
 ledgers live in [`docs/design/`](design/) (mod API designs in [`docs/design/mod-api/`](design/mod-api/)), and
 notes for people working on Horizon itself in [`docs/mod-api/`](mod-api/). The book build refuses a page whose

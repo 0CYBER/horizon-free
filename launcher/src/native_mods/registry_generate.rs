@@ -186,7 +186,7 @@ mod tests {
         for (form, refusal) in [
             (
                 format!(
-                    "{{ git='https://github.com/arismoko/horizon', rev='{}' }}",
+                    "{{ git='https://github.com/horizon-rust/horizon', rev='{}' }}",
                     "a".repeat(40)
                 ),
                 "E_SDK_SOURCE: horizon-mod-api: the SDK is no longer named by git",

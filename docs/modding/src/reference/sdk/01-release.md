@@ -1,7 +1,7 @@
 # The release
 
 Every SDK is the release `sdk-<build id>` of this repository, at
-`https://github.com/arismoko/horizon/releases/download/sdk-<build id>/<file>`. Its files:
+`https://github.com/horizon-rust/horizon/releases/download/sdk-<build id>/<file>`. Its files:
 
 {{#sdk-assets}}
 

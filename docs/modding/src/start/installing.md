@@ -19,7 +19,7 @@ WebAssembly mods install from the launcher or by hand.
 
 Fabric and NeoForge jars do not run in Horizon: they target Minecraft's Java runtime, which Horizon does not have.
 The data and assets inside a jar can be carried over; see
-[Porting Java modpacks](https://github.com/arismoko/horizon/blob/main/docs/modpacks.md).
+[Porting Java modpacks](https://github.com/horizon-rust/horizon/blob/main/docs/modpacks.md).
 
 ## Turning mods on
 

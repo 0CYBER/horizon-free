@@ -25,7 +25,7 @@ two separate passes over the listener list. Cancellation still leaves motion unc
 
 ## Living death contract version 2
 
-[`living_death` version 2](https://github.com/arismoko/horizon/blob/main/docs/native-mods.md#living-death-version-2) supplies
+[`living_death` version 2](https://github.com/horizon-rust/horizon/blob/main/docs/native-mods.md#living-death-version-2) supplies
 the accepted killing source and its captured weapon stack. Cancellation keeps the
 health a listener leaves, suppresses loot, experience and death messages, and does
 not heal the body. An unhealed cancelled body is removed at tick 20 without loot

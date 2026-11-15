@@ -146,7 +146,7 @@ the call, so a change made in it is not kept, and the chunk may already have lef
 handle's reads find nothing there. It is not called when the world closes, nor on a client when its whole
 level goes, and never for a vanilla block entity. The chunk-wide notice is `chunk_unload`, a
 server hook told after the chunk's block entities; a client is told of the block entities alone
-([hook notes](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/on_chunk_unloaded.rs)).
+([hook notes](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/on_chunk_unloaded.rs)).
 
 ## Client ticks: a machine's hum
 

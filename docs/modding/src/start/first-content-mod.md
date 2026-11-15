@@ -8,7 +8,7 @@ You need Rust 1.95 or newer (`cargo`) and the Horizon launcher with an instance 
 ## 1. Install the mod tool
 
 ```sh
-cargo install --locked --git https://github.com/arismoko/horizon cargo-horizon-mod
+cargo install --locked --git https://github.com/horizon-rust/horizon cargo-horizon-mod
 ```
 
 This adds the `cargo horizon-mod` command.

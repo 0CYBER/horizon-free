@@ -1,6 +1,6 @@
 name: modding-book-pages
 # Publishes the modding book and the mod API reference to GitHub Pages
-# (https://arismoko.github.io/horizon/, reference under /api/mod_api/).
+# (https://horizon-rust.github.io/horizon/, reference under /api/mod_api/).
 on:
   push:
     branches: [main]

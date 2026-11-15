@@ -1,6 +1,6 @@
 # Design: moving structures
 
-Proposed contract for arismoko/horizon issue #794; this document requests design
+Proposed contract for horizon-rust/horizon issue #794; this document requests design
 agreement and does not claim an implemented feature. One game-owned carrier entity
 owns a sparse collection of local block cells, their block entities and attachments.
 Mods control it through typed handles and Parts, without depending on game internals.

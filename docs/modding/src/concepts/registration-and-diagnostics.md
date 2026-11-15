@@ -34,7 +34,7 @@ corrected, is a warning: `cx.warn("mymod.warn.no_jei", &["jei"])` inside `Hooks:
 ## Native startup and hook panics
 
 The launcher supplies ordered mod IDs and hook factories to the installed game's
-[native entry template](https://github.com/arismoko/horizon/blob/main/crates/horizon-client/src/native_main.rs.template).
+[native entry template](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-client/src/native_main.rs.template).
 The template constructs `ModEntry::new("example", example::hooks())` entries and passes them to
 `horizon_mod_host::main_with`. `Mods` is `Arc<[ModEntry]>`: each entry binds its ID to its hooks.
 Before installation, `mod_api::mods()` returns an empty list.

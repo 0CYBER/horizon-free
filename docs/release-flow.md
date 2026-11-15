@@ -436,7 +436,7 @@ is out as soon as main's checks and parity-main pass. Meanwhile a player can pic
 Versions page (the last week's `nightly-<date>`, or a `vX.Y.Z`), and `horizon-server update --version <tag>` does
 the same for a server.
 
-## Prebuilt SDK retention design (arismoko/horizon, #3011)
+## Prebuilt SDK retention design (horizon-rust/horizon, #3011)
 
 **Proposed for review, not enabled.** This is an availability policy, not an implementation or an instruction to
 build an SDK. Automated SDK pruning stays removed until this design is reviewed. SDK signing and authentication

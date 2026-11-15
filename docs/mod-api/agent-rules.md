@@ -19,4 +19,4 @@ Rules for a coding agent making a Horizon mod. They are short on purpose; each l
    ([manifest](../modding/src/reference/manifest.md)).
 7. **Freshness errors:** a changed function hash refuses the injection; use `inject update` or reselect it with `inject add`. Never substitute a different function.
 8. **Data and assets** are read through a reload hook, once per reload, never on the tick.
-9. **Missing hook?** File a [hook request](../modding/src/concepts/injections.md#ask-for-the-hook) on arismoko/horizon.
+9. **Missing hook?** File a [hook request](../modding/src/concepts/injections.md#ask-for-the-hook) on horizon-rust/horizon.

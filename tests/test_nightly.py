@@ -260,18 +260,18 @@ class SdkPairTests(unittest.TestCase):
                 mock.patch.object(nightly, "sdk_ready", side_effect=AssertionError("asked")), \
                 mock.patch.object(nightly, "is_ancestor", return_value=True), \
                 mock.patch.object(nightly, "git", side_effect=["a" * 40, NOW]):
-            self.assertEqual(nightly.green_base("arismoko/horizon", "").sha, "a" * 40)
+            self.assertEqual(nightly.green_base("horizon-rust/horizon", "").sha, "a" * 40)
             automatic.assert_called_once_with(parity=True)
         with mock.patch.dict(nightly.os.environ, {"NIGHTLY_BASE": "b" * 40}), \
                 mock.patch.object(nightly.train, "green_main_head") as automatic, \
                 mock.patch.object(nightly, "is_ancestor", return_value=False), \
                 mock.patch.object(nightly, "stop", side_effect=SystemExit):
             with self.assertRaises(SystemExit):
-                nightly.green_base("arismoko/horizon", "")
+                nightly.green_base("horizon-rust/horizon", "")
             automatic.assert_not_called()
 
     def test_a_final_source_that_is_not_mains_commit_stops_before_pushing(self):
-        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "arismoko/horizon"}), \
+        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}), \
                 mock.patch.object(nightly.ns, "fetch_heads", return_value=[]), \
                 mock.patch.object(nightly.ns, "assemble", return_value="b" * 40), \
                 mock.patch.object(nightly.ns, "push") as push:
@@ -280,7 +280,7 @@ class SdkPairTests(unittest.TestCase):
             push.assert_not_called()
 
     def test_publication_checks_fresh_inventory_and_leaves_upstream_unchanged(self):
-        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "arismoko/horizon"}), \
+        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}), \
                 mock.patch.object(nightly, "ready_sdk_shas", side_effect=[{"a" * 40}, set()]) as inventory, \
                 mock.patch.object(nightly, "published_index") as index:
             nightly.require_sdk("a" * 40)
@@ -316,7 +316,7 @@ class SdkPairTests(unittest.TestCase):
         command = nightly.signature_check("a" * 40, Path("/tmp/x"), ["sdk.json"])
         self.assertEqual(command[:6], ["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign"])
         arguments = command[command.index("--") + 1:]
-        self.assertEqual(arguments, ["verify", "--repository", "arismoko/horizon", "--tag", "sdk-" + "a" * 40,
+        self.assertEqual(arguments, ["verify", "--repository", "horizon-rust/horizon", "--tag", "sdk-" + "a" * 40,
                                      "--only", "sdk.json", "/tmp/x"])
         self.assertNotIn("--publishing", command, "an unsigned SDK is refused, as the launcher refuses it")
 
@@ -334,7 +334,7 @@ class SdkPairTests(unittest.TestCase):
         main = nightly.Ref("main", "a" * 40, T)
         saved = [{"number": 17, "head": "b" * 40}]
         explicit = [{"number": 19, "head": "c" * 40}]
-        for repo in ("arismoko/horizon", "horizon-rust/horizon"):
+        for repo in ("horizon-rust/horizon", "horizon-rust/horizon"):
             for spec in ("", "19"):
                 with self.subTest(repo=repo, spec=spec), \
                         mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": repo, "NIGHTLY_PRS": spec,
@@ -345,7 +345,7 @@ class SdkPairTests(unittest.TestCase):
                         mock.patch.object(nightly.ns, "lookup"), \
                         mock.patch.object(nightly, "requested", return_value=explicit) as requested, \
                         mock.patch.object(nightly, "build_set") as build:
-                    if repo == "arismoko/horizon" and spec:
+                    if repo == "horizon-rust/horizon" and spec:
                         with self.assertRaises(SystemExit):
                             nightly.pick(False)
                         build.assert_not_called()
@@ -353,8 +353,8 @@ class SdkPairTests(unittest.TestCase):
                         state.assert_not_called()
                     else:
                         nightly.pick(False)
-                        expected = [] if repo == "arismoko/horizon" else explicit if spec else saved
+                        expected = [] if repo == "horizon-rust/horizon" else explicit if spec else saved
                         self.assertEqual(build.call_args.args[:3], (main, expected, []))
-                        if repo == "arismoko/horizon":
+                        if repo == "horizon-rust/horizon":
                             state.assert_not_called()
                             requested.assert_not_called()

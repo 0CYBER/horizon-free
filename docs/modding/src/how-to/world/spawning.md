@@ -136,7 +136,7 @@ read it, change it, set it or clear it, and finalization reads what is left. Eac
 Chunk generation shares group data inside the generator, outside this hook. A group you set affects
 only this mob's finalization.
 
-See [the `finalize_spawn` contract](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/finalize_spawn.rs) for the spawn sites that fire the hook.
+See [the `finalize_spawn` contract](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/finalize_spawn.rs) for the spawn sites that fire the hook.
 
 ## Changing how large a spawn group grows
 
@@ -197,7 +197,7 @@ fn custom_spawner_tick(&self, host: &mut dyn mod_api::ServerHost, event: &mut mo
 }
 ```
 
-Every mod is asked about every key, so a mod ignores keys it does not own. See [the custom spawner contracts](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/custom_spawners.rs).
+Every mod is asked about every key, so a mod ignores keys it does not own. See [the custom spawner contracts](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/custom_spawners.rs).
 
 ## Spawning from a level
 

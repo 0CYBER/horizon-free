@@ -105,7 +105,7 @@ class DailySummaryTests(unittest.TestCase):
                 path = Path(folder, "reports", f"daily-report-{index}")
                 path.mkdir(parents=True)
                 (path / "daily-report.json").write_text(json.dumps(report))
-            env = {"GITHUB_REPOSITORY": "arismoko/horizon", "GITHUB_RUN_ID": "77", "GITHUB_REF": ref,
+            env = {"GITHUB_REPOSITORY": "horizon-rust/horizon", "GITHUB_RUN_ID": "77", "GITHUB_REF": ref,
                    "GITHUB_SERVER_URL": "https://github.com", "COMMIT": COMMIT, "DRY_RUN": dry_run,
                    "RESULTS": json.dumps(results), "REPORTS": str(Path(folder, "reports")),
                    "GITHUB_STEP_SUMMARY": str(Path(folder, "summary"))}
@@ -142,7 +142,7 @@ class DailySummaryTests(unittest.TestCase):
         self.assertEqual(issue["title"], "Daily: horizon-world game::x::tests::broken")
         self.assertEqual(issue["labels"], ["bug"])
         self.assertTrue(issue["body"].startswith(summary.DISCLOSURE + "\n"))
-        for part in ("`crates/horizon-world/src/lib.rs:7:3`", "https://github.com/arismoko/horizon/actions/runs/77"):
+        for part in ("`crates/horizon-world/src/lib.rs:7:3`", "https://github.com/horizon-rust/horizon/actions/runs/77"):
             self.assertIn(part, issue["body"])
 
     def test_an_open_issue_gets_a_comment_not_a_duplicate(self):
@@ -269,7 +269,7 @@ class DailySummaryTests(unittest.TestCase):
 
     def test_a_partial_first_application_completes_on_the_second(self):
         jobs = [job("shards / ignored-tests-shards (horizon-world)", "failure", ["Run"])] + GREEN_JOBS[2:]
-        run_url = "https://github.com/arismoko/horizon/actions/runs/77"
+        run_url = "https://github.com/horizon-rust/horizon/actions/runs/77"
         # The first attempt filed the new issue, then stopped before commenting on the old one.
         issues = [{"number": 900, "title": "Daily: horizon-world old::red", "body": "> filed earlier"},
                   {"number": 950, "title": "Daily: horizon-world new::red", "body": f"> filed\nFirst daily run that saw it: {run_url} on `ccc`."}]
@@ -340,7 +340,7 @@ class DailySummaryTests(unittest.TestCase):
         runs = {5: {"id": 5, "conclusion": "failure", "html_url": "u5", "jobs": [job(f"summary {sha}", "failure")]},
                 6: {"id": 6, "conclusion": "success", "html_url": "u6", "jobs": [job(f"summary {sha} (dry run)")]},
                 7: {"id": 7, "conclusion": "cancelled", "html_url": "u7", "jobs": [job(f"summary {sha}")]}}
-        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "77", "GITHUB_REPOSITORY": "arismoko/horizon"}):
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "77", "GITHUB_REPOSITORY": "horizon-rust/horizon"}):
             self.assertEqual(summary.seen(sha, Api([], runs=runs)), "u5", "a failed real run counts")
             del runs[5]
             self.assertEqual(summary.seen(sha, Api([], runs=runs)), "", "dry and cancelled runs do not")

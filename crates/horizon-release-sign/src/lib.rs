@@ -612,7 +612,7 @@ mod tests {
         let public = parse_keys(&signer.public_base64()).unwrap()[0];
         // SAFETY: this is the only test that touches the variable, and nothing else here reads it.
         unsafe { std::env::set_var(SDK_KEY_VAR, signer.public_base64()) };
-        let repository = "arismoko/horizon";
+        let repository = "horizon-rust/horizon";
         let trusted = sdk_keys_for(repository).contains(&public);
         assert_eq!(trusted, cfg!(debug_assertions));
         assert_eq!(

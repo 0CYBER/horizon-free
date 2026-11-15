@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, io::Read, path::Path};
 
 /// Where the prebuilt game (#589) is released: one `prebuilt-<commit>` prerelease per daily build
 /// of this fork's main (Diverges from upstream: horizon-rust/horizon has none).
-pub const PREBUILT_REPO: &str = "arismoko/horizon";
+pub const PREBUILT_REPO: &str = "horizon-rust/horizon";
 
 /// Every prebuilt archive's name starts with this. The `v<N>` is the package layout the launcher
 /// reads ([`crate::sdk::PACKAGE_FORMAT`], the one place it is numbered): a release made before it

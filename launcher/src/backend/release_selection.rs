@@ -96,7 +96,7 @@ mod tests {
                 assert_eq!(release.nightly.as_deref(), Some(channel));
                 assert_eq!(
                     release.asset,
-                    Some((format!("https://github.com/arismoko/horizon/releases/download/{channel}/horizon-linux-x86_64.tar.gz"), 123))
+                    Some((format!("https://github.com/horizon-rust/horizon/releases/download/{channel}/horizon-linux-x86_64.tar.gz"), 123))
                 );
             }
         }

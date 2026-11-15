@@ -20,7 +20,7 @@ def pr(number, title="Fix a thing", labels=(), paths=("crates/horizon-client/src
 
 def merged_node(number, commit):
     return {"number": number, "mergeCommit": {"oid": commit}, "title": " Fix a thing ",
-            "url": f"https://github.com/arismoko/horizon/pull/{number}",
+            "url": f"https://github.com/horizon-rust/horizon/pull/{number}",
             "mergedAt": (NOW - dt.timedelta(hours=9)).isoformat(), "author": {"login": "contributor"},
             "labels": {"nodes": []}, "closingIssuesReferences": {"nodes": []}}
 
@@ -31,7 +31,7 @@ def metadata_page(nodes):
 
 class ReleaseTrainTests(unittest.TestCase):
     def test_repository_merge_identity_before_metadata(self):
-        for repository in ("arismoko/horizon", "horizon-rust/horizon"):
+        for repository in ("horizon-rust/horizon", "horizon-rust/horizon"):
             with self.subTest(repository=repository), mock.patch.object(train, "REPO", repository), \
                     mock.patch.object(train, "run", return_value="root"), \
                     mock.patch.object(train, "merged_pull_requests", return_value=[

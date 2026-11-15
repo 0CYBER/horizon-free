@@ -11,13 +11,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 /// Authority for game, launcher and native SDK release reads on this fork.
-pub const REPO: &str = "arismoko/horizon";
+pub const REPO: &str = "horizon-rust/horizon";
 
 /// Where a crash is reported.
 pub fn issues_url() -> String {
     format!("https://github.com/{REPO}/issues")
 }
-pub const README_URL: &str = "https://github.com/arismoko/horizon/blob/main/launcher/README.md";
+pub const README_URL: &str = "https://github.com/horizon-rust/horizon/blob/main/launcher/README.md";
 /// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the

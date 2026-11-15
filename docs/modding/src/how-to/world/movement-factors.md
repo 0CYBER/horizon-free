@@ -21,4 +21,4 @@ The entity reads the block at its feet and, when that gives 1.0 (and, for speed,
 
 The player, every mob's ground and jump path, boats and minecarts read the factors where vanilla does. Both hooks fire on both sides and on the client's replayed ticks: register the mod on both and keep each method a pure function of its inputs, or prediction and the server disagree. To affect entities on every block, use `living_speed` and `living_jump_power` instead.
 
-See [the hook notes](https://github.com/arismoko/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/block_factors.rs) for the cost and the details.
+See [the hook notes](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/block_factors.rs) for the cost and the details.
