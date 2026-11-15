@@ -613,6 +613,25 @@ impl Config {
         self.chat_filter.check()?;
         self.prune_chunks.check()?;
         self.entities.check()?;
+        // The game opens these as given, appending player text or rewriting them, so they stay
+        // in the server folder: not absolute, not up a level, no drive (`C:x`) on Windows.
+        for (what, path) in [
+            ("chat_filter.log", &self.chat_filter.log),
+            ("chat_filter.words_file", &self.chat_filter.words_file),
+            ("anticheat.log", &self.anticheat.log),
+            ("anticheat.strikes", &self.anticheat.strikes),
+        ] {
+            let p = Path::new(path);
+            if p.is_absolute()
+                || p.has_root()
+                || path.contains(':')
+                || path.split(['/', '\\']).any(|part| part == "..")
+            {
+                return Err(format!(
+                    "{what} {path:?} must be a path inside the server folder"
+                ));
+            }
+        }
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -1237,5 +1256,32 @@ mod tests {
         assert!(!back.server.whitelist);
         assert_eq!(back.properties["spawn-protection"], toml::Value::Integer(4));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+    #[test]
+    fn written_files_stay_in_the_server_folder() {
+        for bad in [
+            "/home/mc/.bashrc",
+            "../outside.log",
+            "logs/../../x",
+            "logs\\..\\..\\x",
+            "C:x.log",
+            "C:\\Users\\mc\\x.log",
+        ] {
+            for set in [
+                |c: &mut Config, p: &str| c.chat_filter.log = p.into(),
+                |c: &mut Config, p: &str| c.chat_filter.words_file = p.into(),
+                |c: &mut Config, p: &str| c.anticheat.log = p.into(),
+                |c: &mut Config, p: &str| c.anticheat.strikes = p.into(),
+            ] {
+                let mut c = Config::default();
+                set(&mut c, bad);
+                let e = c.check().unwrap_err();
+                assert!(e.contains("inside the server folder"), "{bad:?}: {e}");
+            }
+        }
+        let mut c = Config::default();
+        c.chat_filter.log = "logs/chat-filter.log".into();
+        c.anticheat.strikes = String::new();
+        c.check().unwrap();
     }
 }

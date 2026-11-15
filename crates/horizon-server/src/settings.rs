@@ -260,6 +260,9 @@ pub fn changeable_remotely(key: &str) -> bool {
     }
     let (section, field) = key.split_once('.').unwrap_or((key, ""));
     !matches!(section, "engine" | "panel" | "api" | "discord")
+        // Files the game writes player text to, or reads its word list from.
+        && !(matches!(section, "chat_filter" | "anticheat")
+            && matches!(field, "log" | "words_file" | "strikes"))
         && !(section == "properties"
             && (field.starts_with("rcon.")
                 || field.starts_with("management-server-")
@@ -295,11 +298,17 @@ mod tests {
             " properties.enable-rcon",
             "properties. rcon.password",
             "panel\n.allow_public",
+            "chat_filter.log",
+            "chat_filter.words_file",
+            "anticheat.log",
+            "anticheat.strikes",
         ] {
             assert!(!changeable_remotely(key), "{key:?}");
         }
         assert!(changeable_remotely("world.difficulty"));
         assert!(changeable_remotely("properties.motd"));
+        assert!(changeable_remotely("chat_filter.enabled"));
+        assert!(changeable_remotely("anticheat.alerts"));
     }
 
     fn table() -> toml::Table {
