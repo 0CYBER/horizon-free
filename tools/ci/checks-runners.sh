@@ -54,12 +54,20 @@ shared_files() {
 # runners whatever ci.yml says: such a job stops here, before any of its code is on disk.
 set -euo pipefail
 case ${GITHUB_EVENT_NAME:-} in
-  pull_request|pull_request_review|pull_request_review_comment|merge_group)
+  pull_request|pull_request_review|pull_request_review_comment)
     head=$(jq -r '.pull_request.head.repo.full_name // "unknown"' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null || echo unknown)
     if [ "$head" != "${GITHUB_REPOSITORY:-}" ]; then
       echo "::error::A pull request from $head never runs on a self-hosted runner: use runs-on ubuntu-latest for forks"
       exit 1
     fi;;
+  merge_group)
+    # The queue's own branch in this repository: main plus what a maintainer reviewed and queued (its workflow files
+    # included), merged by GitHub; a fork's pull request reaches it only through that review.
+    ref=$(jq -r '.merge_group.head_ref // ""' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null || true)
+    case $ref in
+      refs/heads/gh-readonly-queue/main/*) ;;
+      *) echo "::error::A merge_group run for $ref is not main's merge queue"; exit 1;;
+    esac;;
 esac
 if [ -n "${CARGO_TARGET_DIR:-}" ] && [ -d "$CARGO_TARGET_DIR" ]; then
   size=$(du -s --block-size=1G "$CARGO_TARGET_DIR" | cut -f1)

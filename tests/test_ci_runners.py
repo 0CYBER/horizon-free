@@ -112,6 +112,8 @@ class OwnRunnerTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request' && ", value)
         self.assertIn("vars.SELF_HOSTED_CI == 'all'", value)
         self.assertIn("endsWith(format('{0}', github.event.pull_request.number), '0')", value)
+        # Half of the merge queue's groups, by the last digit of the pull request number in the queue's branch name.
+        self.assertIn("github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-')", value)
         # verify's parts go where the launcher goes; verify itself only waits for them.
         for part in ("verify-tree", "verify-lint", "verify-test"):
             with self.subTest(part=part):

@@ -7,7 +7,8 @@ we have to the max") every job that can runs on our own machines, and GitHub's p
 
 | Runner | Machine | Labels | Takes |
 | --- | --- | --- | --- |
-| `ludodesktop-checks-1`…`-3` | ludodesktop (the maintainer's desktop, 24 threads), isolated user `gha` | `horizon-checks` | `checks`' `verify` and `launcher` for this repository's own pull requests whose number ends in 0 or 1 (never a fork's), `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` and `launcher` for this repository's own pull requests whose number ends in 0 or 1 (never a fork's), `verify` of the merge queue's groups whose pull request number ends in 0-4, `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-light-1`…`-8` | the CI VPS | `horizon-light` | The bots, as playhorizon's light runners below |
 | `playhorizon-light-1`…`-12` | playhorizon (partner's server, 8 vCPU) | `horizon-light`, `playhorizon-light` | The bots that run main's own scripts: `pr labels`, `overlap note`, `cancel-on-close`, `claim command`, `triage command`, `mojang republish`, `nightly build`'s `answer`, and `checks`' `parity-scope` |
 | `playhorizon-ci-1`, `playhorizon-ci-2` | playhorizon | `playhorizon-ci` | Nothing routed since 2026-11-03 (they took `checks` of this repository's own pull requests with the old `SELF_HOSTED_CI=all`) |
 | `playhorizon-horizon`, `ludodesktop-horizon`, `ludodesktop-parity-2` | playhorizon, ludodesktop | `horizon-game` | Parity ([release-flow.md](release-flow.md#the-parity-job)) |
@@ -30,7 +31,8 @@ from a `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook in the NixOS configuration.
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
-- **Main's pushes and eight of ten pull requests' `verify` and `launcher`** (number ending in 2–9): `checks` runs
+- **Main's pushes, eight of ten pull requests' `verify` and `launcher`** (number ending in 2–9) **and half of the merge
+  queue** (pull request number ending in 5–9): `checks` runs
   ~100 times an hour (2026-11-03: 21 pushes to main and 76 pull request runs an hour), each with `verify` (10–18
   minutes of work on GitHub, 11–13 on a desktop runner with a cold build folder) and `launcher` (1–11). Three
   runners give ~180 runner-minutes an hour: about the fifth of the pull requests they take. Main's pushes also save
@@ -79,6 +81,15 @@ checks runners are the only ones it may reach:
    event whose head repository isn't this one, before a line of it is on disk.
 4. The repository asks a maintainer to approve the runs of every outside contributor's pull request (Settings →
    Actions → "Require approval for all external contributors").
+
+## On the CI VPS
+
+A VPS lent for CI since 2026-11-15 (Ubuntu 26.04, 14 vCPU, 62 GB, 400 GB, no GPU). Every runner is a system service
+(`gha-runner-checks-<n>`, `gha-runner-light-<n>`) run by the isolated user `gha` (no sudo, no logins, `/home` hidden,
+the rest of the system read-only), inside `gha.slice` (memory ≤ 56 GB). The before-job hook is `job-started.sh` from
+`tools/ci/checks-runners.sh` unchanged. The two checks runners have `CARGO_BUILD_JOBS=7`, their own rustup homes and
+build folders (`/var/lib/gha/checks-<n>/target`, emptied past 40 GB), one shared cargo home and Python 3.13. The eight
+light runners have no Rust. No parity runner: without a GPU the game would render on the CPU.
 
 ## On playhorizon
 

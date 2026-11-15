@@ -38,10 +38,11 @@ jobs:
   # each passed or had nothing to do. It runs even in a cancelled run (`always()`), so it fails there instead of being
   # skipped, which GitHub would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the others.
   #
-  # Where (docs/ci-runners.md): our checks runners (label horizon-checks: the desktop's) take this repository's own
-  # pull requests whose number ends in 0 or 1, about what their three runners can do; GitHub's runners take the others,
-  # forks' pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs read), so both
-  # pools work at once. The repository variable SELF_HOSTED_CI moves them: `all` every job to ours, `light` (the
+  # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take this repository's own pull requests
+  # whose number ends in 0 or 1, and the merge queue's groups whose pull request number ends in 0-4 (the queue's
+  # head_ref is gh-readonly-queue/main/pr-<number>-<sha>, so "<digit>-" is the number's last digit); GitHub's runners
+  # take the others, forks' pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs
+  # read), so both pools work at once. The repository variable SELF_HOSTED_CI moves them: `all` every job to ours, `light` (the
   # desktop paused) or `off` every job to GitHub's. A fork's pull request sees no repository variable, so no switch
   # could move it off a machine that is off: it always runs on GitHub's. On ours the build folder persists
   # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.
@@ -51,7 +52,10 @@ jobs:
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
+      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
+      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
+      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
+      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
@@ -134,7 +138,10 @@ jobs:
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
+      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
+      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
+      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
+      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
@@ -237,7 +244,10 @@ jobs:
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
+      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
+      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
+      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
+      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
@@ -403,7 +413,10 @@ jobs:
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
+      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
+      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
+      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
+      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
