@@ -347,7 +347,9 @@ impl LentLevel {
         Self {
             random: std::mem::replace(
                 &mut world.random,
-                horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(0)),
+                horizon_core::random::LevelRandom::for_level(
+                    horizon_core::random::LegacyRandom::new(0),
+                ),
             ),
             attachments: std::mem::take(&mut world.attachments),
             attachment_syncs: std::mem::take(&mut world.attachment_syncs),
@@ -376,7 +378,9 @@ pub fn query_invulnerability(
         return vanilla;
     };
     let mut unread = LentLevel {
-        random: horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(0)),
+        random: horizon_core::random::LevelRandom::for_level(
+            horizon_core::random::LegacyRandom::new(0),
+        ),
         attachments: Default::default(),
         attachment_syncs: Default::default(),
     };

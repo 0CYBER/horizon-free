@@ -24,8 +24,8 @@ use super::{
     spawning::LocalDifficulty,
 };
 use crate::{enchant::Enchantments, items::Items};
-use horizon_core::{geometry::Aabb, random::RandomSource};
 use horizon_core::equipment_slot::EquipmentSlot;
+use horizon_core::{geometry::Aabb, random::RandomSource};
 use serde_json::Value;
 use std::{fs, path::Path, sync::Arc};
 

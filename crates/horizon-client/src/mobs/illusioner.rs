@@ -310,7 +310,8 @@ mod tests {
                 0.0,
             );
             m.extra.counter = 20;
-            m.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
+            m.random =
+                horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
             let mut fixture = crate::health::TestLevel::new(0);
             let mut level = fixture.level();
             let mut events = Vec::new();
@@ -346,7 +347,9 @@ mod tests {
                 m.ai.target = Some(target);
                 let mut spell = Spell::new(BLINDNESS_SPELL);
                 spell.warmup = 1;
-                m.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
+                m.random = horizon_core::random::EntityRandom::own(
+                    horizon_core::random::LegacyRandom::new(0),
+                );
                 let mut fixture = crate::health::TestLevel::new(0);
                 let mut level = fixture.level();
                 let mut events = Vec::new();

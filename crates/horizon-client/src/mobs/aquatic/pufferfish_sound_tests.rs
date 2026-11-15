@@ -19,7 +19,13 @@ fn pitch_then(before: &LegacyRandom) -> (f32, LegacyRandom) {
 fn fish(types: &crate::mobs::MobTypes, name: &str, silent: bool) -> Mob {
     let at = Vec3::new(0.5, 64.0, 0.5);
     let kind = Arc::new(types.types[name].clone());
-    let mut m = Mob::with_random(1, kind, at, 0.0, horizon_core::random::EntityRandom::own(LegacyRandom::new(424_242)));
+    let mut m = Mob::with_random(
+        1,
+        kind,
+        at,
+        0.0,
+        horizon_core::random::EntityRandom::own(LegacyRandom::new(424_242)),
+    );
     m.silent = silent;
     m.no_gravity = true;
     m.persistent = true;

@@ -3095,7 +3095,9 @@ mod deflect_tests {
             None,
             [1.0, 0.0, 0.0],
         );
-        ball.random = OwnRandom(horizon_core::random::EntityRandom::own(LegacyRandom::new(42)));
+        ball.random = OwnRandom(horizon_core::random::EntityRandom::own(LegacyRandom::new(
+            42,
+        )));
         let mut expect = LegacyRandom::new(42);
         let draw = expect.next_float();
         let yaw = ball.yaw;
@@ -3330,7 +3332,8 @@ mod enchanted_arrow_order_tests {
         if let ProjectileKind::Arrow { critical, .. } = &mut arrow.kind {
             *critical = true;
         }
-        arrow.random.0 = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(42));
+        arrow.random.0 =
+            horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(42));
         // java.util.Random(42): nextInt(6) = 2.
         assert_eq!(arrow.arrow_damage_with_base(3.0), 11.0);
         assert_eq!(arrow.random.0.next_int(), 234785527);

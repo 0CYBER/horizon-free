@@ -7,8 +7,8 @@ use crate::mobs::world::level_random;
 use crate::mobs::{Mob, Species};
 use crate::random_sequences::RandomSequences;
 use horizon_core::geometry::Vec3;
-use horizon_world::loot::{LootData, PackOverlay};
 use horizon_core::nbt::Tag;
+use horizon_world::loot::{LootData, PackOverlay};
 use std::sync::Arc;
 
 fn mob(id: &str, species: Species) -> Mob {

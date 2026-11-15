@@ -1699,7 +1699,7 @@ impl Mob {
         else {
             return archetype.unwrap_or(1.0);
         };
-        let mut instance = instance.clone();
+        let instance = instance.clone();
         instance.value() as f32
     }
     /// `getAttributeValue(BOUNCINESS)`.

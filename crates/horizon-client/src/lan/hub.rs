@@ -7021,7 +7021,8 @@ mod tests {
             (plain, bar)
         };
         for (visibility, expected) in [(0, (3, 1)), (1, (3, 1)), (2, (0, 1))] {
-            hub.guests.update(0, |g| g.info.chat_visibility = visibility);
+            hub.guests
+                .update(0, |g| g.info.chat_visibility = visibility);
             hub.system_message(literal("all"));
             hub.system_message_to(literal("by name"), |name| name == "Bob");
             hub.system_message_to_player(1, literal("to one"));

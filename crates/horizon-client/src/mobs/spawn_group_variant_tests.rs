@@ -3,8 +3,8 @@
 //! (`Axolotl.finalizeSpawn` with `AxolotlGroupData`), alone (`/summon`, a spawn
 //! egg: group data null) and in a natural pack, whose members share the group
 //! data the first one made.
-use super::tests::{run_finalize_in, types};
 use super::LocalDifficulty;
+use super::tests::{run_finalize_in, types};
 use crate::mobs::{Mob, finalize::Group};
 use horizon_core::{
     geometry::Vec3,

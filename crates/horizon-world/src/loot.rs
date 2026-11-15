@@ -2914,9 +2914,9 @@ mod namespace_tests {
                 .collect();
             assert_eq!(content.len(), 1, "{:?}", book.components);
             match &content[0].1 {
-                Some(horizon_core::nbt::Tag::Compound(map)) => {
-                    map.get(&"pages".into()).map_or(serde_json::Value::Null, crate::worldgen::tag_json)
-                }
+                Some(horizon_core::nbt::Tag::Compound(map)) => map
+                    .get(&"pages".into())
+                    .map_or(serde_json::Value::Null, crate::worldgen::tag_json),
                 _ => serde_json::Value::Null,
             }
         };

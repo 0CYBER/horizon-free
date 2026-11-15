@@ -36,7 +36,8 @@ fn enderman(types: &crate::mobs::MobTypes, seed: i64) -> Mob {
     let kind = Arc::new(types.types["minecraft:enderman"].clone());
     let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
     register(&mut m);
-    m.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(seed));
+    m.random =
+        horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(seed));
     m.on_ground = true;
     m.stuck_multiplier = Vec3::ZERO;
     m

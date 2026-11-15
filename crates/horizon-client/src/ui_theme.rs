@@ -1031,7 +1031,10 @@ mod tests {
             .unwrap();
         std::fs::write(tex.join("a.png"), png).unwrap();
         reset_atlas();
-        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(root.clone())).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            root.clone(),
+        ))
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
         let a = atlas.font.glyph('a');
         let uv = a.rect.map(|r| [r.u0, r.v0]).expect("the pack draws a");
@@ -1088,7 +1091,10 @@ mod tests {
             .unwrap();
         std::fs::write(tex.join("a.png"), png).unwrap();
         reset_atlas();
-        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(root.clone())).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            root.clone(),
+        ))
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
         atlas
     }
@@ -1114,7 +1120,13 @@ mod tests {
     fn text_fitted_in_the_packs_font_stays_inside_its_room() {
         let atlas = one_glyph_pack("fit");
         without_fonts(&atlas);
-        let mut batch = HudBatch::new([1040, 700], crate::hud::GuiScale { requested: 1, unicode: false });
+        let mut batch = HudBatch::new(
+            [1040, 700],
+            crate::hud::GuiScale {
+                requested: 1,
+                unicode: false,
+            },
+        );
         let ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
         assert_eq!(ui.density, 1.0);
         let (face, size, label) = (Face::Medium, 13.0, "aaaa");
@@ -1134,7 +1146,13 @@ mod tests {
             "the next whole scale down: 1"
         );
         // Drawn there, every glyph lies between the room's edges.
-        let mut batch = HudBatch::new([1040, 700], crate::hud::GuiScale { requested: 1, unicode: false });
+        let mut batch = HudBatch::new(
+            [1040, 700],
+            crate::hud::GuiScale {
+                requested: 1,
+                unicode: false,
+            },
+        );
         let mut ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
         let (x, density) = (10.0, ui.density);
         ui.text_line(face, fit, 20.0, x, 10.0, u32::MAX, label);

@@ -430,54 +430,6 @@ pub fn render_instance(draw: PreparedInstanceDraw<'_>) -> std::result::Result<Ve
     readback(&frame, encoder)
 }
 
-#[cfg(test)]
-#[rustfmt::skip]
-mod instance_run {
-    use super::super::prepared_model::{PreparedModelInstance, PreparedModelVertex};
-    use super::{PreparedInstanceDraw, SIZE};
-    use glam::{Mat4, Vec3};
-
-    fn corner(x: f32, y: f32) -> PreparedModelVertex {
-        PreparedModelVertex { pos: [x, y, 0.5, 1.0], uv: [0.5, 0.5, 0.0, 0.0], normal: [0.0, 0.0, 1.0, 0.0], flags: [1, 0, 0, 0] }
-    }
-
-    fn instance_at(x: f32, tint: [f32; 4]) -> PreparedModelInstance {
-        let mut normal = [[0.0; 4]; 3];
-        normal[0][0] = 1.0;
-        normal[1][1] = 1.0;
-        normal[2][2] = 1.0;
-        PreparedModelInstance { model: Mat4::from_translation(Vec3::new(x, 0.0, 0.0)).to_cols_array_2d(), normal, tint, light: 0xff00, _pad: [0; 3] }
-    }
-
-    fn render(per_copy: bool, hdr: bool) -> Result<Vec<u8>, String> {
-        let instances = [instance_at(-0.45, [1.0, 0.0, 0.0, 1.0]), instance_at(0.45, [0.0, 0.0, 1.0, 1.0])];
-        let vertices = [corner(-0.2, -0.2), corner(0.2, -0.2), corner(0.2, 0.2), corner(-0.2, 0.2)];
-        super::render_instance(PreparedInstanceDraw {
-            vertices: &vertices, ranges: vec![Some((0, 6))], uploaded: 1, requested: 1, slot: 0,
-            instances: &instances, per_copy, hdr, atlas_size: [4, 4],
-            atlas: &[255, 255, 255, 255].repeat(16), view_proj: Mat4::IDENTITY,
-        })
-    }
-
-    #[test]
-    #[ignore = "daily"]
-    fn an_instanced_run_matches_per_copy_pixels_with_hdr() {
-        let per_copy = render(true, true).expect("per-copy software Vulkan draw");
-        let instanced = render(false, true).expect("instanced software Vulkan draw");
-        assert_eq!(per_copy, instanced);
-        assert_eq!(per_copy.len(), (SIZE * SIZE * 4) as usize);
-        let covered = per_copy.as_chunks::<4>().0.iter().filter(|p| p[0] != 0 || p[2] != 0).count();
-        assert!(covered > 8, "the run covered {covered} pixels");
-        let plain = render(false, false).expect("color-only software Vulkan draw");
-        let alpha = |pixels: &[u8]| pixels.iter().skip(3).step_by(4).copied().collect::<Vec<_>>();
-        assert_eq!(alpha(&per_copy), alpha(&plain), "a bias-0 mark must not change alpha");
-    }
-}
-
-/// What our probe pack's `gbuffers_entities`, `gbuffers_block` and `gbuffers_textured` each write
-/// ([`render_pack`]), in that order.
-pub const PACK_COLOURS: [[u8; 4]; 3] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
-
 /// `vertices`, in the runs `spans` gives them (as the game marks them), drawn on software Vulkan
 /// by a probe pack of our own: each of its gbuffers programs writes one flat colour of
 /// [`PACK_COLOURS`] and puts a vertex at half its camera-relative x and y. Runs the pack leaves
@@ -787,4 +739,52 @@ pub fn render_hud(
     uploads.finish(&encoder);
     hud.draw(&mut encoder, &color, &depth, batch, size);
     readback(&frame, encoder)
+}
+
+/// What our probe pack's `gbuffers_entities`, `gbuffers_block` and `gbuffers_textured` each write
+/// ([`render_pack`]), in that order.
+pub const PACK_COLOURS: [[u8; 4]; 3] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
+
+#[cfg(test)]
+#[rustfmt::skip]
+mod instance_run {
+    use super::super::prepared_model::{PreparedModelInstance, PreparedModelVertex};
+    use super::{PreparedInstanceDraw, SIZE};
+    use glam::{Mat4, Vec3};
+
+    fn corner(x: f32, y: f32) -> PreparedModelVertex {
+        PreparedModelVertex { pos: [x, y, 0.5, 1.0], uv: [0.5, 0.5, 0.0, 0.0], normal: [0.0, 0.0, 1.0, 0.0], flags: [1, 0, 0, 0] }
+    }
+
+    fn instance_at(x: f32, tint: [f32; 4]) -> PreparedModelInstance {
+        let mut normal = [[0.0; 4]; 3];
+        normal[0][0] = 1.0;
+        normal[1][1] = 1.0;
+        normal[2][2] = 1.0;
+        PreparedModelInstance { model: Mat4::from_translation(Vec3::new(x, 0.0, 0.0)).to_cols_array_2d(), normal, tint, light: 0xff00, _pad: [0; 3] }
+    }
+
+    fn render(per_copy: bool, hdr: bool) -> Result<Vec<u8>, String> {
+        let instances = [instance_at(-0.45, [1.0, 0.0, 0.0, 1.0]), instance_at(0.45, [0.0, 0.0, 1.0, 1.0])];
+        let vertices = [corner(-0.2, -0.2), corner(0.2, -0.2), corner(0.2, 0.2), corner(-0.2, 0.2)];
+        super::render_instance(PreparedInstanceDraw {
+            vertices: &vertices, ranges: vec![Some((0, 6))], uploaded: 1, requested: 1, slot: 0,
+            instances: &instances, per_copy, hdr, atlas_size: [4, 4],
+            atlas: &[255, 255, 255, 255].repeat(16), view_proj: Mat4::IDENTITY,
+        })
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn an_instanced_run_matches_per_copy_pixels_with_hdr() {
+        let per_copy = render(true, true).expect("per-copy software Vulkan draw");
+        let instanced = render(false, true).expect("instanced software Vulkan draw");
+        assert_eq!(per_copy, instanced);
+        assert_eq!(per_copy.len(), (SIZE * SIZE * 4) as usize);
+        let covered = per_copy.as_chunks::<4>().0.iter().filter(|p| p[0] != 0 || p[2] != 0).count();
+        assert!(covered > 8, "the run covered {covered} pixels");
+        let plain = render(false, false).expect("color-only software Vulkan draw");
+        let alpha = |pixels: &[u8]| pixels.iter().skip(3).step_by(4).copied().collect::<Vec<_>>();
+        assert_eq!(alpha(&per_copy), alpha(&plain), "a bias-0 mark must not change alpha");
+    }
 }

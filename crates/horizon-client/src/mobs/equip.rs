@@ -9,8 +9,8 @@ mod source;
 use super::Species;
 use crate::items::ItemStack;
 pub use decision::{EquipAnswer, EquipDecision, EquipEntityStamp, EquipStamp};
-use horizon_core::nbt::Tag;
 use horizon_core::equipment_slot::EquipmentSlot;
+use horizon_core::nbt::Tag;
 pub use source::{EquipInput, source_stamp, source_stamp_at};
 use std::collections::{HashMap, HashSet};
 

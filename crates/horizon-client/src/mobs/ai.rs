@@ -4406,7 +4406,9 @@ mod poison_effect_tests {
         // leaves a silverfish call in the outbox.
         let spawned = (0..100).any(|seed| {
             let mut pig = Mob::new(2, pig_kind.clone(), Vec3::new(0.0, 4.0, 0.0), 0.0);
-            pig.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(seed));
+            pig.random = horizon_core::random::EntityRandom::own(
+                horizon_core::random::LegacyRandom::new(seed),
+            );
             pig.extra
                 .effects
                 .push(crate::mobs::StoredEffect::new("minecraft:poison", 25, 0));
@@ -6211,7 +6213,8 @@ mod burn_and_rose_tests {
         let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
         register(&mut m);
         m.no_ai = true;
-        m.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(3));
+        m.random =
+            horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(3));
         m
     }
 

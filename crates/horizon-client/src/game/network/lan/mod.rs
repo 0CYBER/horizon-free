@@ -1716,7 +1716,10 @@ impl Game<'_> {
             .position(|g| g.uuid == uuid && g.placed)
         {
             let live = Some(self.player_state.attachments.clone());
+            // The warden spawn tracker is saved with the player (#16696).
+            let warden = self.warden_tracker_tag();
             host.hub.guests.update(i, |g| {
+                let g = playerdata::with_warden(g, warden);
                 let held = live.map(|a| std::mem::replace(&mut g.attachments, a));
                 playerdata::store(g, &mut self.level, vehicle);
                 if let Some(held) = held {

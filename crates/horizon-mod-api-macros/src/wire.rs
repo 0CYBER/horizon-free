@@ -96,7 +96,8 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                     .as_ref()
                     .map_or_else(|| index.to_string(), ToString::to_string);
                 let ft = &field.ty;
-                schema.push(quote!((#label, <#ft as #w::Wire>::layout(&mut ::std::vec::Vec::new()))));
+                schema
+                    .push(quote!((#label, <#ft as #w::Wire>::layout(&mut ::std::vec::Vec::new()))));
                 check_owned(&field.ty)?;
                 let ft = &field.ty;
                 min = quote!(#min + <#ft as #w::Wire>::MIN);
@@ -128,7 +129,9 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 let mut os = Vec::new();
                 if matches!(variant.fields, Fields::Unit) {
                     let label = format!("{index}:{case}");
-                    schema.push(quote!((#label, <() as #w::Wire>::layout(&mut ::std::vec::Vec::new()))));
+                    schema.push(
+                        quote!((#label, <() as #w::Wire>::layout(&mut ::std::vec::Vec::new()))),
+                    );
                 }
                 for (field_index, (field, bind)) in variant.fields.iter().zip(binds).enumerate() {
                     let field_name = field
@@ -137,7 +140,9 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                         .map_or_else(|| field_index.to_string(), ToString::to_string);
                     let label = format!("{index}:{case}.{field_name}");
                     let ft = &field.ty;
-                    schema.push(quote!((#label, <#ft as #w::Wire>::layout(&mut ::std::vec::Vec::new()))));
+                    schema.push(
+                        quote!((#label, <#ft as #w::Wire>::layout(&mut ::std::vec::Vec::new()))),
+                    );
                     check_owned(&field.ty)?;
                     layout = field_layout(layout, field, &w);
                     ps.push(quote!(out.put(#bind);));

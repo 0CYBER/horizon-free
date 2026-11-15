@@ -21,7 +21,6 @@ mod anger_tests;
 mod completion_tests;
 #[path = "persist/passenger_graph.rs"]
 mod passenger_graph;
-use passenger_graph::take_passengers;
 #[path = "persist/hurt_by_refs.rs"]
 mod hurt_by_refs;
 #[cfg(test)]

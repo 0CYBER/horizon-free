@@ -3,7 +3,7 @@
 //! and the mobs it adds (finalized with the game's `finalizeSpawn`).
 use super::{
     Dim, Game,
-    creatures::{Finalized, local_difficulty_in},
+    creatures::Finalized,
     structures::structures_reaching_in,
 };
 use horizon_client::vanillagen::VanillaTerrain;

@@ -9330,7 +9330,9 @@ mod held_item_name_tests {
             &mut horse,
             &death,
             &mut crate::random_sequences::RandomSequences::default(),
-            &mut horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7)),
+            &mut horizon_core::random::LevelRandom::for_level(
+                horizon_core::random::LegacyRandom::new(7),
+            ),
         );
         assert!(
             items

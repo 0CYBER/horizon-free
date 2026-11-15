@@ -53,7 +53,9 @@ pub fn apply(root: &Path, patch: &str) -> Result<(), String> {
         if path.is_empty()
             || path.contains('\\')
             || path.starts_with('/')
-            || path.split('/').any(|part| part == ".." || part.contains(':'))
+            || path
+                .split('/')
+                .any(|part| part == ".." || part.contains(':'))
         {
             return Err(format!("{path}: the patch names a path outside its root"));
         }
