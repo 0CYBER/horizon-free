@@ -183,7 +183,7 @@ impl Launcher {
         let open = path.clone();
         let reveal = path.clone();
         let copy = {
-            let b = button("native-log-copy", "Copy log", Kind::Ghost, &t);
+            let b = button("native-log-copy", "Copy log", Kind::Secondary, &t);
             match loaded {
                 Some(Ok(_)) => b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     // The whole file as it was read, never a stale or missing one.
@@ -204,7 +204,7 @@ impl Launcher {
             .gap(px(8.))
             .child(copy)
             .child({
-                let b = button("native-log-file", "Open full log", Kind::Ghost, &t);
+                let b = button("native-log-file", "Open full log", Kind::Secondary, &t);
                 if gone {
                     disabled(b)
                 } else {
@@ -212,7 +212,7 @@ impl Launcher {
                 }
             })
             .child({
-                let b = button("native-log-reveal", "Show in folder", Kind::Ghost, &t);
+                let b = button("native-log-reveal", "Show in folder", Kind::Secondary, &t);
                 if gone {
                     disabled(b)
                 } else {
@@ -220,7 +220,7 @@ impl Launcher {
                 }
             })
             .child(
-                button("native-log-refresh", "Refresh", Kind::Ghost, &t).on_click(cx.listener(
+                button("native-log-refresh", "Refresh", Kind::Secondary, &t).on_click(cx.listener(
                     |this, _: &ClickEvent, _, cx| {
                         this.native_log.stale = true;
                         cx.notify();
