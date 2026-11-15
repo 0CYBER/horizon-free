@@ -193,9 +193,12 @@ pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
         }
     }
     paths.sort();
-    let exists = |path: &str, name: &str| {
+    let exists = |behaviour: &str, path: &str, name: &str| {
         let file = root.join(path);
-        let text = std::fs::read_to_string(&file).map_err(|e| error(&file, e))?;
+        let text = std::fs::read_to_string(&file).map_err(|e| BehaviourError::Read {
+            file: behaviour.to_owned(),
+            error: format!("its test file {}: {e}", file.display()),
+        })?;
         let parsed = syn::parse_file(&text).map_err(|e| BehaviourError::Unparsable {
             file: file.display().to_string(),
             error: e.to_string(),
@@ -210,7 +213,7 @@ pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let text = std::fs::read_to_string(path).map_err(|e| error(path, e))?;
-            parse(&file, &text, exists)
+            parse(&file, &text, |path, name| exists(&file, path, name))
         })
         .collect()
 }
@@ -390,10 +393,14 @@ mod tests {
             Err(BehaviourError::Unparsable { .. })
         ));
         write("zeta.toml", "missing.rs::pins_it");
-        assert!(matches!(
-            read(dir.path(), &folder),
-            Err(BehaviourError::Read { .. })
-        ));
+        let Err(BehaviourError::Read { file, error }) = read(dir.path(), &folder) else {
+            panic!("a missing test file is a read error");
+        };
+        assert_eq!(file, "zeta.toml");
+        assert!(
+            error.starts_with("its test file ") && error.contains("missing.rs"),
+            "{error}"
+        );
         assert!(
             read(dir.path(), &dir.path().join("none"))
                 .unwrap()
