@@ -667,6 +667,25 @@ impl Manifest {
     pub fn owned_namespaces(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.id.as_str()).chain(self.namespaces.iter().map(String::as_str))
     }
+    /// The refusal of a `side = "server"` mod whose code declares registry content (one of
+    /// `ids`, in a namespace it owns), naming the mod: every client must have that content.
+    pub fn server_only_declaration<'a>(
+        &self,
+        mut ids: impl Iterator<Item = &'a str>,
+    ) -> Option<String> {
+        if self.side != Side::Server {
+            return None;
+        }
+        let id = ids.find(|id| {
+            let ns = id.split_once(':').map_or("", |(ns, _)| ns);
+            self.owned_namespaces().any(|owned| owned == ns)
+        })?;
+        Some(format!(
+            "{}: a side = \"server\" mod declares {id}, which every client must have; \
+             declare side = \"both\"",
+            self.id
+        ))
+    }
 }
 
 /// Folders of a mod's project that are never part of its package: Git's, Cargo's build output
@@ -1402,7 +1421,7 @@ capabilities = ["registries"]
             let text = EXAMPLE.replace("[\"registries\"]", caps);
             assert!(Manifest::parse(&text).is_err());
         }
-        for field in ["network = true", "experimental = []", "side = \"server\""] {
+        for field in ["network = true", "experimental = []", "side = \"local\""] {
             assert!(Manifest::parse(&format!("{EXAMPLE}{field}\n")).is_err());
         }
         assert_eq!(Manifest::parse(EXAMPLE).unwrap().side, Side::Client);
@@ -1411,6 +1430,22 @@ capabilities = ["registries"]
                 .unwrap()
                 .side,
             Side::Both
+        );
+        let server = Manifest::parse(&format!("{EXAMPLE}side = \"server\"\n")).unwrap();
+        assert_eq!(server.side, Side::Server);
+        let id = &server.id;
+        assert_eq!(
+            server.server_only_declaration(
+                ["minecraft:stone", &format!("{id}:marker")[..]].into_iter()
+            ),
+            Some(format!(
+                "{id}: a side = \"server\" mod declares {id}:marker, which every client must have; \
+                 declare side = \"both\""
+            ))
+        );
+        assert_eq!(
+            server.server_only_declaration(["minecraft:stone"].into_iter()),
+            None
         );
     }
 

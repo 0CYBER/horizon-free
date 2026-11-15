@@ -1132,6 +1132,14 @@ impl Content {
             );
             let owned = manifest.owned_namespaces().any(|owned| owned == namespace);
             check_namespace(name, manifest)?;
+            if manifest.side == crate::manifest::Side::Server
+                && (top == "assets" || (owned && top == "data" && rest.starts_with("horizon/")))
+            {
+                return Err(format!(
+                    "{id}: a side = \"server\" mod carries {name}, which every client must have; \
+                     declare side = \"both\""
+                ));
+            }
             let Some(decl) = (owned && top == "data")
                 .then(|| rest.strip_prefix("horizon/"))
                 .flatten()
@@ -2797,6 +2805,31 @@ capabilities = ["registries"]
             ["!minecraft:lore", "minecraft:max_stack_size"]
         );
         assert_eq!(components["minecraft:max_stack_size"], 16);
+    }
+
+    #[test]
+    fn a_server_mod_is_refused_for_what_clients_must_have() {
+        let server = MANIFEST_TEXT.replace("side = \"both\"", "side = \"server\"");
+        let recipe: &[u8] = br#"{"type": "minecraft:crafting_shapeless"}"#;
+        for (file, bytes) in [
+            ("assets/ruby/lang/en_us.json", &b"{}"[..]),
+            ("data/ruby/horizon/item/gem.json", ITEM),
+            ("data/ruby/horizon/block/ruby_block.json", BLOCK),
+        ] {
+            let e = hmod("server-refused", &server, &[(file, bytes)]).unwrap_err();
+            assert_eq!(
+                e,
+                format!(
+                    "ruby: a side = \"server\" mod carries {file}, which every client must have; declare side = \"both\""
+                )
+            );
+        }
+        let content = hmod(
+            "server-loads",
+            &server,
+            &[("data/ruby/recipe/gem.json", recipe)],
+        );
+        assert_eq!(content.unwrap().files, ["data/ruby/recipe/gem.json"]);
     }
 
     #[test]

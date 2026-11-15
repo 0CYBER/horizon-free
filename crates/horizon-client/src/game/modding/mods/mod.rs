@@ -843,6 +843,25 @@ pub(super) fn content_overlay(
     if !errors.is_empty() {
         return Err(errors.join("\n").into());
     }
+    let declared_ids = (blocks.iter().map(|b| b.id.as_str()))
+        .chain(items.iter().map(|i| i.id.as_str()))
+        .chain(types.iter().map(|t| t.id.as_str()))
+        .chain(fluids.iter().map(|f| f.id.as_str()));
+    for m in packages.iter().map(|s| s.manifest) {
+        if let Some(e) = m.server_only_declaration(declared_ids.clone()) {
+            return Err(e.into());
+        }
+        if m.side == horizon_mod_package::manifest::Side::Server
+            && let Some(hook) = mod_api::__private::client_hook(&m.id)
+        {
+            return Err(format!(
+                "{}: a side = \"server\" mod listens to the client hook {hook}; \
+                 declare side = \"both\"",
+                m.id
+            )
+            .into());
+        }
+    }
     if !blocks.is_empty() || !items.is_empty() || !types.is_empty() {
         let known = match &mut known {
             Some(types) => types,
@@ -1204,11 +1223,11 @@ fn announced_entry(
     mod_list::Entry {
         id: id.to_owned(),
         version: version.to_owned(),
-        // `Side` is open to new kinds; until the list carries one, such a mod stays local.
-        side: if side == Side::Both {
-            mod_list::Side::Both
-        } else {
-            mod_list::Side::Client
+        side: match side {
+            Side::Both => mod_list::Side::Both,
+            Side::Server => mod_list::Side::Server,
+            // `Side` is open to new kinds; until the list carries one, such a mod stays local.
+            _ => mod_list::Side::Client,
         },
     }
 }
@@ -3122,5 +3141,39 @@ mod concurrent_content_tests {
             );
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod server_side_tests {
+    use mod_api::{AddClientReloadListenersEvent, ClientHost, Hooks};
+
+    #[test]
+    fn a_client_hook_is_named_for_its_mod_only() {
+        struct Reloads;
+        #[mod_api::__subscriptions]
+        impl Hooks for Reloads {
+            fn add_client_reload_listeners(
+                &self,
+                _: &dyn ClientHost,
+                _: &mut AddClientReloadListenersEvent<'_>,
+            ) {
+            }
+        }
+        struct Quiet;
+        #[mod_api::__subscriptions]
+        impl Hooks for Quiet {}
+        let mods: mod_api::Mods = vec![
+            mod_api::ModEntry::new("reloads", Box::new(Reloads)),
+            mod_api::ModEntry::new("quiet", Box::new(Quiet)),
+        ]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            assert_eq!(
+                mod_api::__private::client_hook("reloads"),
+                Some("add_client_reload_listeners")
+            );
+            assert_eq!(mod_api::__private::client_hook("quiet"), None);
+        });
     }
 }

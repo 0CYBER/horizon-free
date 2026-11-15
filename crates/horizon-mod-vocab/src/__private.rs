@@ -119,6 +119,15 @@ pub fn installed_code_ids() -> impl Iterator<Item = &'static str> {
     crate::mods().iter().map(|entry| entry.id)
 }
 
+/// The first client-side hook the installed code mod `id` subscribes to, by name: the
+/// engine refuses a `side = "server"` mod that has one.
+pub fn client_hook(id: &str) -> Option<&'static str> {
+    crate::mods()
+        .iter()
+        .filter(|entry| entry.id == id)
+        .find_map(|entry| entry.client_hook())
+}
+
 /// The command argument types mods registered at startup, by namespaced id, for the game's
 /// command trees. Not part of the mod surface.
 pub fn command_argument_types() -> Vec<(String, std::sync::Arc<dyn crate::CommandArgumentType>)> {

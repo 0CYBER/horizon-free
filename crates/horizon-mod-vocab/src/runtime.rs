@@ -40,6 +40,16 @@ impl ModEntry {
     pub fn enter(&self, hook: &'static str) -> crate::content::crash::ModGuard {
         mark_mod(self.id, hook)
     }
+
+    /// The first client-side hook this mod subscribes to, by name: the game refuses a
+    /// `side = "server"` mod that has one.
+    pub(crate) fn client_hook(&self) -> Option<&'static str> {
+        let subscribed = self.hooks.subscribed();
+        generated::CLIENT_HOOKS
+            .iter()
+            .find(|(id, _)| subscribed.iter().flatten().any(|s| *s as usize == *id as usize))
+            .map(|(_, name)| *name)
+    }
 }
 
 // no wire: installed hook trait objects and shared dispatch ownership are process-local.
