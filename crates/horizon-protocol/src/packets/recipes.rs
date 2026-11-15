@@ -37,6 +37,12 @@ impl HolderSet {
                 w.string(name);
             }
             Self::Items(ids) => {
+                // Written for an older client: its own item ids, without the items it lacks.
+                let ids: Vec<i32> = ids
+                    .iter()
+                    .map(|&id| crate::adapter::ids::item(id))
+                    .filter(|&id| id >= 0)
+                    .collect();
                 w.varint(ids.len() as i32 + 1);
                 ids.iter().for_each(|id| w.varint(*id));
             }
@@ -217,32 +223,46 @@ impl SlotDisplay {
         }
         Ok(())
     }
+    /// Writes this display; for an older client (while ids are renumbered down) in its own display
+    /// ids, with the kinds it lacks shown as the display they wrap.
     pub fn write(&self, w: &mut Writer) {
+        use crate::adapter::ids;
+        // This display kind's id on the receiving side: -1 when it has no such kind.
+        let kind = ids::slot_display;
         match self {
-            Self::Empty => w.varint(0),
-            Self::AnyFuel => w.varint(1),
+            Self::Empty => w.varint(kind(0)),
+            Self::AnyFuel => w.varint(kind(1)),
+            Self::WithAnyPotion(d) if kind(2) < 0 => d.write(w),
             Self::WithAnyPotion(d) => {
-                w.varint(2);
+                w.varint(kind(2));
                 d.write(w);
+            }
+            Self::OnlyWithComponent(d, component)
+                if kind(3) < 0 || ids::component(*component) < 0 =>
+            {
+                d.write(w)
             }
             Self::OnlyWithComponent(d, component) => {
-                w.varint(3);
+                w.varint(kind(3));
                 d.write(w);
-                w.varint(*component);
+                w.varint(ids::component(*component));
             }
-            Self::Item(id) => {
-                w.varint(4);
-                w.varint(crate::adapter::ids::item(*id));
-            }
+            Self::Item(id) => match ids::item(*id) {
+                id if id < 0 => w.varint(kind(0)),
+                id => {
+                    w.varint(kind(4));
+                    w.varint(id);
+                }
+            },
             Self::ItemStack(stack) => {
-                w.varint(5);
+                w.varint(kind(5));
                 Template::write(stack, w);
             }
-            Self::Tag(set) if crate::adapter::ids::quirks_written().tag_slot_display_is_id => {
+            Self::Tag(set) if ids::quirks_written().tag_slot_display_is_id => {
                 match set {
                     // TagSlotDisplay of 26.2: the tag's bare id.
                     HolderSet::Tag(name) => {
-                        w.varint(6);
+                        w.varint(kind(6));
                         w.string(name);
                     }
                     // A list of items has no such form: a composite of item displays shows the same.
@@ -253,20 +273,27 @@ impl SlotDisplay {
                 }
             }
             Self::Tag(set) => {
-                w.varint(6);
+                w.varint(kind(6));
                 set.write(w);
             }
+            // Without dyed displays the client shows the dyed item itself.
+            Self::Dyed { target, .. } if kind(7) < 0 => target.write(w),
             Self::Dyed { dye, target } => {
-                w.varint(7);
+                w.varint(kind(7));
                 dye.write(w);
                 target.write(w);
+            }
+            // Before 1.21.5 a trim display named its template, not its pattern: the client is shown
+            // the item being trimmed.
+            Self::SmithingTrim { base, .. } if ids::quirks_written().components_before_1_21_5 => {
+                base.write(w)
             }
             Self::SmithingTrim {
                 base,
                 material,
                 pattern,
             } => {
-                w.varint(8);
+                w.varint(kind(8));
                 base.write(w);
                 material.write(w);
                 match pattern {
@@ -284,12 +311,12 @@ impl SlotDisplay {
                 }
             }
             Self::WithRemainder { input, remainder } => {
-                w.varint(9);
+                w.varint(kind(9));
                 input.write(w);
                 remainder.write(w);
             }
             Self::Composite(list) => {
-                w.varint(10);
+                w.varint(kind(10));
                 w.varint(list.len() as i32);
                 list.iter().for_each(|d| d.write(w));
             }
@@ -783,6 +810,51 @@ mod tests {
         RecipeBookAdd::write(&add, &mut w);
         let mut r = Reader::new(&w.data);
         assert_eq!(RecipeBookAdd::read(&mut r).unwrap(), add);
+        assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn displays_written_for_a_1_21_11_client_read_back_as_that_version() {
+        use crate::adapter::{ServerVersion, ids};
+        let old = ServerVersion::V1_21_11.ids().unwrap();
+        let (stick, apple) = (ids::item(880), ids::item(900));
+        let display = SlotDisplay::Composite(vec![
+            SlotDisplay::Item(stick),
+            SlotDisplay::WithAnyPotion(Box::new(SlotDisplay::Item(apple))),
+            SlotDisplay::Dyed {
+                dye: Box::new(SlotDisplay::Item(apple)),
+                target: Box::new(SlotDisplay::Item(stick)),
+            },
+            SlotDisplay::WithRemainder {
+                input: Box::new(SlotDisplay::Item(stick)),
+                remainder: Box::new(SlotDisplay::Empty),
+            },
+        ]);
+        let mut w = Writer::new();
+        {
+            let _down = ids::renumbering(old, ids::Way::Down);
+            display.write(&mut w);
+            HolderSet::Items(vec![stick, apple]).write(&mut w);
+        }
+        // Read as a 1.21.11 server's packet is: the kinds 1.21.11 lacks show what they wrap.
+        let _up = ids::renumbering(old, ids::Way::Up);
+        let mut r = Reader::new(&w.data);
+        assert_eq!(
+            SlotDisplay::read(&mut r).unwrap(),
+            SlotDisplay::Composite(vec![
+                SlotDisplay::Item(stick),
+                SlotDisplay::Item(apple),
+                SlotDisplay::Item(stick),
+                SlotDisplay::WithRemainder {
+                    input: Box::new(SlotDisplay::Item(stick)),
+                    remainder: Box::new(SlotDisplay::Empty),
+                },
+            ])
+        );
+        assert_eq!(
+            HolderSet::read(&mut r).unwrap(),
+            HolderSet::Items(vec![stick, apple])
+        );
         assert_eq!(r.remaining(), 0);
     }
 }
