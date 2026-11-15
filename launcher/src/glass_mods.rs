@@ -376,7 +376,7 @@ impl Launcher {
                 .px(px(4.))
                 .child(ui::icon("information-circle", 14., white(ink::QUIET)))
                 .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).child(trf(
-                    "{count} mods made for Horizon's earlier mod system aren't listed here yet.",
+                    "{count} more mods made for Horizon's earlier mod system are hidden until their authors update them.",
                     &[("count", &count.to_string())],
                 ))),
         )
@@ -544,6 +544,12 @@ impl Launcher {
                     }))
                 })
                 .into_any_element()
+            } else if p.source == SourceId::Horizon {
+                // The registry's rows have no verdict column: the slot says it, in its place.
+                ui::text(13., FontWeight::MEDIUM, 0.5)
+                    .flex_none()
+                    .child(tr(m.support(&p).label()))
+                    .into_any_element()
             } else {
                 div().flex_none().w(px(20.)).into_any_element()
             };

@@ -372,7 +372,7 @@ pub fn trust_and_capabilities(
                 .iter()
                 .map(|c| format!("May {}", c.describe())),
         );
-        lines.extend(unsupported_capabilities(&v.capabilities));
+        // Capabilities this Horizon lacks are the project's verdict (`Project::blocked`), said once.
         if v.capabilities.is_empty() {
             lines.push("Asks for nothing beyond its own log".into());
         }
@@ -505,7 +505,7 @@ pub const SORTS: [super::details::Sort; 3] = [
 /// The projects of the query's kind whose words match and that have every category and tag the
 /// filters ask for, for this game unless `everything`: the
 /// most downloaded first, or the newest (first published) or most recently updated (latest
-/// version) when the query asks, ties by downloads.
+/// version) when the query asks, ties by downloads; those no version of which installs here last.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
     use super::details::Sort;
     let mut found: Vec<&index::Project> = index
@@ -543,9 +543,14 @@ fn search(index: &Index, query: &Query) -> Vec<Project> {
         }),
         _ => found.sort_by_key(|p| std::cmp::Reverse(p.downloads)),
     }
-    found
+    // What can't be installed here goes after what can, each in the order asked for.
+    let mut found: Vec<Project> = found
         .into_iter()
         .filter_map(|p| project_of(index, p))
+        .collect();
+    found.sort_by_key(|p| p.blocked.is_some());
+    found
+        .into_iter()
         .skip(query.offset)
         .take(query.limit)
         .collect()
