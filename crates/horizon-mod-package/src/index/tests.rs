@@ -154,8 +154,15 @@ fn refuses_broken_indexes() {
         "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/",
         "file:///tmp/",
     );
-    assert!(Index::parse(&local).unwrap_err().contains("https"));
-    assert!(Index::parse_local(&local).is_ok());
+    let published = Index::parse(&local).unwrap();
+    assert!(published.project("coords_hud").is_none());
+    assert!(
+        published
+            .left_out
+            .iter()
+            .any(|l| l.reason.contains("https"))
+    );
+    assert!(Index::parse_local(&local).unwrap().left_out.is_empty());
     let e = broken(&|i| i.projects[0].versions[0].file.name = "../coords_hud.hmod".into());
     assert!(e.contains("plain file name"), "{e}");
     let e = broken(&|i| i.projects[0].versions[0].file.name = "coords_hud.zip".into());
@@ -170,6 +177,98 @@ fn refuses_broken_indexes() {
     assert!(e.contains("another file"), "{e}");
     let e = broken(&|i| i.projects[0].id = "Coords".into());
     assert!(e.contains("is not"), "{e}");
+}
+
+/// `index` as the registry would publish it, read back.
+fn reread(index: &Index) -> Index {
+    Index::parse(&serde_json::to_string(index).unwrap()).unwrap()
+}
+
+/// The sample with a native mod published under the retired `.hnmod` extension, as the live
+/// registry still lists some.
+fn with_hnmod() -> Index {
+    let mut index = sample();
+    let mut native = index.projects[0].clone();
+    native.id = "accurate_block_placement".into();
+    native.kind = Kind::NativeMod;
+    native.versions[0].file.name = "accurate_block_placement-1.0.0.hnmod".into();
+    index.projects.push(native);
+    index
+}
+
+#[test]
+fn a_project_with_no_usable_version_is_left_out_and_the_rest_loads() {
+    let index = reread(&with_hnmod());
+    let ids: Vec<&str> = index.projects.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["coords_hud", "cozy", "glow", "skyblock_start"]);
+    let reasons: Vec<(&str, Option<&str>)> = index
+        .left_out
+        .iter()
+        .map(|l| (l.id.as_str(), l.version.as_deref()))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            ("accurate_block_placement", Some("0.1.0")),
+            ("accurate_block_placement", None)
+        ]
+    );
+    assert!(index.left_out[0].reason.contains("plain file name"));
+}
+
+#[test]
+fn a_bad_version_is_left_out_and_its_project_keeps_the_others() {
+    let mut index = with_hnmod();
+    let native = index.projects.last_mut().unwrap();
+    let mut good = native.versions[0].clone();
+    good.version = "0.0.9".into();
+    good.file.name = "accurate_block_placement-0.0.9.hmod".into();
+    native.versions.push(good);
+    let index = reread(&index);
+    let native = index.project("accurate_block_placement").unwrap();
+    let kept: Vec<&str> = native.versions.iter().map(|v| v.version.as_str()).collect();
+    assert_eq!(kept, ["0.0.9"]);
+    assert_eq!(index.left_out.len(), 1);
+    assert_eq!(index.left_out[0].version.as_deref(), Some("0.1.0"));
+}
+
+#[test]
+fn a_modpack_whose_mod_was_left_out_is_left_out_too() {
+    let mut index = sample();
+    index.projects[0].versions[0].file.url = "http://example.org/coords_hud.hmod".into();
+    let index = reread(&index);
+    assert!(index.project("coords_hud").is_none());
+    assert!(index.project("cozy").is_none());
+    assert!(index.project("glow").is_some());
+    let cozy = index.left_out.iter().find(|l| l.id == "cozy").unwrap();
+    assert!(cozy.reason.contains("not in the index"), "{}", cozy.reason);
+}
+
+#[test]
+fn an_id_listed_twice_leaves_out_both() {
+    let mut index = sample();
+    let twin = index.projects[2].clone();
+    index.projects.push(twin);
+    let index = reread(&index);
+    assert!(index.project("glow").is_none());
+    let twice = index
+        .left_out
+        .iter()
+        .filter(|l| l.reason.contains("listed twice"));
+    assert_eq!(twice.count(), 2);
+}
+
+#[test]
+fn only_text_that_is_not_an_index_fails_to_load() {
+    assert!(Index::parse("{\"schema\": 1, \"projects\": [{}]}").is_err());
+    assert!(Index::parse("not json").is_err());
+    // Odd values a mod's author controls never panic the reader.
+    let mut index = with_hnmod();
+    index.projects[0].versions[0].version = String::new();
+    index.projects[0].id = "Ünïcode ✓".into();
+    index.projects[2].versions[0].file.name = String::new();
+    let index = reread(&index);
+    assert!(index.left_out.len() >= 3);
 }
 
 #[test]
