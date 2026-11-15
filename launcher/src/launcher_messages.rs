@@ -230,9 +230,8 @@ impl Launcher {
                 }
                 Msg::NativeProgress(step, progress, module) => {
                     self.native_step = Some(step);
-                    if module.is_some() {
-                        self.native_mod_step = module;
-                    }
+                    // Only while a mod compiles: later steps say the build's own step.
+                    self.native_mod_step = module;
                     self.native_progress = Some(progress);
                 }
                 Msg::Native(result) => {
