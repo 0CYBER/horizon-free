@@ -55,7 +55,7 @@ impl LeftOut {
                 &[("name", &self.id), ("other", other)],
             ),
             Why::Unfit(line) => trf(
-                "{name} is switched off for this build: {why}",
+                "{name} was left out of this build: {why}. It comes back when its author makes a version for this game.",
                 &[("name", &self.id), ("why", line)],
             ),
             Why::DidNotBuild => super::fit::did_not_build(&self.id),
@@ -172,6 +172,9 @@ mod tests {
         for l in left.iter().chain([&did_not_build]) {
             assert_eq!(LeftOut::from_json(&l.to_json()).as_ref(), Some(l));
         }
-        assert_eq!(left[0].label(), "lib is switched off for this build: why");
+        assert_eq!(
+            left[0].label(),
+            "lib was left out of this build: why. It comes back when its author makes a version for this game."
+        );
     }
 }
