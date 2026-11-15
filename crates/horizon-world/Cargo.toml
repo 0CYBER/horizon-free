@@ -27,13 +27,17 @@ rustix = { version = "1", features = ["fs"] }
 cap-std = "3"
 cap-fs-ext = "3"
 
+# The binaries hold no tests (the library does): `cargo test` builds no empty test harness for them, each of which
+# linked the whole crate again. They still build for integration tests (CARGO_BIN_EXE_*) and clippy --all-targets.
 [[bin]]
 name = "horizon-world"
 path = "src/main.rs"
+test = false
 
 [[bin]]
 name = "horizon-worldgen-parity"
 path = "src/bin/worldgen_parity.rs"
+test = false
 
 # Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
 [[example]]

@@ -93,3 +93,19 @@ pub fn block_speed_factor<W: MovementBlockWorld>(
     let lower = below(world, location)?;
     world.speed_factor(lower)
 }
+/// `Player.getBlockSpeedFactor` over `LivingEntity.getBlockSpeedFactor`: a
+/// player flying (`abilities.flying`) or gliding (`isFallFlying`) keeps all
+/// its speed; otherwise the block's factor, lerped to 1.0 by
+/// `movement_efficiency`.
+pub fn player_block_speed_factor<W: MovementBlockWorld>(
+    world: &mut W,
+    location: MovementLocation,
+    flying: bool,
+    efficiency: f32,
+) -> Result<f32, W::Error> {
+    if flying {
+        return Ok(1.0);
+    }
+    let block = block_speed_factor(world, location)?;
+    Ok(block + efficiency * (1.0 - block))
+}

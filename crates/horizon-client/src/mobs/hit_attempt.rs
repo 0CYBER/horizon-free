@@ -27,7 +27,7 @@ impl Mob {
     ) -> bool {
         let bypasses = source.kind.bypasses_invulnerability();
         let reflected = self.reflected_fireball(source);
-        let flagged = self.is_invulnerable() && !bypasses;
+        let flagged = self.is_invulnerable_to(source);
         let digging =
             self.species() == Species::Warden && warden::digging_or_emerging(self) && !bypasses;
         // Ghast's override can short-circuit the base predicate. Its final answer is still

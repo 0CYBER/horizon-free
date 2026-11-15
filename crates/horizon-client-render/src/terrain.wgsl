@@ -38,9 +38,8 @@ struct Globals {
     // HDR output's tier windows (hdr.rs `Hdr::windows`): x..w low to very bright,
     // [0] where the lift starts, [1] where it is full.
     hdr_windows: array<vec4<f32>, 2>,
-    // HDR lighting: x how strongly the sky lights the world now (`Sky::sky_light_factor`),
-    // y what the sky and fog get: the same, but none under water; z 1 with HDR output on.
-    // w: apply the no-pack HDR gain; HDR_WRITE_LIGHT independently keeps float alpha as coverage.
+    // HDR output: z 1 with it on; w: apply the no-pack HDR gain; HDR_WRITE_LIGHT independently
+    // keeps float alpha as coverage. x and y are unused.
     hdr_light: vec4<f32>,
     hdr_settings: vec4<f32>,
     hdr_gains: vec4<f32>,
@@ -212,7 +211,7 @@ struct TerrainOut {
     // How the face shines in HDR output (mesher.rs's `EMISSION_BITS`): 0 not
     // at all, 1 to 4 the tier with its bright parts, 5 to 8 the tier all over.
     emission: u32,
-    // HDR lighting: block and sky light, as levels 0 to 15.
+    // Block and sky light over 16.
     scene: vec2<f32>,
     fade: u32,
     // A distant tile's tile-relative position, for its fade (`faded`).
@@ -623,11 +622,23 @@ fn unorm8x4(c: u32) -> vec4<f32> {
 fn corner_layer(c: ArenaCorner) -> u32 {
     return c.r.y & 0xffffu;
 }
+// A corner's inputs as `TERRAIN_ATTRIBUTES` name them; a shader pack's material and shadow
+// pass read their solid corners through this too (gfx/native_material.rs's `SECTION_CORNER`).
+struct CornerInputs {
+    position: vec3<f32>,
+    uv: vec2<u32>,
+    layer: u32,
+    color: vec4<f32>,
+    light: vec2<u32>,
+}
+fn corner_inputs(c: ArenaCorner) -> CornerInputs {
+    return CornerInputs(bitcast<vec3<f32>>(c.p), vec2(c.r.x & 0xffffu, c.r.x >> 16u),
+        corner_layer(c), unorm8x4(c.r.z), vec2((c.r.y >> 16u) & 0xffu, c.r.y >> 24u));
+}
 fn corner_vertex(c: ArenaCorner, origin: vec4<f32>) -> TerrainOut {
-    let uv = vec2(c.r.x & 0xffffu, c.r.x >> 16u);
-    let light = vec2((c.r.y >> 16u) & 0xffu, c.r.y >> 24u);
-    return terrain_vertex(bitcast<vec3<f32>>(c.p), terrain_uv(uv, origin.w), corner_layer(c),
-        unorm8x4(c.r.z), light, origin.xyz, origin.w);
+    let i = corner_inputs(c);
+    return terrain_vertex(i.position, terrain_uv(i.uv, origin.w), i.layer, i.color, i.light,
+        origin.xyz, origin.w);
 }
 @vertex fn vs_section(@builtin(vertex_index) vertex: u32,
     @location(5) origin: vec4<f32>) -> TerrainWire {
@@ -661,27 +672,6 @@ fn corner_vertex(c: ArenaCorner, origin: vec4<f32>) -> TerrainOut {
     let origin = slot_origins[block_slots[s.slot >> 8u]];
     if opaque_quad(corner_layer(s.c), origin.w) { return to_wire(left_out()); }
     return to_wire(corner_vertex(s.c, origin));
-}
-// HDR lighting: how far a surface's light carries it above paper white, 0 to 1. Only the
-// strongest light does, so dark stays as dark as in SDR; sky light by how the face meets the sun.
-fn hdr_scene(block: f32, sky: f32, facing: f32) -> f32 {
-    let b = smoothstep(11.0, 15.0, block);
-    let s = smoothstep(11.0, 15.0, sky) * globals.hdr_light.x * facing;
-    return max(b, s);
-}
-// The frame's alpha for it, between 1 (none) and the light sources' marks below 0.75.
-fn hdr_scene_alpha(scene: f32) -> f32 {
-    return 1.0 - 0.24 * scene;
-}
-// The face's normal, from the fragment's derivatives, for how it faces the sun.
-var<private> hdr_normal: vec3<f32>;
-// The normal of the face through `dx` and `dy` (the position's screen derivatives): a mirrored
-// world view's x runs the other way, which would turn it round.
-fn screen_normal(dx: vec3<f32>, dy: vec3<f32>) -> vec3<f32> {
-    return normalize(cross(dy, dx)) * select(1.0, -1.0, globals.world_view.x < 0.0);
-}
-fn hdr_facing() -> f32 {
-    return mix(0.45, 1.0, max(dot(hdr_normal, globals.sun.xyz), 0.0));
 }
 fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
     light: vec2<u32>, origin: vec3<f32>, w: f32) -> TerrainOut {
@@ -752,9 +742,6 @@ fn hdr_mark(tier: u32, y: f32) -> f32 {
 // `fs_solid` for the opaque pass (`opaque_quad`): no fade, no cutout, no discard.
 @fragment fn fs_opaque(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
-    if HDR_LIGHTING && globals.hdr_light.z != 0.0 {
-        hdr_normal = screen_normal(dpdx(in.local), dpdy(in.local));
-    }
     let texel = sprite(in.uv, in.layer & 0x7fffu);
     var color = texel * in.color;
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
@@ -770,9 +757,6 @@ fn hdr_mark(tier: u32, y: f32) -> f32 {
 fn solid_color(in: TerrainOut) -> vec4<f32> {
     let dx = dpdx(in.local);
     let dy = dpdy(in.local);
-    if HDR_LIGHTING && globals.hdr_light.z != 0.0 {
-        hdr_normal = screen_normal(dx, dy);
-    }
     if faded(in.fade, in.local, dx, dy) { discard; }
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     let texel = sprite(in.uv, in.layer & 0x7fffu);
@@ -804,29 +788,21 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
     // shines, at which tier (mesher::hdr_tier) and how much (hdr_mark), by the
     // texel's own brightness, so its light level and face shading don't change
     // it. Only pixels as bright as their sprite's threshold may: its bright
-    // parts, or all of it. Nothing else reads the frame's alpha.
-    // Fog turns a far surface into the fog's colour: it takes the fog's light with it, or a
-    // fully fogged mountain would stand out from the fog behind it.
-    // Without HDR output nothing reads the alpha, so its lighting is not worked out.
+    // parts, or all of it; everything else stays unmarked (1). Nothing else reads the frame's
+    // alpha. Without HDR output nothing reads it, so no mark is worked out.
     var emissive = 1.0;
-    if HDR_LIGHTING && globals.hdr_light.z != 0.0 {
-        let fogged = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
-            linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
-        emissive = hdr_scene_alpha(mix(hdr_scene(in.scene.x, in.scene.y, hdr_facing()),
-            globals.hdr_light.y, fogged));
-        if in.emission > 0u {
-            // A light source's own face shines as one or stays as drawn, without the lighting.
-            emissive = 1.0;
-            let whole = in.emission > 4u;
-            let tier = select(in.emission, in.emission - 4u, whole);
-            let l = in.layer & 0x7fffu;
-            let t = textureLoad(emission_thresholds, vec2(i32(l % SPRITE_SPLIT), i32(l / SPRITE_SPLIT)), 0);
-            let y = brightness(texel.rgb);
-            // All over means all over: the sprite's range is one frame's, and an animated sprite's
-            // other frames dip below it. Fog hides a light source as it hides everything else.
-            if whole || y >= t.r {
-                emissive = hdr_mark(tier, y * (1.0 - fogged));
-            }
+    if HDR_LIGHTING && globals.hdr_light.z != 0.0 && in.emission > 0u {
+        let whole = in.emission > 4u;
+        let tier = select(in.emission, in.emission - 4u, whole);
+        let l = in.layer & 0x7fffu;
+        let t = textureLoad(emission_thresholds, vec2(i32(l % SPRITE_SPLIT), i32(l / SPRITE_SPLIT)), 0);
+        let y = brightness(texel.rgb);
+        // All over means all over: the sprite's range is one frame's, and an animated sprite's
+        // other frames dip below it. Fog hides a light source as it hides everything else.
+        if whole || y >= t.r {
+            let fogged = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
+                linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
+            emissive = hdr_mark(tier, y * (1.0 - fogged));
         }
     }
     if in.emissive_layer != 0xffffffffu {
@@ -839,28 +815,20 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
     }
     return apply_fog(vec4(color.rgb, emissive), in.spherical, in.cylindrical);
 }
-// HDR lighting on what's mostly opaque among translucent faces (water), drawn again after
-// them with only alpha written: `fs_translucent` blends its alpha as coverage, so a lake's
-// value would be diluted. Clear glass leaves what's behind it, light sources included, alone.
+// What's mostly opaque among translucent faces (water), drawn again after them with only alpha
+// written: `fs_translucent` blends its alpha as coverage, which would leave a light source's mark
+// behind a lake partly showing. Unmarked, it lifts nothing there. Clear glass leaves what's
+// behind it, light sources included, alone.
 @fragment fn fs_translucent_mark(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
-    let dx = dpdx(in.local);
-    let dy = dpdy(in.local);
-    hdr_normal = screen_normal(dx, dy);
     if sprite(in.uv, in.layer & 0x7fffu).a < 0.6 { discard; }
-    let fogged = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
-        linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
-    let scene = mix(hdr_scene(in.scene.x, in.scene.y, hdr_facing()), globals.hdr_light.y, fogged);
-    return vec4(0.0, 0.0, 0.0, hdr_scene_alpha(scene));
+    return vec4(0.0, 0.0, 0.0, 1.0);
 }
 // Water, glass and other see-through faces draw whole as they fade in, the
 // layer drawn first in front (gfx.rs's water tiers): dithered, the faded-out
 // pixels showed the layer behind through the one in front, twice the water.
 @fragment fn fs_translucent(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
-    if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
-        hdr_normal = screen_normal(dpdx(in.local), dpdy(in.local));
-    }
     let texel = sprite(in.uv, in.layer & 0x7fffu);
     var color = texel * in.color;
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
@@ -868,12 +836,7 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
     let finished = apply_fog(color, in.spherical, in.cylindrical);
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
         // The surface's own light, whatever its texel's alpha: what is behind it is light already.
-        // (The marked frame keeps one mark a pixel, so there `fs_translucent_mark` skips clear
-        // texels to leave what is behind them its own.)
-        let fogged = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
-            linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
-        let mark = hdr_scene_alpha(mix(hdr_scene(in.scene.x, in.scene.y, hdr_facing()), globals.hdr_light.y, fogged));
-        return vec4(hdr_written(finished.rgb, mark, globals.hdr_settings, globals.hdr_gains), finished.a);
+        return vec4(hdr_written(finished.rgb, 1.0, globals.hdr_settings, globals.hdr_gains), finished.a);
     }
     return frame_stored(finished);
 }
@@ -1075,18 +1038,17 @@ fn sky_along_ray_base(d: vec3<f32>) -> vec3<f32> {
     }
     return color;
 }
+// The sky stays at its SDR light, unmarked.
 fn sky_finished(color: vec3<f32>) -> vec4<f32> {
-    let mark = 1.0 - 0.24 * globals.hdr_light.y;
     if HDR_WRITE_LIGHT {
         if globals.hdr_light.w != 0.0 {
-            return vec4(hdr_written(color, mark, globals.hdr_settings, globals.hdr_gains), 1.0);
+            return vec4(hdr_written(color, 1.0, globals.hdr_settings, globals.hdr_gains), 1.0);
         }
         return frame_stored(vec4(color, 1.0));
     }
-    return vec4(color, mark);
+    return vec4(color, 1.0);
 }
 @fragment fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    // `hdr_scene_alpha`, spelled out: this part of the file also goes into shader packs' skies.
     return sky_finished(sky_along_ray(view_ray(in.ndc)));
 }
 @fragment fn fs_sky_base(in: SkyOut) -> @location(0) vec4<f32> {

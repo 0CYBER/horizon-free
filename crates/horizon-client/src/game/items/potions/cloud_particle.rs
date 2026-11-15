@@ -1,7 +1,10 @@
-//! The particle an `AreaEffectCloud` draws from its saved `custom_particle`.
+//! The particle an `AreaEffectCloud` draws from its saved `custom_particle`,
+//! decoded by the type's own codec (`ParticleTypes.CODEC`); `/particle`
+//! decodes its options with the same function.
 
 use horizon_client::particles::{ParticleOptions, ParticleType};
-use horizon_core::nbt::Tag;
+use horizon_core::nbt::{Compound, Tag};
+use mod_api::client::particles::PositionSource;
 
 /// A number tag as a float.
 fn tag_f32(tag: &Tag) -> Option<f32> {
@@ -53,9 +56,20 @@ fn tag_rgb(tag: Option<&Tag>) -> Option<[f32; 3]> {
     let [r, g, b, _] = tag_color(tag, 3)?;
     Some([r, g, b])
 }
-/// The particle a saved `custom_particle` names (`ParticleTypes.CODEC`), for
-/// the types that need no world data. A type that carries a block, an item or a
-/// position, or one that does not decode, gives `None`.
+/// `BlockPos.CODEC` (`Codec.INT_STREAM`, three ints).
+fn tag_block_pos(tag: Option<&Tag>) -> Option<[i32; 3]> {
+    match tag? {
+        Tag::List(l) if l.len() == 3 => {
+            let mut pos = [0; 3];
+            for (slot, value) in pos.iter_mut().zip(l) {
+                *slot = tag_i32(value)?;
+            }
+            Some(pos)
+        }
+        _ => None,
+    }
+}
+/// The particle a saved `custom_particle` names (`ParticleTypes.CODEC`).
 pub(super) fn custom_particle_options(tag: &Tag) -> Option<ParticleOptions> {
     let Tag::Compound(map) = tag else {
         return None;
@@ -63,7 +77,15 @@ pub(super) fn custom_particle_options(tag: &Tag) -> Option<ParticleOptions> {
     let Some(Tag::String(name)) = map.get(&"type".into()) else {
         return None;
     };
-    let ty = ParticleType::from_name(&name.to_string_lossy())?;
+    particle_options(ParticleType::from_name(&name.to_string_lossy())?, map)
+}
+/// `ParticleTypes.CODEC`'s payload for `ty`: the type's own options codec. A
+/// type that carries a block or an item, or one that does not decode, gives
+/// `None`.
+pub(in crate::game) fn particle_options(
+    ty: ParticleType,
+    map: &Compound,
+) -> Option<ParticleOptions> {
     let field = |key: &str| map.get(&key.into());
     let float = |key: &str, default: f32| field(key).and_then(tag_f32).unwrap_or(default);
     // ScalableParticleOptionsBase.SCALE: required, within [0.01, 4].
@@ -79,12 +101,20 @@ pub(super) fn custom_particle_options(tag: &Tag) -> Option<ParticleOptions> {
         | ParticleType::FallingDust
         | ParticleType::DustPillar
         | ParticleType::Item
-        | ParticleType::Vibration
-        | ParticleType::Trail
-        | ParticleType::Geyser
-        | ParticleType::GeyserPlume
-        | ParticleType::GeyserBase
-        | ParticleType::GeyserPoof => return None,
+        // TrailParticleOption's `target` is a literal point, but a LAN host
+        // sends no trail (`lan_particles::hub_particle`), so drawing it here
+        // would draw it for the host only.
+        | ParticleType::Trail => return None,
+        // GeyserParticleOptions / GeyserBaseParticleOptions: `water_blocks` is
+        // a positive int, `burst_impulse_base` a float.
+        ParticleType::Geyser | ParticleType::GeyserPlume => {
+            ParticleOptions::geyser(ty, tag_i32(field("water_blocks")?)?)
+        }
+        ParticleType::GeyserBase | ParticleType::GeyserPoof => ParticleOptions::geyser_base(
+            ty,
+            tag_i32(field("water_blocks")?)?,
+            field("burst_impulse_base").and_then(tag_f32)?,
+        ),
         // DustParticleOptions: color and scale, both required.
         ParticleType::Dust => ParticleOptions::dust(tag_rgb(field("color"))?, scale()?),
         ParticleType::DustColorTransition => ParticleOptions::dust_transition(
@@ -93,7 +123,7 @@ pub(super) fn custom_particle_options(tag: &Tag) -> Option<ParticleOptions> {
             scale()?,
         ),
         // ColorParticleOption: a required ARGB colour.
-        ParticleType::EntityEffect | ParticleType::TintedLeaves => {
+        ParticleType::EntityEffect | ParticleType::TintedLeaves | ParticleType::Flash => {
             ParticleOptions::colored(ty, tag_color(field("color"), 4)?)
         }
         // SpellParticleOption: color (default -1, white) and power.
@@ -117,6 +147,26 @@ pub(super) fn custom_particle_options(tag: &Tag) -> Option<ParticleOptions> {
             ParticleOptions::sculk_charge(field("roll").and_then(tag_f32)?)
         }
         ParticleType::Shriek => ParticleOptions::shriek(field("delay").and_then(tag_i32)?),
+        // VibrationParticleOption: `destination` and `arrival_in_ticks`.
+        // `SAFE_POSITION_SOURCE_CODEC` allows a block position source only,
+        // whose centre is the point the signal flies to.
+        ParticleType::Vibration => {
+            let Tag::Compound(dest) = field("destination")? else {
+                return None;
+            };
+            let Some(Tag::String(kind)) = dest.get(&"type".into()) else {
+                return None;
+            };
+            if kind.to_string_lossy() != "minecraft:block" {
+                return None;
+            }
+            let pos = tag_block_pos(dest.get(&"pos".into()))?;
+            ParticleOptions::vibration(
+                PositionSource::Block(pos),
+                pos.map(|c| f64::from(c) + 0.5),
+                tag_i32(field("arrival_in_ticks")?)?,
+            )
+        }
         _ => ParticleOptions::simple(ty),
     })
 }

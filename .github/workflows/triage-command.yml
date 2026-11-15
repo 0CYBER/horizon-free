@@ -34,6 +34,7 @@ jobs:
           ref: main
           persist-credentials: false
           sparse-checkout: |
+            .github/council.txt
             .github/trusted-reviewers.txt
             tools/ci/nightly_set.py
             tools/ci/triage_command.py

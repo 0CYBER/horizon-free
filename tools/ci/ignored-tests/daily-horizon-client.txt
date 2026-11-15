@@ -45,7 +45,10 @@ horizon-client game::maps::tests::map_on_banner_in_adventure_mode_honours_can_pl
 horizon-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_refuses_each_content_mod_row lib daily child-process
 horizon-client game::mods::tests::content_overlay_validates_dependencies_and_orders_layers lib daily child-process
 horizon-client game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection lib daily child-process
+horizon-client game::mounts::tests::a_camel_husk_keeps_itself_once_clicked lib daily game-boot
+horizon-client game::mounts::tests::a_chest_on_a_donkey_or_mule_plays_its_own_sound_at_full_volume lib daily game-boot
 horizon-client game::mounts::tests::feeding_a_mount_draws_from_its_own_random_and_posts_eat lib daily game-boot
+horizon-client game::mounts::tests::saddling_and_armouring_play_at_pitch_one_from_the_mounts_own_random lib daily game-boot
 horizon-client game::native_block_entity_transform_tests::structure_transform_placement_rotations_mirrors_unset_and_refusal lib daily child-process
 horizon-client game::native_chat_recipients_tests::a_chat_line_hidden_from_one_receiver_reaches_the_others lib daily resources
 horizon-client game::native_chat_recipients_tests::say_and_me_are_asked_per_receiver_and_a_whisper_is_not lib daily resources
@@ -214,4 +217,7 @@ horizon-client game::transaction_entities_tests::outside_a_transaction_joins_and
 horizon-client game::viewed_worlds::switch::tests::a_level_opened_after_login_is_forgotten_once_left lib daily resources
 horizon-client game::visibility_unwind_tests::visibility_listener_unwind_does_not_block_an_outside_save lib daily child-process
 horizon-client game::wake_time::tests::a_later_listener_reads_and_replaces_the_earlier_adjustment lib daily resources
+horizon-client game::wind::wind_charged_tests::a_mobs_burst_leaves_vehicles_alone_with_mob_griefing_off lib daily game-boot
+horizon-client game::wind::wind_charged_tests::a_silent_wind_charge_bursts_without_a_sound lib daily game-boot
+horizon-client game::wind::wind_charged_tests::a_wind_charged_mob_bursts_with_the_breezes_sound_unless_it_is_silent lib daily game-boot
 horizon-client game::wither_star_tests::a_withers_nether_star_lives_12000_ticks lib daily game-boot

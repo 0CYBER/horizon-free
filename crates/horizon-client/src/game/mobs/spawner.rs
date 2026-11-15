@@ -157,8 +157,8 @@ impl Game<'_> {
                 pos: mod_api::BlockPos::new(key.0, key.1, key.2),
             });
             let mut spawn = |l: &super::natural_spawning::GameLevel,
-                             r: &SpawnerSpawn,
-                             rng: &mut LevelRandom| {
+                             rng: &mut LevelRandom,
+                             r: &SpawnerSpawn| {
                 l.game.plan_spawner_mob(l, r, source, &mut planned, rng)
             };
             spawner.server_tick(&level, &mut random, pos, &mut spawn, &mut events);

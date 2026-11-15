@@ -84,13 +84,17 @@ test-support = []
 # The `scene_replay` example's allocator counts allocations (horizon-threads' `alloc-count`).
 alloc-count = ["horizon-threads/alloc-count"]
 
-# horizon-client's `horizon-extras`: asking the device for hardware ray tracing on request
-# (`gfx/ray_query.rs`, `HORIZON_RAY_TRACING=1`). Without it the device is requested as without
-# the variable.
-horizon-extras = []
-
 [lints]
 workspace = true
+
+# Each installs the process-wide render slots and must run in its own process.
+[[test]]
+name = "render_slots"
+path = "tests/render_slots.rs"
+
+[[test]]
+name = "world_view_slots"
+path = "tests/world_view_slots.rs"
 
 [dev-dependencies]
 tempfile = "3"

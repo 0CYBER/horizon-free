@@ -7,7 +7,7 @@
 use super::{Game, shield::OFFHAND_SLOT, view_vector};
 use horizon_client::{
     enchant::EffectContext,
-    items::ItemStack,
+    items::{ItemStack, Items},
     mobs::Who,
     projectiles::{Projectile, ProjectileKind},
 };
@@ -24,30 +24,30 @@ pub(super) struct Ammo {
     pub(super) slot: Option<usize>,
 }
 
-/// `ProjectileWeaponItem.ARROW_ONLY`, for the arrows Horizon shoots.
-fn is_arrow(stack: &ItemStack) -> bool {
-    matches!(
-        &*stack.item,
-        "minecraft:arrow" | "minecraft:spectral_arrow" | "minecraft:tipped_arrow"
-    )
+/// `ProjectileWeaponItem.ARROW_ONLY`: `stack.is(ItemTags.ARROWS)`, the loaded
+/// `#minecraft:arrows` tag (a data pack may add its own item to it).
+fn is_arrow(items: &Items, stack: &ItemStack) -> bool {
+    items.item_in_tag("minecraft:arrows", &stack.item)
 }
 
 /// `Player.getProjectile`: what `weapon` supports in the off hand, then in
 /// the main hand (`getHeldProjectile`; crossbows also take firework rockets
 /// there), else the first arrows in the inventory. The slot of the stack.
-fn projectile_slot(
+pub(super) fn projectile_slot(
     weapon: &str,
     hands: [(usize, Option<&ItemStack>); 2],
     inventory: &[Option<ItemStack>],
+    items: &Items,
 ) -> Option<usize> {
-    let held = |s: &ItemStack| is_arrow(s) || weapon == CROSSBOW && &*s.item == FIREWORK_ROCKET;
+    let held =
+        |s: &ItemStack| is_arrow(items, s) || weapon == CROSSBOW && &*s.item == FIREWORK_ROCKET;
     hands
         .into_iter()
         .find_map(|(slot, s)| s.is_some_and(held).then_some(slot))
         .or_else(|| {
             inventory
                 .iter()
-                .position(|s| s.as_ref().is_some_and(is_arrow))
+                .position(|s| s.as_ref().is_some_and(|s| is_arrow(items, s)))
         })
 }
 
@@ -107,7 +107,7 @@ impl Game<'_> {
     /// `Player.getProjectile` for `weapon` (`projectile_slot`).
     pub(super) fn projectile_slot(&self, weapon: &str) -> Option<usize> {
         let hands = [OFFHAND_SLOT, self.selected].map(|slot| (slot, self.stack_in(slot)));
-        projectile_slot(weapon, hands, &self.inventory)
+        projectile_slot(weapon, hands, &self.inventory, world_items!(self))
     }
     /// `Player.getProjectile` for `weapon`, as `LivingGetProjectileEvent` leaves
     /// it: a creative player without arrows has `hasInfiniteMaterials`' arrow.
@@ -152,19 +152,26 @@ impl Game<'_> {
             return;
         };
         let kind = shooter.kind.id.clone();
-        let vanilla = Self::mob_vanilla_ammo(&shooter.extra, weapon);
+        let vanilla = Self::mob_vanilla_ammo(&shooter.extra, weapon, world_items!(self));
         let mut projectile = Some(vanilla.clone());
         self.native_living_get_projectile(None, "", Some(mob), &kind, weapon, &mut projectile);
-        let Some(ammo) = projectile.filter(|ammo| *ammo != vanilla && is_arrow(ammo)) else {
+        let Some(ammo) =
+            projectile.filter(|ammo| *ammo != vanilla && is_arrow(world_items!(self), ammo))
+        else {
             return;
         };
         Self::arrow_from_ammo(&ammo, arrow);
     }
     /// `Monster.getProjectile`: the projectile `weapon` supports in the off
     /// hand, then the main hand (`getHeldProjectile`), else a new arrow.
-    fn mob_vanilla_ammo(extra: &horizon_client::mobs::Extra, weapon: &ItemStack) -> ItemStack {
-        let supported =
-            |s: &ItemStack| is_arrow(s) || &*weapon.item == CROSSBOW && &*s.item == FIREWORK_ROCKET;
+    fn mob_vanilla_ammo(
+        extra: &horizon_client::mobs::Extra,
+        weapon: &ItemStack,
+        items: &Items,
+    ) -> ItemStack {
+        let supported = |s: &ItemStack| {
+            is_arrow(items, s) || &*weapon.item == CROSSBOW && &*s.item == FIREWORK_ROCKET
+        };
         extra
             .slot_stack(horizon_items::equipment::OFFHAND)
             .cloned()
@@ -198,10 +205,15 @@ impl Game<'_> {
             return false;
         };
         let kind = shooter.kind.id.clone();
-        let mut projectile = Some(Self::mob_vanilla_ammo(&shooter.extra, weapon));
+        let mut projectile = Some(Self::mob_vanilla_ammo(
+            &shooter.extra,
+            weapon,
+            world_items!(self),
+        ));
         self.native_living_get_projectile(None, "", Some(mob), &kind, weapon, &mut projectile);
         // A crossbow takes arrows and firework rockets only.
-        let projectile = projectile.filter(|ammo| is_arrow(ammo) || &*ammo.item == FIREWORK_ROCKET);
+        let projectile = projectile
+            .filter(|ammo| is_arrow(world_items!(self), ammo) || &*ammo.item == FIREWORK_ROCKET);
         let Some(shooter) = self.mobs.iter_mut().find(|m| m.id == mob) else {
             return false;
         };
@@ -570,6 +582,18 @@ mod tests {
     #[test]
     fn held_projectiles_come_before_the_inventory() {
         let stack = |item: &str| Some(ItemStack::new(item, 1));
+        // The vanilla `#minecraft:arrows` the ammo rules ask for.
+        let items = Items::for_tests(std::collections::HashMap::from([(
+            "minecraft:arrows".to_owned(),
+            [
+                "minecraft:arrow",
+                "minecraft:spectral_arrow",
+                "minecraft:tipped_arrow",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        )]));
         let (crossbow, rocket, arrow) = (
             stack(CROSSBOW),
             stack(FIREWORK_ROCKET),
@@ -580,7 +604,7 @@ mod tests {
         // The weapon in hotbar slot 0, `off` in the off hand.
         let slot = |weapon, off: &Option<ItemStack>, inventory: &[Option<ItemStack>]| {
             let hands = [(OFFHAND_SLOT, off.as_ref()), (0, crossbow.as_ref())];
-            projectile_slot(weapon, hands, inventory)
+            projectile_slot(weapon, hands, inventory, &items)
         };
         // The off hand's rocket loads a crossbow; a bow only takes arrows.
         assert_eq!(slot(CROSSBOW, &rocket, &inventory), Some(OFFHAND_SLOT));
@@ -595,7 +619,10 @@ mod tests {
         assert_eq!(slot(CROSSBOW, &None, &inventory), None);
         // The main hand's rocket, with the crossbow in the off hand.
         let hands = [(OFFHAND_SLOT, crossbow.as_ref()), (3, rocket.as_ref())];
-        assert_eq!(projectile_slot(CROSSBOW, hands, &inventory), Some(3));
+        assert_eq!(
+            projectile_slot(CROSSBOW, hands, &inventory, &items),
+            Some(3)
+        );
 
         // Spectral and tipped arrows in off hand or inventory are recognized.
         let spectral = stack("minecraft:spectral_arrow");

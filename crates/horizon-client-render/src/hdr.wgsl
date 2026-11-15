@@ -20,10 +20,6 @@ struct Params {
     black: f32,
     // The HUD and menus' brightness as a share of paper white.
     ui: f32,
-    // The compatibility frame's lift (`lit`; the float frame's writers have theirs from
-    // Hdr::draw_params). HDR lighting: what the strongest light multiplies a surface by, 1 for
-    // none.
-    scene: f32,
     // Per tier, low to very bright (hdr.rs `COMPAT_SHARES`): the share of the headroom
     // its fully lifted pixels get.
     share: vec4<f32>,
@@ -34,6 +30,9 @@ struct Params {
     // The scene's peak in units of paper white where Horizon lifts the world (hdr.rs
     // `SCENE_PEAK`), else 0: what the tone curve maps onto the display's peak (`tone_scale`).
     scene_peak: f32,
+    // The sun's disc's white in units of paper white (hdr.rs `sun_peak`): the scene's peak, and
+    // on a display above it the display's, up to `SUN_CAP`. Light past it is held at it.
+    sun_peak: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 // Horizon's logo, 1 inside, 0 outside, for calibration's test pictures.
@@ -84,6 +83,13 @@ const BT709_TO_BT2020 = mat3x3<f32>(
     vec3(0.0433, 0.0114, 0.8956),
 );
 
+// Its inverse, for scRGB's black level lift.
+const BT2020_TO_BT709 = mat3x3<f32>(
+    vec3(1.66051121, -0.12456141, -0.01816769),
+    vec3(-0.58771059, 1.13296051, -0.1005606),
+    vec3(-0.07280062, -0.00839911, 1.11872828),
+);
+
 // SMPTE ST 2084: nits (up to 10000) to the PQ signal.
 fn pq(nits: vec3<f32>) -> vec3<f32> {
     let y = pow(clamp(nits / 10000.0, vec3(0.0), vec3(1.0)), vec3(0.1593017578125));
@@ -100,7 +106,9 @@ fn pq_nits(e: vec3<f32>) -> vec3<f32> {
 // ITU-R BT.2390's black level lift (its EETF without the knee) on the PQ signal
 // `e`: black moves up to the display's black level, the peak stays, and the lift
 // fades out by the fourth power on the way up, so only the shadows move. A display
-// that can't go darker than its black level would crush everything below it.
+// that can't go darker than its black level would crush everything below it. Both
+// outputs lift each of BT.2020's channels, as HDR10 carries them: black rises to the
+// display's neutral floor, and a shadow shows the same light in HDR10 and scRGB.
 fn lift_black(e: vec3<f32>) -> vec3<f32> {
     let top = pq(vec3(params.peak * params.paper * 80.0)).x;
     let n = min(e / top, vec3(1.0));
@@ -160,7 +168,7 @@ fn calibration_nits(p: vec2<f32>, size: vec2<f32>) -> f32 {
 }
 
 fn lit(f: vec3<f32>, a: f32, shows: bool, eased: bool) -> Lit {
-    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, params.scene, params.world, params.debug), (params.peak - 1.0) * params.share);
+    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, 0.0, params.world, params.debug), (params.peak - 1.0) * params.share);
 }
 
 // Calibration: above its controls the test picture, straight in nits, past
@@ -226,7 +234,8 @@ fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
         return vec4(lifted, 1.0);
     }
     if params.black > 0.0 {
-        return vec4(pq_nits(lift_black(pq(scrgb * 80.0))) / 80.0, 1.0);
+        let lifted = pq_nits(lift_black(pq(BT709_TO_BT2020 * scrgb * 80.0)));
+        return vec4(BT2020_TO_BT709 * lifted / 80.0, 1.0);
     }
     return vec4(scrgb, 1.0);
 }
@@ -271,17 +280,20 @@ fn tone_knee(headroom: f32) -> f32 {
 //
 // The source is the scene's peak S where Horizon lifts the world (`scene_peak`, hdr.rs
 // `SCENE_PEAK`): the world's light is the same on every display, light past S is held at S, and
-// where T reaches S that is all, so a display above S shows the world as one at S. Where the
+// where T reaches S that is all, so a display above S shows the world as one at S. The sun's disc
+// is the exception: where T passes S it alone is written past S, up to `sun_peak` (T, capped), so
+// there the hold is at `sun_peak` and everything up to it shows as written; up to T = S
+// `sun_peak` is S. Where the
 // scene's range is unknown (`scene_peak` 0: a 0.2 pack's own light, HDR Lighting off), the
 // source follows the display, as the 0.2 contract has it: the peak that puts the EETF's knee at
 // `tone_knee`, PQ's 10 000 nits at most.
-fn tone_scale(top: f32, scene_peak: f32, headroom: f32, paper: f32) -> f32 {
+fn tone_scale(top: f32, scene_peak: f32, sun_peak: f32, headroom: f32, paper: f32) -> f32 {
     let peak = pq(vec3(headroom * paper)).x;
     var source: f32;
     var e: f32;
     var held = 1.0;
     if scene_peak > 0.0 {
-        held = min(1.0, scene_peak / max(top, 1e-6));
+        held = min(1.0, sun_peak / max(top, 1e-6));
         if scene_peak <= headroom {
             return held;
         }
@@ -320,7 +332,7 @@ fn tone_scale(top: f32, scene_peak: f32, headroom: f32, paper: f32) -> f32 {
         return vec4(min(g, vec3(1.0)), 1.0);
     }
     let top = pow(max(max(g.r, max(g.g, g.b)), 0.0), 2.2);
-    let s = tone_scale(top, params.scene_peak, params.peak, params.paper * 80.0);
+    let s = tone_scale(top, params.scene_peak, params.sun_peak, params.peak, params.paper * 80.0);
     return vec4(select(g * pow(s, 1.0 / 2.2), g, s == 1.0), 1.0);
 }
 

@@ -1,0 +1,20 @@
+schema = 1
+id = "frame_identity_terrain"
+name = "Frame identity: terrain"
+version = "1.0.0"
+api = "0.2"
+description = "A test fixture of the frame identity harness: a material stage, a shadow map and displacement. Not a look."
+authors = ["Horizon"]
+license = "MIT"
+
+[material]
+file = "material.wgsl"
+name = "Terrain"
+
+[shadow]
+resolution = 2048
+distance = 64.0
+
+[displacement]
+distance = 12.0
+cells = 16

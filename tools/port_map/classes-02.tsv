@@ -22,8 +22,8 @@ BlockTransformers.axe	skip:data		axe rules are built in code; Horizon loads bloc
 BlockTransformers.axeStrippables	skip:data		stripping table is data; Horizon loads it from block_transform.rs
 BlockTransformers.bootstrap	skip:data		registry bootstrap; transforms are read from data
 CustomData.equals	skip:java
-CustomData.set	inline	crates/horizon-client/src/game/administration/commands/items.rs::edit_components	gap: minor: does not remove the component when the tag ends up empty
-CustomData.update	inline	crates/horizon-client/src/game/administration/commands/items.rs::edit_components	gap: minor: does not remove the component when the tag ends up empty
+CustomData.set	inline	crates/horizon-client/src/game/administration/commands/items.rs::set_custom_data	gap: minor: nothing in commands/items.rs replaces the whole tag; the one custom_data edit, set_custom_data, is the update case and removes the component when the result is empty
+CustomData.update	inline	crates/horizon-client/src/game/administration/commands/items.rs::set_custom_data	SetCustomDataFunction.run: merges the tag into the stack's custom_data and removes the component when the result is empty, as vanilla does
 CustomModelData.getSafe	port	crates/horizon-assets/src/item_model.rs::custom_data_at	index bounds check for flags, floats, strings and colors
 DeathProtection.applyEffects	port	crates/horizon-client/src/game/items/totem.rs::Game::apply_totem	totem use: clears effects, then the totem's regeneration, absorption and fire resistance
 GrowableMutableContainer.replaceSlotItems	inline	crates/horizon-items/src/bundle.rs::Contents::try_insert	gap: minor: the loop that adds slots while items remain is not ported; bundles insert one stack at a time

@@ -30,6 +30,8 @@ fn holder(t: &Tag, reg: &Registries) -> Result<(), String> {
     }
     decode(t, reg)
 }
+/// `RegistryCodecs.holderSet` (HolderSetCodec, forceList false): a `#tag`, or
+/// `ExtraCodecs.compactListCodec` of holders, a single one or a list.
 fn holder_set(t: &Tag, reg: &Registries) -> Result<(), String> {
     if as_string(t).is_some_and(|s| s.starts_with('#')) {
         return tag(t, reg);
@@ -40,7 +42,25 @@ fn holder_set(t: &Tag, reg: &Registries) -> Result<(), String> {
         }
         return Ok(());
     }
-    typed(t, reg)
+    holder(t, reg)
+}
+/// `ExtraCodecs.POSITIVE_INT`: `Codec.INT` takes any numeric tag's
+/// `Number.intValue()`, then `intRangeWithMessage(1, MAX_VALUE, ...)`.
+fn positive_int(t: &Tag) -> Result<(), String> {
+    let value = match *t {
+        Tag::Byte(v) => i32::from(v),
+        Tag::Short(v) => i32::from(v),
+        Tag::Int(v) => v,
+        Tag::Long(v) => v as i32,
+        // Java's (int) cast saturates, and NaN becomes 0, as `as` does.
+        Tag::Float(bits) => f32::from_bits(bits) as i32,
+        Tag::Double(bits) => f64::from_bits(bits) as i32,
+        _ => return Err("Not a number".into()),
+    };
+    if value < 1 {
+        return Err(format!("Value must be positive: {value}"));
+    }
+    Ok(())
 }
 fn typed(t: &Tag, reg: &Registries) -> Result<(), String> {
     dispatch(t, reg, "minecraft:slot_source_type", &|id, map, t| {
@@ -96,6 +116,7 @@ fn typed(t: &Tag, reg: &Registries) -> Result<(), String> {
             }
             "minecraft:limit_slots" => {
                 require(map, t, &["limit"])?;
+                positive_int(get(map, "limit").unwrap())?;
             }
             "minecraft:filtered" => {
                 require(map, t, &["item_filter"])?;
@@ -116,8 +137,14 @@ fn typed(t: &Tag, reg: &Registries) -> Result<(), String> {
     })
 }
 pub(super) fn decode(t: &Tag, reg: &Registries) -> Result<(), String> {
-    if as_string(t).is_some_and(|s| s.starts_with('#')) {
-        return tag(t, reg);
+    // SlotSources.CODEC is `RegistryCodecs.holder`: a quoted id is a
+    // registry reference, as an unquoted one is (`resource_or_id`).
+    if let Some(name) = as_string(t) {
+        return if name.starts_with('#') {
+            tag(t, reg)
+        } else {
+            holder(t, reg)
+        };
     }
     if let Tag::List(values) = t {
         for value in values {
@@ -147,6 +174,12 @@ mod tests {
             r#"{type:"limit_slots",limit:1L,slot_source:"complete:one"}"#,
             r##"{type:"group",terms:"#complete:selection"}"##,
             r#"{type:"slot_range",source:"this",slots:"weapon.mainhand"}"#,
+            // A quoted single holder, at the top and as a group's terms.
+            r#""complete:one""#,
+            r#"{type:"group",terms:"complete:one"}"#,
+            // Codec.INT reads any numeric tag's intValue.
+            r#"{type:"limit_slots",limit:1b,slot_source:"complete:one"}"#,
+            r#"{type:"limit_slots",limit:2.5d,slot_source:"complete:one"}"#,
         ] {
             let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
             assert!(decode(&tag, &reg).is_ok(), "{input}");
@@ -155,9 +188,36 @@ mod tests {
             r#"["complete:missing"]"#,
             r##""#complete:missing""##,
             r#"{type:"slot_range",source:"not_a_context",slots:"container.*"}"#,
+            r#"{type:"group",terms:"complete:missing"}"#,
+            r#""complete:missing""#,
         ] {
             let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
             assert!(decode(&tag, &reg).is_err(), "{input}");
+        }
+        // NbtOps.getNumberValue's and ExtraCodecs.POSITIVE_INT's errors (26.3 bytecode).
+        for (input, error) in [
+            (
+                r#"{type:"limit_slots",limit:"x",slot_source:"complete:one"}"#,
+                "Not a number",
+            ),
+            (
+                r#"{type:"limit_slots",limit:0,slot_source:"complete:one"}"#,
+                "Value must be positive: 0",
+            ),
+            (
+                r#"{type:"limit_slots",limit:-3,slot_source:"complete:one"}"#,
+                "Value must be positive: -3",
+            ),
+            (
+                r#"{type:"limit_slots",limit:0.5d,slot_source:"complete:one"}"#,
+                "Value must be positive: 0",
+            ),
+        ] {
+            // The top level wraps them in element_or_list's either error; only
+            // the inner message is checked against the bytecode.
+            let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
+            let actual = decode(&tag, &reg).unwrap_err();
+            assert!(actual.contains(error), "{input}: {actual}");
         }
     }
 }

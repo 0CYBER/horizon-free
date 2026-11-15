@@ -422,6 +422,14 @@ impl World {
     pub fn below_world_y(&self) -> f64 {
         f64::from(self.shape.min_y - 64)
     }
+    /// The biome table index of the noise cell at a block (`ChunkAccess.getNoiseBiome`): a
+    /// cell above or below the level reads its top or bottom cells, not the cells the chunks'
+    /// widened column holds there (vanilla's Nether and End save none, and read back they
+    /// hold the table's first biome). `None` where the chunk isn't loaded.
+    pub fn noise_biome(&self, x: i32, y: i32, z: i32) -> Option<u16> {
+        let y = y.clamp(self.shape.min_y, self.shape.max_y() - 1);
+        Some(self.chunks.get(&(x >> 4, z >> 4))?.biome(x, y, z))
+    }
     /// One above the highest block Y the level's chunks hold.
     pub fn top_y(&self) -> i32 {
         self.layout().max_y()
@@ -915,6 +923,47 @@ mod tests {
                 assert_eq!(world.dirty_sections.len(), 8);
             }
         }
+    }
+
+    /// `ChunkAccess.getNoiseBiome` clamps the cell to the level. An End chunk read back from a
+    /// save holds the table's first biome in the sections its widened column adds below Y 0
+    /// and above 255, which a read there must not reach.
+    #[test]
+    fn noise_biome_reads_stay_inside_the_level() {
+        use crate::chunk::LevelShape;
+        let mut world = World::new(BlockStateId(0), 0);
+        world.shape = LevelShape::END;
+        // The column runs -64..320: quart rows 16..80 are the level's 0..256.
+        let mut chunk = Chunk::with_layout(0, 0, LevelShape::END.column());
+        for qy in 16..80 {
+            let biome = match qy {
+                16 => 5,
+                79 => 6,
+                _ => 7,
+            };
+            for qz in 0..4 {
+                for qx in 0..4 {
+                    chunk.set_biome_cell(qx, qy, qz, biome);
+                }
+            }
+        }
+        world.chunks.insert((0, 0), Arc::new(chunk));
+        for (y, biome) in [
+            (-64, 5),
+            (-4, 5),
+            (-1, 5),
+            (0, 5),
+            (3, 5),
+            (4, 7),
+            (251, 7),
+            (252, 6),
+            (255, 6),
+            (256, 6),
+            (319, 6),
+        ] {
+            assert_eq!(world.noise_biome(9, y, 9), Some(biome), "y {y}");
+        }
+        assert_eq!(world.noise_biome(16, 0, 0), None);
     }
 
     /// A box misses a state only where no section it reaches lists it, and

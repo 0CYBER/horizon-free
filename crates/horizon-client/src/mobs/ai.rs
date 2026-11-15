@@ -372,6 +372,9 @@ mod fall_flying_tests;
 mod glide;
 use glide::update_fall_flying;
 #[cfg(test)]
+#[path = "cramming_tests.rs"]
+mod cramming_tests;
+#[cfg(test)]
 #[path = "wet_fire_tests.rs"]
 mod wet_fire_tests;
 
@@ -966,10 +969,6 @@ fn generic(m: &mut Mob) {
         g.add(5, Stroll::avoiding_water(1.0));
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
-        if m.kind.species == Species::Armadillo {
-            // Armadillo's constructor: pickNextScuteDropTime.
-            m.extra.egg_time = next_scute_time(m);
-        }
     }
 }
 /// Subclasses of `net.minecraft.world.entity.monster.Monster`.
@@ -2456,13 +2455,15 @@ fn hurt_teleports(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 impl Mob {
     /// LivingEntity.isPushable (and the push it takes from `Entity.push(Entity)`):
     /// bats and shulkers are never moved by others, nor is a mob on a climbable
-    /// block (`onClimbable`, cached by the last tick).
+    /// block (`onClimbable`, cached by the last tick), nor a ridden horse
+    /// (`AbstractHorse.isPushable` is `!isVehicle`).
     pub fn pushable(&self) -> bool {
         self.alive()
             && !matches!(self.species(), Species::Bat | Species::Shulker)
             && !self.on_climbable
             && (self.species() != Species::Creaking || super::creaking::can_move(self))
             && (self.species() != Species::Warden || !super::warden::digging_or_emerging(self))
+            && !(super::equine::is_equine(self.species()) && super::equine::is_vehicle(self))
     }
 }
 /// LivingEntity.onClimbable for the pusher (Spider.onClimbable: climbing a wall).
@@ -2493,15 +2494,9 @@ fn push_entities(
         return;
     }
     let bounds = m.bounds();
-    // The pusher's own isPushable, checked by `e.push(this)` before moving it.
-    let self_pushable = m.alive()
-        && m.species() != Species::Shulker
-        && !m.on_climbable
-        && (m.species() != Species::Creaking || super::creaking::can_move(m))
-        && (m.species() != Species::Warden || !super::warden::digging_or_emerging(m))
-        && !super::equine::is_vehicle(m);
-    // Each with whether it rides a vehicle (`Entity.isPassenger`) and
-    // whether it shares this one's root vehicle (`isPassengerOfSameVehicle`).
+    // The pusher's own isPushable and isVehicle, checked by `e.push(this)`.
+    let self_pushable = m.pushable() && !super::equine::is_vehicle(m);
+    // Each passenger with whether it shares this one's root vehicle.
     let mut targets = super::world::take_push_targets();
     if let Some(p) = w.selected_player()
         // Entity.push: passengers of the same vehicle never push each other.
@@ -2946,7 +2941,7 @@ pub(super) fn server_ai_step(
     m.jump_control_tick();
 }
 /// `Armadillo.pickNextScuteDropTime`: 5 to 10 minutes.
-pub(crate) fn next_scute_time(m: &mut Mob) -> i32 {
+pub(super) fn next_scute_time(m: &mut Mob) -> i32 {
     m.random.next_int_bound(20 * 60 * 5).unwrap_or(0) + 20 * 60 * 5
 }
 /// `Armadillo.customServerAiStep`: the scute timer keeps counting down and is
@@ -3732,49 +3727,46 @@ pub fn custom_travel(
 /// `Entity.applyEffectsFromBlocks` for the flowers that give an effect:
 /// `WitherRoseBlock.entityInside` (wither for 40 ticks on a living mob that
 /// can take it, not in peaceful) and `EyeblossomBlock.entityInside` (poison
-/// for 25 ticks on a bee, when the open flower attracts bees). The blocks
-/// are those the mob's box touches where it started the tick and where it
-/// ended.
+/// for 25 ticks on a bee, when the open flower attracts bees). The blocks are
+/// the ones the mob's box passes through along this tick's move, as
+/// `Entity.checkInsideBlocks` sweeps it, so a mob falling past a flower is
+/// inside it on the way.
 fn flower_contact_effects(m: &mut Mob, w: &MobWorld) {
     if !m.alive() {
         return;
     }
-    let half = f64::from(m.width()) / 2.0 - 1.0e-5;
-    let height = f64::from(m.height()) - 1.0e-5;
-    let mut visited: Vec<[i32; 3]> = Vec::new();
-    for at in [m.previous, m.position] {
-        let cells = |lo: f64, hi: f64| lo.floor() as i32..=hi.floor() as i32;
-        for x in cells(at.x - half, at.x + half) {
-            for y in cells(at.y + 1.0e-5, at.y + height) {
-                for z in cells(at.z - half, at.z + half) {
-                    let p = [x, y, z];
-                    if visited.contains(&p) {
-                        continue;
+    let box_at_end = m
+        .bounds_at(m.position)
+        .deflate(Vec3::new(1.0e-5, 1.0e-5, 1.0e-5));
+    let _ = horizon_core::geometry::sweep_intersected_blocks(
+        m.previous,
+        m.position,
+        box_at_end,
+        1 << 22,
+        |p, _| {
+            match w.block_name(p.x, p.y, p.z) {
+                "minecraft:wither_rose" => {
+                    // World difficulty, not the regional one, and
+                    // isInvulnerableTo(wither) (the invulnerable
+                    // flag, not the hit timer); a wither and a wither
+                    // skeleton refuse the effect in `addEffect`.
+                    if w.difficulty.base != 0 && !m.invulnerable_flag {
+                        m.add_effect("minecraft:wither", 40, 0);
                     }
-                    match w.block_name(x, y, z) {
-                        "minecraft:wither_rose" => {
-                            // World difficulty, not the regional one, and
-                            // isInvulnerableTo(wither) (the invulnerable
-                            // flag, not the hit timer); a wither and a wither
-                            // skeleton refuse the effect in `addEffect`.
-                            if w.difficulty.base != 0 && !m.invulnerable_flag {
-                                m.add_effect("minecraft:wither", 40, 0);
-                            }
-                        }
-                        "minecraft:open_eyeblossom"
-                            if m.species() == Species::Bee
-                                && super::bee::attracts_bees(w, p)
-                                && !m.has_effect("minecraft:poison") =>
-                        {
-                            m.add_effect("minecraft:poison", 25, 0);
-                        }
-                        _ => continue,
-                    }
-                    visited.push(p);
                 }
+                "minecraft:open_eyeblossom"
+                    if m.species() == Species::Bee
+                        && super::bee::attracts_bees(w, [p.x, p.y, p.z])
+                        && !m.has_effect("minecraft:poison") =>
+                {
+                    m.add_effect("minecraft:poison", 25, 0);
+                }
+                _ => {}
             }
-        }
-    }
+            // `checkInsideBlocks` stops the sweep once the entity is dead.
+            m.alive()
+        },
+    );
 }
 
 /// MobEffect ticking for the effects mobs receive (poison, wither,
@@ -5185,7 +5177,7 @@ mod same_vehicle_push_tests {
             Vec::<u32>::new(),
             "the cow pushes the ridden horse"
         );
-        assert!(cow.velocity.x > 0.0, "the ridden horse pushes the cow away");
+        assert_eq!(cow.velocity, Vec3::ZERO, "a ridden horse is not pushable");
 
         let (horse, mut cow) = pair(false).unwrap();
         let mut events = Vec::new();
@@ -6064,7 +6056,10 @@ mod age_up_tests {
             let kind = Arc::new(types.types["minecraft:goat"].clone());
             let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
             // As a natural spawn leaves it, then on its last baby tick.
-            super::super::finalize::goat_spawn(&mut m);
+            super::super::finalize::goat_spawn(
+                &mut m,
+                &mut horizon_core::random::LegacyRandom::new(0),
+            );
             super::super::finalize::set_age(&mut m, -1, None);
             let (mut test_level, mut events) = (crate::health::TestLevel::new(0), Vec::new());
             let level = &mut test_level.level();
@@ -6258,6 +6253,37 @@ mod burn_and_rose_tests {
                 let mut m = golem(types);
                 flower_contact_effects(&mut m, &peaceful);
                 assert!(!m.has_effect("minecraft:wither"), "peaceful");
+            },
+        );
+        let _ = ran;
+    }
+
+    /// `Entity.checkInsideBlocks` runs `WitherRoseBlock.entityInside` for every
+    /// block the box sweeps between the tick's start and end: a zombie falling
+    /// three blocks in one tick (about terminal speed) passes through the
+    /// rose's cell between the two boxes and gets wither, while one standing
+    /// beside it does not.
+    #[test]
+    fn a_mob_falling_past_a_wither_rose_gets_wither_and_one_beside_it_does_not() {
+        let ran = crate::mobs::world::with_built_test_world(
+            &[],
+            build_with("minecraft:wither_rose"),
+            |w, types| {
+                // Boxes 65..67 and 62..64: the rose's cell 64 is between them.
+                let mut falling = zombie(types);
+                falling.previous = Vec3::new(0.5, 65.0, 0.5);
+                falling.position = Vec3::new(0.5, 62.0, 0.5);
+                flower_contact_effects(&mut falling, w);
+                assert!(
+                    falling.has_effect("minecraft:wither"),
+                    "inside the rose on the way past it"
+                );
+
+                let mut beside = zombie(types);
+                beside.previous = Vec3::new(3.5, 64.0, 0.5);
+                beside.position = Vec3::new(3.5, 64.0, 0.5);
+                flower_contact_effects(&mut beside, w);
+                assert!(!beside.has_effect("minecraft:wither"), "beside it");
             },
         );
         let _ = ran;

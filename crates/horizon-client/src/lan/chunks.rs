@@ -1442,6 +1442,12 @@ pub fn entity_tag(entity: &BlockEntity, trial_active: bool) -> Option<Tag> {
             h.creaking
                 .map(|(_, uuid)| ("creaking", crate::save::uuid_tag(uuid))),
         )),
+        // ConduitBlockEntity.getUpdateTag: saveCustomOnly, which for a conduit
+        // is its `Target` alone. The empty tag of a conduit that stopped
+        // hunting still goes out (remote.rs loads it): it clears the target.
+        BlockEntity::Conduit(target) => Some(Tag::compound(
+            target.map(|uuid| ("Target", Tag::IntArray(uuid.to_vec()))),
+        )),
         // No getUpdatePacket: these, chests, hives, command blocks and the rest.
         BlockEntity::Jukebox(_) | BlockEntity::Lectern(_) => None,
         // CampfireBlockEntity.getUpdateTag: the items alone.

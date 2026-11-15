@@ -208,6 +208,10 @@ public final class LocatorBarClient {
                     case "selfmetadata" -> selfMetadata = w[1].equals("on");
                     case "trackposes" -> trackPoses = w[1].equals("on");
                     case "still" -> players.get(w[1]).still();
+                    case "fallmove" -> {
+                        String[] a = w[2].split(" ");
+                        players.get(w[1]).fallmove(Double.parseDouble(a[0]), Double.parseDouble(a[1]), Double.parseDouble(a[2]), Boolean.parseBoolean(a[3]));
+                    }
                     case "respawn" -> players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
                         net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
                     case "use-on" -> {
@@ -601,6 +605,17 @@ public final class LocatorBarClient {
                 if (landed) break;
             }
             position = new PositionMoveRotation(new Vec3(start.x, y, z), Vec3.ZERO, at.yRot(), at.xRot());
+        }
+
+        /** One position in a client tick of its own: the server takes one position per client tick. */
+        void fallmove(double x, double y, double z, boolean ground) throws Exception {
+            PositionMoveRotation before = position;
+            Vec3 to = new Vec3(x, y, z);
+            send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
+            send(new ServerboundMovePlayerPacket.PosRot(to, before.yRot(), before.xRot(), ground, false));
+            send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
+            position = new PositionMoveRotation(to, Vec3.ZERO, before.yRot(), before.xRot());
+            record("fallmove " + x + " " + y + " " + z + " " + ground);
         }
 
         void still() throws Exception {

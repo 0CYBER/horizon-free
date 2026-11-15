@@ -12,6 +12,11 @@ use horizon_core::geometry::trig::Mth;
 use std::borrow::Cow;
 use std::f32::consts::PI;
 
+// The invisible body a viewer still sees (`Entity.isInvisibleTo`), beside this file.
+#[path = "invisible_body.rs"]
+mod invisible_body;
+pub use invisible_body::render_seen_invisible;
+
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
@@ -1499,6 +1504,7 @@ pub fn render_with_hidden(
     mut parts: Option<&mut Option<mod_api::PosedParts>>,
     out: &mut Vec<Vertex>,
 ) {
+    let paint = Some(body_color(m, alpha));
     // The invisibility effect hides the model (a drinking wandering trader);
     // an illusioner shows its four mirror images instead.
     if m.is_invisible() {
@@ -1517,7 +1523,7 @@ pub fn render_with_hidden(
                     light,
                     data,
                     extra,
-                    true,
+                    paint,
                     hidden,
                     parts.as_deref_mut(),
                     out,
@@ -1535,7 +1541,7 @@ pub fn render_with_hidden(
         light,
         data,
         extra,
-        true,
+        paint,
         hidden,
         parts,
         out,
@@ -1581,7 +1587,7 @@ pub fn render_skinned(
         light,
         data,
         &[],
-        true,
+        Some(body_color(m, alpha)),
         hidden,
         parts,
         out,
@@ -1853,7 +1859,7 @@ pub fn render_layers(
         light,
         data,
         extra,
-        false,
+        None,
         Default::default(),
         parts,
         out,
@@ -1880,7 +1886,7 @@ pub fn render_posed(
         light,
         data,
         &[],
-        true,
+        Some(body_color(m, alpha)),
         Default::default(),
         None,
         out,
@@ -2066,7 +2072,8 @@ fn render_visible(
     light: u32,
     data: &MobData,
     extra: &[(&Part, [f32; 4], u32, u32, bool)],
-    body_visible: bool,
+    // `submit`'s `tintedColor` to draw the body in, or `None` for its layers only.
+    paint: Option<u32>,
     hidden: mod_api::HiddenParts,
     parts: Option<&mut Option<mod_api::PosedParts>>,
     out: &mut Vec<Vertex>,
@@ -2221,7 +2228,7 @@ fn render_visible(
                 None
             }
         });
-        if body_visible && let Some(uv) = uv {
+        if let (Some(tint), Some(uv)) = (paint, uv) {
             let start = out.len();
             put(
                 skin,
@@ -2230,7 +2237,7 @@ fn render_visible(
                 body_poses,
                 uv,
                 0.0,
-                body_color(m, alpha),
+                tint,
                 light,
                 body_overlay(m, alpha),
                 out,
@@ -2243,13 +2250,14 @@ fn render_visible(
                     body_poses,
                     glow,
                     0.0,
-                    body_color(m, alpha),
+                    tint,
                     FULL_BRIGHT,
                     0,
                     out,
                 );
             }
-            if translucent_body(m) {
+            // A body below full alpha (`forceTransparent`'s 654311423) blends too.
+            if translucent_body(m) || tint >> 24 != 0xFF {
                 mark_oit(&mut out[start..]);
             }
         }

@@ -154,7 +154,7 @@ fn is_scene_changed() -> bool {
 }
 
 // ffx_opticalflow_prepare_luma.h, for an SDR back buffer (transfer function 0: Horizon's
-// frames); the HDR transfer functions follow AMD's.
+// 8-bit frames) and Horizon's float frame (3); the HDR transfer functions follow AMD's.
 fn luminance_to_perceived(luminance: f32) -> f32 {
     var perceived: f32;
     if luminance <= 216.0 / 24389.0 {
@@ -190,6 +190,13 @@ fn prepare_luma(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let mx = params.min_max_luminance.y;
                 let linear = (c - vec3(mn / 80.0)) / vec3((mx - mn) / 80.0);
                 y_lum = luminance_to_perceived(dot(linear, vec3(0.2126, 0.7152, 0.0722)));
+            } else if params.transfer_function == 3u {
+                // Horizon's float frame (not AMD's): light in vanilla's gamma, 1 at paper white.
+                // As AMD's HDR inputs, linear light over the display's peak (in paper whites),
+                // perceived; light past the peak, which the tone curve eases into it, is the
+                // top, so the 8-bit luma doesn't spill into its neighbour's bits.
+                let linear = pow(max(c, vec3(0.0)), vec3(2.2)) / params.min_max_luminance.y;
+                y_lum = min(luminance_to_perceived(dot(linear, vec3(0.2126, 0.7152, 0.0722))), 1.0);
             }
             textureStore(luma_out, pos, vec4(f32(u32(y_lum * 255.0)), 0.0, 0.0, 0.0));
         }

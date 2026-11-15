@@ -28,7 +28,12 @@ def program():
     guard('/execute if entity @s[type=player,name=Player,nbt={Health:20f,playerGameType:1,Pos:[14.5d,200d,14.5d]}]','player-admit')
     cmd('/data get entity @s UUID','player-uuid',4,True)
     guard('/scoreboard objectives add lodetick dummy','objective')
-    cmd('/execute store result score start lodetick run time query gametime','clock-start',category='raw')
+    # The absolute game time is how long each engine ran before the script (the oracle settles its spawn
+    # first): run, not recorded. The relative clock below is compared.
+    def clock(label):
+        cmd('/execute store result score '+('start' if label=='clock-start' else 'now')+' lodetick run time query gametime',label,category='raw')
+        ops[-1]['record']=False
+    clock('clock-start')
     holders=[]
     for n,(name,dim,tracked,target) in enumerate(CASES,1):
         who=str(uuid.UUID(int=(0xA551<<96)|n));x=2*n+.5
@@ -52,7 +57,7 @@ def program():
             guard('/execute if loaded 12 200 12','target-still-loaded')
             cmd('/tick step 1','step-request',admission=True)
             ops.append(dict(op='player_loop',n=1,label='actual-one-tick',expect_result=1,admission=True,category='control'))
-        cmd('/execute store result score now lodetick run time query gametime',phase+'-raw-clock',category='raw')
+        clock(phase+'-raw-clock')
         guard('/scoreboard players operation now lodetick -= start lodetick',phase+'-clock-op',int(phase=='after'))
         guard('/scoreboard players get now lodetick',phase+'-clock',int(phase=='after'))
         for name,who,path,target,tracked,marker in holders:

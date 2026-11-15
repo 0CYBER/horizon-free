@@ -368,13 +368,9 @@ pub fn behind_server() -> bool {
     HELPERS_BEHIND.load(Ordering::Relaxed) && behind()
 }
 
-/// The parameter `SCHED_IDLE` takes: priority 0, the only value that class accepts.
-/// Zeroed first because musl's `sched_param` has more fields (`sched_ss_*`) than
-/// glibc's, so a struct literal doesn't compile there.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn idle_param() -> libc::sched_param {
-    // SAFETY: `sched_param` is a plain C struct of integers (and, on musl, a
-    // timespec pair); all-zero is a valid value.
+fn idle_sched_param() -> libc::sched_param {
+    // SAFETY: `sched_param` is a plain C struct; zero-init also covers musl's extra fields.
     let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
     param.sched_priority = 0;
     param
@@ -390,7 +386,7 @@ fn behind() -> bool {
         if nice + BEHIND <= 19 {
             libc::setpriority(libc::PRIO_PROCESS as _, 0, nice + BEHIND) == 0
         } else {
-            let param = idle_param();
+            let param = idle_sched_param();
             libc::sched_setscheduler(0, libc::SCHED_IDLE, &param) == 0
         }
     }
@@ -475,7 +471,7 @@ pub fn idle_current() -> bool {
 
 #[cfg(target_os = "linux")]
 fn idle() -> bool {
-    let param = idle_param();
+    let param = idle_sched_param();
     // SAFETY: sets the calling thread's own policy (pid 0); `param` lives
     // across the call.
     unsafe { libc::sched_setscheduler(0, libc::SCHED_IDLE, &param) == 0 }

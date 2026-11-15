@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import test_command_exec_parity as runner
@@ -18,11 +19,29 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--work-dir',type=Path,required=True)
+    parser.add_argument('--work-dir',type=Path,help='a new capture folder; without it, a fresh Java capture and '
+                        'the native run go to .local/stand-lodestone-parity (what tools/parity.py runs)')
     parser.add_argument('--reference-only',action='store_true')
     parser.add_argument('--reference-dir',type=Path)
     parser.add_argument('--binary',type=Path)
     args=parser.parse_args()
+    if args.work_dir:
+        return run(args)
+    assert not args.reference_only and not args.reference_dir,'--reference-only and --reference-dir need --work-dir'
+    base=runner.lab.LOCAL/'stand-lodestone-parity'
+    shutil.rmtree(base,ignore_errors=True)
+    run(argparse.Namespace(work_dir=base/'java',reference_only=True,reference_dir=None,binary=None))
+    binary=args.binary
+    if not binary:
+        subprocess.run(['cargo','build','--profile','fast','-p','horizon-client','--bin','horizon-client'],
+                       cwd=runner.lab.ROOT,check=True)
+        metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],
+                                                    cwd=runner.lab.ROOT,text=True))
+        binary=Path(metadata['target_directory'])/'fast'/('horizon-client.exe' if os.name=='nt' else 'horizon-client')
+    return run(argparse.Namespace(work_dir=base/'native',reference_only=False,reference_dir=base/'java',binary=binary))
+
+
+def run(args):
     out=args.work_dir.resolve();out.mkdir(parents=True,exist_ok=False)
     ops=program()
     recorded=[x for x in ops if x['op'] in ('tick','player_loop') or x['op']=='cmd' and x.get('record',True)]

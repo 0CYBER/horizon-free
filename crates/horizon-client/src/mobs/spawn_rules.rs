@@ -595,10 +595,10 @@ impl SpawnLevel for super::MobWorld<'_> {
         self.has_tag(tag, block)
     }
     fn biome_tag(&self, tag: &str, x: i32, y: i32, z: i32) -> bool {
-        let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
+        let Some(biome) = self.world.noise_biome(x, y, z) else {
             return false;
         };
-        let biome = &self.biomes.get(chunk.biome(x, y, z)).name;
+        let biome = &self.biomes.get(biome).name;
         self.data
             .biome_tags
             .get(tag.trim_start_matches('#'))

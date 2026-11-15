@@ -211,7 +211,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
                 0xf0f0,
                 &data,
                 extra,
-                true,
+                Some(body_color(&villager, 0.5)),
                 hidden,
                 None,
                 &mut out,

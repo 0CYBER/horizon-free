@@ -42,4 +42,4 @@ horizon-client-render skins::tests::profiles_resolve_through_the_services lib da
 horizon-client-render split_ui::tests::locale_switch_and_pack_overrides_keep_the_same_draft lib daily child-process
 horizon-client-render streaming::cover_tests::the_buckets_answer_as_the_scan lib daily slow
 horizon-client-render streaming::cover_tests::the_grid_answers_as_the_scan lib daily slow
-horizon-client-render sunrise_fan::tests::angular_sector_matches_all_triangle_search test:sunrise_shader daily slow
+horizon-client-render sunrise_shader::sunrise_fan::tests::angular_sector_matches_all_triangle_search test:it daily slow

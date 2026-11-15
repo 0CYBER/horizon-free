@@ -15,29 +15,37 @@ libm = "=0.2.16"
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 serde = { version = "1", features = ["derive"] }
 
+# The binaries hold no tests (the library does): `cargo test` builds no empty test harness for them, each of which
+# linked the whole crate again. They still build for integration tests (CARGO_BIN_EXE_*) and clippy --all-targets.
 [[bin]]
 name = "horizon-parity"
 path = "src/bin/parity.rs"
+test = false
 
 [[bin]]
 name = "horizon-tick-parity"
 path = "src/bin/tick_parity.rs"
+test = false
 
 [[bin]]
 name = "horizon-geometry-parity"
 path = "src/bin/geometry_parity.rs"
+test = false
 
 [[bin]]
 name = "horizon-noise-parity"
 path = "src/bin/noise_parity.rs"
+test = false
 
 [[bin]]
 name = "horizon-density-parity"
 path = "src/bin/density_parity.rs"
+test = false
 
 [[bin]]
 name = "horizon-float-log-parity"
 path = "src/bin/float_log_parity.rs"
+test = false
 
 [lints]
 workspace = true

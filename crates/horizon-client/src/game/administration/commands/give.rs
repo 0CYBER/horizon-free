@@ -26,7 +26,8 @@ impl Game<'_> {
         let p = self
             .target_position(Target::Player)
             .unwrap_or(self.source_position());
-        let r = &mut self.world.random;
+        // GiveCommand uses the receiving player's random, not the level's.
+        let mut r = horizon_client::random_source::entity();
         let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
         self.audio
             .play("minecraft:entity.item.pickup", Some(p), 0.2, pitch);

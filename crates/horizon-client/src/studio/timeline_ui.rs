@@ -713,14 +713,13 @@ impl TimelineUi {
             let norm = ((cursor.0 - track_start_x) / track_w).clamp(0.0, 1.0);
             let click_time = (norm * total_dur).round() as u64;
 
-            // Click on Master Sequence Bar: snap slider to selected scene start
+            // Click on Master Sequence Bar: select the scene under the cursor and move the
+            // playhead to the click, as the ruler does (#16122)
             if cursor.1 >= bar_y && cursor.1 <= bar_y + bar_h {
-                let scene = self.scene_at_time(click_time);
-                self.selected_scene = scene;
-                let scene_start = self.scene_start_time(scene);
-                self.current_time_ms = scene_start;
+                self.selected_scene = self.scene_at_time(click_time);
+                self.current_time_ms = click_time;
                 self.dragging_playhead = true;
-                self.pending_seek_ms = Some(scene_start);
+                self.pending_seek_ms = Some(click_time);
                 return TimelineAction::PauseForSeek;
             }
 
@@ -815,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scene_click_snaps_playhead() {
+    fn scene_click_selects_the_scene_and_seeks_to_the_click() {
         let mut ui = TimelineUi::new();
         ui.duration_ms = 30_000;
         ui.split_at(10_000);
@@ -844,21 +843,21 @@ mod tests {
         let click_x = track_start_x + 0.5 * track_w;
         let action = ui.handle_mouse_down((click_x, click_y), screen_w, screen_h, &freecam);
 
-        // Slider/playhead snaps to start of Scene 2 (10_000ms)
+        // Scene 2 is selected and the playhead goes where the click was (15_000ms)
         assert_eq!(action, TimelineAction::PauseForSeek);
-        assert_eq!(ui.current_time_ms, 10_000);
+        assert_eq!(ui.current_time_ms, 15_000);
         assert_eq!(ui.selected_scene, 1);
-        assert_eq!(ui.handle_mouse_up(), TimelineAction::Seek(10_000));
+        assert_eq!(ui.handle_mouse_up(), TimelineAction::Seek(15_000));
 
         // Click in Scene 3 (80% through timeline = 24_000ms = norm 0.8)
         let click_x3 = track_start_x + 0.8 * track_w;
         let action3 = ui.handle_mouse_down((click_x3, click_y), screen_w, screen_h, &freecam);
 
-        // Slider/playhead snaps to start of Scene 3 (20_000ms)
+        // Scene 3 is selected and the playhead goes where the click was (24_000ms)
         assert_eq!(action3, TimelineAction::PauseForSeek);
-        assert_eq!(ui.current_time_ms, 20_000);
+        assert_eq!(ui.current_time_ms, 24_000);
         assert_eq!(ui.selected_scene, 2);
-        assert_eq!(ui.handle_mouse_up(), TimelineAction::Seek(20_000));
+        assert_eq!(ui.handle_mouse_up(), TimelineAction::Seek(24_000));
     }
 
     #[test]

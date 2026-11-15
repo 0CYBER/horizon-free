@@ -187,7 +187,7 @@ python3 tools/parity_fuzz.py --replay scenarios.json                            
 ## Reading vanilla
 
 Game jars, decompiled sources and reports live in the gitignored `.local/`, rebuilt from your own copy of the game;
-nothing of Mojang's is committed or downloaded by the tools ([README](../README.md#build-from-source)):
+nothing of Mojang's is committed or downloaded by the tools ([README](native-client.md#run-from-a-checkout)):
 
 ```sh
 python3 tools/lab.py prepare --server-jar ~/Downloads/server.jar   # checks the pinned jars (research-lock.json)

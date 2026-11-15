@@ -5,6 +5,7 @@
 use super::{Game, Screen, packs};
 use horizon_client::{
     Result,
+    packet_source::PacketSource,
     studio::{ReplayDriver, TimelineAction},
     text::Text,
 };
@@ -333,11 +334,12 @@ impl Game<'_> {
                 let time_ms = if self.replay.standalone {
                     time_ms
                 } else {
-                    let current =
-                        self.replay
-                            .driver
-                            .as_ref()
-                            .map_or(0, ReplayDriver::position_ms) as u64;
+                    let current = self
+                        .replay
+                        .driver
+                        .as_ref()
+                        .map_or(0, |driver| driver.position_ms())
+                        as u64;
                     time_ms.max(current)
                 };
                 self.studio.timeline.current_time_ms = time_ms;
@@ -414,7 +416,12 @@ impl Game<'_> {
 
     /// Add a bookmark at the replay playhead and save it in the `.mcpr` archive.
     pub(super) fn add_studio_marker(&mut self) {
-        let Some(replay) = self.replay.driver.as_mut() else {
+        let Some(replay) = self
+            .replay
+            .driver
+            .as_mut()
+            .and_then(|driver| driver.as_any_mut().downcast_mut::<ReplayDriver>())
+        else {
             return;
         };
         let label = Text::translate(
@@ -454,7 +461,11 @@ impl Game<'_> {
     /// Saves the free camera's path into the replay playing, when it changed.
     pub(super) fn save_studio_camera_track(&mut self) -> std::io::Result<()> {
         if self.studio.camera_track_dirty
-            && let Some(driver) = self.replay.driver.as_mut()
+            && let Some(driver) = self
+                .replay
+                .driver
+                .as_mut()
+                .and_then(|driver| driver.as_any_mut().downcast_mut::<ReplayDriver>())
         {
             driver.save_camera_track(&self.studio.freecam.track)?;
             self.studio.camera_track_dirty = false;
@@ -486,11 +497,15 @@ impl Game<'_> {
         }
         if let Some((position, duration, paused, markers)) =
             self.replay.driver.as_ref().map(|replay| {
+                let markers = replay
+                    .as_any()
+                    .downcast_ref::<ReplayDriver>()
+                    .map_or_else(Vec::new, |driver| driver.markers().to_vec());
                 (
                     replay.position_ms(),
                     replay.duration_ms(),
                     replay.is_paused(),
-                    replay.markers().to_vec(),
+                    markers,
                 )
             })
         {

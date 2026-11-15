@@ -523,9 +523,42 @@ fn expand_jobs(
     out
 }
 
+/// Whether ordinary entity models may be posed on the GPU this frame. Frame generation follows
+/// the CPU copies' motion. A `shaders/` pack (`other_pack`: whether its programs draw the posed
+/// range) or one of Horizon's own (`native_pack`: its passes, the shadow map's included, draw
+/// the entity buffer from its start, posed range and all) keeps the CPU copies while a native
+/// mod reads them (`mod_reads`: `RenderNeeds::entity_spans`): `native_world_drawn` hands it
+/// only the CPU stream.
+pub(super) fn poses(
+    frame_gen: bool,
+    other_pack: Option<bool>,
+    native_pack: bool,
+    mod_reads: impl FnOnce() -> bool,
+) -> bool {
+    !frame_gen
+        && match other_pack {
+            Some(draws) => draws && !mod_reads(),
+            None => !native_pack || !mod_reads(),
+        }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_native_pack_poses_unless_a_mod_reads_the_cpu_entities() {
+        let no_mod = || false;
+        let mod_reads = || true;
+        assert!(poses(false, None, true, no_mod));
+        assert!(!poses(false, None, true, mod_reads));
+        assert!(!poses(true, None, true, no_mod));
+        // Without a pack, as before: a mod reading the entities doesn't stop it.
+        assert!(poses(false, None, false, mod_reads));
+        assert!(poses(false, Some(true), false, no_mod));
+        assert!(!poses(false, Some(true), false, mod_reads));
+        assert!(!poses(false, Some(false), false, no_mod));
+    }
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = crate::gfx::test_gpu::instance();

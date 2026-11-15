@@ -430,14 +430,20 @@ impl Game<'_> {
             return;
         };
         if let Some(title) = title {
-            let mut written = ItemStack::new("minecraft:written_book", 1);
-            written.data_mut().written = Some(WrittenBook {
+            // `signBook` transmutes the carried stack, so a renamed book and
+            // quill stays renamed and keeps its other components.
+            let mut written = stack.transmute("minecraft:written_book", stack.count);
+            let data = written.data_mut();
+            data.writable_pages = Vec::new();
+            data.written = Some(WrittenBook {
                 title,
                 author,
                 generation: 0,
                 pages,
                 page_tags: Vec::new(),
-                resolved: false,
+                // `signBook`'s `new WrittenBookContent(..., true)`: the pages
+                // are literals, so the content is already resolved.
+                resolved: true,
             });
             *stack = written;
         } else {
@@ -527,14 +533,17 @@ impl Game<'_> {
                 _ => {}
             },
             Some(BookScreen::Edit { signing: true, .. }) => match key {
-                Some(KeyCode::Escape) => {
-                    self.set_book_signing(false);
-                }
+                // `BookSignScreen` overrides neither `onClose` nor
+                // `shouldCloseOnEsc`: Escape is `Screen.onClose`, which closes
+                // the whole book and saves nothing.
+                Some(KeyCode::Escape) => self.close_book(),
+                // `BookSignScreen.keyPressed` signs whenever the title box is
+                // not empty, blank or not, and trims the title on send.
                 Some(KeyCode::Enter | KeyCode::NumpadEnter) => {
-                    let blank = self.book.as_ref().is_some_and(
-                        |b| matches!(b, BookScreen::Edit { title, .. } if title.trim().is_empty()),
+                    let empty = self.book.as_ref().is_some_and(
+                        |b| matches!(b, BookScreen::Edit { title, .. } if title.is_empty()),
                     );
-                    if !blank {
+                    if !empty {
                         self.save_book(true);
                     }
                 }
@@ -546,7 +555,10 @@ impl Game<'_> {
                 }
             },
             Some(BookScreen::Edit { .. }) => match key {
-                Some(KeyCode::Escape) => self.save_book(false),
+                // `BookEditScreen` overrides neither `onClose` nor
+                // `shouldCloseOnEsc` either: Escape is `Screen.onClose`, and
+                // only Done calls `saveChanges`.
+                Some(KeyCode::Escape) => self.close_book(),
                 Some(KeyCode::PageUp) => self.turn_page(false),
                 Some(KeyCode::PageDown) => self.turn_page(true),
                 Some(KeyCode::ArrowUp) => self.book_move_line(-1),
@@ -1845,6 +1857,10 @@ mod lectern_books_tag_tests {
 }
 
 #[cfg(test)]
+#[path = "tests/book_escape_tests.rs"]
+mod book_escape_tests;
+
+#[cfg(test)]
 #[path = "tests/lectern_tests.rs"]
 mod lectern_tests;
 
@@ -2180,6 +2196,10 @@ mod sign_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/sign_book_tests.rs"]
+mod sign_book_tests;
 
 fn link_cursor(style: &horizon_client::text::Style) -> Option<horizon_client::widgets::Cursor> {
     style

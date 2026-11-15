@@ -2597,6 +2597,43 @@ fn dripstone_fills_cauldrons() {
     assert_eq!(w.name(BlockPos::new(0, 5, 0)), "water_cauldron[level=1]");
 }
 
+/// `PointedDripstoneBlock.canGrow`: the fluid two blocks above the tip must be
+/// water AND a source (`FluidState.is(Fluids.WATER)` and `isSource`), so
+/// flowing and falling water, which are other fluids of the family, grow nothing.
+#[test]
+fn a_dripstone_tip_grows_only_under_a_water_source() {
+    let mut w = world!();
+    let block = w.id("dripstone_block", &[]);
+    let tip = w.id(
+        "pointed_dripstone",
+        &[("vertical_direction", "down"), ("thickness", "tip")],
+    );
+    let stone = w.id("stone", &[]);
+    let top = BlockPos::new(0, 9, 0);
+    // Whether any pointed dripstone stands in the column besides the first tip.
+    let grown = |w: &World| {
+        (0..9).any(|y| {
+            w.name(BlockPos::new(0, y, 0))
+                .starts_with("pointed_dripstone")
+        })
+    };
+    for (level, expect) in [("0", true), ("1", false), ("8", false)] {
+        w.put(BlockPos::new(0, 11, 0), w.id("water", &[("level", level)]));
+        w.put(BlockPos::new(0, 10, 0), block);
+        w.put(top, tip);
+        w.put(BlockPos::new(0, 2, 0), stone);
+        for y in 0..9 {
+            if y != 2 {
+                w.put(BlockPos::new(0, y, 0), w.id("air", &[]));
+            }
+        }
+        for _ in 0..4000 {
+            w.b().random_tick(&mut w.level, &mut w.ticks, top);
+        }
+        assert_eq!(grown(&w), expect, "water level {level}");
+    }
+}
+
 #[test]
 fn a_level_can_answer_for_a_blocks_signal() {
     let mut w = world!();
@@ -4665,6 +4702,7 @@ mod removal {
 mod fluid_tick;
 mod interact;
 mod pistons;
+mod portals;
 mod redstone;
 mod respawn_anchor;
 

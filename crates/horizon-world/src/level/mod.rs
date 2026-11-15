@@ -156,6 +156,8 @@ mod infiniburn_tests;
 #[cfg(test)]
 mod piston_carry_tests;
 #[cfg(test)]
+mod sculk_vein_water_tests;
+#[cfg(test)]
 #[path = "tests/state_change.rs"]
 mod state_change_tests;
 #[cfg(test)]

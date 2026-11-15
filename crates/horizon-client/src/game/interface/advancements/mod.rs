@@ -1139,15 +1139,15 @@ impl Game<'_> {
     }
     /// `AdvancementRewards.grant`'s pickup: volume 0.2 at the player's feet,
     /// pitch `(nextFloat - nextFloat) * 0.7 + 1`, times 2. `playSound(null, …)`
-    /// so the player hears it. The draws are the level random, which is the
-    /// stream item pickup already uses for this pitch.
+    /// so the player hears it. The draws are the player's own random
+    /// (`player.getRandom()`), which no level draw shares.
     fn advancement_pickup_sound(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
         };
         let at = [p.position.x, p.position.y, p.position.z];
-        let pitch =
-            ((self.world.random.next_float() - self.world.random.next_float()) * 0.7 + 1.0) * 2.0;
+        let mut random = horizon_client::random_source::entity();
+        let pitch = ((random.next_float() - random.next_float()) * 0.7 + 1.0) * 2.0;
         self.audio
             .play("minecraft:entity.item.pickup", Some(at), 0.2, pitch);
     }
@@ -1565,7 +1565,7 @@ impl Game<'_> {
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
     /// at `start`, and the `distance` from `start` to the player.
-    fn trigger_distance(&mut self, name: &str, start: [f64; 3]) {
+    pub(super) fn trigger_distance(&mut self, name: &str, start: [f64; 3]) {
         let me = self.player_entity_for(name);
         self.trigger(name, move |c, w| {
             let pctx = adv::Entities {

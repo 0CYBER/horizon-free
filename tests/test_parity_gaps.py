@@ -4,7 +4,7 @@ from pathlib import Path
 
 from tools import parity_gaps as pg
 
-README = Path(__file__).resolve().parents[1] / "README.md"
+README = Path(__file__).resolve().parents[1] / "docs" / "status.md"
 
 
 def lists(*opens):
@@ -46,9 +46,9 @@ class ReadmeTests(unittest.TestCase):
         text = README.read_text(encoding="utf-8")
         total, counts = pg.written(text)
         self.assertEqual(len(counts), len(pg.ISSUES))
-        self.assertEqual(total, sum(counts), "the README's gap total is the sum of its areas")
+        self.assertEqual(total, sum(counts), "the status page's gap total is the sum of its areas")
         badge = pg.BADGE.search(text)
-        self.assertIsNotNone(badge, "the README's gap badge is missing")
+        self.assertIsNotNone(badge, "the status page's gap badge is missing")
         self.assertEqual(int(badge.group(2)), total, "the gap badge must match the block")
         status = text.split("## Project status", 1)[1]
         self.assertTrue(status.lstrip().startswith("**Player-visible gaps:"), "the gaps come first under Project status")

@@ -103,7 +103,6 @@
   "Interface": "Interfejs",
   "Keeps fine plants in high-res packs from fading far away.": "Čuva fine biljke u pakovanjima visoke rezolucije da ne izblede daleko.",
   "LOD Distance": "LOD Distance",
-  "Lava, fire and sunlight shine brighter than white. Needs an HDR display.": "Lava, vatra i sunčeva svetlost sijaju jače od belog. Potreban je HDR ekran.",
   "Leaf Culling": "Leaf Culling",
   "Leaves fully inside a canopy draw solid: fewer see-through layers.": "Listovi u potpunosti unutar krošnje crtaju čvrsto: manje providnih slojeva.",
   "Leaves with one open side draw solid too: faster, chunkier edges.": "Listovi sa jednom otvorenom stranom takođe crtaju čvrsto: brže, krupnije ivice.",
