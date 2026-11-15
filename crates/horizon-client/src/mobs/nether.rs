@@ -192,8 +192,7 @@ pub fn blaze_anim(s: &State, p: &mut Poses) {
     p.xrot("head", s.x_rot.to_radians());
 }
 
-/// `Ghast.explosionPower`'s `Extra::ints` slot (a named field would grow
-/// `mobs.rs`, which is over the file-size limit).
+/// `Ghast.explosionPower`'s `Extra::ints` slot.
 const EXPLOSION_POWER: usize = 0;
 
 pub fn register_ghast(m: &mut Mob) {

@@ -19,53 +19,28 @@ lines or whose lines already exist elsewhere in the file: sort each commit by ha
 (`git show`, `git grep` at the merge) into carried, rightly kept fork side (say why), or lost, re-apply every lost
 one in the sync, and put the table with its "Sorted as" column filled in the sync PR body.
 
-## File-size baseline provenance
+## Sync provenance
 
-`tools/check_file_size.py --base <base>` permits additions or raised caps only
-when the full SHA in `tools/file_size_baseline.txt` changes and:
+`tools/check_layers.py` and `tools/check_addresses.py` (through `tools/merge_base.py`) accept exact rows or
+assignments restored from upstream's inventory only for a verified sync. The sync's upstream commit is derived
+from the branch's history, with no declaration to write: it is the newest non-first parent of a merge commit in
+`merge_base..HEAD` that is not an ancestor of the merge base and is an ancestor of upstream main, freshly fetched
+from `https://github.com/horizon-rust/horizon.git` into `refs/sync/upstream-main`. Then `sync_provenance` requires:
 
 - the SHA resolves to an available commit;
-- it is an ancestor of upstream main, freshly fetched from
-  `https://github.com/horizon-rust/horizon.git` into `refs/sync/upstream-main`;
+- it is an ancestor of upstream main;
 - it is not an ancestor of the merge base;
-- it is a direct parent of a merge commit in `base..HEAD`.
+- it is a direct parent of a merge commit in `merge_base..HEAD`.
 
-A fake SHA, an old base ancestor, an ordinary new ancestor without a merge,
-and missing provenance all fail. In a sync PR, entries above the current non-test size fail
-as stale-high, including entries for deleted files. Outside a sync, entries are ignored;
-adding or raising one still fails, and shrinking a listed file needs no baseline edit.
-The PR body lists every sync cap and its growth for human review.
+A branch with no merge of upstream main (a fake SHA, an old base ancestor, a fork-only side-branch merge) has no
+sync, and nothing is restored. A PR could still merge a real upstream commit and add unrelated rows: review
+confirms that this is an upstream sync and that each restored row is justified.
 
-## Regenerating the baseline
+Both checks look this up lazily: only when they have a violation, or when their inventory file differs from the
+merge base's, so an ordinary PR or rollup never touches the network. When they look, an unreachable upstream, a
+timeout, a shallow checkout or missing history fails closed, even if a previous fetch left a cached ref.
+`HORIZON_UPSTREAM_URL` overrides the URL for local bare-repo tests; normal CI leaves it unset.
 
-Only a sync PR uses `tools/file_size_baseline.txt`: when its header is unchanged against the merge
-base, the checker ignores the entries and holds every file to its size on the base, so a PR that shrinks a
-listed file does not touch the file. A sync declares its upstream commit in the header and the entries cap
-the files that grew past the limit. Do not edit entries by hand. Regenerate:
-
-    python3 tools/sync/write_file_size_baseline.py --base origin/main --marker <full upstream SHA>
-
-The command writes one entry, at the exact current size, for each Rust file over 3000 code lines that grew past
-its size on the merge base, skipping generated files and `third_party/`. `--marker` is required when something
-grew and must be new compared with the base; without growth the header is kept and the file has no entries.
-`--check` prints the result without writing it.
-
-On a conflict in the baseline (a rollup that carries a sync, or a sync merged with a PR that touched it): take
-either side, run the command on the merged tree, and commit the result as its own commit. Run it again at the
-end of a sync, after the last code change, and run `python3 tools/check_file_size.py --base origin/main`.
-
-A fork-only side-branch merge cannot establish upstream provenance. A PR could
-still merge a real upstream commit and add unrelated caps: review must confirm
-that this is an upstream sync and that the listed restoration growth is justified.
-
-The fetch is required on every changed sync declaration; an unreachable upstream,
-a timeout or missing history fails closed, even if a previous fetch left a cached
-ref. Dyna verify therefore fails, with a network-required message, if its runner
-cannot reach GitHub. `HORIZON_UPSTREAM_URL` overrides the URL for local bare-repo
-tests; normal CI leaves it unset.
-
-The Dyna verify checkout initially uses the checkout action's shallow default,
-then its `Fetch this commit's history` step fetches `HEAD` with `--unshallow` before
-running the file-size check. This retains the upstream-parent merge in history.
-The checker refuses a still-shallow checkout with an explicit full-history error;
-it never treats missing history as approval.
+The Dyna verify checkout initially uses the checkout action's shallow default, then its
+`Fetch this commit's history` step fetches `HEAD` with `--unshallow` before running the checks, which retains
+the upstream-parent merge in history.

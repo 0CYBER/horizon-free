@@ -1,4 +1,4 @@
-// Same logical test module, extracted for the file-size gate.
+// Same logical test module, kept in its own file.
 use super::Target;
 use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
 use horizon_core::nbt::Tag;

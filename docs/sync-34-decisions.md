@@ -21,7 +21,7 @@ An independent static mob-area audit found no additional moved-equivalent port n
 
 Retain sync 33's independently measured CPU-timer calibration, scaled lower bounds, behavioral ratios and exact live-block checks unchanged. A requested 1 kHz CPU timer need not deliver 1 kHz on tick-accounted kernels; the affected WSL2 kernel has 250 Hz accounting. The resolution follow-up is horizon-rust/horizon#15721. The busy stack readiness handshake is distinct from those sampling tests.
 
-Only touched-file rustfmt and a full workspace/all-target compile-only check are permitted locally. No tests, clippy, parity corpus, harnesses or game runs are executed for this sync. CI supplies runtime evidence. Regenerate the sync-only file-size baseline with the tool, in its own commit, against the actual base and new upstream marker; never hand-edit its entries.
+Only touched-file rustfmt and a full workspace/all-target compile-only check are permitted locally. No tests, clippy, parity corpus, harnesses or game runs are executed for this sync. CI supplies runtime evidence.
 
 The separate generated-baseline commit `a98e61e6e0` contains zero caps: no oversized file grew relative to the actual fork base, so the prior sync's three caps are removed and the new upstream marker is recorded. The generator, not a hand edit, produced that result.
 

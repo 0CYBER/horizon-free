@@ -197,13 +197,13 @@ def main(argv=None):
     parser.add_argument("--base", help="refuse 'allowed' entries added since this git ref")
     parser.add_argument("--list", action="store_true", help="print each crate's layer and the exceptions")
     if __package__:
-        from . import check_file_size
+        from . import merge_base
     else:
-        import check_file_size
-    parser.add_argument("--pull-request-merge", action="store_true", help=check_file_size.PULL_REQUEST_MERGE_HELP)
+        import merge_base
+    parser.add_argument("--pull-request-merge", action="store_true", help=merge_base.PULL_REQUEST_MERGE_HELP)
     args = parser.parse_args(argv)
     if args.base:
-        args.base, error = check_file_size.pull_request_base(args.base, args.pull_request_merge)
+        args.base, error = merge_base.pull_request_base(args.base, args.pull_request_merge)
         if error:
             print(f"Layer check failed: {error}")
             return 1
@@ -218,13 +218,16 @@ def main(argv=None):
         for edge in ups:
             print(f"  {edge}")
         return 0
-    if args.base:
-        upstream, provenance = check_file_size.verified_sync_config(args.base, CONFIG_PATH)
-    else:
-        upstream, provenance = None, []
-    problems, notes = check(config, graph, base_config(args.base) if args.base else None,
-                            optional_edges(packages), upstream)
-    problems = provenance + problems
+    base = base_config(args.base) if args.base else None
+    optional = optional_edges(packages)
+    problems, notes = check(config, graph, base, optional)
+    if args.base and (problems or config != base):
+        # Only a violation, or an inventory that differs from the base's, can need what a verified sync restored:
+        # every other run stays off the network.
+        upstream, provenance = merge_base.verified_sync_config(args.base, CONFIG_PATH)
+        if upstream is not None or provenance:
+            problems, notes = check(config, graph, base, optional, upstream)
+        problems = provenance + problems
     problems += portable(config, packages)
     for note in notes:
         print(f"note: {note}")
