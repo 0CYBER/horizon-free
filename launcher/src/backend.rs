@@ -6091,6 +6091,19 @@ pub fn {f}("
         assert!(select_after_update(Some("v2026.10.12"), &installed));
         assert!(!select_after_update(Some("v2026.10.1"), &installed));
         assert!(select_after_update(None, &installed));
+        // A Nightly follows updates only from the newest one: an older pick is a rollback.
+        let nightlies = [
+            "nightly-2026-11-11-bbbbbbb".to_string(),
+            "nightly-2026-11-10-aaaaaaa".to_string(),
+        ];
+        assert!(select_after_update(
+            Some("nightly-2026-11-11-bbbbbbb"),
+            &nightlies
+        ));
+        assert!(!select_after_update(
+            Some("nightly-2026-11-10-aaaaaaa"),
+            &nightlies
+        ));
         assert!(!select_after_update(Some("developer-abc"), &[]));
         assert!(!select_after_update(Some("developer-abc"), &installed));
         assert!(!select_after_update(

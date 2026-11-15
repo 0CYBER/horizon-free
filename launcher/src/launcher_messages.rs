@@ -142,7 +142,7 @@ impl Launcher {
                     self.installing = None;
                     self.bar = (0., 0.);
                     self.installed = backend::installed();
-                    let as_update = self.update_install.take().filter(|(t, _)| *t == tag);
+                    let as_update = self.update_install.take().filter(|t| *t == tag);
                     let for_instance = self.instance_install.take_if(|t| *t == tag).is_some();
                     if let (Ok(()), Some(started)) = (&result, self.install_started.take()) {
                         let name = if as_update.is_some() {
@@ -165,8 +165,20 @@ impl Launcher {
                                 self.updates.horizon = None;
                             }
                             // An instance's own version leaves the other instances on theirs.
-                            let select = as_update.is_none_or(|(_, select)| select)
-                                && (!for_instance || self.launcher_version().is_none());
+                            // Judged now, not when the download started: a version picked on
+                            // Versions meanwhile stays picked.
+                            let before: Vec<String> = self
+                                .installed
+                                .iter()
+                                .filter(|t| **t != tag)
+                                .cloned()
+                                .collect();
+                            let select = as_update.is_none_or(|_| {
+                                backend::select_after_update(
+                                    self.settings.selected.as_deref(),
+                                    &before,
+                                )
+                            }) && (!for_instance || self.launcher_version().is_none());
                             if select {
                                 self.settings.selected = Some(tag);
                             }

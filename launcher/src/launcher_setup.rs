@@ -528,9 +528,7 @@ impl Launcher {
         if self.installing.is_some() || self.removing.contains(&release.tag) {
             return;
         }
-        let select =
-            backend::select_after_update(self.settings.selected.as_deref(), &self.installed);
-        self.update_install = Some((release.tag.clone(), select));
+        self.update_install = Some(release.tag.clone());
         self.install(&release);
     }
 

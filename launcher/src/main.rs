@@ -271,7 +271,7 @@ struct Launcher {
     self_update: SelfUpdate,
     self_update_hidden: bool,
     /// The Horizon version being installed as an update, and whether it becomes the selected one.
-    update_install: Option<(String, bool)>,
+    update_install: Option<String>,
     /// The Horizon version being installed because an instance was made or saved to play it: it
     /// becomes the launcher's version only when the launcher has none.
     instance_install: Option<String>,
