@@ -1,8 +1,2 @@
 # Incoming upstream coverage needing prepared resources or explicit benchmark input.
-horizon-client game::server_travel::hold_tests::a_hold_ignores_the_clients_moves_until_a_tp_to_lit_land_replaces_it HORIZON_TEST_RESOURCES needs
-horizon-client game::server_travel::hold_tests::a_hold_ended_by_a_trip_elsewhere_hears_the_client_again HORIZON_TEST_RESOURCES needs
-horizon-client game::server_travel::hold_tests::a_hold_places_the_player_once_the_chunks_are_lit HORIZON_TEST_RESOURCES needs
-horizon-client game::server_travel::hold_tests::a_hold_follows_the_destination_a_mod_chose HORIZON_TEST_RESOURCES needs
-horizon-client game::mob_islands::tests::villagers_on_their_own_random_tick_in_groups_as_serial HORIZON_TEST_RESOURCES needs
-horizon-client game::minecarts::cart_cost_bench::tick_carts_with_many_parked_carts HORIZON_TEST_RESOURCES needs
 horizon-client-lib lan::entity::send_bench::tracker_send_benchmark HORIZON_SEND_BENCH needs

@@ -882,7 +882,7 @@ fn shadowtex_nearest_settings_read_the_nearest_texel() {
 /// The sky program covers the horizon and downward viewing directions too.
 /// This original probe reports sky colour in RGB and window depth in alpha.
 #[test]
-#[ignore = "requires a graphics adapter"]
+#[ignore = "daily"]
 fn sky_covers_the_horizon_without_writing_depth_or_overpainting_terrain() {
     let _gpu = crate::gfx::test_gpu::lock();
     let gpu = Gpu::new().expect("graphics adapter required for the sky coverage regression");

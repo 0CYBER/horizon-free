@@ -105,7 +105,7 @@ fn contents(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_committed_mod_tank_survives_a_world_save_close_and_reopen() {
     if run_fresh_cases(
         "game::machines::tank_reopen_tests::a_committed_mod_tank_survives_a_world_save_close_and_reopen",

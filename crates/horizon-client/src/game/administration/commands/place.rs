@@ -456,7 +456,7 @@ mod live_dungeon_spawner_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_registered_live_dungeon_keeps_its_real_selected_spawner() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -535,7 +535,7 @@ mod live_dungeon_spawner_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn creation_boundary_preserves_existing_entries_and_rejects_other_blocks() {
         with_game(|game| {
             use horizon_world::level::LevelAccess;

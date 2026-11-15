@@ -398,7 +398,7 @@ mod tests {
     /// no correction follows. A passage that leads into the air: the confirmation, checked
     /// off the ground, and the fall after it pass too, and the player is not floating.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_server_follows_a_crossing_without_a_snap() {
         for (destination_y, steps) in [(65.5, [65.0, 65.0]), (75.5, [74.9216, 74.6862])] {
             with_guests(|game| {
@@ -477,7 +477,7 @@ mod tests {
     /// decided from its own `from` before the hub reads the second, and is followed; the
     /// second, read the next tick while the first's acceptance waits, is refused `Pending`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn two_crossings_in_a_row_are_decided_each_from_its_own_source() {
         with_guests(|game| {
             let rx = scene(game, [0.5, 65.0, 8.25]);
@@ -515,7 +515,7 @@ mod tests {
     /// does not track, feet more than 20 blocks from the opening, and a move to where it
     /// crossed from that the move checks turn down.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_crossing_the_server_cannot_follow_is_refused_by_name() {
         with_guests(|game| {
             let rx = scene(game, [0.5, 65.0, 8.25]);
@@ -623,7 +623,7 @@ mod tests {
     /// A mod hears the crossing, its passage and the feet before it, before the server
     /// follows, and cancels it: refused as `Vetoed`, and the player stays.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn a_mod_vetoes_a_crossing_before_the_server_follows() {
         let mods = vec![mod_api::ModEntry::new("veto", Box::new(Veto))];
         mod_platform::testing::with_mods(mods.into(), || {

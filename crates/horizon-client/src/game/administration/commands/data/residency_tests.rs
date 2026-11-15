@@ -120,25 +120,25 @@ fn reload_preserves_runtime_identity(kind: &str) {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn mob_data_load_keeps_runtime_identity() {
     reload_preserves_runtime_identity("minecraft:pig");
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn item_data_load_keeps_runtime_identity() {
     reload_preserves_runtime_identity("minecraft:item");
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn stand_data_load_keeps_runtime_identity() {
     reload_preserves_runtime_identity("minecraft:armor_stand");
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn frame_data_load_keeps_runtime_identity() {
     reload_preserves_runtime_identity("minecraft:item_frame");
 }
@@ -146,7 +146,7 @@ fn frame_data_load_keeps_runtime_identity() {
 /// Loading saved fields must not reopen LivingEntity's damage cooldown. The
 /// separate Entity immunity field remains writable through its saved NBT key.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn data_edits_keep_hit_cooldown_separate_from_saved_immunity() {
     with_game(|game| {
         game.build_registries();

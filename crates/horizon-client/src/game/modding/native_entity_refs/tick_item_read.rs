@@ -64,7 +64,7 @@ mod general_handle_tests {
     /// is open), so the old handle has nothing to latch onto. Red without
     /// the resident lookup refusing a gone id: the old handle would resolve.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn removed_general_row_refuses_its_handle_and_the_next_row_takes_a_new_id() {
         with_game(|game| {
             let uuid = [21, 22, 23, 24];
@@ -109,7 +109,7 @@ mod general_handle_tests {
     /// of the same UUID leaves in a mod's hands — refuses by the epoch check
     /// alone, before any row is consulted.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn general_handle_of_an_earlier_epoch_refuses_by_the_epoch_check() {
         with_game(|game| {
             game.resident_entities

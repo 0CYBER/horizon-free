@@ -980,7 +980,7 @@ mod map_limit_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources (HORIZON_TEST_RESOURCES)"]
+    #[ignore = "daily"]
     fn a_map_tracking_more_than_256_markers_stays_in_the_hand() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.item_frames.extend([frame(1), frame(2)]);
@@ -1046,7 +1046,7 @@ mod game_event_tests {
     /// `ItemFrame.interact`: putting an item in and turning it each post
     /// `GameEvent.BLOCK_CHANGE` from the player, at the frame's position.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn putting_and_rotating_a_frame_item_posts_block_change() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -1071,7 +1071,7 @@ mod game_event_tests {
     /// `ItemFrame.hurtServer`: the item coming out posts `BLOCK_CHANGE` from
     /// the player hitting the frame.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn taking_a_frame_item_out_posts_block_change_from_the_player() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -1113,7 +1113,7 @@ mod game_event_tests {
     /// `ItemFrame.dropItem` from `BlockAttachedEntity.tick`, when a frame
     /// loses the block it hangs on: the event has no source.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_frame_that_falls_posts_block_change_without_source() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

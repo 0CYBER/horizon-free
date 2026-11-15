@@ -71,7 +71,7 @@ fn read(game: &mut Game<'_>, path: &str) -> Option<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_saved_vibration_names_its_source() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

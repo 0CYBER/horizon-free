@@ -131,7 +131,7 @@ mod tests {
     /// The viewed level's handle reads the viewed world's block where the player's own level
     /// holds another: air against stone at the same position.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_viewed_block_state_differs_from_the_players_own() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -148,7 +148,7 @@ mod tests {
     /// A ray down onto the viewed level's stone hits its top, while the same ray in the
     /// player's own level, all air there, misses.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn clip_hits_the_viewed_block_while_the_players_own_ray_misses() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -169,7 +169,7 @@ mod tests {
     /// The viewed level's collision boxes are its own: none in the pocket the player's own
     /// level fills with stone, the stone's box where the player's level is air.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn collision_boxes_read_the_viewed_world() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -188,7 +188,7 @@ mod tests {
 
     /// A column the viewed world does not hold answers None, and reading it loads nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_column_the_viewed_world_does_not_hold_is_none() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -218,7 +218,7 @@ mod tests {
     /// Writes, server-only reads and the entity reads refuse a viewed level, which keeps its
     /// block.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn writes_and_entity_reads_refuse_a_viewed_level() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -235,7 +235,7 @@ mod tests {
     /// The server's close, and a Respawn, end the handle: it and `host.level` answer None until
     /// the server opens the level again.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_close_and_a_respawn_end_the_viewed_handle() {
         let mut resources = None;
         let mut game = client(&mut resources);

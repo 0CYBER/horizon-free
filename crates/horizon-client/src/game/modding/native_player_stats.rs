@@ -158,7 +158,7 @@ mod tests {
     use mod_api::StatType;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_resting_guest_reads_from_their_own_record() {
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
         use horizon_protocol::packets::configuration::ClientInformation;

@@ -389,7 +389,7 @@ mod tests {
     use mod_api::WorldEpoch;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_boat_owned_snowball_excludes_its_owner_until_it_leaves() {
         use horizon_client::projectiles::{Hit, ProjectileWorld};
         use horizon_core::geometry::Aabb;
@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_vehicle_owned_trident_does_not_scale_damage_as_a_living_attacker() {
         use horizon_client::projectiles::Hit;
         with_game(|game| {
@@ -501,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn projectile_handles_read_and_write_owner_deflection_and_arrow_state() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn trident_and_rocket_handles_narrow_and_turn_with_their_own_random() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -769,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn deflection_follows_vanilla_for_wind_charges_owners_random_and_known_speed() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -859,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn momentum_follows_a_boats_displacement_and_a_refused_blow_still_attacks() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

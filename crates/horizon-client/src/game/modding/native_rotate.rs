@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_part_turns_its_block_as_a_template_places_it() {
         let _publishing = native_worldgen_parts::PUBLISHING
             .lock()

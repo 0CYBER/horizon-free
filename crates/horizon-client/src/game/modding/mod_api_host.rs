@@ -812,7 +812,7 @@ mod attachment_membership_tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attachment_off_walk_membership_matches_old_walk() {
         with_game(|game| {
             game.reset_entity_residency();
@@ -885,7 +885,7 @@ mod attachment_membership_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attachment_guest_hook_membership_matches_old_walk() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             for id in [12, 13] {
@@ -916,7 +916,7 @@ mod attachment_membership_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attachment_membership_matches_old_walk() {
         with_game(|game| {
             game.reset_entity_residency();

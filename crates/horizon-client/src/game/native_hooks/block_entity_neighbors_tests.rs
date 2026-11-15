@@ -35,7 +35,7 @@ impl Hooks for Listener {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn installed_block_entity_neighbor_parts_dispatch_through_game() {
     let notices = Arc::new(Mutex::new(Vec::new()));
     let weak = Arc::new(AtomicBool::new(true));
@@ -113,7 +113,7 @@ impl Hooks for EdgeListener {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_entity_neighbor_traversal_keeps_far_chunk_unloaded() {
     let notices = Arc::new(Mutex::new(Vec::new()));
     let queries = Arc::new(AtomicUsize::new(0));

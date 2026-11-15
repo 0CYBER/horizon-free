@@ -107,7 +107,7 @@ mod tests {
     /// `cargo test -p horizon-client-lib --lib model_layers -- --ignored`
     /// with HORIZON_TEST_RESOURCES set to the prepared resources.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_humanoid_mesh_bakes_as_vanillas_zombie() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),

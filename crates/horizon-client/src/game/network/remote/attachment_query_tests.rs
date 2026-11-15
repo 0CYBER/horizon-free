@@ -45,7 +45,7 @@ fn sync(game: &mut Game<'_>, holder: Holder, value: i32) {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn synced_client_queries_follow_replacement_retirement_and_level_changes() {
     with_client_game(|game| {
         let (pipe, _server) = horizon_protocol::connection::Pipe::pair();

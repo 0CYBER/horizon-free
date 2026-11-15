@@ -94,7 +94,7 @@ const PUSH: Knock = Knock {
 };
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_bridge_names_the_attacker_and_what_it_holds() {
     let heard = heard(|game, _| {
         let mob = {
@@ -176,7 +176,7 @@ fn the_bridge_names_the_attacker_and_what_it_holds() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_canceled_push_is_reported() {
     let heard = heard(|game, log| {
         let level = damage_level_of!(game);
@@ -192,7 +192,7 @@ fn a_canceled_push_is_reported() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn thorns_name_the_wearer_not_the_incoming_attacker() {
     use horizon_client::motion::PlayerMotion;
     let heard = heard(|game, _| {
@@ -241,7 +241,7 @@ fn zombie_at(game: &mut super::Game<'_>, id: u32, at: Vec3) {
 /// A player's melee hit goes `attack_mob` → `hurt_by_player` → `Mob::damage` → the hook:
 /// the hook names the player and the sword it holds, and nothing is left behind afterwards.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_player_melee_hit_names_the_player_and_the_held_sword() {
     let heard = heard(|game, _| {
         player_with_sword(game);
@@ -260,7 +260,7 @@ fn a_player_melee_hit_names_the_player_and_the_held_sword() {
 
 /// A sweep names the player and its sword too, for each mob it hits.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_sweep_names_the_player_and_the_held_sword() {
     let heard = heard(|game, _| {
         player_with_sword(game);
@@ -284,7 +284,7 @@ fn a_sweep_names_the_player_and_the_held_sword() {
 /// The attack the player-victim path lands in is lent by `with_attack`, restored when it
 /// returns, and not seen across a real guest swap (the guest's combat tracker has its own).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_attack_scope_nests_restores_and_a_guest_swap_hides_it() {
     let log = Arc::new(Mutex::new(Heard::default()));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -352,7 +352,7 @@ fn next_draw_after_a_directionless_push(cancel: Option<bool>) -> i32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_push_draws_the_same_stream_with_and_without_a_mod_and_a_canceled_one_draws_nothing() {
     let without = next_draw_after_a_directionless_push(None);
     assert_eq!(next_draw_after_a_directionless_push(Some(false)), without);
@@ -363,7 +363,7 @@ fn the_push_draws_the_same_stream_with_and_without_a_mod_and_a_canceled_one_draw
 /// A guest's blow on another guest lands through `pvp_land`: the hook names the attacking guest
 /// and the sword in its hand, though the victim is the player swapped in when the push runs.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_guest_blow_on_a_guest_names_the_attacker_and_the_sword() {
     let log = Arc::new(Mutex::new(Heard::default()));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -428,7 +428,7 @@ fn a_guest_blow_on_a_guest_names_the_attacker_and_the_sword() {
 /// A mob's fireball on the player goes through `projectile_hit`, which lends the owner's attack:
 /// the hook names the shooter and the bow it holds.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mobs_fireball_on_the_player_names_the_shooter_and_its_bow() {
     use horizon_client::projectiles::{Hit, Projectile, ProjectileKind};
     let heard = heard(|game, _| {
@@ -473,7 +473,7 @@ fn a_mobs_fireball_on_the_player_names_the_shooter_and_its_bow() {
 /// call of the full entry. A listener that wants a mixin's double change on the short entry
 /// applies its change twice on `Short`.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_hook_names_the_entry_a_push_came_through_once_per_full_entry_call() {
     use mod_api::KnockbackEntry::{Full, Short};
     let heard = heard(|game, log| {

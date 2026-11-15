@@ -131,7 +131,7 @@ mod tests {
         .unwrap();
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fresh_game_lifetimes_keep_worker_and_generator_snapshots_separate() {
         use crate::game::native_entity_refs::tests::with_game;
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap())

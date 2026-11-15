@@ -1102,7 +1102,7 @@ pub(super) mod tests {
 
     /// A child run with a name no test has fails the parent instead of passing vacuously.
     #[test]
-    #[ignore = "runs in an isolated scratch process"]
+    #[ignore = "daily"]
     #[should_panic(expected = "matched no test of that name")]
     fn a_fresh_case_whose_name_matches_no_test_fails() {
         run_fresh_cases(
@@ -1345,7 +1345,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn typed_uuid_and_nbt_reads_follow_the_entity_level() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -1387,7 +1387,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_part_allows_weak_power_in_real_game_level() {
         use horizon_client::chunk::Chunk;
         use horizon_core::position::BlockPos;
@@ -1421,7 +1421,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_soil_part_answers_for_the_plants_above_it_in_a_real_game_level() {
         use horizon_client::chunk::Chunk;
         use horizon_core::position::BlockPos;
@@ -1458,7 +1458,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_block_part_decides_whether_the_tool_harvests() {
         use horizon_client::{chunk::Chunk, motion::PlayerMotion};
         use horizon_core::{geometry::Vec3, position::ChunkPos};
@@ -1555,7 +1555,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_handle_reads_redstone_as_signal_getter_does() {
         use horizon_core::geometry::Direction::{East, North, West};
 
@@ -1588,7 +1588,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_bone_meals_a_block_and_sets_a_biome_cell() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -1631,7 +1631,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_can_survive_asks_the_blocks_own_rule() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -1657,7 +1657,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_handle_updates_neighbours_as_vanillas_writes_do() {
         use horizon_core::geometry::Direction::East;
         use mod_api::NeighbourUpdate::{Neighbours, NeighboursExcept, OutputSignal};
@@ -1833,7 +1833,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn neighbor_changed_reads_its_inputs_and_its_tick_fires_at_its_delay() {
         use mod_platform::__private::part_tests::{
             SignalRead, signal_reader_game_thread, signal_reads,
@@ -1894,7 +1894,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_handle_reads_redstone_through_should_check_weak_power() {
         use horizon_core::geometry::Direction::West;
 
@@ -1912,7 +1912,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_part_answers_is_pathfindable_once_per_state_and_type() {
         use mod_api::entity::mobs::PathComputationType::{self, Air, Land, Water};
 
@@ -1954,7 +1954,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_part_asks_neighbours_to_update_when_its_block_is_removed() {
         use horizon_client::chunk::Chunk;
         use horizon_core::position::BlockPos;
@@ -2055,7 +2055,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_parts_decide_what_a_piston_pulls_along() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -2102,7 +2102,7 @@ pub(super) mod tests {
     /// entity's level, on the side that ticks it, with the entity and the block's position; a
     /// block without a part is not asked, and a non-finite answer is ignored.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_block_part_changes_the_bounce_restitution_an_entity_reads() {
         use horizon_client::block_contact::{Contact, bounce_restitution};
         use horizon_core::position::BlockPos;
@@ -2153,7 +2153,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_part_connects_wire_in_a_real_game_level() {
         use horizon_client::chunk::Chunk;
         use horizon_core::{geometry::Direction, position::BlockPos};
@@ -2189,7 +2189,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_part_flips_fence_wall_and_pane_connections_in_a_real_game_level() {
         use horizon_client::chunk::Chunk;
         use horizon_core::{geometry::Direction, position::BlockPos};
@@ -2235,7 +2235,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn side_guards_agree_across_integrated_dedicated_and_client() {
         use super::super::execution_role::ExecutionRole;
         use horizon_client::chunk::Chunk;
@@ -2271,7 +2271,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn chunk_handles_resolve_loaded_parked_and_stale_levels() {
         use horizon_client::chunk::Chunk;
         use mod_api::{Authority, ChunkStatus};
@@ -2312,7 +2312,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn level_reads_and_writes_use_dimension_build_height() {
         use horizon_client::chunk::{Chunk, LevelShape};
         use mod_api::BlockUpdateFlags;
@@ -2356,7 +2356,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn equipping_mobs_by_hand_keeps_one_complete_stack() {
         use horizon_client::{items::ItemStack, mobs::Mob};
         use horizon_core::geometry::Vec3;
@@ -2392,7 +2392,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn sulfur_cube_absorbs_one_complete_stack_by_hand_and_pickup() {
         use horizon_client::{items::ItemStack, mobs::Mob};
         use horizon_core::geometry::Vec3;
@@ -2432,7 +2432,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn shearing_llama_and_happy_ghast_returns_full_body_stacks() {
         use horizon_client::{items::ItemStack, mobs::Mob};
         use horizon_core::geometry::Vec3;
@@ -2463,7 +2463,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn acting_guest_handles_resolve_during_guest_turns() {
         use super::super::lan::LanSettings;
         use horizon_client::{
@@ -2823,7 +2823,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn entities_in_returns_readable_handles_and_intersects_boxes() {
         use horizon_client::entities::ArmorStand;
         use horizon_core::geometry::Vec3;
@@ -2863,7 +2863,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn connectionless_guest_has_no_transport() {
         use horizon_client::{
             lan::{
@@ -3561,7 +3561,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn level_sturdy_uses_gameplay_support() {
         use horizon_client::chunk::Chunk;
         use mod_api::SupportType as Support;
@@ -3769,7 +3769,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn level_clip_reads_parked_world_and_refuses_unloaded() {
         use horizon_client::chunk::Chunk;
         use mod_api::{BlockFace as Face, ClipBlock as Block, ClipFluid as Fluid};
@@ -3919,7 +3919,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_attributes_answer_for_mobs_stands_and_the_dragon() {
         use horizon_client::{entities::ArmorStand, mobs::Mob};
         use horizon_core::geometry::Vec3;
@@ -3951,7 +3951,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn level_shapes_use_empty_context() {
         use super::super::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::chunk::Chunk;
@@ -4092,7 +4092,7 @@ pub(super) mod tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn level_block_writes_validate_and_change_world() {
         use super::super::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::{chunk::Chunk, items::ItemStack};
@@ -4474,7 +4474,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_finds_the_entities_it_tracks_and_its_own_player_in_a_box() {
         use super::super::execution_role::ExecutionRole;
         use horizon_core::geometry::Vec3;
@@ -4531,7 +4531,7 @@ pub(super) mod tests {
     /// real `AddEntity` packet), after the entities the server tracks and before the window's
     /// own player; a player outside the box, and one the server removed, are not listed.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_lists_another_player_in_the_box_after_the_tracked_entities() {
         use super::super::execution_role::ExecutionRole;
         use horizon_core::geometry::Vec3;
@@ -4607,7 +4607,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_refuses_a_box_with_a_bound_that_is_not_finite_and_swaps_an_inverted_one() {
         use super::super::execution_role::ExecutionRole;
         use horizon_core::geometry::Vec3;

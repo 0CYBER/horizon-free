@@ -1867,7 +1867,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pearl_reads_its_end_gateway_cooldown_and_refuses_the_write() {
         use super::super::native_entity_refs::tests::with_game;
 

@@ -59,7 +59,7 @@ fn snbt(text: &str) -> Tag {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mannequin_saves_its_own_fields_and_no_mob_fields() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -102,7 +102,7 @@ fn a_mannequin_saves_its_own_fields_and_no_mob_fields() {
 /// that is not a part hides nothing, and its save comes from its live state
 /// with no loaded compound and over a stale one; a pig keeps its Mob flags.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mannequin_reads_and_saves_from_its_own_state() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

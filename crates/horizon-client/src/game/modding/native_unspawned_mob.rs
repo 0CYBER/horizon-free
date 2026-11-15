@@ -629,7 +629,7 @@ mod tests {
     /// What a listener edits through the editor is on the mob that joins the
     /// level, and the handle reads the edits back inside the call.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn edits_through_the_editor_are_on_the_mob_that_joins() {
         type Seen = (
             Result<Identifier, UnspawnedMobError>,
@@ -696,7 +696,7 @@ mod tests {
     /// A handle kept past its hook reads `Expired`, and the next call's
     /// editor refuses it the same way: it reaches only its own lend.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn a_handle_kept_past_its_hook_is_expired() {
         let kept: Arc<Mutex<Vec<UnspawnedMobRef>>> = Arc::default();
         let refused = Arc::new(Mutex::new(Vec::new()));
@@ -732,7 +732,7 @@ mod tests {
     /// `Flow::Cancel` skips finalization and keeps the listener's edits on
     /// the mob that still joins; `spawn_cancelled` adds no mob at all.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn both_cancels_keep_their_contract_with_edits() {
         let max_health = id("minecraft:max_health");
         listening(
@@ -779,7 +779,7 @@ mod tests {
     /// leaves there is what finalization reads: an ageable group whose later
     /// members are all babies makes this pig one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn the_group_a_listener_leaves_is_what_finalization_reads() {
         with_game(|game| {
             let alone = spawn_pig(game).unwrap();
@@ -840,7 +840,7 @@ mod tests {
     /// and the mob in the caller's slot is the one that was lent, mod goal
     /// and all, not a copy (whose mod goal would have no goal) or a default.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_panicking_listener_still_ends_the_lend() {
         let installed = || vec![mod_api::ModEntry::new("kept-goal", Box::new(KeptGoalMod))];
         mod_platform::testing::with_mods(installed().into(), || {

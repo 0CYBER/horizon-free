@@ -212,7 +212,7 @@ pub(in crate::game) mod tests {
     /// A wrapped `BlockUpdate` changes the viewed level's block, and the player's level keeps
     /// its own at the same position.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_wrapped_block_update_changes_the_viewed_world_not_the_players() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -232,7 +232,7 @@ pub(in crate::game) mod tests {
     /// An `open` makes a world for the level, a `run` fills it, and a `close` drops it and
     /// releases the slot: a late `run` of that binding is dropped, and makes no world.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn open_makes_a_world_and_close_drops_it() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -258,7 +258,7 @@ pub(in crate::game) mod tests {
     /// The client views two levels besides its own, in slots 0 and 1: a slot past them closes the
     /// connection, and an `open` of a bound slot starts it afresh.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_open_past_the_clients_cap_closes_the_connection() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -415,7 +415,7 @@ pub(in crate::game) mod tests {
 
     /// A viewed level's chunks, time and weather leave the player's level as it was.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_players_world_stays_as_it_was() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -447,7 +447,7 @@ pub(in crate::game) mod tests {
     /// A wrapped `AddEntity` and its move put the entity in the viewed world, where it moves; the
     /// player's own world holds nothing of it. A wrapped `RemoveEntities` takes it out.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_wrapped_entity_lives_in_the_viewed_world_not_the_players() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -501,7 +501,7 @@ pub(in crate::game) mod tests {
 
     /// A death's Respawn drops the viewed worlds: the server opens again what it still views.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_death_respawn_drops_the_viewed_worlds() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -578,7 +578,7 @@ pub(in crate::game) mod tests {
     /// is not finite, it plays nothing. One bound to an entity of the viewed level is asked at that
     /// entity. A sound of the player's own level does not ask it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_viewed_sound_plays_where_a_listener_puts_it() {
         let asked = Arc::default();
         let mods = vec![mod_api::ModEntry::new(
@@ -712,7 +712,7 @@ pub(in crate::game) mod tests {
     /// costs one `listened` check, allocates nothing and plays nothing: both sounds carry their
     /// event inline, which decoding them would allocate.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn with_no_listener_a_viewed_sound_is_dropped_after_one_check() {
         let mut resources = None;
         let mut game = client(&mut resources);

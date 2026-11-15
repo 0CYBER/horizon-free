@@ -26,7 +26,7 @@ use quote::ToTokens;
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
 };
 use syn::{FnArg, ImplItem, Item, Pat, Type, visit::Visit, visit_mut::VisitMut};
@@ -503,28 +503,13 @@ struct Sources {
     goal_view: String,
 }
 
-/// The hand-written sources, in deterministic order; `fire.rs` includes generated dispatch.
-fn native_hook_files(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let dir = root.join("crates/horizon-client/src/game/native_hooks");
-    let mut paths = fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .map(|entry| entry.map(|entry| entry.path()).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    paths.retain(|path| {
-        path.extension().is_some_and(|ext| ext == "rs")
-            && path.file_name().is_some_and(|name| name != "fire.rs")
-    });
-    paths.sort();
-    Ok(paths)
-}
-
 /// Parse and validate the catalog and hook/helper signatures.
 fn sources(root: &Path, fill: FillMode) -> Result<Sources, String> {
     #[allow(unused_mut)]
     let mut catalog = Catalog::load(root)?;
     let mut files = Vec::new();
     let mut methods = Vec::new();
-    for path in native_hook_files(root)? {
+    for path in horizon_game_discovery::native_hook_files(root)? {
         let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let file = syn::parse_file(&source).map_err(|e| e.to_string())?;
         let mut names = HashSet::new();

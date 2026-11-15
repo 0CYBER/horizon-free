@@ -162,7 +162,7 @@ mod tests {
     /// made by the particle's own generator (`Particle.random`), so the
     /// client level's random is where it was before the tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_dust_of_a_breeze_on_a_fence_keeps_the_client_level_random() {
         let mut game = game_with_breeze(Vec3::new(8.5, 65.5, 8.5));
         let registry = &game.pack.assets.registry;
@@ -196,7 +196,7 @@ mod tests {
     /// The control: a breeze standing on a full block's top also crumbles it,
     /// and its constructor's draws still leave the client level's random alone.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_dust_of_a_breeze_on_a_full_block_keeps_the_client_level_random() {
         let mut game = game_with_breeze(Vec3::new(8.5, 64.0, 8.5));
         let stone = game
@@ -225,7 +225,7 @@ mod tests {
     /// it is the block below the feet. Reading 0.2 below the feet, as the dust
     /// used to, lands in air on all three.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_ground_of_a_breeze_is_the_fence_wall_or_gate_it_stands_on() {
         let mut game = game_with_breeze(Vec3::new(8.5, 65.5, 8.5));
         let registry = &game.pack.assets.registry;

@@ -76,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a display"]
+    #[ignore = "daily"]
     fn frame_interpolation_matches_draw_and_holds_while_paused_or_frozen() {
         let name = "game::native_hooks::render_frame_pre::tests::frame_interpolation_matches_draw_and_holds_while_paused_or_frozen";
         if run_fresh_cases(name, "HORIZON_FRAME_PARTIAL_CHILD", &["frames"]) {

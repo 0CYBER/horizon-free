@@ -85,7 +85,7 @@ fn held(game: &super::Game<'_>) -> (Option<u32>, i32) {
 /// `item_toss` and sends the guest its inventory back; an allowed one drops as before, and an
 /// item without the Part is not asked.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_part_keeps_the_stack_in_the_slot() {
     let probe = Probe::default();
     with_probe(&probe, || {

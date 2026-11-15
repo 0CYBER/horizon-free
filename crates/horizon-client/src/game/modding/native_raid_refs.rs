@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn raid_events_keep_the_owning_level_with_colliding_ids() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mods = vec![mod_api::ModEntry::new(
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn saved_raids_are_found_before_the_first_raid_tick() {
         with_game(|game| {
             let root = std::env::temp_dir().join(format!("raid-early-{}", std::process::id()));
@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn raid_handles_read_a_raid_and_stop_it() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -401,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn parked_raid_handles_read_and_write_their_own_level() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -496,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn stale_closed_and_client_raid_handles_read_nothing() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

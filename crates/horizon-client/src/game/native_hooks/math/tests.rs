@@ -20,7 +20,7 @@ fn math_profile_selection_matches_platform_and_is_stable() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn game_host_math_profile_matches_platform_and_is_stable() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         let host: &dyn Host = game;

@@ -52,7 +52,7 @@ mod entity_place_tests {
     /// A bed placement reaches the hook as one `Multi` of both halves, a
     /// cancel is reported, and with no listener nothing is asked.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_multi_placement_reaches_the_hook_once_and_cancels() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mods = vec![ModEntry::new(

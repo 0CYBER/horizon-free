@@ -87,7 +87,7 @@ fn zombie(game: &super::Game<'_>, id: u32) -> Mob {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_shield_hook_sees_the_hit_before_armor_and_enchantment_reductions() {
     let heard = heard(Heard::default(), |game| {
         let mut hit = zombie(game, 226001);
@@ -103,7 +103,7 @@ fn the_shield_hook_sees_the_hit_before_armor_and_enchantment_reductions() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_blocked_damage_above_the_hit_is_clamped_to_it() {
     let setup = Heard {
         set_block: Some((true, 100.0)),
@@ -120,7 +120,7 @@ fn a_blocked_damage_above_the_hit_is_clamped_to_it() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn setting_blocked_false_blocks_nothing() {
     let setup = Heard {
         set_block: Some((false, 6.0)),
@@ -136,7 +136,7 @@ fn setting_blocked_false_blocks_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_totem_hook_fires_after_the_health_is_gone_and_a_cancel_lets_the_mob_die() {
     let setup = Heard {
         cancel_totem: true,
@@ -162,7 +162,7 @@ fn the_totem_hook_fires_after_the_health_is_gone_and_a_cancel_lets_the_mob_die()
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_uncanceled_totem_saves_the_mob() {
     let heard = heard(Heard::default(), |game| {
         let mut hit = zombie(game, 226006);
@@ -182,7 +182,7 @@ fn an_uncanceled_totem_saves_the_mob() {
 /// The hit's level is the one the hit draws from: a mod's draw moves the world's random on by
 /// exactly one place.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_shield_hook_draws_from_the_hits_random() {
     let after = |random_draw| {
         let next = Mutex::new(0);

@@ -560,7 +560,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn command_view_uses_live_and_pending_boat_leashes_not_raw_tags() {
         use crate::game::commands::Target;
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -624,7 +624,7 @@ mod tests {
         assert!((d - 5.0).abs() < 1e-12);
     }
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn non_guest_holder_branches_keep_their_existing_velocity_sources() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);

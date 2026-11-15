@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires HORIZON_TEST_RESOURCES with prepared vanilla tables"]
+    #[ignore = "daily"]
     fn archive_item_models_use_real_prepared_tables_without_unpacking() -> crate::Result<()> {
         use horizon_assets::resource_source::Resource;
         use std::io::Write;

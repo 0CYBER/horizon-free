@@ -2451,7 +2451,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn native_persistent_components_are_available_to_give() {
         horizon_protocol::item::custom::install(1000, vec!["example:marker".into()]).unwrap();
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -2669,7 +2669,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn studio_is_in_the_client_chat_tree_without_a_mod_registering_it() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let tree = game.chat_tree_for(None);
@@ -2977,7 +2977,7 @@ mod enchantment_snapshot_tests {
     use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn synchronized_definitions_refresh_existing_enchantment_views() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -3127,7 +3127,7 @@ mod damage_type_registry_tests {
     /// A world pack's damage type is a `/damage` type once the world opens,
     /// beside vanilla's, and the registry keeps vanilla's tags.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_world_packs_damage_type_parses_in_damage() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

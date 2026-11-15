@@ -6,7 +6,7 @@ use horizon_client::{
 };
 
 #[test]
-#[ignore = "needs prepared resources; each interference case uses an isolated process"]
+#[ignore = "daily"]
 fn finalization_never_retargets_stale_items_or_replaced_placeholders() {
     const NAME: &str = "game::block_entity_tick_item_preconditions_tests::finalization_never_retargets_stale_items_or_replaced_placeholders";
     if super::native_entity_refs::tests::run_fresh_cases(

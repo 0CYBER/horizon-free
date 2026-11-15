@@ -240,7 +240,7 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_registered_thrown_type_draws_the_later_renderer_and_no_item() {
     in_scene(
         "a_registered_thrown_type_draws_the_later_renderer_and_no_item",
@@ -255,7 +255,7 @@ fn a_registered_thrown_type_draws_the_later_renderer_and_no_item() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_unregistered_thrown_type_still_draws_its_item() {
     in_scene(
         "an_unregistered_thrown_type_still_draws_its_item",
@@ -273,7 +273,7 @@ fn an_unregistered_thrown_type_still_draws_its_item() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
     in_scene(
         "a_vanilla_boat_is_unchanged_by_a_registration_for_its_type",
@@ -298,7 +298,7 @@ fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
 /// A failing renderer falls back to the item and is asked no more; only a reload's fresh table asks
 /// it again, so this also fails when a reload does not rebuild the table (or does not finish).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failed_renderer_draws_the_item_until_a_resource_reload_resolves_it_again() {
     in_scene(
         "a_failed_renderer_draws_the_item_until_a_resource_reload_resolves_it_again",

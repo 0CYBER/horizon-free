@@ -40,7 +40,7 @@ fn recipe(items: &Items, json: Value) -> crate::crafting::Recipes {
     .unwrap()
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn registered_stored_removal_only_checks_presence_and_keeps_recipe() {
     let items = resources();
     let ingredient = component(
@@ -68,7 +68,7 @@ fn registered_stored_removal_only_checks_presence_and_keeps_recipe() {
     ));
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn registered_default_component_without_decoder_loads_and_compares_default() {
     let items = resources();
     let ingredient = component(
@@ -87,7 +87,7 @@ fn registered_default_component_without_decoder_loads_and_compares_default() {
     assert!(!ingredient.test_in(&ctx, &stack));
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn modelled_potion_stored_value_matches_same_potion_without_allocating() {
     let items = resources();
     let ingredient = component(
@@ -117,7 +117,7 @@ fn modelled_potion_stored_value_matches_same_potion_without_allocating() {
     );
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn raw_stored_component_uses_exact_tag_equality_and_patched_display() {
     let items = resources();
     let ingredient = component(
@@ -239,7 +239,7 @@ fn custom_display_empty_tag_loads_with_an_empty_display_list() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn modelled_bundle_and_trim_values_compare_complete_fields_without_allocations() {
     let items = resources();
     let load = load();
@@ -283,7 +283,7 @@ fn modelled_bundle_and_trim_values_compare_complete_fields_without_allocations()
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn non_simple_empty_default_list_loads_matches_and_cooks_with_full_candidates() {
     let root = std::path::PathBuf::from(
         std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources"),

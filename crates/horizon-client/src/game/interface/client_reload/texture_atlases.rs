@@ -406,7 +406,7 @@ mod tests {
     /// The registered atlas's sprite is in the GUI atlas at its own size after the first load,
     /// drawable by its name, and gone after a reload that no longer registers it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_atlas_sprite_is_stitched_into_the_gui_atlas_until_a_reload_drops_it() {
         let kept = std::sync::Arc::default();
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(

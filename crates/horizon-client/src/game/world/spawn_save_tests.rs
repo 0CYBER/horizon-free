@@ -27,7 +27,7 @@ impl Hooks for SaveOnSpawnJoin {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn spawn_batches_refuse_saves_until_all_rows_are_published() {
     for planned in [false, true] {
         let root = PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap())

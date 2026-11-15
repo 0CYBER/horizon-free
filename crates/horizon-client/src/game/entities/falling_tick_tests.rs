@@ -10,7 +10,7 @@ use mod_platform::__private::part_tests::{falling_tick_game_thread, falling_tick
 use std::sync::{Arc, Mutex};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_falling_part_hears_each_airborne_tick_and_not_the_landing() {
     falling_tick_game_thread();
     with_game(|game| {
@@ -128,7 +128,7 @@ fn with_recorder(check: impl FnOnce(&mut crate::game::Game<'_>, &Heard)) {
 /// The listener names the falling block and reads where the tick left it, and what it writes
 /// to the block's velocity is what the stored falling block carries afterwards.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_falling_listener_reads_its_block_and_its_velocity_write_lands() {
     with_recorder(|game, heard| {
         sand_at(game, 71);
@@ -146,7 +146,7 @@ fn a_falling_listener_reads_its_block_and_its_velocity_write_lands() {
 
 /// A falling block gone before the delivery is skipped, and the next pass starts empty.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_falling_block_gone_before_delivery_is_skipped() {
     with_recorder(|game, heard| {
         sand_at(game, 71);

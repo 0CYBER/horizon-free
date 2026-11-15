@@ -54,7 +54,7 @@ fn dropped(game: &Game<'_>, item: &str) -> u32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_part_decides_whether_a_player_breaking_a_block_destroyed_it() {
     // The fixture's parts: snow loses one layer per break and stays, down to the last, which
     // vanilla removes; glass is removed by its part, which answers that it was destroyed.
@@ -113,7 +113,7 @@ fn a_block_part_decides_whether_a_player_breaking_a_block_destroyed_it() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_part_keeping_the_block_replaces_player_will_destroy_in_creative() {
     // The fixture's parts keep a shulker box and a tripwire (`Some(false)`).
     mod_platform::__private::part_tests::destroyed_by_player_game_thread();
@@ -162,7 +162,7 @@ fn a_part_keeping_the_block_replaces_player_will_destroy_in_creative() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_parts_answer_decides_the_tool_wear_and_the_statistics() {
     // The fixture's parts: snow of two layers or more loses one and stays (`Some(false)`), glass
     // is removed by its part (`Some(true)`), dirt has none.
@@ -212,7 +212,7 @@ fn the_parts_answer_decides_the_tool_wear_and_the_statistics() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_mods_harvest_answer_is_read_once_after_the_removal() {
     // The fixture's part on stone records whether stone is still in the world when its harvest
     // is read, and leaves the removal to vanilla. The harvest is read once, after
@@ -255,7 +255,7 @@ fn the_mods_harvest_answer_is_read_once_after_the_removal() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_pots_harvest_listener_runs_once_and_sees_it_cracked() {
     // playerWillDestroy cracks a pot broken with a pickaxe before the removal, and the harvest is
     // asked of that adjusted state, once.
@@ -275,7 +275,7 @@ fn a_pots_harvest_listener_runs_once_and_sees_it_cracked() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn denied_ice_does_not_melt_above_solid_ground() {
     mod_platform::__private::part_tests::destroyed_by_player_game_thread();
     with_game(|game| {

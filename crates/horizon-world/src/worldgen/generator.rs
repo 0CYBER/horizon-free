@@ -4192,7 +4192,7 @@ mod tests {
             })
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn saved_starts_match_generated_layouts() {
         use super::super::structure::start::Piece;
         use horizon_core::nbt::Compound;

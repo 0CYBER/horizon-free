@@ -149,7 +149,7 @@ fn close_to(actual: [f32; 4], expected: [f32; 4]) {
 /// player, then with water at the eye. The expected names are `ScreenEffectRenderer.submit`'s
 /// order, each mod's quads right before the overlay they belong to.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_draws_prepends_replaces_and_cancels_overlays() {
     with_client_game(|game| {
         burning_player(game);
@@ -349,7 +349,7 @@ impl Hooks for Painter {
 /// `160 + 160 * x * 1.07111 / -z`, `120 - 120 * y * 1.42815 / -z`, so the leaning quad's left edge
 /// is at x 74 and its right edge at x 203, and the clear quad covers x 273 to 311.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a display"]
+#[ignore = "daily"]
 fn screen_effect_quads_draw_over_the_level_and_under_the_gui() {
     let name = "game::block_screen_effect_draw_tests::screen_effect_quads_draw_over_the_level_and_under_the_gui";
     if run_fresh_cases(name, "HORIZON_SCREEN_EFFECT_PASS_CHILD", &["pixels"]) {

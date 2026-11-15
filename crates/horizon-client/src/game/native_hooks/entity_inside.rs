@@ -25,7 +25,7 @@ mod entity_inside_tests {
     /// Landing writes reach the level at the batch end, in the order asked, and only
     /// where the block is still the state landed on.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn landing_writes_apply_at_the_batch_end() {
         use crate::game::api_values::{TryIntoApi, TryIntoEngine};
         use horizon_client::block_contact::{landed, take_pending};
@@ -284,7 +284,7 @@ mod sweep_tests {
     /// for the server's `give_player_effect`, which runs before this tick's effect
     /// tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_part_pushes_the_player_and_its_effect_lands() {
         let part = InsidePart::default();
         let mods = install_inside_mod("inside-push", &part);
@@ -325,7 +325,7 @@ mod sweep_tests {
     /// still happen, but the flush stops at the death, so the later writes and
     /// effects never apply.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_killing_write_stops_the_flush() {
         let part = InsidePart {
             kill_after: Some(0),
@@ -354,7 +354,7 @@ mod sweep_tests {
     /// and the player's tick go on, and the panicking callback's writes are refused
     /// with it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_panicking_part_leaves_the_players_tick_restored() {
         // The panic lands on every contact: each one is caught in the staged fire,
         // and the mod keeps receiving the walk's contacts.
@@ -397,7 +397,7 @@ mod sweep_tests {
     /// player's writes and the pending queue alone: no part is installed, so the
     /// fire's gate answers false and its DamageLevel is never built.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn without_a_part_the_walk_costs_no_mod_work() {
         // The production binding, as every sweep test sets it: nothing is installed
         // on this thread, so its gate answers false for every state and the fire's
@@ -430,7 +430,7 @@ mod sweep_tests {
     /// `applyAndClear`'s own, ready for the server's `give_player_effect` before
     /// this tick's effect tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_added_effect_keeps_its_collector_position() {
         let part = InsidePart::default();
         let mods = install_inside_mod("inside-order", &part);
@@ -471,7 +471,7 @@ mod sweep_tests {
     /// part — two blocks, two contacts, not four, as vanilla's `entityInside`
     /// runs once a move.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_servers_player_is_told_once_a_tick() {
         let part = InsidePart::default();
         let mods = install_inside_mod("inside-once", &part);
@@ -527,7 +527,7 @@ mod sweep_tests {
     /// Without a part the two server passes leave the player as vanilla has it:
     /// the walk still reports its blocks and nothing is queued.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_server_passes_without_a_part_keep_vanilla_behavior() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let stone = game
@@ -620,7 +620,7 @@ mod sweep_tests {
 
     /// A part's pushes reach the item in its own tick, one contact a block.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_part_pushes_an_item_once_a_block() {
         let part = InsidePart::default();
         let mods = install_inside_mod("inside-item", &part);
@@ -649,7 +649,7 @@ mod sweep_tests {
     /// A killing write stops the item's flush: the walk still reaches both blocks,
     /// the writes after the destruction never apply.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_killing_write_stops_the_items_flush() {
         let part = InsidePart {
             kill_after: Some(0),
@@ -678,7 +678,7 @@ mod sweep_tests {
     /// lent level goes back, and the lifted row the batch holds returns to the
     /// level's list (#2194's and #2213's carrier discipline).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_panicking_part_leaves_the_item_batch_restored() {
         let part = InsidePart {
             panic_after: Some(0),
@@ -721,7 +721,7 @@ mod sweep_tests {
     /// Without a part the item's sweep costs one gate test: nothing is written,
     /// nothing queued, exactly what main's recorded route did with no listener.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_item_without_a_part_is_left_alone() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let _ = horizon_client::block_contact::HOOKS.set(super::BLOCK_CONTACT_HOOKS);
@@ -742,7 +742,7 @@ mod sweep_tests {
     /// The projectile's batch sweep: a part's push reaches it, one contact a
     /// block, and a removed projectile's flush stops.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_part_pushes_a_projectile_and_removal_stops_the_flush() {
         let part = InsidePart::default();
         let mods = install_inside_mod("inside-shot", &part);
@@ -816,7 +816,7 @@ mod sweep_tests {
     /// Without a part the projectile's sweep costs one gate test and nothing else,
     /// exactly what main's recorded route did with no listener.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_projectile_without_a_part_is_left_alone() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let _ = horizon_client::block_contact::HOOKS.set(super::BLOCK_CONTACT_HOOKS);
@@ -854,7 +854,7 @@ mod sweep_tests {
     /// a flying arrow meets its blocks in walk order, once each, and a stuck
     /// arrow keeps the contact of the block it sits in.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_arrow_is_told_once_a_block_stuck_and_flying() {
         let part = InsidePart::default();
         let mods = install_inside_mod("inside-arrow", &part);
@@ -910,7 +910,7 @@ mod sweep_tests {
     /// in the staged fire, the lifted projectile row returns to the level's list
     /// exactly once, and the arrow keeps its state.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_panicking_part_leaves_the_arrow_list_whole() {
         let part = InsidePart {
             panic_after: Some(0),

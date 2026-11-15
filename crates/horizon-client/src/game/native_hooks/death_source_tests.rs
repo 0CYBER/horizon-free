@@ -202,7 +202,7 @@ fn finish_projectile_death(game: &mut Game<'_>, id: u32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn player_bow_death_retains_the_incoming_source_and_full_weapon() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::player_bow_death_retains_the_incoming_source_and_full_weapon",
@@ -243,7 +243,7 @@ fn player_bow_death_retains_the_incoming_source_and_full_weapon() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn skeleton_arrow_death_credits_the_skeleton_not_the_player() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::skeleton_arrow_death_credits_the_skeleton_not_the_player",
@@ -328,7 +328,7 @@ fn cancelled_mob(heal: bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_mob_death_preserves_listener_health_five_without_loot() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::cancelled_mob_death_preserves_listener_health_five_without_loot",
@@ -337,7 +337,7 @@ fn cancelled_mob_death_preserves_listener_health_five_without_loot() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_unhealed_mob_is_removed_at_twenty_ticks_without_loot_or_redispatch() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::cancelled_unhealed_mob_is_removed_at_twenty_ticks_without_loot_or_redispatch",
@@ -346,7 +346,7 @@ fn cancelled_unhealed_mob_is_removed_at_twenty_ticks_without_loot_or_redispatch(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn zombie_ai_melee_armor_hurt_retains_the_real_source() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::zombie_ai_melee_armor_hurt_retains_the_real_source",
@@ -456,7 +456,7 @@ fn cancelled_player(heal: bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and loopback sockets"]
+#[ignore = "daily"]
 fn cancelled_player_death_preserves_listener_health_five_and_inventory() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::cancelled_player_death_preserves_listener_health_five_and_inventory",
@@ -465,7 +465,7 @@ fn cancelled_player_death_preserves_listener_health_five_and_inventory() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and loopback sockets"]
+#[ignore = "daily"]
 fn cancelled_unhealed_player_ticks_away_without_drops_or_redispatch() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::cancelled_unhealed_player_ticks_away_without_drops_or_redispatch",
@@ -474,7 +474,7 @@ fn cancelled_unhealed_player_ticks_away_without_drops_or_redispatch() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and loopback sockets"]
+#[ignore = "daily"]
 fn guest_player_bow_death_keeps_the_connected_shooter_without_a_local_player() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::guest_player_bow_death_keeps_the_connected_shooter_without_a_local_player",
@@ -517,7 +517,7 @@ fn guest_player_bow_death_keeps_the_connected_shooter_without_a_local_player() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline",
@@ -573,7 +573,7 @@ fn cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot",
@@ -629,7 +629,7 @@ fn later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_clock() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_clock",
@@ -674,7 +674,7 @@ fn cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_cloc
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and loopback sockets"]
+#[ignore = "daily"]
 fn later_cancelled_player_revival_is_transactional_and_a_second_kill_drops_inventory() {
     crate::game::in_own_process(
         "game::native_hooks::death_source_tests::later_cancelled_player_revival_is_transactional_and_a_second_kill_drops_inventory",

@@ -54,7 +54,7 @@ fn thin((lo, hi): ([f64; 3], [f64; 3])) -> [bool; 3] {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_frame_turns_to_every_direction_and_its_bounds_follow() {
     with_hanging(|game| {
         let frame = game.entity(FRAME).expect("the frame's handle");
@@ -73,7 +73,7 @@ fn a_frame_turns_to_every_direction_and_its_bounds_follow() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_painting_turns_only_to_a_horizontal_direction() {
     with_hanging(|game| {
         let painting = game.entity(PAINTING).expect("the painting's handle");
@@ -93,7 +93,7 @@ fn a_painting_turns_only_to_a_horizontal_direction() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_frames_item_turns_with_vanillas_wrap_and_other_kinds_are_refused() {
     with_hanging(|game| {
         let frame = game.entity(FRAME).expect("the frame's handle");
@@ -133,7 +133,7 @@ fn tracked_facing(game: &mut super::Game<'_>, id: u32) -> Option<i32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hanging_entity_turned_back_to_south_is_sent_south() {
     super::native_guest_turn_tests::with_guests(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -152,7 +152,7 @@ fn a_hanging_entity_turned_back_to_south_is_sent_south() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_turns_its_painting_with_the_servers_direction() {
     use horizon_protocol::entity_data::{Value, serializer};
     super::native_entity_refs::tests::with_client_game(|game| {

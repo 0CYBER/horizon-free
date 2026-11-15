@@ -107,7 +107,7 @@ fn with_player(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_players_completed_break_is_heard_once_with_the_removed_state() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     let order = Arc::new(Mutex::new(Vec::new()));
@@ -337,7 +337,7 @@ fn with_order_probe(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_fakes_break_action_is_heard_before_the_drops_and_the_experience() {
     use mod_api::PlayerAction;
     let stone = [1, 63, 0];
@@ -370,7 +370,7 @@ fn a_fakes_break_action_is_heard_before_the_drops_and_the_experience() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_listener_writes_the_level_where_the_block_stood() {
     use mod_api::PlayerAction;
     let stone = [1, 63, 0];
@@ -394,7 +394,7 @@ fn a_listener_writes_the_level_where_the_block_stood() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn shears_disarm_a_tripwire_and_the_hook_is_told_the_disarmed_string() {
     use mod_api::PlayerAction;
     let wire = [1, 64, 0];
@@ -418,7 +418,7 @@ fn shears_disarm_a_tripwire_and_the_hook_is_told_the_disarmed_string() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_target_break_block_replaced_is_told_with_its_own_block_entity() {
     use mod_api::PlayerAction;
     let target = [1, 63, 0];

@@ -52,7 +52,7 @@ mod landing_crossing_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn landing_crossing_refuses_invalid_writes_and_sibling_damage() {
         let part = LandingPart::default();
         let mods: mod_api::Mods = vec![ModEntry::new(

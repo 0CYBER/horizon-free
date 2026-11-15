@@ -86,7 +86,7 @@ fn landing(host: &LanHost) -> bool {
 }
 
 #[test]
-#[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hold_ignores_the_clients_moves_until_a_tp_to_lit_land_replaces_it() {
     let mut resources = None;
     let (mut game, _rx) = server(&mut resources);
@@ -119,7 +119,7 @@ fn a_hold_ignores_the_clients_moves_until_a_tp_to_lit_land_replaces_it() {
 }
 
 #[test]
-#[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hold_ended_by_a_trip_elsewhere_hears_the_client_again() {
     let mut resources = None;
     let (mut game, _rx) = server(&mut resources);
@@ -139,7 +139,7 @@ fn a_hold_ended_by_a_trip_elsewhere_hears_the_client_again() {
 }
 
 #[test]
-#[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hold_places_the_player_once_the_chunks_are_lit() {
     let mut resources = None;
     let (mut game, _rx) = server(&mut resources);
@@ -173,7 +173,7 @@ fn a_hold_places_the_player_once_the_chunks_are_lit() {
 }
 
 #[test]
-#[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hold_follows_the_destination_a_mod_chose() {
     let mut resources = None;
     let (mut game, _rx) = server(&mut resources);
@@ -307,7 +307,7 @@ fn a_command_arrival_holds_movement_until_lit_then_ticks_damage_again() {
 }
 
 #[test]
-#[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
     use horizon_client::items::ItemStack;
     use horizon_client::lan::guest::InboxItem;
@@ -414,7 +414,7 @@ fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
 }
 
 #[test]
-#[ignore = "prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_world_spawn_search_keeps_movement_held_between_candidate_chunks() {
     use horizon_client::world_spawn::PlayerSpawnFinder;
 

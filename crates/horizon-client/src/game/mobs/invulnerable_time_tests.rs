@@ -75,7 +75,7 @@ fn health(game: &mut Game<'_>) -> f32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hurt_cooldown_survives_an_edit_and_is_not_saved() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -130,7 +130,7 @@ fn step(game: &mut Game<'_>, ticks: u32) {
 /// is saved only while above 0, and is not passed by a stronger hit, but is
 /// by `/kill` (`#bypasses_invulnerability`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     let mut resources = None;
     let mut game = game(&mut resources);

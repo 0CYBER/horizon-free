@@ -49,7 +49,7 @@ impl Hooks for Walls {
 }
 
 #[test]
-#[ignore = "needs prepared resources and an isolated process for native mods"]
+#[ignore = "daily"]
 fn block_parts_answer_what_the_dragon_and_the_wither_may_destroy() {
     let keep = Arc::new(AtomicBool::new(false));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(

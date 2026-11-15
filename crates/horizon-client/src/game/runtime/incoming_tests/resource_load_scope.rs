@@ -13,7 +13,7 @@ impl mod_api::Hooks for Owner {
 }
 
 #[test]
-#[ignore = "requires HORIZON_TEST_RESOURCES pointing to prepared vanilla resources"]
+#[ignore = "daily"]
 fn loader_workers_keep_owning_mod_sets_and_share_only_matching_numeric_payloads() {
     let prepared = std::path::PathBuf::from(
         std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources are required"),

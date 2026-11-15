@@ -568,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn handle_teleport_keeps_display_easing() {
         use crate::game::{commands::OtherEntity, native_entity_refs::tests::with_game};
         use horizon_core::geometry::Vec3;

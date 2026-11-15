@@ -17,7 +17,7 @@ fn tie_player_mob(game: &mut Game<'_>, fence: [i32; 3]) -> (u32, u32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn natural_knot_owner_survives_active_parked_reset_and_retires_at_last_holder() {
     with_game(|game| {
         game.reset_entity_residency();
@@ -75,7 +75,7 @@ fn natural_knot_owner_survives_active_parked_reset_and_retires_at_last_holder() 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn natural_knot_tick_cleanup_retires_a_removed_holder_and_fresh_tie_gets_a_new_id() {
     with_game(|game| {
         game.reset_entity_residency();
@@ -95,7 +95,7 @@ fn natural_knot_tick_cleanup_retires_a_removed_holder_and_fresh_tie_gets_a_new_i
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn natural_knot_last_boat_notification_excludes_its_old_resident_payload() {
     with_game(|game| {
         game.reset_entity_residency();

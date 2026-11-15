@@ -49,7 +49,7 @@ fn end_game() -> Game<'static> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
     let mut game = end_game();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 128.0, 0.5)).unwrap());

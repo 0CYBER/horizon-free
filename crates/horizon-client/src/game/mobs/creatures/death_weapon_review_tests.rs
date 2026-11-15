@@ -62,7 +62,7 @@ fn hit(game: &mut Game<'_>, shot: &Projectile, amount: f32) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
         if isolated() {
@@ -99,7 +99,7 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
         if isolated() {
@@ -130,7 +130,7 @@ fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_dispenser_arrow_without_recorded_weapon_is_none() {
     if isolated() {
         return;
@@ -160,7 +160,7 @@ fn player(game: &mut Game<'_>) {
     crate::game::native_entity_refs::tests::bind_local_player(game, 11, 123);
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_riptide_iii_uses_spin_trident() {
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
         if isolated() {
@@ -184,7 +184,7 @@ fn death_weapon_riptide_iii_uses_spin_trident() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_harming_potion_does_not_read_thrower_sword() {
     if isolated() {
         return;
@@ -212,7 +212,7 @@ fn death_weapon_harming_potion_does_not_read_thrower_sword() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_different_killing_source_discards_projectile() {
     if isolated() {
         return;
@@ -234,7 +234,7 @@ fn death_weapon_different_killing_source_discards_projectile() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_without_subscriber_does_not_capture() {
     if isolated() {
         return;
@@ -253,7 +253,7 @@ fn death_weapon_without_subscriber_does_not_capture() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_removal_clears_capture_and_vehicle_transfer_keeps_its_owner() {
     if isolated() {
         return;
@@ -297,7 +297,7 @@ fn death_weapon_removal_clears_capture_and_vehicle_transfer_keeps_its_owner() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_weapon_same_tick_stronger_arrow_replaces_weapon() {
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
         if isolated() {

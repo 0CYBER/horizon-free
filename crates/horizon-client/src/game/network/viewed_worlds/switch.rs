@@ -315,7 +315,7 @@ mod tests {
     /// Overworld's are its viewed world, which wrapped packets of level 0 now change; no loading
     /// screen starts.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_travel_into_a_viewed_level_swaps_the_worlds_with_no_loading_screen() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -354,7 +354,7 @@ mod tests {
     /// player's once it travels there, and the Overworld chest the player's world had is kept
     /// in its viewed world and is the player's again on the way back.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entities_travel_with_their_level_both_ways() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -414,7 +414,7 @@ mod tests {
     /// the new world holds its diamonds. Data for a position whose block has no block entity is
     /// not kept meanwhile.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_chest_placed_in_a_viewed_column_keeps_its_data_through_the_travel() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -451,7 +451,7 @@ mod tests {
     /// then air, then a chest again with none, is an empty chest after the travel. A chest's own
     /// state change (another facing) keeps the data.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_block_replacing_a_viewed_block_entity_takes_its_data() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -489,7 +489,7 @@ mod tests {
 
     /// Removing both placed block entities clears both retained stores before travel.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn removed_block_entities_at_two_positions_do_not_return_on_travel() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -538,7 +538,7 @@ mod tests {
     /// A travel into a level the client does not view enters it afresh: every viewed world goes,
     /// with the player's, and the loading screen waits for the server.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_travel_into_a_level_not_viewed_reloads() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -555,7 +555,7 @@ mod tests {
     /// viewed Nether reload it: every viewed world goes, the Nether's columns too, and the
     /// loading screen waits for the server.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_death_or_an_end_exit_into_a_viewed_level_reloads() {
         let mut resources = None;
         for keep in [0, 1] {

@@ -1770,7 +1770,7 @@ mod tests {
 
     /// 300 slow ticks in ten seconds log no Horizon slow-tick line, and the ring holds the last 256.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn slow_ticks_enter_the_ring_and_not_the_log() {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
         use horizon_client::server_perf::{ServerPerf, TickDetail, WorldCounts};
@@ -1903,7 +1903,7 @@ mod tests {
     /// is made, so the Overworld's saved border is in place for the first
     /// command, and a first `/worldborder set` is not overwritten later.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_reopened_world_has_each_levels_saved_border_from_the_start() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let home = std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join("h260");
@@ -1944,7 +1944,7 @@ mod tests {
     /// Added controls (H260, after the baseline): a new world, and a read and a
     /// set before the first tick that survive a tick, a save and another reopen.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn reopened_borders_keep_through_a_tick_and_a_save_and_a_new_world_has_defaults() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let home = std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap())
@@ -2242,7 +2242,7 @@ mod request_save_tests {
     use super::{Dim, Levels};
 
     #[test]
-    #[ignore = "needs prepared resources and isolated homes"]
+    #[ignore = "daily"]
     fn requested_save_waits_without_consuming_the_queue_while_lifted() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.levels.request_save(Dim::Overworld);

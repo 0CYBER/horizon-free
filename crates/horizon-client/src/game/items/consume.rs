@@ -834,7 +834,7 @@ mod teleport_hook_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated native-mod process"]
+    #[ignore = "daily"]
     fn consumption_hook_keeps_the_stack_before_use_and_cancellation_stops_attempts() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let moved = Arc::new(AtomicBool::new(false));
@@ -1043,7 +1043,7 @@ mod fox_consumption_hook_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated native-mod process"]
+    #[ignore = "daily"]
     fn fox_consumption_adapter_uses_full_host_and_preserves_listener_writes() {
         let mode = Arc::new(AtomicU8::new(0));
         let heard = Arc::new(Mutex::new(Vec::new()));
@@ -1161,7 +1161,7 @@ mod fox_consumption_hook_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated native-mod process"]
+    #[ignore = "daily"]
     fn fox_tick_pauses_before_movement_and_next_actor_and_preserves_full_host_writes() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let spawned = Arc::new(Mutex::new(Vec::new()));

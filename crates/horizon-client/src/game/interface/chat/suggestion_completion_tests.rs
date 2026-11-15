@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 /// Exercise the actual Game keyboard/mouse handlers and generated mod dispatch.
 #[test]
-#[ignore = "needs prepared resources and a fresh HORIZON_HOME; run in isolation"]
+#[ignore = "daily"]
 fn chat_completion_reaches_mods_from_keyboard_and_mouse() {
     crate::game::in_own_process(
         "game::chat::suggestion_completion_tests::chat_completion_reaches_mods_from_keyboard_and_mouse",

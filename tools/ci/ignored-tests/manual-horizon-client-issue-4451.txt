@@ -1,0 +1,6 @@
+# Opt-in measurements, never selected by daily shards; exact reasons/rationales are in ../ignored-test-exceptions.json.
+horizon-client game::block_entity_tick_items_bench_tests::unscoped_item_entity_reads by-hand manual # measurement; needs prepared resources in HORIZON_TEST_RESOURCES; opt-in measurement on an idle machine, not a daily correctness check
+horizon-client game::mod_api_host::attachment_membership_tests::attachment_entity_read_bench by-hand manual # manual attachment scaling benchmark; needs HORIZON_TEST_RESOURCES; opt-in measurement on an idle machine, not a daily correctness check
+horizon-client game::native_goal_ticks::tests::mod_goal_tick_cost by-hand manual # cost probe; opt-in measurement on an idle machine, not a daily correctness check
+horizon-client game::native_recipes::tests::craft_cost by-hand manual # a benchmark: run it in release with HORIZON_TEST_RESOURCES; opt-in measurement on an idle machine, not a daily correctness check
+horizon-client game::native_server::fake_action_tests::fakes_acting_each_tick_cost by-hand manual # timing; opt-in measurement on an idle machine, not a daily correctness check

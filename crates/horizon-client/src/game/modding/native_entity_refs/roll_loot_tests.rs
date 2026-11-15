@@ -185,7 +185,7 @@ fn count_of(stacks: &[ItemStack], item: &str) -> Vec<u32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_roll_is_the_engines_own_roll_for_the_same_seed_and_tool() {
     let mut resources = None;
     let (mut game, level) = game(&mut resources, "same");
@@ -222,7 +222,7 @@ fn a_roll_is_the_engines_own_roll_for_the_same_seed_and_tool() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn weighted_pools_conditions_and_functions_roll_as_the_table_says() {
     let mut resources = None;
     let (mut game, level) = game(&mut resources, "table");
@@ -279,7 +279,7 @@ fn weighted_pools_conditions_and_functions_roll_as_the_table_says() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_table_with_a_random_sequence_draws_from_it_not_the_level() {
     let mut resources = None;
     let (mut game, level) = game(&mut resources, "sequence");
@@ -304,7 +304,7 @@ fn a_table_with_a_random_sequence_draws_from_it_not_the_level() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_missing_table_and_a_stale_handle_are_none() {
     let mut resources = None;
     let (mut game, level) = game(&mut resources, "none");
@@ -327,7 +327,7 @@ fn a_missing_table_and_a_stale_handle_are_none() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn component_stack_capacity_is_preserved_on_every_split() {
     let mut resources = None;
     let (mut game, level) = game(&mut resources, "component-split");

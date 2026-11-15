@@ -67,7 +67,7 @@ fn fixture(
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn farmer_without_entries_matches_vanilla() {
     fixture(
         &[
@@ -99,7 +99,7 @@ fn farmer_without_entries_matches_vanilla() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn farmer_tag_adds_to_farmland() {
     fixture(
         &[
@@ -119,7 +119,7 @@ fn farmer_tag_adds_to_farmland() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn fisherman_with_entries_runs_the_same_sensor() {
     fixture(
         &[([1, 64, 1], "minecraft:water_cauldron")],
@@ -134,7 +134,7 @@ fn fisherman_with_entries_runs_the_same_sensor() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn profession_without_entries_skips_the_scan() {
     fixture(
         &[([1, 64, 1], "minecraft:water_cauldron")],
@@ -153,7 +153,7 @@ fn profession_without_entries_skips_the_scan() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn scan_bounds_are_inclusive() {
     fixture(
         &[
@@ -171,7 +171,7 @@ fn scan_bounds_are_inclusive() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn custom_profession_detects_declared_secondary_sites() {
     fixture(
         &[

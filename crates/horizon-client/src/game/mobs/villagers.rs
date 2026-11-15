@@ -685,7 +685,7 @@ mod entity_event_particle_tests {
 #[cfg(test)]
 mod nested_spawn_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn lifted_mob_callback_keeps_nested_spawns_until_the_next_pass() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             let kind = game
@@ -716,7 +716,7 @@ mod off_level_tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn retained_ancestor_does_not_consume_a_due_villager_sensor() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -863,7 +863,7 @@ mod birth_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn rejected_birth_leaves_bed_free_and_parents_resting() {
         let joins = Arc::new(AtomicUsize::new(0));
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -899,7 +899,7 @@ mod birth_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn untouched_birth_claims_one_bed_and_announces_one_baby() {
         mod_platform::testing::with_mods(Vec::<mod_api::ModEntry>::new().into(), || {
             crate::game::native_entity_refs::tests::with_game(|game| {
@@ -931,7 +931,7 @@ mod birth_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn villager_birth_is_raw_and_does_not_post_the_animal_hook() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(

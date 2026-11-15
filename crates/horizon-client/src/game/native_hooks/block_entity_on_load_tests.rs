@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_saved_data_placement_rewrite_and_reload() {
         let log = Log::default();
         mod_platform::testing::with_mods(
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_client_instance_reads_received_fields() {
         use crate::game::native_entity_refs::tests::with_client_game;
         use horizon_client::level_loading::Reason;
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_without_listener_preserves_data_and_never_queues() {
         mod_platform::testing::with_mods(vec![].into(), || {
             with_game(|game| {

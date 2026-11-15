@@ -17,7 +17,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_cracks_clear_expire_and_do_not_cross_worlds() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             game.destroy_block_progress(-10, [1, 64, 1], 4);

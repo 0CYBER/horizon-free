@@ -173,7 +173,7 @@ mod tests {
     /// stays through all of it; withdrawing the mod's areas forgets the chunks 52 ticks later,
     /// then closes the level.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_mods_areas_reach_the_client_and_refusals_come_back_typed() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let home =

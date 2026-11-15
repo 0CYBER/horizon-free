@@ -84,7 +84,7 @@ fn pig(game: &mut Game<'_>) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn commands_see_the_knot_a_restored_fence_leash_ties() {
     let mut resources = None;
     let mut game = game(&mut resources);

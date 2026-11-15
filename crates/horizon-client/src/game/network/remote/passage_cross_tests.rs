@@ -91,7 +91,7 @@ fn scene(game: &mut crate::game::Game<'_>, at: [f64; 3]) -> (ConnReader, ConnWri
 /// position and velocity as they are, is confirmed with where the player is, aborts the
 /// dig, starts the attack strength again and marks the block predictions made so far.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_window_crosses_and_keeps_its_velocity_through_the_acceptance() {
     with_client_game(|game| {
         let (mut reader, _server) = scene(game, [0.5, 65.0, 8.25]);
@@ -179,7 +179,7 @@ fn a_window_crosses_and_keeps_its_velocity_through_the_acceptance() {
 /// Refused on the window with nothing moved or sent: a passage it does not hold, and while
 /// riding. The server's refusal is kept for the mods until the next crossing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_window_refuses_what_it_cannot_cross_and_keeps_the_servers_refusal() {
     with_client_game(|game| {
         let (mut reader, _server) = scene(game, [0.5, 65.0, 8.25]);
@@ -242,7 +242,7 @@ impl mod_api::Hooks for Silence {
 /// A mod cancels the crossing's payload: `Cancelled`, the player stays as it was, nothing
 /// waits, so the next crossing is tried afresh (and cancelled again, still not `Pending`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn a_crossing_a_mod_cancels_on_the_wire_moves_nothing() {
     let mods = vec![mod_api::ModEntry::new("silence", Box::new(Silence))];
     mod_platform::testing::with_mods(mods.into(), || {

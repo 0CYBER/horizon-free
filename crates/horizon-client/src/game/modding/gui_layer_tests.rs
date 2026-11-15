@@ -81,7 +81,7 @@ fn take() -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mod_layers_draw_in_their_place_and_hide_like_vanilla_layers() {
     // The layer order is kept once per process.
     if run_fresh_cases(

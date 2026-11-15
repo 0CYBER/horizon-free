@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_targeting_respects_range_walls_liquids_and_handle_lifetime() {
         use crate::game::{
             native_client_session::tests::logged_client,

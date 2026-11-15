@@ -15,7 +15,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
 };
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn statue_conversion_keeps_the_owner_until_physical_discard() {
     super::super::native_entity_refs::tests::with_game(|game| {
         game.world

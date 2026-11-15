@@ -1,0 +1,2 @@
+# Opt-in measurements, never selected by daily shards; exact reasons/rationales are in ../ignored-test-exceptions.json.
+horizon-items item_data::tests::benchmark_decode_components by-hand manual # microbenchmark; run with --ignored --nocapture; opt-in measurement on an idle machine, not a daily correctness check

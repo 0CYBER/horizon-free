@@ -35,7 +35,7 @@ fn carried(game: &Game<'_>, conn: u32) -> Option<u32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn menu_owners_stay_reachable_through_nested_guest_turns() {
     with_guests(|game| {
         open_inventory(game, 12, 3);
@@ -75,7 +75,7 @@ fn menu_owners_stay_reachable_through_nested_guest_turns() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_panicking_turn_leaves_play_state_and_menus_restored() {
     with_guests(|game| {
         open_inventory(game, 12, 3);
@@ -108,7 +108,7 @@ fn a_panicking_turn_leaves_play_state_and_menus_restored() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_lifted_host_comes_back_after_a_panic_and_is_never_lifted_twice() {
     with_guests(|game| {
         open_inventory(game, 12, 3);
@@ -139,7 +139,7 @@ fn a_lifted_host_comes_back_after_a_panic_and_is_never_lifted_twice() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn removing_a_fake_player_drops_its_menu_owners() {
     with_guests(|game| {
         let _serving = super::integrated::tests::install_serving(game, false);

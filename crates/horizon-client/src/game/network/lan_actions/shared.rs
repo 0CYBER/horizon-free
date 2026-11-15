@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn menu_rules_match_guest_packets_and_prediction() {
         use horizon_client::{
             chunk::Chunk,
@@ -894,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn crafting_guest_self_swap_keeps_eight_items() {
         use horizon_client::chunk::Chunk;
         use horizon_protocol::packets::play::{ContainerClick, Serverbound};
@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn block_menu_handle_and_use_each_count_the_guest_once() {
         use horizon_client::chunk::Chunk;
         use mod_api::BlockUpdateFlags;
@@ -1069,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn block_menu_click_keeps_spent_action_on_cancellation() {
         use horizon_client::{chunk::Chunk, lan::guest::GuestKind};
         use mod_api::BlockUpdateFlags;
@@ -1105,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn block_parts_pick_and_use_on_the_server_and_for_a_guest() {
         use super::super::{lan::LanSettings, native_entity_refs::tests::with_game};
         use horizon_client::{
@@ -1789,7 +1789,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn block_part_use_item_on_consumes_once() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::Chunk;
@@ -1857,7 +1857,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn replacing_empty_note_block_use_does_not_award_vanilla_stats() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::Chunk;
@@ -1927,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn fake_body_does_not_count_toward_sleep() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(
@@ -2137,7 +2137,7 @@ mod hotbar_tests {
     /// player by UUID and entity id; the same slot again fires neither, and a cancelled pre
     /// keeps the old slot with no post.
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn a_hotbar_switch_fires_pre_then_post_and_pre_can_keep_the_slot() {
         let heard = Heard::default();
         let mods = vec![ModEntry::new("hotbar", Box::new(Hotbar(heard.clone())))].into();
@@ -2208,7 +2208,7 @@ mod respawn_position_tests {
     /// player's handle, and its new point, facing and copy choice are what
     /// the player gets.
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn a_mod_moves_a_respawn_and_drops_the_point() {
         let heard = Heard::default();
         let mods = vec![ModEntry::new("east", Box::new(East(heard.clone())))].into();
@@ -2258,7 +2258,7 @@ mod respawn_position_tests {
     /// point facing the respawn direction, not the way it died, and keeps
     /// the point.
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn a_listening_mod_leaves_the_respawn_as_it_was() {
         let heard = Arc::default();
         let mods = vec![ModEntry::new(
@@ -2359,7 +2359,7 @@ mod pickup_xp_tests {
     /// `PlayerXpEvent.PickupXp` through the shared `listened` probe: a pickup goes the
     /// same with no listener and with one that changes nothing, and a cancel keeps the orb.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pickup_xp_is_the_same_with_and_without_a_listener() {
         let none = take_orb();
         assert_eq!(none, (false, 7));
@@ -2380,7 +2380,7 @@ mod respawn_world_point_tests {
 
     /// PlayerList.respawn sends world respawn data, independently of the personal landing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn guest_respawn_keeps_world_information_distinct_from_personal_landing() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2535,7 +2535,7 @@ mod swing_echo_tests {
     /// placed (SUCCESS) is the client's own swing, a bed's use
     /// (SUCCESS_SERVER) is not (#9887).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn only_a_server_only_use_swings_back_to_the_player() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2778,7 +2778,7 @@ mod guest_close_listener_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn ordinary_guest_final_close_posts_to_actual_listener() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
@@ -3267,17 +3267,17 @@ mod item_on_block_cooldown_tests {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn failed_stick_use_keeps_group_available_for_placement() {
         placement_control(None);
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn actual_guest_placement_starts_its_cooldown() {
         placement_control(Some(true));
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn actual_guest_second_placement_is_rejected() {
         placement_control(Some(false));
     }

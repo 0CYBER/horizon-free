@@ -1391,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn steering_stick_break_converts_to_fishing_rod() {
         use horizon_client::mobs::Mob;
         use horizon_client::motion::PlayerMotion;
@@ -2154,7 +2154,7 @@ mod off_level_tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn underwater_dismount_skips_deep_frozen_descendants() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();

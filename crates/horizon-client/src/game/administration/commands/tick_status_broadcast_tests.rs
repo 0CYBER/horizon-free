@@ -114,7 +114,7 @@ fn lan_game() -> (Game<'static>, mpsc::Receiver<horizon_client::lan::Out>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tick_status_lines_reach_the_other_operators() {
     let (mut game, rx) = lan_game();
     assert!(game.run_command("tick freeze"));

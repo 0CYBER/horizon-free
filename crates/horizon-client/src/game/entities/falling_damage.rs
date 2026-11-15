@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_canceled_wear_leaves_the_helmet_and_its_share_of_the_hit() {
         with_player(|game, log| {
             start(game, log, Some(iron_helmet()));
@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_answered_wear_runs_on_the_real_host_before_the_cooldown_refuses() {
         with_player(|game, log| {
             start(game, log, Some(iron_helmet()));
@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_helmet_the_hit_breaks_stops_protecting_in_that_hit() {
         with_player(|game, log| {
             let mut helmet = iron_helmet();
@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn no_helmet_or_a_refused_hit_fires_no_helmet_wear() {
         with_player(|game, log| {
             start(game, log, None);

@@ -2,7 +2,7 @@
 use super::*;
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn remote_save_with_a_held_lease_is_still_a_silent_noop() {
     native_entity_refs::tests::with_client_game(|game| {
         let (pipe, _server) = horizon_protocol::connection::Pipe::pair();

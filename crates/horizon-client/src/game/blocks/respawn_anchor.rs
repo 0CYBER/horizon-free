@@ -691,7 +691,7 @@ mod connected_spawnpoint_rotation_tests {
     }
 
     #[test]
-    #[ignore = "prepared resources and isolated scratch homes/cwd"]
+    #[ignore = "daily"]
     fn command_forced_free_point_survives_real_guest_death_and_respawn_packet() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -907,7 +907,7 @@ mod pitch_preservation_controls {
 
     /// Added source/model controls; these do not add a connected bed/anchor runtime claim.
     #[test]
-    #[ignore = "prepared resources and isolated scratch homes/cwd"]
+    #[ignore = "daily"]
     fn bed_anchor_facing_and_invalid_personal_fallback_ignore_stored_pitch() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);

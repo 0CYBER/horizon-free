@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared vanilla resources"]
+#[ignore = "daily"]
 fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {
     use horizon_world::loot::PackOverlay;
     let prepared = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -44,7 +44,7 @@ fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {
 }
 
 #[test]
-#[ignore = "requires prepared vanilla resources"]
+#[ignore = "daily"]
 fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client")
@@ -96,7 +96,7 @@ fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
 
 /// Ordinary player hurt, using a custom source and a frozen-registry tag reload.
 #[test]
-#[ignore = "requires prepared vanilla resources"]
+#[ignore = "daily"]
 fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
     use horizon_world::loot::PackOverlay;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

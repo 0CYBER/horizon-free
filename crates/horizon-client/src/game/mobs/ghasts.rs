@@ -214,7 +214,7 @@ mod item_collision_tests {
     /// An item dropped onto a minecart falls through it to the floor, and one
     /// dropped onto a boat rests on the boat (`canBeCollidedWith`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_dropped_item_rests_on_a_boat_but_falls_through_a_minecart() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

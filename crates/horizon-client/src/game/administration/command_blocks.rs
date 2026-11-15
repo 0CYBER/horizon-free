@@ -1158,7 +1158,7 @@ mod tests {
     /// `AbstractCommandBlockEditScreen.init` and `addExtraControls` worked by
     /// hand for the test's 1280x720 window.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn the_edit_screen_is_laid_out_by_the_build() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.title = None;
@@ -1220,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn mode_switch_preserves_command_entity_output_and_state() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());

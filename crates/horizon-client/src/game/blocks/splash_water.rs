@@ -278,7 +278,7 @@ mod tests {
     /// `AbstractThrownPotion.douseFire` -> `CampfireBlock.douse(entity, ...)`:
     /// the campfire's block change is sourced from the potion's owner.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_doused_campfire_posts_block_change_from_the_potion_owner() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

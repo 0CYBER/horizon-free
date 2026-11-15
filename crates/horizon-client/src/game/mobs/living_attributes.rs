@@ -499,7 +499,7 @@ mod tests {
     /// A held stack with its own `attribute_modifiers` hits by them, not by
     /// its item type's defaults (#941).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_changed_held_stack_hits_by_its_own_modifiers() {
         use horizon_client::mobs::gear;
         use horizon_core::nbt::Tag;
@@ -546,7 +546,7 @@ mod tests {
     /// writes among them — with no modifier applied twice, and no instance
     /// for an attribute nothing created.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_mob_attribute_packet_is_the_live_maps_instances() {
         use horizon_core::nbt::Tag;
         use mod_api::EquipmentSlot;
@@ -608,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_base_write_preserves_covered_for_damage_and_attribute_sync() {
         with_game(|game| {
             let kind = game
@@ -681,7 +681,7 @@ mod tests {
     /// armors it by its stack's rows, and the save keeps a written base and
     /// modifier.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_hits_armor_follows_the_live_map_at_once() {
         use AttributeOperation::*;
         use ModifierLifetime::*;
@@ -765,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_zombie_reads_its_defaults() {
         with_game(|game| {
             spawn(game);
@@ -785,7 +785,7 @@ mod tests {
     /// A read of a mob that wears nothing builds its map once and keeps it,
     /// so the next reads allocate nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_read_builds_the_map_once() {
         with_game(|game| {
             spawn(game);
@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_held_sword_raises_the_attack_damage_until_it_is_put_away() {
         with_game(|game| {
             spawn(game);
@@ -834,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stand_and_the_dragon_wear_armor_modifiers() {
         with_game(|game| {
             spawn(game);
@@ -858,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stale_handle_reads_none() {
         with_game(|game| {
             spawn(game);
@@ -874,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_saved_base_and_modifier_are_read_and_saved_again() {
         use horizon_core::nbt::Tag;
         with_game(|game| {
@@ -905,7 +905,7 @@ mod tests {
     /// The live map takes a held stack's own `attribute_modifiers`, and
     /// another stack of the same item with other components is a change.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stacks_own_modifiers_replace_its_items() {
         use horizon_core::nbt::Tag;
         with_game(|game| {
@@ -936,7 +936,7 @@ mod tests {
     /// read while the same stacks are worn, and reads them again when one
     /// changes: here a chestplate with its own list.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn gear_knockback_is_read_again_only_when_the_gear_changes() {
         use horizon_core::nbt::Tag;
         with_game(|game| {
@@ -999,7 +999,7 @@ mod tests {
     /// A mob's movement speed is kept where its gameplay reads it: a mod's
     /// permanent modifier is saved, a transient one is not, both count at once.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_modifiers_on_a_mobs_speed_reach_its_gameplay() {
         use AttributeOperation::*;
         use ModifierLifetime::*;
@@ -1057,7 +1057,7 @@ mod tests {
     /// An attribute only the live map keeps keeps a mod's writes when the map
     /// is built again, and saves the permanent ones.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_writes_outlive_a_rebuilt_map() {
         use AttributeOperation::*;
         use ModifierLifetime::*;
@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stand_the_dragon_and_a_player_take_writes() {
         use AttributeOperation::*;
         use ModifierLifetime::*;
@@ -1210,7 +1210,7 @@ mod tests {
     /// A mod's answer to `item_attribute_modifier` is what the zombie's
     /// gameplay reads: its knockback and its live map.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_item_modifiers_reach_the_wearer() {
         // The game's stack snapshots, which the hook needs, as its startup installs them;
         // without this the test passes only after another test in the process installed them.

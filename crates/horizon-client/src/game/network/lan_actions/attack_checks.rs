@@ -149,7 +149,7 @@ mod tests {
     /// attacked as before, and an item out of reach, or attacked with a spear in hand,
     /// ends the attack without a kick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attacking_an_item_an_orb_oneself_or_an_arrow_kicks_the_player() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

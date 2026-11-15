@@ -226,7 +226,7 @@ fn exercise(
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn piston_push_reaction_parts_cache_reload_and_replay() {
     const NAME: &str = "game::native_hooks::piston_push_reaction_tests::piston_push_reaction_parts_cache_reload_and_replay";
     const FLAG: &str = "HORIZON_PISTON_REACTION_CASE";
@@ -438,7 +438,7 @@ impl Hooks for PayloadUser {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn piston_push_reaction_real_block_entity_payload_lifecycle() {
     const NAME: &str = "game::native_hooks::piston_push_reaction_tests::piston_push_reaction_real_block_entity_payload_lifecycle";
     const FLAG: &str = "HORIZON_PISTON_PAYLOAD_CASE";
@@ -649,7 +649,7 @@ impl Hooks for TagUser {
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn piston_push_reaction_client_received_tags_refresh_the_cache() {
     const NAME: &str = "game::native_hooks::piston_push_reaction_tests::piston_push_reaction_client_received_tags_refresh_the_cache";
     if run_fresh_cases(NAME, "HORIZON_PISTON_TAG_CASE", &["client"]) {
@@ -719,7 +719,7 @@ fn piston_push_reaction_client_received_tags_refresh_the_cache() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn piston_push_reaction_position_state_opens_ticks_and_saves() {
     const NAME: &str = "game::native_hooks::piston_push_reaction_tests::piston_push_reaction_position_state_opens_ticks_and_saves";
     const FLAG: &str = "HORIZON_PISTON_POSITION_CASE";
@@ -1130,7 +1130,7 @@ fn piston_push_reaction_position_state_opens_ticks_and_saves() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn piston_push_reaction_unowned_vanilla_data_stays_refused() {
     const NAME: &str = "game::native_hooks::piston_push_reaction_tests::piston_push_reaction_unowned_vanilla_data_stays_refused";
     if run_fresh_cases(NAME, "HORIZON_PISTON_UNOWNED_CASE", &["comparator"]) {

@@ -177,7 +177,7 @@ mod tests {
     /// pickaxe by one and counts as mined (`Block.playerDestroy`,
     /// `ItemStack.mineBlock`), as a player's own break does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_breaks_stone_as_the_player_with_their_pickaxe() {
         with_game(|game| {
             game.world.chunks.insert(
@@ -198,7 +198,7 @@ mod tests {
     /// Into the inventory: silk touch keeps the stone whole, and a diamond
     /// ore gives its diamond and still its experience (3 to 7 points).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn drops_go_into_the_inventory_rolled_for_the_tools_enchantments() {
         with_game(|game| {
             game.world.chunks.insert(
@@ -226,7 +226,7 @@ mod tests {
     /// `can_break`, a survival player at bedrock, air, and someone who isn't
     /// playing break nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_players_checks_hold() {
         with_game(|game| {
             game.world.chunks.insert(

@@ -158,7 +158,7 @@ impl Hooks for Probe {
 
 // A controlled peer holds known packs while the real server executor replies.
 #[test]
-#[ignore = "needs HORIZON_TEST_RESOURCES; starts a real integrated server and TCP peer"]
+#[ignore = "daily"]
 fn tcp_configuration_reply_precedes_finish() {
     super::tests::require_resources();
     if super::super::native_entity_refs::tests::run_fresh_cases(

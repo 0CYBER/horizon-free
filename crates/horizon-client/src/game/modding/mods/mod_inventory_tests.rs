@@ -168,7 +168,7 @@ impl Hooks for Guard {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_readers() {
     let fixture = Fixture::new("inventory-reload");
     hmod(&fixture.0, "machine_sample");

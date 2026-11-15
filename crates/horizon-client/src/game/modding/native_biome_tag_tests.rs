@@ -1,7 +1,7 @@
 use crate::game::native_entity_refs::tests::with_game;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn biome_tag_forwarder_distinguishes_unknown_tags_from_unknown_biomes() {
     with_game(|game| {
         game.install_live_features();

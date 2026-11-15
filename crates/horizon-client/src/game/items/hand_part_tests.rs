@@ -104,7 +104,7 @@ fn close(got: &[(f32, u32)], want: &[(f32, u32)]) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_part_decides_whether_the_hand_lowers_for_a_new_stack() {
     crate::game::in_own_process(
         "game::hand_part_tests::a_part_decides_whether_the_hand_lowers_for_a_new_stack",
@@ -162,7 +162,7 @@ fn a_part_decides_whether_the_hand_lowers_for_a_new_stack() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_part_decides_whether_a_changed_stick_restarts_the_break() {
     crate::game::in_own_process(
         "game::hand_part_tests::a_part_decides_whether_a_changed_stick_restarts_the_break",
@@ -196,7 +196,7 @@ fn a_part_decides_whether_a_changed_stick_restarts_the_break() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn without_a_part_the_break_compares_item_and_components() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.inventory[0] = Some(ItemStack::new("minecraft:stick", 1));
@@ -214,7 +214,7 @@ fn without_a_part_the_break_compares_item_and_components() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn remote_mining_component_update_restarts_unless_the_part_refuses() {
     crate::game::in_own_process(
         "game::hand_part_tests::remote_mining_component_update_restarts_unless_the_part_refuses",

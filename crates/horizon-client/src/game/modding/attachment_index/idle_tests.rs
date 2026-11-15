@@ -5,7 +5,7 @@ use horizon_core::nbt::Tag;
 use horizon_mod_runtime::attachments::ATTACHMENTS_KEY;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn idle_tick_does_no_index_work_with_ten_thousand_bound_holders() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());

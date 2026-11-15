@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_block_part_answers_the_sound_type_a_block_plays() {
         // The fixture's parts: glass answers `mymod:block.x.*` at volume 2.0 and pitch 1.5 to
         // every cause, white wool the same to a player only, red and blue wool a NaN volume and

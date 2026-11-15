@@ -4,7 +4,7 @@ mod command_exploration_map_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn actual_item_modify_materializes_selected_exploration_map() {
         let mut game_resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut game_resources);
@@ -186,7 +186,7 @@ mod added_preservation_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn nonempty_command_keeps_no_destination_but_pending_loot_filters_it() {
         let mut game_resources = None;
         let mut game = game("map-command-no-destination", &mut game_resources);
@@ -226,7 +226,7 @@ mod added_preservation_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn loaded_reference_list_sequence_filter_order_preserves_counts_and_empty() {
         let mut game_resources = None;
         let mut game = game("map-command-reference-order", &mut game_resources);

@@ -9,7 +9,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn server_hook_resolves_uuid_only_while_the_entity_is_in_its_active_level() {
         use super::super::super::{Dim, native_entity_refs::tests::with_game};
         use horizon_client::mobs::Mob;
@@ -114,7 +114,7 @@ mod tests {
     /// One pre then one post for each client level tick, naming the level in
     /// place, and nothing before a tick or for a client with no level.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_level_tick_fires_pre_then_post_around_each_tick() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let mods = vec![ModEntry::new("moments", Box::new(Moments(heard.clone())))].into();

@@ -109,7 +109,7 @@ fn with_game(test: impl FnOnce(&mut Game<'_>)) {
 /// own box, and the crumb has the slime ball's model to draw
 /// (`BreakingItemParticle.SlimeProvider`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_oozing_player_swirls_slime_ball_crumbs() {
     with_game(|g| {
         let oozing = horizon_client::brewing::effect("oozing").unwrap().id;

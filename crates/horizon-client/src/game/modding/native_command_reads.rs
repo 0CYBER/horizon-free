@@ -199,7 +199,7 @@ mod tests {
     /// The issue's case: a console `execute in minecraft:the_nether` reaches the mod with the
     /// nether as its level; without it, the console's overworld and spawn corner.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_console_command_executes_in_the_level_execute_in_names() {
         use std::sync::{Arc, Mutex};
         type Heard = Arc<Mutex<Vec<(mod_api::CommandSource, CommandInvocation)>>>;
@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_profile_keeps_its_login_properties() {
         super::super::native_guest_turn_tests::with_guests(|game| {
             let stored = horizon_protocol::packets::login::Property {

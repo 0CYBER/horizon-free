@@ -61,6 +61,8 @@ READERS = {
     # The build scripts hand the repository root to the generator.
     "horizon-engine-slots": MOD_API_GEN,
     "horizon-game": ["packaging/windows/exe.rs"],
+    # Shared source-only module discovery reads the game's declarations and vocabulary export fragments.
+    "horizon-game-discovery": ["crates/horizon-client/src", "crates/horizon-mod-vocab/src"],
     # The shared guest-stack tests read the sources that use its constants, and the jobs they wait on.
     "horizon-guest-stack": ["crates/horizon-client/src", "crates/horizon-threads/src"],
     "horizon-mod-api": MOD_API_GEN,

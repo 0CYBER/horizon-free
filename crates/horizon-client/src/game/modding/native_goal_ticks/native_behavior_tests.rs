@@ -188,7 +188,7 @@ impl Hooks for Mod {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_start_that_passes_its_checks_draws_once_and_runs() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -206,7 +206,7 @@ fn a_start_that_passes_its_checks_draws_once_and_runs() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_failed_entry_condition_draws_nothing_and_calls_nothing() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -239,7 +239,7 @@ fn a_failed_entry_condition_draws_nothing_and_calls_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_duration_ends_it_and_can_still_use_keeps_it() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -272,7 +272,7 @@ fn the_duration_ends_it_and_can_still_use_keeps_it() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn without_can_still_use_it_lives_one_brain_tick() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -294,7 +294,7 @@ fn without_can_still_use_it_lives_one_brain_tick() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_panic_is_contained_and_the_behavior_is_done() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -316,7 +316,7 @@ fn a_panic_is_contained_and_the_behavior_is_done() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_type_with_no_brain_is_refused_at_construction() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     REFUSALS.lock().unwrap().clear();
@@ -443,7 +443,7 @@ fn random_states(
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn behaviors_join_after_vanilla_of_their_priority_and_activity() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ADDS.lock().unwrap().clear();
@@ -482,7 +482,7 @@ fn behaviors_join_after_vanilla_of_their_priority_and_activity() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_behavior_writes_the_walk_target_and_the_refusals_hold() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -516,7 +516,7 @@ fn a_behavior_writes_the_walk_target_and_the_refusals_hold() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn only_an_active_activity_starts_but_core_always_does() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -563,7 +563,7 @@ fn only_an_active_activity_starts_but_core_always_does() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_running_behavior_keeps_ticking_across_the_activity_change() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -608,7 +608,7 @@ fn a_running_behavior_keeps_ticking_across_the_activity_change() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn refresh_stops_a_running_behavior_and_the_rebuild_is_fresh() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -665,7 +665,7 @@ fn refresh_stops_a_running_behavior_and_the_rebuild_is_fresh() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_villager_without_mod_behaviors_draws_what_a_parts_free_one_does() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     // The 50-tick run of one phase: the same villager spot, the same game
@@ -734,7 +734,7 @@ fn animal_tick(
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_sniffer_behavior_sets_a_walk_target() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     READS.lock().unwrap().clear();
@@ -765,7 +765,7 @@ fn a_sniffer_behavior_sets_a_walk_target() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn animal_behaviors_join_after_vanilla_of_their_priority() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ADDS.lock().unwrap().clear();
@@ -830,7 +830,7 @@ fn animal_behaviors_join_after_vanilla_of_their_priority() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn grown_up_stops_a_running_ghastling_behavior() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS.lock().unwrap().clear();
@@ -928,7 +928,7 @@ fn warden_tick(
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_breeze_behavior_starts_in_fight_and_writes_its_target() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     READS.lock().unwrap().clear();
@@ -960,7 +960,7 @@ fn a_breeze_behavior_starts_in_fight_and_writes_its_target() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn warden_behaviors_join_after_vanilla_of_their_priority() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ADDS.lock().unwrap().clear();
@@ -1019,7 +1019,7 @@ fn warden_behaviors_join_after_vanilla_of_their_priority() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_panicking_behavior_leaves_the_rest_of_the_tick_working() {
     let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     CALLS

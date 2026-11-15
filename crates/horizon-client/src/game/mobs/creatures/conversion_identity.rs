@@ -81,7 +81,7 @@ mod tests {
     /// A villager struck into a witch keeps the attachment that has a codec and leaves the
     /// one without behind (`copyAttachmentsFrom(villager, false)`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_converted_mob_keeps_its_serializable_attachments() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

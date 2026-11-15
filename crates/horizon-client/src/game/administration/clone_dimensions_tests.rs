@@ -65,7 +65,7 @@ fn run(game: &mut Game<'_>, command: &str) -> (bool, Option<String>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_unknown_clone_dimension_fails_and_clones_nothing() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -126,7 +126,7 @@ fn block_in(game: &mut Game<'_>, dim: &str, at: &str, block: &str) -> bool {
 /// that level's own world, not into the command's, and the command's level
 /// is back in place after every success and every failure.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_clone_to_another_dimension_lands_in_that_world_and_comes_back() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

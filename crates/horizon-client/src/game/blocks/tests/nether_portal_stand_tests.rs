@@ -21,7 +21,7 @@ fn put_portal(game: &mut Game<'_>, x: i32, z: i32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn armor_stands_in_a_nether_portal_go_through_and_cool_down() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
@@ -74,7 +74,7 @@ fn armor_stands_in_a_nether_portal_go_through_and_cool_down() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_portal_effect_keeps_the_screens_that_allow_it() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

@@ -79,12 +79,12 @@ fn run(distance: f64, expected: usize) {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn five_block_fall_sends_stone_once_except_guest() {
     run(5.0, 1);
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn three_block_fall_sends_no_stone_sound() {
     run(3.0, 0);
 }

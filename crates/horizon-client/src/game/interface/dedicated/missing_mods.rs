@@ -128,7 +128,7 @@ mod tests {
     /// Without the switch the server refuses, naming the switch, and changes nothing in the
     /// world; with it the world opens.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn check_missing_mods_refuses_unless_allowed_and_writes_nothing() {
         use horizon_core::nbt::Tag;
         let dir = std::env::temp_dir().join(format!(

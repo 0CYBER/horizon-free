@@ -206,7 +206,7 @@ fn take_interacts() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn naming_posts_entity_interact_at_the_named_entity() {
     let mut game = game();
     TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
@@ -249,7 +249,7 @@ fn naming_posts_entity_interact_at_the_named_entity() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_armour_stands_name_ignores_f1_and_team_visibility() {
     let mut game = game();
     let mut stand = ArmorStand::new(42, Vec3::new(0.0, 64.0, 4.0), 0.0);
@@ -292,7 +292,7 @@ fn an_armour_stands_name_ignores_f1_and_team_visibility() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_trades_title_draws_the_names_style() {
     let mut game = game();
     // `MerchantScreen.extractLabels` draws the menu's title, the merchant's
@@ -322,7 +322,7 @@ fn a_trades_title_draws_the_names_style() {
 /// creative player's count comes straight back -- one tag names as many stands
 /// as they click.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_creative_player_keeps_the_tag_it_names_a_stand_with() {
     let mut game = game();
     game.armor_stands

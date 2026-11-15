@@ -123,7 +123,7 @@ mod tests {
     /// A client mod's fireworks burst either way, and blast and twinkle only when audible,
     /// as a rocket that isn't silent; a server draws nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mods_fireworks_sound_only_when_audible() {
         use crate::game::native_entity_refs::tests::with_client_game;
         with_client_game(|game| {

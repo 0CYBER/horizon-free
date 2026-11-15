@@ -93,7 +93,7 @@ fn push(ids: &[&'static str]) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_renderer_list_refreshes_with_the_selection_and_leaves_nothing_behind() {
     if fresh_process("the_renderer_list_refreshes_with_the_selection_and_leaves_nothing_behind") {
         return;
@@ -316,7 +316,7 @@ fn invalidation_refreshes(expected: &[&str], change: impl FnOnce(&mut super::Gam
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn debug_renderer_respawn_invalidates_unchanged_selection() {
     if fresh_process("debug_renderer_respawn_invalidates_unchanged_selection") {
         return;
@@ -356,7 +356,7 @@ fn same_value_event(event: i8, expected: &[&str]) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn debug_renderer_same_value_reduced_info_on_invalidates() {
     if fresh_process("debug_renderer_same_value_reduced_info_on_invalidates") {
         return;
@@ -365,7 +365,7 @@ fn debug_renderer_same_value_reduced_info_on_invalidates() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn debug_renderer_same_value_reduced_info_off_invalidates() {
     if fresh_process("debug_renderer_same_value_reduced_info_off_invalidates") {
         return;
@@ -374,7 +374,7 @@ fn debug_renderer_same_value_reduced_info_off_invalidates() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn debug_renderer_overlay_round_trip_invalidates() {
     if fresh_process("debug_renderer_overlay_round_trip_invalidates") {
         return;
@@ -389,7 +389,7 @@ fn debug_renderer_overlay_round_trip_invalidates() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn debug_renderer_second_login_invalidates_first_world_view() {
     if fresh_process("debug_renderer_second_login_invalidates_first_world_view") {
         return;

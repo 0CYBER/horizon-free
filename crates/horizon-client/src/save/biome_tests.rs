@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn a_biome_the_world_lacks_is_saved_back_unchanged() {
     let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
         return;
@@ -76,7 +76,7 @@ fn a_biome_the_world_lacks_is_saved_back_unchanged() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn vanilla_biome_palettes_are_byte_identical_after_reload() {
     let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"));
     let assets = crate::assets::Assets::load(&root).expect("assets");

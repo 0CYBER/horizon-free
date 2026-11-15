@@ -482,7 +482,7 @@ mod below_world_tests {
     /// `Entity.checkBelowWorld` hurts below `Level.getMinY() - 64`: y = -64 in the End and the
     /// Nether (min Y 0), y = -128 in the Overworld, whatever the chunks' widened column holds.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_void_starts_64_blocks_below_each_levels_floor() {
         assert_eq!(
             health_after_hazards(LevelShape::END, -64.5),

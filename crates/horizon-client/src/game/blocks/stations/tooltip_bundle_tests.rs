@@ -98,7 +98,7 @@ fn bottom(batch: &HudBatch) -> f32 {
     batch.vertices.iter().map(|v| v.pos[1]).fold(0.0, f32::max)
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_no_listener_order_and_draw_position() {
     run(None, |game| {
         let stack = bundle();
@@ -126,7 +126,7 @@ fn bundle_no_listener_order_and_draw_position() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_gather_moves_image_to_end() {
     run(Some(true), |game| {
         let batch = draw(game, &bundle());
@@ -136,7 +136,7 @@ fn bundle_gather_moves_image_to_end() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_gather_removes_grid_and_height() {
     let mut full_bottom = 0.0;
     run(None, |game| {
@@ -150,7 +150,7 @@ fn bundle_gather_removes_grid_and_height() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn non_bundle_keeps_text_only_geometry() {
     run(None, |game| {
         let stack = ItemStack::new("minecraft:stick", 1);
@@ -163,7 +163,7 @@ fn non_bundle_keeps_text_only_geometry() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_empty_text_gathers_image_at_zero() {
     run(None, |game| {
         let elements = game
@@ -180,7 +180,7 @@ fn bundle_empty_text_gathers_image_at_zero() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_empty_contents_keeps_image() {
     run(None, |game| {
         let stack = ItemStack::new("minecraft:bundle", 1);
@@ -280,13 +280,13 @@ fn boundary(insert: bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_listener_inserts_before_name() {
     boundary(true);
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_pre_observes_gather_reordered_list() {
     boundary(false);
 }
@@ -316,7 +316,7 @@ impl Hooks for ClearLines {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_cleared_lines_still_draws_image_at_content_top() {
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mods: Mods = vec![ModEntry::new(
@@ -334,7 +334,7 @@ fn bundle_cleared_lines_still_draws_image_at_content_top() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bundle_hidden_tooltip_still_draws_nothing() {
     run(None, |game| {
         let mut stack = bundle();

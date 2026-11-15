@@ -117,7 +117,7 @@ fn drawn_needle(game: &mut Game<'_>, frame: ItemFrame) -> String {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_framed_lodestone_compass_needle_turns_with_its_frame() {
     let mut game = client_game();
     // `ItemFrame.position` is the block's centre, 0.46875 back along the
@@ -145,7 +145,7 @@ fn a_framed_lodestone_compass_needle_turns_with_its_frame() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn only_a_compass_ticks_its_lodestone_tracker() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

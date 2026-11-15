@@ -56,7 +56,7 @@ fn tracked(stack: &ItemStack) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
     let mut resources = None;
     let mut game = lodestone_world(&mut resources);
@@ -128,7 +128,7 @@ fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn a_players_non_compass_keeps_its_lodestone_tracker() {
     let mut resources = None;
     let mut game = lodestone_world(&mut resources);

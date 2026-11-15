@@ -314,6 +314,7 @@ horizon-client-lib mobs::raider::tests::a_banner_chase_stops_when_the_raid_ends 
 horizon-client-lib mobs::raider::tests::a_celebrating_raider_does_not_jump_while_riding lib daily resources
 horizon-client-lib mobs::raider::tests::companions_and_shout_range_match_the_full_scan lib daily resources
 horizon-client-lib mobs::ravager::sight_tests::a_stunned_or_roaring_ravager_does_not_see_the_player lib daily resources
+horizon-client-lib mobs::render::villager_client::tests::villager_client_partial_hat_cache_refreshes lib daily resources
 horizon-client-lib mobs::riders::tests::a_spider_sits_by_its_own_rule_on_a_narrow_vehicle lib daily resources
 horizon-client-lib mobs::silent_voice_tests::a_silent_mob_makes_no_ambient_sound lib daily resources
 horizon-client-lib mobs::sniffer::sniffer_silence_tests::silent_sniffer_mutes_the_state_and_seed_sounds lib daily resources

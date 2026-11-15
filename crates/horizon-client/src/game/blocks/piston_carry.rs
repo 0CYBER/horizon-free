@@ -271,7 +271,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_save_mid_move_keeps_the_carried_block_entity_and_a_bad_key_is_left_out() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let registry = game.pack.assets.registry;

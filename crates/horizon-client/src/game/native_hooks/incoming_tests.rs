@@ -1,5 +1,5 @@
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn held_durability_retains_the_stack_hand_and_explicit_break_slot() {
     use crate::game::{Audio, Game, Hand, Options, Progress, Settings, load_resources};
     use horizon_client::{items::ItemStack, motion::PlayerMotion};

@@ -1855,7 +1855,7 @@ mod tests {
     };
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_capture_preserves_rejected_objects_and_reverses_admission() {
         with_gate(|game, _, _| {
             game.options.execution_role =
@@ -2024,7 +2024,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_follows_the_class_then_the_first_passenger() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             game.boats.push(super::super::boats::Boat::new(
@@ -2135,7 +2135,7 @@ mod tests {
     /// their own id, the target level and the cause; the spared one stays, the
     /// other may go.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_cancels_one_players_travel_and_allows_the_other() {
         with_gate(|game, spare, heard| {
             // Guests 12 and 13 are entities 12 and 13.
@@ -2160,7 +2160,7 @@ mod tests {
     /// still in the level and waits for no arrival, the other has left it for
     /// one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_cancels_one_items_portal_trip_and_allows_the_other() {
         with_gate(|game, spare, heard| {
             let stone = || horizon_client::items::ItemStack::new("minecraft:stone", 1);
@@ -2190,7 +2190,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn discarded_item_does_not_travel() {
         with_gate_mode(true, |game, _, heard| {
             game.spawn_item(
@@ -2214,7 +2214,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn discarded_mob_and_tnt_do_not_travel() {
         with_gate_mode(true, |game, _, heard| {
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
@@ -2236,7 +2236,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn refused_mob_passenger_stays_behind() {
         with_gate(|game, spare, heard| {
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
@@ -2270,7 +2270,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn passenger_callbacks_cannot_revisit_ancestors_or_discarded_siblings() {
         for attack in [1004, 1001, 1002] {
             with_gate(|game, spare, heard| {
@@ -2307,7 +2307,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mixed_passengers_follow_boarding_not_connection_order() {
         with_gate(|game, _, heard| {
             let kind = game

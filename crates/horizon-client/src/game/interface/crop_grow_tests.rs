@@ -32,7 +32,7 @@ impl Hooks for Gardener {
 }
 
 #[test]
-#[ignore = "needs prepared resources and an isolated process for native mods"]
+#[ignore = "daily"]
 fn a_mod_stops_one_cane_and_hears_the_other_grow() {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("gardener", Box::new(Gardener))].into();
     mod_platform::testing::with_mods(mods, || {

@@ -3,7 +3,7 @@ use horizon_client::{items::ItemStack, motion::PlayerMotion};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
