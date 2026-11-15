@@ -380,7 +380,8 @@ impl Launcher {
                                         d.child(badge(Tone::Off, "Installed"))
                                     }),
                             )
-                            .child({
+                            // No empty line under a title that already says it all.
+                            .children((!line.is_empty()).then(|| {
                                 let commit = commit_of(tag);
                                 ui::text(13., FontWeight::NORMAL, 0.6)
                                     .id(SharedString::from(format!("version-line-{tag}")))
@@ -393,7 +394,7 @@ impl Launcher {
                                         )))
                                     })
                                     .child(line.clone())
-                            }),
+                            })),
                     )
                     .child(div().relative().flex().flex_none().child(right)),
             )
