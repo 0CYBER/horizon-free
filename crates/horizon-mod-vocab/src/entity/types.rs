@@ -129,7 +129,10 @@ pub struct EntityUuid(pub u128);
 /// An entity of the open world, for the `Host` methods that read or change one
 /// (`entity.position(host)`). It holds the world's epoch and the entity's id: ids
 /// are shared by every server level and never reused while the server world is
-/// open, and an entity that changes dimension gets a new one, as in vanilla.
+/// open. An entity that changes dimension on its own (a lone mob, a general entity)
+/// is rebuilt under a new id, as in vanilla, so its old handle goes stale; a vehicle a
+/// player rides keeps its id, and its handle still resolves in the new level. Follow
+/// the entity's UUID across a change of level.
 /// On a client the epoch identifies one client level and changes when that level
 /// is replaced. Server reads and writes reject a handle from an earlier epoch,
 /// of an entity that is gone, or used on a client. `Host::entity` makes a server

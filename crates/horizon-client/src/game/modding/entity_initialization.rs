@@ -151,6 +151,11 @@ pub(super) struct TransferredEntityState {
     initialized: bool,
     accepted_hit: Option<std::sync::Arc<horizon_client::health::AcceptedHit>>,
     died: bool,
+    /// The source id whose attachment map a transaction open at the take kept: the
+    /// arrival moves that keeping to the new id.
+    journaled: Option<u32>,
+    /// Filled by an abort that comes before the arrival: the contents the arrival puts back.
+    rollback: Option<super::transactions::ArrivalRollback>,
 }
 
 impl TransferredEntityState {
@@ -169,9 +174,19 @@ impl TransferredEntityState {
 impl Game<'_> {
     /// Consume the source object's state before forgetting its persistence metadata.
     /// Retiring the publisher immediately makes retained query write tokens stale.
+    /// Inside a transaction the take is journaled: the map's writes in the action roll back
+    /// wherever the map is, and the source level's index keeps its rows until the root closes
+    /// (`defer_departure`). Travel itself is not undone, so the map stays with the entity.
     pub(super) fn take_transferred_entity_state(&mut self, id: u32) -> TransferredEntityState {
+        let journaled = (!self.transactions.is_empty()).then(|| {
+            self.journal_attachments(Holder::Entity(id));
+            id
+        });
+        let rollback = journaled.map(|id| self.journal_in_flight(id));
         let mut attachments = self.entity_attachments.remove(&id);
-        if let Some(map) = &mut attachments {
+        if journaled.is_some() {
+            self.defer_departure(id, attachments.as_mut());
+        } else if let Some(map) = &mut attachments {
             map.unbind_index();
         }
         let accepted_hit = self
@@ -182,6 +197,8 @@ impl Game<'_> {
             attachments,
             accepted_hit,
             died,
+            journaled,
+            rollback,
             initialized: self
                 .entity_initialization
                 .initialized
@@ -197,12 +214,24 @@ impl Game<'_> {
         state: TransferredEntityState,
     ) {
         self.journal_arrival(id);
+        if let Some(source) = state.journaled {
+            self.journal_travel(source, id);
+        }
         if state.died {
             self.died.insert(id);
         }
         // Even an empty map marks this as runtime state for `remember_uuid`.
-        self.entity_attachments
-            .insert(id, state.attachments.unwrap_or_default());
+        let mut map = state.attachments.unwrap_or_default();
+        // 🤖 Agent: an action that took this entity and was rolled back before it arrived left
+        // the contents it first found here: the arrival carries those, not the action's writes.
+        if let Some(kept) = state.rollback.and_then(|slot| {
+            slot.lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+        }) {
+            map.replace_contents(kept);
+        }
+        self.entity_attachments.insert(id, map);
         if state.initialized {
             self.entity_initialization
                 .initialized

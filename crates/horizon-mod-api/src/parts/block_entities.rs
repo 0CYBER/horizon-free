@@ -416,32 +416,11 @@ impl BlockEntitiesRegistrar for PartRegistrar {
         part: &'static str,
         declaration: crate::PartStateDeclaration,
     ) -> Result<(), crate::BlockEntityStateError> {
-        let key = (declaration.namespace, declaration.name);
-        let checked = declaration
-            .check(self.mod_wasm)
-            .and_then(|()| {
-                self.owned_declaration_id(&format!("{}:{}", key.0, key.1))
-                    .map(drop)
-                    .map_err(|_| crate::PartStateRefusal::UnownedNamespace)
-            })
-            .and_then(|()| match self.part_states.get(&key) {
-                Some(&(layout, declared)) if layout != declaration.layout => {
-                    Err(crate::PartStateRefusal::Incompatible { declared })
-                }
-                _ => Ok(()),
-            });
-        match checked {
-            Ok(()) => {
-                self.part_states
-                    .insert(key, (declaration.layout, declaration.data_name));
-                Ok(())
-            }
-            Err(reason) => {
-                let error = declaration.refused(part, reason);
-                self.refused.push(format!("{}: {error}", self.mod_id));
-                Err(error)
-            }
-        }
+        self.check_part_state(declaration).map_err(|reason| {
+            let error = declaration.refused(part, reason);
+            self.refused.push(format!("{}: {error}", self.mod_id));
+            error
+        })
     }
 
     fn provide_block_entity_capability(
@@ -463,5 +442,33 @@ impl BlockEntitiesRegistrar for PartRegistrar {
                 (provider, handler)
             },
         );
+    }
+}
+
+impl PartRegistrar {
+    /// Checks a Part state declaration of either holder and records its key: see
+    /// `PartStateDeclaration::check`, a key outside this mod's namespaces, or one declared
+    /// with another Wire layout.
+    pub(crate) fn check_part_state(
+        &mut self,
+        declaration: crate::PartStateDeclaration,
+    ) -> Result<(), crate::PartStateRefusal> {
+        let key = (declaration.namespace, declaration.name);
+        declaration
+            .check(self.mod_wasm)
+            .and_then(|()| {
+                self.owned_declaration_id(&format!("{}:{}", key.0, key.1))
+                    .map(drop)
+                    .map_err(|_| crate::PartStateRefusal::UnownedNamespace)
+            })
+            .and_then(|()| match self.part_states.get(&key) {
+                Some(&(layout, declared)) if layout != declaration.layout => {
+                    Err(crate::PartStateRefusal::Incompatible { declared })
+                }
+                _ => Ok(()),
+            })?;
+        self.part_states
+            .insert(key, (declaration.layout, declaration.data_name));
+        Ok(())
     }
 }
