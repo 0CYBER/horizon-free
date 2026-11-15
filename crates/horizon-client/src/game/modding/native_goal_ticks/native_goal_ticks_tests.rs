@@ -632,7 +632,7 @@ fn a_client_copy_registers_no_mod_goals() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_screens_entity_registers_no_mod_goals() {
     install_game_mods();
     let asked = || ASKED.load(std::sync::atomic::Ordering::Relaxed);

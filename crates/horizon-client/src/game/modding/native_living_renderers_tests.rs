@@ -240,12 +240,17 @@ fn a_registered_living_type_draws_its_renderer_in_place_of_its_model() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_screens_entity_keeps_the_layers_beside_a_registered_renderer() {
     in_scene(
         "a_screens_entity_keeps_the_layers_beside_a_registered_renderer",
         |game, heard, _| {
-            let kind = game.res.mob_types().get("minecraft:zombie").unwrap().clone();
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombie")
+                .unwrap()
+                .clone();
             let at = horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5);
             let zombie = Mob::new_remote(93, kind, at, 0.0);
             let mut out = Vec::new();
@@ -255,7 +260,11 @@ fn a_screens_entity_keeps_the_layers_beside_a_registered_renderer() {
                 .chunks(4)
                 .map(|q| q.iter().map(|v| v.pos[1]).fold(f32::MAX, f32::min).round())
                 .collect();
-            assert_eq!(heights, [100.0, 200.0], "both geometries, and no vanilla model");
+            assert_eq!(
+                heights,
+                [100.0, 200.0],
+                "both geometries, and no vanilla model"
+            );
             let heard = events(heard);
             assert_eq!(heard.len(), 2, "{heard:?}");
             assert!(heard[0].starts_with("renderer 93 "), "{heard:?}");
