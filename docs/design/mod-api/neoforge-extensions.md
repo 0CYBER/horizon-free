@@ -235,6 +235,13 @@ entity coverage is data, handles and global hooks. On the server a mod can act o
 | `moveInFluid(type, movement, fallDistance)` | Missing | — | Movement in fluid is engine-owned; no per-entity method. |
 | `onDamageTaken(container)` | Partial | `living_damage_post` (`hooks/living_damage_post.rs`), `living_incoming_damage` (`hooks/base.rs`) | Global server hooks: the incoming container before the hit, and a post-damage notice at the end of every hurt that passed the cooldown (health damage 0 when none was taken), not a per-entity callback. |
 
+## IPlayerExtension: reach and flight
+
+| Method | Verdict | Horizon route |
+| --- | --- | --- |
+| `isCloseEnough(entity, dist)` | **Covered** | `player_is_close_enough(player, entity, distance)`, server-side: eye to where the eye-to-centre ray enters the entity's box, else position to position, as NeoForge's default. None across levels or for an entity whose box Horizon doesn't keep. |
+| `mayFly()` | **Covered** | `player_may_fly(player)`, both sides: the `mayfly` ability. Horizon has no creative-flight attribute yet, so nothing is OR'd in. |
+
 ## `IBlockEntityExtension`
 
 Block entity parts are attached with `r.block_entity_part`; `BlockEntityPart` extends `BlockPart` and carries the

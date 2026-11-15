@@ -397,6 +397,27 @@ pub trait PlayersBackend {
     /// `Player.getAbilities`; Paper `Player#getAllowFlight/isFlying/getFlySpeed/getWalkSpeed`.
     #[access(WorldOnly)]
     fn player_abilities(&self, player: PlayerRef) -> Option<PlayerAbilities>;
+    /// Side: both.
+    /// `IPlayerExtension.mayFly` (NeoForge): whether the player may start flying, by game mode
+    /// or ability. Read this rather than `player_abilities`' `may_fly`, which a creative-flight
+    /// attribute would not show; Horizon has no such attribute yet, so today the two agree.
+    /// None for a stale or unavailable player.
+    #[access(WorldOnly)]
+    fn player_may_fly(&self, player: PlayerRef) -> Option<bool>;
+    /// Side: server.
+    /// `IPlayerExtension.isCloseEnough(entity, distance)` (NeoForge): whether the point where
+    /// the ray from the player's eyes to the middle of the entity's box enters the box lies
+    /// within `distance` of the eyes, or, when the ray misses (the eyes inside the box), whether
+    /// the player's position lies within `distance` of the entity's. For checking a menu, a use
+    /// or a ranged interaction the way the game does. None for a stale player or entity, one
+    /// whose box Horizon doesn't keep, or one in another level.
+    #[access(WorldOnly)]
+    fn player_is_close_enough(
+        &self,
+        player: PlayerRef,
+        entity: EntityRef,
+        distance: f64,
+    ) -> Option<bool>;
     /// Side: server.
     /// The value of statistic `stat_type` for `key` (`minecraft:stone`,
     /// `minecraft:jump`...), as `ServerStatsCounter.getValue`: 0 when never
