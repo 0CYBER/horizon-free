@@ -326,6 +326,7 @@ fn a_still_guardian_spikes_the_player_who_hit_it() {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
