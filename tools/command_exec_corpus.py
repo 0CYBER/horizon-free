@@ -2015,11 +2015,11 @@ def aquatic_from_bucket():
 def noai_tadpole_age():
     """`Tadpole.aiStep` counts the age up and grows the tadpole into a frog at
     24000; `NoAI` skips only `serverAiStep`, so a NoAI tadpole ages too. An
-    age-locked one doesn't (#14615)."""
+    age-locked one doesn't (#14615). A negative age counts up like any other (#16691)."""
     box = 'x=8,y=218,z=8,dx=10,dy=6,dz=4'
     # (tag, x, saved Age, AgeLocked)
     tadpoles = [('h14615_young', 10, 0, False), ('h14615_due', 13, 23998, False),
-                ('h14615_locked', 16, 0, True)]
+                ('h14615_locked', 16, 0, True), ('h16691_negative', 18, -100, False)]
     ops = []
     for tag, x, age, locked in tadpoles:
         lock = ',AgeLocked:1b' if locked else ''
