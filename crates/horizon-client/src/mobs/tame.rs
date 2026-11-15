@@ -227,21 +227,12 @@ pub fn set_tame(m: &mut Mob, tame: bool) {
     } else {
         m.attrs.max_health = 8.0;
     }
-    // `setBaseValue`: a base kept from the load or `/attribute` is replaced too.
-    let base = wolf_health_base(tame);
-    if m.species() == Species::Wolf
-        && let Some(b) = m.extra.attributes.as_mut().and_then(|s| {
-            s.bases
-                .iter_mut()
-                .find(|(a, _)| *a == super::finalize::Attr::MaxHealth)
-        })
-    {
-        b.1 = base;
+    // `setBaseValue`: it makes the attribute's instance, which the save then
+    // writes, and replaces a base kept from the load or `/attribute`.
+    if m.species() == Species::Wolf {
+        let base = if tame { 40.0 } else { 8.0 };
+        super::finalize::set_base(m, super::finalize::Attr::MaxHealth, base);
     }
-}
-/// The max_health base `Wolf.applyTamingSideEffects` sets.
-pub fn wolf_health_base(tame: bool) -> f64 {
-    if tame { 40.0 } else { 8.0 }
 }
 /// `TamableAnimal.getOwner`: the player the saved owner UUID names, when it
 /// is the one this mob sees; anyone else nearby is not its owner.

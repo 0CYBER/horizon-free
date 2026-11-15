@@ -99,6 +99,25 @@ fn a_wolf_loaded_without_an_owner_makes_its_health_instance() {
 }
 
 #[test]
+fn a_wolf_loaded_with_an_owner_keeps_the_saved_max_health() {
+    // TamableAnimal.readAdditionalSaveData: setTame(true, false), the flag
+    // alone, so no instance is made and a saved base stays.
+    let d = [(HEALTH, 8.0)];
+    let owner = ",Owner:[I;1,2,3,4]";
+    expect("minecraft:wolf", Species::Wolf, &d, owner, &[]);
+    let (m, _) = loaded("minecraft:wolf", Species::Wolf, &d, owner);
+    assert!(m.extra.tame);
+    let saved_base = format!(r#"{owner},attributes:[{{id:"{HEALTH}",base:80d}}]"#);
+    expect(
+        "minecraft:wolf",
+        Species::Wolf,
+        &d,
+        &saved_base,
+        &[(HEALTH, 80.0)],
+    );
+}
+
+#[test]
 fn a_wolf_tamed_in_game_saves_its_forty_health() {
     // Wolf.applyTamingSideEffects (setTame(true, true)) sets the base to 40.
     let (mut m, input) = loaded("minecraft:wolf", Species::Wolf, &[(HEALTH, 8.0)], "");
@@ -162,10 +181,11 @@ fn the_other_species_stay_as_they_were() {
 
 #[test]
 fn a_wolf_with_a_health_modifier_keeps_its_taming_base() {
-    // Wolf.applyTamingSideEffects owns the base (8 wild, 40 tame); a max_health
-    // modifier changes the value, never the saved base, save after save.
+    // A max_health modifier changes the value, never the saved base, save
+    // after save: 8 from the load of a wild wolf, the saved 40 of a tame one.
     let d = [(HEALTH, 8.0)];
-    for (extra, base) in [("", 8.0), (",Owner:[I;1,2,3,4]", 40.0)] {
+    let tame = format!(r#",Owner:[I;1,2,3,4],attributes:[{{id:"{HEALTH}",base:40d}}]"#);
+    for (extra, base) in [("", 8.0), (tame.as_str(), 40.0)] {
         let (mut m, mut tag) = loaded("minecraft:wolf", Species::Wolf, &d, extra);
         add_modifier(&mut m, Attr::MaxHealth, "test:boost", 10.0, Op::AddValue);
         for _ in 0..2 {

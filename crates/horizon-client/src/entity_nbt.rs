@@ -1489,7 +1489,6 @@ pub fn mob_to_nbt(
     put_sulfur_attributes(map, m);
     // The instances their own construction and load make (finalize::made_at_load),
     // which AttributeMap.pack saves although the loaded tag had none.
-    use crate::mobs::finalize::Attr;
     let made = crate::mobs::finalize::made_at_load(m);
     // AttributeMap.pack writes the list even when no instance exists.
     map.entry("attributes".into())
@@ -1501,17 +1500,10 @@ pub fn mob_to_nbt(
             _ => Vec::new(),
         };
         let attr_id = format!("minecraft:{}", attr.name());
-        if let Some(existing) = list
-            .iter_mut()
-            .find(|t| text(t.get("id")).as_deref() == Some(attr_id.as_str()))
+        if !list
+            .iter()
+            .any(|t| text(t.get("id")).as_deref() == Some(attr_id.as_str()))
         {
-            // The model owns a wolf's health base.
-            if (species, attr) == (S::Wolf, Attr::MaxHealth)
-                && let Tag::Compound(c) = existing
-            {
-                c.insert("base".into(), Tag::Double(base.to_bits()));
-            }
-        } else {
             list.push(Tag::compound([
                 ("id", string(&attr_id)),
                 ("base", Tag::Double(base.to_bits())),
@@ -2391,11 +2383,15 @@ pub fn mob_from_nbt_with_random(
         crate::mobs::tame::restore_sitting(&mut m, flag(tag, "Sitting"));
     }
     if m.species() == crate::mobs::Species::Wolf {
-        let health = m.health;
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
-        let tame = m.extra.owner.is_some();
-        crate::mobs::tame::set_tame(&mut m, tame);
-        m.health = health;
+        // TamableAnimal.readAdditionalSaveData: with an owner `setTame(true,
+        // false)`, the flag alone, so the max health stays as saved; without
+        // one `setTame(false, true)`, whose side effect sets its base to 8.
+        if m.extra.owner.is_some() {
+            m.extra.tame = true;
+        } else {
+            crate::mobs::tame::set_tame(&mut m, false);
+        }
         crate::mobs::tame::restore_sitting(&mut m, flag(tag, "Sitting"));
         let armor = tag
             .get("equipment")
