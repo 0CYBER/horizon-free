@@ -693,6 +693,8 @@ exactly vanilla's, so a vanilla client can share the game folder.
 enabled:true
 vibration:true
 adaptiveTriggers:true
+impulseTriggers:true
+blockVibration:true
 lightbar:health
 lookSensitivity:0.5
 invertX:false
@@ -749,12 +751,17 @@ tabs. The creative grid's items aren't slots, so creative has only Close and its
 ## Rumble
 
 Vibration (on by default, off in the options): taking damage (stronger with
-the damage), a block broken, an explosion nearby (scaled by distance), a totem
-of undying. Short, low-intensity pulses, as on Bedrock. A DualSense gets them
-shaped, through its own output report (below), on every OS. Other pads go through
-gilrs force feedback: Linux (evdev force feedback, including Steam Input's
-virtual pad) and Windows support it; macOS gilrs has no force feedback, so it
-is silently skipped there.
+the damage), a block broken, a stack split, an explosion nearby (scaled by
+distance), a totem of undying. Short, low-intensity pulses, as on Bedrock. A
+DualSense and an Xbox One pad get them through their own output reports
+(below), on every OS where the pad takes one. **Haptic Feedback from Bedrock**
+(`blockVibration:`, on by default) turns the broken-block tick off, as
+Bedrock's own option does, and **Split Vibration** (`splitVibration:`, on by
+default) the short tick when a stack splits. The split's tick only plays when
+the pad's own cursor made the click: the mouse never buzzes. Other pads go
+through gilrs force feedback: Linux (evdev force feedback, including Steam
+Input's virtual pad) and Windows support it; macOS gilrs has no force
+feedback, so it is silently skipped there.
 
 ## DualSense output
 
@@ -899,11 +906,15 @@ documents (none of it measured on Horizon's pad yet):
 ### Vibration shapes and HD haptics
 
 Each event plays a short shape rather than one flat block: a hit opens at
-full strength for 50 ms and dies away in two steps, an explosion rolls on for
-half a second, a totem swells, a broken block is a 35 ms tick. Over HID they
-drive the motors' emulation (the compatible-vibration bytes). Measured on the
-pad, that emulation has inertia: after a full-strength step it takes about
-half a second to settle, so short shapes blur.
+full strength and dies away in two steps, an explosion rolls on for half a
+second, a totem swells, a broken block is a 120 ms tick, a split a 90 ms one.
+Over HID they drive the motors' emulation (the compatible-vibration bytes).
+Measured on the pad, that emulation has inertia: after a full-strength step it
+takes about half a second to settle, so short shapes blur. The Xbox output
+(below) therefore plays a hit as one flat step at the pulse's level for the
+whole pulse: its shaped fade dropped the handle motors below what they answer,
+which left a hit in the trigger motors alone. A broken block and a split are
+one step on either path.
 
 The DualSense has no motors, but two voice-coil actuators, and on USB it is
 also a four-channel 48 kHz audio device whose channels 3 and 4 drive them
@@ -974,6 +985,116 @@ flags), the pad reporting a feedback and a weapon trigger effect as active,
 and the writer thread. Verified against the references only: everything
 else, the flag-less stop, the attenuation and LED reset reports, and all of
 Bluetooth.
+
+## Xbox One output
+
+Gilrs only reads the pads, and its force feedback has no trigger motors. A pad
+in use is also written to directly: Microsoft's Xbox One and Series pads
+(045e; the ids in `horizon-dualsense`'s `xbox::XBOX_ONE`) over hidapi, and, on
+Windows, any Xbox-style pad Windows.Gaming.Input lists (a GameSir G7, an
+8BitDo in Xbox mode) through WGI, whose four motors don't need Microsoft's
+ids.
+
+- **Report.** The pad has four motors: the two handles (heavy and light) and
+  one in each trigger, the impulse triggers. A vibration writes all four:
+  report 0x09 over USB, 13 bytes (GIP's rumble command, 0x0F to set both
+  handles and both triggers, the trigger levels, the handle levels, then the
+  effect's duration, delay and loop bytes); report 0x03 over Bluetooth, 9
+  bytes, with the same four levels. SDL's `ControllerHasTriggerRumble` marks
+  only Microsoft's own pads: a licensed third-party pad takes the same bytes
+  and buzzes its handles, with nothing in its triggers. On Windows,
+  Windows.Gaming.Input's four motors reach a third-party Xbox-style pad's
+  handles too, so a GameSir or an 8BitDo in Xbox mode buzzes both sides and
+  both triggers when it has them. Unit tests pin the bytes to SDL's
+  `SDL_hidapi_xboxone.c`.
+- **Windows on a cable.** A wired pad's HID endpoint is XGIP's stand-in and
+  takes no output report (SDL skips every `\\?\HID#` path there). Windows.
+  Gaming.Input is the way to its trigger motors: `Gamepad::SetVibration`
+  carries `LeftMotor`, `RightMotor`, `LeftTrigger` and `RightTrigger`, all
+  0..1, and it shares the pad with other programs (the launcher) instead of
+  opening its HID endpoint. A player's wired 1708 pad proved the trigger motors
+  reach it: the right trigger buzzed on a broken block, and the four motors
+  played over Bluetooth. Windows needs the app's window in front for any
+  vibration: it stops when the window loses focus. A Bluetooth pad is a real HID device on every OS, and Chromium's own
+  Xbox HID writer drives it there too, so on Windows Bluetooth takes the report
+  above and WGI is only the fallback when the endpoint can't be opened. On
+  Linux and macOS a wired pad takes the USB report. iOS has no hidapi, so the
+  crate builds without output there.
+- **Which link the pad is on.** Windows.Gaming.Input answers it (`IsWireless`),
+  so on Windows WGI is asked first: a wired pad takes WGI's four motors even
+  when Windows still lists a paired Bluetooth entry for it, and a wireless one
+  takes its HID report and falls back to WGI. That also settles the case where
+  a cable is plugged into a pad that is still paired over Bluetooth, which
+  otherwise opened a dead Bluetooth handle.
+- **Which pad.** The output follows the pad the player is using, not the first
+  one the system lists: the writer takes its ids and its place among identical
+  pads, then asks WGI or hidapi for that one. Connecting a second controller
+  therefore neither takes the first one's output nor silences it, and each pad
+  keeps its own four motors.
+- **Splitscreen.** Each player's pad keeps its own four motors. P1's game owns
+  its output while its turn runs; a guest's game has no output path of its own,
+  so the router that feeds the guests opens one link per guest pad, with that
+  player's Impulse Triggers setting, and writes all four motors. Without it a
+  guest's vibration fell back to gilrs' force feedback, which moves the grips
+  alone.
+- **Switching links.** When a controller connects or disconnects, the pad's
+  own output is dropped instead of kept: a handle to the old link keeps
+  accepting writes and buzzes nothing. The next frame opens the pad afresh on
+  the link it is on now, so cable ↔ Bluetooth both ways works without
+  restarting the game.
+- **One output path.** While the pad's own output is open, every vibration goes
+  through it, handles included. The trigger motors have no other path, and
+  riding along keeps gilrs' force feedback (Windows.Gaming.Input on Windows,
+  which always sets the triggers to zero) from cutting a trigger between
+  steps.
+- **Trigger levels.** The triggers feel where the action is: a broken block
+  buzzes both, a stack split both lightly, an explosion and a totem both, a hit
+  both (the handles carry it too), and the radial menu's ticks neither. The
+  broken block's tick is one fixed level: the grips at 60% for 120 ms, the
+  triggers at 35%, so every block feels the same and all four motors answer.
+  35% on the grips for 100 ms sat below what those motors deliver, and only the
+  triggers buzzed. A hit holds one flat step for its whole pulse (the handles
+  70–90%, the triggers 65%, 200–450 ms), so the grips spin up too. A split is
+  lighter and shorter: 55% in the grips, 30% in the triggers, 90 ms.
+  **Impulse Triggers** (`impulseTriggers:`, on by default) stops the trigger
+  motors and leaves the handles; **Haptic Feedback from Bedrock**
+  (`blockVibration:`) turns off the broken block's tick, and **Split
+  Vibration** (`splitVibration:`) the split's.
+- **Handles and triggers.** Windows lists an Xbox pad twice, the WGI gamepad
+  with force feedback and a raw HID entry without one; when the pad in use is
+  the second, falling back to gilrs' rumble goes to its gamepad twin. That
+  fallback only runs while the pad's own output isn't open.
+- **Thread.** A report can block for milliseconds, so a thread of its own owns
+  the pad, as the DualSense's does: the game hands it the vibration's steps, it
+  writes the motors and ends them, and it looks for the pad again when it goes.
+- **Failures.** A failed write drops the handle and the thread scans again. The
+  writer does *not* probe with a zero-timeout read first: on Windows hidapi's
+  overlapped read answers `ERROR_BUSY` (0xAA) whenever no input report is
+  waiting, which closed the link on the first vibration over Bluetooth. A
+  handle the launcher holds makes the HID open fail, and the writer then tries
+  WGI, which isn't exclusive.
+
+Byte layout from public references, read for facts; no code is copied from
+them (Chromium's writer is BSD):
+
+| Reference | Read at | What it settles |
+| --- | --- | --- |
+| SDL [`SDL_hidapi_xboxone.c`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/src/joystick/hidapi/SDL_hidapi_xboxone.c) (zlib) | `6defbc0` | the 13-byte USB and 9-byte Bluetooth reports, 0x0F, the device ids, `ControllerHasTriggerRumble`, the Windows `\\?\HID#` skip |
+| Chromium [`xbox_hid_controller.cc`](https://chromium.googlesource.com/chromium/src/+/main/device/gamepad/xbox_hid_controller.cc) (BSD) | 2026-11 | the same output report driven on every OS over Bluetooth |
+| Windows [`Gamepad.SetVibration`](https://learn.microsoft.com/uwp/api/windows.gaming.input.gamepad.setvibration) | 2026-11 | `GamepadVibration`'s four motor fields and their 0..1 range |
+
+Verified against the references and a player's pads: `cargo run -p
+horizon-dualsense --example xbox -- handles`, `-- triggers` and `-- link` each
+played physically over Bluetooth (the four motors and the link's stop). In the
+game on the player's wired 1708 pad, all four motors buzz on a broken block
+after the tick's level was raised (the grips did not answer 35% for 100 ms),
+and cable ↔ Bluetooth worked both ways without a restart —
+Windows.Gaming.Input's trigger motors do reach a wired pad. The flat hit step,
+a splitscreen guest's triggers, the split's tick and a GameSir G7 still need a
+physical check.
+
+`cargo run -p horizon-dualsense --example xbox -- all` plays each motor on a
+real pad, which is how to check a change without the game.
 
 ## Steam Deck
 

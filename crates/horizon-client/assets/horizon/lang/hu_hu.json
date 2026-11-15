@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Jelölő hozzáadása",
   "horizon.studio.topbar.clear_keyframes": "🗑 Kulcsképkockák törlése",
   "horizon.studio.topbar.timeline_hud": "⏱ Idővonal",
-  "horizon.studio.topbar.split_scene": "Jelenet hasítása"
+  "horizon.studio.topbar.split_scene": "Jelenet hasítása",
+  "horizon.options.block_vibration": "Haptikus visszajelzés a Bedrockból",
+  "horizon.options.split_vibration": "Rezgés köteg szétválasztásakor",
+  "horizon.options.impulse_triggers": "Impulzus ravaszok",
+  "A tick when you break a block, as in Bedrock.": "Amikor blokkot törsz, az rezeg, mint a Bedrockban.",
+  "A short buzz when you split a stack, as in Bedrock.": "Rövid rezgés, amikor szétválasztasz egy köteget, mint a Bedrockban.",
+  "An Xbox One controller's triggers buzz with its handles.": "Az Xbox One vezérlő ravaszai a markolataival együtt rezegnek."
 }

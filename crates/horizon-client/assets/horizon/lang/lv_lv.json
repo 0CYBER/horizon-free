@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Pievienot marķieri",
   "horizon.studio.topbar.clear_keyframes": "🗑 Notīrīt atzīmes",
   "horizon.studio.topbar.timeline_hud": "⏱ Laika josla",
-  "horizon.studio.topbar.split_scene": "Sadalīt ainu"
+  "horizon.studio.topbar.split_scene": "Sadalīt ainu",
+  "horizon.options.block_vibration": "Bedrock haptiskā atgriezeniskā saite",
+  "horizon.options.split_vibration": "Vibrācija, sadalot kaudzi",
+  "horizon.options.impulse_triggers": "Impulsa sprūdi",
+  "A tick when you break a block, as in Bedrock.": "Kad salaužat bloku, tas vibrē, kā Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Īsa vibrācija, sadalot kaudzi, kā Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One pults sprūdi vibrē kopā ar tās rokturiem."
 }

@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Zonte un marcadôr",
   "horizon.studio.topbar.clear_keyframes": "🗑 Nete i ponts clâfs",
   "horizon.studio.topbar.timeline_hud": "⏱ Cronologie",
-  "horizon.studio.topbar.split_scene": "Dividi la scene"
+  "horizon.studio.topbar.split_scene": "Dividi la scene",
+  "horizon.options.block_vibration": "Rispueste atiche di Bedrock",
+  "horizon.options.split_vibration": "Vibrazion cuant che si divît un grup",
+  "horizon.options.impulse_triggers": "Grillets a impuls",
+  "A tick when you break a block, as in Bedrock.": "Cuant che tu romps un bloc, al vibre, come in Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Une vibrazion curte cuant che si divît un grup, come in Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "I grillets di un control Xbox One a vibrein insieme aes sôs manegs."
 }

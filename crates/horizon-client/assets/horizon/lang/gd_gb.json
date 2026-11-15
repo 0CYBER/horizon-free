@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Cuir comharra ris",
   "horizon.studio.topbar.clear_keyframes": "🗑 Glan na frèamaichean-iuchrach",
   "horizon.studio.topbar.timeline_hud": "⏱ Loidhne-ùine",
-  "horizon.studio.topbar.split_scene": "Sgoilt an sealladh"
+  "horizon.studio.topbar.split_scene": "Sgoilt an sealladh",
+  "horizon.options.block_vibration": "Fios-air-ais haptach bho Bedrock",
+  "horizon.options.split_vibration": "Crith nuair a roinneas tu cruachan",
+  "horizon.options.impulse_triggers": "Truicearan brosnachaidh",
+  "A tick when you break a block, as in Bedrock.": "Nuair a bhriseas tu bloc, bidh e a' crith, mar ann am Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Crith goirid nuair a roinneas tu cruachan, mar ann am Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Bidh truicearan rianadair Xbox One a' crith còmhla ris na làmhan."
 }

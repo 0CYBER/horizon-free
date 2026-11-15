@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Markering toevoegen",
   "horizon.studio.topbar.clear_keyframes": "🗑 Keyframes wissen",
   "horizon.studio.topbar.timeline_hud": "⏱ Tijdlijn",
-  "horizon.studio.topbar.split_scene": "Scène splitsen"
+  "horizon.studio.topbar.split_scene": "Scène splitsen",
+  "horizon.options.block_vibration": "Haptische feedback van Bedrock",
+  "horizon.options.split_vibration": "Trilling bij het splitsen van een stapel",
+  "horizon.options.impulse_triggers": "Impulstriggers",
+  "A tick when you break a block, as in Bedrock.": "Als je een blok breekt, trilt het, zoals in Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Een korte trilling wanneer je een stapel splitst, zoals in Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "De triggers van een Xbox One-controller trillen samen met de handgrepen."
 }

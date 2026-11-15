@@ -837,10 +837,18 @@ impl ApplicationHandler for Split<'_> {
                 }
             }
         }
-        self.pads
-            .play_rumbles(&mut self.host.pad, self.p1_pad.owner);
+        self.pads.play_rumbles(
+            &mut self.host.pad,
+            self.p1_pad.owner,
+            self.host.settings.controller.impulse_triggers,
+            false,
+        );
         for g in &mut self.guests {
-            self.pads.play_rumbles(&mut g.game.pad, g.pad);
+            // A guest's game has no output path of its own: the router drives its pad's four
+            // motors, with that player's own Impulse Triggers setting.
+            let impulse = g.game.settings.controller.impulse_triggers;
+            self.pads
+                .play_rumbles(&mut g.game.pad, g.pad, impulse, true);
         }
         self.turn(0);
         let rendered = Instant::now();

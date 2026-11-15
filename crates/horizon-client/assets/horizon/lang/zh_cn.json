@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "添加标记",
   "horizon.studio.topbar.clear_keyframes": "🗑 清除关键帧",
   "horizon.studio.topbar.timeline_hud": "⏱ 时间轴",
-  "horizon.studio.topbar.split_scene": "拆分场景"
+  "horizon.studio.topbar.split_scene": "拆分场景",
+  "horizon.options.block_vibration": "来自 Bedrock 的触觉反馈",
+  "horizon.options.split_vibration": "拆分堆叠时的振动",
+  "horizon.options.impulse_triggers": "脉冲扳机",
+  "A tick when you break a block, as in Bedrock.": "当你破坏方块时，它会像 Bedrock 一样振动。",
+  "A short buzz when you split a stack, as in Bedrock.": "拆分堆叠时短暂振动，如同 Bedrock。",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One 控制器的扳机会随握把一起振动。"
 }

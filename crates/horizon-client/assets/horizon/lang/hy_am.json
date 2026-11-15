@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Ավելացնել մարկեր",
   "horizon.studio.topbar.clear_keyframes": "🗑 Մաքրել կադրերը",
   "horizon.studio.topbar.timeline_hud": "⏱ Ժամանակագիծ",
-  "horizon.studio.topbar.split_scene": "Բաժանել տեսարանը"
+  "horizon.studio.topbar.split_scene": "Բաժանել տեսարանը",
+  "horizon.options.block_vibration": "Հապտիկ արձագանք Bedrock-ից",
+  "horizon.options.split_vibration": "Թրթռում կույտը բաժանելիս",
+  "horizon.options.impulse_triggers": "Իմպուլսային ձգաններ",
+  "A tick when you break a block, as in Bedrock.": "Երբ կոտրում ես բլոկ, այն թրթռում է, ինչպես Bedrock-ում։",
+  "A short buzz when you split a stack, as in Bedrock.": "Կարճ թրթռում, երբ բաժանում ես կույտը, ինչպես Bedrock-ում։",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One կարգավորիչի ձգանները թրթռում են նրա բռնակների հետ միասին։"
 }

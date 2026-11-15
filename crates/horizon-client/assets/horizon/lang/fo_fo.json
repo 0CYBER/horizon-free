@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Legg markør afturat",
   "horizon.studio.topbar.clear_keyframes": "🗑 Tøm nyklapunkt",
   "horizon.studio.topbar.timeline_hud": "⏱ Tíðarlinja",
-  "horizon.studio.topbar.split_scene": "Být scenu"
+  "horizon.studio.topbar.split_scene": "Být scenu",
+  "horizon.options.block_vibration": "Haptisk afturmelding frá Bedrock",
+  "horizon.options.split_vibration": "Risting tá stakkur verður býttur",
+  "horizon.options.impulse_triggers": "Impulstriggarar",
+  "A tick when you break a block, as in Bedrock.": "Tá tú brýtur ein blokk, ristir hon, sum í Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Stutt risting tá tú býtir ein stakk, sum í Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Trigararnir á einum Xbox One-stýripinna rista saman við haldgreipunum."
 }

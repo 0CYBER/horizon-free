@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Aggiungi marcatore",
   "horizon.studio.topbar.clear_keyframes": "🗑 Cancella fotogrammi chiave",
   "horizon.studio.topbar.timeline_hud": "⏱ Linea temporale",
-  "horizon.studio.topbar.split_scene": "Dividi scena"
+  "horizon.studio.topbar.split_scene": "Dividi scena",
+  "horizon.options.block_vibration": "Risposta aptica da Bedrock",
+  "horizon.options.split_vibration": "Vibrazione quando si divide una pila",
+  "horizon.options.impulse_triggers": "Grilletto a impulso",
+  "A tick when you break a block, as in Bedrock.": "Quando rompi un blocco, vibra, come in Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Una breve vibrazione quando dividi una pila, come in Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "I grilletti di un controller Xbox One vibrano insieme alle impugnature."
 }

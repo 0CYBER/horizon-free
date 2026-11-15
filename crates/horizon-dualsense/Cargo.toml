@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The DualSense's output over HID: rumble, adaptive triggers, lightbar and player LEDs"
+description = "The DualSense's and Xbox One's output over HID: rumble, adaptive triggers, lights and impulse triggers"
 
 [dependencies]
 log = "0.4"
@@ -18,6 +18,11 @@ log = "0.4"
 hidapi = { version = "2.6.7", default-features = false, features = ["linux-static-hidraw", "macos-shared-device"] }
 # HD haptics through the pad's own audio device (USB).
 cpal = "0.16"
+
+# Windows.Gaming.Input drives the four motors of a wired Xbox One pad, whose HID endpoint takes
+# no output report, and shares the pad with other programs. The same version gilrs uses.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Gaming_Input", "Foundation_Collections"] }
 
 [lints]
 workspace = true

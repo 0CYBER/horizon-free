@@ -109,9 +109,9 @@ Vanilla has none of these, and the engine stays 1:1 vanilla, so they are platfor
 exposes. Ports to consoles and handhelds need them, and other projects can build on them.
 
 - **Controllers:** the pad backend (gilrs), bindings, deadzones and the look curve, button glyphs, the pad's menu
-  navigation and cursor, the controller settings, DualSense output. Today in `horizon-client-input/src/gamepad.rs`,
-  `game/pad.rs`, `game/pad_*.rs` and `game/pad/`, `pad_cursor.rs`, `pad_glyph.rs`, `controller_ui.rs`, and
-  `horizon-dualsense`. The engine's hooks:
+  navigation and cursor, the controller settings, DualSense and Xbox One output. Today in
+  `horizon-client-input/src/gamepad.rs`, `game/pad.rs`, `game/pad_*.rs` and `game/pad/`, `pad_cursor.rs`,
+  `pad_glyph.rs`, `controller_ui.rs`, and `horizon-dualsense`. The engine's hooks:
   - **Actions.** Every input the game reads is an `Action`, vanilla's key mappings (`horizon-client-input/src/actions.rs`),
     and code asks whether an action is held (`held.rs`), never a key. A pad presses and holds actions like a
     keyboard does. This hook exists today.

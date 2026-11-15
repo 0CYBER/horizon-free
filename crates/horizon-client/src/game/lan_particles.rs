@@ -597,6 +597,20 @@ impl Game<'_> {
     /// `ClientPacketListener.handleExplosion`: the blast's particles (and its
     /// sound, when the packet carries it), then the player's push.
     pub(super) fn remote_explode(&mut self, p: &play::Explode) {
+        // A blast near this player's own body shakes its pad (a server's pads are not this
+        // window's: the client half is where a player feels it).
+        if let Some(player) = &self.player {
+            let d = [
+                player.position.x - p.center[0],
+                player.position.y - p.center[1],
+                player.position.z - p.center[2],
+            ];
+            let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            self.input_feedback(horizon_client::input_source::Feedback::Explosion {
+                distance,
+                radius: p.radius,
+            });
+        }
         if p.play_sound {
             let pitch = (1.0
                 + (self.particles.random().next_float() - self.particles.random().next_float())

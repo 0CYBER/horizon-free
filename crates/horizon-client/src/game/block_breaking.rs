@@ -31,6 +31,15 @@ impl Game<'_> {
         self.player_break_block(pos).map(|_| ())
     }
 
+    /// The window's own player broke a block: the tutorial's counter and the pad's tick. It runs
+    /// in the client half only, where the pad is: the server half breaks blocks for every player
+    /// it serves, and their pads are other windows' (an Xbox One pad's impulse triggers buzz on
+    /// the hand that swung).
+    pub(super) fn player_broke_block(&mut self, state: horizon_world::registry::BlockStateId) {
+        self.tutorial_destroy(state, 1.0);
+        self.input_feedback(horizon_client::input_source::Feedback::BlockBroken);
+    }
+
     /// `ServerPlayerGameMode.destroyBlock`: whether the block was removed.
     /// A break inside another (a mod breaking more blocks from its
     /// `native_destroy_block`) keeps the outer break's own events.

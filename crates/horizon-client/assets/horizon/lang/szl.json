@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Dodaj marker",
   "horizon.studio.topbar.clear_keyframes": "🗑 Wyczyść kluczowe ôbrazy",
   "horizon.studio.topbar.timeline_hud": "⏱ Ôs czasu",
-  "horizon.studio.topbar.split_scene": "Podziel scena"
+  "horizon.studio.topbar.split_scene": "Podziel scena",
+  "horizon.options.block_vibration": "Haptyczne sprzyńżyni zwrotne ze Bedrocka",
+  "horizon.options.split_vibration": "Wibracyjo przi dzielůniu stosu",
+  "horizon.options.impulse_triggers": "Impulsowe spusty",
+  "A tick when you break a block, as in Bedrock.": "Kiej łamiesz blok, wibruje, jak we Bedrocku.",
+  "A short buzz when you split a stack, as in Bedrock.": "Krůtko wibracyjo przi dzielůniu stosu, jak we Bedrocku.",
+  "An Xbox One controller's triggers buzz with its handles.": "Spusty kontrolera Xbox One wibrujōm razem z jego uchwytami."
 }

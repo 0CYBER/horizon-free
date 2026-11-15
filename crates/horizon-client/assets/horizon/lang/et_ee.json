@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Lisa marker",
   "horizon.studio.topbar.clear_keyframes": "🗑 Tühjenda võtmeraamid",
   "horizon.studio.topbar.timeline_hud": "⏱ Ajatelg",
-  "horizon.studio.topbar.split_scene": "Tükelda stseen"
+  "horizon.studio.topbar.split_scene": "Tükelda stseen",
+  "horizon.options.block_vibration": "Bedrocki haptiline tagasiside",
+  "horizon.options.split_vibration": "Virna jagamise vibratsioon",
+  "horizon.options.impulse_triggers": "Impulsspäästikud",
+  "A tick when you break a block, as in Bedrock.": "Kui ploki lõhud, vibreerib see nagu Bedrockis.",
+  "A short buzz when you split a stack, as in Bedrock.": "Lühike vibratsioon virna jagamisel, nagu Bedrockis.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox Onei pulti päästikud vibreerivad koos selle käepidemetega."
 }

@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Додај ознаку",
   "horizon.studio.topbar.clear_keyframes": "🗑 Обриши кључне кадрове",
   "horizon.studio.topbar.timeline_hud": "⏱ Временска линија",
-  "horizon.studio.topbar.split_scene": "Подели сцену"
+  "horizon.studio.topbar.split_scene": "Подели сцену",
+  "horizon.options.block_vibration": "Haptička povratna informacija iz Bedrocka",
+  "horizon.options.split_vibration": "Vibracija pri deljenju gomile",
+  "horizon.options.impulse_triggers": "Impulsni okidači",
+  "A tick when you break a block, as in Bedrock.": "Kada razbijete blok, on vibrira, kao u Bedrock-u.",
+  "A short buzz when you split a stack, as in Bedrock.": "Kratka vibracija kada podelite gomilu, kao u Bedrocku.",
+  "An Xbox One controller's triggers buzz with its handles.": "Okidači Xbox One kontrolera vibriraju zajedno sa njegovim ručkama."
 }

@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Tinye akara",
   "horizon.studio.topbar.clear_keyframes": "🗑 Hichapụ keyframe",
   "horizon.studio.topbar.timeline_hud": "⏱ Usoro oge",
-  "horizon.studio.topbar.split_scene": "Kewaa nkebi"
+  "horizon.studio.topbar.split_scene": "Kewaa nkebi",
+  "horizon.options.block_vibration": "Nzaghachi haptic si Bedrock",
+  "horizon.options.split_vibration": "Mkpọtụ mgbe e kewara mkpọ",
+  "horizon.options.impulse_triggers": "Ihe mkpalite mmetụ",
+  "A tick when you break a block, as in Bedrock.": "Mgbe ị na-agbaji blọk, ọ na-ama jijiji, dị ka na Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Mkpọtụ dị mkpirikpi mgbe i kewara mkpọ, dịka na Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Ihe mkpalite nke njikwa Xbox One na-ama jijiji yana aka ya."
 }

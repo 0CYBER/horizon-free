@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Gehitu markatzailea",
   "horizon.studio.topbar.clear_keyframes": "🗑 Garbitu keyframe-ak",
   "horizon.studio.topbar.timeline_hud": "⏱ Denbora-lerroa",
-  "horizon.studio.topbar.split_scene": "Zatitu eszena"
+  "horizon.studio.topbar.split_scene": "Zatitu eszena",
+  "horizon.options.block_vibration": "Bedrocken erantzun haptikoa",
+  "horizon.options.split_vibration": "Pila zatitzean dardara",
+  "horizon.options.impulse_triggers": "Bultzada-gakoak",
+  "A tick when you break a block, as in Bedrock.": "Bloke bat hausten duzunean, bibratu egiten du, Bedrocken bezala.",
+  "A short buzz when you split a stack, as in Bedrock.": "Dardara laburra pila bat zatitzen duzunean, Bedrocken bezala.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One kontrol baten gakoek bere heldulekuekin batera bibratzen dute."
 }

@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Nişan əlavə et",
   "horizon.studio.topbar.clear_keyframes": "🗑 Açar kadrları təmizlə",
   "horizon.studio.topbar.timeline_hud": "⏱ Vaxt xətti",
-  "horizon.studio.topbar.split_scene": "Səhnəni böl"
+  "horizon.studio.topbar.split_scene": "Səhnəni böl",
+  "horizon.options.block_vibration": "Bedrock-dan haptik əks əlaqə",
+  "horizon.options.split_vibration": "Yığın bölmə vibrasiyası",
+  "horizon.options.impulse_triggers": "İmpuls tetikləri",
+  "A tick when you break a block, as in Bedrock.": "Blok qıranda o, Bedrock-dakı kimi titrəyir.",
+  "A short buzz when you split a stack, as in Bedrock.": "Bir yığını böldükdə qısa müddət titrəyir, Bedrock-dakı kimi.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One kontrolunun tetikləri tutacaqları ilə birlikdə titrəyir."
 }

@@ -15,12 +15,14 @@ use std::time::{Duration, Instant};
 pub const RADIAL_TICK: Pulse = Pulse {
     strong: 0.0,
     weak: 0.3,
+    triggers: [0.0, 0.0],
     millis: 45,
 };
 /// A page turn's tick: shorter than a slot's.
 pub const RADIAL_PAGE_TICK: Pulse = Pulse {
     strong: 0.0,
     weak: 0.3,
+    triggers: [0.0, 0.0],
     millis: 30,
 };
 /// How long after a page turn's tick the second one comes when the pages went round an end.
@@ -29,6 +31,7 @@ pub const WRAP_TICK_GAP: Duration = Duration::from_millis(90);
 pub const RADIAL_NOTHING: Pulse = Pulse {
     strong: 0.15,
     weak: 0.1,
+    triggers: [0.0, 0.0],
     millis: 110,
 };
 

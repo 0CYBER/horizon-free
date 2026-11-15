@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Дадаць маркер",
   "horizon.studio.topbar.clear_keyframes": "🗑 Ачысціць ключавыя кадры",
   "horizon.studio.topbar.timeline_hud": "⏱ Таймлайн",
-  "horizon.studio.topbar.split_scene": "Раздзяліць сцэну"
+  "horizon.studio.topbar.split_scene": "Раздзяліць сцэну",
+  "horizon.options.block_vibration": "Гаптычны водгук ад Bedrock",
+  "horizon.options.split_vibration": "Вібрацыя пры падзеле стосу",
+  "horizon.options.impulse_triggers": "Імпульсныя трыгеры",
+  "A tick when you break a block, as in Bedrock.": "Калі вы разбураеце блок, ён вібруе, як у Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Стос каротка вібруе пры падзеле, як у Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Трыгеры кантролера Xbox One вібруюць разам з яго ручкамі."
 }

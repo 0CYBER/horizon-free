@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Pridať značku",
   "horizon.studio.topbar.clear_keyframes": "🗑 Vymazať kľúčové snímky",
   "horizon.studio.topbar.timeline_hud": "⏱ Časová os",
-  "horizon.studio.topbar.split_scene": "Rozdeliť scénu"
+  "horizon.studio.topbar.split_scene": "Rozdeliť scénu",
+  "horizon.options.block_vibration": "Haptická odozva z Bedrocku",
+  "horizon.options.split_vibration": "Vibrácia pri rozdelení kopy",
+  "horizon.options.impulse_triggers": "Impulzné spúšte",
+  "A tick when you break a block, as in Bedrock.": "Keď rozbijete blok, zavibruje, ako v Bedrocku.",
+  "A short buzz when you split a stack, as in Bedrock.": "Krátka vibrácia pri rozdelení kopy, ako v Bedrocku.",
+  "An Xbox One controller's triggers buzz with its handles.": "Spúšte ovládača Xbox One vibrujú spolu s jeho rukoväťami."
 }

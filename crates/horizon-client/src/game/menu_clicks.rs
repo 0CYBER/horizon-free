@@ -106,6 +106,33 @@ impl Game<'_> {
             self.send_creative_slots();
         }
     }
+    /// Bedrock's tick when a stack splits: a right-click with an empty hand on a stack of more
+    /// than one, which the menu halves. Returns the clicked slot and the counts that confirm
+    /// the click actually did it (the stack before, and the half the hand should hold after).
+    pub(super) fn split_click(
+        &mut self,
+        ops: &[(Option<usize>, i32, horizon_client::menu::Input)],
+    ) -> Option<(usize, u32, u32)> {
+        let [(Some(slot), 1, horizon_client::menu::Input::Pickup)] = ops else {
+            return None;
+        };
+        if self.carried.is_some() {
+            return None;
+        }
+        let stack = self.slot_mut(*slot).clone()?;
+        (stack.count > 1).then(|| (*slot, stack.count, stack.count.div_ceil(2)))
+    }
+    /// Whether the menu did the split `split_click` described: the hand took the upper half and
+    /// the clicked slot kept the lower one.
+    pub(super) fn split_done(&mut self, split: (usize, u32, u32)) -> bool {
+        let (slot, before, half) = split;
+        let carried = self.carried.as_ref().is_some_and(|c| c.count == half);
+        carried
+            && self
+                .slot_mut(slot)
+                .clone()
+                .is_some_and(|s| s.count.saturating_add(half) == before)
+    }
     /// Several clicks on one menu instance (a quick craft drag is three).
     pub(super) fn menu_ops(
         &mut self,
@@ -125,6 +152,7 @@ impl Game<'_> {
         if let [(Some(slot), button, input)] = ops {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
+        let split = self.split_click(ops);
         let ops = ops.to_vec();
         let done = self.menu_session(move |menu, env, to_menu| {
             let mut clicks = Vec::new();
@@ -154,6 +182,14 @@ impl Game<'_> {
         // CreativeModeInventoryScreen.slotClicked: the changed slots go out with the click.
         if done && self.remote.is_some() && self.screen == Screen::Creative {
             self.send_creative_slots();
+        }
+        // The pad's own click, and only the pad's: the mouse's split doesn't buzz.
+        if done
+            && self.input_made_pointer_event()
+            && let Some(split) = split
+            && self.split_done(split)
+        {
+            self.input_feedback(horizon_client::input_source::Feedback::ItemStackSplit);
         }
         done
     }

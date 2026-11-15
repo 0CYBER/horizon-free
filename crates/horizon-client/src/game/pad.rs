@@ -227,7 +227,14 @@ mod hardware {
         }
         pub(in crate::game) fn lend_output(&mut self, _: &mut Pads, _: PadId) {}
         pub(in crate::game) fn reclaim_output(&mut self, _: &mut Pads) {}
-        pub(in crate::game) fn play_rumbles(&mut self, _: &mut Pads, _: Option<PadId>) {}
+        pub(in crate::game) fn play_rumbles(
+            &mut self,
+            _: &mut Pads,
+            _: Option<PadId>,
+            _: bool,
+            _: bool,
+        ) {
+        }
         pub(in crate::game) fn report_status(&self, _: &mut Pads, _: Option<PadId>) {}
         pub(in crate::game) fn connected(&self, _: PadId) -> bool {
             false
@@ -841,6 +848,13 @@ impl Game<'_> {
         if !settings.enabled || !settings.vibration || !self.pad.in_use {
             return;
         }
+        // Bedrock's own switch, off for a player who doesn't want every block to tick; the
+        // split's tick has its own, so either can be off without the other.
+        match rumble {
+            Rumble::BlockBroken if !settings.block_vibration => return,
+            Rumble::ItemStackSplit if !settings.split_vibration => return,
+            _ => {}
+        }
         let Some(pulse) = rumble.pulse() else {
             return;
         };
@@ -915,7 +929,8 @@ impl Game<'_> {
                     "enabled": self.settings.controller.enabled,
                     "glyphs": self.pad.style.name(),
                     "last_rumble": self.pad.last_rumble.map(|(why, p)| json!({
-                        "reason": why, "strong": p.strong, "weak": p.weak, "ms": p.millis,
+                        "reason": why, "strong": p.strong, "weak": p.weak,
+                        "triggers": p.triggers, "ms": p.millis,
                     })),
                     "in_use": self.pad.in_use,
                     "notice": self.split_hud.notice.showing().map(|(title, body)| {

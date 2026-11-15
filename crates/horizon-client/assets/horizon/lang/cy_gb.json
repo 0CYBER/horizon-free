@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Ychwanegu Marciwr",
   "horizon.studio.topbar.clear_keyframes": "🗑 Clirio Allweddfframiau",
   "horizon.studio.topbar.timeline_hud": "⏱ Llinell Amser",
-  "horizon.studio.topbar.split_scene": "Hollti Golygfa"
+  "horizon.studio.topbar.split_scene": "Hollti Golygfa",
+  "horizon.options.block_vibration": "Adborth haptig o Bedrock",
+  "horizon.options.split_vibration": "Dirgryniad rhannu pentwr",
+  "horizon.options.impulse_triggers": "Trigolion byrlym",
+  "A tick when you break a block, as in Bedrock.": "Pan fyddwch yn torri bloc, mae'n dirgrynu, fel yn Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Dirgryniad byr pan rannu pentwr, fel yn Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Mae trigolion rheolydd Xbox One yn dirgrynu gyda'i dolennau."
 }

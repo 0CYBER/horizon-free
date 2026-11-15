@@ -490,5 +490,11 @@
   "Pack settings": "Podešavanja paketa",
   "Built-in settings": "Ugrađena podešavanja",
   "%s settings": "Podešavanja za %s",
-  "Settings made by the pack's author: they change only this pack.": "Podešavanja koja je napravio autor paketa: menjaju samo ovaj paket."
+  "Settings made by the pack's author: they change only this pack.": "Podešavanja koja je napravio autor paketa: menjaju samo ovaj paket.",
+  "horizon.options.block_vibration": "Хаптичка повратна информација из Bedrock-а",
+  "horizon.options.split_vibration": "Вибрација при дељењу гомиле",
+  "horizon.options.impulse_triggers": "Импулсни окидачи",
+  "A tick when you break a block, as in Bedrock.": "Када разбијете блок, он вибрира, као у Bedrock-у.",
+  "A short buzz when you split a stack, as in Bedrock.": "Кратка вибрација када поделите гомилу, као у Bedrock-у.",
+  "An Xbox One controller's triggers buzz with its handles.": "Окидачи Xbox One контролера вибрирају заједно са његовим ручкама."
 }

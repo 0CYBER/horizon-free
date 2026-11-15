@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "ಮಾರ್ಕರ್ ಸೇರಿಸಿ",
   "horizon.studio.topbar.clear_keyframes": "🗑 ಕೀಫ್ರೇಮ್‌ಗಳು ತೆರವು",
   "horizon.studio.topbar.timeline_hud": "⏱ ಟೈಮ್‌ಲೈನ್",
-  "horizon.studio.topbar.split_scene": "ದೃಶ್ಯ ವಿಭಜಿಸಿ"
+  "horizon.studio.topbar.split_scene": "ದೃಶ್ಯ ವಿಭಜಿಸಿ",
+  "horizon.options.block_vibration": "Bedrock ನಿಂದ ಹ್ಯಾಪ್ಟಿಕ್ ಪ್ರತಿಕ್ರಿಯೆ",
+  "horizon.options.split_vibration": "ಸ್ಟ್ಯಾಕ್ ವಿಭಜನೆಯ ಕಂಪನ",
+  "horizon.options.impulse_triggers": "ಇಂಪಲ್ಸ್ ಟ್ರಿಗರ್ಗಳು",
+  "A tick when you break a block, as in Bedrock.": "ನೀವು ಬ್ಲಾಕ್ ಮುರಿದಾಗ ಅದು ಕಂಪಿಸುತ್ತದೆ, Bedrockನಲ್ಲಿರುವಂತೆ.",
+  "A short buzz when you split a stack, as in Bedrock.": "ಸ್ಟ್ಯಾಕ್ ವಿಭಜಿಸಿದಾಗ ಸಣ್ಣ ಕಂಪನ, Bedrock ನಂತೆ.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One ನಿಯಂತ್ರಕದ ಟ್ರಿಗರ್ಗಳು ಅದರ ಹಿಡಿಕೆಗಳೊಂದಿಗೆ ಕಂಪಿಸುತ್ತವೆ."
 }

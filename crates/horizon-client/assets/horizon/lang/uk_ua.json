@@ -1136,5 +1136,11 @@
   "horizon.pad.action.radial": "Радіальне меню",
   "horizon.recipes.fuel.options": "Утримуйте SHIFT, щоб закріпити цю підказку, потім клацніть інгредієнт, щоб переглянути рецепти.",
   "horizon.recipes.fuel.any": "Будь-яке паливо",
-  "horizon.recipes.fuel.minecraft": "Minecraft"
+  "horizon.recipes.fuel.minecraft": "Minecraft",
+  "horizon.options.block_vibration": "Гаптичний відгук від Bedrock",
+  "horizon.options.split_vibration": "Вібрація при розділенні стосу",
+  "horizon.options.impulse_triggers": "Імпульсні курки",
+  "A tick when you break a block, as in Bedrock.": "Коли ви руйнуєте блок, він вібрує, як у Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "Стіс коротко вібрує при розділенні, як у Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Курки контролера Xbox One вібрують разом із його ручками."
 }

@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "마커 추가",
   "horizon.studio.topbar.clear_keyframes": "🗑 키프레임 지우기",
   "horizon.studio.topbar.timeline_hud": "⏱ 타임라인",
-  "horizon.studio.topbar.split_scene": "장면 분할"
+  "horizon.studio.topbar.split_scene": "장면 분할",
+  "horizon.options.block_vibration": "Bedrock의 햅틱 피드백",
+  "horizon.options.split_vibration": "스택 나누기 진동",
+  "horizon.options.impulse_triggers": "임펄스 트리거",
+  "A tick when you break a block, as in Bedrock.": "블록을 부수면 Bedrock처럼 진동합니다.",
+  "A short buzz when you split a stack, as in Bedrock.": "Bedrock처럼 스택을 나눌 때 짧게 진동합니다.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One 컨트롤러의 트리거가 그립과 함께 진동합니다."
 }

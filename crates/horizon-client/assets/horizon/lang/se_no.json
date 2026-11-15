@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Lasit mearkka",
   "horizon.studio.topbar.clear_keyframes": "🗑 Čuohpat čuoggáid",
   "horizon.studio.topbar.timeline_hud": "⏱ Áigelinnjá",
-  "horizon.studio.topbar.split_scene": "Juohkin dáhpáhus"
+  "horizon.studio.topbar.split_scene": "Juohkin dáhpáhus",
+  "horizon.options.block_vibration": "Haptalaš máhcahat Bedrockis",
+  "horizon.options.split_vibration": "Vibráhtuvvat go juohká čoahkki",
+  "horizon.options.impulse_triggers": "Impulstriggárat",
+  "A tick when you break a block, as in Bedrock.": "Go cuvket blohkka, dat vibrere, dego Bedrockis.",
+  "A short buzz when you split a stack, as in Bedrock.": "Oanehaš vibráhtuvvat go juohká čoahkki, dego Bedrockis.",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One -stivrema triggerat vibrerejit dan gieđaiguin."
 }

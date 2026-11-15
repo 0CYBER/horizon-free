@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "मार्कर जोड़ें",
   "horizon.studio.topbar.clear_keyframes": "🗑 कीफ्रेम्स साफ़ करें",
   "horizon.studio.topbar.timeline_hud": "⏱ टाइमलाइन",
-  "horizon.studio.topbar.split_scene": "दृश्य विभाजित करें"
+  "horizon.studio.topbar.split_scene": "दृश्य विभाजित करें",
+  "horizon.options.block_vibration": "Bedrock से हैप्टिक फ़ीडबैक",
+  "horizon.options.split_vibration": "स्टैक बाँटने पर कंपन",
+  "horizon.options.impulse_triggers": "इम्पल्स ट्रिगर",
+  "A tick when you break a block, as in Bedrock.": "जब आप कोई ब्लॉक तोड़ते हैं तो वह कंपन करता है, जैसे Bedrock में।",
+  "A short buzz when you split a stack, as in Bedrock.": "स्टैक बाँटने पर थोड़ा कंपन, जैसे Bedrock में।",
+  "An Xbox One controller's triggers buzz with its handles.": "Xbox One कंट्रोलर के ट्रिगर उसके हैंडल के साथ कंपन करते हैं।"
 }

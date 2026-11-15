@@ -1041,5 +1041,11 @@
   "horizon.studio.topbar.add_marker": "Hoʻohui Hōʻailona",
   "horizon.studio.topbar.clear_keyframes": "🗑 Holoi i nā Keyframe",
   "horizon.studio.topbar.timeline_hud": "⏱ Laina Manawa",
-  "horizon.studio.topbar.split_scene": "Māhele Hiʻohiʻona"
+  "horizon.studio.topbar.split_scene": "Māhele Hiʻohiʻona",
+  "horizon.options.block_vibration": "Pili haptika mai Bedrock",
+  "horizon.options.split_vibration": "Hāʻule i ka wā e hoʻokaʻawale ai i ka puʻu",
+  "horizon.options.impulse_triggers": "Nā puʻupuʻu hoʻopā",
+  "A tick when you break a block, as in Bedrock.": "Ke wāwahi ʻoe i kahi poloka, haʻalulu ia, e like me Bedrock.",
+  "A short buzz when you split a stack, as in Bedrock.": "He hāʻule pōkole ke hoʻokaʻawale ʻoe i ka puʻu, e like me Bedrock.",
+  "An Xbox One controller's triggers buzz with its handles.": "Haʻalulu nā puʻupuʻu o kahi Xbox One me kona mau lima."
 }
