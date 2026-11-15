@@ -49,6 +49,28 @@ fn the_top_colour_is_on_the_top_edge_and_the_bottom_colour_on_the_bottom_edge() 
 }
 
 #[test]
+fn both_inverted_axes_keep_the_first_colour_on_the_lower_edge() {
+    let atlas = atlas();
+    let mut batch = HudBatch::scratch([854, 480]);
+    paint(
+        &mut batch,
+        &atlas,
+        &[gradient(30, 28, 10, 20, 0x8011_2233, 0xFF44_5566)],
+    );
+    assert_eq!(
+        vertices(&batch),
+        [
+            ([10.0, 20.0], 0xFF66_5544),
+            ([30.0, 20.0], 0xFF66_5544),
+            ([30.0, 28.0], 0x8033_2211),
+            ([10.0, 20.0], 0xFF66_5544),
+            ([30.0, 28.0], 0x8033_2211),
+            ([10.0, 28.0], 0x8033_2211),
+        ]
+    );
+}
+
+#[test]
 fn a_clip_through_the_middle_keeps_the_ramp_between_the_two_colours() {
     let atlas = atlas();
     let mut batch = HudBatch::scratch([854, 480]);

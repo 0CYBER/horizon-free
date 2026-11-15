@@ -26,9 +26,14 @@ impl Game<'_> {
         bottom: u32,
     ) {
         let [x, y, w, h] = rect;
-        if !(rect.iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0) {
+        if !rect.iter().all(|v| v.is_finite()) || w == 0.0 || h == 0.0 || (w > 0.0) != (h > 0.0) {
             return;
         }
+        let ((x, y, w, h), top, bottom) = if w < 0.0 {
+            ((x + w, y + h, -w, -h), bottom, top)
+        } else {
+            ((x, y, w, h), top, bottom)
+        };
         let abgr = horizon_client::hud_layout::abgr;
         batch.fill_gradient(&self.gui.atlas, (x, y, w, h), abgr(top), abgr(bottom));
     }

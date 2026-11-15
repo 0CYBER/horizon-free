@@ -880,10 +880,15 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 top,
                 bottom,
             } => {
-                if x1 > x0 && y1 > y0 {
-                    let (x, y) = (*x0 as f32, *y0 as f32);
-                    let rect = (x, y, *x1 as f32 - x, *y1 as f32 - y);
-                    batch.fill_gradient(atlas, rect, abgr(*top), abgr(*bottom));
+                if x1 != x0 && y1 != y0 && (x1 > x0) == (y1 > y0) {
+                    let (x, y) = ((*x0).min(*x1) as f32, (*y0).min(*y1) as f32);
+                    let rect = (x, y, (*x0).max(*x1) as f32 - x, (*y0).max(*y1) as f32 - y);
+                    let (top, bottom) = if y1 > y0 {
+                        (*top, *bottom)
+                    } else {
+                        (*bottom, *top)
+                    };
+                    batch.fill_gradient(atlas, rect, abgr(top), abgr(bottom));
                 }
             }
             GuiDraw::Text {

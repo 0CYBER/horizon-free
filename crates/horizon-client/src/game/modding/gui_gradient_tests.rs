@@ -29,6 +29,7 @@ impl Hooks for Gradients {
         draw.push_clip([0.0, 0.0, 100.0, 14.0]).unwrap();
         draw.fill_gradient([10.0, 10.0, 20.0, 8.0], TOP, BOTTOM);
         draw.pop_clip().unwrap();
+        draw.fill_gradient([130.0, 28.0, -20.0, -8.0], 0x8011_2233, 0xFF44_5566);
         draw.gui_paint(&[
             GuiDraw::Push(vec![PoseOp::Translate(50.0, 60.0)]),
             GuiDraw::FillGradient {
@@ -69,6 +70,19 @@ fn a_mods_gradients_draw_top_to_bottom_in_the_clip_and_pose_and_empty_ones_draw_
         });
     });
     let drawn: Vec<_> = batch.vertices.iter().map(|v| (v.pos, v.color)).collect();
+    let (inverted, drawn): (Vec<_>, Vec<_>) =
+        drawn.into_iter().partition(|(pos, _)| pos[0] >= 100.0);
+    assert_eq!(
+        inverted,
+        [
+            ([110.0, 20.0], 0xFF66_5544),
+            ([130.0, 20.0], 0xFF66_5544),
+            ([130.0, 28.0], 0x8033_2211),
+            ([110.0, 20.0], 0xFF66_5544),
+            ([130.0, 28.0], 0x8033_2211),
+            ([110.0, 28.0], 0x8033_2211),
+        ]
+    );
     let (clipped, painted): (Vec<_>, Vec<_>) =
         drawn.iter().copied().partition(|(pos, _)| pos[0] < 40.0);
     assert!(!clipped.is_empty(), "{drawn:?}");
