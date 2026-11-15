@@ -14,7 +14,8 @@ An assigned issue is taken, and so is one claimed on Discord (Kira's `in progres
 (labels `tracker`, `proposal`, `not claimable`, set by maintainers) are never claimed whole. Refused with a one-line
 answer: a pull request (claim the issue it fixes), a closed or locked issue, an issue someone else holds, more than
 8 open claims at once, not counting issues a pull request already fixes (the council and the trusted reviewers have
-no limit). A success answers with a 👍 on the comment; the assignment shows in the thread.
+no limit). For the first hour after an issue is filed only its author can `/claim` it (the council and the trusted reviewers
+included; an issue filed by a bot has no such hour). A success answers with a 👍 on the comment; the assignment shows in the thread.
 A claim made here is released after 5 days unless an open pull request links the issue (`Fixes #N`, a mention, or the
 sidebar's link); assignments made by hand are never released. No code of any pull request is read or run: only the
 comment's text, its author and the API's answers, which reach this script as env vars.
@@ -36,6 +37,7 @@ import nightly_set as ns  # noqa: E402  (the same trusted reviewers and owner)
 PREFIX = "🤖 Claims: "
 MAX_CLAIMS = 8
 STALE = timedelta(days=5)
+AUTHOR_GRACE = timedelta(hours=1)  # an issue's author alone may claim it for this long after filing it
 LOGIN = re.compile(r"^@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))$")
 USAGE = "Use `/claim` or `/unclaim` (the trusted reviewers: `/unclaim @login`)."
 # The login GitHub shows for this workflow's token: `github-actions[bot]` in REST, `github-actions` in GraphQL.
@@ -85,6 +87,21 @@ def is_team(actor: ns.Actor, reviewers: ns.Reviewers) -> bool:
 
 def assignees(issue: dict) -> list[str]:
     return [a["login"] for a in issue.get("assignees") or []]
+
+
+def grace_refusal(issue: dict, login: str, now: datetime) -> str | None:
+    """Why only the author may claim this issue yet (None when `login` may). Issues filed by bots have no window."""
+    author = issue.get("user") or {}
+    name = str(author.get("login") or "")
+    if not name or author.get("type") == "Bot" or name.endswith("[bot]") or not issue.get("created_at"):
+        return None
+    created = datetime.fromisoformat(issue["created_at"].replace("Z", "+00:00"))
+    if now - created >= AUTHOR_GRACE or name.lower() == login.lower():
+        return None
+    mins = max(0, int((now - created).total_seconds() // 60))
+    ago = "less than a minute" if mins == 0 else f"{mins} minute{'s' if mins != 1 else ''}"
+    until = (created + AUTHOR_GRACE).astimezone(timezone.utc).strftime("%H:%M")
+    return f"@{name} filed this issue {ago} ago: they have the first hour to claim it (until {until} UTC)."
 
 
 def target_refusal(issue: dict) -> str | None:
@@ -174,7 +191,7 @@ class Api:
             cursor = page["pageInfo"]["endCursor"]
 
 
-def run(api, cmd: Command, actor: ns.Actor, number: int, reviewers: ns.Reviewers) -> str | None:
+def run(api, cmd: Command, actor: ns.Actor, number: int, reviewers: ns.Reviewers, now: datetime) -> str | None:
     """Does the command; returns the comment to post, or None when a 👍 says it. Raises Refused for a refusal.
     Claims are GitHub assignees, so they are held by login; who may act for others is decided by ID."""
     login = actor.login
@@ -198,6 +215,8 @@ def run(api, cmd: Command, actor: ns.Actor, number: int, reviewers: ns.Reviewers
         if KIRA_LABEL in labels:
             raise Refused(f"someone claimed this issue on Discord (Kira's `{KIRA_LABEL}` label): pick another, or ask "
                           "in the thread.")
+        if (why := grace_refusal(issue, login, now)):
+            raise Refused(why)
         if not is_team(actor, reviewers) and api.open_claims(login) >= MAX_CLAIMS:
             raise Refused(f"You hold {MAX_CLAIMS} open issues: finish or `/unclaim` one first.")
         if login.lower() not in {a.lower() for a in api.assign(number, login)}:
@@ -228,7 +247,7 @@ def command() -> int:
         except ns.Refused as e:
             raise Refused(str(e)) from e
         reviewers = ns.read_reviewers(Path(ns.REVIEWERS).read_text())
-        text = run(api, cmd, actor, number, reviewers)
+        text = run(api, cmd, actor, number, reviewers, datetime.now(timezone.utc))
     except Refused as e:
         text = f"{PREFIX}refused, {e} (asked by @{safe(login)})"
     except RuntimeError as e:

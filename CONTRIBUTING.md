@@ -145,7 +145,8 @@ Work is tracked in GitHub issues, and an issue that is assigned is taken (so is 
 claimed on Discord with Kira's `/claim`): pick another, or ask its holder in the thread. Before you start, comment
 **`/claim`** on the issue; you are assigned at once, no role needed. No issue for your work yet? Open one (a line is
 enough), then claim it. `/unclaim` gives it back. Issues labelled `tracker`, `proposal` or `not claimable` aren't
-claimed whole: claim one of the issues a tracker lists, or open one for the part you take.
+claimed whole: claim one of the issues a tracker lists, or open one for the part you take. For the first hour after
+an issue is filed only its author can claim it, so whoever found a problem gets to fix it (issues filed by bots have no such hour).
 
 A claim with no open pull request linking the issue (`Fixes #123` in the description, or a draft) is released after
 5 days, with a comment: open a draft early. You can hold 8 open issues at a time, not counting the ones your

@@ -27,8 +27,10 @@ def listing(*lines):
 LIST = listing("kacpherek", "rdbtCVS")
 
 
-def thread(state="open", holders=(), pr=False, locked=False):
-    t = {"state": state, "assignees": [{"login": h} for h in holders], "locked": locked}
+def thread(state="open", holders=(), pr=False, locked=False, author="filer", age=timedelta(days=1), bot=False):
+    t = {"state": state, "assignees": [{"login": h} for h in holders], "locked": locked,
+         "user": {"login": author, "type": "Bot" if bot else "User"},
+         "created_at": (NOW - age).strftime("%Y-%m-%dT%H:%M:%SZ")}
     if pr:
         t["pull_request"] = {"merged_at": None}
     return t
@@ -58,7 +60,7 @@ class Fake:
 
 def do(text, api=None, login="newcomer", reviewers=LIST, n=5):
     api = api or Fake()
-    return cc.run(api, cc.parse(text), actor(login), n, reviewers), api
+    return cc.run(api, cc.parse(text), actor(login), n, reviewers, NOW), api
 
 
 class ParseTests(unittest.TestCase):
@@ -138,6 +140,34 @@ class ClaimTests(unittest.TestCase):
     def test_github_dropped_the_assignee(self):
         with self.assertRaisesRegex(cc.Refused, "didn't assign"):
             do("/claim", Fake(assignable=False))
+
+
+class GraceTests(unittest.TestCase):
+    def test_non_author_is_refused_inside_the_window(self):
+        api = Fake({5: thread(age=timedelta(minutes=2))})
+        with self.assertRaises(cc.Refused):
+            do("/claim", api)
+        with self.assertRaises(cc.Refused):
+            do("/claim", Fake({5: thread(age=timedelta(minutes=59))}), login="ludovic111")
+        self.assertEqual(api.calls, [])
+
+    def test_refusal_text(self):
+        with self.assertRaises(cc.Refused) as e:
+            do("/claim", Fake({5: thread(age=timedelta(minutes=2))}))
+        self.assertEqual(str(e.exception), "@filer filed this issue 2 minutes ago: they have the first hour to claim it "
+                                           "(until 12:58 UTC).")
+
+    def test_author_claims_inside_the_window(self):
+        text, api = do("/claim", Fake({5: thread(age=timedelta(minutes=2))}), login="Filer")
+        self.assertIsNone(text)
+        self.assertEqual(api.calls, [("assign", 5, "Filer")])
+
+    def test_anyone_claims_after_the_window(self):
+        do("/claim", Fake({5: thread(age=cc.AUTHOR_GRACE)}))
+
+    def test_bot_filed_issues_have_no_window(self):
+        do("/claim", Fake({5: thread(age=timedelta(seconds=5), bot=True)}))
+        do("/claim", Fake({5: thread(age=timedelta(seconds=5), author="kira-horizon[bot]")}))
 
 
 class UnclaimTests(unittest.TestCase):
