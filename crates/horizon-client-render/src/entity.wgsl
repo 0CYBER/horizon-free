@@ -442,8 +442,8 @@ fn sky_celestial(in: Out) -> vec4<f32> {
 // The sun in Horizon's lifted world (gfx/celestial.rs): its disc shows vanilla's colour, the sky
 // plus the sun clipped at white channel by channel, with white at S: the scene's peak, and on a
 // display above it the display's, up to a cap (`hdr_settings.x`, hdr.rs `sun_peak`). The sky
-// under it is vanilla's times one gain (sky_finished's lift), so in the frame's encoding that
-// is min(S * sun + S / sky gain * frame, S): this pass blends src + frame * alpha, then
+// under it is vanilla's (sky_finished lifts nothing), so in the frame's encoding that is
+// min(S * sun + S * frame, S): this pass blends src + frame * alpha, then
 // fs_sky_sun_clip takes the min. Added in the frame's gamma instead, sky and sun pass S and the
 // tone curve's hold flattens the disc in the sky's hue. w is the very bright tier's lift by the
 // texel's brightness (hdr_mark's): from 0 (sun.png's faint halo, the moon) to 1 both passes go
@@ -458,8 +458,7 @@ fn sun_weight(in: Out, added: vec3<f32>) -> f32 {
     let w = sun_weight(in, added);
     let peak = globals.hdr_settings.x;
     let sun = hdr_written(added, 0.0, globals.hdr_settings, vec4(peak));
-    let sky_gain = hdr_written(vec3(1.0), 1.0 - 0.24 * globals.hdr_light.y, globals.hdr_settings, globals.hdr_gains).r;
-    return vec4(mix(sky_celestial(in).rgb, sun, w), mix(1.0, pow(peak, 1.0 / 2.2) / sky_gain, w));
+    return vec4(mix(sky_celestial(in).rgb, sun, w), mix(1.0, pow(peak, 1.0 / 2.2), w));
 }
 // The clip at S in the frame's encoding where w is 1, none (half float's largest) where it is 0.
 @fragment fn fs_sky_sun_clip(in: Out) -> @location(0) vec4<f32> {
