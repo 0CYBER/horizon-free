@@ -112,8 +112,9 @@ class OwnRunnerTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request' && ", value)
         self.assertIn("vars.SELF_HOSTED_CI == 'all'", value)
         self.assertIn("endsWith(format('{0}', github.event.pull_request.number), '0')", value)
-        # Half of the merge queue's groups, by the last digit of the pull request number in the queue's branch name.
-        self.assertIn("github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-')", value)
+        # The whole merge queue, unless SELF_HOSTED_CI is light or off.
+        self.assertIn("github.event_name == 'merge_group') &&", value)
+        self.assertNotIn("head_ref", value)
         # verify's parts all go where the first goes; verify itself only waits for them.
         for part in ("verify-static", "verify-test"):
             with self.subTest(part=part):

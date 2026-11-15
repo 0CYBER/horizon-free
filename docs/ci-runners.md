@@ -7,7 +7,7 @@ we have to the max") every job that can runs on our own machines, and GitHub's p
 
 | Runner | Machine | Labels | Takes |
 | --- | --- | --- | --- |
-| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the merge queue's groups whose pull request number ends in 0-4, `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the whole merge queue, `mod-registry`, `telemetry-server`, `pack load bench` |
 | `vps-light-1`…`-8` | the CI VPS | `horizon-light` | The bots, as playhorizon's light runners below |
 | `playhorizon-light-1`…`-12` | playhorizon (partner's server, 8 vCPU) | `horizon-light`, `playhorizon-light` | The bots that run main's own scripts: `pr labels`, `overlap note`, `cancel-on-close`, `claim command`, `triage command`, `mojang republish`, `nightly build`'s `answer`, and `checks`' `parity-scope` |
 | `playhorizon-ci-1`, `playhorizon-ci-2` | playhorizon | `playhorizon-ci` | Nothing routed since 2026-11-03 (they took `checks` of this repository's own pull requests with the old `SELF_HOSTED_CI=all`) |
@@ -31,12 +31,17 @@ from a `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook in the NixOS configuration.
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
-- **Main's pushes, eight of ten pull requests' `verify`** (number ending in 2–9) **and half of the merge
-  queue** (pull request number ending in 5–9): `checks` runs
+- **Main's pushes, and eight of ten pull requests' `verify`** (number ending in 2–9): `checks` runs
   ~100 times an hour (2026-11-03: 21 pushes to main and 76 pull request runs an hour), each with `verify` (10–18
   minutes of work on GitHub, 11–13 on a desktop runner with a cold build folder; the launcher's checks are one of its steps). Three
   runners give ~180 runner-minutes an hour: about the fifth of the pull requests they take. Main's pushes also save
   the Rust cache GitHub's runs of pull requests read. `SELF_HOSTED_CI=all` sends them all to ours.
+
+## The merge queue
+
+The whole merge queue runs on the checks runners (about 11 queue runs an hour). On the VPS the build folder persists,
+so a queue run's Rust tests take about 3 min against about 9 on GitHub's runners. If the VPS is down, set
+`SELF_HOSTED_CI=light` and the queue goes back to GitHub's runners.
 
 ## Two jobs per pull request
 
@@ -55,7 +60,7 @@ for):
 
 | `SELF_HOSTED_CI` | Bots (`horizon-light`) | `checks`, `mod-registry`, `telemetry-server`, `pack load bench` (`horizon-checks`) |
 | --- | --- | --- |
-| unset (default) | ours | `verify`: ours for pull requests ending in 0 or 1 (forks' included, see Forks), GitHub's for the others and main's pushes; the rest ours, forks' pull requests excepted |
+| unset (default) | ours | `verify`: ours for pull requests ending in 0 or 1 (forks' included, see Forks) and for the whole merge queue, GitHub's for the other pull requests and main's pushes; the rest ours, forks' pull requests excepted |
 | `all` | ours | ours, every pull request |
 | `light` | ours | GitHub's: the desktop is paused |
 | `off` | GitHub's | GitHub's: everything back, in one switch |

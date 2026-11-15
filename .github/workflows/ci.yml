@@ -44,9 +44,9 @@ jobs:
   # would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the other.
   #
   # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take pull requests whose number ends in 0 or 1,
-  # this repository's own and approved forks' alike, and the merge queue's groups whose pull request number ends in 0-4
-  # (the queue's head_ref is gh-readonly-queue/main/pr-<number>-<sha>, so "<digit>-" is the number's last digit);
-  # GitHub's runners take the others and main's pushes (which also save the Rust cache GitHub's pull request runs
+  # this repository's own and approved forks' alike, and the whole merge queue (about 11 runs an hour; the
+  # build folder persists there, so a queue run's Rust tests take about 3 min against about 9 on GitHub's runners);
+  # GitHub's runners take the other pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs
   # read), so both pools work at once. A fork's run starts only after a maintainer approves it, and its code runs on
   # an isolated runner user with no secret and a token that writes nothing. The repository variable SELF_HOSTED_CI
   # moves this repository's own runs: `all` every job to ours, `light` (the desktop paused) or `off` every job to
@@ -60,9 +60,7 @@ jobs:
       github.event_name == 'pull_request' &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1')) ||
-      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
-      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
-      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
+      github.event_name == 'merge_group') &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
@@ -259,9 +257,7 @@ jobs:
       github.event_name == 'pull_request' &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1')) ||
-      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
-      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
-      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
+      github.event_name == 'merge_group') &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
