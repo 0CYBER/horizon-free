@@ -19,7 +19,7 @@ struct Info {
     last_access: u64,
 }
 
-/// `Calendar.add(MONTH, 1)` on a UTC time: the same day and time a month
+/// Adding one month on a UTC time: the same day and time a month
 /// later, the day clamped to the end of a shorter month.
 pub fn one_month_later(millis: i64) -> i64 {
     let days = millis.div_euclid(86_400_000);

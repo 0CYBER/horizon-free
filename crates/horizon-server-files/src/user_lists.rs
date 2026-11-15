@@ -112,7 +112,7 @@ pub fn parse_date(s: &str) -> Option<i64> {
 
 /// The `Z` field of that lenient parse, in minutes east of UTC: `+hhmm` / `-hhmm` (exactly four digits,
 /// hours to 23, minutes to 59), `GMT` alone or `GMT+h:mm` / `GMT-hh:mm`, or `UTC`, the names in any case.
-/// What follows the zone is left unread, as `DateFormat.parse(String)` leaves it. Other zone names
+/// What follows the zone is left unread, as Java's date parser leaves it. Other zone names
 /// (`EST`...) are not read here.
 fn zone_offset(zone: &str) -> Option<i64> {
     let digits = |text: &str| text.bytes().all(|b| b.is_ascii_digit());
@@ -335,7 +335,7 @@ impl Entry for BanEntry<String> {
     }
 }
 
-/// JsonElement.getAsInt / getAsBoolean on primitives.
+/// Gson's int and boolean views for primitives.
 fn json_int(v: &Json) -> Option<i32> {
     match v {
         Json::Number(n) => n
@@ -495,7 +495,7 @@ pub type WhiteList = UserList<WhiteEntry>;
 pub type BanList = UserList<BanEntry<NameAndId>>;
 pub type IpBanList = UserList<BanEntry<String>>;
 
-/// A list or cache file as vanilla reads it, through Guava's `Files.newReader(file, UTF_8)`: a byte
+/// A list or cache file as vanilla reads it, through Guava's UTF-8 reader: a byte
 /// sequence that is not UTF-8 becomes U+FFFD, grouped as Java's decoder groups it (`java_utf8`), and the
 /// rest is kept. A file that cannot be read at all is an error, as before.
 pub(crate) fn read_utf8(file: &std::path::Path) -> std::io::Result<String> {
@@ -658,7 +658,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `StoredUserList.load` reads through Guava's `Files.newReader(file, UTF_8)`: a byte that is not
+    /// `StoredUserList.load` reads through Guava's UTF-8 reader: a byte that is not
     /// UTF-8 becomes U+FFFD (vanilla's reader gave `0043 0061 0066 fffd` for `Caf\xE9`), so the entry is
     /// kept, and the next save writes it back with the others instead of losing the file.
     #[test]
