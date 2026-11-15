@@ -1022,6 +1022,80 @@ fn the_chat_search_and_copy_skip_legacy_codes() {
     assert_eq!(chat.lines.len(), 0);
 }
 
+/// `ChatComponent`'s queue row: the pending count, the click that shows the
+/// next held message, and the hover text that says so.
+#[test]
+fn the_queue_row_counts_held_messages_and_opens_the_next() {
+    use crate::text::ClickEvent;
+    let line = queue_line(3);
+    assert_eq!(line.plain(), "chat.queue");
+    let style = line.chars().next().unwrap().1;
+    assert!(matches!(
+        &style.click,
+        Some(ClickEvent::Custom { id, payload: None }) if id.as_str() == QUEUE_EXPAND_ID
+    ));
+    assert_eq!(
+        style.hover.as_deref().map(Text::plain),
+        Some("chat.queue.tooltip".to_string())
+    );
+}
+
+/// The row sits in the band below the messages (`chatBottom .. +9`) and is
+/// only there while the queue holds something.
+#[test]
+fn the_queue_row_is_drawn_under_the_messages_only_while_queued() {
+    let font = font();
+    let mut chat = Chat::default();
+    add(&mut chat, &font, Text::literal("hi"));
+    chat.queue = 3;
+    let draws = chat.layout(361, 0.0, false);
+    assert!(
+        draws
+            .iter()
+            .any(|d| matches!(d, GuiDraw::Text { text, .. } if text.plain() == "chat.queue"))
+    );
+    assert!(draws.iter().any(|d| matches!(
+        d,
+        GuiDraw::Fill {
+            x0: -2,
+            y0: 321,
+            x1: 324,
+            y1: 330,
+            ..
+        }
+    )));
+    chat.queue = 0;
+    assert!(
+        !chat
+            .layout(361, 0.0, false)
+            .iter()
+            .any(|d| matches!(d, GuiDraw::Text { text, .. } if text.plain() == "chat.queue"))
+    );
+}
+
+/// The row's glyphs take the click (a `ClickableStyleFinder` over the row),
+/// and nothing above or below it does.
+#[test]
+fn a_click_on_the_queue_row_is_the_next_held_message() {
+    let font = font();
+    let mut chat = Chat::default();
+    add(&mut chat, &font, Text::literal("hi"));
+    chat.queue = 2;
+    let height = 361;
+    let scale = chat.options.scale;
+    let bottom = ((height - 40) as f64 / scale).floor();
+    let at = |chat: &Chat, gui_x: f64, gui_y: f64| {
+        chat.queue_style_at(&font, height, (gui_x + 4.0) * scale, gui_y * scale)
+    };
+    assert!(at(&chat, 0.5, bottom + 1.0).is_some());
+    assert!(at(&chat, 0.5, bottom + 2.0).is_some());
+    assert!(at(&chat, 0.5, bottom).is_none());
+    assert!(at(&chat, 0.5, bottom + 10.0).is_none());
+    assert!(at(&chat, -1.0, bottom + 2.0).is_none());
+    chat.queue = 0;
+    assert!(at(&chat, 0.5, bottom + 2.0).is_none());
+}
+
 /// A repeat merged by compact chat leaves a reader scrolled up where they were.
 #[test]
 fn a_compact_repeat_keeps_the_scrolled_view_still() {

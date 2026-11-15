@@ -2,9 +2,12 @@
 //! where the player fell from, turned into the vanilla death message.
 use super::{Game, commands::Target};
 
+#[cfg(test)]
+#[path = "tests/infested_roll_tests.rs"]
+mod infested_roll_tests;
 use horizon_client::{
     health::{Attack, HealthEvent},
-    mobs::{Mob, Species, stuck::Stuck},
+    mobs::{Damage, Mob, Species, Who, stuck::Stuck},
     motion::MotionEvent,
     particles::{ParticleOptions, ParticleType},
     text::Text,
@@ -436,6 +439,13 @@ impl Game<'_> {
         // The attacker of the hit whose damage was just recorded, for its criterion.
         let mut recorded: Option<(String, u32)> = None;
         for e in events {
+            // `LivingEntity.hurtServer` ends with the effects' `onMobHurt`,
+            // whatever `actuallyHurt` made of the hit: a hit absorption or
+            // armor takes whole still rolls the Infested chance.
+            if matches!(e, MotionEvent::Health(HealthEvent::MobHurt)) {
+                self.player_infested();
+                continue;
+            }
             let (name, amount) = match e {
                 // LivingEntity.hurtServer reached resolvePlayerResponsibleForDamage:
                 // every hit that got past the cooldown, absorbed or blocked too.
@@ -475,6 +485,8 @@ impl Game<'_> {
                         "blocked" => self.award_custom_stat("damage_blocked_by_shield", *amount),
                         // MotionWorld emits the authoritative jump award here too.
                         // Both local and guest event drains share this consumer.
+                        // ServerPlayer.jumpFromGround: a ground jump, counted
+                        // with the other statistics the tick's events carry.
                         "jump" => self.award_custom_stat("jump", *amount),
                         _ => {}
                     }
@@ -537,10 +549,6 @@ impl Game<'_> {
                 direct,
             });
             self.combat.last_damage = now;
-            // InfestedMobEffect.onMobHurt.
-            if self.potions.effects.get("infested").is_some() {
-                self.player_infested();
-            }
         }
         self.combat.pending.clear();
         self.combat.pending_direct.clear();
@@ -921,6 +929,11 @@ fn fall_location_of(name: &str, trapdoor: bool) -> &'static str {
     }
 }
 
+/// Whether the causing entity deals `kind` itself (`DamageSources.mobAttack`,
+/// `playerAttack`, a mace's or a spear's, a ram's no-aggro blow, a sting, a
+/// sonic boom, thorns): the fork's one answer lives with the damage sources.
+pub(super) use horizon_client::health::melee;
+
 #[cfg(test)]
 mod fall_location_tests {
     use super::fall_location_of;
@@ -966,6 +979,52 @@ impl Game<'_> {
             );
         }
         hurt
+    }
+    /// `Bee.doHurtTarget`: the sting, then, only when it landed, the stinger
+    /// in the victim, the poison and the sting sound. A refused sting gives
+    /// the bee back the stinger and the anger `sting` set inside its tick.
+    pub(super) fn sting(&mut self, target: Who, amount: f32, poison_ticks: i32, source: Damage) {
+        let from = source.from.unwrap_or_default();
+        let mob = match source.attacker {
+            Some(Who::Mob(id)) => Some(id),
+            _ => None,
+        };
+        let landed = match target {
+            Who::Player => {
+                self.hurt_player_from(amount, Some(from), "minecraft:mob_attack", Some(mob), false)
+            }
+            Who::Mob(id) => self.mob_attacks_mob(id, amount, source),
+        };
+        self.combat.hit_landed = landed;
+        if !landed {
+            if let Some(b) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
+                horizon_client::mobs::bee::sting_refused(b);
+            }
+            return;
+        }
+        match target {
+            Who::Player => {
+                self.combat.stuck.add_stinger();
+                if poison_ticks > 0 {
+                    self.give_player_effect("minecraft:poison", poison_ticks, 0);
+                }
+            }
+            Who::Mob(id) if poison_ticks > 0 => {
+                if let Some(t) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    t.add_effect("minecraft:poison", poison_ticks, 0);
+                }
+            }
+            Who::Mob(_) => {}
+        }
+        let Some(mob) = mob else {
+            return;
+        };
+        if let Some(b) = self.mobs.iter_mut().find(|m| m.id == mob)
+            && horizon_client::mobs::bee::sting_landed(b)
+        {
+            self.audio
+                .play("minecraft:entity.bee.sting", Some(from), 1.0, 1.0);
+        }
     }
     /// Whether a hit from a mob's tick on `target`, handled after the mob
     /// loop, comes after a tick of the target that vanilla runs after the hit:
@@ -1150,7 +1209,7 @@ mod pet_credit_tests {
 
 #[cfg(test)]
 mod guest_hit_tests {
-    use horizon_client::mobs::{Mob, MobEvent};
+    use horizon_client::mobs::{Damage, DamageKind, Mob, MobEvent, Species, Who};
     use horizon_client::motion::PlayerMotion;
     use horizon_core::geometry::Vec3;
 
@@ -1178,10 +1237,16 @@ mod guest_hit_tests {
                     ticks: 140,
                     amplifier: 0,
                 },
-                MobEvent::StingPlayer {
+                MobEvent::Sting {
+                    target: Who::Player,
                     amount: 2.0,
-                    from,
                     poison_ticks: 200,
+                    source: Damage {
+                        kind: DamageKind::Sting,
+                        attacker: Some(Who::Mob(5)),
+                        from: Some(from),
+                        attacker_species: Some(Species::Bee),
+                    },
                 },
             ];
             for hit in hits {
@@ -1198,3 +1263,7 @@ mod guest_hit_tests {
 #[cfg(test)]
 #[path = "combat/zombie_ignite_tests.rs"]
 mod zombie_ignite_tests;
+
+#[cfg(test)]
+#[path = "combat/bee_sting_tests.rs"]
+mod bee_sting_tests;

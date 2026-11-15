@@ -138,7 +138,7 @@ impl Game<'_> {
             )
         };
         let name = match &state.name {
-            Some(n) => horizon_protocol::text::literal(n),
+            Some(n) => horizon_client::scoreboard::json_to_tag(&n.component()),
             None => Tag::compound([("translate", Tag::String(key.as_str().into()))]),
         };
         let uuid = state.mob.map_or([0; 4], |id| self.mob_uuid(id));

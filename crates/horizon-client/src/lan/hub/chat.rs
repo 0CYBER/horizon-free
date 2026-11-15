@@ -256,7 +256,8 @@ impl Hub {
             return;
         }
         let line = format!("<{name}> {}", message.content);
-        self.broadcast_chat(&message, &bound, line, events);
+        // No mods here (`has_mods` above), so no `chat_recipient` listener hides anyone.
+        self.broadcast_chat(&message, &bound, line, &[], events);
         events.push(HostEvent::PlayerChat {
             sender: uuid,
             text: message.content,
@@ -346,18 +347,20 @@ impl Hub {
     }
 
     /// PlayerList.broadcastChatMessage: logged (`[Not Secure]` unless signed
-    /// and fresh), then sent to every player.
+    /// and fresh), then sent to every player but the ones in `hidden` (the
+    /// receivers a mod kept it from, `chat_recipient`).
     pub fn broadcast_chat(
         &mut self,
         message: &ChatMessage,
         bound: &play::ChatTypeBound,
         line: String,
+        hidden: &[u128],
         events: &mut Vec<HostEvent>,
     ) {
         let secure = message.trusted(now_millis());
         events.push(HostEvent::Chat { line, secure });
         for k in 0..self.guests.len() {
-            if self.guests[k].placed {
+            if self.guests[k].placed && !hidden.contains(&self.guests[k].uuid) {
                 self.send_chat(k, message, bound);
             }
         }
@@ -418,6 +421,18 @@ impl Hub {
                 chat_type,
             }));
         }
+    }
+
+    /// `PlayerList.broadcastSystemMessage` to everyone but `except`, whose
+    /// copy travels with its command's captured output (as `/say`'s).
+    pub fn system_message_except(&self, content: Tag, except: u32) {
+        self.broadcast_except(
+            except,
+            &C::SystemChat(play::SystemChat {
+                content,
+                overlay: false,
+            }),
+        );
     }
 
     /// A chat line as a player who is on, disguised: no signature, named as the player is shown,
@@ -533,14 +548,15 @@ impl Hub {
         }
     }
 
-    /// A message command's chat (SayCommand, EmoteCommands): to everyone,
-    /// bound to `chat_type` and the sender's name.
+    /// A message command's chat (SayCommand, EmoteCommands): to everyone but
+    /// the players in `hidden`, bound to `chat_type` and the sender's name.
     pub fn broadcast_command_chat(
         &mut self,
         i: usize,
         chat_type: &str,
         message: Option<ChatMessage>,
         text: &str,
+        hidden: &[u128],
         events: &mut Vec<HostEvent>,
     ) {
         let (uuid, name) = (self.guests[i].uuid, self.guests[i].name.clone());
@@ -554,7 +570,7 @@ impl Hub {
             _ => format!("* {name} {text}"),
         };
         match message {
-            Some(message) => self.broadcast_chat(&message, &bound, line, events),
+            Some(message) => self.broadcast_chat(&message, &bound, line, hidden, events),
             // An unsigned command packet (no signing context):
             // PlayerChatMessage.system, a disguised chat.
             None => {
@@ -563,7 +579,7 @@ impl Hub {
                     secure: false,
                 });
                 for k in 0..self.guests.len() {
-                    if self.guests[k].placed {
+                    if self.guests[k].placed && !hidden.contains(&self.guests[k].uuid) {
                         self.send_disguised(k, literal(text), bound.clone());
                     }
                 }

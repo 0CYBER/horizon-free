@@ -6,7 +6,7 @@
 //! on a log, stone or ore. Both are one goal here. The long jump activity is
 //! the frog's goal (frog.rs) with the goat's numbers.
 use super::{
-    Damage, Mob, MobEvent, MobWorld, Who,
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Who,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone},
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -432,7 +432,11 @@ fn ram_tick(m: &mut Mob, cx: &mut Cx) {
             Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
                 target: id,
                 amount,
-                source: Damage::mob(m.id, from),
+                // The same `noAggroMobAttack`: a ram angers no mob.
+                source: Damage {
+                    kind: DamageKind::MobAttackNoAggro,
+                    ..Damage::mob(m.id, from)
+                },
             }),
         }
         let level = |effect: &str| {
@@ -823,3 +827,7 @@ mod ram_tests {
         let _ = ran;
     }
 }
+
+#[cfg(test)]
+#[path = "goat_ram_tests.rs"]
+mod goat_ram_tests;

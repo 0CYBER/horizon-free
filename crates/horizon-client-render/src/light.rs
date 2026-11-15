@@ -429,6 +429,19 @@ fn give_scratch(scratch: LightScratch) {
     }
 }
 
+/// Frees the pooled scratch, once the streaming workers have had nothing to
+/// do for a while (`jobs::Source::all_idle`): a full pool is some 50 MB on
+/// twelve threads, and a loaded view lights nothing new until the player
+/// moves on. The next job builds one again.
+pub fn release_scratch() {
+    let pool = std::mem::take(
+        &mut *SCRATCH_POOL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    drop(pool);
+}
+
 thread_local! {
     static RELIGHT_SCRATCH: RefCell<RelightScratch> = RefCell::new(RelightScratch::new());
 }
@@ -1890,6 +1903,7 @@ pub(crate) mod tests {
         // the world, in batches; a held clone of the chunk must not change.
         let mut w = world(|_| {});
         let held = w[&(0, 0)].clone();
+        let tables = tables();
         let mut rng = 0x9e37_79b9_u32;
         let mut next = |n: usize| {
             rng ^= rng << 13;
@@ -1920,7 +1934,7 @@ pub(crate) mod tests {
             }
             relight(
                 &mut w,
-                &tables(),
+                &tables,
                 true,
                 &positions,
                 false,
@@ -1936,7 +1950,7 @@ pub(crate) mod tests {
                         .map(|c| &**c)
                 })
             });
-            for (si, s) in light_chunk(&region, &tables(), true).iter().enumerate() {
+            for (si, s) in light_chunk(&region, &tables, true).iter().enumerate() {
                 for i in 0..4096 {
                     assert_eq!(
                         s.get(i),

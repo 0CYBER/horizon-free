@@ -258,7 +258,7 @@ The four caps limit what mods can ask for, counted per level:
 
 | Setting | Default | Range | What it counts |
 |---|---|---|---|
-| `max_viewed_loaded_chunks` | 2048 | 0 to 65536 | Chunks kept loaded for one player in one level, the loading ring around each area included. Fixed at 2048 for this protocol revision: a higher value is lowered to 2048 at startup, with a warning in the log |
+| `max_viewed_loaded_chunks` | 2048 | 0 to 65536 | Chunks kept loaded for one player in one level, the loading ring around each area included. A client keeps at most 4489 columns of a viewed level: a higher value is lowered to 4489 at startup, with a warning in the log. A client of an older Horizon (before revision 4 of viewed levels) gets at most 2048 |
 | `max_viewed_ticking_chunks` | 441 | 0 to 65536 | Of them, the ticking ones: 441 is one player's simulation area at distance 10 |
 | `max_viewed_loaded_chunks_per_level` | 16384 | 0 to 1048576 | Loaded chunks of every player together in one level |
 | `max_viewed_ticking_chunks_per_level` | 3528 | 0 to 1048576 | Ticking chunks of every player together in one level |
@@ -830,6 +830,17 @@ most 8, as many as the machine has cores). It applies at the next start. It is t
 environment variable `HORIZON_PARALLEL_TICK=1`, for a host that gives you no way to set one (a game panel
 with a fixed startup command). With the setting off, a `HORIZON_PARALLEL_TICK` already in the server's
 environment still applies.
+
+Natural mob spawning is one of those phases: the spawn attempts of the chunks around your players run on the helper
+threads, and the server thread then takes what they found, in order, if the mob caps still allow it. It has vanilla's odds
+and caps but not the random draws of one vanilla level, so a world does not spawn the same mobs with the setting on as off.
+It stays on one thread while a native mod listens to spawns, with fewer than 512 chunks to try (about two players' worth) and
+on a machine with one core ([how it works](parallel-natural-spawning.md)).
+
+One thing differs from the serial tick while it is on: the rolls a mob makes on the level's random (a fish
+leaving its school, a parrot imitating, a brain's durations) come from a random of the mob's own, so that mobs
+on different threads do not wait for each other. The odds are vanilla's; the values are not the ones the level's
+random would have given ([mob-islands.md](mob-islands.md#every-turn-draws-its-own-random)).
 
 ### Mob AI far from players: `[entities] dab`
 

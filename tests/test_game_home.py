@@ -29,6 +29,7 @@ EXEMPT = {
     "build_release.py": "builds and packs the release",
     "release_train.py": "release bookkeeping",
     "pr_ready.py": "runs cargo checks and parity.py",
+    "test_scope.py": "names the crates a pull request's tests cover, starts no game",
     "test_friends_integration_parity.py": "builds binaries; test_friends.Game isolates every game through integration_env",
     "test_management_protocol_parity.py": "starts both servers through server_bench.Server, which uses lab.game_env",
     "test_item_use_order_parity.py": "starts servers through test_server_knockback_parity.run_side; its Server uses game_environment",

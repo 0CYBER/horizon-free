@@ -32,13 +32,42 @@ pub fn register(m: &mut Mob) {
     g.add(1, CamelPanic(Panic::new(4.0)));
     g.add(2, Breed::new(1.0));
     g.add(3, Tempt::new(2.5, tempt, false));
-    g.add(4, FollowParent::new(2.5));
-    g.add(5, Stroll::new(2.0));
+    // CamelAi's `triggerIf(Predicate.not(Camel::refuseToMove), ...)` around
+    // BabyFollowAdult and RandomStroll: neither gives a sitting camel a walk
+    // target (the move control would stand it up for one).
+    g.add(4, FollowWhenStanding(FollowParent::new(2.5)));
+    g.add(5, Stroll::new(2.0).gate(|m, _| !refuse_to_move(m)));
     g.add(5, RandomSitting);
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());
     // finalizeSpawn: fully standing.
     stand_up_instantly(m);
+}
+/// `CamelAi`'s `triggerIf(Predicate.not(Camel::refuseToMove),
+/// BabyFollowAdult.create(...))`: a sitting camel does not start following an
+/// adult, whose walk target would stand it up.
+#[derive(Clone, Debug)]
+struct FollowWhenStanding(FollowParent);
+impl Goal for FollowWhenStanding {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !refuse_to_move(m) && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx);
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx);
+    }
 }
 fn pose_time(m: &Mob) -> i64 {
     i64::from(m.age) - i64::from(m.extra.egg_time)
@@ -57,7 +86,7 @@ pub fn sitting_dims(baby: bool) -> (f32, f32, f32) {
         (1.7, 2.375 - 1.43, 0.845)
     }
 }
-fn in_transition(m: &Mob) -> bool {
+pub fn in_transition(m: &Mob) -> bool {
     pose_time(m) < if sitting(m) { SIT_DOWN } else { STAND_UP }
 }
 /// `Camel.getPoseTime` of a client mob from the `LAST_POSE_CHANGE_TICK` it
@@ -136,6 +165,21 @@ pub fn on_elastic_leash_pull(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
     if sitting(m) && !in_transition(m) && can_change_pose(m, w) {
         stand_up(m, events);
     }
+}
+/// `Camel.CamelMoveControl.tick`: a walk target stands the camel up first
+/// (not on a lead, not while it is already changing pose, and only with room
+/// for the standing box), then the ordinary ground move control runs.
+pub fn move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.ai.mov.operation == super::control::Operation::MoveTo
+        && m.extra.leash.is_none()
+        && sitting(m)
+        && !in_transition(m)
+        && can_change_pose(m, w)
+    {
+        stand_up(m, events);
+    }
+    let attr_speed = m.movement_speed();
+    m.ground_move_tick(w, attr_speed);
 }
 /// `Camel.getBodyAnchorAnimationYOffset` at the partial tick 0: how high the
 /// seat of the front (`front`) or back rider is on a camel of `height` at
@@ -252,6 +296,7 @@ pub fn walk_target(m: &Mob, distance: f32) -> (f32, f32) {
 pub fn refuse_to_move(m: &Mob) -> bool {
     sitting(m) || in_transition(m)
 }
+/// `Camel.sitDown`.
 fn sit_down(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if !sitting(m) {
         sound(m, voice(m, 0), events);
@@ -274,6 +319,14 @@ pub fn stand_up_instantly(m: &mut Mob) {
 /// `is_camel`: camels and camel husks (`CamelHusk extends Camel`).
 pub fn is_camel(s: super::Species) -> bool {
     matches!(s, super::Species::Camel | super::Species::CamelHusk)
+}
+/// `CamelHusk.interact`: a click on a husk sets `PersistenceRequired` before
+/// the hand does anything, so one that took a saddle, food or a lead stays
+/// past the monster category's 128 blocks (`Mob.checkDespawn`).
+pub fn keep_on_interact(m: &mut Mob) {
+    if m.species() == super::Species::CamelHusk {
+        m.persistent = true;
+    }
 }
 /// The sit, stand, dash ready, dash and eat sounds (`CamelHusk` overrides each).
 pub fn voice(m: &Mob, which: usize) -> &'static str {
@@ -333,14 +386,16 @@ impl Goal for RandomSitting {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        // checkExtraStartConditions: not leashed, no controlling passenger
-        // (a player's or a mob's, a husk on its back), and room for the pose
-        // it would take (`Camel.canCamelChangePose`).
+        // `CamelAi.RandomSitting` checkExtraStartConditions: not leashed, no
+        // controlling passenger (a driver on a saddled camel, or a mob on its
+        // back: `Camel.hasControllingPassenger`), and room for the pose it
+        // would take (`Camel.canCamelChangePose`). A player on an unsaddled
+        // camel is only a passenger, so it kneels under them.
         !m.fluids.in_water
             && pose_time(m) >= 400
             && m.extra.leash.is_none()
             && m.on_ground
-            && m.rider.is_none()
+            && !super::equine::controlled(m)
             && !super::riders::mob_controlled(m, cx.w)
             && can_change_pose(m, cx.w)
             && m.random.next_int_bound(4).unwrap_or(1) == 0
@@ -357,7 +412,8 @@ impl Goal for RandomSitting {
         }
     }
 }
-/// `Camel.tick`: the dash clock, water stands it up; keyframe states.
+/// `Camel.tick`: the dash clock, water stands it up; keyframe states. The
+/// move that stops a sitting camel lives in `Mob::travel` (`Camel.travel`).
 pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.extra.flag2 && m.extra.anim_ticks < 50 && (m.on_ground || m.fluids.in_water) {
         m.extra.flag2 = false;
@@ -370,13 +426,6 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     }
     if sitting(m) && m.fluids.in_water {
         stand_up_instantly(m);
-    }
-    if refuse_to_move(m) {
-        m.velocity.x = 0.0;
-        m.velocity.z = 0.0;
-        m.ai.xxa = 0.0;
-        m.ai.zza = 0.0;
-        m.ai.nav.stop();
     }
     animation_states(m, pose_time(m), sitting(m));
 }
@@ -493,6 +542,13 @@ pub fn anim(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "camel_husk_tests.rs"]
+mod camel_husk_tests;
+
+#[cfg(test)]
+mod camel_pose_tests;
 
 #[cfg(test)]
 mod tests {

@@ -3151,7 +3151,7 @@ impl Game<'_> {
     pub(in crate::game) fn native_player_jump(&mut self, player: u128, name: &str) {
         self.fire_player_jump(player, name);
     }
-    /// A guest was disconnected by a server kick, after the hub recorded the rendered `reason`. The guest's state is
+    /// A network or fake guest was kicked, after the hub recorded the rendered `reason`. The guest's state is
     /// swapped in unless they were already removed in the same poll.
     pub(in crate::game) fn native_player_kicked(&mut self, player: u128, name: &str, reason: &str) {
         self.fire_player_kicked(player, name, reason);
@@ -3604,7 +3604,9 @@ impl Game<'_> {
     }
     /// `player` (`name`) left the game (NeoForge's `PlayerLoggedOutEvent`), by
     /// any path: a lost connection, a kick, the server stopping or failing.
-    /// Once for each player `native_player_logged_in` told of. They've already
+    /// Once for each player `native_player_logged_in` told of, and also for a
+    /// kicked fake without a preceding login. Silent `remove_fake` sends no logout.
+    /// They've already
     /// left `native_server_players`, except when the server stops, which tells
     /// before it saves, with them still listed and able to get a last message.
     /// Server-side.
@@ -4183,14 +4185,14 @@ impl Game<'_> {
     /// `[0, 1, 0]` for the top), at the point `at`. Set `canceled` and the impact
     /// does not happen: no damage, no knockback, no sound, no block reaction, the
     /// arrow does not stick, a pearl does not teleport, a potion or a fireball
-    /// does not burst. The projectile flies on and is not discarded, so a mod
-    /// that cancels also decides what becomes of it. It continues through its
-    /// whole motion and may hit something on a later tick. Covers what
-    /// `tick_projectiles` flies: arrows, tridents, snowballs,
-    /// eggs, pearls, potions, fireballs, wither skulls, wind charges, llama spit and
-    /// shulker bullets, from players, mobs and dispensers. It does not fire for
-    /// a breeze's deflection, for a hit on a wind charge, for fireworks or for
-    /// fishing bobbers. A dragon part or End crystal is told by the id of the
+    /// does not burst. Cancellation leaves the projectile alive. A flying bobber
+    /// skips hooking and redirection to the hit point, but its ordinary move
+    /// still stops against solid blocks. Water is not an impact. Bobbers notify
+    /// before vanilla's entity deflection and world-border bounce; rockets notify
+    /// after deflection and cancellation skips their impact explosion only.
+    /// Covers arrows, tridents, thrown items, fireballs, wither skulls, wind
+    /// charges, llama spit, shulker bullets, bobbers and rockets. Other families
+    /// skip breeze deflections and hits on wind charges. A dragon part or End crystal is told by the id of the
     /// dragon or crystal. Heard only when a mod also sets
     /// `native_hears_projectile_impacts`. Server-side.
     pub(in crate::game) fn native_projectile_impact(
@@ -4890,11 +4892,12 @@ mod text_tests {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let drawn = |argb: u32| {
                 let mut batch = HudBatch::scratch([640, 480]);
-                crate::game::host::draw::GameDrawContext {
-                    game,
-                    surface: &mut batch,
-                }
-                .text("Hi", [4.0, 4.0], argb, false);
+                crate::game::host::draw::GameDrawContext::new(game, &mut batch).text(
+                    "Hi",
+                    [4.0, 4.0],
+                    argb,
+                    false,
+                );
                 batch.vertices
             };
             let opaque = drawn(0xFFFF_FFFF);

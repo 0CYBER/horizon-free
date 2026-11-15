@@ -50,7 +50,10 @@ fn register(server: Connection, poll: &Poll, worker: &Arc<Worker>, outbox: Arc<O
     .unwrap_or_else(|()| panic!("registration failed"))
 }
 fn queue(outbox: &Outbox, body: Vec<u8>) {
-    outbox.pending.fetch_add(charge(&body), Ordering::Relaxed);
+    let body = Body::from(body);
+    outbox
+        .pending
+        .fetch_add(charge(body.retained()), Ordering::Relaxed);
     // Keep the connection in Coming: no unrelated serve notification is posted.
     outbox.push(vec![body], None);
 }

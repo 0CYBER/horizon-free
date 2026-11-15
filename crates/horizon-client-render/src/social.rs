@@ -14,90 +14,27 @@
 //! are `PresenceHandler.getPresenceStatus`'s, supplied by the client each tick.
 mod list_updates;
 mod model;
+mod presence;
+mod service;
 
 use list_updates::{Handler, spawn_updater};
 pub use list_updates::{State, set_foreground};
-use model::presence_of;
 pub use model::{
     Friend, FriendData, Presence, PresenceStatus, ResultCode, parse_friends, parse_presence,
 };
 
-use crate::auth::{self, AuthSession};
+use presence::PresenceHandler;
+pub use presence::{
+    SharePresence, latest_presence, send_offline_presence, set_presence_status, set_share_presence,
+    tick, try_update_presence,
+};
+use service::{Service, send_json, session, url};
+
 use serde_json::{Value, json};
 use std::{
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
-
-/// `Options.sharePresence` (`PresenceSharing`): how much of the player the service sees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SharePresence {
-    None,
-    Limited,
-    All,
-}
-
-impl SharePresence {
-    /// `options.txt`'s `sharePresence` (0 none, 1 limited, 2 all; `Options` defaults to
-    /// all).
-    pub fn of(setting: u8) -> Self {
-        match setting {
-            0 => Self::None,
-            1 => Self::Limited,
-            _ => Self::All,
-        }
-    }
-}
-
-/// `MinecraftServicesFriendsService`: the HTTP client and its caches.
-#[derive(Default)]
-struct Service {
-    friends_etag: Option<String>,
-    presence_etag: Option<String>,
-    friends_cache: FriendData,
-    presence_cache: Vec<Presence>,
-    /// `getFriendsPollInterval`/`getPresencePollInterval`: the service's `Retry-After`.
-    friends_poll: Option<Duration>,
-    presence_poll: Option<Duration>,
-    /// `requestCooldown`: ten seconds between `getFriendData` requests.
-    cooldown: Option<Instant>,
-    /// `requestPending`: one list request at a time.
-    pending: bool,
-}
-
-impl Service {
-    /// `canMakeRequest`.
-    fn can_make_request(&self) -> bool {
-        self.cooldown.is_none_or(|at| Instant::now() > at)
-    }
-}
-
-/// `PresenceHandler`.
-struct PresenceHandler {
-    latest: Vec<Presence>,
-    last_post: Instant,
-    /// `updatePresence`: post at the next tick.
-    update: bool,
-    /// `PresenceHandler.getPresenceStatus`'s answer, from the client's state.
-    playing: PresenceStatus,
-}
-
-impl Default for PresenceHandler {
-    fn default() -> Self {
-        Self {
-            latest: Vec::new(),
-            // `lastPresencePost = Instant.now()`: the first post waits an interval.
-            last_post: Instant::now(),
-            // Its constructor sets `updatePresence = true`.
-            update: true,
-            playing: PresenceStatus::Online,
-        }
-    }
-}
 
 /// `PlayerSocialManager`'s flags.
 #[derive(Default)]
@@ -199,86 +136,6 @@ pub fn friend_list_state() -> State {
     lock().handler.state
 }
 
-/// `PresenceHandler.getLatestPresence`.
-pub fn latest_presence() -> Vec<Presence> {
-    lock().presence.latest.clone()
-}
-
-/// `Options.sharePresence`: what presence the handler posts.
-pub fn set_share_presence(share: SharePresence) {
-    lock().share = share;
-}
-
-/// `PresenceHandler.getPresenceStatus`, supplied by the client from its world state.
-pub fn set_presence_status(status: PresenceStatus) {
-    lock().presence.playing = status;
-}
-
-/// `Minecraft.runTick`: `PresenceHandler.tick`, once per client tick.
-pub fn tick() {
-    let due = {
-        let inner = lock();
-        if !inner.manager.friend_list_enabled || inner.handler.latest.friends.is_empty() {
-            return;
-        }
-        let interval = inner
-            .service
-            .presence_poll
-            .unwrap_or(Duration::from_secs(60));
-        let since = inner.presence.last_post.elapsed();
-        (inner.presence.update && since >= interval) || since >= interval * 5
-    };
-    if due {
-        update_presence();
-    }
-}
-
-/// `PresenceHandler.updatePresence`.
-fn update_presence() {
-    let status = {
-        let mut inner = lock();
-        inner.presence.update = false;
-        inner.presence.last_post = Instant::now();
-        match inner.share {
-            SharePresence::None => PresenceStatus::Offline,
-            SharePresence::Limited => PresenceStatus::Online,
-            SharePresence::All => inner.presence.playing,
-        }
-    };
-    let _ = thread::Builder::new()
-        .name("Friends presence".into())
-        .spawn(move || {
-            if let Some(presence) = post_presence(status) {
-                lock().presence.latest = presence;
-            }
-        });
-}
-
-/// `PresenceHandler.tryUpdatePresence`: the world was entered (or the overlay opened).
-pub fn try_update_presence() {
-    lock().presence.update = true;
-}
-
-/// `PresenceHandler.sendOfflinePresence`: the game is closing.
-pub fn send_offline_presence() {
-    static SENT: AtomicBool = AtomicBool::new(false);
-    {
-        let inner = lock();
-        if !inner.manager.friend_list_enabled || inner.handler.latest.friends.is_empty() {
-            return;
-        }
-    }
-    // `Minecraft.close` happens once; a second quit path must not post twice.
-    if SENT.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    let _ = thread::Builder::new()
-        .name("Friends offline".into())
-        .spawn(|| {
-            let _ = post_presence(PresenceStatus::Offline);
-        });
-}
-
 /// `FriendsService.sendFriendRequest(name)`.
 pub fn send_friend_request(name: &str) -> ResultCode {
     friend_action(json!({"name": name, "updateType": "ADD"}))
@@ -353,60 +210,6 @@ fn friend_action(body: Value) -> ResultCode {
     code
 }
 
-/// `MinecraftServicesFriendsService.presence`: post one status, cache the answer.
-/// `None` means the answer said nothing new (304, an empty body or a failure); the
-/// handler keeps its last presence then.
-fn post_presence(status: PresenceStatus) -> Option<Vec<Presence>> {
-    let session = session()?;
-    let url = url("updatePresence")?;
-    let body = json!({"status": status.wire()}).to_string();
-    let etag = lock().service.presence_etag.clone();
-    let answer = send_json(&session, "POST", &url, &body, etag.as_deref()).ok()?;
-    let mut inner = lock();
-    if let Some(retry) = answer.retry_after {
-        inner.service.presence_poll = Some(retry);
-    }
-    if let Some(etag) = answer.etag {
-        inner.service.presence_etag = Some(etag);
-    }
-    if answer.status == 304 || answer.body.is_empty() {
-        return None;
-    }
-    // `PresenceResponse`: a missing `presence` field is an empty list, replacing the
-    // cached one; malformed JSON keeps the cache, as authlib's exception path does.
-    if let Ok(value) = serde_json::from_str::<Value>(&answer.body) {
-        let presence = presence_of(&value);
-        inner.service.presence_cache = presence.clone();
-        return Some(presence);
-    }
-    None
-}
-
-/// `MinecraftServicesFriendsService.getFriendData`'s request.
-fn fetch_friends(session: &AuthSession, etag: Option<&str>) -> Result<Answer, Failure> {
-    let url = url("getFriends").ok_or(Failure {
-        code: ResultCode::ServiceNotAvailable,
-    })?;
-    send_json(session, "GET", &url, "", etag)
-}
-
-/// One HTTP answer: its status, cache headers and body.
-struct Answer {
-    status: u16,
-    etag: Option<String>,
-    retry_after: Option<Duration>,
-    body: String,
-}
-
-struct Failure {
-    code: ResultCode,
-}
-
-/// The discovery document's `player` service endpoint.
-fn session() -> Option<Arc<AuthSession>> {
-    auth::current().filter(|s| !s.expired())
-}
-
 fn uuid(id: u128) -> String {
     let hex = format!("{id:032x}");
     format!(
@@ -417,111 +220,4 @@ fn uuid(id: u128) -> String {
         &hex[16..20],
         &hex[20..32]
     )
-}
-
-fn url(name: &str) -> Option<String> {
-    let doc = auth::discovery().ok()?;
-    auth::endpoint(&doc, "player", name)
-}
-
-/// authlib's `MinecraftClient`: the bearer token, `If-None-Match` when a cache has an
-/// `ETag`, and `Retry-After` back to the caller.
-fn send_json(
-    session: &AuthSession,
-    method: &str,
-    url: &str,
-    body: &str,
-    etag: Option<&str>,
-) -> Result<Answer, Failure> {
-    let bearer = format!("Bearer {}", session.access_token());
-    let agent = auth::agent();
-    let mut request = match method {
-        "GET" => agent.get(url),
-        "POST" => agent.post(url),
-        "PUT" => agent.put(url),
-        _ => {
-            return Err(Failure {
-                code: ResultCode::Error,
-            });
-        }
-    };
-    request = request.set("Authorization", &bearer);
-    if let Some(etag) = etag {
-        request = request.set("If-None-Match", etag);
-    }
-    let response = if method == "GET" {
-        request.call()
-    } else {
-        request
-            .set("Content-Type", "application/json; charset=utf-8")
-            .send_string(body)
-    }
-    .map_err(http_error)?;
-    let status = response.status();
-    let etag = response.header("ETag").map(str::to_owned);
-    let retry_after = response.header("Retry-After").and_then(parse_retry_after);
-    if status == 304 {
-        return Ok(Answer {
-            status,
-            etag,
-            retry_after,
-            body: String::new(),
-        });
-    }
-    let body = response.into_string().map_err(|_| Failure {
-        code: ResultCode::Error,
-    })?;
-    Ok(Answer {
-        status,
-        etag,
-        retry_after,
-        body,
-    })
-}
-
-/// authlib's `MinecraftClient.parseRetryAfter`: whole seconds above zero.
-fn parse_retry_after(value: &str) -> Option<Duration> {
-    value
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .filter(|seconds| *seconds > 0)
-        .map(Duration::from_secs)
-}
-
-/// `MinecraftServicesFriendsService.handleHttpError`.
-fn http_error(error: ureq::Error) -> Failure {
-    let code = match error {
-        ureq::Error::Status(status, _) => match status {
-            429 => ResultCode::TooManyRequests,
-            500.. => ResultCode::ServiceNotAvailable,
-            403 => ResultCode::Forbidden,
-            400 => ResultCode::UnknownProfile,
-            401 => ResultCode::Unauthorized,
-            _ => ResultCode::Error,
-        },
-        ureq::Error::Transport(_) => ResultCode::ConnectionIssue,
-    };
-    Failure { code }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_share_presence_option_maps_to_its_levels() {
-        assert_eq!(SharePresence::of(0), SharePresence::None);
-        assert_eq!(SharePresence::of(1), SharePresence::Limited);
-        assert_eq!(SharePresence::of(2), SharePresence::All);
-        assert_eq!(SharePresence::of(9), SharePresence::All);
-    }
-
-    #[test]
-    fn retry_after_reads_whole_positive_seconds() {
-        assert_eq!(parse_retry_after("30"), Some(Duration::from_secs(30)));
-        assert_eq!(parse_retry_after(" 5 "), Some(Duration::from_secs(5)));
-        assert_eq!(parse_retry_after("0"), None);
-        assert_eq!(parse_retry_after("later"), None);
-    }
 }

@@ -122,6 +122,25 @@ pub trait DrawContext {
     fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
         Err(GuiEntityError::Unavailable)
     }
+    /// `GuiGraphics.enableScissor`: what this hook call draws from now on, until the matching
+    /// [`pop_clip`](Self::pop_clip), is cut to `rect` (`[x, y, w, h]` in GUI pixels, as
+    /// [`fill`](Self::fill) takes it), the visible part of a sprite, glyph or item kept.
+    /// Clips nest: an inner one is cut to the one around it, so it never shows more than that
+    /// does. A negative width or height clips everything. What a scrolling list, a scrolling
+    /// label or a viewport into a larger page draws through; a scene from
+    /// [`draw_scene`](Self::draw_scene) keeps its own box. A clip still open when the hook call
+    /// returns is closed then, so it also cuts what later listeners of the same call draw:
+    /// close what you open. Refuses a rectangle that is not finite and a 65th open clip,
+    /// leaving the clips as they were. A client's call; nothing is clipped on a server.
+    fn push_clip(&mut self, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
+        unimplemented!("DrawContext::push_clip")
+    }
+    /// `GuiGraphics.disableScissor`: closes the clip [`push_clip`](Self::push_clip) opened
+    /// last, so what is drawn next is cut only by the clips around it. Refuses with
+    /// [`GuiClipRefusal::NoneOpen`] when this hook call has none open.
+    fn pop_clip(&mut self) -> Result<(), GuiClipRefusal> {
+        unimplemented!("DrawContext::pop_clip")
+    }
     /// `Screen.renderMenuBackground`: draws the tiled menu background (32x32) across `rect`
     /// (`[x, y, w, h]` in GUI pixels). If `in_world` is true, uses the dark translucent
     /// texture (`gui/inworld_menu_background`); otherwise uses the opaque dirt-like

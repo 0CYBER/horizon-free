@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import io
 import datetime
+import io
 import json
 import os
 from pathlib import Path
@@ -229,7 +230,7 @@ class PrReadyTests(unittest.TestCase):
             self.assertEqual(pr_ready.touched_crates({f"crates/horizon-client/{path}"}, packages),
                              ["horizon-client-lib"])
         for path in ["src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs", "src/game/items/combat.rs",
-                     "tests/launch_api.rs", "Cargo.toml", "build.rs"]:
+                     "tests/it/mod_api_hooks.rs", "Cargo.toml", "build.rs"]:
             self.assertEqual(pr_ready.touched_crates({f"crates/horizon-client/{path}"}, packages),
                              ["horizon-client"])
 
@@ -259,21 +260,6 @@ class PrReadyTests(unittest.TestCase):
                          "cargo test --locked -p horizon-client --tests")
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-client --doc")
         self.assertIsNone(by_name["doc tests"].status)
-
-    def test_file_size_is_skipped_only_on_a_shallow_clone(self):
-        def file_size_step(shallow):
-            with mock.patch.object(pr_ready, "affected_here", return_value=[]), \
-                    mock.patch.object(pr_ready.subprocess, "run",
-                                      return_value=subprocess.CompletedProcess([], 0, stdout=shallow)) as run:
-                steps = pr_ready.plan(args(quick=True), "origin/main", {"tools/pr_ready.py"}, PACKAGES, LIBRARIES, DEPENDENCIES)
-            run.assert_called_once_with(["git", "rev-parse", "--is-shallow-repository"], cwd=pr_ready.ROOT,
-                                        capture_output=True, text=True)
-            return {step.name: step for step in steps}["File size"]
-        shallow = file_size_step("true\n")
-        self.assertEqual((shallow.status, shallow.detail), ("skip", "not checked on a shallow clone"))
-        full = file_size_step("false\n")
-        self.assertIsNone(full.status)
-        self.assertEqual(full.command, "python3 tools/check_file_size.py --base origin/main")
 
     def test_content_root_tests_run_only_when_what_they_load_changes(self):
         def content_step(path):
@@ -683,6 +669,26 @@ class PrReadyTests(unittest.TestCase):
                                                  "their current inputs.\nNothing to run: every harness passed."),
                          "no harness affected")
         self.assertEqual(pr_ready.duration(125), "2 min 5 s")
+
+    def test_unittest_summary_keeps_skips_and_expected_failures(self):
+        class Outcomes(unittest.TestCase):
+            def test_pass(self):
+                self.assertTrue(True)
+
+            @unittest.skip("fixture platform is unavailable")
+            def test_skip(self):
+                self.fail("must not run")
+
+            @unittest.expectedFailure
+            def test_expected_failure(self):
+                self.fail("known fixture failure")
+
+        stream = io.StringIO()
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(Outcomes)
+        result = unittest.TextTestRunner(stream=stream).run(suite)
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(pr_ready.unittest_passed(stream.getvalue()),
+                         "3 run, OK (skipped=1, expected failures=1)")
 
     def test_python_checks_run_beside_cargo_and_harnesses_after_it(self):
         steps = pr_ready.plan(args(), "origin/main", {"crates/horizon-core/src/lib.rs"}, PACKAGES, LIBRARIES,

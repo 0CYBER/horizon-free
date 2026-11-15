@@ -78,12 +78,9 @@ mod tests {
     use crate::game::{
         Game,
         api_values::TryIntoApi,
-        viewed_worlds::tests::{client, column, layered, open, payload, run, spawn},
+        viewed_worlds::tests::{client, close, column, layered, open, run, spawn},
     };
-    use horizon_protocol::{
-        packets::play::{self, Clientbound as C},
-        viewed_levels,
-    };
+    use horizon_protocol::packets::play::{self, Clientbound as C};
     use horizon_world::registry::BlockStateId;
     use mod_api::{
         BlockFace, BlockState, BlockUpdateFlags, ClipBlock, ClipFluid, Host, LevelRef,
@@ -243,8 +240,7 @@ mod tests {
         let mut resources = None;
         let mut game = client(&mut resources);
         let (_, viewed) = viewing(&mut game);
-        game.handle_packet(payload(&viewed_levels::close(1)))
-            .unwrap();
+        game.handle_packet(close(1)).unwrap();
         assert_eq!(game.level(NETHER), None);
         assert_eq!(state(&game, viewed, [3, 71, 5]), None);
         assert_eq!(

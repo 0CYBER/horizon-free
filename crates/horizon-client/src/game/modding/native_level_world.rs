@@ -242,6 +242,17 @@ impl Game<'_> {
             .rules
             .bool_slot(mod_api::__private::game_rule_bool_slot(key)?)
     }
+    /// Read a registered integer game rule.
+    pub(super) fn level_game_rule_int(
+        &self,
+        level: LevelRef,
+        key: mod_api::IntGameRuleKey,
+    ) -> Option<i32> {
+        self.native_level_world(level)?;
+        self.ui
+            .rules
+            .int_slot(mod_api::__private::game_rule_int_slot(key)?)
+    }
     /// Game rule `rule` (`minecraft:keep_inventory` or `keep_inventory`), as
     /// `/gamerule` queries it: None for an unknown rule.
     pub(super) fn level_game_rule(
@@ -542,6 +553,48 @@ mod tests {
                 game.ui.rules = gamerules::GameRules::with_registry(registry, &[]);
                 let level = game.level("minecraft:overworld").unwrap();
                 assert_eq!(level.game_rule_bool(game, *KEY.get().unwrap()), Some(true));
+            })
+        });
+    }
+
+    /// #3316's case: `example:cap` (8, 0..=64) refuses `/gamerule example:cap 70`, takes 12, and
+    /// keeps 12 through a save and load of the rules.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_int_rule_is_range_checked_by_gamerule_and_saved() {
+        use std::sync::OnceLock;
+        static KEY: OnceLock<mod_api::IntGameRuleKey> = OnceLock::new();
+        struct RuleMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for RuleMod {
+            fn register(
+                &self,
+                registrar: &mut dyn mod_api::Registrar,
+                _: &mod_api::RegistrationContext,
+            ) {
+                registrar.game_rule_category("machines").unwrap();
+                let key = registrar
+                    .game_rule_int("cap", "example:machines", 8, 0, 64)
+                    .unwrap();
+                let _ = KEY.set(key);
+            }
+        }
+        let mods: mod_api::Mods = vec![ModEntry::new("example", Box::new(RuleMod))].into();
+        with_mods(mods, || {
+            with_game(|game| {
+                let registry = Arc::new(crate::game::api_values::game_rule_registry());
+                game.level.rule_registry = registry.clone();
+                game.ui.rules = gamerules::GameRules::with_registry(registry.clone(), &[]);
+                let key = *KEY.get().unwrap();
+                let level = game.level("minecraft:overworld").unwrap();
+                assert_eq!(level.game_rule_int(game, key), Some(8));
+                assert!(!game.run_command("gamerule example:cap 70"));
+                assert_eq!(level.game_rule_int(game, key), Some(8));
+                assert!(game.run_command("gamerule example:cap 12"));
+                assert_eq!(level.game_rule_int(game, key), Some(12));
+                let saved = game.ui.rules.to_nbt().tag;
+                game.ui.rules = gamerules::GameRules::from_nbt_with_registry(&saved, &[], registry);
+                assert_eq!(level.game_rule_int(game, key), Some(12));
             })
         });
     }

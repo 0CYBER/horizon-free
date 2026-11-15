@@ -114,12 +114,13 @@ impl MotionWorld<'_, '_, '_> {
                 vanilla,
             )
         };
-        // LivingDrownEvent, likewise.
+        // LivingDrownEvent, likewise. A player's getMaxAirSupply is Entity's 300.
         if let Some(drowning) = drown(
             self.loop_context,
             self.player.entity_id as u32,
             "minecraft:player",
             &mut self.player.air,
+            300,
             breath,
             !self.player.client_side,
         ) {
@@ -287,6 +288,24 @@ impl PlayerMotion {
     }
 }
 impl MotionWorld<'_, '_, '_> {
+    /// `Player.getBlockSpeedFactor` (#16176): soul sand and honey slow the
+    /// player's move only while it neither flies nor glides.
+    pub(super) fn player_block_speed_factor(&mut self) -> Result<f32> {
+        let efficiency = self.player.attribute("minecraft:movement_efficiency")? as f32;
+        let flying = self.player.flying || self.player.fall_flying;
+        let location = self.location();
+        let context = self.loop_context;
+        Ok(movement_support::player_block_speed_factor(
+            &mut RegistryMovementWorld {
+                properties: &self.resources.blocks,
+                world: self,
+                edits: &ModBlockFactors(context),
+            },
+            location,
+            flying,
+            efficiency,
+        )?)
+    }
     /// `LivingEntity.aiStep`'s jump phase: rise in water or lava, else jump
     /// from the ground (or from shallow fluid); nothing while flying.
     pub(super) fn jump_phase(&mut self) -> Result<()> {

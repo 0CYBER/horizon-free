@@ -227,9 +227,9 @@ pub trait LevelsBackend {
     /// Match and assemble through the engine's recipe matcher, without consuming inputs.
     /// Covers minecraft:crafting, smelting, blasting, smoking, campfire_cooking,
     /// stonecutting and smithing, including data-pack recipes of those types.
-    /// Mod-owned types return RecipeLookupError::NotMatchable: cache recipes_of_type once
+    /// Registered crafting serializers match through minecraft:crafting. Read-only and unregistered
+    /// mod-owned types return RecipeLookupError::NotMatchable; cache recipes_of_type once
     /// per load/reload and match those in mod memory (no per-tick host crossing).
-    /// Dynamic custom outputs and contextual predicates remain mod-owned.
     /// A valid input without a match returns Ok(None); invalid shapes/items and unavailable
     /// levels are typed refusals. Crafting dimensions are 1 through 3, with row-major slots.
 
@@ -540,6 +540,11 @@ pub trait LevelsBackend {
     /// Read a registered boolean game rule.
     #[access(WorldOnly)]
     fn level_game_rule_bool(&self, level: LevelRef, key: BoolGameRuleKey) -> Option<bool>;
+    /// Side: server.
+    /// Read a registered integer game rule (`GameRules.getInt`), always within the range it was
+    /// declared with. None for a stale handle, a level the server has not opened, or a client.
+    #[access(WorldOnly)]
+    fn level_game_rule_int(&self, level: LevelRef, key: IntGameRuleKey) -> Option<i32>;
     /// Side: server.
     /// Game rule `rule` (`minecraft:keep_inventory` or `keep_inventory`), as
     /// `/gamerule` queries it: `Ok(None)` for an unknown rule. A gone/reopened level
@@ -1155,6 +1160,36 @@ pub trait LevelsBackendMut {
     /// not already delivered.
     #[access(WorldOnly)]
     fn level_send_block_updated(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
+    /// Side: server.
+    /// Queues the loaded chunks `chunks` (chunk coordinates) of the level in place, and the loaded
+    /// chunks around them, to be lit again whole from their blocks, for a mod that wrote blocks by
+    /// other means (`edit_blocks` queues the same relight for its own chunks). Accepted at once and
+    /// never lit during the call: the light jobs run at the level's next light update, as those of `edit_blocks` and
+    /// `level_check_light` do, and a column whose eight
+    /// neighbours are not all loaded waits until they are. The light that changed goes to the
+    /// players who see that chunk's border, as any relight's does. There is no completion event
+    /// and no per-call count of finished chunks: a mod that needs the new light reads it on a
+    /// later tick (`level_brightness`), and `chunk_resend` sends the chunk with whatever light has
+    /// landed by the end of that tick. Returns how many columns were queued, the ring included; a
+    /// column not loaded, or already waiting in the queue, is not counted. The queue is bounded
+    /// (4096 columns in all, and 256 chunks a call): a call that would pass either is refused
+    /// whole with `TooManyChunks`, whose `max` is how many chunks a call may take now. Each
+    /// refusal queues nothing and is named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` (a
+    /// level that is not the one being ticked) and `TooManyChunks`.
+    #[access(WorldOnly)]
+    fn level_relight_chunks(
+        &mut self,
+        level: LevelRef,
+        chunks: &[[i32; 2]],
+    ) -> Result<u32, ChunkRefusal>;
+    /// Side: server.
+    /// Sends the loaded chunk whole again, with its light, block entities and biomes as they are
+    /// at the end of the tick, to every player watching it (`chunk_watchers`), as a chunk
+    /// `edit_blocks` changed is sent: one packet instead of a block update per changed block.
+    /// Ok with nothing sent when no player is in the level. Each refusal queues nothing and is
+    /// named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` and `NotLoaded`.
+    #[access(WorldOnly)]
+    fn chunk_resend(&mut self, chunk: ChunkRef) -> Result<(), ChunkRefusal>;
     /// Side: server.
     /// Plays sound event `sound` at `at` for the players in this level
     /// within range (16 blocks, times the volume above 1), as

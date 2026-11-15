@@ -343,7 +343,7 @@ mod tests {
         let mut original = StructureStart::new(7, &def, chunk, pieces);
         original.references = 3;
         let tag = original.save().unwrap();
-        let read_start = |t: &Tag| read_saved_start(7, &def, chunk, t, &resources, &bindings);
+        let read_start = |t: &Tag| read_saved_start(7, &def, chunk, t, 1234, &resources, &bindings);
         let loaded = read_start(&tag).expect("all seven types decode");
         assert_eq!(loaded.save(), Some(tag.clone()));
         assert_eq!(

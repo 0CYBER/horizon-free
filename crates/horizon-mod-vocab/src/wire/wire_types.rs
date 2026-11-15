@@ -2,7 +2,7 @@
 use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{
     BlockEntityTypeKey, BlockKey, BoolGameRuleKey, DimensionKey, EffectKey, EnchantmentKey,
-    FluidKey, ItemKey, MenuKey, TagKey, UnresolvedFluid,
+    FluidKey, IntGameRuleKey, ItemKey, MenuKey, TagKey, UnresolvedFluid,
 };
 
 impl Wire for crate::InsideEffect {
@@ -422,7 +422,7 @@ layout_fields!("slot" => $width);
         }
     )+};
 }
-slot_keys!(u32; BlockEntityTypeKey, BlockKey, BoolGameRuleKey, DimensionKey, EffectKey, EnchantmentKey, FluidKey, ItemKey, MenuKey, crate::client::particle_keys::ParticleKey, TagKey);
+slot_keys!(u32; crate::GameEventKey, BlockEntityTypeKey, BlockKey, BoolGameRuleKey, IntGameRuleKey, DimensionKey, EffectKey, EnchantmentKey, FluidKey, ItemKey, MenuKey, crate::client::particle_keys::ParticleKey, TagKey);
 slot_keys!(u64; UnresolvedFluid);
 
 impl Wire for crate::Identifier {
@@ -710,7 +710,7 @@ impl Wire for crate::ModBlockEntity {
 }
 
 impl Wire for crate::ItemPlace {
-    layout_fields!("tag" => u32, "0:PlayerSlot.player" => u128, "0:PlayerSlot.slot" => i32, "1:PlayerHand.player" => u128, "1:PlayerHand.hand" => crate::Hand, "2:PlayerCursor.menu" => crate::MenuRef, "3:BlockEntity.level" => crate::LevelRef, "3:BlockEntity.pos" => [i32;3], "3:BlockEntity.side" => Option<crate::Direction>, "3:BlockEntity.slot" => usize, "4:ItemEntity.id" => u32, "5:EntitySlot.entity" => u32, "5:EntitySlot.slot" => usize, "6:Nested.parent" => Box<crate::ItemPlace>, "6:Nested.slot" => usize, "7:MenuSlot.menu" => crate::MenuRef, "7:MenuSlot.slot" => usize, "8:Mod.provider" => String, "8:Mod.key" => u64, "9:Equipment.entity" => u32, "9:Equipment.slot" => crate::EquipmentSlot, "10:Scratch.0" => u64, "11:Strict.0" => Box<crate::ItemPlace>, "12:OneByOne.0" => Box<crate::ItemPlace>, "13:InfiniteMaterials.player" => u128, "13:InfiniteMaterials.inner" => Box<crate::ItemPlace>);
+    layout_fields!("tag" => u32, "0:PlayerSlot.player" => u128, "0:PlayerSlot.slot" => i32, "1:PlayerHand.player" => u128, "1:PlayerHand.hand" => crate::Hand, "2:PlayerCursor.menu" => crate::MenuRef, "3:BlockEntity.level" => crate::LevelRef, "3:BlockEntity.pos" => [i32;3], "3:BlockEntity.side" => Option<crate::Direction>, "3:BlockEntity.slot" => usize, "4:ItemEntity.id" => u32, "5:EntitySlot.entity" => u32, "5:EntitySlot.slot" => usize, "6:Nested.parent" => Box<crate::ItemPlace>, "6:Nested.slot" => usize, "7:MenuSlot.menu" => crate::MenuRef, "7:MenuSlot.slot" => usize, "8:Mod.provider" => String, "8:Mod.key" => u64, "9:Equipment.entity" => u32, "9:Equipment.slot" => crate::EquipmentSlot, "10:Scratch.0" => u64, "11:Strict.0" => Box<crate::ItemPlace>, "12:OneByOne.0" => Box<crate::ItemPlace>, "13:InfiniteMaterials.player" => u128, "13:InfiniteMaterials.inner" => Box<crate::ItemPlace>, "14:ScratchSlots.0" => u64);
     const LAYOUT_SEED: u64 = crate::wire::layout_seed(stringify!(crate::ItemPlace));
     const MIN: usize = 4;
     fn put(&self, out: &mut Writer) {
@@ -789,6 +789,10 @@ impl Wire for crate::ItemPlace {
                     out.put(player);
                     out.put(inner)
                 }
+                ScratchSlots(id) => {
+                    out.put(&14u32);
+                    out.put(id)
+                }
             }
         });
     }
@@ -841,6 +845,7 @@ impl Wire for crate::ItemPlace {
                     player: input.take()?,
                     inner: input.take()?,
                 },
+                14 => ScratchSlots(input.take()?),
                 n => return Err(WireError::Tag(n)),
             })
         })
@@ -1667,6 +1672,20 @@ impl crate::wire::Wire for crate::AttachmentWrite {
             2 => Self::Set,
             tag => return Err(crate::wire::WireError::Tag(tag)),
         })
+    }
+}
+
+// Biome keys carry a slot and an engine-owned generation. Validate on the receiving host.
+impl Wire for crate::BiomeKey {
+    layout_fields!("slot" => u32, "generation" => u64);
+    const LAYOUT_SEED: u64 = crate::wire::layout_seed("crate::BiomeKey");
+    const MIN: usize = <u32 as Wire>::MIN + <u64 as Wire>::MIN;
+    fn put(&self, out: &mut Writer) {
+        out.put(&self.0);
+        out.put(&self.1);
+    }
+    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
+        Ok(Self(input.take()?, input.take()?))
     }
 }
 

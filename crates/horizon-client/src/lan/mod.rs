@@ -14,6 +14,7 @@ pub mod anticheat;
 pub mod arrivals;
 pub mod attributes;
 mod biome_resend;
+mod body;
 pub mod border;
 pub mod chunk_watch;
 pub mod chunks;
@@ -40,6 +41,7 @@ pub mod menu;
 pub mod menu_extra_rev;
 #[cfg(test)]
 mod payload_bounds_tests;
+pub mod player_shown;
 pub mod playerdata;
 pub mod prediction;
 pub mod recipes;
@@ -50,6 +52,7 @@ pub mod tracking;
 pub mod viewed_levels;
 pub mod waypoints;
 
+pub use body::Body;
 pub use conn::{Holding, PlayerSender, flush_all};
 use horizon_protocol::packets::play;
 use horizon_protocol::{

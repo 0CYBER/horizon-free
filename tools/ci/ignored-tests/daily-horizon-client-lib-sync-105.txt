@@ -1,0 +1,3 @@
+# Incoming saved far surface tests need prepared resources.
+horizon-client-lib save::tests::saved_far_surface_checks_packed_indices_against_their_palettes lib daily resources
+horizon-client-lib save::tests::saved_far_surface_reads_a_section_once_not_once_a_block lib daily resources

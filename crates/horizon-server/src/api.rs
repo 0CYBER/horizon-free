@@ -935,6 +935,22 @@ fn patch_config(shared: &Shared, body: &[u8]) -> Response {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A shorter wait for the endpoint file in tests that expect it never to appear.
+    pub(crate) static ENDPOINT_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// How long `Client::open` waits for the endpoint file of a server that holds the lock.
+fn endpoint_wait() -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = ENDPOINT_WAIT.with(|w| w.get()) {
+        return wait;
+    }
+    Duration::from_secs(5)
+}
+
 /// The API of the server running in a folder, for the CLI.
 pub struct Client {
     address: SocketAddr,
@@ -949,7 +965,7 @@ impl Client {
         }
         // The supervisor writes the endpoint just after taking the lock: give it a moment.
         let path = dir.join(ENDPOINT);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + endpoint_wait();
         let text = loop {
             match std::fs::read_to_string(&path) {
                 Ok(text) => break text,

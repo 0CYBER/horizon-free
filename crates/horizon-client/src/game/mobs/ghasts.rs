@@ -123,7 +123,8 @@ impl Game<'_> {
             return true;
         }
         if harnessed && !sneaking {
-            // doPlayerRide.
+            // doPlayerRide: `player.startRiding(this)`, which keeps the
+            // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
             let id = self.mobs[index].id;
             if !self.native_may_board(id) {
                 return true;
@@ -133,7 +134,6 @@ impl Game<'_> {
             // addPassenger: the rider is not standing on top, so no still
             // timeout.
             self.mobs[index].extra.counter = 0;
-            self.yaw = self.mobs[index].yaw;
             self.mount.reset_jump();
             if was_empty {
                 let down = happy_ghast::goggles(true, &self.mobs[index]);

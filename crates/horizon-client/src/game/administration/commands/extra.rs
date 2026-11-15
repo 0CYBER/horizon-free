@@ -747,7 +747,10 @@ impl Game<'_> {
                 .hub
                 .guests
                 .iter()
-                .filter(|g| g.participates_online() && lan.hub.singleplayer_owner != Some(g.uuid))
+                .filter(|g| {
+                    (g.participates_online() || g.is_fake())
+                        && lan.hub.singleplayer_owner != Some(g.uuid)
+                })
                 .filter(|g| match &s.player_name {
                     Some(name) => g.name.eq_ignore_ascii_case(name),
                     None => s.kind == 'a' || s.kind == 'e',

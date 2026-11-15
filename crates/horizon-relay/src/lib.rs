@@ -81,52 +81,76 @@ impl Default for Config {
 }
 impl Config {
     /// The defaults with the `RELAY_*` environment variables applied: an error for a setting the relay
-    /// can't run with as given ([`Config::check`]).
+    /// can't run with as given ([`Config::check`]), and for a value that does not parse.
     pub fn from_env() -> Result<Self, String> {
-        fn var<T: std::str::FromStr>(name: &str) -> Option<T> {
-            std::env::var(name).ok()?.trim().parse().ok()
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+
+    /// [`Config::from_env`] over any source of variables (the tests give a table). A variable that is
+    /// unset or empty keeps its default; one that does not parse is an error naming it, not a default kept
+    /// without a word (`RELAY_PER_ADDRESS_LIMITS=false` behind a proxy would leave every client counted as
+    /// one address).
+    pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        fn var<T: std::str::FromStr>(
+            get: &impl Fn(&str) -> Option<String>,
+            name: &str,
+            expected: &str,
+        ) -> Result<Option<T>, String> {
+            let Some(text) = get(name) else {
+                return Ok(None);
+            };
+            let text = text.trim();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            text.parse()
+                .map(Some)
+                .map_err(|_| format!("{name} is {text:?}: use {expected}"))
         }
+        const COUNT: &str = "a whole number";
+        const NUMBER: &str = "a number";
+        const FLAG: &str = "0 or 1";
         let mut c = Self::default();
-        if let Some(v) = var("RELAY_MAX_HOSTS") {
+        if let Some(v) = var(&get, "RELAY_MAX_HOSTS", COUNT)? {
             c.max_hosts = v;
         }
-        if let Some(v) = var("RELAY_MAX_HOSTS_PER_ADDRESS") {
+        if let Some(v) = var(&get, "RELAY_MAX_HOSTS_PER_ADDRESS", COUNT)? {
             c.rates.hosts_per_address = v;
         }
-        if let Some(v) = var("RELAY_MAX_OPEN_PER_ADDRESS") {
+        if let Some(v) = var(&get, "RELAY_MAX_OPEN_PER_ADDRESS", COUNT)? {
             c.rates.open_per_address = v;
         }
-        if let Some(v) = var("RELAY_MAX_BRIDGES") {
+        if let Some(v) = var(&get, "RELAY_MAX_BRIDGES", COUNT)? {
             c.max_bridges = v;
         }
-        if let Some(v) = var("RELAY_MAX_PENDING_PER_HOST") {
+        if let Some(v) = var(&get, "RELAY_MAX_PENDING_PER_HOST", COUNT)? {
             c.max_pending_per_host = v;
         }
-        if let Some(v) = var("RELAY_MAX_CONNECTIONS") {
+        if let Some(v) = var(&get, "RELAY_MAX_CONNECTIONS", COUNT)? {
             c.max_connections = v;
         }
-        if let Some(v) = var::<f64>("RELAY_SESSION_KBPS") {
+        if let Some(v) = var::<f64>(&get, "RELAY_SESSION_KBPS", NUMBER)? {
             c.session_rate = v * 1024.0;
         }
-        if let Some(v) = var::<f64>("RELAY_TOTAL_MBPS") {
+        if let Some(v) = var::<f64>(&get, "RELAY_TOTAL_MBPS", NUMBER)? {
             c.total_rate = v * 1_000_000.0 / 8.0;
         }
-        if let Some(v) = var::<f64>("RELAY_GLOBAL_UNKNOWN_PER_MIN") {
+        if let Some(v) = var::<f64>(&get, "RELAY_GLOBAL_UNKNOWN_PER_MIN", NUMBER)? {
             c.global_unknown_per_min = v;
         }
-        if let Some(v) = var::<f64>("RELAY_NAMEPLATE_UNKNOWN_PER_MIN") {
+        if let Some(v) = var::<f64>(&get, "RELAY_NAMEPLATE_UNKNOWN_PER_MIN", NUMBER)? {
             c.rates.nameplate_unknown_per_min = v;
         }
-        if let Some(v) = var::<f64>("RELAY_NAMEPLATE_UNKNOWN_BURST") {
+        if let Some(v) = var::<f64>(&get, "RELAY_NAMEPLATE_UNKNOWN_BURST", NUMBER)? {
             c.rates.nameplate_unknown_burst = v;
         }
-        if let Some(v) = var::<u8>("RELAY_PER_ADDRESS_LIMITS") {
+        if let Some(v) = var::<u8>(&get, "RELAY_PER_ADDRESS_LIMITS", FLAG)? {
             c.per_address = v != 0;
         }
-        if let Some(v) = var::<u8>("RELAY_PROXY_PROTOCOL") {
+        if let Some(v) = var::<u8>(&get, "RELAY_PROXY_PROTOCOL", FLAG)? {
             c.proxy_protocol = v != 0;
         }
-        if let Ok(list) = std::env::var("RELAY_PROXY_FROM") {
+        if let Some(list) = get("RELAY_PROXY_FROM") {
             c.proxy_from = Net::parse_list(&list).map_err(|e| format!("RELAY_PROXY_FROM: {e}"))?;
         }
         c.check()?;
@@ -135,6 +159,14 @@ impl Config {
 
     /// Why the relay must not start with these settings, if it mustn't.
     pub fn check(&self) -> Result<(), String> {
+        for (name, rate) in [
+            ("RELAY_SESSION_KBPS", self.session_rate),
+            ("RELAY_TOTAL_MBPS", self.total_rate),
+        ] {
+            if !rate.is_finite() {
+                return Err(format!("{name} must be finite"));
+            }
+        }
         if self.proxy_protocol && self.proxy_from.is_empty() {
             return Err("RELAY_PROXY_PROTOCOL=1 needs RELAY_PROXY_FROM: the load balancers' addresses or \
                         ranges (e.g. 10.0.0.0/8). Without it any client could send a PROXY line and choose \
@@ -971,6 +1003,41 @@ mod tests {
     }
 
     #[test]
+    fn bandwidth_settings_reject_nonfinite_values() {
+        for rate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for (name, config) in [
+                (
+                    "RELAY_SESSION_KBPS",
+                    Config {
+                        session_rate: rate,
+                        ..Config::default()
+                    },
+                ),
+                (
+                    "RELAY_TOTAL_MBPS",
+                    Config {
+                        total_rate: rate,
+                        ..Config::default()
+                    },
+                ),
+            ] {
+                assert_eq!(config.check(), Err(format!("{name} must be finite")));
+            }
+        }
+        for rate in [-1.0, 0.0, 1.0, 1_048_576.0] {
+            assert!(
+                Config {
+                    session_rate: rate,
+                    total_rate: rate,
+                    ..Config::default()
+                }
+                .check()
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
     fn proxy_protocol_needs_its_load_balancers() {
         let on = Config {
             proxy_protocol: true,
@@ -986,6 +1053,43 @@ mod tests {
         for bad in ["10.0.0.0/33", "nope", "10.0.0.1/x", "::/129"] {
             assert!(Net::parse_list(bad).is_err(), "{bad}");
         }
+    }
+
+    /// A `RELAY_*` value that does not parse is an error naming the variable, not a default kept without a
+    /// word: `RELAY_PER_ADDRESS_LIMITS=false` behind a proxy left every client counted as one address.
+    #[test]
+    fn a_setting_that_does_not_parse_is_refused() {
+        for (name, value) in [
+            ("RELAY_PER_ADDRESS_LIMITS", "false"),
+            ("RELAY_PROXY_PROTOCOL", "true"),
+            ("RELAY_MAX_HOSTS", "ten"),
+            ("RELAY_MAX_HOSTS_PER_ADDRESS", "-1"),
+            ("RELAY_SESSION_KBPS", "fast"),
+            ("RELAY_TOTAL_MBPS", "100Mbps"),
+            ("RELAY_NAMEPLATE_UNKNOWN_BURST", "1,5"),
+        ] {
+            let error = Config::from_vars(|n| (n == name).then(|| value.to_string())).unwrap_err();
+            assert!(error.contains(name) && error.contains(value), "{error}");
+        }
+        // The same names with values that parse apply, spaces around them are ignored, and an empty
+        // or unset one keeps its default.
+        let set = |name: &'static str, value: &'static str| {
+            Config::from_vars(move |n| (n == name).then(|| value.to_string())).unwrap()
+        };
+        let defaults = Config::default();
+        assert_eq!(set("RELAY_MAX_HOSTS", " 7 ").max_hosts, 7);
+        assert!(!set("RELAY_PER_ADDRESS_LIMITS", "0").per_address);
+        assert_eq!(set("RELAY_SESSION_KBPS", "2.5").session_rate, 2.5 * 1024.0);
+        assert_eq!(set("RELAY_MAX_HOSTS", "").max_hosts, defaults.max_hosts);
+        assert_eq!(
+            set("RELAY_MAX_BRIDGES", "  ").max_bridges,
+            defaults.max_bridges
+        );
+        assert_eq!(set("RELAY_UNKNOWN", "x").max_hosts, defaults.max_hosts);
+        // A list of load balancers still names its variable when it is wrong.
+        let error = Config::from_vars(|n| (n == "RELAY_PROXY_FROM").then(|| "nowhere".to_string()))
+            .unwrap_err();
+        assert!(error.starts_with("RELAY_PROXY_FROM: "), "{error}");
     }
 
     #[test]

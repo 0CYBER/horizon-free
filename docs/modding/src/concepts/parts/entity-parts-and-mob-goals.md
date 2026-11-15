@@ -33,7 +33,16 @@ tick sees, and every other entity from the tick's snapshot — a `getEntities` o
 list was taken out — so a read the snapshot does not carry (a mob's gear or effects, its species id)
 answers `None`, and the handle docs mark the reads that carry the snapshot rule. Writes apply to the
 mob itself through the engine's own paths: `move_to(pos, speed)` and `stop_navigation()`
-(`PathNavigation`), `look_at(pos)` (`LookControl`), `jump()`, and `set_target(Option<LivingRef>)`
+(`PathNavigation`), `move_to_path(Vec<PathNode>, speed)` to follow a path the mod computed.
+It returns `Result<(), MoveToPathError>`: `NotFinite` for a non-finite speed or coordinate,
+`Unavailable` when no navigable mob is available, and `Empty` when no node remains after trimming.
+`NotFinite` and `Unavailable` preserve navigation; `Empty` leaves no path in progress.
+The engine classifies and trims every supplied node, follows the path as given, and drops it on a
+block change or the stuck check instead of searching again. Unloaded and out-of-world positions
+are classified using void air without loading chunks; finite positions are not refused for their
+size. Submission, classification and trimming take linear work and allocate per-node storage.
+Optional per-node type overrides are not supported: the engine supplies every classification.
+Other writes include `look_at(pos)` (`LookControl`), `jump()`, and `set_target(Option<LivingRef>)`
 (`Mob.setTarget`, with the write handle's rules: a fox, an enderman or a zombified piglin stores it
 with its setter's side effects, and a brain-backed species refuses, since its target is a brain
 memory that `MobRef::set_brain_target` writes from a server host). Writes to other entities
@@ -65,3 +74,21 @@ entity unsheared, and `None` leaves it to the species (a sheep keeps shearing as
 negative amounts repair. It returns the pre-shrink stack only on break, and `None` when
 nothing breaks or the entity or slot is unavailable. Creative players' equipment is
 exempt. The operation does not fire equip effects.
+
+`mob.set_wanted_position(host, [x, y, z], speed)` writes `MoveControl` directly,
+without pathfinding or requiring loaded terrain. `wanted_position(host)` and
+`speed_modifier(host)` read its stored position and speed, including after the
+wish is consumed. The mob moves by its own control; its AI may replace the wish
+next tick. Finite negative speed is accepted as in vanilla. Non-finite coordinates
+return `WantedPositionError::NonFinitePosition`; non-finite speed returns
+`NonFiniteSpeed`. Refused inputs leave the old wish intact. The setter returns
+`Ok(false)` (reads return `None`) for stale handles, clients, the dragon and mobs
+held out of the level. These methods are server side.
+
+The mob handle also reads `can_open_doors`, `can_pass_doors`, and `can_float`
+and writes them with `set_can_open_doors`, `set_can_pass_doors`, and `set_can_float`.
+Reads take `&dyn Host`; writes take `&mut dyn ServerHost`. Set these navigation
+wishes from `entity_join`; the mob's own setup may set them again. Each setter
+changes only its flag and leaves any current path intact. Reads return `None`
+and writes return `false` for stale handles, clients, mobs held out of the level,
+and mobs without ground or flying navigation (including water and amphibious navigation).

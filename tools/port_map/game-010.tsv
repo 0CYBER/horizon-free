@@ -37,7 +37,7 @@ BreezeAttackEntitySensor.doTick	port	crates/horizon-client/src/mobs/monster_brai
 FrogAttackablesSensor.isMatchingEntity	port	crates/horizon-client/src/mobs/frog.rs::server_ai_step	every 20 ticks: nearest size-1 slime or magma cube within 10 blocks in line of sight
 FrogAttackablesSensor.isUnreachableAttackTarget	inline	crates/horizon-client/src/mobs/frog.rs::server_ai_step	skips ids in the unreachable list (up to five, 100 ticks each)
 GolemSensor.checkForNearbyGolem	port	crates/horizon-client/src/mobs/villager_brain.rs::sense_golem	an iron golem in the nearby list sets golem_detected_recently for 599 ticks
-HoglinSpecificSensor.doTick	inline	crates/horizon-client/src/mobs/piglin.rs::hoglin_repellent	gap: player: only the repellent scan is kept; adult piglin and adult hoglin counts are not sensed, so adult hoglins do not keep 8 blocks from adult piglins and do not flee them when outnumbered
+HoglinSpecificSensor.doTick	inline	crates/horizon-client/src/mobs/piglin.rs::hoglin_sense	hoglin_repellent runs it every 20 ticks with the repellent scan: it counts the adult piglins and hoglins in sight and keeps the nearest adult piglin and the adult hoglins; the idle activity keeps an adult hoglin 8 blocks from that piglin (AwayFrom::AdultPiglin) and piglins_outnumber_hoglins starts and ends its retreat
 HurtBySensor.doTick	port	crates/horizon-client/src/mobs/villager_brain.rs::sense_hurt	last damage source forgotten after 40 ticks, attacker kept while alive
 IsInWaterSensor.doTick	inline	crates/horizon-client/src/mobs/frog.rs::Croak::can_use	no IS_IN_WATER memory; frog goals read fluids.in_water directly
 MobSensor.doTick	inline	crates/horizon-client/src/mobs/armadillo.rs::server_ai_step	armadillo scare sensor every fifth tick: cannot stay rolled up clears the danger, else scan
@@ -68,7 +68,7 @@ TargetingConditions.test	port	crates/horizon-client/src/mobs/goals.rs::Mob::play
 DefaultRandomPos.generateRandomPosTowardDirection	port	crates/horizon-client/src/mobs/goals.rs::Mob::default_check	Mob::toward builds the position, default_check does limits, home, stable and malus
 GoalUtils.mobRestricted	port	crates/horizon-client/src/mobs/goals.rs::Mob::restricted	home within radius + distance + 1, then isRestricted
 GoalUtils.hasMalus	inline	crates/horizon-client/src/mobs/goals.rs::Mob::default_check	path type malus must be 0, also in land_up_out_of_solid
-LandRandomPos.getPosTowards	port	crates/horizon-client/src/mobs/goals.rs::Mob::land_random_pos_towards	the direction from the mob to the point, then the ten tries within a quarter turn of it; gap: player: the golem goals that call it (GolemRandomStrollInVillageGoal, MoveBackToVillageGoal) are not registered, so a golem still wanders anywhere
+LandRandomPos.getPosTowards	port	crates/horizon-client/src/mobs/goals.rs::Mob::land_random_pos_towards	the direction from the mob to the point, then the ten tries within a quarter turn of it; GolemRandomStrollInVillageGoal calls it (golem.rs towards_villager_who_wants_golem and towards_poi) and is registered in mobs/golem.rs; MoveBackToVillageGoal is registered there too and calls DefaultRandomPos.getPosTowards (default_random_pos_towards), as vanilla does
 LandRandomPos.getPosInDirection	inline	crates/horizon-client/src/mobs/goals.rs::Mob::land_random_pos_away	only the away direction is wired; the toward call has no user
 LandRandomPos.movePosUpOutOfSolid	port	crates/horizon-client/src/mobs/goals.rs::Mob::land_up_out_of_solid	up out of solid, then no water and no malus
 RandomPos.generateRandomDirection	port	crates/horizon-client/src/mobs/goals.rs::Mob::random_direction
@@ -112,7 +112,7 @@ Dolphin.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::fina
 Dolphin.defineSynchedData	skip:java		synched fields: got_fish is extra.flag and moistness extra.counter
 Dolphin.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	GotFish and Moistness
 Dolphin.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	GotFish and Moistness, 2400 when absent
-Dolphin.registerGoals	port	crates/horizon-client/src/mobs/aquatic.rs::register	gap: player: no MoveToItemGoal and PlayWithItemsGoal (dolphins ignore items thrown in the water), no FollowPlayerRiddenEntityGoal for boats or nautiluses, no AvoidEntity of guardians, and HurtByTarget does not skip guardians
+Dolphin.registerGoals	port	crates/horizon-client/src/mobs/aquatic.rs::register	the Dolphin arm registers MoveToItem, PlayWithItems, FollowPlayerRidden (boats and nautiluses), an AvoidEntity of guardians and a HurtByTarget that ignores guardians
 Dolphin.createAttributes	skip:data		attributes come from the entity tables
 Dolphin.canAttack	port	crates/horizon-client/src/mobs/goals.rs::spares_target	a baby dolphin takes nobody as its target
 Dolphin.playAttackSound	port	crates/horizon-client/src/mobs/ai.rs::do_hurt_target	the dolphin arm: DOLPHIN_ATTACK at 1.0/1.0 after the blow lands, skipped for a silent mob

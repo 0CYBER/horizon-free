@@ -69,6 +69,7 @@ RECORDS = {
     "type member": "Public field or variant of a type",
     "part": "Part kind",
     "capability": "Capability",
+    "behaviour": "Behaviour: a promise that is no type or signature",
 }
 ID_FORMS = {
     "hook": "hook:<name>",
@@ -83,6 +84,7 @@ ID_FORMS = {
     "type member": "type:<path>.<field or variant>",
     "part": "part:<kind>",
     "capability": "capability:<key>",
+    "behaviour": "behaviour:<name>",
 }
 
 

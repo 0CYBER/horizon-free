@@ -54,6 +54,7 @@ pub enum ExportError {
     },
     NotASampleKind(Select),
     NoSamplesOfKind(Select),
+    StartTimeOutOfRange(i64),
     Write(String),
 }
 
@@ -80,6 +81,10 @@ impl fmt::Display for ExportError {
             ExportError::NoSamplesOfKind(select) => {
                 write!(f, "this capture has no {select} samples to export")
             }
+            ExportError::StartTimeOutOfRange(started) => write!(
+                f,
+                "capture start time {started} ms is outside pprof's signed nanosecond range"
+            ),
             ExportError::Write(detail) => write!(f, "cannot write the export: {detail}"),
         }
     }

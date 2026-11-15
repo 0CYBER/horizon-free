@@ -265,7 +265,7 @@ pub(super) fn native_pipeline(
     });
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(&stage.label),
+        label: Some(&super::dx12_compiler::module_label(&stage.label)),
         source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
     });
     let options = wgpu::PipelineCompilationOptions {

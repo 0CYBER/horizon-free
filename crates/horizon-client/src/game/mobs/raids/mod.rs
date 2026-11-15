@@ -139,14 +139,18 @@ impl RaidLevel for Lvl<'_, '_> {
             || w.block_name(x, y - 1, z) == "minecraft:snow"
                 && g.res.facts().is_air(g.world.block(x, y, z))
     }
-    fn player(&self) -> Option<RaidPlayer> {
-        // The first player in the level: a server has no player of its own.
-        let p = self.game.level_players().into_iter().next()?;
-        Some(RaidPlayer {
-            position: [p.position.x, p.position.y, p.position.z],
-            block: block_of(p.position),
-            alive: p.alive,
-        })
+    fn players(&self) -> Vec<RaidPlayer> {
+        // The players of the level in place: a server has none of its own.
+        self.game
+            .level_players()
+            .into_iter()
+            .map(|p| RaidPlayer {
+                uuid: p.uuid,
+                position: [p.position.x, p.position.y, p.position.z],
+                block: block_of(p.position),
+                alive: p.alive,
+            })
+            .collect()
     }
 }
 
@@ -1245,18 +1249,25 @@ impl Game<'_> {
         self.particles_around_mob(id, "splash", horizon_client::particles::Burst::VILLAGER);
     }
 
-    /// The raid bar a living player at `at` is in (`Raid.getPlayers`): red,
-    /// notched in tens. The name is the translate component the client draws.
-    pub(super) fn raid_boss_at(&self, at: [f64; 3], alive: bool) -> Option<(i32, Tag, f32)> {
-        if !alive || self.dim != Dim::Overworld {
-            return None;
+    /// The raid bars a player `uuid` is in (`Raid.getPlayers`): red, notched
+    /// in tens. The set is the one `updatePlayers` cached on the last 20-tick
+    /// beat, so a viewer joins or leaves it up to 19 ticks late, alive or not
+    /// (`validPlayer`'s `isAlive` is only read on a beat). The name is the
+    /// translate component the client draws.
+    pub(super) fn raid_bars_at(&self, uuid: u128) -> Vec<(i32, Tag, f32)> {
+        if self.dim != Dim::Overworld {
+            return Vec::new();
         }
-        let block = block_of(Vec3::new(at[0], at[1], at[2]));
-        let (id, raid) = self.raiding.raids.nearby(block)?;
-        if !raid.bar.visible || raid.is_stopped() {
-            return None;
-        }
-        Some((id, raid_name_tag(raid.bar.name), raid.bar.progress))
+        self.raiding
+            .raids
+            .ids()
+            .into_iter()
+            .filter_map(|id| self.raiding.raids.get(id).map(|raid| (id, raid)))
+            .filter(|(_, raid)| {
+                raid.bar.players.contains(&uuid) && raid.bar.visible && !raid.is_stopped()
+            })
+            .map(|(id, raid)| (id, raid_name_tag(raid.bar.name), raid.bar.progress))
+            .collect()
     }
     /// A firework a villager launches to celebrate (`CelebrateVillagersSurvivedRaid`).
     pub(super) fn villager_firework(&mut self, at: [f64; 3], color: usize, flight: u8) {
@@ -1708,6 +1719,10 @@ impl Game<'_> {
 #[cfg(test)]
 #[path = "tests/bed_loss.rs"]
 mod bed_loss_tests;
+
+#[cfg(test)]
+#[path = "tests/bar_players.rs"]
+mod bar_players_tests;
 
 #[cfg(test)]
 mod entity_ticking_tests {

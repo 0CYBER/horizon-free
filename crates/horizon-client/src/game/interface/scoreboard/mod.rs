@@ -251,8 +251,15 @@ impl Game<'_> {
     }
     /// The entity with the given scoreboard name.
     fn target_of_holder(&self, name: &str) -> Option<Target> {
-        if name == self.acting_player_name() {
+        // `PlayerList.getPlayerByName` (any case); a mod's nicknames are not scoreboard names.
+        if self.player.is_some() && name.eq_ignore_ascii_case(self.acting_player_name()) {
             return Some(Target::Player);
+        }
+        if let Some(g) = self
+            .command_players()
+            .find(|g| g.name.eq_ignore_ascii_case(name))
+        {
+            return Some(Target::Guest(g.conn));
         }
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
         self.target_with_uuid(uuid)
@@ -330,10 +337,15 @@ impl Game<'_> {
                         ok = false;
                     }
                 }
-                let team = holder
-                    .as_deref()
-                    .and_then(|h| self.score.board.players_team(h))
-                    .map(|t| t.name.clone());
+                // TamableAnimal.getTeam: a tamed pet with no team of its own
+                // answers with its root owner's.
+                let team = match t {
+                    Target::Mob(id) => self.mob_team(id).map(|t| t.name.clone()),
+                    _ => holder
+                        .as_deref()
+                        .and_then(|h| self.score.board.players_team(h))
+                        .map(|t| t.name.clone()),
+                };
                 for (want, negated) in &s.teams {
                     let matches = match &team {
                         Some(name) => name == want,
@@ -530,15 +542,22 @@ impl Game<'_> {
             |v| v.wrapping_add(1),
         );
     }
-    /// `ServerPlayer.awardKillScore`: total kills and the team kill counts.
+    /// `ServerPlayer.awardKillScore`: total kills, the player kills and the
+    /// team kill counts, for the victim `victim`.
     pub(super) fn score_player_killed(&mut self, victim: Target) {
-        let victim_name = self.holder_name(victim);
+        let name = self.holder_name(victim);
+        self.score_player_killed_named(name, matches!(victim, Target::Player | Target::Guest(_)));
+    }
+    /// [`score_player_killed`](Self::score_player_killed) with the victim's
+    /// scoreboard name at hand: a guest's record is out of `self.lan` during
+    /// its turn (`ServerPlayer.die` runs there).
+    pub(super) fn score_player_killed_named(&mut self, victim_name: Option<String>, player: bool) {
         let display = self.player_display_comp();
         let me = self.acting_player_name().to_owned();
         let board = &mut self.score.board;
         let inc = |v: i32| v.wrapping_add(1);
         board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, &me, Some(&display), inc);
-        if victim == Target::Player {
+        if player {
             board.for_all_objectives_with(sb::CRITERIA_PLAYER_KILLS, &me, Some(&display), inc);
         }
         let color_of =
@@ -1055,6 +1074,20 @@ fn feedback_name(display: Text, scoreboard_name: &str) -> Text {
     display.with_component(component)
 }
 
+/// `TriggerCommand.suggestObjectives`: the trigger objectives `holder` has an
+/// unlocked score in.
+pub(super) fn trigger_objectives_for(board: &Scoreboard, holder: &str) -> Vec<String> {
+    let mut names: Vec<String> = board
+        .objectives
+        .iter()
+        .filter(|o| o.criteria == "trigger")
+        .filter(|o| board.score(holder, &o.name).is_some_and(|s| !s.locked))
+        .map(|o| o.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
 /// The commands' view of the game.
 struct GameEnv<'a, 'b> {
     g: &'a mut Game<'b>,
@@ -1315,3 +1348,9 @@ mod criterion_tests;
 mod empty_tag_tests;
 #[cfg(test)]
 mod guest_advancement_tests;
+
+#[cfg(test)]
+mod source_holder_tests;
+
+#[cfg(test)]
+mod selector_option_tests;

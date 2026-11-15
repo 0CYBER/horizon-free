@@ -90,12 +90,13 @@ impl Game<'_> {
                 Ok(rate as i32)
             }
             "tick.query" => {
+                // TickCommand.tickQuery: every line passes `broadcast` false.
                 let rate = self.clock.rate();
                 let busy = millis(self.clock.average_nanos());
                 let rate_text = format_fixed(f64::from(rate), 1);
                 if self.clock.sprinting() {
-                    self.feedback(t("commands.tick.status.sprinting", &[]));
-                    self.feedback(t(
+                    self.feedback_unbroadcast(t("commands.tick.status.sprinting", &[]));
+                    self.feedback_unbroadcast(t(
                         "commands.tick.query.rate.sprinting",
                         &[lit(rate_text), lit(busy)],
                     ));
@@ -108,8 +109,8 @@ impl Game<'_> {
                     } else {
                         "commands.tick.status.running"
                     };
-                    self.feedback(t(status, &[]));
-                    self.feedback(t(
+                    self.feedback_unbroadcast(t(status, &[]));
+                    self.feedback_unbroadcast(t(
                         "commands.tick.query.rate.running",
                         &[lit(rate_text), lit(busy), lit(millis(target))],
                     ));
@@ -124,7 +125,7 @@ impl Game<'_> {
                         .copied()
                         .unwrap_or(0)
                 };
-                self.feedback(t(
+                self.feedback_unbroadcast(t(
                     "commands.tick.query.percentiles",
                     &[
                         lit(millis(at(0.5))),
@@ -279,20 +280,33 @@ impl Game<'_> {
         }
         .unwrap_or(min);
         if id == "random.roll" {
-            let who = self.target_name(
-                self.command_source
-                    .and_then(|s| s.entity)
-                    .unwrap_or(Target::Player),
-            );
-            self.system_message(Text::translate(
+            let line = Text::translate(
                 "commands.random.roll",
                 &[
-                    who,
+                    self.source_display_name(),
                     Text::literal(value.to_string()),
                     Text::literal(min.to_string()),
                     Text::literal(max.to_string()),
                 ],
-            ));
+            );
+            // PlayerList.broadcastSystemMessage: every player hears the roll,
+            // the source's own copy with the captured output it has (`/say`'s).
+            let captured = self.chat_capture.as_ref().and(self.lan_acting);
+            if let Some(host) = &self.lan {
+                let content = horizon_client::lan::data::component_nbt(&line.component());
+                match captured {
+                    Some(conn) => host.hub.system_message_except(content, conn),
+                    None => host.hub.system_message(content),
+                }
+            }
+            // MinecraftServer.sendSystemMessage: the server's log, unless the
+            // console's captured reply below is what logs it (`console_reply`).
+            if self.options.dedicated.is_some()
+                && (self.lan_acting.is_some() || self.chat_capture.is_none())
+            {
+                super::super::dedicated::log("INFO", &format!("System chat: {}", line.plain()));
+            }
+            self.system_message(line);
         } else {
             self.feedback(Text::translate(
                 "commands.random.sample.success",
@@ -350,3 +364,10 @@ impl Game<'_> {
         Ok(1)
     }
 }
+
+#[cfg(test)]
+#[path = "tick_status_broadcast_tests.rs"]
+mod tick_status_broadcast_tests;
+
+#[cfg(test)]
+mod random_command_tests;

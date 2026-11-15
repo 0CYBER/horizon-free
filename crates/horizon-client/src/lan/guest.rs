@@ -207,6 +207,12 @@ pub struct Guest {
     /// The chunk radius this client is sent.
     pub view_distance: i32,
     pub position: [f64; 3],
+    /// Where the player's chunk tickets stay while they are not at `position`.
+    /// `None`: they are at `position`'s chunk. `Some(chunk)`: a teleport sent
+    /// the player away and they are still at the chunk it left. The hold ends
+    /// (back to `None`) at an accepted move, the teleport's ack, a passenger or
+    /// vehicle move, a camera change and a placement.
+    pub held_ticket_chunk: Option<(i32, i32)>,
     pub previous_position: [f64; 3],
     pub yaw: f32,
     pub pitch: f32,
@@ -705,6 +711,7 @@ impl Guest {
             brand: j.brand,
             recipe_sync: Default::default(),
             position,
+            held_ticket_chunk: None,
             previous_position: position,
             yaw: 0.0,
             pitch: 0.0,
@@ -985,6 +992,33 @@ impl Guest {
         for p in packets {
             self.send(p);
         }
+    }
+    /// A new player at `at` (`ChunkMap.addEntity`; the tickets start there).
+    pub fn place(&mut self, at: [f64; 3]) {
+        (
+            self.position,
+            self.previous_position,
+            self.held_ticket_chunk,
+        ) = (at, at, None);
+    }
+    /// `ServerChunkCache.move` after an accepted move: the tickets follow.
+    pub fn accept_move(&mut self, to: [f64; 3]) {
+        self.previous_position = self.position;
+        (self.position, self.held_ticket_chunk) = (to, None);
+    }
+    /// The chunk the player's `DistanceManager` tickets are at. Teleporting
+    /// does not move them: `ServerChunkCache.move` does, and its callers are an
+    /// accepted move or the ack of a teleport (`handlePlayerPositionChange`),
+    /// a vehicle or passenger move (`handleMoveVehicle`) and a camera
+    /// (`ServerPlayer.setCamera` and its tick), whose chunk is `position`'s.
+    pub fn ticket_chunk(&self) -> (i32, i32) {
+        self.held_ticket_chunk
+            .filter(|_| !self.watching)
+            .unwrap_or_else(|| self.chunk())
+    }
+    /// A camera change or a passenger's move: the tickets follow `position`.
+    pub fn release_tickets(&mut self) {
+        self.held_ticket_chunk = None;
     }
     pub fn chunk(&self) -> (i32, i32) {
         (
@@ -2571,6 +2605,23 @@ mod tests {
             position,
             10,
         )
+    }
+
+    #[test]
+    fn a_player_handle_keeps_its_identity_when_respawn_resets_the_body() {
+        use mod_api::{__private::game::player_ref, EntityRef, WorldEpoch};
+        let mut guest = guest_at([0.5, 64.0, 0.5]);
+        guest.death_time = 20;
+        guest.death_canceled = true;
+        let epoch = WorldEpoch::new(7);
+        let before = player_ref(EntityRef::new(epoch, guest.entity_id as u32), guest.uuid);
+
+        // This is the respawn reset, with no motion/resources needed for identity.
+        let _ = guest.new_body(false);
+        let after = player_ref(EntityRef::new(epoch, guest.entity_id as u32), guest.uuid);
+        assert_eq!(before, after);
+        assert_eq!(guest.death_time, 0);
+        assert!(!guest.death_canceled);
     }
 
     #[test]

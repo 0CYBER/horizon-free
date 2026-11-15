@@ -75,7 +75,7 @@ pub(super) fn build_renderer(
         previous,
         api,
         translucent_batching,
-        shader_pack.draws_flat,
+        (shader_pack.draws_flat, shader_pack.starts_wide),
         settings,
         shader_pack.frame(),
         display,
@@ -111,7 +111,11 @@ pub(super) fn build_renderer(
         .hud
         .set_cit_glints(&renderer.device, &renderer.queue, cit_glints);
     // Last, so a renderer that fails before this marks none of the pack's pipelines invalid.
-    renderer.build_mod_pipelines(&pack.render.mod_pipelines)?;
+    // Textured pipelines' sprites are looked up in the atlas the renderer was built with.
+    renderer.build_mod_pipelines(&pack.render.mod_pipelines, &|name| {
+        let r = atlas.sprites.get(name)?;
+        Some([r.u0, r.v0, r.u1, r.v1])
+    })?;
     Ok(renderer)
 }
 
@@ -164,7 +168,7 @@ pub(super) fn loading_renderer(
         api,
         // It draws no terrain.
         false,
-        false,
+        (false, false),
         // An 8-bit frame, which HDR output takes as well: HDR off until the settings apply.
         &horizon_client::graphics::Graphics::default(),
         Default::default(),

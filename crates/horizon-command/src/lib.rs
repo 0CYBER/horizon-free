@@ -46,6 +46,9 @@ pub struct CommandError {
     /// The translation key of the exception type, when known (the
     /// exception "type" vanilla code compares against).
     pub key: String,
+    /// Not a CommandSyntaxException: `Commands.performCommand`'s catch reports
+    /// it as `command.failed` and no result callback runs.
+    pub unexpected: bool,
 }
 impl CommandError {
     pub fn new(message: Text) -> Self {
@@ -55,7 +58,15 @@ impl CommandError {
             cursor: 0,
             literal_incorrect: false,
             key: String::new(),
+            unexpected: false,
         }
+    }
+    /// An exception that is not a CommandSyntaxException, as
+    /// `Commands.performCommand` catches it.
+    pub fn unexpected() -> Self {
+        let mut e = Self::tr("command.failed", &[]);
+        e.unexpected = true;
+        e
     }
     pub fn tr(key: &str, args: &[&dyn std::fmt::Display]) -> Self {
         let mut e = Self::new(Text::tr(key, args));
@@ -69,6 +80,7 @@ impl CommandError {
             cursor: reader.cursor,
             literal_incorrect: false,
             key: String::new(),
+            unexpected: false,
         }
     }
     pub fn tr_at(key: &str, args: &[&dyn std::fmt::Display], reader: &Reader) -> Self {
@@ -522,15 +534,7 @@ impl<'a> SuggestionsBuilder<'a> {
         self.remaining().to_lowercase()
     }
     pub fn suggest(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: None,
-                int_value: None,
-            });
-        }
+        self.suggest_at(self.start, text);
     }
     /// SuggestionsBuilder.suggest(int).
     pub fn suggest_int(&mut self, value: i32) {
@@ -542,15 +546,46 @@ impl<'a> SuggestionsBuilder<'a> {
         });
     }
     pub fn suggest_tooltip(&mut self, text: impl Into<String>, tooltip: impl Into<String>) {
+        self.suggest_at_tooltip(self.start, text, tooltip);
+    }
+    /// `SuggestionsBuilder.suggest` for a replacement that starts `start` bytes into the input:
+    /// the text from there to the cursor is replaced, so a completion can apply to one token of a
+    /// longer text argument (a mod's greedy text being split into words). A `start` past the
+    /// input or inside a character suggests nothing, rather than panicking where the range is
+    /// used.
+    pub fn suggest_at(&mut self, start: usize, text: impl Into<String>) {
         let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: Some(tooltip.into()),
-                int_value: None,
-            });
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
         }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: None,
+            int_value: None,
+        });
+    }
+    /// [`Self::suggest_at`] with an explanation.
+    pub fn suggest_at_tooltip(
+        &mut self,
+        start: usize,
+        text: impl Into<String>,
+        tooltip: impl Into<String>,
+    ) {
+        let text = text.into();
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
+        }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: Some(tooltip.into()),
+            int_value: None,
+        });
+    }
+    /// Whether `start` can begin a replacement range of the input.
+    fn replaces_something(&self, start: usize) -> bool {
+        start <= self.input.len() && self.input.is_char_boundary(start)
     }
     pub fn offset(&self, start: usize) -> SuggestionsBuilder<'a> {
         SuggestionsBuilder::new(self.input, start)
@@ -602,6 +637,9 @@ fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
         _ => compare_ignore_case(&a.text, &b.text),
     }
 }
+/// The longest completion text a suggestion packet carries: `ByteBufCodecs.STRING_UTF8` counts
+/// 32767 UTF-16 code units, which is what vanilla's reader and its client both enforce.
+const MAX_SUGGESTION_TEXT: usize = 32767;
 /// Suggestions.create: merged, expanded to a common range and sorted case-insensitively.
 pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Suggestion>) {
     if list.is_empty() {
@@ -620,6 +658,13 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
             s.text,
             &input[s.range.1..end]
         );
+        // Padding grows the text past what the suggestion itself holds: a long prefix, and a
+        // suggestion starting later, expand to the whole merged range. Each one was within the
+        // packet's limit alone, so the expanded text is measured again and the ones that no
+        // longer fit are left out, keeping the others.
+        if text.encode_utf16().count() > MAX_SUGGESTION_TEXT {
+            continue;
+        }
         let expanded = Suggestion {
             range: (start, end),
             text,
@@ -633,6 +678,10 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
         if seen.insert((expanded.text.clone(), expanded.tooltip.clone())) {
             out.push(expanded);
         }
+    }
+    if out.is_empty() {
+        // Every completion was too long to send: nothing to show, and no range to show it in.
+        return ((0, 0), out);
     }
     let ints = out.iter().filter(|s| s.int_value.is_some()).count();
     if ints == 0 || ints == out.len() {
@@ -1156,6 +1205,16 @@ impl Dispatcher {
             all.extend(builder.out);
         }
         let (range, list) = merge_suggestions(truncated, all);
+        // The reply's range is the builder's, covering the token being typed, even when nothing
+        // is suggested locally: a node that asks the server (`ask_server`, and the mods' own
+        // `tab_complete` answers for the free `id`) brings its completions with the server's
+        // reply, which the chat applies to that token. The empty list's `(0, 0)` would paste
+        // what the server adds at the start of the line.
+        let range = if list.is_empty() {
+            (start, truncated.len())
+        } else {
+            range
+        };
         (range, list, ask)
     }
     fn smart_usage_of(&self, node: usize, optional: bool, deep: bool, level: u8) -> Option<String> {

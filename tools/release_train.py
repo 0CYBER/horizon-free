@@ -353,9 +353,20 @@ def decision(kind, prs, now, paused=False, force=False, new_line=None, blockers=
     return True, f"{len(counted)} pull requests changed what players run"
 
 
+# A title's `kind(area): ` prefix (CONTRIBUTING.md "Pull requests") labels the pull request; release names and notes
+# read the words after it.
+KIND_PREFIX = re.compile(r"^\s*(?:parity|bug|fix|perf|feature|feat|extra|tooling|docs)(?:\([^)]*\))?\s*:\s*", re.I)
+
+
+def plain(title):
+    """A title without its `kind(area): ` prefix, capitalised: "parity(mobs): ghasts fly" -> "Ghasts fly"."""
+    rest = KIND_PREFIX.sub("", title.strip(), count=1)
+    return rest if rest == title.strip() else rest[:1].upper() + rest[1:]
+
+
 def clause(title):
     """The start of a pull request title, for a release's name: "Nether portals: vanilla timing" -> "Nether portals"."""
-    title = re.sub(r"^(?:fix|fixes|fixed)\s+(?:the\s+)?", "", title.strip(), flags=re.I)
+    title = re.sub(r"^(?:fix|fixes|fixed)\s+(?:the\s+)?", "", plain(title), flags=re.I)
     return re.split(r"[:;(]| — | - ", title, maxsplit=1)[0].strip().rstrip(".")
 
 
@@ -385,7 +396,7 @@ def summary(new, fixed, limit=72):
 
 def bullet(pr):
     """A pull request as a line of notes: its title (written for people), its number and the issues it closes."""
-    title = re.sub(r"\s*\((?:fixes|closes) #\d+\)|,? stacked on #\d+", "", pr["title"]).strip().rstrip(".")
+    title = re.sub(r"\s*\((?:fixes|closes) #\d+\)|,? stacked on #\d+", "", plain(pr["title"])).strip().rstrip(".")
     issues = "".join(f", fixes #{issue}" for issue in pr["issues"])
     return f"- {title} (#{pr['number']}{issues})"
 

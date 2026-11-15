@@ -2,7 +2,7 @@
 //! NeoForge 26.3's `ItemAccess.forPlayerSlot`. A slot is the storage it shows, so a write through
 //! [`ItemPlace::MenuSlot`] is a write to that storage, journaled once, through its own handler,
 //! under the slot's own rules.
-use crate::{EntityRef, ItemPlace, LevelRef, MenuRef};
+use crate::{EntityRef, ItemPlace, LevelRef, MenuRef, MenuSlotPlace};
 
 /// What a menu slot shows: where [`MenuRef::slot_backing`] says its stack lives.
 #[non_exhaustive]
@@ -36,6 +36,10 @@ pub enum MenuSlotBacking {
     CraftResult,
     /// Slot `.0` of a mod's chest menu (`open_menu`).
     Native(usize),
+    /// A container slot of a mod menu type opened with no block, backed by storage that is not a
+    /// block entity ([`PlayerRef::back_mod_menu_slots`](crate::PlayerRef::back_mod_menu_slots)):
+    /// a held item's contents or an entity's item handler. Only such a slot has this backing.
+    Place(MenuSlotPlace),
 }
 
 impl MenuRef {
@@ -44,4 +48,25 @@ impl MenuRef {
     pub fn cursor(self) -> ItemPlace {
         ItemPlace::PlayerCursor { menu: self }
     }
+}
+
+/// A slot's role in the client's layout, not its server backing or acceptance rules.
+/// Player indices are hotbar 0..=8, main 9..=35, armour 36..=39 (feet to head),
+/// and off hand 40. Equipment belongs to the open container, never the player.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+pub enum MenuSlotKind {
+    /// The player inventory index, independent of menu order.
+    Player(u32),
+    /// Storage declared by the layout, including linked storage.
+    Storage,
+    /// A crafting input grid.
+    CraftingGrid,
+    /// An output slot.
+    Result,
+    /// Equipment of the open container, such as a horse saddle.
+    Equipment,
+    /// A role the client layout cannot classify.
+    #[default]
+    Other,
 }

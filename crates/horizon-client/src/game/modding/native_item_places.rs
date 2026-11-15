@@ -156,7 +156,7 @@ impl Game<'_> {
     /// isn't here or is dead, an item entity not in the level in place, any other place
     /// (`ItemPlace::stack` reads those), and on a client.
     pub(super) fn game_stack(&mut self, place: &ItemPlace) -> Option<ItemStack> {
-        if let ItemPlace::Scratch(id) = place {
+        if let ItemPlace::Scratch(id) | ItemPlace::ScratchSlots(id) = place {
             return self.scratch_held(*id);
         }
         if self.block_entity_tick_items.is_some() {
@@ -190,7 +190,9 @@ impl Game<'_> {
         if !self.places_simulated() || stack.count == 0 {
             return 0;
         }
-        if let ItemPlace::Scratch(id) = place {
+        // A write to a backed mod menu's storage (#3385) is noticed; none is backed in vanilla.
+        self.notice_menu_place_write(place);
+        if let ItemPlace::Scratch(id) | ItemPlace::ScratchSlots(id) = place {
             return self.scratch_insert(*id, &stack);
         }
         let max = self.containers().max_stack(&stack);
@@ -325,7 +327,8 @@ impl Game<'_> {
         if !self.places_simulated() {
             return 0;
         }
-        if let ItemPlace::Scratch(id) = place {
+        self.notice_menu_place_write(place);
+        if let ItemPlace::Scratch(id) | ItemPlace::ScratchSlots(id) = place {
             return self.scratch_extract(*id, &stack);
         }
         // How many of `stack` `held` gives.

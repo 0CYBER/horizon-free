@@ -15,6 +15,7 @@ pub mod bed_geometry;
 pub mod block_contact;
 pub mod block_sounds;
 pub mod item_damage;
+pub mod packet_source;
 pub mod parallel;
 pub mod powder_snow;
 #[cfg(test)]
@@ -212,6 +213,7 @@ pub use horizon_client_input::gamepad;
 pub use horizon_client_input::gameplay_guide;
 pub use horizon_client_input::held;
 pub use horizon_client_input::input;
+pub use horizon_client_input::input_queue;
 pub use horizon_client_input::input_source;
 pub use horizon_client_input::interaction_input;
 pub use horizon_client_input::key_names;

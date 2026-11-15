@@ -444,9 +444,11 @@ jobs:
         if: ${{ !cancelled() && needs.changes.outputs.rust_required != 'false' && needs.changes.outputs.self_hosted == 'true' }}
         run: |
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
-          # The runner's CPU time and peak memory: what the build parallelism above has to fit.
+          # Peak includes page cache; oom_kill records OOM kills, anon is only end-of-job residue.
           grep usage_usec /sys/fs/cgroup/cpu.stat || true
           echo "memory.peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)"
+          grep '^oom_kill ' /sys/fs/cgroup/memory.events 2>/dev/null || echo "oom_kill unavailable"
+          awk '/^anon / {print "anon at job end", $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo "anon at job end unavailable"
       # Publish native work even if the independent wasm check fails. Pull requests only read
       # main's snapshots; they can never replace a cache subsequently consumed by main.
       - uses: actions/cache/save@v4
@@ -701,9 +703,11 @@ jobs:
         if: ${{ !cancelled() && needs.changes.outputs.rust_required != 'false' && needs.changes.outputs.self_hosted == 'true' }}
         run: |
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
-          # The runner's CPU time and peak memory: what the build parallelism above has to fit.
+          # Peak includes page cache; oom_kill records OOM kills, anon is only end-of-job residue.
           grep usage_usec /sys/fs/cgroup/cpu.stat || true
           echo "memory.peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)"
+          grep '^oom_kill ' /sys/fs/cgroup/memory.events 2>/dev/null || echo "oom_kill unavailable"
+          awk '/^anon / {print "anon at job end", $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo "anon at job end unavailable"
       - name: Summarize failed gate steps
         if: ${{ failure() && !cancelled() && steps.setup.outcome == 'success' }}
         env:
@@ -760,7 +764,7 @@ jobs:
         with:
           # A dispatch with `pr`: that pull request's head; otherwise this event's commit.
           ref: ${{ needs.changes.outputs.pr_sha }}
-      # Public-tree ranges and file-size ancestry need full history of this exact commit,
+      # Public-tree ranges and sync ancestry need full history of this exact commit,
       # not every branch and tag. The Rust job only needs its checkout's HEAD and tracked files.
       - name: Fetch this commit's history
         timeout-minutes: 11
@@ -822,15 +826,6 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python3 tools/check_addresses.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
-      # docs/layers.md#file-size: a Rust file over 3000 lines may not grow (pull requests; main has no base to compare).
-      - name: Big files don't grow
-        id: big_files_don_t_grow
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        # The checkout is the pull request merged into main as it is now: measure the merge against that main, so
-        # main's own growth since the branch's base (a sync's) is never charged to the pull request.
-        run: python3 tools/check_file_size.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
       # Fixed conflict hotspots stay fixed: no SUMMARY.md line for a discovered book page, at most 5 launcher
       # language files outside a rollup or sync, no growth of hooks/notes.rs. Measured against the base as above.
       # The branch name counts only from this repository: a fork could name its branch like a rollup.

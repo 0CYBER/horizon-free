@@ -2,6 +2,8 @@
 //! chunk-generation spawning (`NaturalSpawner`), mob events (attacks,
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
+#[path = "../../creatures/biome_facts.rs"]
+pub(super) mod biome_facts;
 #[cfg(test)]
 mod borrowed_panic_tests;
 mod borrowed_tick;
@@ -10,6 +12,8 @@ mod combat_adaptations;
 mod conversion_identity;
 mod death_tail;
 mod hoglin_target;
+#[path = "../../creatures/mob_conversion.rs"]
+mod mob_conversion;
 #[cfg(test)]
 mod mob_dispatch_panic_tests;
 mod player_loot_entity;
@@ -21,6 +25,12 @@ mod residency;
 #[cfg(test)]
 mod retained_limits_tests;
 mod section_steps;
+#[cfg(test)]
+#[path = "../../creatures/spawn_egg_mob_tests.rs"]
+mod spawn_egg_mob_tests;
+#[cfg(test)]
+#[path = "../../creatures/spectator_view_tests.rs"]
+mod spectator_view_tests;
 mod world_view;
 use super::api_values::{TryIntoApi, TryIntoEngine};
 use super::level_sounds::LevelSound;
@@ -45,7 +55,6 @@ use horizon_client::{
         Damage, DamageKind, Mob, MobEvent, MobWorld, PlayerView, Seen, SpawnSetup, Species, Who,
         ai::{eating_sound, eating_sound_is_bound, feed_animal, takes_food},
         entity_sounds::full_id,
-        farm::Climate,
         finalize::Group,
         spawning::{self, BiomeFacts},
     },
@@ -511,42 +520,14 @@ impl Game<'_> {
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
     pub(super) fn biome_facts(&self, x: i32, y: i32, z: i32) -> BiomeFacts {
-        let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
-            return BiomeFacts::default();
-        };
-        let b = world_biomes!(self).get(chunk.biome(x, y, z));
-        let tags = self.res.mob_data();
-        let has = |t: &str| tags.biome_has(t, &b.name);
-        let climate = if has("minecraft:spawns_warm_variant_farm_animals") {
-            Climate::Warm
-        } else if has("minecraft:spawns_cold_variant_farm_animals") {
-            Climate::Cold
-        } else {
-            Climate::Temperate
-        };
-        BiomeFacts {
-            coral_nautilus: has("minecraft:spawns_coral_variant_zombie_nautilus"),
-            climate,
-            temperature: b.temperature,
-            snowy: has("minecraft:spawns_snow_foxes")
-                || b.name.contains("snow")
-                || b.name.contains("frozen"),
-            snow_fox: has("minecraft:spawns_snow_foxes"),
-            swamp: b.name.contains("swamp"),
-            ocean: has("minecraft:is_ocean"),
-            mushroom: b.name == "minecraft:mushroom_fields",
-            desert: b.name == "minecraft:desert",
-            jungle: has("minecraft:is_jungle"),
-            wolf: horizon_client::mobs::tame::wolf_variant_for(&b.name, &has),
-            full_moon: (self.world.day_time / 24000).rem_euclid(8) == 0,
-            frog: if has("minecraft:spawns_warm_variant_frogs") {
-                1
-            } else if has("minecraft:spawns_cold_variant_frogs") {
-                2
-            } else {
-                0
-            },
-        }
+        biome_facts::biome_facts_in(
+            &self.world,
+            world_biomes!(self),
+            self.res.mob_data(),
+            x,
+            y,
+            z,
+        )
     }
     /// Create a mob of `kind` at a position, finalized like a natural spawn.
     pub(super) fn spawn_mob(
@@ -557,6 +538,19 @@ impl Game<'_> {
         site: SpawnSite,
     ) -> Option<u32> {
         let mob = self.create_mob_reason(kind, at, persistent, site, None)?;
+        self.insert_spawned_mob(mob)
+    }
+    /// [`spawn_mob`](Self::spawn_mob) for a creation that snaps the mob to a
+    /// yaw (`snapTo(pos, yaw, 0)`): the facing takes no draw from the level.
+    pub(super) fn spawn_mob_facing(
+        &mut self,
+        kind: &str,
+        at: [f64; 3],
+        persistent: bool,
+        site: SpawnSite,
+        yaw: f32,
+    ) -> Option<u32> {
+        let mob = self.create_mob_reason(kind, at, persistent, site, Some(yaw))?;
         self.insert_spawned_mob(mob)
     }
     /// Create a mob of `kind` at a position without `finalizeSpawn`'s rolls,
@@ -845,12 +839,15 @@ impl Game<'_> {
     /// its place with what `conversion::single` carries over, and the old
     /// mob's riders move onto it. A zombie that comes out of it rolls
     /// `Zombie.handleAttributes(special, CONVERSION)` (the
-    /// `postConversionStep` of its `ConversionTracker`).
+    /// `postConversionStep` of its `ConversionTracker`). `pre_checked` skips
+    /// `LivingConversionEvent.Pre`, which the lightning asks before it picks
+    /// its outcome.
     pub(super) fn convert_to(
         &mut self,
         from: &Mob,
         kind: &str,
         params: horizon_client::mobs::conversion::Params,
+        pre_checked: bool,
         after: impl FnOnce(&mut Self, &mut Mob),
     ) -> Option<u32> {
         // Tick conversions can have been removed from the tick list before
@@ -868,7 +865,7 @@ impl Game<'_> {
         let from_kind = (mod_api::__private::listened(mod_api::HookId::LivingConversionPre)
             || mod_api::__private::listened(mod_api::HookId::LivingConversionPost))
         .then(|| super::native_hooks::mob_kind(from));
-        if let Some(from_kind) = &from_kind {
+        if !pre_checked && let Some(from_kind) = &from_kind {
             self.native_living_conversion_pre(from.id, from_kind, kind, &mut cancel);
         }
         if cancel {
@@ -1469,7 +1466,7 @@ impl Game<'_> {
                 .map(|e| e.id.trim_start_matches("minecraft:"))
                 .collect();
             let bounds = m.bounds();
-            self.effects_on_death(&names, bounds, false, Some(m.id), Some(&mut m.random));
+            self.effects_on_death(&names, bounds, m.silent, Some(m.id), Some(&mut m.random));
         }
         self.deliver_pending_mob_actions(level_id)?;
         self.finish_creature_entities(&mut laps, &primable)
@@ -2358,10 +2355,9 @@ impl Game<'_> {
                     let ctx = self.who_context(Some(Who::Mob(source)), None);
                     self.post_game_event(event, at, ctx);
                 }
-                // A mob's own `gameEvent(..)` calls: Armadillo.rollUp/rollOut's
-                // ENTITY_ACTION, Creeper.tick's PRIME_FUSE, Mob.ate's EAT, a fox's
-                // DRINK, the shulker's lid, an evoker's vexes (ENTITY_PLACE),
-                // Enderman.teleport's TELEPORT, onEquipItem's EQUIP/UNEQUIP.
+                // A mob's own `gameEvent(..)` calls: Armadillo.rollUp/rollOut's ENTITY_ACTION,
+                // PRIME_FUSE, EAT, a fox's DRINK, the shulker's lid, an evoker's vexes
+                // (ENTITY_PLACE), TELEPORT, EQUIP/UNEQUIP, updateFallFlying's ELYTRA_GLIDE.
                 MobEvent::GameEvent {
                     event, at, source, ..
                 } if matches!(
@@ -2376,6 +2372,7 @@ impl Game<'_> {
                         | "minecraft:teleport"
                         | "minecraft:equip"
                         | "minecraft:unequip"
+                        | "minecraft:elytra_glide"
                 ) =>
                 {
                     let ctx = self.who_context(Some(Who::Mob(source)), None);
@@ -2411,21 +2408,15 @@ impl Game<'_> {
                     self.combat.hit_landed =
                         self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
-                // doHurtTarget: the effect only when hurtServer took damage.
                 // Bee.doHurtTarget: a sting that hurt leaves the stinger in the
-                // body, then the poison.
-                MobEvent::StingPlayer {
+                // body, then the poison; the bee's own stinger, calm-down and
+                // sound follow only then too.
+                MobEvent::Sting {
+                    target,
                     amount,
-                    from,
                     poison_ticks,
-                } => {
-                    if self.mob_hits_player(amount, from, "minecraft:mob_attack") {
-                        self.combat.stuck.add_stinger();
-                        if poison_ticks > 0 {
-                            self.give_player_effect("minecraft:poison", poison_ticks, 0);
-                        }
-                    }
-                }
+                    source,
+                } => self.sting(target, amount, poison_ticks, source),
                 MobEvent::AttackPlayerWithEffect {
                     amount,
                     from,
@@ -2942,9 +2933,12 @@ impl Game<'_> {
                         self.apply_setup(id, &setup);
                     }
                 }
-                MobEvent::Convert { from, kind, params } => {
-                    self.convert_to(&from, kind, params, |_, _| {});
-                }
+                MobEvent::Convert {
+                    from,
+                    kind,
+                    params,
+                    after,
+                } => self.convert_event(&from, kind, params, after),
                 MobEvent::ThrowItem {
                     mob,
                     stack,
@@ -3810,6 +3804,8 @@ impl Game<'_> {
             // Other species either draw their own variants or do not need a coin.
             false
         };
+        // The baby's variant; a rabbit draws its own (Rabbit.getBreedOffspring).
+        let rabbit_variant = self.bred_rabbit_variant(parent, &p, q.as_ref());
         // Axolotl.getBreedOffspring: useRareVariant (one in 1200) makes it blue,
         // else either parent's variant. The draws come from the mother's random.
         let axolotl = if p.species() == Species::Axolotl {
@@ -3986,6 +3982,10 @@ impl Game<'_> {
                 && !coin
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            }
+            // The rabbit's own draw above.
+            if let Some(variant) = rabbit_variant {
+                child.extra.variant = variant;
             }
             if let Some(variant) = mooshroom {
                 child.extra.variant = variant;
@@ -4164,6 +4164,7 @@ impl Game<'_> {
         let mut default_push: Option<([f64; 2], HurtSource<'_>)> = None;
         let events_before = self.player.as_ref().map_or(0, |p| p.events.len());
         let damage_outcome = if let Some(id) = self.health_resources.damage.id(damage_type) {
+            let weapon = self.player_armor_weapon(attacker, projectile);
             self.hurt_player_equipment(
                 id,
                 amount,
@@ -4172,6 +4173,7 @@ impl Game<'_> {
                 causing,
                 by_creative_player,
                 &attack,
+                weapon,
             )
         } else {
             Ok(Default::default())
@@ -4316,7 +4318,8 @@ impl Game<'_> {
         let attack = self.current_attack();
         if self.player.is_some()
             && let Some(id) = self.health_resources.damage.id(damage_type)
-            && let Ok(o) = self.hurt_player_equipment(id, amount, None, false, 0, false, &attack)
+            && let Ok(o) =
+                self.hurt_player_equipment(id, amount, None, false, 0, false, &attack, None)
         {
             canceled = o.canceled;
         }
@@ -4624,7 +4627,7 @@ impl Game<'_> {
                         return;
                     }
                     // AbstractWindCharge.tick: out of the world's top it bursts.
-                    if wind && keep && p.position.y > 350.0 {
+                    if wind && keep && super::wind::above_the_top(self.world.shape, p.position.y) {
                         hits.push((
                             p.clone(),
                             Hit::Block {
@@ -4859,7 +4862,13 @@ impl Game<'_> {
         } else if let Some(i) = self.carts.iter().position(|c| c.id == id) {
             let kind = self.carts[i].kind.id();
             if !self.vehicle_refuses_projectile(p, id, kind, damage_type) {
-                self.hurt_cart(i, amount, creative, false);
+                self.hurt_cart(
+                    i,
+                    amount,
+                    creative,
+                    false,
+                    super::minecarts::CartHit::projectile(p.owner, p.guest),
+                );
             }
         }
     }
@@ -5417,7 +5426,7 @@ impl Game<'_> {
             );
             let refused = self.vehicle_refuses_projectile(p, id, kind, damage_type);
             if !refused {
-                self.arrow_hits_cart(i, amount, p.velocity, burning, creative);
+                self.arrow_hits_cart(i, amount, p.velocity, burning, creative, p.owner, p.guest);
             }
             self.finish_arrow_hit(
                 arrow,
@@ -6360,6 +6369,8 @@ impl Game<'_> {
         let Some(index) = self.mob_interaction_target(target) else {
             return Ok(false);
         };
+        // CamelHusk.interact: any click on it keeps it (`setPersistenceRequired`).
+        horizon_client::mobs::camel::keep_on_interact(&mut self.mobs[index]);
         // PlayerInteractTrigger: the name tag as it was before it named the mob.
         let used = self.held().cloned();
         if self.name_mob(index) {
@@ -7469,6 +7480,21 @@ impl Game<'_> {
         );
         let (species, variant, color) =
             (parent.species(), parent.extra.variant, parent.extra.color);
+        // `MushroomCow.getBreedOffspring(level, this)`: the egg's mate is the
+        // parent itself, so the colour always rolls `nextInt(1024) == 0` to
+        // flip, and every other roll spends the coin flip that can only pick
+        // that same colour again. Both come from the parent's own random.
+        let variant = if species == Species::Mooshroom {
+            let random = &mut self.mobs[index].random;
+            if random.next_int_bound(1024).unwrap_or(1) == 0 {
+                if variant == 1 { 0 } else { 1 }
+            } else {
+                let _ = random.next_boolean();
+                variant
+            }
+        } else {
+            variant
+        };
         let target = self.mob_entity(&self.mobs[index]);
         // SpawnEggItem.spawnOffspringFromSpawnEgg: `type.create(level, SPAWN_ITEM_USE)`
         // creates the baby without finalizeSpawn, and `snapTo(pos, 0, 0)` faces
@@ -7494,6 +7520,10 @@ impl Game<'_> {
         }
         self.trigger_item_entity("minecraft:player_interacted_with_entity", &stack, &target);
         self.consume_held();
+        // `Mob.interact`: the egg's `SUCCESS_SERVER` consumes the click, so the
+        // interaction posts `ENTITY_INTERACT` with the player, at the mob.
+        let ctx = self.who_context(Some(Who::Player), None);
+        self.post_game_event("minecraft:entity_interact", at, ctx);
         true
     }
     /// `SpawnEggItem.use`: the SOURCE_ONLY ray must hit a liquid block.
@@ -7526,6 +7556,11 @@ impl Game<'_> {
             return Ok(false);
         };
         let kind = stack.item.trim_end_matches("_spawn_egg").to_owned();
+        // ItemStack.useOn in adventure mode: an egg used on a block without a
+        // matching `can_place_on` passes to `use`, whose fluid ray finds none.
+        if !fluid && !self.may_use_on(hit.pos) {
+            return Ok(false);
+        }
         if !self.spawn_egg_allowed(&stack.item) {
             self.use_failed = true;
             return Ok(true);
@@ -7806,6 +7841,8 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let scale = self.view_scale();
+        // Who watches (`Entity.isInvisibleTo`): the local player's team.
+        let viewer = self.player_team();
         self.rendered_mobs.set(0);
         let (skinning, listened) = (self.skinning(), self.mob_render_listened());
         // What custom entity model animations read of the frame.
@@ -7860,12 +7897,23 @@ impl Game<'_> {
                 }
             }
             let outline = self.mob_outline(mob);
-            // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws (and
-            // the outline of a glowing mob, LivingEntityRenderer.getRenderType).
-            // A player keeps its armour, elytra and held items
-            // (`LivingEntityRenderer.submit` skips only the body).
-            let layers_only = mob.invisible && outline.is_none() && is_player;
-            if mob.invisible && outline.is_none() && !layers_only {
+            // Entity.DATA_SHARED_FLAGS_ID invisible (the flag the invisibility
+            // effect sets): only the name tag draws (and the outline of a
+            // glowing mob, LivingEntityRenderer.getRenderType). A player keeps
+            // its armour, elytra and held items (`LivingEntityRenderer.submit`
+            // skips only the body).
+            let invisible = mob.is_invisible();
+            // Entity.isInvisibleTo(viewer): a spectator sees it anyway, the
+            // body forced translucent (`LivingEntityRenderer.submit`).
+            let seen_invisible = invisible
+                && !horizon_client::scoreboard::invisible_to(
+                    self.mob_team_of(mob),
+                    viewer,
+                    self.spectator(),
+                    true,
+                );
+            let layers_only = invisible && outline.is_none() && is_player && !seen_invisible;
+            if invisible && outline.is_none() && !layers_only && !seen_invisible {
                 continue;
             }
             let culling = if PRECHECK
@@ -7924,10 +7972,11 @@ impl Game<'_> {
             // (a player's, the HDR tiers below, the sulfur cube's shell). A glowing mob's
             // silhouette is posed too (`SkinFrame::outline_since`), unless it is invisible:
             // then only the outline draws.
-            let silhouette_on_gpu = outline.is_none() || !mob.invisible;
+            let silhouette_on_gpu = outline.is_none() || !invisible;
             let posable = skinning
                 && !(is_player || modded)
                 && !layers_only
+                && !seen_invisible
                 && silhouette_on_gpu
                 && armor.is_empty()
                 && !matches!(
@@ -7954,7 +8003,20 @@ impl Game<'_> {
                 );
                 skinned = Some((mark, skin.bounds));
             } else if !modded {
-                if layers_only {
+                if seen_invisible {
+                    horizon_client::mobs::render::render_seen_invisible(
+                        mob,
+                        alpha as f32,
+                        camera,
+                        &lookup,
+                        packed,
+                        self.res.mob_data(),
+                        &armor,
+                        hidden,
+                        (listened || added.is_some()).then_some(&mut parts),
+                        out,
+                    );
+                } else if layers_only {
                     horizon_client::mobs::render::render_layers(
                         mob,
                         alpha as f32,
@@ -7999,13 +8061,15 @@ impl Game<'_> {
                 // and SpinAttackEffectLayer. Only the cape hides with the body;
                 // the others have no `isInvisible` check.
                 let chest = mob.extra.slot_id(horizon_items::equipment::CHEST);
-                if !layers_only {
+                // `CapeLayer` and `Deadmau5EarsLayer`: `!state.isInvisible`, whoever sees the body.
+                if !invisible {
                     self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 }
-                if let Some((_, name)) = self
-                    .remote_player_names()
-                    .into_iter()
-                    .find(|(id, _)| *id == mob.id)
+                if !invisible
+                    && let Some((_, name)) = self
+                        .remote_player_names()
+                        .into_iter()
+                        .find(|(id, _)| *id == mob.id)
                 {
                     self.player_ears_geometry(mob, &name, camera, alpha as f32, packed, out);
                 }
@@ -8049,7 +8113,7 @@ impl Game<'_> {
                     let color = horizon_client::mobs::render::abgr(rgb);
                     self.skin_frame.borrow_mut().outline_since(first, color);
                 }
-                if mob.invisible {
+                if invisible && !seen_invisible {
                     out.truncate(entity_start);
                     continue;
                 }
@@ -8484,55 +8548,6 @@ pub(super) fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
         item.data_mut().set_loot_component(id, value);
     }
     item
-}
-impl Game<'_> {
-    /// The rest of `NetherPortalBlock.randomTick` after a won roll: with a
-    /// player close enough for spawning, a zombified piglin spawns on the block
-    /// under the portal column when it is a valid spawn.
-    pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
-        // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
-        // blocks of the chunk centre.
-        let centre = [
-            f64::from((pos[0] >> 4) * 16 + 8),
-            f64::from((pos[2] >> 4) * 16 + 8),
-        ];
-        let close = self.level_players().iter().any(|p| {
-            let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
-            !p.spectator && dx * dx + dz * dz < 16384.0
-        });
-        if !close {
-            return;
-        }
-        let mut y = pos[1];
-        while &*self
-            .res
-            .facts()
-            .get(self.world.block(pos[0], y, pos[2]))
-            .name
-            == "minecraft:nether_portal"
-        {
-            y -= 1;
-        }
-        // isValidSpawn: a sturdy top face (portal frames emit no light).
-        let below = self.res.facts().get(self.world.block(pos[0], y, pos[2]));
-        if below.sturdy_full & (1 << 1) == 0 {
-            return;
-        }
-        let at = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(y + 1),
-            f64::from(pos[2]) + 0.5,
-        ];
-        // setPortalCooldown: the new piglin does not travel at once.
-        if let Some(id) = self.spawn_mob(
-            "minecraft:zombified_piglin",
-            at,
-            false,
-            SpawnSite::Finalizing(horizon_client::mobs::spawn_rules::Reason::Structure),
-        ) {
-            self.set_portal_cooldown(id);
-        }
-    }
 }
 /// The instance a mob effect gives the player; `None` for a creative or
 /// spectator player (`immune`) unless it is ambient (the nautilus's Breath).
@@ -9283,6 +9298,7 @@ mod tests {
                         keep_equipment: false,
                         preserve_can_pick_up_loot: true,
                     },
+                    false,
                     |_, _| {},
                 )
                 .unwrap();
@@ -11094,6 +11110,7 @@ mod conversion_subscriber_tests {
                             &from,
                             "minecraft:drowned",
                             horizon_client::mobs::conversion::Params::KEEP_ALL,
+                            false,
                             |_, _| {},
                         )
                         .unwrap();
@@ -11589,6 +11606,7 @@ mod conversion_tag_tests {
                     &source,
                     &format!("minecraft:{to}"),
                     horizon_client::mobs::conversion::Params::KEEP_ALL,
+                    false,
                     |_, _| {},
                 )
                 .unwrap();
@@ -12068,6 +12086,10 @@ mod enchanted_block_loot_breaker_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "rabbit_colour_tests.rs"]
+mod rabbit_colour_tests;
 
 #[cfg(test)]
 mod chorus_projectile_drop_tests {

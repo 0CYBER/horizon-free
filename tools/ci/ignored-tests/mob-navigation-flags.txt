@@ -1,0 +1,7 @@
+# Mob navigation flags (#4411): resource-backed tests of can_open_doors, can_pass_doors and can_float.
+horizon-client game::native_mob_navigation_flags_tests::navigation_flags_closed_door_path_reaches_goal_only_when_passable lib daily resources
+horizon-client game::native_mob_navigation_flags_tests::navigation_flags_literal_values_and_current_path_unchanged lib daily resources
+horizon-client game::native_mob_navigation_flags_tests::navigation_flags_refuse_client lib daily resources
+horizon-client game::native_mob_navigation_flags_tests::navigation_flags_refuse_held_out_of_level lib daily resources
+horizon-client game::native_mob_navigation_flags_tests::navigation_flags_refuse_no_ground_or_flying_navigation lib daily resources
+horizon-client game::native_mob_navigation_flags_tests::navigation_flags_refuse_stale_handle lib daily resources

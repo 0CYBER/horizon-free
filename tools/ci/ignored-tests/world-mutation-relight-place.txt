@@ -1,0 +1,11 @@
+horizon-client game::native_chunk_relight_tests::a_mod_queues_the_chunks_it_wrote lib daily resources
+horizon-client game::native_chunk_relight_tests::relight_chunks_refuses_more_than_256_chunks lib daily resources
+horizon-client game::native_chunk_relight_tests::relight_chunks_refuses_a_call_that_overfills_the_queue lib daily resources
+horizon-client game::native_chunk_relight_tests::a_stale_handle_is_refused_by_name lib daily resources
+horizon-client game::native_chunk_relight_tests::another_level_is_not_in_place lib daily resources
+horizon-client game::native_chunk_relight_tests::a_chunk_is_resent_only_when_loaded lib daily resources
+horizon-client game::native_chunk_relight_tests::a_client_cannot_relight_or_resend lib daily resources
+horizon-client game::native_player_place_tests::a_block_placed_as_a_player_runs_set_placed_by lib daily resources
+horizon-client game::native_player_place_tests::each_place_block_refusal_has_its_own_name_and_writes_nothing lib daily resources
+horizon-client game::native_player_place_tests::another_level_is_not_where_the_player_is lib daily resources
+horizon-client game::native_player_place_tests::a_client_cannot_place_a_block_as_a_player lib daily resources

@@ -36,17 +36,39 @@ pub struct StackedOnOther<'a> {
     pub clicked: &'a mut dyn SlotView,
     pub cancellation_result: bool,
 }
+/// Who and where a `menu_slot_rules` ask is about: the player whose menu it is, the menu's
+/// block, the container the asked slot indexes, and the menu's own containers' slots as they
+/// stand when the click plans (read only, borrowed; the player's inventory slots are not in
+/// it). None where the menu has no such thing: a client's prediction knows no other player,
+/// and a menu opened with no block has no `pos`. `snapshot` is the click plan's one copy for
+/// the parts (see [`super::SlotSnapshot`]); a context without one copies per ask.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SlotContext<'a> {
+    pub player: Option<u128>,
+    pub pos: Option<[i32; 3]>,
+    pub container: mod_api::MenuContainer,
+    pub slots: &'a [Option<ItemStack>],
+    /// A flattened LAN container stores grid/result values in Main's unused positions.
+    /// These positions are empty in the prediction's separate Main container.
+    pub main_crafting: Option<crate::containers::ModCrafting>,
+    pub grid: &'a [Option<ItemStack>],
+    pub result: &'a [Option<ItemStack>],
+    pub snapshot: Option<&'a super::SlotSnapshot>,
+}
+
 /// `menu_slot_rules` inside a menu click, which cannot reach the game: the game lends the menu
 /// one for the click. A click asks it once for each slot and stack it consults.
 pub trait SlotRules {
     /// Whether a part answers the menu type `menu`; a menu type none answers is never asked.
     fn listens(&self, menu: &str) -> bool;
     /// The slot's own answers arrive in `may_place` and `max_stack`; the parts may change them.
+    /// `context` is who and where the ask is about (see [`SlotContext`]).
     fn rule(
         &self,
         menu: &str,
         slot: usize,
         stack: &ItemStack,
+        context: SlotContext<'_>,
         may_place: &mut bool,
         max_stack: &mut u32,
     );

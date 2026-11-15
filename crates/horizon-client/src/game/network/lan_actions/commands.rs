@@ -145,9 +145,16 @@ impl Game<'_> {
     /// One guest's command as that guest, its feedback sent to them; false
     /// when it failed (or the guest is gone).
     pub(in crate::game) fn run_guest_command(&mut self, c: GuestCommand) -> bool {
-        let Some(swap) = self.enter_guest(c.conn) else {
-            return false;
-        };
+        self.run_guest_command_told(c).is_some_and(|(ok, _)| ok)
+    }
+
+    /// `run_guest_command`, with the lines it sent the guest; None when the
+    /// guest is gone.
+    pub(in crate::game) fn run_guest_command_told(
+        &mut self,
+        c: GuestCommand,
+    ) -> Option<(bool, Vec<horizon_client::text::Text>)> {
+        let swap = self.enter_guest(c.conn)?;
         self.chat_capture = Some(Vec::new());
         let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
         let ok = if self.perform_native_command(c.conn, c.permission, &c.command) {
@@ -172,9 +179,9 @@ impl Game<'_> {
         }
         // What the command earned is announced before its feedback.
         self.announce_guest_advancements();
-        for line in lines {
+        for line in &lines {
             let Some(host) = self.lan.as_ref() else {
-                return ok;
+                return Some((ok, lines));
             };
             host.hub.send_to(
                 c.conn,
@@ -186,7 +193,7 @@ impl Game<'_> {
         }
         // The other operators hear of it; never the player whose command it was.
         self.send_admin_feedback(Some(c.conn));
-        ok
+        Some((ok, lines))
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -240,7 +247,7 @@ impl Game<'_> {
         self.guest_suggestions(conn, &payload);
     }
 
-    pub(super) fn guest_suggestions(&mut self, conn: u32, payload: &[u8]) {
+    pub(in crate::game) fn guest_suggestions(&mut self, conn: u32, payload: &[u8]) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
@@ -259,9 +266,9 @@ impl Game<'_> {
         let skip = usize::from(text.starts_with('/'));
         let command = &text[skip..];
         let d = self.ui.dispatcher.0.clone();
-        // The completions come from the server's players and lists, not from the host's own registries: a
-        // dedicated server has no local player (they would list "Player"), and a LAN world's guests are not in
-        // the host's list.
+        // Server players and lists, not the host's registries: a dedicated server has no local player.
+        let triggers =
+            super::super::scoreboard::trigger_objectives_for(&self.score.board, &player_name);
         let mut players = if self.options.dedicated.is_some() {
             Vec::new()
         } else {
@@ -292,16 +299,26 @@ impl Game<'_> {
             }
             None => Default::default(),
         };
-        let reg = &mut self.ui.registries;
+        let reg = self.suggestion_registries();
         let level = std::mem::replace(&mut reg.permission, permission);
+        let own_sender = reg
+            .sender
+            .replace(horizon_client_core::registries::CommandSender {
+                uuid: player_uuid,
+                name: player_name.clone(),
+            });
         let own_players = std::mem::replace(&mut reg.players, players);
         let own_ops = std::mem::replace(&mut reg.ops, ops);
         let own_banned = std::mem::replace(&mut reg.banned_players, banned_players);
         let own_banned_ips = std::mem::replace(&mut reg.banned_ips, banned_ips);
         let own_whitelisted = std::mem::replace(&mut reg.whitelisted, whitelisted);
+        let own_triggers = std::mem::replace(&mut reg.trigger_objectives, triggers);
         let parse = d.parse(command, &self.ui.registries);
+        // Commands.sendCommands prunes the tree a player's client completes from; the answer the
+        // server sends follows the same test, so a child literal of a path the sender may not run
+        // is not offered either (Bukkit hides it; brigadier alone lists every child).
         let ((start, end), mut suggestions) =
-            d.suggestions(&parse, command.len(), &self.ui.registries);
+            d.client_suggestions(&parse, command.len(), &self.ui.registries);
         self.native_tab_complete(
             player_uuid,
             &player_name,
@@ -309,13 +326,15 @@ impl Game<'_> {
             [start, end],
             &mut suggestions,
         );
-        let reg = &mut self.ui.registries;
+        let reg = self.suggestion_registries();
         reg.permission = level;
+        reg.sender = own_sender;
         reg.players = own_players;
         reg.ops = own_ops;
         reg.banned_players = own_banned;
         reg.banned_ips = own_banned_ips;
         reg.whitelisted = own_whitelisted;
+        reg.trigger_objectives = own_triggers;
         // ServerCommandSuggestionsProvider.limitSuggestionCount.
         suggestions.truncate(1000);
         let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;

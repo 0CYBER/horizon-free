@@ -1,5 +1,5 @@
 //! The service fakes: the commands a mod runs and the messages it sends.
-use crate::{Commands, Messages, Text};
+use crate::{CommandResult, Commands, Messages, Text};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
@@ -28,6 +28,9 @@ impl Commands for FakeCommands {
     fn run_command(&mut self, line: &str) -> bool {
         self.ran.push(line.to_owned());
         self.known.contains(line)
+    }
+    fn run_command_with_output(&mut self, line: &str) -> CommandResult {
+        CommandResult::new(self.run_command(line), Vec::new())
     }
     fn feedback(&mut self, line: Text) -> Result<(), crate::text::TextFormError> {
         line.validate_depth()?;

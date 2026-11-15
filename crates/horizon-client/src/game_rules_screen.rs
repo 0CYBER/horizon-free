@@ -802,7 +802,7 @@ mod tests {
             max: 0,
         };
         let registry = std::sync::Arc::new(
-            crate::gamerules::RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule])
+            crate::gamerules::RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule])
                 .unwrap(),
         );
         let mut screen = RulesScreen::new(&GameRules::with_registry(registry, &[]));

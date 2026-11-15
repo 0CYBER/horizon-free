@@ -22,6 +22,9 @@ use horizon_core::{
 use horizon_protocol::entity_data::{Value, serializer};
 use std::sync::Arc;
 
+#[path = "fishing/impact.rs"]
+mod impact;
+
 /// The table a catch rolls where no mod's fishing medium names one.
 const FISHING_TABLE: &str = "minecraft:gameplay/fishing";
 
@@ -173,7 +176,7 @@ fn first_entity_hit(
     end: Vec3,
     margin: f64,
     targets: impl IntoIterator<Item = (u32, Aabb)>,
-) -> Option<u32> {
+) -> Option<(u32, Vec3)> {
     let mut hit = None;
     let mut hit_at = f64::INFINITY;
     for (id, target_bounds) in targets {
@@ -183,7 +186,14 @@ fn first_entity_hit(
             target_bounds.inflate(Vec3::new(margin, margin, margin)),
         ) && at < hit_at
         {
-            hit = Some(id);
+            hit = Some((
+                id,
+                Vec3::new(
+                    start.x + (end.x - start.x) * at,
+                    start.y + (end.y - start.y) * at,
+                    start.z + (end.z - start.z) * at,
+                ),
+            ));
             hit_at = at;
         }
     }
@@ -1077,7 +1087,23 @@ impl Game<'_> {
                                 .map(|t| (t.id, t.bounds())),
                         ),
                 );
-                if let Some(id) = hit {
+                let impact = match (hit, block_hit) {
+                    (Some((id, at)), _) => horizon_client::projectiles::Hit::Entity {
+                        who: horizon_client::mobs::Who::Mob(id),
+                        at,
+                    },
+                    (None, Some(hit)) => horizon_client::projectiles::Hit::Block {
+                        pos: [hit.block.x, hit.block.y, hit.block.z],
+                        face: hit.direction.normal(),
+                        at: hit.location,
+                    },
+                    (None, None) => horizon_client::projectiles::Hit::None,
+                };
+                let (hook, canceled) = self.fishing_impact(h, impact)?;
+                h = hook;
+                // A veto skips only hit handling; Entity.move below still
+                // stops a flying bobber against solid collision shapes.
+                if let Some((id, _)) = hit.filter(|_| !canceled) {
                     let breeze = self
                         .mobs
                         .iter()
@@ -1106,7 +1132,7 @@ impl Game<'_> {
                             return Some(h);
                         }
                     }
-                } else if let Some(hit) = block_hit {
+                } else if let Some(hit) = block_hit.filter(|_| !canceled && hit.is_none()) {
                     let projectile = ProjectileHitter {
                         owner: Some(horizon_client::mobs::Who::Player),
                         guest: self.lan_acting,
@@ -2406,12 +2432,13 @@ mod tests {
         assert_eq!(entity_hit_margin(2), 0.0);
         assert_eq!(entity_hit_margin(8), 0.3);
         assert_eq!(
-            first_entity_hit(start, end, entity_hit_margin(8), [(1, target)]),
+            first_entity_hit(start, end, entity_hit_margin(8), [(1, target)]).map(|(id, _)| id),
             None
         );
         let within_margin = Aabb::new(Vec3::new(0.5, 0.29, -0.1), Vec3::new(0.7, 0.5, 0.1));
         assert_eq!(
-            first_entity_hit(start, end, entity_hit_margin(8), [(1, within_margin)]),
+            first_entity_hit(start, end, entity_hit_margin(8), [(1, within_margin)])
+                .map(|(id, _)| id),
             Some(1)
         );
     }
@@ -2421,7 +2448,8 @@ mod tests {
         let target = Aabb::new(Vec3::new(-0.1, -0.1, -0.1), Vec3::new(0.7, 0.15, 0.1));
 
         assert_eq!(
-            first_entity_hit(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 0.0, [(1, target)]),
+            first_entity_hit(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 0.0, [(1, target)])
+                .map(|(id, _)| id),
             None
         );
     }
@@ -2434,7 +2462,7 @@ mod tests {
         let far = Aabb::new(Vec3::new(0.8, -0.1, -0.1), Vec3::new(0.95, 0.15, 0.1));
 
         assert_eq!(
-            first_entity_hit(start, end, 0.0, [(2, far), (1, near)]),
+            first_entity_hit(start, end, 0.0, [(2, far), (1, near)]).map(|(id, _)| id),
             Some(1)
         );
     }
@@ -2472,7 +2500,7 @@ mod tests {
         let ridden = Minecart::new(3, CartKind::Chest, Vec3::new(0.2, 0.0, 0.0));
         let boxes = super::minecart_hook_targets([&cart, &ridden].into_iter(), Some(3));
         assert_eq!(
-            first_entity_hit(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 0.0, boxes),
+            first_entity_hit(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 0.0, boxes).map(|(id, _)| id),
             Some(7)
         );
     }

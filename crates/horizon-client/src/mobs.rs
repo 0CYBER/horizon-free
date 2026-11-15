@@ -4,6 +4,7 @@
 //! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body controls (`control`),
 //! `LivingEntity` physics (`living`) and per-species behaviour, models, animations and sounds.
 pub mod ai;
+mod ai_pause;
 pub mod allay;
 pub mod ambient;
 pub mod anim;
@@ -51,6 +52,7 @@ pub mod hostile;
 mod hurt_by;
 pub mod illager;
 pub mod illusioner;
+pub mod invulnerable;
 pub mod item_break;
 pub mod keyframes;
 pub mod landing;
@@ -646,6 +648,8 @@ pub enum DamageKind {
     /// `spear`: a stab of a spear (the player attack tags too).
     Spear,
     MobAttack,
+    /// `mob_attack_no_aggro`: a goat's ram, the one type in `#no_anger`.
+    MobAttackNoAggro,
     Arrow,
     Thrown,
     Fireball,
@@ -854,6 +858,8 @@ impl Damage {
                 | DamageKind::Stalagmite
                 | DamageKind::Starve
                 | DamageKind::Campfire
+                // `mob_attack` panics; its no-aggro twin is not in the tag.
+                | DamageKind::MobAttackNoAggro
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -1147,7 +1153,7 @@ pub struct Extra {
     /// horse still rearing then goes on with the rider's keys until the rear
     /// ends (`tick` clears it).
     pub stand_sliding: bool,
-    /// Species scratch values (the wither's head targets and clocks).
+    /// Species scratch values (the wither's head targets and clocks, a ghast's power).
     pub ints: [i32; 6],
     pub counter: i32,
     /// Nautilus ATTACK_TARGET_COOLDOWN saved slot: None is absent,
@@ -1550,6 +1556,10 @@ pub struct Mob {
     /// direction and feet, which `SulfurCube.knockback` turns the launch by. Set by whoever deals
     /// the blow (`Game::attacker_aim`) and cleared once it is dealt.
     pub attacker_aim: Option<Aim>,
+    /// `DamageSource.isCreativePlayer()` of the blow being dealt: its causing entity is a
+    /// player in creative mode, whose hits `Entity.isInvulnerableToBase` lets through. Set by
+    /// whoever deals the blow (`Game::hurt_by_player`) and cleared once it is dealt.
+    pub creative_attacker: bool,
     /// The horizontal motion `(x, z)` of the projectile that is the direct entity of the blow
     /// being dealt (`Projectile.calculateHorizontalHurtKnockbackDirection`): the knock goes the
     /// way it was travelling. None for any other direct entity.
@@ -1888,16 +1898,16 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
-    /// `Bee.doHurtTarget` on a player: a sting that lands leaves its stinger
-    /// in them and poisons them for `poison_ticks` (none on easy).
-    StingPlayer {
+    /// `Bee.doHurtTarget`: a sting that lands leaves its stinger and poisons.
+    Sting {
+        target: Who,
         amount: f32,
-        from: [f64; 3],
         poison_ticks: i32,
+        source: Damage,
     },
     /// A melee hit whose effect comes only if the hit lands (husk hunger,
-    /// cave spider poison, wither skeleton wither, bee and pufferfish
-    /// poison): a shield-blocked hit gives nothing.
+    /// cave spider poison, wither skeleton wither): a shield-blocked hit gives
+    /// nothing.
     AttackPlayerWithEffect {
         amount: f32,
         from: [f64; 3],
@@ -2120,12 +2130,12 @@ pub enum MobEvent {
         setup: SpawnSetup,
     },
     /// `Mob.convertTo` with `ConversionType.SINGLE` ([`conversion::single`]):
-    /// a new mob of `kind` takes the place of `from` (already removed) and
-    /// keeps its gear, name and flags.
+    /// `from` (already removed) becomes `kind` with its gear, name and flags, then `after`.
     Convert {
         from: Box<Mob>,
         kind: &'static str,
         params: conversion::Params,
+        after: conversion::After,
     },
     DropItem {
         mob: u32,
@@ -2545,7 +2555,6 @@ impl MobEvent {
             Self::AttackPlayer(..)
             | Self::CubeHurtPlayer { .. }
             | Self::AttackPlayerWithEffect { .. }
-            | Self::StingPlayer { .. }
             | Self::DamagePlayer { .. }
             | Self::EffectPlayer { .. }
             | Self::AxolotlSupportPlayer { .. }
@@ -2553,6 +2562,7 @@ impl MobEvent {
             Self::SonicBoom { target, .. }
             | Self::Push { target, .. }
             | Self::Knockback { target, .. }
+            | Self::Sting { target, .. }
             | Self::StabDismount { target }
             | Self::Ignite(target, _)
             | Self::ZombieIgnite(target, _)
@@ -3125,8 +3135,7 @@ pub struct PlayerView {
     pub effects: Vec<&'static str>,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
-    /// The mobs on the player's team (`isAlliedTo`): combat targeting
-    /// leaves the player alone.
+    /// The mobs on the player's team (`isAlliedTo`): combat targeting leaves the player alone.
     pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
@@ -3611,6 +3620,7 @@ impl Mob {
             silent: false,
             invulnerable_flag: false,
             attacker_aim: None,
+            creative_attacker: false,
             projectile_motion: None,
             climbing: false,
             on_climbable: false,
@@ -3832,23 +3842,6 @@ impl Mob {
     pub fn damage(&mut self, level: &mut DamageLevel<'_>, amount: f32, source: Damage) -> bool {
         self.damage_with(level, amount, source, None)
     }
-    /// `LivingEntity.isInvulnerableTo` and dead or removed: only #bypasses_invulnerability gets
-    /// past the flag. Fire-immune mobs also refuse fire, except a ghast's reflected fireball.
-    /// The guard every damage hook runs after (`LivingIncomingDamageEvent`).
-    pub fn refuses_damage(&self, source: &Damage) -> bool {
-        self.extra.client_side
-            || !self.alive()
-            || self.removed
-            || (self.is_invulnerable() && !source.kind.bypasses_invulnerability())
-            || (source.is_fire() && self.kind.flags.fire_immune && !self.reflected_fireball(source))
-    }
-    /// `Ghast.isReflectedFireball`: its fire immunity does not refuse a
-    /// player's return hit.
-    fn reflected_fireball(&self, source: &Damage) -> bool {
-        &*self.kind.id == "minecraft:ghast"
-            && source.kind == DamageKind::Fireball
-            && source.attacker == Some(Who::Player)
-    }
     /// `LivingEntity.hurtServer`'s partial mob adapter, with health reductions inline.
     /// `damage` by a source with a weapon: `armor_effectiveness` runs the
     /// weapon's armor-effectiveness enchantments (breach) over the armor fraction, with the
@@ -3860,6 +3853,9 @@ impl Mob {
         source: Damage,
         armor_effectiveness: Option<&mut dyn FnMut(f32, &mut LegacyRandom) -> f32>,
     ) -> bool {
+        // `Guardian.hurtServer`'s spikes answer its attacker before
+        // `super.hurtServer`'s guards.
+        hurt_by::before_hurt(self, &source);
         // Enderman.hurtServer: past `isInvulnerableTo`, the teleport draw
         // follows `super.hurtServer` whatever it answered (a hurt cooldown, a
         // dead enderman), its hurt sound's pitch included.
@@ -4153,12 +4149,7 @@ impl Mob {
             self.last_damage = Some((source, i64::from(self.age)));
         }
         self.last_direct = None;
-        if let Some(who) = source.attacker {
-            self.ai.hurt_by(who, self.age as i32);
-            if who == Who::Player {
-                self.ai.last_hurt_by_player = 100;
-            }
-        }
+        hurt_by::resolve(self, &source);
         // dealDefaultKnockback, unless the damage type is tagged no_knockback or
         // the hit was blocked whole; a source without a position knocks in a
         // random direction.
@@ -4277,7 +4268,7 @@ impl Mob {
         let cloud = self.species() == Species::Enderman
             && direct == "minecraft:area_effect_cloud"
             && !self.removed
-            && !(self.is_invulnerable() && !source.kind.bypasses_invulnerability());
+            && !self.is_invulnerable_to(&source);
         let hurt = self.damage(level, amount, source);
         if cloud {
             enderman::teleport_chance(self, &source);
@@ -7449,3 +7440,5 @@ pub fn apply_mob_pushes(m: &mut Mob, pending: &mut PendingPushes) {
         pushes.into_iter().for_each(add);
     }
 }
+#[cfg(test)]
+mod guardian_tests;

@@ -264,6 +264,7 @@ pub(crate) fn install_registrar(
             warning.args()
         );
     }
+    registrar.validate_recipe_types();
     if !registrar.refused.is_empty() {
         return Err(registrar.refused);
     }
@@ -301,6 +302,7 @@ pub(crate) fn install_registrar(
         fluids: OnceLock::new(),
         resolved_items: OnceLock::new(),
         resolved_entity_types: OnceLock::new(),
+        resolved_game_events: OnceLock::new(),
         resolved_blocks: OnceLock::new(),
         particles: OnceLock::new(),
         controllers: registrar.controllers,

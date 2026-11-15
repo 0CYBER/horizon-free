@@ -40,10 +40,15 @@ pub(crate) fn particle_of(
     ambient: bool,
     registry_id: impl FnOnce(&str) -> Option<i32>,
 ) -> Option<Particle> {
-    // MobEffect.particleFactory: the omens have their own particles,
-    // the others an entity effect in their colour (faint if ambient).
+    // MobEffect.particleFactory: the omens and the four effects `MobEffects`
+    // registers with a particle of their own show that one, the others an
+    // entity effect in their colour (faint if ambient).
     let (name, data) = match effect {
         "trial_omen" | "raid_omen" => (effect, None),
+        "wind_charged" => ("small_gust", None),
+        "weaving" => ("item_cobweb", None),
+        "oozing" => ("item_slime", None),
+        "infested" => ("infested", None),
         _ => {
             let def = crate::brewing::effect(effect)?;
             let alpha = if ambient { 38 } else { 255 };

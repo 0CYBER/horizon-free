@@ -79,6 +79,7 @@ impl BossBar {
         let style = Style {
             color: Some(color_rgb(&self.color)),
             hover: Some(std::sync::Arc::new(Text::literal(self.id.clone()))),
+            insertion: Some(self.id.clone()),
             ..Style::default()
         };
         // ComponentUtils.wrapInSquareBrackets(name).withStyle(...): the
@@ -88,12 +89,7 @@ impl BossBar {
     /// The filled fraction of the bar: `Mth.clamp(value / max, 0, 1)` as
     /// `CustomBossEvent.setValue` computes it (a 0 of 0 bar reads 0).
     pub fn progress(&self) -> f32 {
-        let fraction = self.value as f32 / self.max as f32;
-        if fraction.is_nan() {
-            0.0
-        } else {
-            fraction.clamp(0.0, 1.0)
-        }
+        (self.value as f32 / self.max as f32).clamp(0.0, 1.0)
     }
 }
 
@@ -220,5 +216,52 @@ mod tests {
         assert_eq!(color_rgb("purple"), text::named_color("dark_blue").unwrap());
         b.remove("test:x");
         assert!(b.bars.is_empty());
+    }
+
+    /// `CustomBossEvent.setValue`/`setMax`: the progress is `value / max`
+    /// clamped, divided by the stored max and not by a max raised to one.
+    #[test]
+    fn progress_divides_by_the_stored_max() {
+        let mut bar = BossBar::new("test:x", literal("Hello"));
+        bar.value = 50;
+        bar.max = 10;
+        assert_eq!(bar.progress(), 1.0);
+        bar.max = 100;
+        assert_eq!(bar.progress(), 0.5);
+        // 50 / -5 is negative, so the clamp floors it.
+        bar.max = -5;
+        assert_eq!(bar.progress(), 0.0);
+        // 50 / 0 is infinite, so the clamp caps it.
+        bar.max = 0;
+        assert_eq!(bar.progress(), 1.0);
+        // 0 / 0 is NaN, as Java's `(float)value / max` is.
+        bar.value = 0;
+        assert!(bar.progress().is_nan());
+    }
+
+    /// `CustomBossEvent.getDisplayName`: `withInsertion(customId)`, so a
+    /// shift-click of the bracketed name types the bar's id.
+    #[test]
+    fn the_shown_name_inserts_the_bar_id_on_shift_click() {
+        let mut b = BossBars::default();
+        b.add("demo:bar", literal("Demo"));
+        let shown = b.get("demo:bar").unwrap().display_name();
+        let styles: Vec<_> = shown.chars().map(|(_, style)| style).collect();
+        assert!(!styles.is_empty());
+        assert!(
+            styles
+                .iter()
+                .all(|s| s.insertion.as_deref() == Some("demo:bar")),
+            "{:?}",
+            shown.component()
+        );
+        // The hover still names the id, as it did.
+        assert_eq!(
+            styles[0].hover.as_deref().map(Text::plain),
+            Some("demo:bar".into())
+        );
+        // The component a vanilla client receives carries it at the root.
+        let component = shown.component();
+        assert_eq!(component["insertion"], "demo:bar", "{component}");
     }
 }

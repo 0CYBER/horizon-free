@@ -247,3 +247,120 @@ fn entity_die_explosions() {
         assert_eq!(deaths(), vec![("minecraft:entity_die", at, None)]);
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn painting_falling_off_the_wall_posts_no_entity_die() {
+    with_game(|game| {
+        game.run_command("gamerule entity_drops true");
+        // A south-facing painting at (4, 200, 4) hangs on the block at z 3.
+        game.run_command("setblock 4 200 3 stone strict");
+        game.run_command("setblock 1 200 4 sculk_sensor strict");
+        let painting = game
+            .summon_with_nbt(
+                "minecraft:painting",
+                [4.5, 200.5, 4.5],
+                "{variant:\"minecraft:kebab\",facing:0b}",
+            )
+            .unwrap()
+            .expect("the painting joins");
+        assert_eq!(game.paintings.len(), 1);
+        game.sculk_prepare();
+        game.sculk_sync_index();
+        capture();
+        // BlockAttachedEntity.tick: `ticksSinceLastCheck++ >= 100`, the 101st.
+        for _ in 0..101 {
+            game.tick_paintings();
+        }
+        assert_eq!(game.paintings.len(), 1, "the wall still holds it");
+        game.run_command("setblock 4 200 3 air strict");
+        for _ in 0..101 {
+            game.tick_paintings();
+        }
+        assert_eq!(game.target_position(painting), None, "discarded");
+        assert!(game.paintings.is_empty());
+        // BlockAttachedEntity.tick: discard(), then dropItem().
+        assert_eq!(
+            game.dropped
+                .iter()
+                .map(|i| &*i.stack.item)
+                .collect::<Vec<_>>(),
+            ["minecraft:painting"],
+        );
+        // ...and no gameEvent: a sculk sensor beside it stays quiet.
+        assert!(
+            deaths().is_empty(),
+            "a discarded painting posts no entity_die"
+        );
+        let Some(BlockEntity::Sculk(sensor)) = game.world.block_entities.get(&(1, 200, 4)) else {
+            panic!("sensor must exist");
+        };
+        assert!(
+            sensor.vibration.selector.current.is_none(),
+            "the sensor must not hear the painting fall"
+        );
+        // BlockAttachedEntity.kill (a hit or /kill) still posts it.
+        let killed_at = [6.5, 200.5, 4.03125];
+        game.summon_with_nbt("minecraft:painting", [6.5, 200.5, 4.5], "{facing:0b}")
+            .unwrap()
+            .expect("the second painting joins");
+        capture();
+        game.run_command("kill @e[type=minecraft:painting]");
+        assert!(game.paintings.is_empty());
+        assert_eq!(deaths(), vec![("minecraft:entity_die", killed_at, None)]);
+        let Some(BlockEntity::Sculk(sensor)) = game.world.block_entities.get(&(1, 200, 4)) else {
+            panic!("sensor must exist");
+        };
+        let heard = sensor
+            .vibration
+            .selector
+            .current
+            .expect("the sensor hears it");
+        assert_eq!(heard.0.event, "minecraft:entity_die");
+        assert_eq!(heard.0.pos, killed_at);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn unknown_painting_variant_keeps_the_default_one() {
+    with_game(|game| {
+        // Painting.defineSynchedData: VariantUtils.getAny, the registry's first.
+        game.summon_with_nbt("minecraft:painting", [4.5, 200.5, 4.5], "{facing:0b}")
+            .unwrap()
+            .expect("a painting with no saved variant joins");
+        // Painting.readAdditionalSaveData: a variant that does not resolve
+        // leaves that default in place.
+        game.summon_with_nbt(
+            "minecraft:painting",
+            [6.5, 200.5, 4.5],
+            "{variant:\"minecraft:nosuch\",facing:0b}",
+        )
+        .unwrap()
+        .expect("a painting with an unknown variant still joins");
+        // Identifier.CODEC: a bare id is read in the `minecraft` namespace.
+        game.summon_with_nbt(
+            "minecraft:painting",
+            [8.5, 200.5, 4.5],
+            "{variant:\"kebab\",facing:0b}",
+        )
+        .unwrap()
+        .expect("a painting with a bare variant id still joins");
+        assert_eq!(game.paintings.len(), 3);
+        let (default, unknown) = (&game.paintings[0], &game.paintings[1]);
+        // RegistryDataLoader registers the registry's entries sorted by id, so
+        // VariantUtils.getAny is `minecraft:alban`.
+        assert_eq!(&*default.variant, "minecraft:alban");
+        assert_eq!(unknown.variant, default.variant);
+        assert_eq!(
+            (unknown.width, unknown.height),
+            (default.width, default.height)
+        );
+        assert_eq!(&*game.paintings[2].variant, "minecraft:kebab");
+        let variant = game
+            .painting_variants
+            .get(&default.variant)
+            .expect("the default variant is a real one");
+        assert_ne!(&*variant.id, "minecraft:nosuch");
+    });
+}

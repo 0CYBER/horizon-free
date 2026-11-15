@@ -156,6 +156,8 @@ mod infiniburn_tests;
 #[cfg(test)]
 mod piston_carry_tests;
 #[cfg(test)]
+mod sculk_vein_water_tests;
+#[cfg(test)]
 #[path = "tests/state_change.rs"]
 mod state_change_tests;
 #[cfg(test)]
@@ -209,7 +211,7 @@ pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{PlaceContext, PlaceOutcome, PlacementContext, PlacementPreview};
 pub use portal::PortalShape;
 pub use states::{BlockId, PropKey, StateTable};
-pub use tick::{Precipitation, PrecipitationKind, RandomTickMask};
+pub use tick::{Precipitation, PrecipitationKind, RandomTickMask, RandomTickMaskUpdate};
 pub use ticks::Ticks;
 
 /// `Block.UPDATE_*` flags accepted by [`Behaviours::set_block`].

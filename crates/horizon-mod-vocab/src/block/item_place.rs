@@ -139,6 +139,16 @@ pub enum ItemPlace {
         /// The place the player reaches.
         inner: Box<ItemPlace>,
     },
+    /// A stack outside the world whose item may change: a private two-slot copy, as
+    /// `DispenseFluidContainer` runs a dispensed container, so an empty bucket can become a
+    /// full one. [`ItemsServerHost::scratch_slots`](crate::prelude::ItemsServerHost::scratch_slots)
+    /// makes one in a transaction with the stack in its first slot, and
+    /// [`scratch_take_slots`](crate::prelude::ItemsServerHost::scratch_take_slots) takes both
+    /// slots back out. Reads and extracts are the first slot's; an insert fills the first slot
+    /// where it is empty or holds the same item and components, and what doesn't fit goes to
+    /// the second (`forHandlerIndex`), as a changed item split off a stack does. It lives and
+    /// aborts as a [`Scratch`](Self::Scratch) stack does.
+    ScratchSlots(u64),
 }
 
 impl Clone for ItemPlace {
@@ -221,6 +231,7 @@ impl Clone for ItemPlace {
                     };
                 }
                 Self::Scratch(id) => break Self::Scratch(*id),
+                Self::ScratchSlots(id) => break Self::ScratchSlots(*id),
             }
         };
         for link in links.into_iter().rev() {
@@ -480,7 +491,16 @@ impl ItemPlace {
                 let (provider, _) = host.capability_providers().place_provider(provider)?;
                 provider.stack(host, *key)
             }
-            ItemPlace::MenuSlot { menu, slot } => menu.slot(host, *slot)?,
+            // A slot backed by a mod's storage reads it through its handler; every other slot
+            // reads as before.
+            ItemPlace::MenuSlot { menu, slot } => match menu.slot_backing(host, *slot) {
+                Some(MenuSlotBacking::Place(place)) => {
+                    let (handler, index) = place.handler(host, menu.player)?;
+                    let resource = handler.resource(host, index)?;
+                    resource.to_stack(handler.amount(host, index))
+                }
+                _ => menu.slot(host, *slot)?,
+            },
             _ => backend_mut_of(host).and_then(|backend| backend.game_stack(self)),
         }
     }
@@ -502,7 +522,8 @@ impl ItemPlace {
     /// none, as `forInfiniteMaterials`); an item entity's dropped beside it at the root commit; a
     /// block entity's, an entity's or an item's slot's into that container's other slots
     /// (`forHandlerIndex`, refused instead around [`Strict`](Self::Strict)); a mod's place's
-    /// where its [`PlaceProvider`] puts it; a [`Scratch`](Self::Scratch) stack's nowhere.
+    /// where its [`PlaceProvider`] puts it; a [`Scratch`](Self::Scratch) stack's nowhere; a
+    /// [`ScratchSlots`](Self::ScratchSlots) stack's into its second slot.
     pub fn insert(
         &self,
         host: &mut dyn ServerHost,
@@ -705,6 +726,10 @@ impl ItemPlace {
                     }
                     MenuSlotBacking::Entity { entity, slot } => {
                         (entity.capability(host, &ENTITY_ITEMS, ()), slot)
+                    }
+                    MenuSlotBacking::Place(place) => {
+                        let (handler, index) = place.handler(host, menu.player).ok_or(())?;
+                        (Some(handler), index)
                     }
                     MenuSlotBacking::CraftResult => return Ok(0),
                     _ => {

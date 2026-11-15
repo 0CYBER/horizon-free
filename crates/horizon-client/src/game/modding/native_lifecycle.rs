@@ -69,6 +69,7 @@ pub(super) struct NativeLifecycle {
     tasks: ScheduledTasks,
     /// The section `entity_entering_section` files each entity under, for this epoch's world.
     pub(super) entity_sections: super::entity_sections::EntitySections,
+    pub(super) section_observer: super::entity_sections::observer_cache::ObserverCache,
     /// Tossed item entities `item_toss` is still asking about, innermost last: a join flush
     /// stops before them, so a cancel never takes back an entity already announced.
     pub(super) held_joins: Vec<u32>,
@@ -285,6 +286,7 @@ impl Game<'_> {
 
     pub(super) fn native_lifecycle_server_tick_start(&mut self, world_running: bool) {
         if let Some((context, phase)) = self.native_lifecycle.server_tick_start(world_running) {
+            self.native_console_lines();
             self.native_lifecycle.read_scope = true;
             self.native_server_tick(&context, phase);
             // Tasks come due after the start phase, still inside the tick's read scope. One that

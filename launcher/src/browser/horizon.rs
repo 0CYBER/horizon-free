@@ -7,6 +7,7 @@ use super::{
     details::{Details, GitHub, Link},
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
+use crate::i18n::trf;
 use horizon_mod_package::index::{self, Index, Trust};
 use std::collections::HashMap;
 use std::fs;
@@ -351,9 +352,11 @@ pub fn trust_and_capabilities(
     if let Some(v) = p.versions.first().filter(|_| p.kind == index::Kind::Mod) {
         lines.extend(
             v.capabilities
+                .known()
                 .iter()
                 .map(|c| format!("May {}", c.describe())),
         );
+        lines.extend(unsupported_capabilities(&v.capabilities));
         if v.capabilities.is_empty() {
             lines.push("Asks for nothing beyond its own log".into());
         }
@@ -401,8 +404,19 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
         required: v.requires.iter().map(|r| r.id.clone()).collect(),
         blocked: index
             .revoked(&p.id, &v.file.sha256)
-            .map(|r| format!("taken down: {}", r.reason)),
+            .map(|r| format!("taken down: {}", r.reason))
+            .or_else(|| unsupported_capabilities(&v.capabilities)),
     }
+}
+
+fn unsupported_capabilities(capabilities: &index::Capabilities) -> Option<String> {
+    let unknown = capabilities.unknown();
+    (!unknown.is_empty()).then(|| {
+        trf(
+            "Can't install: it asks for {names}, which this Horizon doesn't have",
+            &[("names", &unknown.join(", "))],
+        )
+    })
 }
 
 /// A GitHub login as GitHub allows it (letters, digits, single dashes, at most 39), so an index
@@ -585,7 +599,7 @@ impl Source for Registry {
         let mut body = p.description.clone();
         if let Some(v) = newest.filter(|v| !v.capabilities.is_empty()) {
             body.push_str("\n\n## What it may do\n\n");
-            for c in &v.capabilities {
+            for c in v.capabilities.known() {
                 body.push_str(&format!("- May {}\n", c.describe()));
             }
         }
@@ -598,7 +612,12 @@ impl Source for Registry {
                     .project(&r.id)
                     .and_then(|m| Some((m, m.versions.iter().find(|w| w.version == r.version)?)));
                 let Some((m, w)) = found else { continue };
-                let may: Vec<&str> = w.capabilities.iter().map(|c| c.describe()).collect();
+                let may: Vec<&str> = w
+                    .capabilities
+                    .known()
+                    .iter()
+                    .map(|c| c.describe())
+                    .collect();
                 let may = match may.is_empty() {
                     true => String::new(),
                     false => format!(": may {}", may.join(", ")),

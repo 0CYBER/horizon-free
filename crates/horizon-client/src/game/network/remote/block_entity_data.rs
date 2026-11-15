@@ -60,7 +60,7 @@ impl Game<'_> {
         let Some(entity) = self.world.block_entities.get(&key) else {
             return;
         };
-        if entity.id() != name || fields.is_empty() {
+        if entity.id() != name || fields.is_empty() && !matches!(entity, BlockEntity::Conduit(_)) {
             return;
         }
         let mut full = fields.clone();

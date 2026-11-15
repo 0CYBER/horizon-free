@@ -179,6 +179,11 @@ impl Tile {
             ]
         })
     }
+    /// Whether either mesh it holds is in the compact layout: a stand-in drawn in its place can
+    /// hide a compact replacement (`Renderer::follow_packed_layout`).
+    pub fn holds_packed(&self) -> bool {
+        self.mesh.packed || self.previous.as_ref().is_some_and(|p| p.0.packed)
+    }
     /// Both meshes it holds in the arena: its own and the stand-in, if any.
     pub fn meshes_mut(&mut self) -> impl Iterator<Item = &mut SectionGpu> {
         std::iter::once(&mut *self.mesh).chain(self.previous.as_deref_mut().map(|(mesh, _)| mesh))

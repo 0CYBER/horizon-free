@@ -26,7 +26,7 @@ here.
 - **Prerequisites:** Rust (stable), Python 3.11+, JDK 25, git 2.38 or newer, and on Linux the ALSA and udev headers
   (`libasound2-dev libudev-dev`).
 - **Resources:** Horizon never downloads the game; it prepares its resources from your own copy of Minecraft 26.3, as
-  described in [Build from source](README.md#build-from-source).
+  described in [Build from source](docs/native-client.md#run-from-a-checkout).
 - **Commands:**
 
   ```sh
@@ -165,6 +165,8 @@ including examples. The dependency scope includes optional, platform, build and 
 library, binary, integration and doc tests without building unrelated example executables. Shared Cargo
 configuration and toolchain changes select the whole workspace; CI also keeps its workspace-wide checks.
 
+For a quick check while you work, `python3 tools/check_changed.py` runs rustfmt, clippy and tests for only the crates your branch changed and the crates that depend on them (`--dry-run` lists the commands).
+
 ### Translations
 
 Most translations are machine-written and remain unreviewed until a speaker checks them. See [docs/translations.md](docs/translations.md). Never mark machine-written text as reviewed.
@@ -199,9 +201,14 @@ it (edited on every push, never repeated): talk to its author in the thread befo
   intact; only design questions come back to you. You don't need to tick "Allow edits by maintainers".
 - **Keep your branch yours.** You can push to it as you like. If you want to bring it up to date, `git merge
   origin/main` is the safe way; a rebase or force-push is fine too, since nothing of ours lives on your branch.
+- **Title: `kind(area): what changes`**, so the queue reads at a glance: `parity(mobs): a ghast's fireball uses its
+  ExplosionPower`, `perf(launcher): download the game's files in parallel`, `bug(saves): keep /attribute modifiers
+  through a save`. The kind is one of the words below; the area is an area label, several with commas
+  (`perf(chunks,rendering): ...`), or leave it out (`docs: ...`). Release notes drop the prefix.
 - **Tick its kind** in the template: `parity` (Horizon now does what vanilla does), `bug` (a crash or breakage),
   `perf`, `feature` (new for players), `extra` (Horizon-only, off by default), `tooling` or `docs`. A workflow sets
-  that label, and area labels (`launcher`, `mobs`, `worldgen`, `rendering`...) from the paths you change.
+  that label from the box, else from the title, and area labels (`launcher`, `mobs`, `worldgen`, `rendering`...)
+  from the title and the paths you change.
   `label:parity` is the list of real progress toward vanilla.
 - **Release labels** (we set them if you can't): `feature` also puts it under "New" in the release notes,
   `skip-release` when players see no change (tooling, docs, tests), nothing for a fix. `release-now` is for crash
@@ -216,8 +223,7 @@ How agents, checks, releases and signed updates keep this safe: [security](docs/
 
 ### Large pull requests
 
-500 lines of code ([what counts](#pull-requests)) stays the default. A pull request that can't be split below it
-starts from a spec:
+A change too big to review as one concern starts from a spec:
 
 1. **Open an issue with the spec** before the code: what changes, the files it touches, the behaviour players and
    other code will see, and the tests or harnesses that prove it.

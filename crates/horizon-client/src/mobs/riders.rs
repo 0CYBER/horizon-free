@@ -57,21 +57,34 @@ pub(crate) fn parse_passenger_attachments(value: &serde_json::Value) -> Vec<[f32
             .collect()
     })
 }
-/// An `EntityType` attachment point: the builder takes floats, so the double
-/// the position math sees is the float's widening (`Vec3(x, y, z)` of
-/// `0.86875F` is `0.8687499761581421`).
-fn pt(x: f32, y: f32, z: f32) -> [f64; 3] {
-    [f64::from(x), f64::from(y), f64::from(z)]
+/// The type's attachment alone, in its scale: what a vehicle's own
+/// `getPassengerAttachmentPoint` adds its offset to (a rearing horse's slide).
+pub fn type_attachment(v: &Mob) -> [f64; 3] {
+    let [x, y, z] = base_attachment_at(v, 0);
+    let s = scale(v);
+    [x * s, y * s, z * s]
 }
-/// `EntityTypes` `passengerAttachments(y)` with one height.
+/// An `EntityType` attachment point from `passengerAttachments(float... offsetYs)`:
+/// the builder takes floats, so the double the position math sees is the
+/// float's widening (`0.86875F` is `0.8687499761581421`).
 fn up(y: f32) -> [f64; 3] {
-    pt(0.0, y, 0.0)
+    [0.0, f64::from(y), 0.0]
+}
+/// An attachment point the type attaches from `Vec3` doubles
+/// (`passengerAttachments(new Vec3(0.0, 1.37, -0.3))` keeps them).
+fn pt(x: f64, y: f64, z: f64) -> [f64; 3] {
+    [x, y, z]
+}
+/// An attachment point from the builder's float form
+/// (`attach(PASSENGER, 0.0F, 0.81F, -0.15F)`), widened like `up`.
+fn pt32(x: f32, y: f32, z: f32) -> [f64; 3] {
+    [f64::from(x), f64::from(y), f64::from(z)]
 }
 /// `EntityType.HAPPY_GHAST` `passengerAttachments`: four seats at the corners
 /// of the back (front, left, back, right), picked by the rider's place in
 /// `getPassengers` (`EntityAttachments.get` clamps the index to the last).
 pub fn happy_ghast_attachment(index: usize) -> [f64; 3] {
-    const SEATS: [[f32; 3]; 4] = [
+    const SEATS: [[f64; 3]; 4] = [
         [0.0, 4.0, 1.7],
         [-1.7, 4.0, 0.0],
         [0.0, 4.0, -1.7],
@@ -90,7 +103,7 @@ fn base_attachment_at(v: &Mob, index: usize) -> [f64; 3] {
     if !v.kind.passenger_attachments.is_empty() {
         let i = index.min(v.kind.passenger_attachments.len() - 1);
         let [x, y, z] = v.kind.passenger_attachments[i];
-        return pt(x, y, z);
+        return pt32(x, y, z);
     }
     match v.species() {
         Species::Chicken => pt(0.0, 0.7, -0.1),
@@ -128,6 +141,10 @@ fn base_attachment_at(v: &Mob, index: usize) -> [f64; 3] {
         Species::Sniffer => up(2.09375),
         Species::Fox => pt(0.0, 0.6375, -0.25),
         Species::Frog => pt(0.0, 0.375, -0.25),
+        Species::Llama | Species::TraderLlama if baby => {
+            // `Llama.BABY_DIMENSIONS`: `(1.87F - 0.25F) * 0.5F`, `-0.3F * 0.5F`.
+            pt32(0.0, 0.81, -0.15)
+        }
         Species::Llama | Species::TraderLlama => pt(0.0, 1.37, -0.3),
         Species::Turtle => pt(0.0, 0.55625, -0.25),
         Species::Wolf => pt(0.0, 0.81875, -0.0625),
@@ -155,9 +172,9 @@ pub fn vehicle_attachment(r: &Mob, vehicle_width: f32) -> f64 {
 }
 fn unscaled_vehicle_attachment(r: &Mob, vehicle_width: f32) -> f64 {
     use Species as S;
-    // Avatar.DEFAULT_VEHICLE_ATTACHMENT.
+    // Avatar.DEFAULT_VEHICLE_ATTACHMENT: a `Vec3(0.0, 0.6, 0.0)` of doubles.
     if avatar(r) {
-        return f64::from(0.6_f32);
+        return 0.6;
     }
     // `Spider.getVehicleAttachmentPoint` and `CaveSpider.getVehicleAttachmentPoint`:
     // a vehicle no wider than the rider takes the spider's fixed seat, and a
@@ -1167,7 +1184,7 @@ mod happy_ghast_seat_tests {
 
     #[test]
     fn passengers_take_separate_seats() {
-        assert_eq!(happy_ghast_attachment(0), [0.0, 4.0, f64::from(1.7_f32)]);
+        assert_eq!(happy_ghast_attachment(0), [0.0, 4.0, 1.7]);
         let seats: Vec<_> = (0..4).map(happy_ghast_attachment).collect();
         for (i, a) in seats.iter().enumerate() {
             assert!(seats[i + 1..].iter().all(|b| a != b));

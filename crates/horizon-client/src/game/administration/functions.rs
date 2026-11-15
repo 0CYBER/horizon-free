@@ -36,6 +36,9 @@ pub(super) struct FnState {
     /// Run the `minecraft:load` tag on the next tick.
     load_pending: bool,
     pub schedule: Vec<Scheduled>,
+    /// The world's saved queue has been read once: it is the live
+    /// `TimerQueue` `SavedData`, so a later reload keeps it as it is.
+    schedule_loaded: bool,
     next_seq: u64,
     /// A dedicated server's `function-permission-level`.
     pub permission: Option<u8>,
@@ -295,7 +298,13 @@ impl Game<'_> {
         }
         self.apply_server_reload(prepared, &stack, enabled_features);
         self.run_native_advancement_grants();
-        if self.fns.schedule.is_empty() {
+        // The schedule is the world's live `TimerQueue` `SavedData`, not pack
+        // content: firing an event (`TimerQueue.tick`) and `/schedule clear`
+        // (`TimerQueue.remove`) drop it from the queue, and a reload only
+        // replaces the function library. Read the saved file when the world's
+        // data loads, then keep the queue as it is.
+        if !self.fns.schedule_loaded {
+            self.fns.schedule_loaded = true;
             self.load_schedule();
         }
         Ok(stack)
@@ -316,6 +325,10 @@ impl Game<'_> {
         self.sync_enchantment_registries();
         // A function's `loot ... loot <id>` names the reloaded packs' tables.
         self.sync_loot_table_ids();
+        // `ReloadableServerRegistries.reload` binds the packs' tags before
+        // `ServerFunctionLibrary` compiles its functions: an item or block
+        // argument's `#tag` resolves against them.
+        self.sync_pack_tag_ids();
         let mut registries = self.ui.registries.clone();
         registries.permission = self.fns.command_level();
         registries.functions = store.functions.keys().cloned().collect();
@@ -368,6 +381,36 @@ impl Game<'_> {
         }
         self.fns.store = store;
         self.sync_function_registries(stack);
+    }
+    /// The item and block tags the world's packs define, as `TagLoader` binds
+    /// them into the registries before the functions compile: the item and
+    /// block arguments' `#tag` and the completions read them. Recomputed from
+    /// the content tables, so a tag a pack no longer defines leaves again.
+    pub(in crate::game) fn sync_pack_tag_ids(&mut self) {
+        let tags = |ids: &std::collections::HashMap<String, std::collections::HashSet<String>>| {
+            let mut out: Vec<String> = ids
+                .keys()
+                .map(|k| horizon_client::command::args::normalize(k))
+                .collect();
+            out.sort();
+            out
+        };
+        let item_tags = tags(&self.items().item_tags);
+        let block_tags = tags(&self.items().block_tags);
+        let reg = &mut self.ui.registries;
+        reg.item_tags.clone_from(&item_tags);
+        reg.block_tags.clone_from(&block_tags);
+        // `Registries::tags` reads an exported registry's entry first. Only
+        // update one the export made: a new empty entry would also take over
+        // `Registries::ids` and hide every item id.
+        for (registry, tags) in [
+            ("minecraft:item", item_tags),
+            ("minecraft:block", block_tags),
+        ] {
+            if let Some(entry) = reg.by_registry.get_mut(registry) {
+                entry.tags = tags;
+            }
+        }
     }
     fn save_datapack_settings(&self) {
         let disabled: Vec<&String> = self
@@ -635,14 +678,18 @@ impl Game<'_> {
         args: Option<&Tag>,
         source: Source,
     ) -> R<Outcome> {
-        let lines = f.instantiate(args).map_err(|(key, a)| {
+        let failure = |key: &str, a: &[String]| {
             let args: Vec<&dyn std::fmt::Display> =
                 a.iter().map(|s| s as &dyn std::fmt::Display).collect();
             err(
                 "commands.function.instantiationFailure",
-                &[&f.id, &horizon_client::text::Text::tr(&key, &args).plain()],
+                &[&f.id, &horizon_client::text::Text::tr(key, &args).plain()],
             )
-        })?;
+        };
+        let lines = f.instantiate(args).map_err(|(key, a)| failure(&key, &a))?;
+        if let Err((key, a)) = self.parse_macro_lines(f, &lines) {
+            return Err(failure(&key, &a));
+        }
         if self.exec.functions.len() >= 128 {
             return Ok(Outcome::NoReturn);
         }
@@ -677,6 +724,35 @@ impl Game<'_> {
             Some(Some(v)) => Outcome::Value(v),
             Some(None) => Outcome::Fail,
         })
+    }
+    /// `MacroFunction.MacroEntry.instantiate`: a `$` line is parsed only after
+    /// substitution, at the function compilation permission
+    /// (`CommandFunction.fromLines`' `compilationContext`), and a line that
+    /// does not parse fails the whole call before any of its lines run.
+    fn parse_macro_lines(
+        &mut self,
+        f: &Function,
+        lines: &[String],
+    ) -> Result<(), (String, Vec<String>)> {
+        if !f.is_macro() {
+            return Ok(());
+        }
+        let level = std::mem::replace(&mut self.ui.registries.permission, self.fns.command_level());
+        let d = self.ui.dispatcher.0.clone();
+        let mut out = Ok(());
+        for (line, entry) in lines.iter().zip(&f.lines) {
+            if matches!(entry, datapack::FunctionLine::Macro(_))
+                && let Err(error) = d.parse(line, &self.ui.registries).executable()
+            {
+                out = Err((
+                    "commands.function.error.parse".into(),
+                    vec![f.id.clone(), line.clone(), error.message.plain()],
+                ));
+                break;
+            }
+        }
+        self.ui.registries.permission = level;
+        out
     }
     /// The functions a `FunctionArgument` names: a function or a tag.
     pub(in crate::game) fn functions_named(&mut self, name: &str) -> R<Vec<Function>> {
@@ -1383,12 +1459,17 @@ impl Game<'_> {
                 .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
             horizon_client::scoreboard::tag_to_json(&tag)
         } else {
-            self.fns
-                .store
-                .predicates
-                .get(id)
-                .cloned()
-                .ok_or_else(|| err("argument.predicate.unknown", &[&id]))?
+            self.fns.store.predicates.get(id).cloned().ok_or_else(|| {
+                let id = if id.contains(':') {
+                    id.to_string()
+                } else {
+                    format!("minecraft:{id}")
+                };
+                err(
+                    "argument.resource_or_id.no_such_element",
+                    &[&id, &"minecraft:predicate"],
+                )
+            })?
         };
         let source = self.command_source.unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| {
@@ -2438,6 +2519,116 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// `StringTemplate.fromString` fails a `$` line with no variable, so the
+    /// file is not registered, and `MacroFunction.MacroEntry.instantiate`
+    /// parses a substituted line, throwing `commands.function.error.parse`
+    /// before any of the call's lines run.
+    #[test]
+    #[ignore = "daily"]
+    fn macro_lines_need_a_variable_and_parse_after_substitution() {
+        use crate::game::{Audio, Options, Settings, load_resources};
+        use std::time::Instant;
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            Instant::now(),
+            false,
+            crate::game::execution_role::ExecutionRole::IntegratedServer,
+            &crate::game::Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.clone(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        let dir = std::env::temp_dir().join(format!("horizon-macro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let functions = dir.join("datapacks/macros/data/h166/function");
+        std::fs::create_dir_all(&functions).unwrap();
+        let format = horizon_core::version::DATA_PACK_FORMAT;
+        std::fs::write(
+            dir.join("datapacks/macros/pack.mcmeta"),
+            serde_json::json!({"pack":{"description":"Macro lines","pack_format":format.0,"min_format":[format.0,format.1],"max_format":[format.0,format.1]}}).to_string(),
+        )
+        .unwrap();
+        for (name, text) in [
+            // No `$(…)`: not a macro at all, so the file does not load.
+            ("novar", "$say hello\nscoreboard players add #ran h166 1\n"),
+            // Substitutes to a line with a trailing argument; the plain lines
+            // around it show that none of the call's lines ran.
+            (
+                "bad",
+                "scoreboard players add #ran h166 1\n$scoreboard players set #seen h166 $(v) bogus\nscoreboard players add #ran h166 1\n",
+            ),
+            (
+                "good",
+                "$scoreboard players set #seen h166 $(v)\nscoreboard players add #ran h166 1\n",
+            ),
+        ] {
+            std::fs::write(functions.join(format!("{name}.mcfunction")), text).unwrap();
+        }
+        game.world_root = dir.clone();
+        let run = |game: &mut Game<'_>, line: &str| {
+            game.exec = ExecState::default();
+            let source = game.player_source();
+            game.execute_line(line, source)
+        };
+        run(&mut game, "scoreboard objectives add h166 dummy").unwrap();
+        run(&mut game, "scoreboard players set #ran h166 -99").unwrap();
+        game.reload_datapacks(false, &game.level.enabled_features.clone())
+            .unwrap();
+        assert!(!game.fns.store.functions.contains_key("h166:novar"));
+        assert!(
+            game.fns
+                .store
+                .errors
+                .iter()
+                .any(|(id, e)| id == "h166:novar" && e.contains("No variables in macro"))
+        );
+        let error = run(&mut game, "function h166:novar").unwrap_err();
+        assert_eq!(error.key, "arguments.function.unknown");
+        let error = game.check_predicate("h166missing").unwrap_err();
+        assert_eq!(error.key, "argument.resource_or_id.no_such_element");
+        let text = error.message.plain();
+        assert!(text.contains("minecraft:h166missing"), "{text}");
+        assert!(text.contains("minecraft:predicate"), "{text}");
+        // A substituted line that does not parse fails the call, so no line of
+        // it runs, and the reason names the line `MacroEntry.instantiate` got.
+        let error = run(&mut game, "function h166:bad {v:1}").unwrap_err();
+        assert_eq!(error.key, "commands.function.instantiationFailure");
+        let reason = error.message.plain();
+        assert!(
+            reason.contains("scoreboard players set #seen h166 1 bogus"),
+            "{reason}"
+        );
+        assert_eq!(game.score.board.score("#ran", "h166").unwrap().value, -99);
+        assert!(game.score.board.score("#seen", "h166").is_none());
+        // A valid substitution still runs every line.
+        run(&mut game, "function h166:good {v:7}").unwrap();
+        assert_eq!(game.score.board.score("#ran", "h166").unwrap().value, -98);
+        assert_eq!(game.score.board.score("#seen", "h166").unwrap().value, 7);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn unless_function_keeps_a_fallthrough_after_running_it_once() {
@@ -3380,3 +3571,11 @@ mod required_tag_tests {
 
 #[cfg(test)]
 include!("functions/typed_state_range_tests.rs");
+
+#[cfg(test)]
+#[path = "functions/pack_tag_tests.rs"]
+mod pack_tag_tests;
+
+#[cfg(test)]
+#[path = "functions/schedule_reload_tests.rs"]
+mod schedule_reload_tests;

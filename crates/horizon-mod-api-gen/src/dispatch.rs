@@ -425,7 +425,7 @@ pub(super) fn emit<'a>(
                 surface_calls.insert(
                     name.as_str(),
                     format!(
-                        "&mut crate::game::host::draw::{} {{ game: self, surface: {name} }}",
+                        "&mut crate::game::host::draw::{}::new(self, {name})",
                         context.game_struct()
                     ),
                 );
@@ -1326,9 +1326,9 @@ mod level { pub trait LevelAccess { fn block_state(&self,pos:crate::BlockPos)->c
             if !success {
                 assert_ne!(methods, implementations);
             }
-            let proof = include_str!("../../../tools/refactors/api-pr3b/level_read.rs")
+            let proof = include_str!("../tests/fixtures/level_read.rs")
                 .replace("/* READ_IMPLS */", &methods);
-            let fixture = include_str!("../../../tools/refactors/api-pr3b/hook_index.rs")
+            let fixture = include_str!("../tests/fixtures/hook_index.rs")
                 .replace("INDEX_PATH", index.to_str().unwrap())
                 .replace(
                     "pub fn run() {",
@@ -1385,7 +1385,7 @@ mod level { pub trait LevelAccess { fn block_state(&self,pos:crate::BlockPos)->c
             root.join("crates/horizon-client/src/game/modding/api_values/block_state.rs"),
         )
         .unwrap();
-        let fixture = include_str!("../../../tools/refactors/api-pr3b/hook_index.rs");
+        let fixture = include_str!("../tests/fixtures/hook_index.rs");
         for (name, code, success) in [
             ("baseline", production.clone(), true),
             (
@@ -1508,7 +1508,7 @@ mod level { pub trait LevelAccess { fn block_state(&self,pos:crate::BlockPos)->c
         ] {
             let source = directory.join(format!("{name}.rs"));
             let binary = directory.join(name);
-            let mut fixture = include_str!("../../../tools/refactors/api-pr3b/block_routing.rs")
+            let mut fixture = include_str!("../tests/fixtures/block_routing.rs")
                 .replace("INDEX_PATH", index.to_str().unwrap())
                 .replace("FIRE_BODY", &body);
             if name == "global_listener" {
@@ -1587,7 +1587,7 @@ fn main() {
             "",
         );
         assert_ne!(silent, body);
-        let fixture = include_str!("../../../tools/refactors/api-pr3b/hook_crossing.rs");
+        let fixture = include_str!("../tests/fixtures/hook_crossing.rs");
         let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/hook-crossing-proof");
         std::fs::create_dir_all(&directory).unwrap();

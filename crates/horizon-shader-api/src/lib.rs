@@ -13,8 +13,8 @@ pub mod stages;
 pub use check::{Problem, Report, check};
 pub use inputs::Frame;
 pub use manifest::{
-    API, Api, Blend, LightColor, MANIFEST, Manifest, Material, OptionKind, OptionPage, PackOption,
-    PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
+    API, Api, Blend, Coverage, LightColor, MANIFEST, Manifest, Material, OptionKind, OptionPage,
+    PackOption, PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
 };
 pub use package::{EXTENSION, Pack};
 pub use stages::{Composed, StageKind, compose};

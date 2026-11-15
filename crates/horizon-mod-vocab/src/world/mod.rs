@@ -4,10 +4,12 @@ pub(crate) mod advancement_progress;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod biome;
+pub(crate) mod biome_key;
 pub(crate) mod biome_modifier;
 pub(crate) mod biome_region;
 pub(crate) mod biome_source;
 pub(crate) mod chunk_generator;
+pub(crate) mod chunk_refusal;
 pub(crate) mod clock_adjustment;
 pub(crate) mod criteria;
 pub(crate) mod custom_spawners;
@@ -40,6 +42,7 @@ pub(crate) mod reload_order;
 pub mod rotation;
 pub(crate) mod runtime_levels;
 pub(crate) mod scheduler;
+pub(crate) mod server_console;
 pub(crate) mod server_reload;
 pub mod snapshots;
 pub(crate) mod startup_progress;

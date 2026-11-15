@@ -503,6 +503,25 @@ impl Game<'_> {
         }
         self.default_execute((pos[0], pos[1], pos[2]), facing, stack)
     }
+    /// `dispense_with_remainder`: `consume_with_remainder` for a mod's dispense answer, in the
+    /// level in place; `stack` unchanged off it, as `dispense_default` keeps it.
+    pub(super) fn dispense_with_remainder(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        facing: Direction,
+        stack: ItemStack,
+        remainder: ItemStack,
+    ) -> Option<ItemStack> {
+        if !(self.serving.is_some() || self.options.dedicated.is_some())
+            || dimension != self.dim.id()
+            || !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4))
+            || stack.count == 0
+        {
+            return Some(stack).filter(|stack| stack.count > 0);
+        }
+        self.consume_with_remainder((pos[0], pos[1], pos[2]), facing, stack, remainder)
+    }
     /// `new DefaultDispenseItemBehavior().dispense(..)` including its events.
     pub(super) fn dispense_default_in_level(
         &mut self,
@@ -1103,7 +1122,7 @@ impl Game<'_> {
         true
     }
     /// After `EntityType.spawn` / `MobBucketItem.spawn`: `mob.playAmbientSound()`.
-    fn mob_ambient(&mut self, id: u32) -> Result<()> {
+    pub(super) fn mob_ambient(&mut self, id: u32) -> Result<()> {
         if self.dragon_spawn_ambient(id) {
             return Ok(());
         }
@@ -2027,6 +2046,7 @@ impl Game<'_> {
                 keep_equipment: false,
                 preserve_can_pick_up_loot: false,
             },
+            false,
             |game, _| {
                 game.mooshroom_shear_puff([at.x, at.y, at.z], height);
                 let mut drops =

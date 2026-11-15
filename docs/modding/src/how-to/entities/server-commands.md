@@ -24,6 +24,17 @@ must be a `namespace:path` resource location of at most 256 bytes, and the serve
 most 256 distinct registries; a usage past either is left out, with the reason in the log. Block positions are resolved and floored
 from the source's world, relative or local coordinates without loading chunks.
 
+`id` is a free identifier: vanilla's `minecraft:resource_location` argument, lowercase letters,
+digits and `_ - . : /`, canonicalised to `namespace:path` with `minecraft` when the namespace is
+left out, and checked against no registry. `Command::new("map fullrender <world:id>")` takes
+`minecraft:overworld`, `mymod:custom` and `overworld` (delivered as `minecraft:overworld`), and
+refuses an upper-case token or a second colon. The value arrives as a plain string. It offers no
+list of its own, so its node declares `minecraft:ask_server`: the client, modded or not, asks the
+server for the completions, as it does for a mod argument type. The identifiers are yours to
+supply in `tab_complete`, which receives the command, the replaced byte range and the suggestions
+the server computed, and may add to or filter them, matching its own command path and the
+argument's position.
+
 Positions, rotations, dimensions and compound tags have their own kinds, each sent to clients
 as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla command:
 
@@ -114,8 +125,9 @@ argument's kind:
 
 ```rust,ignore
 use mod_api::{
-    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandSuggestion,
-    Hooks, RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost, Text,
+    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandSender,
+    CommandSuggestion, Hooks, RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost,
+    Text,
 };
 
 struct Machine;
@@ -135,7 +147,12 @@ impl CommandArgumentType for Machine {
         }
     }
 
-    fn suggest(&self, prefix: &str) -> Vec<CommandSuggestion> {
+    fn suggest(
+        &self,
+        sender: Option<&CommandSender>,
+        prefix: &str,
+    ) -> Vec<CommandSuggestion> {
+        let _ = sender;
         ["press", "furnace"]
             .into_iter()
             .filter(|machine| machine.starts_with(prefix))
@@ -162,7 +179,12 @@ The server parses the argument with `parse` before calling `run_mod_command`; a
 rejected value shows the returned `Text` and no listener runs. A valid value arrives
 as `CommandArgumentValue::Custom { kind, value }`, where `kind` is `mymod:machine`
 and `value` is the canonical text `parse` returned. `suggest` is asked for the
-completions while the player types.
+completions while the player types, with the sender: a provider that completes names
+from a mod's own registry returns only the entries that sender may use, keyed by its
+UUID and compared with `sender.permission()`. The game keeps the answer as it comes
+and does not filter it, so a provider that ignores the sender offers everything to
+everyone. `sender` is `None` when no player asks: the console, and a client
+completing its own client commands before its own profile is known.
 
 For a fixed set of words, register `ChoiceArgument` (NeoForge's `EnumArgument`)
 instead of writing a type: `r.register_command_argument("mode",
@@ -171,9 +193,9 @@ ones, and completes the choices that start with the typed text.
 
 `CommandArgumentKind::Word` takes one word of ASCII letters, digits and `_ - . +`; the
 word ends at the first other character, a space included, so a value with `:` or `/`
-needs `Greedy`, which takes the rest of the line and must be the usage's last argument.
-Players whose client does not know the type
-parse and complete the command: the server sends the argument as a Brigadier string
+needs `Greedy`, which takes the rest of the line. `suggest` receives that text as typed so
+far: one word, or the whole tail of the line up to the cursor. Players whose client does not know
+the type parse and complete the command: the server sends the argument as a Brigadier string
 of that shape with `minecraft:ask_server`, and their chat asks the server for the
 suggestions.
 
@@ -181,6 +203,36 @@ The namespaced id is in the registering mod's namespace; an id registered twice,
 name in another namespace or an empty name refuses the mods at startup, naming the
 mod. A client mod registers client command argument types the same way; they are
 available to `register_client_commands`.
+
+### Completing one token of a greedy text
+
+A `Greedy` argument holds free text, and the tokens in it are yours to split. A completion
+replaces all of that text by default, so `suggest` names the token it completes with
+`CommandSuggestion::replacing_from`, a byte offset into the prefix:
+
+```rust,ignore
+// `//replace 50%stone,50%dirt st` completes only the block being typed.
+fn suggest(&self, _: Option<&CommandSender>, prefix: &str) -> Vec<CommandSuggestion> {
+    let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+    ["stone", "dirt"]
+        .into_iter()
+        .filter(|block| block.starts_with(&prefix[start..]))
+        .map(|block| CommandSuggestion::new(block).replacing_from(start))
+        .collect()
+}
+```
+
+The offset reaches the player's client as the suggestion's range, so vanilla clients replace
+the same token in place and keep the text in front of it. An offset past the prefix, or inside
+a character, refuses that suggestion: the reason is logged with the type's id, the other
+suggestions stay, and nothing panics.
+
+A greedy `text` argument is the last one: no word may follow it, and a usage that puts one
+after it is left out, with the reason in the log. Such a usage is written with the free text
+last and the mod splitting what it needs from that text: `//undo <text>` for
+`//undo 1 <player>`, `/music <text>` for `/music volume 20 30`, `/corecarol <text>` for
+`/corecarol skip now`. Vanilla has no reachable node after a greedy argument either, so a
+trailing word would never be matched there.
 
 `player_command` provides player-only pre-execution cancellation (NeoForge's `CommandEvent`), including vanilla commands.
 
@@ -190,6 +242,17 @@ server tick, every mod is asked to register again. The server rebuilds the typed
 command dispatcher and sends each player's tree after `player_commands_sent`
 filters it, as vanilla does after `/reload`. Repeated requests before that tick
 coalesce; without a world open to players, nothing is rebuilt.
+
+## Who sees a usage
+
+A usage's `level` gates its whole path, and the same test answers running, the tree
+and the completions: a player below the level neither receives that literal in their
+command tree nor is offered it, and typing the path is refused. A root with one
+public usage keeps only the children the player may run, so `/warp` stays visible
+while `/warp admin` is absent for a non-operator. An operator level change sends the
+trees again (`/op`, `/deop`) and the completions follow from then on; a provider
+whose answers depend on its own policy calls `host.commands().refresh_commands()`
+after it changes them.
 
 ## Custom selector tokens
 

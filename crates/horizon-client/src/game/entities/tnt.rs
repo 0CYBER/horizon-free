@@ -690,6 +690,13 @@ impl Game<'_> {
             self.send_overlay_message(message);
             return Ok(false);
         }
+        // `TntBlock.prime`: an adventure player lights TNT only with a stack
+        // whose `can_break` matches it. The refused click is still SUCCESS: the
+        // arm swings, and neither the block, the stack nor the fuse changes.
+        if !self.may_build() && !self.can_break_in_adventure(hit.pos) {
+            self.swing_arm();
+            return Ok(true);
+        }
         if !self.tnt_prime_allowed(pos) {
             return Ok(true);
         }
@@ -751,6 +758,10 @@ impl Game<'_> {
             self.view_scale(),
         );
         for t in &self.tnts {
+            // LevelExtractor: the camera entity is not drawn from its own eyes.
+            if self.hides_as_camera(t.id) {
+                continue;
+            }
             // EntityRenderer.shouldRender.
             if !self.standing_entity_in_view(
                 camera,

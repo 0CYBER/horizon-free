@@ -28,6 +28,7 @@ use super::{Dim, Game, Mining, Screen, level_sounds::LevelSound};
 use crate::game::api_values::TryIntoApi;
 use horizon_client::actions::Action;
 use horizon_client::first_person::{Hand, SwingAnimation};
+use horizon_client::input_queue::InputQueue;
 use horizon_client::{
     Result,
     blocks::Fluid,
@@ -48,6 +49,7 @@ use horizon_client::{
     sprint::Keys,
     streaming::{ChunkGenerator, Proto, Streaming},
     tab_list::SPECTATOR,
+    text::Text,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
@@ -85,10 +87,13 @@ use chat_received::QueuedChat;
 pub(in crate::game) mod client_level_tick;
 mod entity_section_steps;
 mod item_use;
+mod queued_keys;
 mod remote_attributes;
 mod tables;
 
 pub(super) use super::villager_client::builtin_registries;
+
+mod chat_queue;
 
 /// `ChatType`'s two decorations: how a message shows in the chat, and what the narrator says of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -730,7 +735,7 @@ pub(super) struct Remote {
     /// Keys whose presses send a packet (swap hands, drop, a mount's
     /// inventory): like the click queue, they wait for the tick's
     /// `handleKeybinds` phase rather than going out between window events.
-    pub(super) pending_keys: Vec<KeyCode>,
+    pub(super) pending_keys: InputQueue<KeyCode>,
     /// Whether the main and off hand still wait for the server's answer to
     /// a SWAP_ITEM_WITH_OFFHAND (`remote_hand_slot_set`).
     swap_answer: [bool; 2],
@@ -1235,7 +1240,7 @@ impl Game<'_> {
             interaction_swing: [true; 2],
             destroy_delay: 0,
             input: Default::default(),
-            pending_keys: Vec::new(),
+            pending_keys: InputQueue::new(queued_keys::PENDING_KEYS),
             swap_answer: [false; 2],
             stop_mining: false,
             placing: None,
@@ -1478,7 +1483,7 @@ impl Game<'_> {
             interaction_swing: [true; 2],
             destroy_delay: 0,
             input: Default::default(),
-            pending_keys: Vec::new(),
+            pending_keys: InputQueue::new(queued_keys::PENDING_KEYS),
             swap_answer: [false; 2],
             stop_mining: false,
             placing: None,
@@ -1508,7 +1513,7 @@ impl Game<'_> {
     }
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
-    pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+    pub(super) fn leave_server(&mut self, reason: Option<Text>) -> Result<()> {
         if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
             return self.begin_closing_save(false);
         }
@@ -1989,9 +1994,8 @@ impl Game<'_> {
             return Ok(());
         };
         let Some(signature) = r.signatures.unpack(packed) else {
-            let reason =
-                horizon_client::text::Text::translate("multiplayer.disconnect.invalid_packet", &[]);
-            return self.leave_server(Some(reason.plain()));
+            let reason = Text::translate("multiplayer.disconnect.invalid_packet", &[]);
+            return self.leave_server(Some(reason));
         };
         r.secure_chat.ignore_pending(&signature);
         let queued = r.chat_queue.len();
@@ -2051,69 +2055,6 @@ impl Game<'_> {
             self.say_chat_queued(&narration);
         }
         shown
-    }
-
-    /// `ChatListener.messageDelay`: Chat Delay in milliseconds, as Java truncates it.
-    fn chat_delay_ms(&self) -> i64 {
-        (self.settings.chat_delay * 1000.0) as i64
-    }
-
-    /// `ChatListener.tick`: while paused the wait does not run down; with no
-    /// Chat Delay the queue flushes; otherwise the next message the chat takes
-    /// shows once the delay has passed since the last shown one.
-    pub(super) fn tick_chat_queue(&mut self) {
-        let delay = self.chat_delay_ms();
-        // Minecraft.isPaused: a single-player pausing screen, not every pause menu.
-        if self.pause {
-            if delay > 0
-                && let Some(r) = self.remote.as_mut()
-            {
-                r.chat_previous = r.chat_previous.map(|t| t + Duration::from_millis(50));
-            }
-            return;
-        }
-        if delay == 0 {
-            if self
-                .remote
-                .as_ref()
-                .is_some_and(|r| !r.chat_queue.is_empty())
-            {
-                self.flush_chat_queue();
-            }
-            return;
-        }
-        let ready = self.remote.as_ref().is_some_and(|r| {
-            r.chat_previous
-                .is_none_or(|t| t.elapsed() >= Duration::from_millis(delay as u64))
-        });
-        if !ready {
-            return;
-        }
-        // A message the Chat option hides is dropped and the next one is tried,
-        // until one shows.
-        while let Some(chat) = self.remote.as_mut().and_then(|r| r.chat_queue.pop_front()) {
-            if self.accept_chat(chat) {
-                break;
-            }
-        }
-    }
-
-    /// `ChatListener.flushQueue`: every held-back message shows now, and the
-    /// delay starts over.
-    fn flush_chat_queue(&mut self) {
-        let Some(queue) = self
-            .remote
-            .as_mut()
-            .map(|r| std::mem::take(&mut r.chat_queue))
-        else {
-            return;
-        };
-        for chat in queue {
-            self.accept_chat(chat);
-        }
-        if let Some(r) = self.remote.as_mut() {
-            r.chat_previous = None;
-        }
     }
 
     /// The minecarts the server sent, for the control socket's `status`
@@ -2439,7 +2380,7 @@ impl Game<'_> {
                         return Ok(());
                     }
                     let retry = self.reconnect_after(&reason, key.as_deref(), from_server);
-                    self.leave_server(Some(reason))?;
+                    self.leave_server(Some(Text::literal(reason)))?;
                     self.offer_reconnect(retry);
                     return Ok(());
                 }
@@ -4433,10 +4374,11 @@ impl Game<'_> {
                     }
                     (None, None) => None,
                 };
+                // `ClientPacketListener.random`, the listener's own stream: a
+                // pickup pitch is never a draw of the level's.
                 if let Some(o) = orb_at {
-                    let pitch = (self.world.random.next_float() - self.world.random.next_float())
-                        * 0.35
-                        + 0.9;
+                    let mut r = horizon_client::random_source::create();
+                    let pitch = (r.next_float() - r.next_float()) * 0.35 + 0.9;
                     self.audio.play(
                         "minecraft:entity.experience_orb.pickup",
                         Some([o.x, o.y, o.z]),
@@ -4444,10 +4386,8 @@ impl Game<'_> {
                         pitch,
                     );
                 } else if let Some(at) = at {
-                    let pitch = ((self.world.random.next_float() - self.world.random.next_float())
-                        * 0.7
-                        + 1.0)
-                        * 2.0;
+                    let mut r = horizon_client::random_source::create();
+                    let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
                     self.audio
                         .play("minecraft:entity.item.pickup", Some(at), 0.2, pitch);
                 }
@@ -5171,11 +5111,8 @@ impl Game<'_> {
                         "Missing or out-of-order chat message from server, expected index {expected} but got {}",
                         p.global_index
                     );
-                    let reason = horizon_client::text::Text::translate(
-                        "multiplayer.disconnect.bad_chat_index",
-                        &[],
-                    );
-                    return self.leave_server(Some(reason.plain()));
+                    let reason = Text::translate("multiplayer.disconnect.bad_chat_index", &[]);
+                    return self.leave_server(Some(reason));
                 }
                 let last_seen: Option<Vec<Signature>> =
                     p.last_seen.iter().map(|s| r.signatures.unpack(s)).collect();
@@ -5184,11 +5121,8 @@ impl Game<'_> {
                         "Message from player with ID {:032x} referenced unrecognized signature id",
                         p.sender
                     );
-                    let reason = horizon_client::text::Text::translate(
-                        "multiplayer.disconnect.invalid_packet",
-                        &[],
-                    );
-                    return self.leave_server(Some(reason.plain()));
+                    let reason = Text::translate("multiplayer.disconnect.invalid_packet", &[]);
+                    return self.leave_server(Some(reason));
                 };
                 let signature = p
                     .signature
@@ -6153,10 +6087,10 @@ impl Game<'_> {
         let at = Vec3::new(p[0], p[1], p[2]);
         // ItemEntity's constructor draws bobOffs from the item's own random.
         let mut random = horizon_client::mobs::entity_random(id as u32, at);
-        let bob_offset = random.next_float() * std::f32::consts::PI * 2.0;
+        let bob = super::item_entities::bob_offset(at, random.next_float(), self.clock.still());
         self.dropped.push(ItemEntity {
             random,
-            ..ItemEntity::new(id as u32, stack, at, velocity, bob_offset)
+            ..ItemEntity::new(id as u32, stack, at, velocity, bob)
         });
     }
     /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
@@ -8267,7 +8201,11 @@ impl Game<'_> {
     /// firework rocket wherever it may be used, and the server launches it.
     /// Whether the item's use succeeded, which ends the click.
     /// The caller has selected Item.useOn after cooldown and adventure gates.
-    fn predict_item_on_block(&mut self, stack: &ItemStack, hit: &super::Hit) -> bool {
+    pub(in crate::game) fn predict_item_on_block(
+        &mut self,
+        stack: &ItemStack,
+        hit: &super::Hit,
+    ) -> bool {
         // FireworkRocketItem.useOn: SUCCESS unless gliding, when Item.use
         // boosts instead. The phase's cooldown/adventure gates already ran.
         if &*stack.item == "minecraft:firework_rocket" {
@@ -8545,20 +8483,21 @@ impl Game<'_> {
     /// Run BlockItem.place on a disposable level: where it placed and the
     /// blocks it set. The real level supplies collision shapes and
     /// building-blocking entities; random draws, scheduled ticks and events
-    /// stay in the preview.
+    /// stay in the preview. `ItemStack.useOn` runs it in adventure mode only
+    /// when the used stack's `can_place_on` names the clicked block.
     pub(super) fn remote_can_place(
         &mut self,
         hit: &super::Hit,
         stack: &ItemStack,
     ) -> Option<DryPlace> {
-        if !self.may_build() {
+        if !self.may_build() && !self.stack_can_place_on_in_adventure(stack, hit.pos) {
             return None;
         }
         let ctx = horizon_world::level::PlaceContext {
             clicked_pos: horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
             face: horizon_core::geometry::Direction::ALL[face_direction(hit.face) as usize],
             hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-            inside: hit.face == [0; 3],
+            inside: hit.inside,
             yaw: self.yaw,
             pitch: self.pitch,
             sneaking: self.remote_shift_down(),
@@ -9016,7 +8955,7 @@ impl Game<'_> {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
-        let mut input = std::mem::take(&mut r.input);
+        let mut input = r.input.take_queued();
         let stop = std::mem::take(&mut r.stop_mining);
         // Minecraft.tick runs handleKeybinds only while `gui.screen() == null`: a
         // book, a sign editor, a dialog or a prompt over the world (each a
@@ -9058,42 +8997,6 @@ impl Game<'_> {
             self.send_play(S::SetCarriedItem(play::SetCarriedItem {
                 slot: self.selected as i16,
             }));
-        }
-    }
-
-    fn remote_queued_keys(&mut self) {
-        // handleKeybinds' keybind polls: the queued presses act now, in tick
-        // order, so no packet goes out between CLIENT_TICK_END and a pong.
-        let pending = self
-            .remote
-            .as_mut()
-            .map(|r| std::mem::take(&mut r.pending_keys))
-            .unwrap_or_default();
-        for key in pending {
-            match key {
-                KeyCode::KeyF if !self.spectator() => self.remote_swap_hands(),
-                KeyCode::KeyQ if !self.spectator() => {
-                    // Minecraft.hasControlDown: the physical keys, so a toggled
-                    // sprint on Left Control does not make Q drop the stack.
-                    let all = self.has_control_down() || self.input_takes_stack_drop();
-                    self.remote_drop(all);
-                }
-                KeyCode::KeyE
-                    if !self.in_portal_transition()
-                        && (self.riding_mount_with_menu() || self.riding_chest_boat()) =>
-                {
-                    let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
-                    self.send(S::PlayerCommand(play::PlayerCommand {
-                        id,
-                        action: 5,
-                        data: 0,
-                    }));
-                }
-                _ => {}
-            }
-        }
-        if self.clicks.miss_time > 0 {
-            self.clicks.miss_time -= 1;
         }
     }
 
@@ -9723,10 +9626,10 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             r.menu
                 .set(Some((container, "minecraft:merchant".to_owned())));
-            r.set_menu_title(Some(text));
+            r.set_menu_title(Some(text.clone()));
         }
         let session = horizon_client::merchant::Session::new(Vec::new(), true);
-        self.open_remote_merchant(session, (!title.is_empty()).then_some(title));
+        self.open_remote_merchant(session, (!title.is_empty()).then_some(text));
     }
     /// ClientboundMerchantOffersPacket.
     fn remote_merchant_offers(&mut self, p: play::MerchantOffers) {

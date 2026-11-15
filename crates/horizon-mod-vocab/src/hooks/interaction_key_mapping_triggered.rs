@@ -12,18 +12,21 @@ pub trait Hooks {
     /// `[0, 1, 0]` for the top), at the point `at`. Set `canceled` and the impact
     /// does not happen: no damage, no knockback, no sound, no block reaction, the
     /// arrow does not stick, a pearl does not teleport, a potion or a fireball
-    /// does not burst. The projectile flies on and is not discarded, so a mod
-    /// that cancels also decides what becomes of it. It continues through its
-    /// whole motion and may hit something on a later tick. Covers what
-    /// `tick_projectiles` flies: arrows, tridents, snowballs,
-    /// eggs, pearls, potions, fireballs, wither skulls, wind charges, llama spit and
-    /// shulker bullets, from players, mobs and dispensers. It does not fire for
-    /// a breeze's deflection, for a hit on a wind charge, for fireworks or for
-    /// fishing bobbers. A dragon part or End crystal is told by the id of the
+    /// does not burst. Cancellation leaves the projectile alive. A flying bobber
+    /// skips hooking and redirection to the hit point, but its ordinary move
+    /// still stops against solid blocks. Water is not an impact. Bobbers notify
+    /// before vanilla's entity deflection and world-border bounce; rockets notify
+    /// after deflection and cancellation skips their impact explosion only.
+    /// Covers arrows, tridents, thrown items, fireballs, wither skulls, wind
+    /// charges, llama spit, shulker bullets, bobbers and rockets. Other families
+    /// skip breeze deflections and hits on wind charges. A dragon part or End crystal is told by the id of the
     /// dragon or crystal. Heard only when a mod also sets
-    /// `hears_projectile_impacts`. Server-side.
+    /// `hears_projectile_impacts`. Server-side. Version 2 adds bobbers and rockets;
+    /// listeners retaining the earlier family set filter out `minecraft:fishing_bobber`
+    /// and `minecraft:firework_rocket`. Named injections request `hook_version = 2`.
     #[hook(
         side = "server",
+        version = 2,
         contract = "cancel",
         out = "canceled",
         neoforge = "ProjectileImpactEvent",

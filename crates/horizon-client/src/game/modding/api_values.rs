@@ -2584,20 +2584,6 @@ pub(in crate::game) fn block_entity_declarations()
         .collect()
 }
 
-impl TryIntoEngine<()> for mod_api::GameRuleDecl {
-    type Engine = horizon_client_core::gamerules::Rule;
-    type Error = std::convert::Infallible;
-    fn try_into_engine(&self, _: &()) -> Result<Self::Engine, Self::Error> {
-        Ok(Self::Engine {
-            name: self.name.clone(),
-            category: self.category.clone(),
-            default: horizon_client_core::gamerules::Value::Bool(self.default),
-            min: 0,
-            max: 0,
-        })
-    }
-}
-
 #[cfg(test)]
 mod declaration_snapshot_tests {
     use super::*;
@@ -3050,7 +3036,7 @@ pub(in crate::game) fn game_rule_registry() -> horizon_client_core::gamerules::R
         .iter()
         .map(|rule| rule.try_into_engine(&()).unwrap())
         .collect();
-    horizon_client_core::gamerules::RuleRegistry::with_bool_rules(
+    horizon_client_core::gamerules::RuleRegistry::with_mod_rules(
         mod_api::__private::game_rule_categories(),
         &rules,
     )
@@ -3059,6 +3045,8 @@ pub(in crate::game) fn game_rule_registry() -> horizon_client_core::gamerules::R
 
 #[path = "api_values/damage.rs"]
 pub(in crate::game) mod damage;
+#[path = "api_values/game_rule_values.rs"]
+mod game_rule_values;
 #[path = "api_values/item_properties.rs"]
 mod item_properties;
 #[path = "api_values/loot_values.rs"]

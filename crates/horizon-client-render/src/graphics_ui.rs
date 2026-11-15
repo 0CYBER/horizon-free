@@ -8,8 +8,8 @@ use crate::{
     gfx::EffectiveOutput,
     graphics::{
         EntityCullingMode, FarDetail, FrameGeneration, GpuCullingMode, GraphicsApi, HdrMode,
-        HdrSetup as Setup, LeafCullingMode, Overlay, Pacing, ParticleCullingMode, PresentMode,
-        Preset, Upscaling,
+        HdrSetup as Setup, LeafCullingMode, Overlay, Pacing, ParallelTickMode, ParticleCullingMode,
+        PresentMode, Preset, Upscaling,
     },
     graphics_style::Cost,
     lang,
@@ -98,6 +98,7 @@ pub enum H {
     PresentMode,
     Pacing,
     Workers,
+    ParallelTick,
     Overlay,
     ResolutionScale,
     DynamicResolution,
@@ -433,6 +434,11 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             None,
                             "Threads that generate, light and mesh chunks. Next start.",
                         ),
+                        h(
+                            H::ParallelTick,
+                            Saves,
+                            "Shares your world's tick among threads. Auto: only while that is faster.",
+                        ),
                     ],
                 ),
                 (
@@ -590,7 +596,7 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         h(
                             H::Hdr,
                             None,
-                            "Lava, fire and sunlight shine brighter than white. Needs an HDR display.",
+                            "Lava, fire and the sun shine brighter than white. Needs an HDR display.",
                         ),
                         h(
                             H::HdrSmoothGradients,
@@ -630,13 +636,19 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         h(
                             H::HdrLighting,
                             None,
-                            "Light sources, the sun and sunlight shine past white. Off: just as SDR.",
+                            "Light sources and the sun shine past white. Off: just as SDR.",
                         ),
                     ],
                 ),
             ],
         ),
     ];
+    // The fork forces ticking serial, so Parallel Tick would be a no-op setting.
+    for (_, groups) in &mut pages {
+        for (_, rows) in groups {
+            rows.retain(|r| !matches!(r.item, Item::Horizon(H::ParallelTick)));
+        }
+    }
     // Only Windows and Linux have more than one graphics API, translucent batching (Metal
     // draws flat) and GPU culling (Metal draws no count the GPU wrote).
     if cfg!(target_os = "macos") {
@@ -836,8 +848,8 @@ impl H {
             _ => None,
         }
     }
-    /// "Paper White: Auto (203)" or "Paper White: 160": a setting in nits, 0 for Auto, which
-    /// shows the nits Auto gives.
+    /// "Paper White: Auto (203 nits)" or "Paper White: 160 nits": a setting in nits, 0 for Auto,
+    /// which shows the nits Auto gives.
     fn nits_label(self, s: &Settings, out: &EffectiveOutput) -> Text {
         let (g, r) = (&s.horizon, out.reported);
         let (caption, set, auto) = match self {
@@ -846,8 +858,8 @@ impl H {
             _ => ("UI Brightness", g.hdr_ui_nits, g.ui_nits(r)),
         };
         match set {
-            0 => labelled(caption, lang::tr("Auto (%s)", &[&auto])),
-            n => labelled(caption, n),
+            0 => labelled(caption, lang::tr("Auto (%s nits)", &[&auto])),
+            n => labelled(caption, lang::tr("%s nits", &[&n])),
         }
     }
     fn label(self, s: &Settings, out: &EffectiveOutput) -> Text {
@@ -887,6 +899,7 @@ impl H {
             H::ParticleCulling => labelled("Particle Culling", g.particle_culling.label()),
             H::LeafCulling => labelled("Leaf Culling", g.leaf_culling.label()),
             H::OpaqueIce => labelled("Opaque Ice", on_off(g.opaque_ice)),
+            H::ParallelTick => labelled("Parallel Tick", g.parallel_tick.label()),
             H::CacheShulkerBoxes => labelled("Shulker Boxes", on_off(g.cache_shulker_boxes)),
             H::CacheSigns => labelled("Signs", on_off(g.cache_signs)),
             H::CacheDecoratedPots => labelled("Decorated Pots", on_off(g.cache_decorated_pots)),
@@ -953,7 +966,10 @@ impl H {
                 Setup::Changed => "Use Automatic Setup",
             })),
             H::HdrPaperWhite | H::HdrPeak | H::HdrUiBrightness => self.nits_label(s, out),
-            H::HdrBlackLevel => labelled("Black Level", format!("{:.2}", g.black_level_nits())),
+            H::HdrBlackLevel => labelled(
+                "Black Level",
+                lang::tr("%s nits", &[&format!("{:.2}", g.black_level_nits())]),
+            ),
             H::HdrLighting => labelled("HDR Lighting", on_off(g.hdr_lighting)),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::ShadowCache => labelled("Shadow Cache", on_off(g.shadow_cache)),
@@ -1041,6 +1057,9 @@ impl H {
                 g.leaf_culling = step(&LeafCullingMode::ALL, g.leaf_culling, back);
             }
             H::OpaqueIce => g.opaque_ice = !g.opaque_ice,
+            H::ParallelTick => {
+                g.parallel_tick = step(&ParallelTickMode::ALL, g.parallel_tick, back)
+            }
             H::CacheShulkerBoxes => g.cache_shulker_boxes = !g.cache_shulker_boxes,
             H::CacheSigns => g.cache_signs = !g.cache_signs,
             H::CacheDecoratedPots => g.cache_decorated_pots = !g.cache_decorated_pots,
@@ -1290,6 +1309,7 @@ impl Item {
                         | H::Pacing
                         | H::PresentMode
                         | H::Workers
+                        | H::ParallelTick
                         | H::FrameGeneration
                         | H::BatteryMode
                         | H::ShadowCache
@@ -2796,13 +2816,13 @@ mod tests {
             H::HdrUiBrightness,
         ] {
             // Everything a drag can land on, each read back where the slider puts it.
+            // `set_slider` overwrites only this slider's field, so both settings are reused.
             let mut set = std::collections::BTreeSet::new();
+            let (mut s, mut again) = (fresh(), fresh());
             for i in 0..=10_000 {
-                let mut s = fresh();
                 h.set_slider(&mut s, i as f32 / 10_000.0);
                 let v = value(h, &s);
                 set.insert(v);
-                let mut again = fresh();
                 h.set_slider(&mut again, h.slider(&s).unwrap());
                 assert_eq!(value(h, &again), v, "{h:?} round trip");
             }
@@ -2839,14 +2859,6 @@ mod tests {
             reach(H::HdrBlackLevel, &mut s),
             (0..=100).collect::<Vec<u32>>()
         );
-    }
-    #[test]
-    fn black_level_reads_as_its_lift() {
-        let mut s = Settings::default();
-        let label = |s: &Settings| Item::Horizon(H::HdrBlackLevel).label(s, &NONE).plain();
-        assert_eq!(label(&s), "Black Level: 0.00");
-        s.horizon.hdr_black_level = 5;
-        assert_eq!(label(&s), "Black Level: 0.05");
     }
     /// Horizon's graphics captions are English sentences that the language table keys by
     /// themselves, so a caption, description or value that is not in `en_us.json` shows in

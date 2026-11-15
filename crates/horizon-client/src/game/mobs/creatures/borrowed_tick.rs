@@ -113,33 +113,22 @@ impl Game<'_> {
         // Each mob's position updates in its tick, in order, filed and told before the next mob
         // is examined. The small record remains separate from `Mob` because teleports update
         // the same position field as ordinary movement.
-        let section_table = round.sections().then(|| {
-            std::rc::Rc::new(std::cell::RefCell::new(std::mem::take(
-                &mut self.native_lifecycle.entity_sections,
-            )))
-        });
+        let section_scope = round
+            .sections()
+            .then(|| self.entity_section_scope())
+            .flatten();
+        let (section_table, live_section_observer) = if round.sections() {
+            self.native_lifecycle
+                .section_observer
+                .begin(&mut self.native_lifecycle.entity_sections, section_scope)
+        } else {
+            (None, None)
+        };
         let mut section_moves = section_table
             .as_ref()
             .map(|sections| std::mem::take(&mut sections.borrow_mut().ticked))
             .unwrap_or_default();
         crate::mobs::living::section_writes::begin(section_table.is_some());
-        let section_scope = round
-            .sections()
-            .then(|| self.entity_section_scope())
-            .flatten();
-        let live_section_observer: Option<crate::mobs::living::section_writes::Observer> =
-            section_scope
-                .zip(section_table.as_ref())
-                .map(|(scope, sections)| {
-                    let observer: crate::mobs::living::section_writes::Observer =
-                        std::rc::Rc::new(std::cell::RefCell::new(
-                            crate::game::entity_sections::LiveSectionObserver::new(
-                                std::rc::Rc::clone(sections),
-                                scope,
-                            ),
-                        ));
-                    observer
-                });
         let mut dispatch_panic = None;
         let mut pushes = std::mem::take(state.pushes);
         let original_len = snapshot.len();
@@ -807,11 +796,9 @@ impl Game<'_> {
         // consumed every record that belonged to this family tick.
         section_moves.clear();
         if let Some(table) = section_table {
-            let mut sections = std::rc::Rc::try_unwrap(table)
-                .ok()
-                .expect("live section observer still held");
-            sections.get_mut().ticked = section_moves;
-            self.native_lifecycle.entity_sections = sections.into_inner();
+            let mut sections = table.borrow_mut();
+            sections.ticked = section_moves;
+            std::mem::swap(&mut self.native_lifecycle.entity_sections, &mut sections);
         } else {
             self.native_lifecycle.entity_sections.ticked = section_moves;
         }

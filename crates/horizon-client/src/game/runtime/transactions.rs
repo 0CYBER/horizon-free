@@ -295,6 +295,13 @@ pub(super) enum DeferredEffect {
         key: &'static str,
         amount: i32,
     },
+    /// `Player.awardStat` of an item statistic (`used`, `crafted`...) for `item`.
+    ItemStat {
+        player: u128,
+        stat: &'static str,
+        item: std::sync::Arc<str>,
+        amount: i32,
+    },
     Sound {
         sound: &'static str,
         at: [f64; 3],
@@ -920,6 +927,14 @@ impl Game<'_> {
                     amount,
                 } => {
                     self.native_as_player(player, |g| g.award_custom_stat(key, amount));
+                }
+                DeferredEffect::ItemStat {
+                    player,
+                    stat,
+                    item,
+                    amount,
+                } => {
+                    self.native_as_player(player, |g| g.award_stat(stat, &item, amount));
                 }
                 DeferredEffect::Sound {
                     sound,

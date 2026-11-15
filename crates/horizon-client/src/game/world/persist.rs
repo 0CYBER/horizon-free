@@ -791,19 +791,34 @@ impl Game<'_> {
     }
     /// The kinds `entity_lists!` does not hold: `Err` hands the compound back
     /// when `kind` is not one of them.
-    fn load_unlisted(
+    pub(super) fn load_unlisted(
         &mut self,
         key: ChunkKey,
         kind: &str,
         uuid: Option<[i32; 4]>,
         tag: Tag,
     ) -> std::result::Result<(), Tag> {
+        self.load_unlisted_transferred(key, kind, uuid, tag, &mut None)
+    }
+    pub(super) fn load_unlisted_transferred(
+        &mut self,
+        key: ChunkKey,
+        kind: &str,
+        uuid: Option<[i32; 4]>,
+        tag: Tag,
+        transferred: &mut Option<super::entity_initialization::TransferredEntityState>,
+    ) -> std::result::Result<(), Tag> {
         if !UNLISTED_KINDS.contains(&kind) {
             return Err(tag);
         }
         match kind {
             "minecraft:area_effect_cloud" => {
-                if let Some(id) = self.load_potion_cloud(&tag) {
+                let id = if let Some(state) = transferred.take() {
+                    self.load_potion_cloud_transferred(&tag, Some(state))
+                } else {
+                    self.load_potion_cloud(&tag)
+                };
+                if let Some(id) = id {
                     let uuid = with_constructor_uuid(uuid);
                     self.remember(id, uuid, tag);
                 }
@@ -814,6 +829,9 @@ impl Game<'_> {
                     let id = self.next_entity;
                     let delay = horizon_client::save::number(tag.get("Warmup")).unwrap_or(0) as i32;
                     let owner = self.loaded_fangs_owner(&tag);
+                    if let Some(state) = transferred.take() {
+                        self.adopt_transferred_entity_state(id, state);
+                    }
                     self.insert_fangs(
                         id,
                         [at.x, at.y, at.z],
@@ -825,12 +843,48 @@ impl Game<'_> {
                     self.remember(id, uuid, tag);
                 }
             }
-            "minecraft:ominous_item_spawner" => self.load_ominous_item_spawner(tag),
-            "minecraft:ender_dragon" => self.load_dragon(tag, uuid),
-            "minecraft:end_crystal" => self.load_crystal(tag, uuid),
-            "minecraft:item_frame" | "minecraft:glow_item_frame" => self.load_item_frame(tag, uuid),
-            "minecraft:cushion" => self.load_cushion(tag, uuid),
-            "minecraft:painting" => self.load_painting(tag, uuid, key),
+            "minecraft:ominous_item_spawner" => {
+                if let Some(state) = transferred.take() {
+                    self.load_ominous_item_spawner_transferred(tag, Some(state));
+                } else {
+                    self.load_ominous_item_spawner(tag);
+                }
+            }
+            "minecraft:ender_dragon" => {
+                if let Some(state) = transferred.take() {
+                    self.load_dragon_transferred(tag, uuid, Some(state));
+                } else {
+                    self.load_dragon(tag, uuid);
+                }
+            }
+            "minecraft:end_crystal" => {
+                if let Some(state) = transferred.take() {
+                    self.load_crystal_transferred(tag, uuid, Some(state));
+                } else {
+                    self.load_crystal(tag, uuid);
+                }
+            }
+            "minecraft:item_frame" | "minecraft:glow_item_frame" => {
+                if let Some(state) = transferred.take() {
+                    self.load_item_frame_transferred(tag, uuid, Some(state));
+                } else {
+                    self.load_item_frame(tag, uuid);
+                }
+            }
+            "minecraft:cushion" => {
+                if let Some(state) = transferred.take() {
+                    self.load_cushion_transferred(tag, uuid, Some(state));
+                } else {
+                    self.load_cushion(tag, uuid);
+                }
+            }
+            "minecraft:painting" => {
+                if let Some(state) = transferred.take() {
+                    self.load_painting_transferred(tag, uuid, key, Some(state));
+                } else {
+                    self.load_painting(tag, uuid, key);
+                }
+            }
             _ => return Err(tag),
         }
         Ok(())
@@ -931,10 +985,21 @@ impl Game<'_> {
 
     /// A saved armor stand.
     pub(super) fn load_armor_stand(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
+        self.load_armor_stand_transferred(tag, uuid, None)
+    }
+    pub(super) fn load_armor_stand_transferred(
+        &mut self,
+        tag: Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
         self.next_entity += 1;
         if let Some(mut a) = entity_nbt::armor_stand_from_nbt(&tag, self.next_entity) {
             a.live
                 .retain_supplier(&self.motion.attributes, "minecraft:armor_stand");
+            if let Some(state) = transferred {
+                self.adopt_transferred_entity_state(a.id, state);
+            }
             self.remember(a.id, uuid, tag);
             self.bind_saved_entity_attachments(a.id, &mut a.attachment_lifetime);
             self.armor_stands.push(a);
@@ -943,6 +1008,14 @@ impl Game<'_> {
 
     /// The saved ender dragon.
     pub(super) fn load_dragon(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
+        self.load_dragon_transferred(tag, uuid, None)
+    }
+    pub(super) fn load_dragon_transferred(
+        &mut self,
+        tag: Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
         // The loaded dragon's own random (`Entity.random`): loading draws
         // nothing from the level's.
         let seed = random_source::unique_seed();
@@ -955,6 +1028,9 @@ impl Game<'_> {
                 .retain_supplier(&self.motion.attributes, "minecraft:ender_dragon");
             d.id = self.next_entity + 1;
             self.next_entity += 9;
+            if let Some(state) = transferred {
+                self.adopt_transferred_entity_state(d.id, state);
+            }
             self.remember_tags(d.id, &tag);
             self.remember_uuid(d.id, uuid, &tag);
             d.join = horizon_client::join_seq::JoinSeq::next();
@@ -964,6 +1040,14 @@ impl Game<'_> {
 
     /// A saved end crystal.
     pub(super) fn load_crystal(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
+        self.load_crystal_transferred(tag, uuid, None)
+    }
+    pub(super) fn load_crystal_transferred(
+        &mut self,
+        tag: Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
         let drawn = self.world.random.next_int_bound(100_000).unwrap_or(0);
         if let Some(mut c) = super::dragon::Crystal::from_nbt(&tag, drawn) {
             c.time = super::dragon::Crystal::start_time(c.position, drawn, self.clock.still());
@@ -971,6 +1055,9 @@ impl Game<'_> {
             // entity counter.
             self.next_entity += 1;
             c.id = self.next_entity;
+            if let Some(state) = transferred {
+                self.adopt_transferred_entity_state(c.id, state);
+            }
             self.remember_tags(c.id, &tag);
             self.remember_uuid(c.id, uuid, &tag);
             self.crystals.push(c);
@@ -979,10 +1066,21 @@ impl Game<'_> {
 
     /// A saved item frame.
     pub(super) fn load_item_frame(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
+        self.load_item_frame_transferred(tag, uuid, None)
+    }
+    pub(super) fn load_item_frame_transferred(
+        &mut self,
+        tag: Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
         self.next_entity += 1;
         if let Some(mut f) = entity_nbt::item_frame_from_nbt(&tag, self.next_entity) {
             let item = f.item.take();
             f.set_item(item);
+            if let Some(state) = transferred {
+                self.adopt_transferred_entity_state(f.id, state);
+            }
             self.remember(f.id, uuid, tag);
             self.bind_saved_entity_attachments(f.id, &mut f.attachment_lifetime);
             self.item_frames.push(f);
@@ -991,25 +1089,45 @@ impl Game<'_> {
 
     /// A saved cushion.
     pub(super) fn load_cushion(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
+        self.load_cushion_transferred(tag, uuid, None)
+    }
+    pub(super) fn load_cushion_transferred(
+        &mut self,
+        tag: Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
         self.next_entity += 1;
         if let Some(c) = entity_nbt::cushion_from_nbt(&tag, self.next_entity) {
+            if let Some(state) = transferred {
+                self.adopt_transferred_entity_state(c.id, state);
+            }
             self.remember(c.id, uuid, tag);
             self.cushions.push(c);
         }
     }
 
-    /// A saved painting, or its compound when its variant is unknown.
+    /// A saved painting, or its compound when its block position is unreadable.
     pub(super) fn load_painting(&mut self, tag: Tag, uuid: Option<[i32; 4]>, key: ChunkKey) {
-        // Painting.defineSynchedData: a painting without a saved variant keeps
-        // VariantUtils.getAny, the registry's first one.
+        self.load_painting_transferred(tag, uuid, key, None)
+    }
+    pub(super) fn load_painting_transferred(
+        &mut self,
+        tag: Tag,
+        uuid: Option<[i32; 4]>,
+        key: ChunkKey,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
+        // Painting.readAdditionalSaveData: a `variant` that does not resolve
+        // leaves Painting.defineSynchedData's VariantUtils.getAny in place.
         if let Some((pos, facing, variant)) = entity_nbt::painting_from_nbt(&tag)
-            && let Some(v) = match variant {
-                Some(variant) => self.painting_variants.get(&variant).cloned(),
-                None => self.painting_variants.all.first().cloned(),
-            }
+            && let Some(v) = self.painting_variants.saved_or_default(variant.as_deref())
         {
             self.next_entity += 1;
             let id = self.next_entity;
+            if let Some(state) = transferred {
+                self.adopt_transferred_entity_state(id, state);
+            }
             self.remember(id, uuid, tag);
             let mut painting = horizon_client::entities::Painting {
                 attachment_lifetime: Default::default(),
@@ -1123,7 +1241,15 @@ impl Game<'_> {
     }
 
     /// An entity of a type Horizon does not simulate, kept as its compound.
-    fn load_other(&mut self, mut tag: Tag, kind: &str) -> Option<u32> {
+    fn load_other(&mut self, tag: Tag, kind: &str) -> Option<u32> {
+        self.load_other_transferred(tag, kind, None)
+    }
+    pub(super) fn load_other_transferred(
+        &mut self,
+        mut tag: Tag,
+        kind: &str,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) -> Option<u32> {
         // A missing mod's record is opaque, not a vanilla fallback entity to normalize.
         let quarantined = super::general::quarantined_kind(kind).then(|| tag.clone());
         strip_finalize(&mut tag);
@@ -1131,6 +1257,9 @@ impl Game<'_> {
         let other = Self::other_from_nbt(&tag, id, kind)?;
         self.next_entity = id;
         let uuid = with_constructor_uuid(entity_nbt::uuid(&tag));
+        if let Some(state) = transferred {
+            self.adopt_transferred_entity_state(id, state);
+        }
         self.remember(id, uuid, tag);
         if let Some(original) = quarantined {
             self.persist.raw.insert(id, original);

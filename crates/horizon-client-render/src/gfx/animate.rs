@@ -825,12 +825,18 @@ mod tests {
     fn rounding_matches_f32_mix_but_for_exact_halves() {
         // The CPU blend this replaced: f32 mix, then rounded. They differ
         // only where the exact mix is a half, which f32 rounded either way.
+        let normalized: [f32; 256] = std::array::from_fn(|channel| channel as f32 / 255.0);
         for millis in 1..1000u32 {
             let t = millis as f32 / 1000.0;
+            let inverse_t = 1.0 - t;
+            let remaining = 1000 - millis;
             for a in 0..=255u32 {
+                // Preserve the original f32 operations and their order, just reuse the a term.
+                let from_a = normalized[a as usize] * inverse_t;
+                let exact_a = a * remaining;
                 for b in (0..=255u32).step_by(3) {
-                    let f = ((a as f32 / 255.0) * (1.0 - t) + (b as f32 / 255.0) * t) * 255.0;
-                    let exact = a * (1000 - millis) + b * millis;
+                    let f = (from_a + normalized[b as usize] * t) * 255.0;
+                    let exact = exact_a + b * millis;
                     let ours = (exact + 500) / 1000;
                     if exact % 1000 != 500 {
                         assert_eq!(ours, f.round() as u32, "{a} {b} {millis}");

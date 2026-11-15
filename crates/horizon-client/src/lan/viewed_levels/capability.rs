@@ -203,10 +203,10 @@ mod tests {
     #[test]
     fn a_horizon_client_is_asked_and_its_answer_is_kept() {
         assert_eq!(
-            join("horizon", &[], &[&[1, 3, 2]]),
+            join("horizon", &[], &[&[1, 4, 2]]),
             Joined {
-                asked: Some(vec![0, 3]),
-                kept: kept(3, 2),
+                asked: Some(vec![0, 4]),
+                kept: kept(4, 2),
             }
         );
     }
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(
             join("horizon", &[], &[]),
             Joined {
-                asked: Some(vec![0, 3]),
+                asked: Some(vec![0, 4]),
                 kept: kept(0, 0),
             }
         );
@@ -245,9 +245,9 @@ mod tests {
     #[test]
     fn an_answer_of_a_revision_not_served_views_none() {
         assert_eq!(
-            join("horizon", &[], &[&[1, 4, 5]]),
+            join("horizon", &[], &[&[1, 5, 5]]),
             Joined {
-                asked: Some(vec![0, 3]),
+                asked: Some(vec![0, 4]),
                 kept: kept(0, 0),
             }
         );
@@ -256,9 +256,9 @@ mod tests {
     #[test]
     fn a_second_answer_closes_the_connection() {
         assert_eq!(
-            join("horizon", &[], &[&[1, 3, 2], &[1, 3, 2]]),
+            join("horizon", &[], &[&[1, 4, 2], &[1, 4, 2]]),
             Joined {
-                asked: Some(vec![0, 3]),
+                asked: Some(vec![0, 4]),
                 kept: Err("horizon:levels: a second answer".into()),
             }
         );

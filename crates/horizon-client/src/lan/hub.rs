@@ -43,6 +43,7 @@ pub mod advancements;
 mod block_changes;
 pub mod chat;
 pub mod chat_filter;
+mod fake_kicks;
 mod item_particles;
 mod joined;
 mod move_collision;
@@ -458,7 +459,7 @@ pub struct Hub {
     /// before the level's ChunkMap.tick (`Entities::synced`).
     pub synced: Vec<(i32, i32)>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
-    entity_out: Vec<Vec<Vec<u8>>>,
+    entity_out: Vec<Vec<super::Body>>,
     /// Each placed guest's entities gone this tick, where they were last sent (only while the
     /// prediction records).
     entity_gone: Vec<Vec<[f64; 3]>>,
@@ -1494,7 +1495,7 @@ impl Hub {
             player_id: entity_id,
             hardcore: self.config.hardcore,
             levels,
-            max_players: self.config.max_players as i32,
+            max_players: i32::try_from(self.lan.shared.max_players()).unwrap_or(i32::MAX),
             chunk_radius: self.chunk_radius(),
             simulation_distance: self.config.simulation_distance,
             reduced_debug_info: self.reduced_debug_info,
@@ -2110,6 +2111,7 @@ impl Hub {
         let ticks = self.ticks;
         self.guests.update(i, |g| {
             g.teleport_tick = ticks;
+            g.held_ticket_chunk = Some(g.ticket_chunk()); // teleport has no move
             g.pending_move = None;
             if let Some(p) = position {
                 g.position = p;
@@ -2299,6 +2301,7 @@ impl Hub {
         self.ticks += 1;
         self.anticheat_tick(ctx.tick_rate);
         let mut events = std::mem::take(&mut self.pending_kicks);
+        self.finish_fake_kicks(&mut events);
         self.expire_arrivals(&mut events);
         let mut credits = Vec::new();
         for receipt in self.lan.poll() {
@@ -2351,9 +2354,7 @@ impl Hub {
                 }
             }
         }
-        // keepConnectionAlive's timeout, checked once a second here. Kicked,
-        // the client gets the reason; still here a second later (it reads
-        // nothing, so its disconnect waits unwritten), its connection is closed.
+        // keepConnectionAlive's timeout: close a kicked client still unread a second later.
         if self.ticks.is_multiple_of(20) {
             for g in &self.guests {
                 if g.participates_online() && !g.left_reason.is_empty() && g.sender.timed_out() {
@@ -3107,7 +3108,7 @@ impl Hub {
                 options.scale,
             )),
             T::Effect | T::InstantEffect => Some(ParticleData::ColorPower(rgb, options.scale)),
-            T::EntityEffect | T::TintedLeaves => Some(ParticleData::Color(
+            T::EntityEffect | T::TintedLeaves | T::Flash => Some(ParticleData::Color(
                 (((c[3].clamp(0.0, 1.0) * 255.0).round() as i32) << 24) | rgb,
             )),
             T::DragonBreath | T::SculkCharge => Some(ParticleData::Scalar(options.scale)),
@@ -4436,6 +4437,7 @@ impl Hub {
             // A passenger only turns: its vehicle carries it (absSnapTo where it is).
             if g.vehicle.is_some() {
                 (g.yaw, g.pitch) = (yaw, pitch);
+                g.release_tickets();
                 return std::ops::ControlFlow::Break(false);
             }
             let d = [0, 1, 2].map(|k| to[k] - g.first_good[k]);
@@ -4811,8 +4813,7 @@ impl Hub {
             // The new player faces the level's respawn direction (snapTo), or
             // the one its TeleportTransition carries.
             [g.yaw, g.pitch] = rotation.unwrap_or(ctx.spawn_angle);
-            g.position = at;
-            g.previous_position = at;
+            g.place(at);
             g.send(&C::Respawn(play::Respawn {
                 spawn: info,
                 keep: 0,
@@ -4907,10 +4908,9 @@ impl Hub {
             .set_dimension(self.config.levels.get(dimension));
     }
 
-    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
-    /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
-    /// then vanilla's packet order. Nothing tracked in the old level is
-    /// removed one by one: the client drops its whole level.
+    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now names
+    /// (`set_dimension`): ClientboundRespawnPacket keeping all data, then vanilla's packet order.
+    /// Nothing tracked in the old level is removed one by one: the client drops its whole level.
     ///
     /// Through a `portal`, vanilla finds the exit (an End platform, a Nether
     /// portal, a spawn column) before the teleport; here it is found once
@@ -4929,6 +4929,7 @@ impl Hub {
     ) {
         let info = self.spawn_info(i, portal_cooldown, ctx.sea_level);
         self.close_container_for(i);
+        self.before_travel(i);
         let left = self.guests[i].dimension.clone();
         self.guests.update(i, |g| {
             // Out of the old level with its chunks (ChunkMap.removeEntity).
@@ -4944,20 +4945,19 @@ impl Hub {
             if let Some(pitch) = pitch {
                 g.pitch = pitch;
             }
-            g.position = at;
-            g.previous_position = at;
+            g.place(at);
             g.send(&C::Respawn(play::Respawn {
                 spawn: info,
                 // ClientboundRespawnPacket.KEEP_ALL_DATA.
                 keep: 3,
             }));
-            g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
-                difficulty: ctx.difficulty,
-                locked: ctx.difficulty_locked,
-            }));
         });
         // Its chunks, queues and entities left behind, or kept as a viewed level (#3716).
         self.leave_level(i, &left);
+        self.guests[i].send(&C::ChangeDifficulty(play::ChangeDifficulty {
+            difficulty: ctx.difficulty,
+            locked: ctx.difficulty_locked,
+        }));
         self.send_permission_level(i);
         if portal {
             // A teleport still pending from the old level is void: its late
@@ -5013,6 +5013,7 @@ impl Hub {
             let value = false;
             self.guests.update(i, |guest| guest.landing = value);
         }
+        self.guests.update(i, |g| g.place(at)); // hold the exit chunk
         self.teleport(i, Some(at));
         let g = &self.guests[i];
         g.send(&C::GameEvent(play::GameEvent {
@@ -5180,6 +5181,7 @@ mod tests {
     mod effect_meta_tests;
     #[path = "../far_tests.rs"]
     mod far_tests;
+    mod live_player_limit_tests;
     mod ordered_inbox_tests;
     mod pending_move_bound_tests;
     mod pending_move_scope_tests;
@@ -5535,7 +5537,7 @@ mod tests {
             max: 0,
         };
         hub.rule_registry = Arc::new(
-            crate::gamerules::RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule])
+            crate::gamerules::RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule])
                 .unwrap(),
         );
         hub.guests.update(0, |guest| guest.permission = 2);
@@ -7815,5 +7817,42 @@ mod tests {
         // The same id again, with nothing awaited: disconnected.
         tick_packet(&mut hub, &mut world, accept(id));
         assert!(!hub.guests[0].left_reason.is_empty());
+    }
+    /// A guest's `/tp`: `ServerGamePacketListenerImpl.teleport` does not call `ServerChunkCache.move`,
+    /// so its tickets stay at the chunk it left (also over a second teleport) until the client's
+    /// ack of the teleport (`handleAcceptTeleportPacket` -> `handlePlayerPositionChange`) moves them.
+    /// A camera change moves them at once (`ServerPlayer.setCamera`), also back to the player.
+    #[test]
+    fn a_teleported_guests_tickets_stay_where_it_left_until_the_teleport_is_acked() {
+        let (mut hub, _rx) = hub_with_a_guest();
+        let mut world = floor_at(0);
+        let left = hub.guests[0].chunk();
+        hub.teleport(0, Some([104.5, 70.0, 8.5]));
+        assert_eq!(hub.guests[0].ticket_chunk(), left);
+        hub.teleport(0, Some([200.5, 70.0, 8.5]));
+        assert_eq!(
+            (hub.guests[0].chunk(), hub.guests[0].ticket_chunk()),
+            ((12, 0), left)
+        );
+        let id = hub.guests[0].teleport_counter;
+        tick_packet(
+            &mut hub,
+            &mut world,
+            S::AcceptTeleportation(play::AcceptTeleportation {
+                id,
+                x: 200.5,
+                y: 70.0,
+                z: 8.5,
+                yaw: 0.0,
+                pitch: 0.0,
+            }),
+        );
+        assert_eq!(hub.guests[0].ticket_chunk(), (12, 0));
+        // `guest_set_camera`: watching, the teleport to the camera, the tickets released.
+        hub.guests.update(0, |g| g.watching = true);
+        hub.teleport(0, Some([8.5, 70.0, 8.5]));
+        hub.guests.update(0, |g| g.release_tickets());
+        hub.guests.update(0, |g| g.watching = false);
+        assert_eq!(hub.guests[0].ticket_chunk(), left);
     }
 }

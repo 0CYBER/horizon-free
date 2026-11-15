@@ -2158,12 +2158,7 @@ impl Game<'_> {
                             Some(horizon_client::lan::data::component_nbt(&text.component()));
                         line = format!("<{name}> {}", text.plain());
                     }
-                    let mut chat = Vec::new();
-                    let host = self.lan.as_mut()?;
-                    host.hub.broadcast_chat(&message, &bound, line, &mut chat);
-                    for event in chat {
-                        self.lan_log_event(event);
-                    }
+                    self.lan_broadcast_chat(&message, &bound, line, &name, &text.plain())?;
                     self.lan_player_chatted(sender, &raw);
                 }
                 HostEvent::ChatSessionStarted(update) => {
@@ -2284,6 +2279,7 @@ impl Game<'_> {
                         let mut host = self.lan.take()?;
                         self.cleanup_fake_player(&mut host, &guest);
                         self.lan = Some(host);
+                        self.native_guest_left(&guest);
                         continue;
                     }
                     // The menu they had open closes, in the level they were in
@@ -2318,54 +2314,7 @@ impl Game<'_> {
                     host.play.remove(&guest.conn);
                     host.forget_menus(guest.conn);
                     self.clear_guest_book_connection(guest.conn);
-                    // A held player was recorded as joined at its login: it leaves too.
-                    if self.is_dedicated_server() && (guest.placed || guest.held) {
-                        super::dedicated::events::record(
-                            "leave",
-                            &guest.name,
-                            guest.uuid,
-                            serde_json::json!({ "reason": guest.left_reason }),
-                        );
-                        if guest.held && !guest.placed {
-                            // Never announced, so no "left the game" either.
-                            super::dedicated::log(
-                                "INFO",
-                                &horizon_client::lan::arrivals::dropped_line(
-                                    &guest.name,
-                                    &guest.left_reason,
-                                ),
-                            );
-                        } else {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("{} lost connection: {}", guest.name, guest.left_reason),
-                            );
-                        }
-                        // A player moved to another server without `announce` was not
-                        // announced as leaving, so the line is not logged either; a held
-                        // player was never announced at all.
-                        if guest.placed && !guest.quiet_leave {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {} left the game", guest.name),
-                            );
-                        }
-                    } else if self.player.is_some() && guest.placed && !guest.quiet_leave {
-                        // ServerGamePacketListenerImpl.removePlayerFromWorld.
-                        let who = self.player_text(&guest.name, guest.uuid);
-                        self.system_message(
-                            Text::translate("multiplayer.player.left", &[who])
-                                .with_color(horizon_client::text::YELLOW),
-                        );
-                    }
-                    if guest.placed
-                        && self
-                            .lan
-                            .as_ref()
-                            .is_some_and(|host| !host.players_told_left)
-                    {
-                        self.native_player_logged_out(guest.uuid, &guest.name);
-                    }
+                    self.native_guest_left(&guest);
                 }
                 HostEvent::Flight { conn, flying } => {
                     self.lan_flight_toggled(conn, flying);
@@ -3376,7 +3325,7 @@ impl Game<'_> {
                 && !dead
                 && let Some((source, _)) = m.last_damage
             {
-                use horizon_client::mobs::{DamageKind as K, Who};
+                use horizon_client::mobs::Who;
                 let kind = super::creatures::source_damage_type(source);
                 // The player a mob sees is the guest acting.
                 let cause = source.attacker.and_then(|who| match who {
@@ -3388,16 +3337,7 @@ impl Game<'_> {
                     Who::Mob(id) => Some(id as i32),
                 });
                 // A projectile is the direct entity of its hit: not tracked here.
-                let melee = matches!(
-                    source.kind,
-                    K::PlayerAttack
-                        | K::MaceSmash
-                        | K::Spear
-                        | K::MobAttack
-                        | K::Sting
-                        | K::SonicBoom
-                );
-                let direct = cause.filter(|_| melee);
+                let direct = cause.filter(|_| super::combat::melee(source.kind));
                 host.hub.damage_event(m.id as i32, kind, cause, direct, at);
             }
             if dead && !old.is_some_and(|o| o.1) {
@@ -5987,7 +5927,7 @@ mod merchant_packet_tests {
                     dragging: false,
                     focused: None,
                     mob: Some(77),
-                    name: Some("Packet timing".into()),
+                    name: Some(crate::text::Text::literal("Packet timing")),
                 },
             );
             fn packets(
@@ -6129,7 +6069,7 @@ mod merchant_packet_tests {
                     dragging: false,
                     focused: None,
                     mob: Some(77),
-                    name: Some("Level-up packet timing".into()),
+                    name: Some(crate::text::Text::literal("Level-up packet timing")),
                 },
             );
             let opened = packets(&rx).0;

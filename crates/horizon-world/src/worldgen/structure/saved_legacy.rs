@@ -141,7 +141,7 @@ mod tests {
                 let id = id.strip_prefix("minecraft:").unwrap_or(&id);
                 let original = StructureStart::new(5, def, chunk, vec![Piece::Legacy(piece)]);
                 let saved = original.save().unwrap();
-                let loaded = read_saved_start(5, def, chunk, &saved, &resources, &bindings)
+                let loaded = read_saved_start(5, def, chunk, &saved, 1234, &resources, &bindings)
                     .unwrap_or_else(|| panic!("{id} decodes"));
                 let piece = &original.pieces[0];
                 assert_eq!(
@@ -164,7 +164,7 @@ mod tests {
         let mut original = StructureStart::new(5, def, chunk, pieces);
         original.references = 2;
         let tag = original.save().unwrap();
-        let loaded = read_saved_start(5, def, chunk, &tag, &resources, &bindings)
+        let loaded = read_saved_start(5, def, chunk, &tag, 1234, &resources, &bindings)
             .expect("every piece type decodes");
         assert_eq!(loaded.save(), Some(tag.clone()));
         assert_eq!(
@@ -189,7 +189,7 @@ mod tests {
             };
             child.insert(key.into(), value);
             assert!(
-                read_saved_start(5, def, chunk, &broken, &resources, &bindings).is_none(),
+                read_saved_start(5, def, chunk, &broken, 1234, &resources, &bindings).is_none(),
                 "child {index}: {key}"
             );
         }
@@ -265,7 +265,7 @@ mod tests {
                 ("references", Tag::Int(2)),
                 ("Children", Tag::List(vec![child])),
             ]);
-            let loaded = read_saved_start(5, def, chunk, &tag, &resources, &bindings)
+            let loaded = read_saved_start(5, def, chunk, &tag, 1234, &resources, &bindings)
                 .unwrap_or_else(|| panic!("{id}: {input}"));
             let saved = loaded.save().unwrap();
             assert_eq!(

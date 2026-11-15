@@ -41,7 +41,49 @@ generation, including an empty one. Closing a screen or changing dimension retai
 disconnecting discards it. Reads allocate nothing and do not rescan recipes or registries.
 
 Parts that read `context.setting(..)` or `side()` have no counterpart on the Host.
-Named injections for `menu_slot_rules` request `hook_version = 3`.
+Named injections for `menu_slot_rules` request `hook_version = 4`.
+
+### Who and where: the slot's context
+
+A rule that depends on more than the stack reads `event.context`, a `MenuSlotContext` the game
+fills the same way on the server and on the client's prediction. `context.player` is the UUID of
+the player whose menu it is, `context.pos` the block entity the menu belongs to
+(`ContainerLevelAccess`), and `context.slots` a read-only copy of the menu's own containers'
+slots as they stand while the click plans, without the player's inventory. The containers are
+keyed by `MenuContainer`: `Main` for the menu's own slots, and for a mod menu type with a crafting
+grid `Grid` (the grid's slots, row by row) and `Result` (its crafted result, slot 0).
+`event.container` names the container the asked slot is in, and `event.slot` indexes inside it;
+`context.slot(container, index)` reads any of them. A machine whose upgrade slot takes one card
+per kind, a cable bus that asks its block entity what a part slot holds, a grid slot that looks at
+the result, or a slot only the block's owner fills answers from these:
+
+```rust,ignore
+use mod_api::MenuContainer;
+
+fn menu_slot_rules(&self, host: &dyn mod_api::Host, event: &mut mod_api::MenuSlotRulesEvent<'_>) {
+    let context = event.context;
+    // Upgrade slots 4..8 of the main container take one card of each kind.
+    if event.container == MenuContainer::Main && (4..8).contains(&event.slot) {
+        let item = event.stack.item();
+        event.may_place &= !(4..8).any(|i| {
+            i != event.slot
+                && context.slot(MenuContainer::Main, i).is_some_and(|s| s.item() == item)
+        });
+    }
+    // A crafting grid takes no more while a result waits to be taken.
+    if event.container == MenuContainer::Grid {
+        event.may_place &= context.slot(MenuContainer::Result, 0).is_none();
+    }
+    // `context.pos` names the block entity to read through `host`.
+    let _ = (host, context.pos, context.player);
+}
+```
+
+`player` is None where no player is known and `pos` None for a menu that is not a block's (one
+opened with no block by `player_open_mod_menu`, a vehicle's); a slot that cannot cross to the API
+shows empty, and `slot` reads nothing for `MenuContainer::Player` or past a container's end. The
+context is built once per click plan, and only for a menu type a part answers: vanilla menus and
+types with no listening part never pay for it, and the asks of one click share one copy.
 
 ## Keeping a block menu open
 
@@ -161,6 +203,15 @@ if let Some(menu) = host.menu(uuid, window) {
 }
 ```
 
+To rebuild the whole menu at once (a page turned, a list refiltered) `host.menu_set_items(uuid, window, items)`
+replaces everything it shows and sends it as one `ContainerSetContent` for that window, now rather than with the next
+tick's sync, as vanilla's `sendAllDataToRemote` does: the screen, the title and the cursor stay. Like `open_menu` it pads
+`items` with empty slots and drops the ones past the menu's last. It returns `Result<(), MenuItemsRefusal>` and each
+refusal sends and changes nothing: `Client`, `NoPlayer` (no placed player has that UUID), `NotOpen` (`window` is not
+the player's open `open_menu` menu: another window, a closed menu, or a menu the game opened) and
+`Stack(StackWriteError)` (an item the world lacks, a count or damage the item does not allow). For one slot or a few,
+write them through `host.menu` as above: they cost one packet each and no replacement of the others.
+
 A title or a row count changes only with a new menu, as in vanilla: `open_menu` again, with a new window id, the
 title and all the items. The old menu closes on the server as a close does, its cursor stack going back to the
 player's inventory, and packets for its window are ignored. `replace` is the choice a Java `MenuProvider` makes
@@ -169,3 +220,86 @@ client a close, which centres the mouse again; `MenuReplace::InPlace` sends none
 one's place and the mouse stays where it is. Opening from the player's inventory sends no close either way.
 `player.open_mod_menu` takes the same `replace` for a content mod's menu type
 ([machine menu data](../../how-to/world/machine-menu-data.md)).
+
+## Slots backed by a held item or an entity's handler
+
+A menu opened with no block (`player.open_mod_menu`, or `open_menu`'s chest menu) can show storage that is not a block
+entity, as NeoForge's `StackCopySlot` and `ResourceHandlerSlot` do. Right after the open, back its first container
+slots with `player.back_mod_menu_slots(host, window, places)`, one `MenuSlotPlace` per slot:
+
+- `MenuSlotPlace::HeldItem { hand, slot }`: slot `slot` of the container inside the stack in the player's `hand`, through
+  its `ITEM_ITEMS` handler (a backpack's contents). While the menu is open, the hotbar slot holding a main-hand stack takes
+  no click, so the backpack can't go into itself.
+- `MenuSlotPlace::EntityItems { entity, slot }`: slot `slot` of `entity`'s `ENTITY_ITEMS` handler, as a mod's provider
+  answers it.
+
+From then on `MenuRef::slot_backing` names the slot `MenuSlotBacking::Place(place)`. A pickup or shift-click on the
+menu, and an `ItemPlace::MenuSlot` write, go through that storage's own handler in one transaction, so an aborted
+transaction leaves it as it was. The client sees ordinary synced slots; there is no new packet. Nothing runs per tick:
+the slots are mirrored after each click on the menu and after each `ItemPlace` write to the player's places (their hand,
+a container held there, the menu's slots), and only the slots that changed are written. These writes queue a change
+notice, deduplicated per menu; there is no next-tick scan. A handler changed independently of an `ItemPlace` write
+is checked and mirrored at the next click, not automatically on the next tick. Before each click and at each
+change notice the menu checks its places: it closes once one stops resolving (the backpack left the hand, the entity is
+gone), or once a `HeldItem` hand no longer holds the stack bound when the slots were backed (another stack put in its
+place, another hotbar slot selected). Stacks are values, so the bound stack is told apart by its item and components
+other than its contents. Slots past `places` stay the mod's own (`menu_clicked`). A drag, a number-key swap, a
+double-click collect or a throw on a backed menu is still the mod's to answer.
+
+Backing the same window again replaces its places. A slot no longer backed (an empty list, or a shorter one) is
+emptied: it never keeps the copy it showed, which stays in the storage it came from. A backing that cannot be made
+changes nothing and says why with a `MenuSlotBackRefusal`:
+
+- `NoPlayerOrWindow`: the player is not online here, or `window` is not the menu they have open.
+- `UnsupportedMenu`: the open menu is not a mod menu opened with no block (a block's or an entity's menu shows its own
+  storage).
+- `TooManyPlaces`: more places than the menu's container slots.
+- `PlaceUnresolved { index }`: `places[index]` names no storage now.
+
+```rust,ignore
+let window = player.open_mod_menu(host, backpack_menu, title, Vec::new(), None, MenuReplace::CloseFirst)?;
+if let Some(window) = window {
+    let places = (0..27).map(|slot| MenuSlotPlace::HeldItem { hand: Hand::Main, slot }).collect();
+    if let Err(refusal) = player.back_mod_menu_slots(host, window, places) {
+        log::warn!("backpack menu not backed: {refusal:?}");
+    }
+}
+```
+
+A vanilla menu and a menu no mod backed never take this path: their slots keep the backing they had.
+
+## Recipe transfer into a mod menu
+
+A recipe viewer's "+" calls `RecipesClientHost::transfer_recipe_id(recipe, max)` (or `transfer_recipe(book_id)`
+for a recipe-book recipe). The game's own transfer fills crafting grids only, so for a machine's menu the
+server first asks the `MenuPart` of the open mod menu type:
+
+```rust,ignore
+fn menu_transfer(
+    &self,
+    host: &mut dyn mod_api::ServerHost,
+    event: &mut mod_api::MenuTransferEvent<'_>,
+) -> Option<mod_api::RecipeTransferResult> {
+    // Look up event.recipe, check event.player's inventory, and unless event.dry_run
+    // move one set (as many as fit with event.max) into the block entity at event.pos.
+    let _ = (host, event);
+    Some(mod_api::RecipeTransferResult::Moves)
+}
+```
+
+Return `None` to hand the transfer on to the game's grid transfer (`NotIntoMenu` for a menu without a
+crafting grid). A dry run, the viewer's check, must move nothing. Vanilla menu types are never asked. A solo
+world and a LAN host's own player get the same contract: the game is the server there and asks the part of the
+player's open block menu before its own grid transfer, on the same thread.
+
+`menu.slot_kinds(host)` is a client read in menu index order, with exactly
+`slot_count` entries. It describes the client's layout and content declaration,
+not the server's backing or acceptance rules. `Player(index)` uses hotbar 0–8,
+main 9–35, armour 36–39 (feet to head), off hand 40. Container equipment is
+`Equipment`; linked storage is `Storage`. Workstations without a classified layout (anvil, enchanting table, loom,
+and similar types) return `Other` for every slot, including player slots. A game menu with no known client slot count returns `None`, as do
+stale or foreign handles, missing content types, and calls without an open menu
+or outside a world. Creative returns the underlying inventory menu's 46 slots,
+never creative tab wrappers; read the screen type to distinguish them.
+The answer is stable for one open menu. Cache it: each read builds one Vec
+from the layout table and content declaration, with one allocation.

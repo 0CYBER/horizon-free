@@ -122,7 +122,7 @@ impl Game<'_> {
         )
     }
 
-    fn native_client_menu_name(&self, menu: MenuRef) -> Option<&str> {
+    pub(super) fn native_client_menu_name(&self, menu: MenuRef) -> Option<&str> {
         let remote = self.remote.as_ref().filter(|remote| remote.logged_in)?;
         let epoch = self.native_lifecycle.epoch()?;
         (menu.fields().player.fields().entity.epoch() == epoch
@@ -229,6 +229,7 @@ impl Game<'_> {
     pub(super) fn menu_slot_count(&self, menu: MenuRef) -> Option<usize> {
         if self.remote.is_some() {
             let name = self.native_client_menu_name(menu)?;
+            Self::inventory_screen_slot(name, 0)?;
             return Some(
                 (0..)
                     .map_while(|slot| Self::inventory_screen_slot(name, slot))
@@ -286,7 +287,11 @@ impl Game<'_> {
                 slot: n,
             },
             SlotBacking::Ender(n) => MenuSlotBacking::Ender(n),
-            SlotBacking::Native(n) => MenuSlotBacking::Native(n),
+            // Only a slot a mod backed (`player_back_mod_menu_slots`) reads as a place.
+            SlotBacking::Native(n) => match self.native_menu_place(guest.conn, open.window, n) {
+                Some(place) => MenuSlotBacking::Place(place),
+                None => MenuSlotBacking::Native(n),
+            },
         })
     }
 
@@ -312,6 +317,8 @@ impl Game<'_> {
             MenuSlotBacking::CraftResult => guest.craft_result.clone(),
             MenuSlotBacking::Ender(n) => guest.ender_items.get(n)?.clone(),
             MenuSlotBacking::Native(n) => guest.native_menu.get(n)?.clone(),
+            // The place's mirror, refreshed after each click and each tick.
+            MenuSlotBacking::Place(_) => guest.native_menu.get(slot)?.clone(),
             _ => unreachable!("MenuSlotBacking: unhandled variant"),
         })
     }

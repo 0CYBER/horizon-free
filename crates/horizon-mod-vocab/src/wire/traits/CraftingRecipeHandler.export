@@ -1,0 +1,2 @@
+The owning crafting kind implements serializer and grid callbacks. Register its
+retained resource through Registrar; native and wasm use identical owned values.

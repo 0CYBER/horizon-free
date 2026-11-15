@@ -707,6 +707,19 @@ impl Flat {
         self.free_ids.clear();
         self.next_id = 0;
     }
+    /// Takes over `from`'s block tables and section ids, with the arenas they describe
+    /// (`Renderer::take_world`). Their bind groups name `from`'s origins: `bind_pages` makes
+    /// them again.
+    pub fn take_tables(&mut self, from: &mut Self) {
+        self.clear();
+        self.pages = std::mem::take(&mut from.pages);
+        for table in self.pages.iter_mut().flatten() {
+            (table.group, table.arena) = (None, None);
+        }
+        self.free_ids = std::mem::take(&mut from.free_ids);
+        self.next_id = from.next_id;
+        self.translucent_blocks_per_page = from.translucent_blocks_per_page;
+    }
     /// Forgets the tables of pages the arenas released (`live`, by page key).
     pub fn trim(&mut self, live: impl Fn(u32) -> bool) {
         for (i, page) in self.pages.iter_mut().enumerate() {

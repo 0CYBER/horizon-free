@@ -42,6 +42,16 @@ says otherwise, this section wins; "ours" marks what Horizon adds.
   on every reload, not part of #876.
 - **Matrix rows 5 and 7** each need their own test; a test that the callback never
   runs inside a lifted pass shows row 6 only.
+- **When it runs.** Preparation (the renderer's callback) and draws run on the
+  client's frame, outside any action transaction: never inside a tick's lifted
+  pass, so nothing a lifted pass rolls back was published by them.
+- **Leases.** A part's quads are CPU vertices submitted every frame, not prepared
+  GPU models, so an item render state's own reference to its baked models is the
+  only lease, and there is no retirement step: an old state draws its models after
+  a reload, and they are released once, when the last state holding them drops.
+- **Colour.** A part's tint is packed vanilla-space ARGB, as an item model's
+  `tints` are, decoded once by the frame. A value above 1 has no input until a
+  typed HDR tint exists (the limit `WorldQuad::color` has); it is not part of #876.
 
 ## Reference and boundary
 
@@ -192,14 +202,14 @@ Future implementation tests use original assets, not third-party model files.
 | Original cube A and two separated cubes B; boolean component false/true | Exactly 6/12 resource quads selected in both inventory and hand |
 | Same true stack in ground, frame, head and other-player hand | B selected in all four; engine context transforms differ |
 | Resource reload changes B to three cubes | True stack selects 18 quads after commit; 0 new draws reference old holder |
-| Reload fails with unknown special type | Named error; previous holder remains active; initial load displays missing model |
-| Queue old state, reload, drain | Old lease valid until drain; retirement occurs once after root commit |
-| Rollback lifted preparation/reload | 0 published draws, retirements or journal entries |
+| Reload with an unknown special type | Named error naming the item; that item draws the missing model and the reload goes on (Settled) |
+| Queue old state, reload, drain | Old state still draws its 12 quads after the reload; its baked models are released once, when the last state holding them drops (no retirement step: Settled, Leases); a new resolve draws 18 |
+| Rollback lifted preparation/reload | 0 published draws, retirements or journal entries; the renderer is asked 0 times inside a tick's lifted pass (Settled, When it runs) |
 | Save during action savepoint | Refused; no persisted partial state |
 | NaN transform, 257 instances, stale part, oversized input | Entire custom layer refused; 0 partial instances |
 | Native panic / wasm trap followed by vanilla cube | Custom layer missing marker; vanilla cube still 6 quads |
-| Unsupported raw-pipeline capability / duplicate registration | Named registration refusal; no partial type installation |
-| White 1, linear RGB 2, encoded tint 0.5 | Shader values 1, 2, approximately 0.21763764; frame alpha engine-owned |
+| Unsupported raw-pipeline capability / duplicate registration | Unsupported capability: named registration refusal. Duplicate or vanilla id: not refused; the last registration wins, with one log line naming both (Settled) |
+| White 1, encoded tint 0.5 | Shader values 1 and approximately 0.21763764, through vanilla's tint path; frame alpha engine-owned. Linear RGB 2 waits for a typed HDR tint (Settled, Colour) |
 | Native and wasm, same inputs | Identical part slots, transforms, tint and refusal outcomes |
 | No listener, repeated built-in scenes | Identical baseline output; 0 extension callbacks/allocations |
 

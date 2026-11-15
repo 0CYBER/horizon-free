@@ -60,7 +60,7 @@ Whoever moves the work (the orchestrator on each heartbeat, or anyone in their p
    contributors, with its pull requests. `build` puts it into roadmap/roadmap.json, which the website reads from main; the hub's Journal tab
    shows it among the releases, and `/data/journal.json` carries it to Kira's #updates and to X.
    In the same pass, `python3 tools/parity_gaps.py readme --write` refreshes the parity headline: the
-   player-visible gaps still open in the port ledger's ten lists (#3512 to #3521), on the README and the website.
+   player-visible gaps still open in the port ledger's ten lists (#3512 to #3521), on the status page (docs/status.md) and the website.
 6. Suggestions come only from #horizon-ideas posts on Discord: Kira sends each one to the maintainers' private
    channel. A good one becomes an item in a normal pull request; none is published automatically.
 

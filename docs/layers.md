@@ -38,7 +38,7 @@ Credits:
   Horizon's own parts from another repository as a launcher plugin.
 - **Martipops** (controllers, splitscreen): the compositor's place in the engine, and where controllers,
   splitscreen, Replay Studio, PvP & HUD and a UI page API go.
-- **Contributors at the 2026-11-08 stage:** the file-size rule, the single list of addresses, sponsors in the
+- **Contributors at the 2026-11-08 stage:** the single list of addresses, sponsors in the
   Horizon layer, a platform that exposes what vanilla already uses, and extras as native mods.
 
 ## The rule
@@ -163,7 +163,7 @@ Horizon's own extras and its product, and every built-in address of an outside s
 - **Examples:** `horizon-addresses`, `horizon-cosmetics`, `horizon-friends`, `horizon-relay`, `horizon-telemetry`,
   `horizon-perf-share`, `horizon-release-sign`, `horizon-server`, `horizon-mod-registry`, `horizon-heartbeat`,
   `horizon-official`, `horizon-official-servers`, `horizon-discord`, `launcher/`. Still in engine crates today:
-  `game/cosmetics.rs`, `game/emotes.rs`, `game/extras.rs` and `game/extras/`, `extras_ui.rs`, `pvp.rs`.
+  `game/cosmetics.rs`, `game/cosmetics/emotes.rs`, `game/extras.rs` and `game/extras/`, `extras_ui.rs`, `pvp.rs`.
 - **Rules:**
   - It uses the platform's public API only, never the engine.
   - Until it moves, every Horizon feature in the game sits behind the `horizon-extras` feature
@@ -428,7 +428,7 @@ pub fn connect(address: impl Into<String>);                   // from a Title pa
 - Rows are rebuilt when the page is drawn or acted on, like the engine's own pages: no cost while no page is
   open.
 - The engine keeps native mods' pages (`Page::NativeMod`) as they are. Both kinds sit in one module that
-  `options_ui.rs` calls: `options_ui.rs` is over 3000 lines and doesn't grow.
+  `options_ui.rs` calls.
 
 ### HUD drawing (`horizon_platform::hud`)
 
@@ -570,30 +570,7 @@ themselves, or stays a cfg-gated module linked into the official build. None mov
 The minimap already moved to a native mod ([extras.md](extras.md#moved-to-native-mods)). Splitscreen,
 controllers and replay recording are not extras: they are platform ([above](#controllers-splitscreen-replays-and-ui-pages)).
 
-## File size
-
-A Rust file over 3000 lines may not grow compared with the base of the branch. `game.rs` (~21,700 lines),
-`game/remote.rs` (~10,900) and `gfx.rs` (~10,100) are the worst; they slow incremental builds. Smaller files may
-grow to 3000 lines, and a big file may shrink or stay as it is. The fork records restored upstream growth in
-`tools/file_size_baseline.txt`, at each file's exact size in that sync. A changed
-`# sync-baseline: <full upstream SHA>` header must name a commit that is an ancestor of upstream main,
-explicitly fetched from `https://github.com/horizon-rust/horizon.git` into `refs/sync/upstream-main`.
-It must not be an ancestor of the base and must be a parent of a merge in `base..HEAD`. Without this
-proof, adding or raising an entry fails against `--base`. Missing network access, failed fetches and
-shallow history fail closed (`tools/pr_ready.py` skips the step on a shallow clone, saying so; CI's verify job checks a full history). The addresses and layers checks reuse the same provenance helper to
-permit only exact rows or assignments from the verified upstream inventories. A PR can still merge
-a real upstream commit and add unrelated caps: review the sync and growth list
-(see `tools/sync/README.md`). In a sync PR a listed file must stay within its cap, and a cap above
-the current size (or naming a deleted file) fails. Every other PR (no changed header) ignores the entries and holds each file to
-its size on the base, so shrinking a listed file never needs an edit to the baseline. Nobody edits the entries by hand: a sync, or a
-rollup that carries one, regenerates the file with `python3 tools/sync/write_file_size_baseline.py --base origin/main --marker <full
-upstream SHA>`, which lists the files that grew past the limit at their exact size. On a conflict in the file, run that command
-instead of merging by hand. Sync PRs list every entry and its growth. This records restoration debt, not permission for other PRs to grow it.
-Generated files and `third_party/` are not checked. Test code doesn't count either, since a normal
-build doesn't compile it: inline `#[cfg(test)] mod name { ... }` modules. Filenames such as `tests.rs`
-or `<name>_tests.rs` do not exempt a file; other `#[cfg(test)]` items count.
-
-## The check
+## The checks
 
 `python3 tools/check_layers.py` runs in CI's verify job and in `tools/pr_ready.py`. It reads the `cargo metadata` of the
 four workspaces `tools/layers.json` lists (the game, `launcher/`, `crates/horizon-mod-registry/` and
@@ -611,6 +588,9 @@ gives every crate its layer. It fails when:
 Each failure names the section of this page that applies. An `allowed` or `optional` entry that has no dependency
 left is only reported: take it out when you like. `--list` prints every crate's layer and the upward dependencies
 left.
+
+`python3 tools/check_addresses.py` (horizon-rust/horizon#12990) checks the built-in addresses
+([below](#built-in-addresses)); it runs in CI's verify job and in `tools/pr_ready.py` too.
 
 ### Today's exceptions
 
@@ -683,7 +663,6 @@ These are not addresses:
   code is just as wrong, and so is Horizon code that reaches into the engine instead of the platform.
 - Horizon features in the game are behind `horizon-extras`, and nothing new names a Horizon crate below it.
 - No new built-in address outside `horizon-addresses`.
-- No file over 3000 lines grows.
 
 ## Plan
 
@@ -700,7 +679,6 @@ mechanical steps (checks, M1–M4) continue meanwhile. M5 and M6 started on 2026
 | 1 | This page, first version | | #12979, merged |
 | 2 | Layer check in CI and pr_ready, with the PR template's checklist | | #12983, merged |
 | 3 | Address check in CI and pr_ready | | #12990, merged |
-| 4 | File-size check in CI and pr_ready | | #13015, merged |
 | 2b | The portable crates' rule in the layer check ([Portable crates](#portable-crates)) | | #13002 (NikitaMGrimm), merged |
 | M1 | `horizon-addresses`, the address list file; the Horizon crates read it | 7 address entries | #12993, merged |
 | M2 | `horizon-system` (engine): the hardware probes leave `horizon-telemetry`, and the crash report and GPU info read them there; `horizon-platform`, the platform's public API, re-exports them for the Horizon layer | prepares M3 | #13058, merged |

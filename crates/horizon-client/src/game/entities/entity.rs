@@ -265,9 +265,9 @@ pub(super) trait Entity: EntityRules {
         PushReaction::PushPull
     }
     /// Width and height of the box a portal sweep follows, or None for a kind
-    /// the game does not carry through portals (so far armor stands and
-    /// falling blocks; fishing hooks are off the walk, and
-    /// `FishingHook.canUsePortal` is false in vanilla).
+    /// the game does not carry through portals (so far falling blocks; fishing
+    /// hooks are off the walk, and `FishingHook.canUsePortal` is false in
+    /// vanilla).
     fn portal_size(&self) -> Option<(f32, f32)> {
         None
     }
@@ -1526,6 +1526,21 @@ impl Game<'_> {
     ) -> Result<(), Tag> {
         let mut state = Some(state);
         load_entity_of_any_kind!(self, kind, uuid, player_uuid, tag, &mut state)
+            .or_else(|tag| {
+                self.load_unlisted_transferred(
+                    Self::chunk_of(horizon_client::entity_nbt::position(&tag).unwrap_or_default()),
+                    kind,
+                    uuid,
+                    tag,
+                    &mut state,
+                )
+            })
+            .or_else(|tag| {
+                let saved = tag.clone();
+                self.load_other_transferred(tag, kind, state.take())
+                    .map(|_| ())
+                    .ok_or(saved)
+            })
     }
 
     /// The ids of the entities that are not on the walk of `entity_lists!`.
@@ -2139,10 +2154,14 @@ impl Entity for ArmorStand {
         if !(kind == "minecraft:armor_stand") {
             return Err(tag);
         }
-        if transferred.is_some() {
-            return Err(tag);
-        }
-        game.load_armor_stand(tag, uuid);
+        load_with_transfer!(
+            game,
+            transferred,
+            load_armor_stand,
+            load_armor_stand_transferred,
+            tag,
+            uuid
+        );
         Ok(())
     }
     stored_motion!();
@@ -2217,6 +2236,18 @@ impl Entity for ArmorStand {
         } else {
             PushReaction::PushPull
         }
+    }
+    /// `ArmorStand.getDefaultDimensions`: the box a portal sweep follows, and
+    /// the size its exit is placed by. `ArmorStand.readAdditionalSaveData`
+    /// makes a stand without `hasPhysics` (a marker or a `NoGravity` one)
+    /// `noPhysics`, so `Entity.isAffectedByBlocks` never runs its sweep and it
+    /// enters no portal; a marker's box is `MARKER_DIMENSIONS`, 0 by 0, too.
+    fn portal_size(&self) -> Option<(f32, f32)> {
+        if self.marker || self.no_gravity {
+            return None;
+        }
+        let (width, height) = armor_stand_size(self);
+        Some((width as f32, height as f32))
     }
 }
 
@@ -3043,6 +3074,7 @@ mod set_rotation_tests {
             air: 300,
             rotation: [0.0, 0.0],
             following: None,
+            fire_ticks: 0,
         };
         orb.set_rotation([90.0, 10.0]);
         assert_eq!(orb.rotation(), [90.0, 10.0]);

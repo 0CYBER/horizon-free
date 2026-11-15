@@ -93,6 +93,7 @@ impl Menu {
                         id,
                         self.state.slots[dest].index,
                         stack,
+                        self.slot_context(env, dest),
                         self.state.slots[dest].role != Role::ModResult,
                         CONTAINER_MAX,
                         Self::max_stack(env, stack),

@@ -74,8 +74,8 @@ impl Game<'_> {
             return false;
         }
         tags.push(tag.to_owned());
-        // False, not a silent no-op, for kinds whose tags aren't stored yet
-        // (ominous item spawners, falling blocks, rockets).
+        // False, not a silent no-op, for a kind with no saved compound to
+        // write tags to (a natural leash knot).
         self.set_entity_tags(t, &tags)
     }
     /// Removes tag `tag` (`Entity.removeTag`): false when it didn't have it.

@@ -836,6 +836,7 @@ fn every_item_place_case_has_declared_tag_and_field_types() {
         (9u32, 29u32, EquipmentSlot::Saddle),
     );
     fields(ItemPlace::Scratch(41), (10u32, 41u64));
+    fields(ItemPlace::ScratchSlots(43), (14u32, 43u64));
     let parent = Box::new(ItemPlace::ItemEntity { id: 71 });
     fields(ItemPlace::Strict(parent.clone()), (11u32, parent.clone()));
     fields(ItemPlace::OneByOne(parent.clone()), (12u32, parent.clone()));

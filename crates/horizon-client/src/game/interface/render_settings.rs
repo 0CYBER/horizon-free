@@ -100,7 +100,8 @@ impl Game<'_> {
     }
 
     /// The renderer made again on the same device from the resources loaded, keeping the
-    /// pipelines that come out the same (`adopt_renderer`, as after a lost device).
+    /// pipelines that come out the same and the world the old one holds (`Renderer::take_world`):
+    /// only what draws in the frame is made again, and no section is meshed again.
     fn rebuild_renderer(&mut self) -> Result<()> {
         let Some(window) = self.window.clone() else {
             return Ok(());
@@ -118,12 +119,14 @@ impl Game<'_> {
                 return Err(error);
             }
         };
+        let mut world_kept = false;
         if let Some(old) = &mut self.renderer {
             renderer.resize(old.config.width, old.config.height);
             renderer.screenshot = old.screenshot.take();
             renderer.screenshot_result = old.screenshot_result.take();
+            world_kept = renderer.take_world(old);
         }
-        self.adopt_renderer(renderer);
+        self.adopt(renderer, world_kept);
         log::info!(
             "Horizon: the renderer was made again for the frame the settings call for in {} ms",
             started.elapsed().as_millis()
@@ -244,16 +247,27 @@ impl Game<'_> {
     /// A renderer made again from the resources loaded takes over: what named the old one's
     /// atlas slots is forgotten, the world is meshed again, and the shader pack and the
     /// settings are applied again.
-    pub(super) fn adopt_renderer(&mut self, mut renderer: Renderer) {
-        // A new renderer starts with the vanilla column and without the world border's wall.
-        renderer.clear_sections(self.world.layout());
+    pub(super) fn adopt_renderer(&mut self, renderer: Renderer) {
+        self.adopt(renderer, false);
+    }
+
+    /// `adopt_renderer`; with `world_kept`, a renderer that took the old one's sections and far
+    /// tiles (`Renderer::take_world`): they and the meshes on their way stay.
+    fn adopt(&mut self, mut renderer: Renderer, world_kept: bool) {
+        if !world_kept {
+            // A new renderer starts with the vanilla column.
+            renderer.clear_sections(self.world.layout());
+        }
+        // And has no wall for the world border.
         self.border_renderer.invalidate();
         self.renderer = Some(renderer);
         self.forget_atlas_slots();
-        self.clear_lod();
-        self.pending_uploads.clear();
-        let context = self.worker_context();
-        self.streaming.reload_resources(&mut self.world, context);
+        if !world_kept {
+            self.clear_lod();
+            self.pending_uploads.clear();
+            let context = self.worker_context();
+            self.streaming.reload_resources(&mut self.world, context);
+        }
         self.native_shaders = native_shaders::NativeShaders::picking(&std::mem::take(
             &mut self.native_shaders.picked,
         ));

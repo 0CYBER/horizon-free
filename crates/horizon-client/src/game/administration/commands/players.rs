@@ -34,7 +34,7 @@ impl Game<'_> {
 
     /// `PlayerList.getPlayers` but the player in place: the guests who
     /// joined the world.
-    fn command_players(&self) -> impl Iterator<Item = &Guest> {
+    pub(in crate::game) fn command_players(&self) -> impl Iterator<Item = &Guest> {
         let acting = self.lan_acting;
         self.lan
             .iter()
@@ -71,6 +71,35 @@ impl Game<'_> {
     /// (`RconConsoleSource`), "Server" otherwise (`MinecraftServer.createCommandSourceStack`).
     pub(in crate::game) fn server_name(&self) -> Text {
         Text::literal(if self.rcon_source { "Rcon" } else { "Server" })
+    }
+
+    /// `CommandSourceStack.getDisplayName`: the executing entity's name, the
+    /// command block's or minecart's own name when the source has no entity,
+    /// or the server's.
+    pub(in crate::game) fn source_display_name(&self) -> Text {
+        match self.command_source {
+            Some(source) => match source.entity {
+                Some(target) => self.target_name(target),
+                None => source
+                    .block
+                    .and_then(|pos| match self.world.block_entities.get(&pos) {
+                        Some(horizon_client::containers::BlockEntity::CommandBlock(block)) => {
+                            Some(block.name())
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        source.cart.and_then(|id| {
+                            self.carts
+                                .iter()
+                                .find(|cart| cart.id == id)
+                                .map(|cart| cart.command.name())
+                        })
+                    })
+                    .unwrap_or_else(|| self.server_name()),
+            },
+            None => self.player_display_name(),
+        }
     }
 
     /// `PlayerList.getPlayerByName`: names are not case sensitive. Horizon:

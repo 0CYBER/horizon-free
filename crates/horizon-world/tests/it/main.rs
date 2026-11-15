@@ -1,0 +1,40 @@
+//! The integration tests of this crate, linked into one binary: a binary per file linked the crate and its
+//! dependencies again for every file. A new test file goes in this folder with a `mod` line here.
+
+mod biome_data;
+mod biome_direct_lists;
+mod biome_points_selection;
+mod biome_predicate_bounds;
+mod biome_region;
+mod block_collision_scan;
+mod block_entities;
+mod block_predicate_bounds;
+mod carver_generation;
+mod carving_stage;
+mod collision_data;
+mod decoration_bounds;
+mod edge_backoff;
+mod feature_catalog;
+mod feature_graph_bounds;
+mod feature_placement;
+mod feature_region;
+mod feature_sort_bounds;
+mod jigsaw_bounds;
+mod material_rule_specialization;
+mod material_stage;
+mod movement_properties;
+mod native_load_hooks;
+mod placement_bounds;
+mod placement_queries;
+mod processor_bounds;
+mod registered_biome_source;
+mod retrogen_biomes;
+mod rule_test_bounds;
+mod snbt_unicode_order;
+mod state_provider_bounds;
+mod template_loading;
+mod tick_data;
+mod weighted_provider;
+mod world_io;
+mod world_movement;
+mod world_ray_limits;

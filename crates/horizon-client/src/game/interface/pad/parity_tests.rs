@@ -210,7 +210,7 @@ fn pad_number_actions_select_the_hotbar_as_their_keys_do() {
         // This tests the one-shot number action, not all actions sharing D-pad up
         // (the default chat binding would open a screen before the number action).
         game.pad_action("key.hotbar.3", true).unwrap();
-        assert_eq!(game.hotbar_presses, [2]);
+        assert_eq!(game.hotbar_presses.entries(), [2]);
     });
 }
 

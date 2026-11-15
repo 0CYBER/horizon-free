@@ -306,6 +306,7 @@ fn grow_up(m: &mut Mob, events: &mut Vec<MobEvent>) {
                     keep_equipment: false,
                     preserve_can_pick_up_loot: false,
                 },
+                after: super::conversion::After::Finalize,
             });
         }
     }
@@ -377,10 +378,6 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &
                     m.yaw = m.random.next_float() * 360.0;
                     m.on_ground = false;
                 }
-            }
-            // LivingEntity air: dolphins drown underwater and refill instantly in air.
-            if !m.fluids.eye_in_water {
-                m.air = 4800;
             }
         }
         _ => {}
@@ -1037,18 +1034,15 @@ pub const COMMON_TROPICAL: [(u8, u8, u8); 22] = [
     (3, 9, 4),
     (6, 4, 4),
 ];
-pub fn finalize(m: &mut Mob) {
+pub fn finalize(m: &mut Mob, r: &mut impl RandomSource) {
     if m.species() == Species::TropicalFish {
-        let (p, b, c) = if m.random.next_float() < 0.9 {
-            COMMON_TROPICAL[m
-                .random
-                .next_int_bound(COMMON_TROPICAL.len() as i32)
-                .unwrap_or(0) as usize]
+        let (p, b, c) = if r.next_float() < 0.9 {
+            COMMON_TROPICAL[r.next_int_bound(COMMON_TROPICAL.len() as i32).unwrap_or(0) as usize]
         } else {
             (
-                m.random.next_int_bound(12).unwrap_or(0) as u8,
-                m.random.next_int_bound(16).unwrap_or(0) as u8,
-                m.random.next_int_bound(16).unwrap_or(0) as u8,
+                r.next_int_bound(12).unwrap_or(0) as u8,
+                r.next_int_bound(16).unwrap_or(0) as u8,
+                r.next_int_bound(16).unwrap_or(0) as u8,
             )
         };
         m.extra.variant = p;

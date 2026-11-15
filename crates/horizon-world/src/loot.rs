@@ -648,6 +648,8 @@ fn int_value(v: &Value) -> Option<i64> {
 #[path = "loot_conditions.rs"]
 mod loot_conditions;
 use loot_conditions::overlay_map;
+mod predicates;
+pub use predicates::load_predicates;
 
 /// Loot tables by id. Each is kept as its JSON text and read into a [`Value`]
 /// the first time it is rolled: of vanilla's ~1,450 tables a game rolls a
@@ -784,9 +786,7 @@ impl LootData {
         let mut modifiers = HashMap::new();
         load_kind(&all, "item_modifier", &mut modifiers)?;
         overlay_map(overlay, "item_modifier", &mut modifiers);
-        let mut predicates = HashMap::new();
-        load_kind(&all, "predicate", &mut predicates)?;
-        overlay_map(overlay, "predicate", &mut predicates);
+        let predicates = load_predicates(root, overlay)?;
         let items = defaults
             .entries()
             .iter()

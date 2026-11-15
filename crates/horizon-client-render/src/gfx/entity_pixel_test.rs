@@ -12,6 +12,7 @@ struct Frame {
     group: wgpu::BindGroup,
     bindings: wgpu::BindGroupLayout,
     atlas: wgpu::TextureView,
+    atlas_texture: wgpu::Texture,
 }
 
 /// The software Vulkan adapter (lavapipe, llvmpipe) the pixel tests draw on.
@@ -172,6 +173,7 @@ fn software_frame(
         group,
         bindings,
         atlas: atlas_view,
+        atlas_texture,
     })
 }
 
@@ -1078,6 +1080,9 @@ pub fn render_hud(
         false,
     )
     .map_err(|error| error.to_string())?;
+    // As the game's renderer has it (gfx.rs): the batch's atlas patches, a map's or a mod's
+    // image, upload before the draw.
+    hud.atlas_texture = Some(frame.atlas_texture.clone());
     let mut uploads = super::upload::Uploads::new(&frame.device);
     let mut encoder = frame.device.create_command_encoder(&Default::default());
     let color = frame.color.create_view(&Default::default());

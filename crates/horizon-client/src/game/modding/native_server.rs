@@ -139,12 +139,12 @@ fn usage_nodes(
         if kind == "vec3_uncentered" {
             node[UNCENTERED] = true.into();
         }
-        if let Some(id) = custom {
-            // A client that does not know the type parses a word (or the rest of the line).
-            // Fabric sends the registered type's id, which an unmodded client cannot read and
-            // whose node it drops; a Brigadier string keeps the tree valid and asks the server
-            // for the completions.
-            node["custom_argument"] = id.into();
+        // A registered type goes out as a Brigadier string an unmodded client can read; it and
+        // the free `id`, which has no list of its own, ask the server (the mods' `tab_complete`).
+        if custom.is_some() || kind == "id" {
+            if let Some(id) = custom {
+                node["custom_argument"] = id.into();
+            }
             node["suggestions"] = "minecraft:ask_server".into();
         }
         out.push((name.to_owned(), node, optional));
@@ -1654,21 +1654,42 @@ impl Game<'_> {
     /// acting player) are reachable; displaced outer players are excluded
     /// from name, UUID and selector resolution on this path only.
     pub(super) fn native_run_command(&mut self, line: &str) -> bool {
+        self.run_console_command(line, false).0
+    }
+    /// The one path `native_run_command` and `native_run_command_with_output` run a line
+    /// by: the console's source from the overworld's spawn, the native command filter on,
+    /// and the running command's own chat capture, so a call inside another capture leaves
+    /// the outer one as it was. With `capture`, the source is not silent and the feedback
+    /// comes back as the second value.
+    pub(super) fn run_console_command(
+        &mut self,
+        line: &str,
+        capture: bool,
+    ) -> (bool, Vec<horizon_client::text::Text>) {
         if self.lan.is_none() {
-            return false;
+            return (false, Vec::new());
         }
+        let base = self.server_source();
         let server = execute::Source {
             dimension: Dim::Overworld,
-            ..self.server_source()
+            silent: base.silent && !capture,
+            ..base
         };
         let outer = self.command_source.replace(server);
         let filter = std::mem::replace(&mut self.native_command_filter, true);
         let outer_exec = std::mem::take(&mut self.exec);
+        let outer_capture = capture.then(|| self.chat_capture.replace(Vec::new()));
         let ok = self.as_console(|g| g.run_command(line));
+        let lines = match outer_capture {
+            Some(outer_capture) => {
+                std::mem::replace(&mut self.chat_capture, outer_capture).unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
         self.exec = outer_exec;
         self.native_command_filter = filter;
         self.command_source = outer;
-        ok
+        (ok, lines)
     }
     /// The open world's folder (`world/`, beside its `level.dat`): a server
     /// mod keeps its data in a folder of its own there, so the world's
@@ -2398,6 +2419,7 @@ mod tests {
             age: 0,
             on_ground: true,
             count: 1,
+            fire_ticks: 0,
             ticks: 0,
             health: 5,
             air: 300,
@@ -2970,7 +2992,11 @@ mod tests {
             }
         }
 
-        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
             ["press", "furnace"]
                 .into_iter()
                 .filter(|machine| machine.starts_with(prefix))
@@ -2991,7 +3017,11 @@ mod tests {
             }
             Ok(input.into())
         }
-        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
             match prefix {
                 "panic" => panic!("completer"),
                 "text" => vec![mod_api::CommandSuggestion::new("a".repeat(32768))],
@@ -3050,7 +3080,11 @@ mod tests {
             fn parse(&self, _: &str) -> Result<String, mod_api::CommandArgumentError> {
                 unreachable!()
             }
-            fn suggest(&self, _: &str) -> Vec<mod_api::CommandSuggestion> {
+            fn suggest(
+                &self,
+                _: Option<&mod_api::CommandSender>,
+                _: &str,
+            ) -> Vec<mod_api::CommandSuggestion> {
                 unreachable!()
             }
         }
@@ -3126,6 +3160,168 @@ mod tests {
                 .map(|s| s.text.as_str())
                 .collect::<Vec<_>>(),
             ["press"]
+        );
+    }
+
+    #[test]
+    fn the_id_kind_reads_a_free_identifier_with_no_registry() {
+        let (tree, _, problems) = tree(&[mod_api::Command::new("map fullrender <world:id>")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let world = &tree["children"]["map"]["children"]["fullrender"]["children"]["world"];
+        assert_eq!(world["parser"], "minecraft:resource_location");
+        assert!(
+            world.get("properties").is_none(),
+            "ResourceLocationArgument carries no properties"
+        );
+        // The free `id` has no list of its own: its node asks the server, which answers from the
+        // mods' own suggestions (`tab_complete`), so an unmodded client is not left with nothing.
+        assert_eq!(world["suggestions"], "minecraft:ask_server");
+
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(
+            &mut dispatcher,
+            &tree,
+            "native_mod_command",
+            &HashMap::new(),
+        );
+        let registries = horizon_client::command::Registries::default();
+        for (line, id) in [
+            ("map fullrender minecraft:overworld", "minecraft:overworld"),
+            ("map fullrender mymod:custom", "mymod:custom"),
+            ("map fullrender overworld", "minecraft:overworld"),
+        ] {
+            let parsed = dispatcher.parse(line, &registries);
+            let (context, _) = parsed.executable().unwrap_or_else(|e| {
+                panic!("{line}: {}", e.message.plain());
+            });
+            assert_eq!(context.get("world"), Some(&Arg::Str(id.into())), "{line}");
+        }
+        for refused in [
+            "map fullrender Minecraft:overworld",
+            "map fullrender minecraft:overworld:again",
+            "map fullrender 50%stone,50%dirt",
+        ] {
+            assert!(
+                dispatcher.parse(refused, &registries).executable().is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    /// A test mod's argument type for a WorldEdit-style pattern list: the greedy text holds
+    /// several tokens, and the completion is for the one being typed.
+    struct PatternArgument;
+
+    impl mod_api::CommandArgumentType for PatternArgument {
+        fn kind(&self) -> mod_api::CommandArgumentKind {
+            mod_api::CommandArgumentKind::Greedy
+        }
+
+        fn parse(&self, input: &str) -> Result<String, mod_api::CommandArgumentError> {
+            Ok(input.trim().to_owned())
+        }
+
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
+            let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+            ["stone", "dirt"]
+                .into_iter()
+                .filter(|block| block.starts_with(&prefix[start..]))
+                .map(|block| mod_api::CommandSuggestion::new(block).replacing_from(start))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_greedy_argument_completes_the_token_being_typed() {
+        let arguments: CommandArguments = HashMap::from([(
+            "test:pattern".into(),
+            Arc::new(PatternArgument) as Arc<dyn mod_api::CommandArgumentType>,
+        )]);
+        let (tree, _, problems) = super::command_tree(
+            &[mod_api::Command::new("replace <pattern:test:pattern>")],
+            |_| false,
+            &arguments,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &tree, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+
+        // The second token: the range covers it, and the text in front of it is kept.
+        let typed = "replace stone st";
+        let parse = dispatcher.parse(typed, &registries);
+        let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            ["stone"]
+        );
+        assert_eq!(range, (14, typed.len()), "the token, not the whole text");
+        assert_eq!(suggestions[0].apply(typed), "replace stone stone");
+
+        // The first token of the text replaces it whole, as before.
+        let typed = "replace dir";
+        let parse = dispatcher.parse(typed, &registries);
+        let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        assert_eq!(range, (8, typed.len()));
+        assert_eq!(suggestions[0].apply(typed), "replace dirt");
+    }
+
+    /// A type whose completion mixes one the text can hold with one it cannot.
+    struct MixedOffsets;
+
+    impl mod_api::CommandArgumentType for MixedOffsets {
+        fn kind(&self) -> mod_api::CommandArgumentKind {
+            mod_api::CommandArgumentKind::Greedy
+        }
+
+        fn parse(&self, input: &str) -> Result<String, mod_api::CommandArgumentError> {
+            Ok(input.to_owned())
+        }
+
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
+            vec![
+                mod_api::CommandSuggestion::new("stone").replacing_from(0),
+                mod_api::CommandSuggestion::new("dirt").replacing_from(prefix.len() + 1),
+            ]
+        }
+    }
+
+    #[test]
+    fn a_suggestion_with_an_offset_past_the_text_is_refused_and_the_others_stay() {
+        let arguments: CommandArguments = HashMap::from([(
+            "test:mixed".into(),
+            Arc::new(MixedOffsets) as Arc<dyn mod_api::CommandArgumentType>,
+        )]);
+        let (tree, _, problems) = super::command_tree(
+            &[mod_api::Command::new("fill <blocks:test:mixed>")],
+            |_| false,
+            &arguments,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &tree, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+        let typed = "fill st";
+        let parse = dispatcher.parse(typed, &registries);
+        let (_, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            ["stone"],
+            "the suggestion past the typed text is left out, never applied"
         );
     }
 
@@ -3394,6 +3590,7 @@ mod tests {
                     mod_api::Command::new("typed data <word:word> <number:number> <enabled:boolean> <item:item> <pos:block_pos>"),
                     mod_api::Command::new("typed opt [value:integer]"),
                     mod_api::Command::new("typed repeat <value:player> <value:integer>"),
+                    mod_api::Command::new("typed at <pos:vec3>"),
                     mod_api::Command::op("protected <who:player>", 4),
                 ]);
             }
@@ -3482,13 +3679,18 @@ mod tests {
                         "typed data console 3 true dirt ^0.5 ^0.5 ^0.5"
                     ));
                     assert!(game.perform_native_console_command("typed repeat guest13 3"));
+                    assert!(game.perform_native_console_command("typed at 1 64.25 ~1"));
+                    // A point is three numbers: two, or text, is a parse error and is not heard
+                    // (the count of 12 heard lines below holds neither).
+                    game.perform_native_console_command("typed at 1 64.25");
+                    game.perform_native_console_command("typed at 1 up 3");
                     assert!(game.command_source.is_none(), "console source restored");
                     game.as_guest(12, |game| {
                         assert!(game.native_run_command("execute as guest13 run typed opt 13"))
                     })
                     .unwrap();
                     let heard = heard.lock().unwrap();
-                    assert_eq!(heard.len(), 11);
+                    assert_eq!(heard.len(), 12);
                     let first = &heard[0].1;
                     assert_eq!(first.literals, ["typed", "give"]);
                     assert_eq!(first.argument("who"), Some(&Value::Player(other)));
@@ -3535,6 +3737,12 @@ mod tests {
                     );
                     assert_eq!(heard[9].1.arguments[0].value, Value::Player(other));
                     assert_eq!(heard[9].1.argument("value"), Some(&Value::Integer(3)));
+                    // `1 64.25 ~1`: a whole x is a block centre (1.5), y is as typed, and `~1`
+                    // is one block from the console's z.
+                    assert_eq!(
+                        heard[10].1.argument("pos"),
+                        Some(&Value::Vec3([1.5, 64.25, -2.0]))
+                    );
                 });
             },
         );

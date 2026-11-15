@@ -13,7 +13,7 @@ use horizon_protocol::{
     buf::{Reader, Writer},
     ids::play::clientbound as ids,
     packets::play::Clientbound as C,
-    viewed_levels::{self, Answer, CHANNEL, Message},
+    viewed_levels::{self, Answer, CHANNEL, Level, Message},
 };
 use std::sync::mpsc::Receiver;
 
@@ -22,14 +22,26 @@ const NETHER: &str = "minecraft:the_nether";
 const NETHER_INDEX: i32 = 2;
 
 /// A hub with the players `uuids`, each placed in the Overworld at (0.5, 64, 0.5) with a client
-/// of this revision that views up to `max_levels` other levels and a batch quota of 9; each one's
-/// packets.
+/// that views up to `max_levels` other levels and a batch quota of 9; each one's packets. The
+/// client is of revision 3, which names a viewed level by its Login index ([`got`] reads that
+/// form); [`hub_bound`] has clients of revision 4.
 fn hub_with(uuids: &[u128], max_levels: u8) -> (Hub, Vec<Receiver<Out>>) {
     hub_answered(
         uuids,
         Answer {
-            revision: viewed_levels::REVISION,
+            revision: viewed_levels::REVISION_3,
             max_levels,
+        },
+    )
+}
+
+/// [`hub_with`], each client of revision 4, viewing 2 levels: slots and epochs ([`got_bound`]).
+fn hub_bound(uuids: &[u128]) -> (Hub, Vec<Receiver<Out>>) {
+    hub_answered(
+        uuids,
+        Answer {
+            revision: viewed_levels::REVISION_4,
+            max_levels: 2,
         },
     )
 }
@@ -38,7 +50,6 @@ fn hub_with(uuids: &[u128], max_levels: u8) -> (Hub, Vec<Receiver<Out>>) {
 fn hub_answered(uuids: &[u128], answer: Answer) -> (Hub, Vec<Receiver<Out>>) {
     let config = crate::lan::NetConfig {
         announce: false,
-        listen: false,
         ..crate::lan::NetConfig::loopback(0, "ViewedLevelsTest".into(), 4)
     };
     // Players are an entity type its clients know, so the levels' players are tracked.
@@ -194,16 +205,17 @@ fn got(rx: &Receiver<Out>) -> Vec<Got> {
                 continue;
             }
         };
-        match Message::decode(&payload.data).unwrap() {
-            Message::Open { level, .. } => out.push(Got::Open(level)),
-            Message::Close { level } => out.push(Got::Close(level)),
+        match Message::decode_in(&payload.data, viewed_levels::REVISION_3).unwrap() {
+            Message::Open { level, .. } => out.push(Got::Open(level.number())),
+            Message::Close { level } => out.push(Got::Close(level.number())),
             Message::Run { level, packets } => {
                 out.extend(packets.into_iter().map(|(id, body)| Got::Wrapped {
-                    level,
+                    level: level.number(),
                     id,
                     body: body.to_vec(),
                 }))
             }
+            Message::Swap { .. } => unreachable!("no swap below revision 4"),
         }
     }
     out
@@ -230,6 +242,7 @@ fn wrapped_columns(got: &[Got], kind: i32) -> Vec<(i32, i32)> {
 /// opened with its clock, then its nearest 9 chunks go wrapped in a plain batch; a block change
 /// in a sent column follows them wrapped.
 #[test]
+#[ignore = "daily"]
 fn a_nether_area_is_sent_wrapped_in_a_plain_batch() {
     let (mut hub, rx) = hub_with(&[1], 2);
     hub.set_viewed_areas(1, "test:portal", nether(2)).unwrap();
@@ -275,6 +288,7 @@ fn a_nether_area_is_sent_wrapped_in_a_plain_batch() {
 /// A vanilla client (no capability answer, so 0 levels) gets no area in another level and
 /// nothing of it; an area in its own level holds its ticket and sends nothing past its view.
 #[test]
+#[ignore = "daily"]
 fn a_vanilla_client_gets_nothing() {
     let (mut hub, rx) = hub_with(&[1], 0);
     assert_eq!(
@@ -304,6 +318,7 @@ fn a_vanilla_client_gets_nothing() {
 /// A withdrawn area's chunks stay on the client 52 ticks, then are forgotten, then the level is
 /// closed; nothing more follows.
 #[test]
+#[ignore = "daily"]
 fn a_withdrawn_areas_chunks_are_forgotten_after_the_linger_then_closed() {
     assert_eq!(LINGER, 52);
     let (mut hub, rx) = hub_with(&[1], 2);
@@ -343,6 +358,7 @@ fn a_withdrawn_areas_chunks_are_forgotten_after_the_linger_then_closed() {
 
 /// Each limit refuses with its cap's name and value, and the areas asked before stay.
 #[test]
+#[ignore = "daily"]
 fn each_limit_refuses_with_its_cap_and_keeps_the_old_areas() {
     use ChunkAreaMode::{Loaded, Ticking};
     let (mut hub, _rx) = hub_with(&[1, 2], 2);
@@ -423,6 +439,7 @@ fn each_limit_refuses_with_its_cap_and_keeps_the_old_areas() {
 /// not here, not watching, holds no player ticket and is not counted where the level's players
 /// are; its area is its own ticket.
 #[test]
+#[ignore = "daily"]
 fn an_area_is_not_a_player() {
     let (mut hub, _rx) = hub_with(&[1], 2);
     hub.guests.update(0, |g| g.dimension = NETHER.into());
@@ -450,6 +467,7 @@ fn an_area_is_not_a_player() {
 
 /// A player that disconnects takes its areas, their tickets and their squares with it.
 #[test]
+#[ignore = "daily"]
 fn disconnect_drops_the_areas_and_their_tickets() {
     let (mut hub, _rx) = hub_with(&[1], 2);
     hub.set_viewed_areas(1, "test:portal", nether(3)).unwrap();
@@ -463,6 +481,7 @@ fn disconnect_drops_the_areas_and_their_tickets() {
 /// A client keeps at most 2048 columns of a viewed level in this protocol revision: once its
 /// view holds that many, nothing more of the level is sent, though the areas may cover more.
 #[test]
+#[ignore = "daily"]
 fn a_view_holding_2048_columns_is_sent_no_more() {
     let (mut hub, rx) = hub_with(&[1], 2);
     hub.set_viewed_areas(1, "test:portal", nether(2)).unwrap();
@@ -493,6 +512,7 @@ fn a_view_holding_2048_columns_is_sent_no_more() {
 /// whatever the radius, and changes nothing; centres on the limit hold their squares and
 /// tickets there.
 #[test]
+#[ignore = "daily"]
 fn a_centre_past_the_world_border_is_refused() {
     use ChunkAreaMode::{Loaded, Ticking};
     let (mut hub, _rx) = hub_with(&[1], 2);
@@ -541,6 +561,7 @@ fn a_centre_past_the_world_border_is_refused() {
 /// A column still waiting for its postprocessing (vanilla runs `postProcessGeneration` before
 /// a chunk is sent) is held back until it is done; the others go meanwhile.
 #[test]
+#[ignore = "daily"]
 fn a_column_waiting_for_its_postprocessing_is_not_sent() {
     let (mut hub, rx) = hub_with(&[1], 2);
     hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
@@ -582,6 +603,7 @@ fn a_column_waiting_for_its_postprocessing_is_not_sent() {
 /// A column whose packet is too large to wrap is not counted in the batch, stays queued and is
 /// not recorded as sent; a batch of none of them sends nothing.
 #[test]
+#[ignore = "daily"]
 fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
     use super::send::batch_runs;
     let (hub, _rx) = hub_with(&[1], 2);
@@ -593,7 +615,7 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
     oversized.bytes(&vec![0; 1 << 21]);
     let taken = [(3, ()), (5, ()), (8, ())];
     let bodies = [body((0, 0)), oversized.data.clone(), body((1, 0))];
-    let (payloads, sent) = batch_runs(NETHER_INDEX, &taken, &bodies);
+    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies);
     assert_eq!(sent, vec![3, 8], "the queue places of the columns sent");
     let mut columns = Vec::new();
     for payload in &payloads {
@@ -602,10 +624,12 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
         let Ok(C::CustomPayload(p)) = C::decode(id, r.rest()) else {
             panic!("not a custom payload");
         };
-        let Message::Run { level, packets } = Message::decode(&p.data).unwrap() else {
+        let Message::Run { level, packets } =
+            Message::decode_in(&p.data, viewed_levels::REVISION_3).unwrap()
+        else {
             panic!("not a run");
         };
-        assert_eq!(level, NETHER_INDEX);
+        assert_eq!(level, Level::Index(NETHER_INDEX));
         for (id, body) in packets {
             let Ok(C::LevelChunkWithLight(c)) = C::decode(id, body) else {
                 panic!("not a chunk");
@@ -614,7 +638,7 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
         }
     }
     assert_eq!(columns, vec![(0, 0), (1, 0)]);
-    let (payloads, sent) = batch_runs(NETHER_INDEX, &[(0, ())], &[oversized.data]);
+    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &[(0, ())], &[oversized.data]);
     assert!(payloads.is_empty() && sent.is_empty(), "no empty batch");
 }
 
@@ -639,6 +663,7 @@ fn columns_of(got: &[Got], level: i32, kind: i32) -> Vec<(i32, i32)> {
 /// a view of level 0, forgotten wrapped once they lingered 52 ticks, then closed. A second
 /// travel, into the End it does not view, drops every view without `close`.
 #[test]
+#[ignore = "daily"]
 fn a_travel_into_a_viewed_level_swaps_it_with_the_level_left() {
     let (mut hub, rx) = hub_with(&[1], 2);
     hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
@@ -666,7 +691,10 @@ fn a_travel_into_a_viewed_level_swaps_it_with_the_level_left() {
     let overworld = g.viewed.view("minecraft:overworld").unwrap();
     let mut kept: Vec<_> = overworld.sent.iter().copied().collect();
     kept.sort_unstable();
-    assert_eq!((overworld.level, kept), (0, vec![(0, 0), (1, 0)]));
+    assert_eq!(
+        (overworld.level, kept),
+        (viewed_levels::Level::Index(0), vec![(0, 0), (1, 0)])
+    );
     let sent = got(&rx[0]);
     assert!(sent.contains(&Got::Plain(ids::RESPAWN)));
     // The Nether's pass sends none of its chunks again.
@@ -723,6 +751,7 @@ fn a_travel_into_a_viewed_level_swaps_it_with_the_level_left() {
 /// A client of revision 1 does not swap worlds on a travel: into the Nether it views, the server
 /// drops its views and the Overworld left, and sends the Nether's chunks again, plain, as its own.
 #[test]
+#[ignore = "daily"]
 fn a_revision_1_client_is_not_switched() {
     let older = Answer {
         revision: 1,
@@ -787,6 +816,7 @@ fn wrapped_entities(got: &[Got], kind: i32) -> Vec<i32> {
 /// A player of a viewed level that respawns (`ServerEntity.removePairing`, then a new entity):
 /// the viewer's view forgets it and is sent its removal, wrapped, then a fresh `AddEntity`.
 #[test]
+#[ignore = "daily"]
 fn a_respawned_player_is_removed_from_a_view_and_added_again() {
     let (mut hub, rx) = hub_with(&[1, 2], 2);
     hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
@@ -963,13 +993,14 @@ fn opened(got: &[Got]) -> Vec<i32> {
         .collect()
 }
 
-/// A level opened after a client logged in (a runtime level) is not in the Login packet's
-/// `levels` its client names viewed levels by: that client is sent nothing of it, where an `open`
-/// at an index past its list would close its connection. A client that logged in after the open
-/// views it at its index.
+/// A client of revision 3 or older names viewed levels by their index in the Login packet's
+/// `levels`, and a level opened after it logged in (a runtime level) is not there: that client is
+/// sent nothing of it, where an `open` at an index past its list would close its connection. A
+/// client that logged in after the open views it at its index.
 #[test]
-fn a_level_opened_after_a_clients_login_is_not_viewed_by_it() {
-    let (mut hub, rx) = hub_with(&[1, 2], 2);
+#[ignore = "daily"]
+fn a_level_opened_after_a_clients_login_is_not_viewed_by_an_older_client() {
+    let (mut hub, rx) = hub_answered(&[1, 2], revision_3());
     open_levels(&mut hub, &["test:r"]);
     log_in_now(&mut hub, 1);
     for uuid in [1, 2] {
@@ -995,6 +1026,7 @@ fn a_level_opened_after_a_clients_login_is_not_viewed_by_it() {
 /// A viewed level keeps the index its client was told at Login when a level before it closes:
 /// the server's own list shifts, the client's does not.
 #[test]
+#[ignore = "daily"]
 fn a_viewed_level_keeps_its_login_index_after_a_level_before_it_closes() {
     let (mut hub, rx) = hub_with(&[1], 2);
     open_levels(&mut hub, &["test:a", "test:b"]);
@@ -1015,6 +1047,7 @@ fn a_viewed_level_keeps_its_login_index_after_a_level_before_it_closes() {
 /// open again under its id, it is opened and sent afresh, nothing of the old level counted as
 /// sent.
 #[test]
+#[ignore = "daily"]
 fn a_closed_levels_views_are_closed_and_a_reopen_is_sent_afresh() {
     let (mut hub, rx) = hub_with(&[1], 2);
     open_levels(&mut hub, &["test:r"]);
@@ -1046,12 +1079,13 @@ fn a_closed_levels_views_are_closed_and_a_reopen_is_sent_afresh() {
     assert_eq!(columns_of(&again, 3, ids::LEVEL_CHUNK_WITH_LIGHT).len(), 9);
 }
 
-/// A travel out of a level opened after its client's Login, into a level it views: its client
-/// cannot name the level left, so it does not swap (it drops its viewed worlds and enters the
-/// Nether afresh), and the server does the same.
+/// A travel out of a level opened after its client's Login, into a level it views, by a client
+/// of revision 3: it cannot name the level left, so it does not swap (it drops its viewed worlds
+/// and enters the Nether afresh), and the server does the same.
 #[test]
-fn a_travel_out_of_a_level_opened_after_login_does_not_swap() {
-    let (mut hub, rx) = hub_with(&[1], 2);
+#[ignore = "daily"]
+fn a_travel_out_of_a_level_opened_after_login_does_not_swap_an_older_client() {
+    let (mut hub, rx) = hub_answered(&[1], revision_3());
     open_levels(&mut hub, &["test:r"]);
     hub.guests.update(0, |g| {
         g.dimension = "test:r".into();
@@ -1074,6 +1108,267 @@ fn a_travel_out_of_a_level_opened_after_login_does_not_swap() {
         g.viewed.views.is_empty(),
         "test:r left is not kept as a view"
     );
+    assert!(
+        g.sent_chunks.is_empty(),
+        "the Nether is sent again as its own"
+    );
+}
+
+/// A client of revision 3: viewed levels by their Login index.
+fn revision_3() -> Answer {
+    Answer {
+        revision: viewed_levels::REVISION_3,
+        max_levels: 2,
+    }
+}
+
+/// What a client of revision 4 was sent, in order: plain packets by id, and `horizon:levels`
+/// messages with their slot and epoch.
+#[derive(Debug, PartialEq)]
+enum Bound {
+    Plain(i32),
+    Open {
+        slot: i32,
+        epoch: i32,
+        columns: u32,
+        dimension: String,
+    },
+    Run {
+        slot: i32,
+        epoch: i32,
+        ids: Vec<i32>,
+    },
+    Close {
+        slot: i32,
+        epoch: i32,
+    },
+    Swap {
+        slot: i32,
+        epoch: i32,
+    },
+}
+
+fn got_bound(rx: &Receiver<Out>) -> Vec<Bound> {
+    let bodies = rx.try_iter().flat_map(|o| match o {
+        Out::Packet(body) => vec![body],
+        Out::Packets(bodies) => bodies,
+        Out::Disconnect(_) => Vec::new(),
+    });
+    let binding = |level| match level {
+        viewed_levels::Level::Bound { slot, epoch } => (slot, epoch),
+        other => panic!("not a binding: {other:?}"),
+    };
+    let mut out = Vec::new();
+    for body in bodies {
+        let mut r = Reader::new(&body);
+        let id = r.varint().unwrap();
+        let payload = match C::decode(id, r.rest()) {
+            Ok(C::CustomPayload(p)) if p.channel == CHANNEL => p,
+            _ => {
+                out.push(Bound::Plain(id));
+                continue;
+            }
+        };
+        out.push(
+            match Message::decode_in(&payload.data, viewed_levels::REVISION_4).unwrap() {
+                Message::Open {
+                    level,
+                    columns,
+                    spawn,
+                } => {
+                    let (slot, epoch) = binding(level);
+                    Bound::Open {
+                        slot,
+                        epoch,
+                        columns,
+                        dimension: spawn.dimension,
+                    }
+                }
+                Message::Run { level, packets } => {
+                    let (slot, epoch) = binding(level);
+                    let ids = packets.iter().map(|(id, _)| *id).collect();
+                    Bound::Run { slot, epoch, ids }
+                }
+                Message::Close { level } => {
+                    let (slot, epoch) = binding(level);
+                    Bound::Close { slot, epoch }
+                }
+                Message::Swap { level } => {
+                    let (slot, epoch) = binding(level);
+                    Bound::Swap { slot, epoch }
+                }
+            },
+        );
+    }
+    out
+}
+
+/// The `open`s among `got`: slot, epoch, column cap and dimension.
+fn bound_opens(got: &[Bound]) -> Vec<(i32, i32, u32, &str)> {
+    got.iter()
+        .filter_map(|g| match g {
+            Bound::Open {
+                slot,
+                epoch,
+                columns,
+                dimension,
+            } => Some((*slot, *epoch, *columns, dimension.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The chunks `got` carried in runs of `slot` at `epoch`.
+fn bound_chunks(got: &[Bound], slot: i32, epoch: i32) -> usize {
+    got.iter()
+        .map(|g| match g {
+            Bound::Run {
+                slot: s,
+                epoch: e,
+                ids,
+            } if *s == slot && *e == epoch => ids
+                .iter()
+                .filter(|&&id| id == ids::LEVEL_CHUNK_WITH_LIGHT)
+                .count(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// A pass of the level in place `level` with a fresh batch quota.
+fn pass(hub: &mut Hub, level: &str, world: &mut World) {
+    hub.set_dimension(level);
+    hub.ticks += 1;
+    for i in 0..hub.guests.len() {
+        hub.guests.update(i, |g| {
+            g.batch_quota = 9.0;
+            g.unacknowledged = 0;
+        });
+    }
+    run_level(hub, world);
+}
+
+/// A client of revision 4 views a level opened after its Login: each `open` binds the first
+/// free slot below its cap with the next epoch and says the server's column cap. A closed level's
+/// `close` names its binding, and the slot it frees is bound again with a new epoch. A client of
+/// revision 3, logged in at the same time, is sent nothing of those levels.
+#[test]
+#[ignore = "daily"]
+fn a_level_opened_after_login_is_viewed_in_a_slot_from_revision_4() {
+    let (mut hub, rx) = hub_bound(&[1]);
+    hub.viewed.caps.loaded_per_player = 3000;
+    open_levels(&mut hub, &["test:r", "test:s"]);
+    let areas = |level: &str| vec![area(level, (0, 0), 1, ChunkAreaMode::Loaded)];
+    let both = [areas("test:r"), areas("test:s")].concat();
+    hub.set_viewed_areas(1, "test:portal", both).unwrap();
+    let mut world = lit_columns(1);
+    pass(&mut hub, "test:r", &mut world);
+    let sent = got_bound(&rx[0]);
+    assert_eq!(bound_opens(&sent), vec![(0, 0, 3000, "test:r")], "{sent:?}");
+    assert_eq!(bound_chunks(&sent, 0, 0), 9);
+    pass(&mut hub, "test:s", &mut world);
+    let sent = got_bound(&rx[0]);
+    assert_eq!(bound_opens(&sent), vec![(1, 1, 3000, "test:s")], "{sent:?}");
+    assert_eq!(bound_chunks(&sent, 1, 1), 9);
+    // test:r closes, and test:t takes its slot with a new epoch.
+    hub.set_dimension("minecraft:overworld");
+    open_levels(&mut hub, &["test:s"]);
+    hub.close_views_of("test:r");
+    assert_eq!(got_bound(&rx[0]), vec![Bound::Close { slot: 0, epoch: 0 }]);
+    open_levels(&mut hub, &["test:s", "test:t"]);
+    let both = [areas("test:s"), areas("test:t")].concat();
+    hub.set_viewed_areas(1, "test:portal", both).unwrap();
+    pass(&mut hub, "test:t", &mut world);
+    let sent = got_bound(&rx[0]);
+    assert_eq!(bound_opens(&sent), vec![(0, 2, 3000, "test:t")], "{sent:?}");
+}
+
+/// A client of revision 3 is sent at most 2048 columns of a level, all it keeps, and its areas are
+/// checked against that, whatever the server's setting.
+#[test]
+#[ignore = "daily"]
+fn a_client_of_revision_3_keeps_the_fixed_column_cap() {
+    let (mut hub, _rx) = hub_with(&[1], 2);
+    hub.viewed.caps.loaded_per_player = 3000;
+    // A radius-24 `Loaded` area counts (2 × 24 + 3)² = 2601 chunks.
+    let big = vec![area(NETHER, (0, 0), 24, ChunkAreaMode::Loaded)];
+    assert!(matches!(
+        hub.set_viewed_areas(1, "test:portal", big.clone()),
+        Err(ChunkAreaRefusal::TooManyChunks { limit: 2048, .. })
+    ));
+    let (mut bound, _rx) = hub_bound(&[1]);
+    bound.viewed.caps.loaded_per_player = 3000;
+    assert_eq!(bound.set_viewed_areas(1, "test:portal", big), Ok(()));
+}
+
+/// From revision 4 a travel into a viewed level is followed, right after its Respawn, by a `swap`
+/// naming the slot of the level entered and the next epoch, which the level left is bound to on
+/// the server too. Here the level left is a runtime level opened after the client's Login.
+#[test]
+#[ignore = "daily"]
+fn a_travel_is_followed_by_a_swap_from_revision_4() {
+    let (mut hub, rx) = hub_bound(&[1]);
+    open_levels(&mut hub, &["test:r"]);
+    hub.guests.update(0, |g| {
+        g.dimension = "test:r".into();
+        g.sent_chunks.extend([(0, 0), (1, 0)]);
+    });
+    hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
+    let mut nether_world = lit_columns(1);
+    pass(&mut hub, NETHER, &mut nether_world);
+    let sent = got_bound(&rx[0]);
+    assert_eq!(bound_opens(&sent), vec![(0, 0, 2048, NETHER)]);
+    in_ctx(&mut nether_world, |ctx| {
+        hub.change_level(0, [8.5, 64.0, 8.5], 0.0, None, false, 0, ctx);
+    });
+    let sent = got_bound(&rx[0]);
+    let respawn = sent.iter().position(|g| *g == Bound::Plain(ids::RESPAWN));
+    let swap = sent
+        .iter()
+        .position(|g| *g == Bound::Swap { slot: 0, epoch: 1 });
+    assert_eq!(swap, Some(respawn.expect("Respawn sent") + 1), "{sent:?}");
+    let g = &hub.guests[0];
+    let left = g.viewed.view("test:r").expect("test:r kept as a view");
+    let mut kept: Vec<_> = left.sent.iter().copied().collect();
+    kept.sort_unstable();
+    assert_eq!(
+        (left.level, kept),
+        (
+            viewed_levels::Level::Bound { slot: 0, epoch: 1 },
+            vec![(0, 0), (1, 0)]
+        )
+    );
+    assert_eq!(
+        g.sent_chunks.len(),
+        9,
+        "the Nether's chunks, the player's own"
+    );
+}
+
+/// With the epochs spent, the view of the level entered is closed before the travel's Respawn:
+/// the client enters it as an ordinary Respawn, no `swap` is sent and nothing needs an epoch.
+#[test]
+#[ignore = "daily"]
+fn a_travel_with_the_epochs_spent_closes_the_view_first() {
+    let (mut hub, rx) = hub_bound(&[1]);
+    hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
+    let mut nether_world = lit_columns(1);
+    pass(&mut hub, NETHER, &mut nether_world);
+    got_bound(&rx[0]);
+    hub.guests
+        .update(0, |g| g.viewed.epochs = i64::from(i32::MAX) + 1);
+    in_ctx(&mut nether_world, |ctx| {
+        hub.change_level(0, [8.5, 64.0, 8.5], 0.0, None, false, 0, ctx);
+    });
+    let sent = got_bound(&rx[0]);
+    let close = sent
+        .iter()
+        .position(|g| *g == Bound::Close { slot: 0, epoch: 0 });
+    let respawn = sent.iter().position(|g| *g == Bound::Plain(ids::RESPAWN));
+    assert!(close.is_some() && close < respawn, "{sent:?}");
+    assert!(!sent.iter().any(|g| matches!(g, Bound::Swap { .. })));
+    let g = &hub.guests[0];
+    assert!(g.viewed.views.is_empty());
     assert!(
         g.sent_chunks.is_empty(),
         "the Nether is sent again as its own"

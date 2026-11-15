@@ -12,11 +12,6 @@ use horizon_protocol::{
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
 
-/// The most columns one viewed world holds: the server's own cap on a player's `Loaded` chunks in
-/// one level (`max_viewed_loaded_chunks`, 2048 by default), so that a server cannot fill the
-/// client's memory through one opened level. A server that raises its setting past it is refused.
-pub(in crate::game) const MAX_COLUMNS: usize = 2048;
-
 /// Another level's world, kept while the server sends it.
 pub(in crate::game) struct ViewedWorld {
     /// The level's key (`minecraft:the_nether`).
@@ -36,6 +31,10 @@ pub(in crate::game) struct ViewedWorld {
     /// since: what a travel into the level loads (`switch`). A world that was the player's keeps
     /// its own in `world.block_entities` besides.
     pub(in crate::game) block_entities: FxHashMap<(i32, i32), Vec<BlockEntityInfo>>,
+    /// The most columns it holds: the cap its `open` said, at most
+    /// `viewed_levels::MAX_COLUMNS`, so that a server cannot fill the client's memory through
+    /// one opened level.
+    pub(in crate::game) columns: u32,
 }
 
 impl ViewedWorld {
@@ -44,8 +43,10 @@ impl ViewedWorld {
         format: Arc<ChunkFormat>,
         default_clock: Option<i32>,
         world: World,
+        columns: u32,
     ) -> Self {
         Self {
+            columns,
             key: mod_api::__private::dimension_key(&level),
             level,
             format,
@@ -61,16 +62,16 @@ impl ViewedWorld {
     /// current: what the world keeps of its chunks, light, biomes, blocks, time, weather and
     /// entities. Block events, destruction progress and level events change nothing yet: what
     /// they show is drawn, and drawing a viewed level is gap 13. A chunk of a new column past
-    /// [`MAX_COLUMNS`] is refused before it is decoded.
+    /// its cap ([`Self::columns`]) is refused before it is decoded.
     pub(in crate::game) fn apply(&mut self, packet: C) -> Result<(), RouteError> {
         match packet {
             // `handleLevelChunkWithLight`: the column replaces any it held, with the light the
             // server sent.
             C::LevelChunkWithLight(p)
-                if self.world.chunks.len() >= MAX_COLUMNS
+                if self.world.chunks.len() >= self.columns as usize
                     && !self.world.chunks.contains_key(&(p.x, p.z)) =>
             {
-                return Err(RouteError::TooManyColumns);
+                return Err(RouteError::TooManyColumns(self.columns));
             }
             C::LevelChunkWithLight(p) => match self.format.column(&p) {
                 Ok(chunk) => {
@@ -217,62 +218,128 @@ pub(super) fn stored_state(state: i32) -> BlockStateId {
     BlockStateId(if known_block_state(state) { state } else { 0 })
 }
 
-/// The worlds a connection views (`Remote::viewed`), by the level's index in the Login packet's
-/// `levels`.
+/// The worlds a connection views (`Remote::viewed`), by the slot an `open` bound each level to
+/// (`horizon_protocol::viewed_levels`, revision 4).
 #[derive(Default)]
 pub(in crate::game) struct ViewedWorlds {
-    worlds: FxHashMap<i32, ViewedWorld>,
+    /// Each bound slot's world, with the epoch of the `open` or travel swap that bound it.
+    worlds: FxHashMap<i32, (i32, ViewedWorld)>,
+    /// The newest epoch an `open` or a travel swap gave on this connection. Dropping every world
+    /// leaves it: the server's counter goes on.
+    latest: Option<i32>,
+    /// The world of the level a travel just left, with the slot of the level entered: it waits
+    /// for the server's `swap` right after the Respawn, which binds it there.
+    left: Option<(i32, ViewedWorld)>,
+}
+
+/// Where a `run` or `close` of a slot at an epoch goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::game) enum Binding {
+    /// The slot is bound with that epoch: to its world.
+    Live,
+    /// An epoch no newer than the latest that the slot is not bound with: a packet of a level the
+    /// slot no longer holds, dropped.
+    Stale,
+    /// An epoch newer than any `open` gave: a server's error.
+    Unknown,
 }
 
 impl ViewedWorlds {
+    /// Where a `run` or `close` of `slot` at `epoch` goes.
+    pub(in crate::game) fn binding(&self, slot: i32, epoch: i32) -> Binding {
+        if self.latest.is_none_or(|latest| epoch > latest) {
+            return Binding::Unknown;
+        }
+        match self.worlds.get(&slot) {
+            Some((bound, _)) if *bound == epoch => Binding::Live,
+            _ => Binding::Stale,
+        }
+    }
+    /// Whether an `open` at `epoch` is newer than every epoch given before, as each must be.
+    pub(in crate::game) fn is_new(&self, epoch: i32) -> bool {
+        self.latest.is_none_or(|latest| epoch > latest)
+    }
     /// How many levels it views.
+    #[cfg(test)]
     pub(in crate::game) fn len(&self) -> usize {
         self.worlds.len()
     }
-    pub(in crate::game) fn contains(&self, level: i32) -> bool {
-        self.worlds.contains_key(&level)
-    }
     pub(in crate::game) fn get_mut(&mut self, level: i32) -> Option<&mut ViewedWorld> {
-        self.worlds.get_mut(&level)
+        self.worlds.get_mut(&level).map(|(_, world)| world)
     }
     /// The key of the level named `level`, while the server keeps it open: what `host.level`
     /// hands a client mod for it.
     pub(in crate::game) fn key_of(&self, level: &str) -> Option<mod_api::DimensionKey> {
         self.worlds
             .values()
-            .find(|w| w.level == level)
-            .map(|w| w.key)
+            .find(|(_, w)| w.level == level)
+            .map(|(_, w)| w.key)
     }
     /// The world of the level `key` names, while the server keeps it open: what a client mod's
     /// reads through its handle read.
     pub(in crate::game) fn world_of(&self, key: mod_api::DimensionKey) -> Option<&World> {
         self.worlds
             .values()
-            .find(|w| w.key == key)
-            .map(|w| &w.world)
+            .find(|(_, w)| w.key == key)
+            .map(|(_, w)| &w.world)
     }
-    /// The world of `level`, if the server opened it.
-    pub(in crate::game) fn get(&self, level: i32) -> Option<&ViewedWorld> {
-        self.worlds.get(&level)
+    /// The slot of the level named `level`, if the client views it.
+    pub(in crate::game) fn slot_of(&self, level: &str) -> Option<i32> {
+        self.worlds
+            .iter()
+            .find(|(_, (_, w))| w.level == level)
+            .map(|(&slot, _)| slot)
     }
-    /// `level`'s world, replacing any it held: an `open` starts afresh.
-    pub(in crate::game) fn insert(&mut self, level: i32, world: ViewedWorld) {
-        if let Some(old) = self.worlds.insert(level, world) {
+    /// The world of `slot`, if one is bound to it.
+    pub(in crate::game) fn get(&self, slot: i32) -> Option<&ViewedWorld> {
+        self.worlds.get(&slot).map(|(_, world)| world)
+    }
+    /// Binds `slot` to `world` at `epoch`, replacing any world it held: an `open` starts afresh.
+    pub(in crate::game) fn insert(&mut self, slot: i32, epoch: i32, world: ViewedWorld) {
+        self.latest = Some(self.latest.map_or(epoch, |latest| latest.max(epoch)));
+        if let Some((_, old)) = self.worlds.insert(slot, (epoch, world)) {
             free(old);
         }
     }
-    /// Takes `level`'s world out, whole: a travel into it (`switch`).
-    pub(in crate::game) fn take(&mut self, level: i32) -> Option<ViewedWorld> {
-        self.worlds.remove(&level)
+    /// Takes `slot`'s world out, whole: a travel into it (`switch`).
+    pub(in crate::game) fn take(&mut self, slot: i32) -> Option<ViewedWorld> {
+        self.worlds.remove(&slot).map(|(_, world)| world)
     }
-    /// Drops `level`'s world (`close`); false when it held none.
-    pub(in crate::game) fn remove(&mut self, level: i32) -> bool {
-        self.worlds.remove(&level).map(free).is_some()
+    /// Drops `slot`'s world (`close`), releasing the slot; false when it held none.
+    pub(in crate::game) fn remove(&mut self, slot: i32) -> bool {
+        self.worlds
+            .remove(&slot)
+            .map(|(_, world)| free(world))
+            .is_some()
     }
-    /// Drops every world: a Login, a Respawn or a new configuration phase.
+    /// Drops every world: a Login, a Respawn or a new configuration phase. The epochs go on.
     pub(in crate::game) fn clear(&mut self) {
-        for (_, world) in self.worlds.drain() {
+        for (_, (_, world)) in self.worlds.drain() {
             free(world);
+        }
+        if let Some((_, world)) = self.left.take() {
+            free(world);
+        }
+    }
+    /// Keeps `world`, the level a travel left, until the `swap` that binds it to `slot`, the slot
+    /// of the level entered.
+    pub(in crate::game) fn hold_left(&mut self, slot: i32, world: ViewedWorld) {
+        if let Some((_, old)) = self.left.replace((slot, world)) {
+            free(old);
+        }
+    }
+    /// The server's `swap`: binds the level a travel left to `slot` at `epoch`. False when the
+    /// client made no travel swap to `slot`, which it refuses.
+    pub(in crate::game) fn bind_left(&mut self, slot: i32, epoch: i32) -> bool {
+        match self.left.take() {
+            Some((held, world)) if held == slot => {
+                self.insert(slot, epoch, world);
+                true
+            }
+            other => {
+                self.left = other;
+                false
+            }
         }
     }
 }
@@ -321,8 +388,8 @@ mod tests {
         })
     }
 
-    /// A world full at 2048 columns takes a column it holds again, refuses a new one, and takes
-    /// it once the server forgot another.
+    /// A world full at its cap, here 2048 columns, takes a column it holds again, refuses a new
+    /// one, and takes it once the server forgot another.
     #[test]
     fn a_viewed_world_holds_at_most_2048_columns() {
         let overworld = DimensionType::vanilla("minecraft:overworld");
@@ -332,6 +399,7 @@ mod tests {
             format,
             None,
             World::new(BlockStateId(0), 1),
+            2048,
         );
         for x in 0..2048 {
             viewed.apply(column(x)).unwrap();
@@ -340,7 +408,10 @@ mod tests {
         // A replacement is no new column.
         assert_eq!(viewed.apply(column(17)), Ok(()));
         assert_eq!(viewed.world.chunks.len(), 2048);
-        assert_eq!(viewed.apply(column(2048)), Err(RouteError::TooManyColumns));
+        assert_eq!(
+            viewed.apply(column(2048)),
+            Err(RouteError::TooManyColumns(2048))
+        );
         assert!(!viewed.world.chunks.contains_key(&(2048, 0)));
         let forget = C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [5, 0] });
         viewed.apply(forget).unwrap();
@@ -361,6 +432,7 @@ mod tests {
             format,
             Some(3),
             World::new(BlockStateId(0), 1),
+            2048,
         );
         let time = |game_time, clocks| C::SetTime(play::SetTime { game_time, clocks });
         let clock = |clock, total_ticks, rate| ClockState {
@@ -396,6 +468,7 @@ mod tests {
                 format.clone(),
                 Some(3),
                 World::new(BlockStateId(0), 1),
+                2048,
             )
         };
         let mut viewed = fresh();

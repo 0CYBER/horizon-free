@@ -211,10 +211,13 @@ turn the switch off.
   under control. A game the player starts from the window is not, until they turn Agent Control
   on. An open socket lets any program of that user drive the game, so it opens only when an agent
   asked for the game, or when the player chose it.
-- **The window an agent opens** comes up without the focus (on Windows and macOS; X11 focuses it
-  anyway): the person keeps their keyboard, and the game keeps its pointer grab to itself, as
-  `--offscreen` does, so the system pointer is never taken, hidden or moved. Once the person
-  clicks into the window it is an ordinary one, and that click takes the pointer.
+- **The window an agent opens** asks for no focus, and belongs to the agent until a person
+  presses a mouse button inside it. Until then the game keeps its pointer grab to itself, as
+  `--offscreen` does, so the system pointer is never taken, hidden or moved, and the person's
+  keys, wheel and mouse motion don't reach the game, even if the system gives the window the
+  focus (X11 does, and Windows can): the focus alone claims nothing. Closing the window still
+  works. That first press makes it an ordinary window and takes the pointer; the agent's own
+  input plays before and after it.
 - **Headless:** `horizon-ctl launch --headless` (`horizon-client --headless --control`) starts a
   game with no display, no window and no GPU: it runs where no display server is (an SSH session,
   a server) and runs its own loop instead of winit's (`game/runtime/headless.rs`), one frame a tick. It
@@ -330,9 +333,10 @@ who took over mid-test.
   recorded: a stray key or mouse move can't spoil the run. The run's own input (the socket, the
   replay) still plays. Clicking into the window or away from it takes effect when the run ends,
   and the game's pointer grab stays inside the game until then, so the system pointer is never
-  taken or moved; closing the window still ends the run. A key held as the run starts stays
-  down until it is pressed again. Outside these runs nothing is held back; a game no one at
-  the computer should touch runs `--offscreen` or `--headless`.
+  taken or moved; closing the window still ends the run. A click during the run doesn't claim
+  an agent's window no one has clicked yet: it takes one after the run. A key held as the run
+  starts stays down until it is pressed again. Outside these runs nothing is held back; a game
+  no one at the computer should touch runs `--offscreen` or `--headless`.
 - `state` and `status` have an `input` section: `last_origin`, per-origin `counts`,
   `user_since_agent` and `last_user_age_s`.
 - `input-log [--since SEQ] [--limit N] [--origin ORIGIN]` lists the newest 512 input events:
@@ -422,9 +426,10 @@ of the frame ([#8750](https://github.com/horizon-rust/horizon/issues/8750)).
 - The server's own randoms and entity ids are its own: a summoned mob's facing and variant, and
   mob AI during a step, can differ when other server work drew on them first, and ids follow the
   order the server loads and creates entities in, which loading changes from run to run. What an
-  id seeds can then differ: a minecart's offset against z-fighting, a mob's client random. Give
-  facings and variants in the command (`{Rotation:[0f,0f]}`) for a repeatable scene. An end
-  crystal's spin and bob start from its position instead, so they are the same in every run.
+  id seeds can then differ: a minecart's offset against z-fighting, a mob's client random, a
+  dropped item's model when its model picks one at random. Give facings and variants in the
+  command (`{Rotation:[0f,0f]}`) for a repeatable scene. An end crystal's and a dropped item's spin
+  and bob start from their position instead, so they are the same in every run.
 - A script should wait until the world has loaded before it changes it: a command that acts on
   what is loaded (`kill @e`, `fill`) finds more or less of it otherwise.
 - The player still ticks while frozen, as in vanilla: stand the player on a block (it falls

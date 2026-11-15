@@ -36,6 +36,36 @@ pub struct Index {
     pub projects: Vec<Project>,
     #[serde(default)]
     pub revoked: Vec<Revoked>,
+    /// What [`Index::parse`] left out because it breaks a rule, with the reasons: the rest of
+    /// the index still loads. Never written.
+    #[serde(skip)]
+    pub left_out: Vec<LeftOut>,
+}
+
+/// A project, a version or a takedown [`Index::parse`] left out, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeftOut {
+    pub id: String,
+    /// None: the whole project (or the takedown).
+    pub version: Option<String>,
+    pub reason: String,
+}
+
+impl LeftOut {
+    fn project(p: &Project, reason: String) -> LeftOut {
+        LeftOut {
+            id: p.id.clone(),
+            version: None,
+            reason,
+        }
+    }
+    fn version(id: &str, v: &Version, reason: String) -> LeftOut {
+        LeftOut {
+            id: id.to_string(),
+            version: Some(v.version.clone()),
+            reason,
+        }
+    }
 }
 
 /// What a project is. New kinds (data packs, worlds, themes) can be added
@@ -175,8 +205,8 @@ pub struct Version {
     pub api: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<Side>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Capabilities::is_empty")]
+    pub capabilities: Capabilities,
     /// The Minecraft version it is for.
     pub game: String,
     /// A modpack's mods, as its manifest lists them.
@@ -210,6 +240,68 @@ impl Version {
             .iter()
             .find(|b| b.build == build && b.target == target)
             .ok_or(NativeBinaryAbsent)
+    }
+}
+
+/// A version's capabilities as the index lists them. A name this build doesn't know (one an older
+/// or a newer Horizon defined) is kept as written: that version is not installable, and the rest
+/// of the index still loads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "Vec<String>", into = "Vec<String>")]
+pub struct Capabilities {
+    known: Vec<Capability>,
+    unknown: Vec<String>,
+}
+
+impl Capabilities {
+    /// The capabilities this build knows, in the index's order.
+    pub fn known(&self) -> &[Capability] {
+        &self.known
+    }
+    /// The names this build doesn't know, as the index wrote them.
+    pub fn unknown(&self) -> &[String] {
+        &self.unknown
+    }
+    pub fn is_empty(&self) -> bool {
+        self.known.is_empty() && self.unknown.is_empty()
+    }
+    /// Why this build can't install a version with these capabilities, if it can't.
+    pub fn unsupported(&self) -> Option<String> {
+        (!self.unknown.is_empty()).then(|| {
+            format!(
+                "it asks for {}, which this Horizon doesn't have",
+                self.unknown.join(", ")
+            )
+        })
+    }
+}
+
+impl From<Vec<Capability>> for Capabilities {
+    fn from(known: Vec<Capability>) -> Self {
+        Self {
+            known,
+            unknown: Vec::new(),
+        }
+    }
+}
+
+impl From<Vec<String>> for Capabilities {
+    fn from(names: Vec<String>) -> Self {
+        let mut listed = Self::default();
+        for name in names {
+            match serde_json::from_value(serde_json::Value::String(name.clone())) {
+                Ok(capability) => listed.known.push(capability),
+                Err(_) => listed.unknown.push(name),
+            }
+        }
+        listed
+    }
+}
+
+impl From<Capabilities> for Vec<String> {
+    fn from(listed: Capabilities) -> Self {
+        let known = listed.known.iter().map(Capability::to_string);
+        known.chain(listed.unknown).collect()
     }
 }
 
@@ -254,7 +346,9 @@ pub enum Trust {
 }
 
 impl Index {
-    /// Parses and checks an index (see [`Index::check`]).
+    /// Parses an index and keeps what passes [`Index::check`]'s rules: an entry that breaks one
+    /// is left out with its reason ([`Index::left_out`]). Only text that is not an index, or one
+    /// of a newer schema, fails.
     pub fn parse(text: &str) -> Result<Index, String> {
         Self::parse_with(text, false)
     }
@@ -277,8 +371,8 @@ impl Index {
                 head.schema
             ));
         }
-        let index: Index = serde_json::from_str(text).map_err(|e| format!("mod index: {e}"))?;
-        index.check_with(local_files)?;
+        let mut index: Index = serde_json::from_str(text).map_err(|e| format!("mod index: {e}"))?;
+        index.keep_valid(local_files);
         Ok(index)
     }
 
@@ -292,146 +386,138 @@ impl Index {
 
     fn check_with(&self, local_files: bool) -> Result<(), String> {
         for (i, p) in self.projects.iter().enumerate() {
-            let at = |e: String| format!("{}: {e}", p.id);
-            if !valid_id(&p.id) {
-                return Err(format!("project id {:?} is not [a-z0-9_]{{1,64}}", p.id));
-            }
             if self.projects[..i].iter().any(|q| q.id == p.id) {
-                return Err(at("listed twice".into()));
+                return Err(format!("{}: listed twice", p.id));
             }
-            if p.name.trim().is_empty() || p.license.trim().is_empty() {
-                return Err(at("needs a name and a licence".into()));
-            }
-            https(&p.source).map_err(at)?;
-            if let Some(icon) = &p.icon {
-                https(icon).map_err(at)?;
-            }
-            if p.screenshots.len() > page::MAX_SCREENSHOTS {
-                return Err(at(format!(
-                    "{} screenshots, at most {}",
-                    p.screenshots.len(),
-                    page::MAX_SCREENSHOTS
-                )));
-            }
-            for s in &p.screenshots {
-                https(s).map_err(at)?;
-            }
-            if let Some(key) = &p.key {
-                minisign_verify::PublicKey::from_base64(key.trim())
-                    .map_err(|e| at(format!("key: {e}")))?;
-            }
+            check_project(p)?;
             if p.versions.is_empty() {
-                return Err(at("has no version".into()));
+                return Err(format!("{}: has no version", p.id));
             }
             for (j, v) in p.versions.iter().enumerate() {
-                let at = |e: String| format!("{} {}: {e}", p.id, v.version);
-                if v.version.trim().is_empty()
-                    || p.versions[..j].iter().any(|w| w.version == v.version)
-                {
-                    return Err(at("empty or repeated version".into()));
+                if p.versions[..j].iter().any(|w| w.version == v.version) {
+                    return Err(format!("{} {}: empty or repeated version", p.id, v.version));
                 }
-                let mut pairs = std::collections::HashSet::new();
-                for b in &v.native_binaries {
-                    if b.build.len() > MAX_NATIVE_BUILD
-                        || b.build.bytes().any(|c| c.is_ascii_control())
-                        || b.build.is_empty()
-                        || b.build.trim() != b.build
-                        || b.target.split('-').count() < 3
-                        || !b.target.bytes().all(|c| {
-                            c.is_ascii_lowercase() || c.is_ascii_digit() || b"-_.".contains(&c)
-                        })
-                        || b.target.split('-').any(str::is_empty)
-                    {
-                        return Err(at("invalid native build or canonical target triple".into()));
-                    }
-                    if !pairs.insert((&b.build, &b.target)) {
-                        return Err(at("duplicate native build and target".into()));
-                    }
-                    let f = &b.file;
-                    if !plain_name(&f.name) || f.size == 0 || f.size > MAX_FILE {
-                        return Err(at("invalid native binary file".into()));
-                    }
-                    if !(local_files && f.url.starts_with("file:///")) {
-                        https(&f.url).map_err(at)?;
-                    }
-                    hex64(&f.sha256).map_err(at)?;
-                    let signature = f
-                        .signature
-                        .as_deref()
-                        .ok_or_else(|| at("native binary needs a signature".into()))?;
-                    minisign_verify::Signature::decode(signature)
-                        .map_err(|e| at(format!("native signature: {e}")))?;
-                }
-                let f = &v.file;
-                let extension_ok = p
-                    .kind
-                    .extension()
-                    .is_none_or(|e| f.name.ends_with(&format!(".{e}")));
-                if !plain_name(&f.name) || !extension_ok {
-                    return Err(at(format!(
-                        "{:?} is not a plain file name for a {}",
-                        f.name,
-                        p.kind.name()
-                    )));
-                }
-                if !(local_files && f.url.starts_with("file:///")) {
-                    https(&f.url).map_err(at)?;
-                }
-                hex64(&f.sha256).map_err(at)?;
-                if f.size == 0 || f.size > MAX_FILE {
-                    return Err(at(format!(
-                        "size {} is not 1 byte to {} MiB",
-                        f.size,
-                        MAX_FILE >> 20
-                    )));
-                }
-                match (&p.key, &f.signature) {
-                    (Some(_), None) => {
-                        return Err(at("unsigned, but the project has a key".into()));
-                    }
-                    (None, Some(_)) => return Err(at("signed, but the project has no key".into())),
-                    (Some(_), Some(sig)) => {
-                        minisign_verify::Signature::decode(sig)
-                            .map_err(|e| at(format!("signature: {e}")))?;
-                    }
-                    (None, None) => {}
-                }
-                for r in &v.requires {
-                    let found = self
-                        .project(&r.id)
-                        .and_then(|q| q.versions.iter().find(|w| w.version == r.version));
-                    match found {
-                        Some(w) if w.file.sha256 == r.sha256 => {}
-                        Some(_) => {
-                            return Err(at(format!(
-                                "{} {}: another file than the index's",
-                                r.id, r.version
-                            )));
-                        }
-                        None => {
-                            return Err(at(format!(
-                                "needs {} {}, which is not in the index",
-                                r.id, r.version
-                            )));
-                        }
-                    }
-                }
+                check_version(p, v, local_files)?;
+                self.check_requires(p, v)?;
             }
         }
         for r in &self.revoked {
-            if let Some(h) = &r.sha256 {
-                hex64(h).map_err(|e| format!("revoked {}: {e}", r.id))?;
+            check_revoked(r)?;
+        }
+        Ok(())
+    }
+
+    /// What a reader keeps of an index that fails [`Index::check`]: each project, version and
+    /// takedown that fails its own rule is left out with its reason ([`Index::left_out`]), and
+    /// the rest loads. A modpack version whose mod was left out goes too, and so does a project
+    /// left with no version. An id listed twice leaves out every project with that id.
+    fn keep_valid(&mut self, local_files: bool) {
+        let mut left_out = Vec::new();
+        let mut listed: std::collections::HashMap<String, usize> = Default::default();
+        for p in &self.projects {
+            *listed.entry(p.id.clone()).or_default() += 1;
+        }
+        self.projects.retain(|p| {
+            let reason = match listed[&p.id] {
+                1 => check_project(p).err(),
+                _ => Some(format!("{}: listed twice", p.id)),
+            };
+            if let Some(reason) = &reason {
+                left_out.push(LeftOut::project(p, reason.clone()));
+            }
+            reason.is_none()
+        });
+        for p in &mut self.projects {
+            let mut seen: Vec<String> = Vec::new();
+            for v in std::mem::take(&mut p.versions) {
+                let checked = match seen.contains(&v.version) {
+                    true => Err(format!("{} {}: empty or repeated version", p.id, v.version)),
+                    false => check_version(p, &v, local_files),
+                };
+                seen.push(v.version.clone());
+                match checked {
+                    Ok(()) => p.versions.push(v),
+                    Err(reason) => left_out.push(LeftOut::version(&p.id, &v, reason)),
+                }
+            }
+        }
+        // A modpack names its mods by version: leaving one out leaves out the pack's version,
+        // which another pack may name in turn. Repeat until nothing more goes.
+        loop {
+            let this: &Index = self;
+            let gone: Vec<(usize, usize, String)> = this
+                .projects
+                .iter()
+                .enumerate()
+                .flat_map(|(i, p)| {
+                    p.versions.iter().enumerate().filter_map(move |(j, v)| {
+                        this.check_requires(p, v).err().map(|e| (i, j, e))
+                    })
+                })
+                .collect();
+            if gone.is_empty() {
+                break;
+            }
+            for (i, j, reason) in gone.into_iter().rev() {
+                let v = self.projects[i].versions.remove(j);
+                left_out.push(LeftOut::version(&self.projects[i].id, &v, reason));
+            }
+        }
+        self.projects.retain(|p| {
+            if p.versions.is_empty() {
+                let reason = format!("{}: has no version this Horizon can use", p.id);
+                left_out.push(LeftOut::project(p, reason));
+            }
+            !p.versions.is_empty()
+        });
+        self.revoked.retain(|r| match check_revoked(r) {
+            Ok(()) => true,
+            Err(reason) => {
+                left_out.push(LeftOut {
+                    id: r.id.clone(),
+                    version: None,
+                    reason,
+                });
+                false
+            }
+        });
+        self.left_out = left_out;
+    }
+
+    /// Each mod a modpack version names is in the index, with the same file.
+    fn check_requires(&self, p: &Project, v: &Version) -> Result<(), String> {
+        let at = |e: String| format!("{} {}: {e}", p.id, v.version);
+        for r in &v.requires {
+            let found = self
+                .project(&r.id)
+                .and_then(|q| q.versions.iter().find(|w| w.version == r.version));
+            match found {
+                Some(w) if w.file.sha256 == r.sha256 => {}
+                Some(_) => {
+                    return Err(at(format!(
+                        "{} {}: another file than the index's",
+                        r.id, r.version
+                    )));
+                }
+                None => {
+                    return Err(at(format!(
+                        "needs {} {}, which is not in the index",
+                        r.id, r.version
+                    )));
+                }
             }
         }
         Ok(())
     }
 
-    /// A project's newest version for Minecraft `game` that wasn't taken down.
+    /// A project's newest version for Minecraft `game` that wasn't taken down and asks for no
+    /// capability this build doesn't know.
     pub fn installable<'a>(&self, project: &'a Project, game: &str) -> Option<&'a Version> {
-        project
-            .versions
-            .iter()
-            .find(|v| v.game == game && self.revoked(&project.id, &v.file.sha256).is_none())
+        project.versions.iter().find(|v| {
+            v.game == game
+                && v.capabilities.unknown().is_empty()
+                && self.revoked(&project.id, &v.file.sha256).is_none()
+        })
     }
     pub fn project(&self, id: &str) -> Option<&Project> {
         self.projects.iter().find(|p| p.id == id)
@@ -445,6 +531,121 @@ impl Index {
                     .as_ref()
                     .is_none_or(|h| h.eq_ignore_ascii_case(sha256))
         })
+    }
+}
+
+/// A project's own fields: a valid id, a name and a licence, `https` addresses and a key that
+/// decodes.
+fn check_project(p: &Project) -> Result<(), String> {
+    let at = |e: String| format!("{}: {e}", p.id);
+    if !valid_id(&p.id) {
+        return Err(format!("project id {:?} is not [a-z0-9_]{{1,64}}", p.id));
+    }
+    if p.name.trim().is_empty() || p.license.trim().is_empty() {
+        return Err(at("needs a name and a licence".into()));
+    }
+    https(&p.source).map_err(at)?;
+    if let Some(icon) = &p.icon {
+        https(icon).map_err(at)?;
+    }
+    if p.screenshots.len() > page::MAX_SCREENSHOTS {
+        return Err(at(format!(
+            "{} screenshots, at most {}",
+            p.screenshots.len(),
+            page::MAX_SCREENSHOTS
+        )));
+    }
+    for s in &p.screenshots {
+        https(s).map_err(at)?;
+    }
+    if let Some(key) = &p.key {
+        minisign_verify::PublicKey::from_base64(key.trim()).map_err(|e| at(format!("key: {e}")))?;
+    }
+    Ok(())
+}
+
+/// A version's own rules: a name, valid native binaries, a plain file name with the kind's
+/// extension, an `https` address, a hex hash, a size in bounds and a signature as the project's
+/// key asks.
+fn check_version(p: &Project, v: &Version, local_files: bool) -> Result<(), String> {
+    let at = |e: String| format!("{} {}: {e}", p.id, v.version);
+    if v.version.trim().is_empty() {
+        return Err(at("empty or repeated version".into()));
+    }
+    let mut pairs = std::collections::HashSet::new();
+    for b in &v.native_binaries {
+        if b.build.len() > MAX_NATIVE_BUILD
+            || b.build.bytes().any(|c| c.is_ascii_control())
+            || b.build.is_empty()
+            || b.build.trim() != b.build
+            || b.target.split('-').count() < 3
+            || !b
+                .target
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"-_.".contains(&c))
+            || b.target.split('-').any(str::is_empty)
+        {
+            return Err(at("invalid native build or canonical target triple".into()));
+        }
+        if !pairs.insert((&b.build, &b.target)) {
+            return Err(at("duplicate native build and target".into()));
+        }
+        let f = &b.file;
+        if !plain_name(&f.name) || f.size == 0 || f.size > MAX_FILE {
+            return Err(at("invalid native binary file".into()));
+        }
+        if !(local_files && f.url.starts_with("file:///")) {
+            https(&f.url).map_err(at)?;
+        }
+        hex64(&f.sha256).map_err(at)?;
+        let signature = f
+            .signature
+            .as_deref()
+            .ok_or_else(|| at("native binary needs a signature".into()))?;
+        minisign_verify::Signature::decode(signature)
+            .map_err(|e| at(format!("native signature: {e}")))?;
+    }
+    let f = &v.file;
+    let extension_ok = p
+        .kind
+        .extension()
+        .is_none_or(|e| f.name.ends_with(&format!(".{e}")));
+    if !plain_name(&f.name) || !extension_ok {
+        return Err(at(format!(
+            "{:?} is not a plain file name for a {}",
+            f.name,
+            p.kind.name()
+        )));
+    }
+    if !(local_files && f.url.starts_with("file:///")) {
+        https(&f.url).map_err(at)?;
+    }
+    hex64(&f.sha256).map_err(at)?;
+    if f.size == 0 || f.size > MAX_FILE {
+        return Err(at(format!(
+            "size {} is not 1 byte to {} MiB",
+            f.size,
+            MAX_FILE >> 20
+        )));
+    }
+    match (&p.key, &f.signature) {
+        (Some(_), None) => {
+            return Err(at("unsigned, but the project has a key".into()));
+        }
+        (None, Some(_)) => return Err(at("signed, but the project has no key".into())),
+        (Some(_), Some(sig)) => {
+            minisign_verify::Signature::decode(sig).map_err(|e| at(format!("signature: {e}")))?;
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+/// A takedown's hash, when it names one, is hex.
+fn check_revoked(r: &Revoked) -> Result<(), String> {
+    match &r.sha256 {
+        Some(h) => hex64(h).map_err(|e| format!("revoked {}: {e}", r.id)),
+        None => Ok(()),
     }
 }
 
@@ -596,7 +797,10 @@ pub struct Facts {
 impl Facts {
     /// Whether the file is the one `version` of `project` describes.
     pub fn matches(&self, project: &Project, version: &Version) -> Result<(), String> {
-        let (mut caps, mut listed) = (self.capabilities.clone(), version.capabilities.clone());
+        let (mut caps, mut listed) = (
+            self.capabilities.clone(),
+            version.capabilities.known().to_vec(),
+        );
         caps.sort();
         listed.sort();
         let differs = self.id.as_ref().is_some_and(|id| *id != project.id)
@@ -604,6 +808,7 @@ impl Facts {
             || self.api != version.api
             || self.side != version.side
             || caps != listed
+            || !version.capabilities.unknown().is_empty()
             || self.game.as_ref().is_some_and(|g| *g != version.game)
             || self.requires != version.requires;
         if !differs {

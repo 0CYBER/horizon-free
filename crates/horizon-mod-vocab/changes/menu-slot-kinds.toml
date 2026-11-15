@@ -1,0 +1,2 @@
+ids = ["handle:MenuRef::slot_kinds", "type:MenuSlotKind"]
+why = "Add a client read of menu slot roles from the client layout and content menu declaration."

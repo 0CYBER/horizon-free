@@ -1,0 +1,10 @@
+ids = [
+    "type:MenuSlotPlace",
+    "type:MenuSlotBackRefusal",
+    "type:MenuSlotBacking",
+    "type:MenuSlotBacking.Place",
+    "handle:MenuSlotPlace::resolves",
+    "handle:PlayerRef::back_mod_menu_slots",
+]
+why = "A mod menu's slots can show a held item's contents or an entity's item handler, written through that handler (#3385). PlayerRef::back_mod_menu_slots says why it backed nothing with a MenuSlotBackRefusal (no player or window, an unsupported menu, too many places, a place that doesn't resolve). MenuSlotBacking gains the Place variant, so its wire layout changes for wasm mods."
+migrate = "Existing MenuSlotBacking matches keep their non_exhaustive fallback. Rebuild against this SDK for the changed wire layout. To bind places, handle PlayerRef::back_mod_menu_slots returning Result<(), MenuSlotBackRefusal>; a refusal leaves the existing backing unchanged."

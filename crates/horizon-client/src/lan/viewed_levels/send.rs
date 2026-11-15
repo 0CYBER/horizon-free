@@ -4,7 +4,7 @@
 //! changes, the chunks no area covered for [`super::view::LINGER`] ticks forgotten, and `close`
 //! once nothing of it is left. Its entities go in the tracking pass (`entities`).
 use super::super::hub::{Hub, TickCtx, game_event};
-use super::{areas::MAX_LOADED_PER_PLAYER, view::View};
+use super::view::View;
 use crate::{chunk::Chunk, streaming::Streaming, world::World};
 use horizon_protocol::{
     frame,
@@ -12,7 +12,7 @@ use horizon_protocol::{
         Empty,
         play::{self, Clientbound as C},
     },
-    viewed_levels::{self, Run},
+    viewed_levels::{self, Level, Run},
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -63,13 +63,13 @@ impl Clock {
 /// One player's runs of one level: packets in order, a new payload whenever the next would pass
 /// a frame's limit.
 pub(crate) struct Runs {
-    level: i32,
+    level: Level,
     run: Option<(Run, usize)>,
     payloads: Vec<Vec<u8>>,
 }
 
 impl Runs {
-    pub(crate) fn new(level: i32) -> Self {
+    pub(crate) fn new(level: Level) -> Self {
         Self {
             level,
             run: None,
@@ -144,7 +144,7 @@ fn ready(world: &World, streaming: Option<&Streaming>, c: &Chunk) -> bool {
 /// packets, in order. Only the columns the runs took come back, so only they are counted in the
 /// batch, taken out of the queue and recorded as sent; one too large stays queued.
 pub(crate) fn batch_runs<T>(
-    level: i32,
+    level: Level,
     taken: &[(usize, T)],
     bodies: &[Vec<u8>],
 ) -> (Vec<Vec<u8>>, Vec<usize>) {
@@ -191,11 +191,7 @@ impl Hub {
             if !self.guests[i].views_level(&dimension) {
                 continue;
             }
-            // A level its client was not told of at Login is one it cannot name.
-            let Some(level) = self.guests[i].viewed.login_index(&dimension) else {
-                continue;
-            };
-            if self.open_view(i, level, ctx) && self.update_viewed(i) {
+            if self.open_view(i, ctx) && self.update_viewed(i) {
                 self.send_view_batch(i, ctx.world, ctx.streaming);
                 self.send_view_state(i, ctx.world, ctx.clock_rate);
             }
@@ -234,8 +230,9 @@ impl Hub {
     }
 
     /// Opens the level in place on guest `i`'s client if it is not open yet: `open`, then its
-    /// clock and weather. False when its client can view no more levels.
-    fn open_view(&mut self, i: usize, level: i32, ctx: &TickCtx) -> bool {
+    /// clock and weather. False when its client can view no more levels, or cannot name this one
+    /// (`Viewed::name_new`).
+    fn open_view(&mut self, i: usize, ctx: &TickCtx) -> bool {
         let dimension = &self.config.dimension;
         let g = &self.guests[i];
         if g.viewed.views.contains_key(dimension) {
@@ -244,6 +241,13 @@ impl Hub {
         if g.viewed.views.len() >= usize::from(g.sender.viewed_levels.max_levels) {
             return false;
         }
+        let name = |g: &mut super::super::guest::Guest| {
+            let answer = g.sender.viewed_levels;
+            g.viewed.name_new(dimension, answer)
+        };
+        let Some(level) = self.guests.update(i, name) else {
+            return false;
+        };
         let spawn = self.spawn_info(i, 0, ctx.sea_level);
         let mut runs = Runs::new(level);
         runs.push(&self.time_packet(ctx.world, ctx.clock_rate).encode());
@@ -260,12 +264,14 @@ impl Hub {
         let weather = (w.raining, w.rain_level.1, w.thunder_level.1);
         let clock = Clock::now(self, ctx.world, ctx.clock_rate);
         let dimension = dimension.clone();
+        let caps = self.viewed.caps;
         self.guests.update(i, |g| {
             let mut view = View::new(level);
             view.weather = weather;
             view.clock = clock;
             g.viewed.views.insert(dimension, view);
-            g.sender.send(viewed_levels::open(level, &spawn));
+            let columns = caps.for_client(g.sender.viewed_levels).loaded_per_player;
+            g.sender.send(viewed_levels::open(level, columns, &spawn));
             g.sender.send_many(runs.finish());
         });
         true
@@ -284,9 +290,11 @@ impl Hub {
         let Some(view) = g.viewed.views.get(&self.config.dimension) else {
             return;
         };
-        // A client keeps at most this many columns of a viewed level in this protocol revision:
-        // past it, a `Ticking` area's square beside `Loaded` ones is kept but not sent.
-        let room = (MAX_LOADED_PER_PLAYER as usize).saturating_sub(view.sent.len());
+        // The client keeps at most its cap of columns of a viewed level (the cap its `open` said,
+        // or before revision 4 the fixed one): past it, a `Ticking` area's square beside `Loaded`
+        // ones is kept but not sent.
+        let cap = self.viewed.caps.for_client(g.sender.viewed_levels);
+        let room = (cap.loaded_per_player as usize).saturating_sub(view.sent.len());
         let taken: Vec<(usize, &Chunk)> = view
             .queue
             .iter()

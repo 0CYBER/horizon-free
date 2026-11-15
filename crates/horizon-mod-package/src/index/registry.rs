@@ -518,7 +518,7 @@ fn version_at(
         changelog: v.changelog.clone(),
         api: facts.api,
         side: facts.side,
-        capabilities: facts.capabilities,
+        capabilities: facts.capabilities.into(),
         game: v.game.clone(),
         requires: facts.requires,
         file: File {
@@ -664,6 +664,7 @@ pub fn build(src: &Sources) -> Result<Index, Vec<String>> {
         generated: src.generated.clone(),
         projects,
         revoked,
+        left_out: Vec::new(),
     };
     let local = src.release.starts_with("file:///");
     index.check_with(local).map_err(|e| vec![e])?;

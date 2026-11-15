@@ -18,6 +18,12 @@ pub fn game_rule_categories() -> &'static [String] {
 pub fn game_rule_bool_slot(key: crate::BoolGameRuleKey) -> Option<u32> {
     installed()?.game_rule_slots.get(key.0 as usize).copied()
 }
+/// Dense position for a validated integer rule key.
+// hidden: the game resolves load-owned keys to dense positions.
+#[doc(hidden)]
+pub fn game_rule_int_slot(key: crate::IntGameRuleKey) -> Option<u32> {
+    installed()?.game_rule_slots.get(key.0 as usize).copied()
+}
 
 /// Registrar operations for game rules.
 pub trait GameRulesRegistrar {
@@ -35,4 +41,19 @@ pub trait GameRulesRegistrar {
         category: &str,
         default: bool,
     ) -> Result<crate::BoolGameRuleKey, crate::GameRuleError>;
+
+    /// Declare an integer game rule (vanilla's `IntegerValue`, such as `random_tick_speed`) in a
+    /// namespace owned by this mod's manifest, with its default and the range `/gamerule` and the
+    /// game rules screen accept. `min` above `max`, or `default` outside `min..=max`, returns
+    /// [`GameRuleError::InvalidRange`](crate::GameRuleError::InvalidRange). Like
+    /// [`game_rule_bool`](Self::game_rule_bool), a refusal refuses mod loading even if ignored, and
+    /// the category is resolved after all mods register.
+    fn game_rule_int(
+        &mut self,
+        id: &str,
+        category: &str,
+        default: i32,
+        min: i32,
+        max: i32,
+    ) -> Result<crate::IntGameRuleKey, crate::GameRuleError>;
 }

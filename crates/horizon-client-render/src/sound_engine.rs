@@ -23,6 +23,7 @@ pub const MASTER: usize = 0;
 pub const MUSIC: usize = 1;
 pub const RECORDS: usize = 2;
 pub const WEATHER: usize = 3;
+pub const BLOCKS: usize = 4;
 pub const NEUTRAL: usize = 6;
 pub const PLAYERS: usize = 7;
 pub const AMBIENT: usize = 8;

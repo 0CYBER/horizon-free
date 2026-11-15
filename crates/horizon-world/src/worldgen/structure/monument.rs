@@ -1,6 +1,10 @@
 //! Ocean monuments (OceanMonumentStructure, OceanMonumentPieces).
 use crate::registry::BlockStateId;
-use horizon_core::{geometry::Direction, random::RandomSource};
+use horizon_core::{
+    geometry::Direction,
+    position::ChunkPos,
+    random::{LegacyRandom, RandomSource, WorldgenRandom},
+};
 use {
     super::legacy::{LegacyPiece, PieceContext, PieceFrame, Result, make_bounding_box},
     horizon_core::bounding_box::BoundingBox,
@@ -122,7 +126,50 @@ fn room_box(direction: Direction, index: i32, w: i32, h: i32, d: i32) -> Boundin
         _ => [rz * 8, ry * 4, rx * 8],
     })
 }
+/// `StructurePiece(StructurePieceType, CompoundTag)`'s orientation, which
+/// `StructurePiece.createTag` writes as `Direction.get2DDataValue` or -1 for none:
+/// `Direction.from2DDataValue` wraps other values (`Mth.abs(data % 4)`).
+fn saved_orientation(tag: &horizon_core::nbt::Tag) -> Option<Direction> {
+    let data = super::saved_legacy::int(tag, "O");
+    (data != -1).then(|| {
+        [
+            Direction::South,
+            Direction::West,
+            Direction::North,
+            Direction::East,
+        ][(data % 4).unsigned_abs() as usize]
+    })
+}
 impl MonumentBuilding {
+    /// `OceanMonumentStructure.regeneratePiecesAfterLoad`: only the saved top piece's box
+    /// and orientation are read; its saved rooms are thrown away and this building's built
+    /// again from `seed`, as its own world seed and chunk name it. `None` for a tag without
+    /// the box, which vanilla's `StructurePiece` constructor throws on (dropping the piece).
+    pub fn regenerate_after_load(
+        tag: &horizon_core::nbt::Tag,
+        chunk: ChunkPos,
+        seed: i64,
+    ) -> Option<Self> {
+        let horizon_core::nbt::Tag::IntArray(box_corners) = tag.get("BB")? else {
+            return None;
+        };
+        // `BoundingBox.CODEC` reads exactly its six ints: minX, minY, minZ, maxX, maxY, maxZ.
+        let [x0, _, z0, x1, _, z1] = <[i32; 6]>::try_from(box_corners.as_slice()).ok()?;
+        // `BoundingBox` normalizes inverted bounds before regeneratePiecesAfterLoad reads them.
+        let (west, north) = (x0.min(x1), z0.min(z1));
+        let saved = saved_orientation(tag);
+        let mut random = WorldgenRandom::new(LegacyRandom::new(0));
+        random.set_large_feature_seed(seed, chunk.x, chunk.z);
+        // Java eagerly draws the fallback direction even when a saved orientation exists,
+        // leaving the random stream at the same point as fresh generation.
+        let default = super::legacy::random_horizontal(&mut random);
+        Some(Self::new(
+            &mut random,
+            west,
+            north,
+            saved.unwrap_or(default),
+        ))
+    }
     pub fn new(
         random: &mut impl RandomSource,
         west: i32,
@@ -1449,4 +1496,179 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        registry::BlockRegistry,
+        worldgen::{
+            block_feature::FeatureBlockBindings,
+            generator_structures::read_saved_start,
+            structure::{
+                StateTransforms, StructureResources,
+                start::{Piece, StructureDef, StructureKind, StructureStart},
+            },
+        },
+    };
+    use horizon_core::density::TerrainAdjustment;
+    use horizon_core::nbt::Tag;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// A hand-built save of one monument start, read back: only the top piece's box and
+    /// orientation are kept, and its rooms are rebuilt from the seed exactly as the
+    /// generator builds them (`OceanMonumentStructure.regeneratePiecesAfterLoad`).
+    #[test]
+    fn saved_monument_reads_the_top_piece_and_regenerates_its_rooms() {
+        let (mut registry_tag, _) = horizon_core::nbt::parse_snbt(
+            r#"{DataVersion:0,states:[
+            {id:"minecraft:air"},{id:"minecraft:cave_air"},{id:"minecraft:void_air"},
+            {id:"minecraft:water",properties:{level:"0"}},
+            {id:"minecraft:prismarine"},
+            {id:"minecraft:prismarine_bricks"},{id:"minecraft:dark_prismarine"},
+            {id:"minecraft:sea_lantern"}],defaults:{
+            "minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2,
+            "minecraft:water":3,"minecraft:prismarine":4,
+            "minecraft:prismarine_bricks":5,"minecraft:dark_prismarine":6,
+            "minecraft:sea_lantern":7}}"#,
+        )
+        .unwrap();
+        *registry_tag.get_mut("DataVersion").unwrap() = Tag::Int(crate::DATA_VERSION);
+        let registry = Box::leak(Box::new(BlockRegistry::from_nbt(&registry_tag).unwrap()));
+        let resources = StructureResources::new(
+            registry,
+            StateTransforms::default(),
+            std::path::Path::new("unused"),
+            BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let bindings = FeatureBlockBindings::new(registry, BTreeSet::new()).unwrap();
+        let def = StructureDef {
+            name: "minecraft:monument".into(),
+            kind: StructureKind::Monument(BTreeSet::new()),
+            biomes: BTreeSet::new(),
+            step: 0,
+            terrain: TerrainAdjustment::BeardThin,
+            enhanced_terrain: None,
+        };
+        let chunk = ChunkPos::new(-2, 3);
+        let seed = 12345;
+        let read = |t: &Tag| read_saved_start(0, &def, chunk, t, seed, &resources, &bindings);
+        // createTopPiece then generatePieces: the direction comes from the start's random.
+        let mut random = WorldgenRandom::new(LegacyRandom::new(0));
+        random.set_large_feature_seed(seed, chunk.x, chunk.z);
+        let direction = super::super::legacy::random_horizontal(&mut random);
+        let building =
+            MonumentBuilding::new(&mut random, chunk.x * 16 - 29, chunk.z * 16 - 29, direction);
+        let mut original =
+            StructureStart::new(0, &def, chunk, vec![Piece::Legacy(Box::new(building))]);
+        original.references = 5;
+        let tag = original.save().unwrap();
+        let loaded = read(&tag).expect("the top piece decodes");
+        assert_eq!(loaded.save(), Some(tag.clone()), "every saved field");
+        assert_eq!(
+            format!("{loaded:?}"),
+            format!("{original:?}"),
+            "the rooms are rebuilt from box, orientation and seed"
+        );
+        // The rooms' own saved pieces are thrown away: their boxes and ids say nothing.
+        let mut rooms = tag.clone();
+        let Tag::List(children) = rooms.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        children.push(Tag::compound([
+            ("id", Tag::String("minecraft:OMCR".into())),
+            ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
+            ("O", Tag::Int(-1)),
+            ("GD", Tag::Int(3)),
+        ]));
+        children.push(Tag::compound([
+            ("id", Tag::String("minecraft:future_room".into())),
+            ("BB", Tag::IntArray(vec![0, 0, 0, 2, 2, 2])),
+            ("O", Tag::Int(3)),
+        ]));
+        assert_eq!(
+            format!("{:?}", read(&rooms).unwrap()),
+            format!("{loaded:?}")
+        );
+        // The box is the saved one (its min corner is the builder's west/north), and the
+        // orientation is the saved one; no box field is rebuilt from the seed.
+        let piece = |t: &Tag| match read(t).unwrap().pieces.into_iter().next().unwrap() {
+            Piece::Legacy(p) => p,
+            Piece::Pool(_) => unreachable!(),
+        };
+        let mut moved = tag.clone();
+        let Tag::List(children) = moved.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        *children[0].get_mut("BB").unwrap() = Tag::IntArray(vec![100, 20, -300, 157, 42, -243]);
+        *children[0].get_mut("O").unwrap() = Tag::Int(3);
+        let top = piece(&moved);
+        assert_eq!(
+            top.bounding_box(),
+            BoundingBox::new([100, 39, -300], [157, 61, -243]),
+            "west/north from the saved box, the rest from makeBoundingBox"
+        );
+        let Tag::List(children) = moved.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        *children[0].get_mut("BB").unwrap() = Tag::IntArray(vec![157, 42, -243, 100, 20, -300]);
+        assert_eq!(piece(&moved).bounding_box(), top.bounding_box());
+        // Numeric orientations use getIntOr and from2DDataValue, including negative wrapping.
+        for (orientation, expected) in [
+            (Tag::Int(0), 0),
+            (Tag::Int(-5), 1),
+            (Tag::Int(6), 2),
+            (Tag::Double(3.9_f64.to_bits()), 3),
+        ] {
+            let mut changed = tag.clone();
+            let Tag::List(children) = changed.get_mut("Children").unwrap() else {
+                unreachable!()
+            };
+            *children[0].get_mut("id").unwrap() = Tag::String(":OmB".into());
+            *children[0].get_mut("O").unwrap() = orientation;
+            assert_eq!(
+                piece(&changed).save().unwrap().get(&"O".into()),
+                Some(&Tag::Int(expected))
+            );
+        }
+        // A save with no orientation draws the default from the start's random, then builds
+        // exactly as the generator's own draw of the direction did.
+        let mut no_orientation = tag.clone();
+        let Tag::List(children) = no_orientation.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        *children[0].get_mut("O").unwrap() = Tag::Int(-1);
+        assert_eq!(
+            format!("{:?}", read(&no_orientation).unwrap()),
+            format!("{original:?}")
+        );
+        // A piece with no box, or a first piece of another type, leaves the start to the
+        // generator (vanilla drops the piece and reads the next one).
+        for broken in [
+            Tag::compound([
+                ("id", Tag::String("minecraft:OMB".into())),
+                ("BB", Tag::IntArray(vec![0, 0, 0, 1])),
+            ]),
+            Tag::compound([
+                ("id", Tag::String("minecraft:OMB".into())),
+                ("BB", Tag::String("0,0,0,1,1,1".into())),
+            ]),
+            Tag::compound([
+                ("id", Tag::String("minecraft:msroom".into())),
+                ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
+            ]),
+        ] {
+            let mut t = tag.clone();
+            let Tag::List(children) = t.get_mut("Children").unwrap() else {
+                unreachable!()
+            };
+            children[0] = broken.clone();
+            assert!(read(&t).is_none(), "{broken:?}");
+        }
+        let mut empty = tag.clone();
+        *empty.get_mut("Children").unwrap() = Tag::List(Vec::new());
+        assert!(read(&empty).is_none());
+    }
 }

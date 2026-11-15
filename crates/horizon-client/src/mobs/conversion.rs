@@ -1,5 +1,6 @@
 //! `Mob.convertTo` with `ConversionType.SINGLE`: one mob turns into another
-//! of a different type in its place, keeping what the old one had.
+//! of a different type in its place, keeping what the old one had. [`common`]
+//! is also what a cube mob's split children get (`SPLIT_ON_DEATH`).
 use super::Mob;
 use horizon_core::random::RandomSource;
 
@@ -19,6 +20,43 @@ impl Params {
         keep_equipment: true,
         preserve_can_pick_up_loot: true,
     };
+    /// `ConversionParams.single(mob, false, false)`: the old mob's gear stays
+    /// behind and the new mob keeps its own `canPickUpLoot` (`MushroomCow.shear`,
+    /// `Villager.thunderHit`).
+    pub const NONE: Self = Self {
+        keep_equipment: false,
+        preserve_can_pick_up_loot: false,
+    };
+}
+
+/// `ConversionParams.AfterConversion`: what the converting mob does once the
+/// new one exists (`MobEvent::Convert`'s `after`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum After {
+    /// No step: `Mob.convertTo` with a bare `ConversionParams.single`.
+    #[default]
+    None,
+    /// `AbstractPiglin.finishConversion` and `Hoglin.finishConversion`: the
+    /// new mob is nauseous for 10 seconds.
+    Nausea,
+    /// `Pig.thunderHit`: `populateDefaultEquipmentSlots` off the pig's own
+    /// random, then `setPersistenceRequired`.
+    ZombifiedPiglinGear,
+    /// `Villager.thunderHit`: `finalizeSpawn(CONVERSION)`, then
+    /// `setPersistenceRequired`.
+    Witch,
+    /// `Tadpole.ageUp`: `finalizeSpawn(CONVERSION)`, then
+    /// `setPersistenceRequired`.
+    Finalize,
+}
+
+impl After {
+    /// Whether the caller already asked `LivingConversionEvent.Pre`: the
+    /// lightning picks its outcome from the answer, so `convert_to` must not
+    /// ask again.
+    pub fn pre_checked(self) -> bool {
+        matches!(self, Self::ZombifiedPiglinGear | Self::Witch)
+    }
 }
 
 /// `Pig.thunderHit`'s completion after `single`: choose the converted pig's
@@ -70,29 +108,15 @@ pub fn single(from: &Mob, to: &mut Mob, params: Params) {
     to.extra.leash_pending = from.extra.leash_pending;
     to.extra.leash_player = from.extra.leash_player;
     common(from, to, params.preserve_can_pick_up_loot);
-    // A zombie that turns into another zombie keeps canBreakDoors.
-    if super::doors::is_zombie(from.species()) && super::doors::is_zombie(to.species()) {
-        super::doors::set_can_break_doors(to, from.extra.can_break_doors);
-    }
 }
 
-/// State shared by single and split conversions, without spawn finalization.
+/// `ConversionType.convertCommon`, what every conversion carries over (`SINGLE` and `SPLIT_ON_DEATH`):
+/// absorption, effects, babyhood and age, the flags, the custom name. `preserve_can_pick_up_loot`
+/// is the params' `preserveCanPickUpLoot`.
 pub fn common(from: &Mob, to: &mut Mob, preserve_can_pick_up_loot: bool) {
-    // setAbsorptionAmount runs before the effects are copied to the fresh mob.
-    let maximum = *to
-        .kind
-        .attributes
-        .get("minecraft:max_absorption")
-        .unwrap_or(&0.0) as f32;
-    to.absorption = from.absorption.clamp(0.0, maximum);
-    // addEffect for each: Absorption's onEffectStarted raises it again.
-    for effect in &from.extra.effects {
-        to.add_effect(effect.id, effect.duration, effect.amplifier);
-        // `new MobEffectInstance(effect)` copies its icon flag too.
-        if let Some(copy) = to.extra.effects.iter_mut().find(|e| e.id == effect.id) {
-            copy.show_icon = effect.show_icon;
-        }
-    }
+    // convertCommon, in its order: the absorption first, then the effects.
+    to.absorption = from.absorption;
+    to.extra.effects = from.extra.effects.clone();
     to.extra.hidden_effects = from.extra.hidden_effects.clone();
     to.extra.effect_chains = from.extra.effect_chains.clone();
     to.extra.ambient_effects = from.extra.ambient_effects.clone();

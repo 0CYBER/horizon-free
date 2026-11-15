@@ -128,13 +128,12 @@ a Horizon client forgets a level the server opened after it logged in, so a long
 many instances keeps none of them. A level opened again under the same id after a `delete`
 reaches the client afresh, with nothing of the old one.
 
-A client learns at login which levels the server has, and names the levels it views by their place
-in that list. A runtime level opened after a player logged in is not in that player's list:
-[chunk areas](../entities/chunk-areas.md) there are kept, but nothing of the level is sent to that
-player's client, which sees it only by going in. A player who logged in after the level opened
-views it as any other level. When a runtime level closes, by `unload` or `delete`, every client
-that viewed it drops its world of it; the areas stay, and show the level again once it is open
-again, to the clients that can name it.
+A runtime level opened after a player logged in is viewed through [chunk areas](../entities/chunk-areas.md)
+like any other level, by a Horizon client of this version. A client of an older version names the
+levels it views by their place in the list it got at login, where such a level is not: the areas
+there are kept, but nothing of the level is sent to it, and it sees the level only by going in.
+When a runtime level closes, by `unload` or `delete`, every client that viewed it drops its world
+of it; the areas stay, and show the level again once it is open again.
 
 ## The cap
 

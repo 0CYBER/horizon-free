@@ -32,7 +32,7 @@ enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10           # chunks sent around each player
 simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
 max_view_distance = 0        # past view_distance, saved chunks only, up to this (never generated; 0: off)
-max_viewed_loaded_chunks = 2048             # chunks a mod may keep loaded for one player in another level (0: none; at most 2048 for now)
+max_viewed_loaded_chunks = 2048             # chunks a mod may keep loaded for one player in another level (0: none; at most 4489, higher values lowered with a warning; an older Horizon client gets at most 2048)
 max_viewed_ticking_chunks = 441             # of them, ticking (one player's simulation area at distance 10)
 max_viewed_loaded_chunks_per_level = 16384  # the same for all players together, per level
 max_viewed_ticking_chunks_per_level = 3528  # ticking, all players together, per level
@@ -360,8 +360,9 @@ pub struct Server {
     /// Horizon's far ring (docs/hosting.md): saved chunks sent past `view_distance`, up to this; 0 is off.
     pub max_view_distance: u32,
     /// Viewed levels (docs/hosting.md): the chunks mods may keep loaded for one player in one other
-    /// level (fixed at 2048 for this protocol revision: the game lowers a higher value), the ticking
-    /// ones among them, and the same for all players together in one level.
+    /// level (at most 4489 columns; a higher value is lowered with a warning, and an older
+    /// Horizon client gets at most 2048), the ticking ones among them, and the same for all
+    /// players together in one level.
     pub max_viewed_loaded_chunks: u32,
     pub max_viewed_ticking_chunks: u32,
     pub max_viewed_loaded_chunks_per_level: u32,

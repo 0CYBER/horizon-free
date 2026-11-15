@@ -11,7 +11,7 @@ tools/addresses.json says where each host may be:
 - `not_addresses`: strings that look like hosts but are not contacted (a suffix matcher, a translation key);
 - `allowed`: today's addresses outside a home, "path host". They only go away: with --base, a branch may move
   an entry to another file but may not add a host nor grow the list. A changed sync-baseline declaration,
-  verified by check_file_size.sync_provenance, may restore exact rows from that upstream commit's inventory;
+  verified by merge_base.sync_provenance, may restore exact rows from that upstream commit's inventory;
   only those newly restored rows are excluded from the growth comparison.
 
     python3 tools/check_addresses.py                     # the check
@@ -267,17 +267,17 @@ def base_config(base):
     return json.loads(shown.stdout) if shown.returncode == 0 else None
 
 
-def _check_file_size():
+def _merge_base():
     if __package__:
-        from . import check_file_size
+        from . import merge_base
     else:
-        import check_file_size
-    return check_file_size
+        import merge_base
+    return merge_base
 
 
 def restored_upstream_rows(base):
     """Allow exact upstream rows only for a changed, verified sync declaration."""
-    config, errors = _check_file_size().verified_sync_config(base, CONFIG_PATH)
+    config, errors = _merge_base().verified_sync_config(base, CONFIG_PATH)
     rows = {tuple(row.split(" ", 1)) for row in config.get("allowed", [])} if config is not None else set()
     return rows, errors
 
@@ -286,10 +286,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="refuse addresses added to 'allowed' since the branch left this git ref")
     parser.add_argument("--list", action="store_true", help="print every host found and its files")
-    parser.add_argument("--pull-request-merge", action="store_true", help=_check_file_size().PULL_REQUEST_MERGE_HELP)
+    parser.add_argument("--pull-request-merge", action="store_true", help=_merge_base().PULL_REQUEST_MERGE_HELP)
     args = parser.parse_args(argv)
     if args.base:
-        args.base, error = _check_file_size().pull_request_base(args.base, args.pull_request_merge)
+        args.base, error = _merge_base().pull_request_base(args.base, args.pull_request_merge)
         if error:
             print(f"Address check failed: {error}")
             return 1
@@ -302,9 +302,15 @@ def main(argv=None):
         for host in sorted(by_host):
             print(f"{host}: {', '.join(sorted(by_host[host]))}")
         return 0
-    upstream_rows, provenance = restored_upstream_rows(args.base) if args.base else (set(), [])
-    problems, notes = check(config, found, base_config(args.base) if args.base else None, upstream_rows)
-    problems = provenance + problems
+    base = base_config(args.base) if args.base else None
+    problems, notes = check(config, found, base)
+    if args.base and (problems or config != base):
+        # Only a violation, or an inventory that differs from the base's, can need rows a verified sync restored:
+        # every other run stays off the network.
+        upstream_rows, provenance = restored_upstream_rows(args.base)
+        if upstream_rows or provenance:
+            problems, notes = check(config, found, base, upstream_rows)
+        problems = provenance + problems
     for note in notes:
         print(f"note: {note}")
     if problems:

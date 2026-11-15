@@ -104,7 +104,7 @@ pub fn installable<'a>(index: &Index, p: &'a Project) -> Option<&'a Version> {
     }
     index
         .installable(p, GAME)
-        .filter(|v| v.capabilities == [horizon_mod_package::Capability::Registries])
+        .filter(|v| v.capabilities.known() == [horizon_mod_package::Capability::Registries])
 }
 
 /// The registry's projects the browser offers, most downloaded first: content

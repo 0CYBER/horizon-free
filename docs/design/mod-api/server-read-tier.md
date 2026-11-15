@@ -143,8 +143,7 @@ method-name stderr coverage satisfies the issue without that expansion.
 
 ## One scripted clean break
 
-Commit a reproducible `tools/refactors/server_read_tier.py` with the eventual
-implementation. It must parse declarations, require exactly one valid Side for
+Commit a reproducible implementation script with the eventual clean break. It must parse declarations, require exactly one valid Side for
 every read, inventory handles using the generator's recognition rules, and
 move all server reads together. Preserve server/both/client labels; normalize
 missing or contradictory labels only after explicit review, never infer a

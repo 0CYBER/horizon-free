@@ -15,6 +15,14 @@ press adds. `ClientHost::click_mapping(key)` adds one click (`KeyMapping.click`)
 mapping. A press of the key itself does both; a mod that wants a held attack that also starts at once
 calls both.
 
+Queued actions are taken oldest first, at most **64 entries per queue per drain**, with at most
+**1024 pending entries**. A burst spills into later drains, normally later client ticks, rather than
+all acting on the next tick. Hotbar selection can drain more than once per tick, so its limit is per
+drain, not per tick. A full queue refuses the new entry, logs its first refusal once for that queue's
+lifetime, and the call returns normally (`Ok(())`), like a lost physical press. Clearing pending
+input does not reset that diagnostic. Physical input using these queues has the same limits; ordinary
+input below the limits keeps its order and timing.
+
 `key` is a vanilla mapping of the movement, gameplay or inventory category: `key.forward`, `key.left`,
 `key.back`, `key.right`, `key.jump`, `key.sneak`, `key.sprint`, `key.attack`, `key.use`, `key.pickItem`,
 `key.drop`, `key.inventory`, `key.swapOffhand` and `key.hotbar.1` to `key.hotbar.9`. Both return
@@ -40,7 +48,7 @@ the rest:
   tap between two ticks does: hold it (`set_mapping_down("key.attack", true)`) for a break that goes on.
 - A held use repeats every four ticks and does nothing more while the item is in use; letting go
   releases it (a bow shoots).
-- A click on an inventory key acts as its key's press: a hotbar slot is selected on the next tick, and
+- A click on an inventory key acts as its key's press: a hotbar slot is selected on a subsequent tick, and
   drop, the inventory and the hand swap act as they do for the key.
 - Sneak, sprint, attack and use toggle when their toggle option is on: `true` flips them and `false`
   does nothing, as `ToggleKeyMapping.setDown`.

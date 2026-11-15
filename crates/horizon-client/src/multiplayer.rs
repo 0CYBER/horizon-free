@@ -142,7 +142,8 @@ pub enum Screen {
     /// A page a crate registered at the title screen's Friends icon, as a form.
     Page(Form),
     Disconnected {
-        reason: String,
+        /// The server's or a mod's reason, rendered in the player's language when drawn.
+        reason: Text,
         /// Auto-reconnect's next attempt, until it is cancelled.
         retry: Option<crate::reconnect::Retry>,
         /// Wrapped reason lines, set by the last draw; the buttons sit below them.
@@ -908,7 +909,10 @@ impl Screen {
             // DisconnectedScreen: its title and the reason.
             Self::Disconnected { reason, .. } => ScreenInfo::new(
                 "multiplayer/disconnected",
-                join(&[&get("disconnect.lost", "Connection Lost"), reason]),
+                join(&[
+                    &get("disconnect.lost", "Connection Lost"),
+                    &reason_plain(reason),
+                ]),
             ),
         }
     }
@@ -1399,8 +1403,10 @@ impl Screen {
                 retry,
                 lines,
             } => {
-                // DisconnectedScreen: the reason wraps to width - 50.
-                let wrapped = wrap(reason, (w.ceil() - 50.0).max(1.0), atlas);
+                // DisconnectedScreen: the reason wraps to width - 50, rendered in the language
+                // the player has now, not the one it was resolved in.
+                let reason = reason_plain(reason);
+                let wrapped = wrap(&reason, (w.ceil() - 50.0).max(1.0), atlas);
                 lines.set(wrapped.len());
                 let l = disconnected_layout(h, wrapped.len(), retry.is_some());
                 centered(
@@ -2076,6 +2082,22 @@ fn disconnected_layout(h: f32, lines: usize, retry: bool) -> DisconnectedLayout 
     }
 }
 
+/// `Component.getString` of a disconnect reason, in the language active now.
+///
+/// A `Text` caches the spans of the language it was built under, so resolving it once — when the
+/// server turned the player away — and drawing those spans later would keep reading in that
+/// language. The screen keeps the component itself (`Screen::Disconnected::reason`), so it is
+/// decoded again here, at the moment it draws and narrates, as `DisconnectedScreen` renders its
+/// own component every frame.
+pub fn reason_plain(reason: &Text) -> String {
+    match reason.source_component() {
+        // The resolver `Text::from(Value)` uses: a selector reads as its own text.
+        Some(source) => crate::component::to_text(source, &mut |s| Text::literal(s)).plain(),
+        // Span-only text keeps no component to resolve again: nothing in it to translate.
+        None => reason.plain(),
+    }
+}
+
 /// Greedy word wrap to a pixel width.
 pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
     let mut lines = Vec::new();
@@ -2339,7 +2361,7 @@ mod tests {
         };
         assert_eq!(at(&friend, 427.0, 253.0), [(113.0, 177.0), (113.0, 201.0)]);
         let lost = Screen::Disconnected {
-            reason: String::new(),
+            reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
         };
@@ -2850,5 +2872,78 @@ mod tests {
         click(&mut screen, Some(42), 0.0, 0.0, size, &saves);
         assert_eq!(cycle(&screen).unwrap().3, "Server Resource Packs: Prompt");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DisconnectedScreen.getNarrationMessage: the reason reads as the player's language
+    /// renders it, and a plain-text reason is unchanged.
+    #[test]
+    fn disconnect_screen_narrates_a_translated_reason() {
+        let language = crate::lang::Language::of(
+            "fr_fr",
+            [
+                ("disconnect.lost".into(), "Connexion perdue".into()),
+                ("mymod.kicked".into(), "Expulsé par le mod".into()),
+            ],
+        );
+        let ((), _missed) = crate::lang::scoped(language, || {
+            let translated = Screen::Disconnected {
+                reason: Text::translate("mymod.kicked", &[]),
+                retry: None,
+                lines: std::cell::Cell::new(1),
+            };
+            assert_eq!(
+                translated.narration().title,
+                "Connexion perdue. Expulsé par le mod"
+            );
+            let plain = Screen::Disconnected {
+                reason: Text::literal("You were kicked"),
+                retry: None,
+                lines: std::cell::Cell::new(1),
+            };
+            assert_eq!(plain.narration().title, "Connexion perdue. You were kicked");
+        });
+    }
+
+    /// The reason is rendered where the screen draws and narrates, not where it was built: a
+    /// `Text` caches the spans of the language it was resolved in, so a reason built under one
+    /// language must read in the one active when it is drawn or narrated.
+    #[test]
+    fn a_reason_built_in_one_language_is_narrated_in_another() {
+        let french = crate::lang::Language::of(
+            "fr_fr",
+            [
+                ("disconnect.lost".into(), "Connexion perdue".into()),
+                ("mymod.kicked".into(), "Expulsé par le mod".into()),
+            ],
+        );
+        let english = crate::lang::Language::of(
+            "en_us",
+            [
+                ("disconnect.lost".into(), "Connection Lost".into()),
+                ("mymod.kicked".into(), "Kicked by the mod".into()),
+            ],
+        );
+        // Built while the game speaks French, as a server turning a French player away does.
+        let (screen, _missed) = crate::lang::scoped(french, || {
+            let reason = Text::translate("mymod.kicked", &[]);
+            assert_eq!(reason.plain(), "Expulsé par le mod");
+            Screen::Disconnected {
+                reason,
+                retry: None,
+                lines: std::cell::Cell::new(1),
+            }
+        });
+        let ((), _missed) = crate::lang::scoped(english, || {
+            let Screen::Disconnected { reason, .. } = &screen else {
+                unreachable!("a disconnected screen was just built")
+            };
+            // The player switches language while the screen is up: what it draws and
+            // narrates follows the language now, not the one the reason was resolved in.
+            assert_eq!(reason_plain(reason), "Kicked by the mod");
+            assert_eq!(
+                screen.narration().title,
+                "Connection Lost. Kicked by the mod"
+            );
+        });
     }
 }

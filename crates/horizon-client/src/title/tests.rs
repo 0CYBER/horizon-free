@@ -2821,7 +2821,7 @@ fn the_multiplayer_screens_have_their_own_ids() {
     );
     assert_eq!(
         M::Disconnected {
-            reason: String::new(),
+            reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
         }
@@ -2842,7 +2842,7 @@ fn creation_rules_keep_injected_registry_and_selected_values() {
         max: 0,
     };
     let registry =
-        Arc::new(RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule]).unwrap());
+        Arc::new(RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule]).unwrap());
     let mut fixture = Fixture::new();
     fixture.title.set_rule_registry(registry.clone());
     fixture.title.enter_singleplayer();
@@ -2889,14 +2889,13 @@ fn recreate_rules_load_saved_values_and_default_new_rules() {
             .collect::<Vec<_>>()
     };
     let old = Arc::new(
-        RuleRegistry::with_bool_rules(&["example:machines".into()], &definitions(&["old"]))
-            .unwrap(),
+        RuleRegistry::with_mod_rules(&["example:machines".into()], &definitions(&["old"])).unwrap(),
     );
     let mut rules = GameRules::with_registry(old, &[]);
     rules.set("example:old", Value::Bool(false));
     rules.save(&dir).unwrap();
     let current = Arc::new(
-        RuleRegistry::with_bool_rules(&["example:machines".into()], &definitions(&["old", "new"]))
+        RuleRegistry::with_mod_rules(&["example:machines".into()], &definitions(&["old", "new"]))
             .unwrap(),
     );
     let options =
@@ -2935,7 +2934,7 @@ fn late_registry_handoff_preserves_open_creation_edits() {
         max: 0,
     };
     let registry = std::sync::Arc::new(
-        RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule]).unwrap(),
+        RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule]).unwrap(),
     );
     let mut fixture = Fixture::new();
     fixture.title.enter_singleplayer();

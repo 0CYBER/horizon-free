@@ -173,11 +173,7 @@ impl WorldRequest {
         horizon_client::save::migrate_legacy(&save_root)?;
         let session_lock = horizon_client::save::SessionLock::acquire(&save_root)?;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
-        let rand_sequences =
-            horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
-                .and_then(|t| t.get("data").cloned())
-                .map(|d| horizon_client::random_sequences::RandomSequences::from_nbt(&d))
-                .unwrap_or_default();
+        let rand_sequences = super::trading::read_random_sequences(&save_root);
         let existing = Level::read_with_registry(&save_root, rule_registry.clone());
         let created = existing.is_none();
         let level = existing.unwrap_or_else(|| Level {
@@ -1456,7 +1452,7 @@ mod tests {
             max: 0,
         };
         let registry =
-            Arc::new(RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule]).unwrap());
+            Arc::new(RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule]).unwrap());
         let mut create = horizon_client::title::WorldOptions {
             rules: GameRules::with_registry(registry.clone(), &[]),
             ..Default::default()

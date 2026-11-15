@@ -59,6 +59,7 @@ pub fn damage_type(kind: DamageKind, caused: bool) -> &'static str {
         K::MaceSmash => "minecraft:mace_smash",
         K::Spear => "minecraft:spear",
         K::MobAttack => "minecraft:mob_attack",
+        K::MobAttackNoAggro => "minecraft:mob_attack_no_aggro",
         K::Arrow => "minecraft:arrow",
         K::Thrown => "minecraft:thrown",
         K::Fireball => "minecraft:fireball",

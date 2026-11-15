@@ -49,6 +49,13 @@ impl Commands for Game<'_> {
         mod_api::__private::check_access("run_command", mod_api::__private::LoadAccess::WorldOnly);
         self.native_run_command(line)
     }
+    fn run_command_with_output(&mut self, line: &str) -> mod_api::CommandResult {
+        mod_api::__private::check_access(
+            "run_command_with_output",
+            mod_api::__private::LoadAccess::WorldOnly,
+        );
+        self.native_run_command_with_output(line)
+    }
 }
 impl Levels for Game<'_> {
     fn list_levels(&self) -> Vec<LevelRef> {

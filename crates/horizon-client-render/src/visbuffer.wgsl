@@ -406,19 +406,6 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
     t.visibility += b.z * t2.visibility;
     let du = (uv_x - t.uv) * toward.x;
     let dv = (uv_y - t.uv) * toward.y;
-    // HDR output alone reads the light levels and the face's normal (as in `fs_opaque`):
-    // `terrain_vertex` gives them as the block light over 16 and the sky light over 16, and the
-    // section-relative position.
-    if globals.hdr_light.z != 0.0 {
-        let local = array(bitcast<vec3<f32>>(p0), bitcast<vec3<f32>>(select(p1, p2, second)),
-            bitcast<vec3<f32>>(select(p2, p3, second)));
-        // `t.scene` is still the first corner's.
-        t.scene = b.x * t.scene + b.y * t1.scene + b.z * t2.scene;
-        t.local = b.x * local[0] + b.y * local[1] + b.z * local[2];
-        let dlx = (bx.x * local[0] + bx.y * local[1] + bx.z * local[2] - t.local) * toward.x;
-        let dly = (by.x * local[0] + by.y * local[1] + by.z * local[2] - t.local) * toward.y;
-        hdr_normal = normalize(cross(dly, dlx));
-    }
     // `fs_opaque` and `solid_color` past their discards, which pass 1 already made.
     let texel = vis_sprite(t.uv, t.layer & 0x7fffu, du, dv);
     var color = texel * t.color;

@@ -20,7 +20,9 @@ pub use mod_platform::content::crash::{clear_detail, enter_native_mod, set_detai
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 use horizon_system::{command_output, machine_arch};
@@ -467,6 +469,71 @@ pub fn on_report(hook: ReportHook) {
         .push(hook);
 }
 
+type EmergencyHook = std::sync::Arc<dyn Fn() + Send + Sync>;
+static EMERGENCY_SAVE: Mutex<Option<EmergencyHook>> = Mutex::new(None);
+const SAVE_NOT_STARTED: u8 = 0;
+const SAVE_RUNNING: u8 = 1;
+const SAVE_FINISHED: u8 = 2;
+// Taking the hook must not let a second crashing worker exit before the save finishes.
+static EMERGENCY_SAVE_STATE: AtomicU8 = AtomicU8::new(SAVE_NOT_STARTED);
+
+/// Unregisters this emergency save, without removing a newer registration.
+#[must_use]
+pub struct EmergencySave(EmergencyHook);
+
+impl Drop for EmergencySave {
+    fn drop(&mut self) {
+        let mut hook = EMERGENCY_SAVE.lock().unwrap_or_else(|e| e.into_inner());
+        if hook
+            .as_ref()
+            .is_some_and(|f| std::sync::Arc::ptr_eq(f, &self.0))
+        {
+            *hook = None;
+        }
+    }
+}
+
+/// Replaces the process's emergency save. The callback must not panic and must
+/// bound its wait: it runs on the crashing worker, before the process exits.
+pub fn on_emergency_save(f: impl Fn() + Send + Sync + 'static) -> EmergencySave {
+    let hook: EmergencyHook = std::sync::Arc::new(f);
+    *EMERGENCY_SAVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook.clone());
+    EmergencySave(hook)
+}
+
+fn emergency_save() {
+    // Leave room for the integrated server's own 30 s save timeout.
+    emergency_save_with_timeout(Duration::from_secs(35));
+}
+
+/// Run once per process; other crashing workers wait rather than cutting the save short.
+fn emergency_save_with_timeout(timeout: Duration) {
+    if EMERGENCY_SAVE_STATE
+        .compare_exchange(
+            SAVE_NOT_STARTED,
+            SAVE_RUNNING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        let started = Instant::now();
+        while EMERGENCY_SAVE_STATE.load(Ordering::Acquire) == SAVE_RUNNING {
+            let Some(left) = timeout.checked_sub(started.elapsed()) else {
+                break;
+            };
+            std::thread::sleep(left.min(Duration::from_millis(5)));
+        }
+        return;
+    }
+    // Never wait on the registry in a panic hook, or hold it while stopping the server.
+    let hook = EMERGENCY_SAVE.try_lock().ok().and_then(|mut h| h.take());
+    if let Some(hook) = hook {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook()));
+    }
+    EMERGENCY_SAVE_STATE.store(SAVE_FINISHED, Ordering::Release);
+}
+
 /// Writes the report and tells where it is; the log gets the error too.
 fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
     if REPORTED.swap(true, Ordering::SeqCst) {
@@ -728,6 +795,7 @@ pub fn install(home: PathBuf, side: &'static str) {
             deliver(&home, panic_report(info, side));
         } else if is_worker_thread(std::thread::current().name()) {
             deliver(&home, worker_panic_report(info, side));
+            emergency_save();
             // The crash ends the game, as the relayed report does on vanilla's main thread.
             std::process::exit(101);
         } else {
@@ -925,6 +993,87 @@ mod tests {
         }
     }
 
+    static EMERGENCY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset_emergency_save() {
+        *EMERGENCY_SAVE.lock().unwrap() = None;
+        EMERGENCY_SAVE_STATE.store(SAVE_NOT_STARTED, Ordering::Release);
+    }
+
+    #[test]
+    fn emergency_save_second_caller_waits_for_save() {
+        let _serial = EMERGENCY_TEST_LOCK.lock().unwrap();
+        reset_emergency_save();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let saved = std::sync::Arc::new(AtomicBool::new(false));
+        let (started, running) = std::sync::mpsc::channel();
+        let (count, flag) = (calls.clone(), saved.clone());
+        let _hook = on_emergency_save(move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            started.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::Release);
+        });
+        let first = std::thread::spawn(emergency_save);
+        running.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second = std::thread::spawn(move || {
+            emergency_save();
+            assert!(saved.load(Ordering::Acquire));
+        });
+        first.join().unwrap();
+        second.join().unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn emergency_save_waiter_times_out() {
+        let _serial = EMERGENCY_TEST_LOCK.lock().unwrap();
+        reset_emergency_save();
+        EMERGENCY_SAVE_STATE.store(SAVE_RUNNING, Ordering::Release);
+        let bound = Duration::from_millis(20);
+        let started = Instant::now();
+        emergency_save_with_timeout(bound);
+        assert!(started.elapsed() >= bound);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn emergency_save_registry_calls_once_replaces_and_unregisters() {
+        use std::sync::{Arc, atomic::AtomicUsize};
+        let _serial = EMERGENCY_TEST_LOCK.lock().unwrap();
+        reset_emergency_save();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let old = on_emergency_save(move || {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
+        emergency_save();
+        emergency_save();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        reset_emergency_save();
+        let count = calls.clone();
+        let replaced = on_emergency_save(move || {
+            count.fetch_add(10, Ordering::Relaxed);
+        });
+        let count = calls.clone();
+        let latest = on_emergency_save(move || {
+            count.fetch_add(100, Ordering::Relaxed);
+        });
+        drop(old);
+        drop(replaced);
+        emergency_save();
+        assert_eq!(calls.load(Ordering::Relaxed), 101);
+        reset_emergency_save();
+        let count = calls.clone();
+        let removed = on_emergency_save(move || {
+            count.fetch_add(1000, Ordering::Relaxed);
+        });
+        drop(removed);
+        emergency_save();
+        assert_eq!(calls.load(Ordering::Relaxed), 101);
+        drop(latest);
+    }
+
     #[test]
     fn an_emulated_build_names_both_architectures() {
         // A Windows ARM64 PC playing the x64 build: its reports say so (#7513 read "x86_64").
@@ -985,17 +1134,17 @@ mod tests {
     #[test]
     fn a_panic_in_a_converted_package_names_the_runtime_package_export_and_site() {
         let runtime = enter_native_mod(ModCall {
-            id: "portizon",
+            id: "converter_runtime",
             hook: "client_tick_pre",
             part: None,
         });
-        let packages = ConvertedPackages::new("portizon", ["example:mod"]);
+        let packages = ConvertedPackages::new("converter_runtime", ["example:mod"]);
         let package = packages.package("example:mod").unwrap();
         let scope = package
             .enter("tick", "com.example.Foo.tick(Foo.java:42)")
             .unwrap();
         assert!(attributed("boom".into()).ends_with(
-            "\nin native mod portizon, hook client_tick_pre\n\
+            "\nin native mod converter_runtime, hook client_tick_pre\n\
              in converted package example:mod, export tick, \
              call site com.example.Foo.tick(Foo.java:42)"
         ));
@@ -1016,7 +1165,8 @@ mod tests {
         );
         drop(scope);
         assert!(
-            attributed("boom".into()).ends_with("\nin native mod portizon, hook client_tick_pre")
+            attributed("boom".into())
+                .ends_with("\nin native mod converter_runtime, hook client_tick_pre")
         );
         drop(runtime);
         assert_eq!(attributed("boom".into()), "boom");
@@ -1025,11 +1175,11 @@ mod tests {
     #[test]
     fn a_guest_export_cannot_forge_a_report_line() {
         let runtime = enter_native_mod(ModCall {
-            id: "portizon",
+            id: "converter_runtime",
             hook: "client_tick_pre",
             part: None,
         });
-        let packages = ConvertedPackages::new("portizon", ["example:mod"]);
+        let packages = ConvertedPackages::new("converter_runtime", ["example:mod"]);
         let scope = packages
             .package("example:mod")
             .unwrap()

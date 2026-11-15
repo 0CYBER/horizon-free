@@ -13,6 +13,7 @@ pub struct Requests {
     pub particles: Names,
     pub block_entity_types: Names,
     pub entity_types: Names,
+    pub game_events: Names,
 }
 
 #[derive(Clone, Default)]

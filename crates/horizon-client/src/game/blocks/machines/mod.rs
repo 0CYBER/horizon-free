@@ -289,6 +289,19 @@ impl Containers<'_> {
             .map_or(64, |i| i.max_stack)
             .max(1)
     }
+    /// `Container.getMaxStackSize(stack)` of a container: the container's own
+    /// limit, at most the item's. `ComposterBlock.InputContainer` (levels 0 to
+    /// 6) and `OutputContainer` (level 8, `READY`), `JukeboxBlockEntity` and
+    /// `ChiseledBookShelfBlockEntity` override `getMaxStackSize` to 1; every
+    /// other container keeps the `Container` default of 99. A composter's
+    /// level 7 is `EmptyContainer` (99), which takes nothing through a face.
+    fn max_stack_in(&self, view: &View, stack: &ItemStack) -> u32 {
+        let container = match view.kind {
+            Kind::Composter(0..=6) | Kind::Composter(8) | Kind::Jukebox | Kind::Bookshelf => 1,
+            _ => 99,
+        };
+        container.min(self.max_stack(stack))
+    }
     /// `HopperBlockEntity.getBlockContainer` (double chests combined, right half
     /// first). `blocked_chests`: `ChestBlock.getContainer(.., false)` returns
     /// nothing for a blocked chest (`isChestBlockedAt`: a redstone conductor
@@ -305,19 +318,6 @@ impl Containers<'_> {
             });
         }
         let entity = self.world.block_entities.get(&pos)?;
-        // A beehive keeps bees, not items, a campfire cooks its own and
-        // suspicious sand or gravel hides its loot: none is a `Container`
-        // (HopperBlockEntity.getContainerAt), so a dropper drops in front of
-        // them and a hopper leaves them alone.
-        if matches!(
-            entity,
-            BlockEntity::Beehive(_)
-                | BlockEntity::Campfire(_)
-                | BlockEntity::Brushable(_)
-                | BlockEntity::EndPortal
-        ) {
-            return None;
-        }
         // A mod's block entity is a container when its block says so. The one
         // ticking now is out of the world (an empty id marks its place): what
         // went into its place would be lost when it comes back.
@@ -332,6 +332,14 @@ impl Containers<'_> {
                 container: Some(container),
             });
         }
+        // Non-container block entities (signs, banners, beacons, skulls, etc.,
+        // or beehives/campfires/brushables) are not `Container`s
+        // (HopperBlockEntity.getContainerAt), so a dropper drops in front of
+        // them and a hopper leaves them alone.
+        let size = entity.slots().len();
+        if size == 0 {
+            return None;
+        }
         let kind = match (entity, name) {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
             (BlockEntity::Crafter(_), _) => Kind::Crafter,
@@ -342,7 +350,6 @@ impl Containers<'_> {
             (_, n) if is_shulker_box(n) => Kind::Shulker,
             _ => Kind::Generic,
         };
-        let size = entity.slots().len();
         if horizon_client::containers::is_chest_block(name) {
             let is_blocked = |p: Pos| {
                 let above = self.world.block(p.0, p.1 + 1, p.2);
@@ -1925,6 +1932,15 @@ impl Game<'_> {
         }
         self.suck_item_entities(None, hopper, min, max)
     }
+    /// `MinecartHopper.tick`'s `tryConsumeItems` for whichever path ticks the
+    /// cart. `ServerLevel.tickNonPassenger` ticks the vehicle, then its
+    /// passengers, so a ridden cart pulls too; Horizon ticks that one in its
+    /// rider's turn (`tick_cart_riding`). `alive` is `isAlive` after the move.
+    pub(super) fn hopper_cart_tick(&mut self, cart: &mut super::minecarts::Minecart, alive: bool) {
+        if alive && cart.kind == super::minecarts::CartKind::Hopper && cart.enabled {
+            self.hopper_cart_suck(cart);
+        }
+    }
     /// `MinecartHopper.tick`'s `tryConsumeItems` (`suckInItems`) for an enabled
     /// hopper minecart: one item from the container above, else the item
     /// entities over it or touching it, each tick without a cooldown.
@@ -2902,6 +2918,10 @@ mod part_front_tests {
 }
 
 #[cfg(test)]
+#[path = "hopper_cart_rider_tests.rs"]
+mod hopper_cart_rider_tests;
+
+#[cfg(test)]
 mod hopper_cart_transfer_tests {
     use super::super::{
         boats::Boat,
@@ -3375,6 +3395,60 @@ mod can_take_tests {
             game.containers()
                 .can_take_into(&shelf_view, 0, &book, Direction::Down, &empty_hopper),
             "an empty hopper takes the book"
+        );
+    }
+
+    /// A non-container block entity above a hopper (such as a sign holding lava)
+    /// has no slots, so `view` returns `None`. The hopper does not treat it as a
+    /// container, allowing item entities resting on the rim to be picked up.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn non_container_block_entity_above_hopper_does_not_block_item_suction() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        let hopper_pos = (2, 4, 3);
+        let sign_pos = (2, 5, 3);
+        let hopper_state = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:hopper")
+            .unwrap();
+        let sign_state = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:oak_sign")
+            .unwrap();
+        game.world
+            .set(hopper_pos.0, hopper_pos.1, hopper_pos.2, hopper_state)
+            .unwrap();
+        game.world
+            .set(sign_pos.0, sign_pos.1, sign_pos.2, sign_state)
+            .unwrap();
+        game.world
+            .block_entities
+            .insert(hopper_pos, BlockEntity::Chest(vec![None; 5]));
+        game.world
+            .block_entities
+            .insert(sign_pos, BlockEntity::Sign(Default::default()));
+
+        assert!(
+            game.containers().view(sign_pos, false).is_none(),
+            "a sign is not a container"
+        );
+        assert!(
+            game.containers().hopper_insertion_view(sign_pos).is_none(),
+            "a sign has no hopper insertion view"
+        );
+        let hopper_view = game
+            .containers()
+            .view(hopper_pos, false)
+            .expect("hopper view");
+        assert!(
+            game.suck_from_container(sign_pos, [2.5, 5.5, 3.5], &hopper_view)
+                .is_none(),
+            "suck_from_container returns None so hopper falls through to suck_item_entities"
         );
     }
 }
