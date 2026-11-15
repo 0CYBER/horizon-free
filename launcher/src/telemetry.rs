@@ -12,6 +12,9 @@ use horizon_telemetry::{outbox, Choices, Consent, Item, Kind, Payload, Source};
 
 use crate::{account::Accounts, backend};
 
+/// How the data question and Settings open: the switches are off, the ping is on.
+pub const OPENING: &str = "These reports are off until you turn them on. The \"I'm playing\" ping is on until you turn it off.";
+
 /// Each switch: its name, and in plain words exactly what it sends.
 pub const SWITCHES: [(Kind, &str, &str); 4] = [
     (

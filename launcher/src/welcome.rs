@@ -35,7 +35,7 @@ impl Launcher {
                 .flex_col()
                 .gap(px(6.))
                 .child(tr(
-                    "While you play, the game tells Horizon you're playing, so the launcher can show how many people play right now. It's anonymous, and you can turn it off here or in Settings.",
+                    "While you play, the game tells Horizon you're playing, so the launcher can show how many people play right now. It's anonymous, it's on now, and you can turn it off here or in Settings.",
                 ))
                 .child(
                     div()
@@ -85,7 +85,7 @@ impl Launcher {
                     .child(tr("Make Horizon yours")),
             )
             .child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(
-                "Pick a look to start with, and choose whether to be counted as playing. You can change all of this later in Settings.",
+                "Pick a look to start with. The \"I'm playing\" ping is already on; you can turn it off below. You can change all of this later in Settings.",
             )));
         let body = div()
             .id("welcome-body")

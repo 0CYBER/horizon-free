@@ -145,7 +145,8 @@ impl Launcher {
         self.collection.view = None;
     }
 
-    /// Escape on the data question is "Send nothing": the answer that shares nothing.
+    /// Escape on the data question closes it with every report off. The "I'm playing" ping stays
+    /// as it is: only "Turn everything off" turns that off too.
     pub(crate) fn consent_escape(&mut self) -> bool {
         if self.asking_consent() {
             self.answer_consent(Choices::NONE);
@@ -161,8 +162,8 @@ impl Launcher {
         };
     }
 
-    /// The question, centred over the launcher. Everything starts off; "Send nothing" is one
-    /// click, as easy as saying yes.
+    /// The question, centred over the launcher. The reports start off and the ping on;
+    /// "Turn everything off" is one click, as easy as saying yes.
     pub(crate) fn consent_screen(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         let draft = self.collection.draft;
@@ -211,8 +212,9 @@ impl Launcher {
                     .text_color(t.ink)
                     .child(tr("Help make Horizon faster and steadier?")),
             )
-            .child(text(theme::UI).text_color(t.muted).child(tr(
-                "Horizon can send a few things to its developers. Each switch is off until you turn it on, and Settings can change it any time.",
+            .child(text(theme::UI).text_color(t.muted).child(trf(
+                "Horizon can send a few things to its developers. {opening} Settings can change any of it at any time.",
+                &[("opening", tr(telemetry::OPENING))],
             )))
             .child(
                 div()
@@ -246,12 +248,14 @@ impl Launcher {
             .px(px(28.))
             .pb(px(28.))
             .child(
-                button("ask-none", "Send nothing", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
+                button("ask-none", "Turn everything off", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.settings.ping_off = true;
+                        this.save_settings();
                         this.answer_consent(Choices::NONE);
                         cx.notify();
-                    },
-                )),
+                    }),
+                ),
             )
             .child(
                 button("ask-save", "Save choices", Kind::Primary, &t).on_click(cx.listener(
@@ -408,8 +412,9 @@ impl Launcher {
                 text(theme::UI)
                     .max_w(px(600.))
                     .text_color(t.muted)
-                    .child(tr(
-                        "Each switch is off unless you turn it on. What it sends is below it; the privacy page on playhorizon.dev says how long it is kept.",
+                    .child(trf(
+                        "{opening} What each one sends is below it; the privacy page on playhorizon.dev says how long it is kept.",
+                        &[("opening", tr(telemetry::OPENING))],
                     )),
             )
             .child(list)
