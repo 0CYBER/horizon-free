@@ -176,7 +176,7 @@ mod tests {
     use horizon_core::geometry::Aabb;
 
     #[test]
-    #[ignore = "daily"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn preparation_refreshes_climbing_and_nearest_after_a_move() {
         let mut game = super::super::super::native_machines::tests::server_game();
         game.build_registries();
