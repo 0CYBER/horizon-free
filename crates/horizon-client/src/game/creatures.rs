@@ -5175,7 +5175,7 @@ impl Game<'_> {
             let mut arrow = p.clone();
             let amount = self.shot_damage(&mut arrow, None);
             let creative = p.owner == Some(Who::Player) && self.creative;
-            self.hurt_boat(i, amount, creative);
+            self.hurt_boat_by(i, amount, creative, super::nonliving_hurt::projectile_by(p));
             self.finish_arrow_hit(arrow, EntityHit::Hurt);
             return Ok(());
         }

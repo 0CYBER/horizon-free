@@ -759,9 +759,12 @@ impl Game<'_> {
             let item = &mut self.dropped[i];
             item.health = (item.health as f32 - 5.0) as i32;
             item.needs_sync = true;
-            if item.health <= 0 {
-                let at = item.position;
-                let contents = item.hurt(0).unwrap_or_default();
+            // `ItemEntity.hurtServer`: ENTITY_DAMAGE before it is destroyed;
+            // `lightningBolt()` names no entity.
+            let (at, dead) = (item.position, item.health <= 0);
+            self.item_damage_event(at, None);
+            if dead {
+                let contents = self.dropped[i].hurt(0).unwrap_or_default();
                 self.dropped.remove(i);
                 destroyed_contents.extend(contents.into_iter().map(|stack| (stack, at)));
             }

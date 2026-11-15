@@ -1009,12 +1009,15 @@ impl Game<'_> {
                             let item = &mut self.dropped[i];
                             item.health = (item.health as f32 - amount) as i32;
                             destroyed = item.health <= 0;
+                            // `ItemEntity.hurtServer`: ENTITY_DAMAGE before it is destroyed.
+                            let at = item.position;
+                            self.item_damage_event(at, self.explosion_kill_credit());
                             if destroyed {
-                                let at = item.position;
                                 // Health was already reduced above. Run the shared
                                 // onDestroyed path without applying damage twice.
                                 destroyed_contents.extend(
-                                    item.hurt(0)
+                                    self.dropped[i]
+                                        .hurt(0)
                                         .unwrap_or_default()
                                         .into_iter()
                                         .map(|stack| (stack, at)),
@@ -1042,7 +1045,7 @@ impl Game<'_> {
                     // `VehicleEntity.hurtServer`: damage * 10, broken past 40.
                     EntityHandle::Boat(i) => {
                         let len = self.boats.len();
-                        self.hurt_boat(i, amount, false);
+                        self.hurt_boat_by(i, amount, false, self.explosion_kill_credit());
                         boats_gone += len - self.boats.len();
                     }
                     // `hurtServer` does nothing to the rest.

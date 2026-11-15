@@ -351,6 +351,7 @@ mod nautili;
 mod net_harness;
 mod nether_portal;
 mod no_resources;
+mod nonliving_hurt;
 mod occlusion_culling;
 mod ominous_item_spawner;
 mod options;
@@ -3531,8 +3532,7 @@ impl Game<'_> {
         }
         let (origin, dir) = self.aim()?;
         // GameRenderer.pick: the block ray runs out to the larger of the two
-        // interaction ranges; filterHitResult then drops a hit past the
-        // block's.
+        // interaction ranges; filterHitResult then drops a hit past the block's.
         self.clip_ray(origin, dir, self.block_reach.max(self.entity_reach))
             .filter(|hit| {
                 let distance: [f64; 3] = std::array::from_fn(|i| hit.point[i] - origin[i]);

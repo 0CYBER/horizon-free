@@ -1329,6 +1329,9 @@ impl Game<'_> {
         let (at, top) = (b.position, b.bounds().max_position().y);
         let rain = self.in_rain(at, top);
         for _ in 0..2 {
+            if self.boat_cactus_pass(i, &steps) {
+                return true;
+            }
             let before = self.boats[i].fire_ticks;
             let mut in_snow = false;
             let mut seen = Vec::new();
@@ -1398,9 +1401,9 @@ impl Game<'_> {
         self.fluid_height_of(p[0], p[1], p[2], Some(Fluid::Water))
             .is_some_and(|(height, _)| low + 1.0e-5 < f64::from(p[1]) + f64::from(height))
     }
-    /// `VehicleEntity.hurtServer` for fire (`inFire`, `onFire`), which an
-    /// `Invulnerable` boat ignores. True when the boat broke.
-    fn burn_boat(&mut self, i: usize, damage: f32) -> bool {
+    /// `VehicleEntity.hurtServer` for fire (`inFire`, `onFire`) or a cactus,
+    /// which an `Invulnerable` boat ignores. True when the boat broke.
+    pub(super) fn burn_boat(&mut self, i: usize, damage: f32) -> bool {
         let invulnerable = self
             .persist
             .raw
@@ -1751,7 +1754,8 @@ impl Game<'_> {
         let (kind, id) = (self.boats[i].entity_type(), self.boats[i].id as i32);
         let (damage, scale, _, magic) = self.melee_damage(&kind, false);
         let chest = self.boats[i].chest;
-        let hurt = self.hurt_boat_result(i, damage, self.creative);
+        let by = Some(super::commands::Target::Player);
+        let hurt = self.hurt_boat_result(i, damage, self.creative, by);
         // AbstractChestBoat.destroy -> ContainerEntity.chestVehicleDestroyed:
         // with entity_drops on, a player whose hit breaks a chest boat (not a
         // creative discard) angers the piglins that see it.
@@ -1786,7 +1790,7 @@ impl Game<'_> {
     /// itself only drops on the death path (`VehicleEntity.destroy`), not when
     /// a creative hit discards it. True when the boat was removed.
     pub(super) fn hurt_boat(&mut self, i: usize, damage: f32, creative: bool) -> bool {
-        self.hurt_boat_result(i, damage, creative).unwrap_or(false)
+        self.hurt_boat_by(i, damage, creative, None)
     }
     /// Whether a spectator must be refused this boat's menu.
     pub(super) fn boat_loot_pending(&self, id: u32) -> bool {
@@ -1870,6 +1874,7 @@ impl Game<'_> {
         i: usize,
         mut damage: f32,
         creative: bool,
+        by: Option<super::commands::Target>,
     ) -> Option<bool> {
         let mut cancel = false;
         self.native_vehicle_damage("boat", &mut damage, &mut cancel);
@@ -1881,8 +1886,9 @@ impl Game<'_> {
         b.hurt_time = 10;
         b.damage += damage * 10.0;
         let destroyed = creative || b.damage > 40.0;
+        let at = [b.position.x, b.position.y, b.position.z];
+        self.vehicle_damage_event(at, by);
         if destroyed {
-            let at = [b.position.x, b.position.y, b.position.z];
             self.native_vehicle_destroy("boat", at);
             self.eject_boat_mobs(i, true);
             let id = self.boats[i].id;

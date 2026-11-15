@@ -352,11 +352,10 @@ impl Game<'_> {
         let ignites = registry.in_tag(kind, "minecraft:is_fire")
             || registry.in_tag(kind, "minecraft:is_explosion");
         match target {
-            Target::Boat(_) => self
-                .boats
-                .iter()
-                .position(|b| b.id == id)
-                .is_some_and(|i| self.hurt_boat_result(i, amount, creative).is_some()),
+            Target::Boat(_) => self.boats.iter().position(|b| b.id == id).is_some_and(|i| {
+                self.hurt_boat_result(i, amount, creative, causing)
+                    .is_some()
+            }),
             Target::Cart(_) => self.carts.iter().position(|c| c.id == id).is_some_and(|i| {
                 self.hurt_cart_result(i, amount, creative, ignites, CartHit::command(by, causing))
             }),

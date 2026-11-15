@@ -379,7 +379,8 @@ impl Game<'_> {
                     let snow = (o.previous, o.position, o.bounds(), o.velocity);
                     self.entity_powder_snow_particles(snow.0, snow.1, snow.2, snow.3, false);
                     self.orb_moved(i, step);
-                    if !stays {
+                    // `ExperienceOrb.tick`'s `applyEffectsFromBlocks`: a cactus pricks it.
+                    if !stays || self.orb_cactus_hits(i) {
                         self.orbs.remove(i);
                     }
                 }
