@@ -784,6 +784,7 @@ pub fn tick(
         ai_step(m, w, level_random, events);
     }
     count_fall_fly_ticks(m);
+    super::finalize::refresh_dirty_attributes(m); // LivingEntity.tick: refreshDirtyAttributes
     effects_from_blocks(m, w, level_random, events);
     if m.alive() {
         freeze_tick(m, w, events);
@@ -798,8 +799,7 @@ pub fn tick(
     if m.species() == Species::Rabbit {
         super::rabbit::post_tick(m);
     }
-    // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen
-    // creaking's waits).
+    // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen creaking's waits).
     if m.alive()
         && (!super::creaking::is_creaking(m) || super::creaking::can_move(m))
         && !super::armadillo::scared(m)

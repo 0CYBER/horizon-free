@@ -1261,7 +1261,7 @@ impl Game<'_> {
                 .map(Some)
             }
             Target::Mob(mob_id) => {
-                let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) else {
+                let Some(m) = self.mobs.iter().find(|m| m.id == mob_id) else {
                     return Ok(None);
                 };
                 // The attributes the mob's gameplay reads live in `finalize`;
@@ -1271,10 +1271,21 @@ impl Game<'_> {
                 else {
                     return Err(no_attribute(&name, &description));
                 };
+                // `LivingEntity.collectEquipmentChanges` puts the gear's
+                // modifiers in the same map, so reads see them too.
+                let gear = finalize::equipment_modifiers(
+                    m,
+                    attr.id(),
+                    world_items!(self),
+                    &self.stations().enchantments,
+                );
                 let current = if id == "attribute.base.get" {
                     finalize::base_value(m, attr)
                 } else {
-                    finalize::value(m, attr)
+                    finalize::value_with_gear(m, attr, &gear)
+                };
+                let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) else {
+                    return Ok(None);
                 };
                 let no_modifier = text_error(
                     "commands.attribute.failed.no_modifier",
@@ -1298,7 +1309,7 @@ impl Game<'_> {
                     }
                     "attribute.base.set" => {
                         // AttributeInstance keeps the raw base and clamps only the
-                        // effective value; Health is unchanged.
+                        // effective value; the tick's refreshDirtyAttributes clamps Health.
                         finalize::set_base(m, attr, value_arg);
                         Ok(Some((
                             1,
@@ -1324,6 +1335,7 @@ impl Game<'_> {
                         // AttributeInstance.hasModifier: the modeled transient
                         // minecraft:baby counts too.
                         if finalize::has_modifier(m, attr, &modifier_id)
+                            || gear.iter().any(|(id, _, _)| id == &modifier_id)
                             || (modifier_id == "minecraft:baby"
                                 && finalize::transient(m, attr).is_some())
                         {
@@ -1370,10 +1382,15 @@ impl Game<'_> {
                         )))
                     }
                     _ => {
-                        // Permanent entries stay authoritative. The modeled baby
-                        // modifier is transient and absent from that saved store.
-                        let amount =
-                            finalize::modifier_amount(m, attr, &modifier_id).or_else(|| {
+                        // The gear's modifier replaced a permanent one of its id
+                        // (collectEquipmentChanges). The modeled baby modifier is
+                        // transient and absent from the saved store.
+                        let amount = gear
+                            .iter()
+                            .find(|(id, _, _)| id == &modifier_id)
+                            .map(|(_, amount, _)| *amount)
+                            .or_else(|| finalize::modifier_amount(m, attr, &modifier_id))
+                            .or_else(|| {
                                 finalize::transient(m, attr)
                                     .filter(|_| modifier_id == "minecraft:baby")
                                     .map(|(amount, _)| amount)
@@ -1521,20 +1538,30 @@ impl Game<'_> {
                 .map(|m| horizon_client::mobs::armor::absorption_bonus(&m.extra.effects)),
             _ => None,
         };
+        let gear = match target {
+            Target::Mob(mob) => self.mobs.iter().find(|m| m.id == mob).map(|m| {
+                let enchantments = &self.stations().enchantments;
+                finalize::equipment_modifiers(m, attribute, world_items!(self), enchantments)
+            }),
+            _ => None,
+        };
         let map = self
             .generic_attributes(target, attribute)
             .ok_or_else(no_attribute)?;
         if !map.has(key) {
             return Err(no_attribute());
         }
+        // LivingEntity.collectEquipmentChanges: reads see the gear's modifiers.
+        let mut worn = attribute_gear::with_gear(map, key, gear);
         let (message, args, result) = match id {
             "attribute.get" | "attribute.base.get" => {
+                let seen = worn.as_mut().unwrap_or(map);
                 let v = if id == "attribute.get"
                     && let Some(bonus) = absorption_bonus
                 {
-                    horizon_client::mobs::armor::max_absorption_of(Some(&*map), 0.0, bonus)
+                    horizon_client::mobs::armor::max_absorption_of(Some(&*seen), 0.0, bonus)
                 } else if id == "attribute.get" {
-                    map.value(key).map_err(|_| no_attribute())?
+                    seen.value(key).map_err(|_| no_attribute())?
                 } else {
                     map.base_value(key).map_err(|_| no_attribute())?
                 };
@@ -1573,7 +1600,7 @@ impl Game<'_> {
                 )
             }
             "attribute.modifier.add" => {
-                if map.has_modifier(key, modifier_id) {
+                if worn.as_ref().unwrap_or(map).has_modifier(key, modifier_id) {
                     return Err(text_error(
                         "commands.attribute.failed.modifier_already_present",
                         &[
@@ -1621,7 +1648,9 @@ impl Game<'_> {
                 )
             }
             _ => {
-                let v = map
+                let v = worn
+                    .as_ref()
+                    .unwrap_or(map)
                     .modifier_value(key, modifier_id)
                     .map_err(|_| no_modifier())?;
                 (
@@ -2267,6 +2296,9 @@ pub(super) fn look_at(from: [f64; 3], to: [f64; 3]) -> [f32; 2] {
     [wrap_degrees(yaw), pitch]
 }
 
+#[path = "attribute_gear.rs"]
+mod attribute_gear;
+
 #[cfg(test)]
 #[path = "attribute_missing_tests.rs"]
 mod attribute_missing_tests;
@@ -2479,7 +2511,7 @@ mod vehicle_damage_command_tests {
     use horizon_client::chunk::Chunk;
     use horizon_core::position::ChunkPos;
     use std::sync::Arc;
-    fn with_game(test: impl FnOnce(&mut Game<'_>)) {
+    pub(super) fn with_game(test: impl FnOnce(&mut Game<'_>)) {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
         let loaded = load_resources(
@@ -2991,3 +3023,7 @@ mod attribute_modifier_command_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "attribute_equipment_tests.rs"]
+mod attribute_equipment_tests;

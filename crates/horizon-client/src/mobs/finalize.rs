@@ -19,9 +19,10 @@
 //! second part (horse markings, llama strength, panda hidden gene, tropical
 //! fish base colour), `variant3` the tropical fish pattern colour, and
 //! `sound_variant` the index in the species' sound variant registry.
-use super::{Mob, Species, farm::Climate, gear, spawning::LocalDifficulty};
+use super::{Mob, Species, equip, farm::Climate, gear, spawning::LocalDifficulty};
 use crate::{enchant::Enchantments, items::Items};
 use horizon_core::{geometry::Aabb, random::RandomSource};
+use horizon_world::player_inventory::EquipmentSlot;
 use serde_json::Value;
 use std::{fs, path::Path, sync::Arc};
 
@@ -496,6 +497,9 @@ pub struct Attributes {
     /// (`/attribute ... modifier remove`) until the next setBaby. Not
     /// saved: a load runs setBaby again.
     pub baby_speed_removed: bool,
+    /// The maximum health changed since the mob's last tick
+    /// (`AttributeMap.getAttributesToUpdate`). Not saved.
+    pub max_health_dirty: bool,
 }
 /// The attribute `/attribute` names (`follow_range`, not
 /// `minecraft:follow_range`) when gameplay reads it from this store. Armor
@@ -617,13 +621,94 @@ pub fn value(m: &Mob, a: Attr) -> f64 {
 pub fn value_with(m: &Mob, a: Attr, extra: &[(f64, Op)]) -> f64 {
     compute(m, a, true, extra)
 }
+/// The modifiers the mob's equipment puts in its attribute map for
+/// `attribute` (`LivingEntity.collectEquipmentChanges`): for every
+/// `EquipmentSlot` with an unbroken stack, `ItemStack.forEachModifier` (the
+/// stack's `attribute_modifiers`, then its enchantments' `attributes` effects),
+/// each by `removeModifier(id)` then `addTransientModifier`, so a later one
+/// with the same id replaces the earlier.
+pub fn equipment_modifiers(
+    m: &Mob,
+    attribute: &str,
+    items: &Items,
+    enchantments: &Enchantments,
+) -> Vec<(String, f64, Op)> {
+    let mut out: Vec<(String, f64, Op)> = Vec::new();
+    for slot in EquipmentSlot::ALL {
+        let Some(stack) =
+            equipment_stack(m, slot).filter(|s| s.count > 0 && &*s.item != "minecraft:air")
+        else {
+            continue;
+        };
+        // `ItemStack.isBroken`: damageable and its damage at the maximum.
+        let max_damage = items.stack_max_damage(&stack);
+        if max_damage > 0 && stack.damage >= max_damage {
+            continue;
+        }
+        let own = items
+            .attribute_modifiers(&stack)
+            .into_iter()
+            .filter(|row| equip::group_matches(&row.4, slot));
+        // `EnchantmentHelper.forEachModifier`: `matchingSlot`, one modifier
+        // per slot, its id suffixed with the slot (`idForSlot`).
+        let enchanted = enchantments
+            .modifier_rows(&stack)
+            .into_iter()
+            .filter(|row| equip::group_matches(&row.4, slot))
+            .map(|(kind, id, amount, op, group)| {
+                (kind, format!("{id}/{}", slot_name(slot)), amount, op, group)
+            });
+        for (kind, id, amount, operation, _) in own.chain(enchanted) {
+            if kind != attribute {
+                continue;
+            }
+            let op = match operation.as_str() {
+                "add_multiplied_base" => Op::AddMultipliedBase,
+                "add_multiplied_total" => Op::AddMultipliedTotal,
+                _ => Op::AddValue,
+            };
+            out.retain(|(held, _, _)| *held != id);
+            out.push((id, amount, op));
+        }
+    }
+    out
+}
+/// `EquipmentSlot.getSerializedName`.
+fn slot_name(slot: EquipmentSlot) -> &'static str {
+    match slot {
+        EquipmentSlot::MainHand => "mainhand",
+        EquipmentSlot::OffHand => "offhand",
+        EquipmentSlot::Feet => "feet",
+        EquipmentSlot::Legs => "legs",
+        EquipmentSlot::Chest => "chest",
+        EquipmentSlot::Head => "head",
+        EquipmentSlot::Body => "body",
+        EquipmentSlot::Saddle => "saddle",
+    }
+}
+/// [`value`] of the map with the gear's modifiers in it
+/// (`equipment_modifiers`): one with the id of a stored modifier replaces it.
+pub fn value_with_gear(m: &Mob, a: Attr, gear: &[(String, f64, Op)]) -> f64 {
+    let extra: Vec<(f64, Op)> = gear.iter().map(|(_, amount, op)| (*amount, *op)).collect();
+    compute_replacing(m, a, true, &extra, gear)
+}
 fn compute(m: &Mob, a: Attr, with_transient: bool, extra: &[(f64, Op)]) -> f64 {
+    compute_replacing(m, a, with_transient, extra, &[])
+}
+/// [`compute`] without the stored modifiers whose id one in `replaced` has.
+fn compute_replacing(
+    m: &Mob,
+    a: Attr,
+    with_transient: bool,
+    extra: &[(f64, Op)],
+    replaced: &[(String, f64, Op)],
+) -> f64 {
     let mut base = base_value(m, a);
     let empty = Vec::new();
     let mods = m.extra.attributes.as_ref().map_or(&empty, |s| &s.modifiers);
     let mut ops: Vec<(f64, Op)> = mods
         .iter()
-        .filter(|x| x.attr == a)
+        .filter(|x| x.attr == a && !replaced.iter().any(|(id, _, _)| *id == x.id))
         .map(|x| (x.amount, x.op))
         .collect();
     if with_transient {
@@ -657,7 +742,14 @@ fn compute(m: &Mob, a: Attr, with_transient: bool, extra: &[(f64, Op)]) -> f64 {
 /// Copies the attribute values into the fields the game reads.
 fn refresh(m: &mut Mob, a: Attr) {
     match a {
-        Attr::MaxHealth => m.attrs.max_health = value(m, a) as f32,
+        Attr::MaxHealth => {
+            m.attrs.max_health = value(m, a) as f32;
+            // `AttributeInstance.setDirty`: the tick's `refreshDirtyAttributes`
+            // checks Health against the new maximum.
+            if let Some(s) = m.extra.attributes.as_mut() {
+                s.max_health_dirty = true;
+            }
+        }
         Attr::MovementSpeed => m.attrs.speed = base_with_modifiers(m, a),
         Attr::FollowRange => {
             m.attrs.follow_range = value(m, a);
@@ -822,8 +914,23 @@ pub fn health_boost_changed(m: &mut Mob) {
         return;
     }
     refresh(m, Attr::MaxHealth);
+    clamp_health(m);
+}
+/// `LivingEntity.onAttributeUpdated(MAX_HEALTH)`: a lowered maximum lowers
+/// Health (nothing is healed).
+fn clamp_health(m: &mut Mob) {
     if m.health > m.attrs.max_health {
         m.health = m.attrs.max_health;
+    }
+}
+/// `LivingEntity.refreshDirtyAttributes`, near the end of `LivingEntity.tick`:
+/// a maximum health changed since the last tick (`/attribute`, a modifier)
+/// lowers Health to it.
+pub fn refresh_dirty_attributes(m: &mut Mob) {
+    if let Some(s) = m.extra.attributes.as_mut()
+        && std::mem::take(&mut s.max_health_dirty)
+    {
+        clamp_health(m);
     }
 }
 

@@ -3,6 +3,7 @@
 //! decide whether a mob takes an item off the ground at all (`wantsToPickUp`,
 //! `canHoldItem`). `game/mob_looting.rs` reads the item data and calls these.
 use super::Species;
+use horizon_world::player_inventory::EquipmentSlot;
 
 /// An `EquipmentSlot`, in the order `finalize::item` and `drops::SLOTS` keep
 /// them.
@@ -25,6 +26,17 @@ impl Slot {
     pub fn index(self) -> usize {
         self as usize
     }
+    /// The `EquipmentSlot` of the same name.
+    pub(super) fn equipment(self) -> EquipmentSlot {
+        match self {
+            Slot::MainHand => EquipmentSlot::MainHand,
+            Slot::OffHand => EquipmentSlot::OffHand,
+            Slot::Feet => EquipmentSlot::Feet,
+            Slot::Legs => EquipmentSlot::Legs,
+            Slot::Chest => EquipmentSlot::Chest,
+            Slot::Head => EquipmentSlot::Head,
+        }
+    }
 }
 
 /// `LivingEntity.getEquipmentSlotForItem`: the item's own `equippable` slot,
@@ -45,18 +57,27 @@ pub fn slot_for(equip_slot: Option<&str>) -> Option<Slot> {
 
 /// `EquipmentSlotGroup.test`: whether a modifier the item records for `group`
 /// counts in `slot`.
-fn group_matches(group: &str, slot: Slot) -> bool {
+pub(super) fn group_matches(group: &str, slot: EquipmentSlot) -> bool {
     match group {
         "any" => true,
-        "hand" => matches!(slot, Slot::MainHand | Slot::OffHand),
-        "armor" => slot.is_armor(),
-        "mainhand" => slot == Slot::MainHand,
-        "offhand" => slot == Slot::OffHand,
-        "head" => slot == Slot::Head,
-        "chest" => slot == Slot::Chest,
-        "legs" => slot == Slot::Legs,
-        "feet" => slot == Slot::Feet,
-        // `body` and `saddle` are slots this pass never equips into.
+        "hand" => matches!(slot, EquipmentSlot::MainHand | EquipmentSlot::OffHand),
+        // `EquipmentSlot.isArmor`: the humanoid armour and a body's animal armour.
+        "armor" => matches!(
+            slot,
+            EquipmentSlot::Feet
+                | EquipmentSlot::Legs
+                | EquipmentSlot::Chest
+                | EquipmentSlot::Head
+                | EquipmentSlot::Body
+        ),
+        "mainhand" => slot == EquipmentSlot::MainHand,
+        "offhand" => slot == EquipmentSlot::OffHand,
+        "head" => slot == EquipmentSlot::Head,
+        "chest" => slot == EquipmentSlot::Chest,
+        "legs" => slot == EquipmentSlot::Legs,
+        "feet" => slot == EquipmentSlot::Feet,
+        "body" => slot == EquipmentSlot::Body,
+        "saddle" => slot == EquipmentSlot::Saddle,
         _ => false,
     }
 }
@@ -72,7 +93,7 @@ pub fn attribute_with(
 ) -> f64 {
     let mut value = base;
     for (kind, _, amount, operation, group) in modifiers {
-        if kind != attribute || !group_matches(group, slot) {
+        if kind != attribute || !group_matches(group, slot.equipment()) {
             continue;
         }
         value += match operation.as_str() {
