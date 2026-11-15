@@ -125,13 +125,19 @@ pub trait RecipesClientHost {
     /// The `book_id`s of the recipe `recipe_id` (`minecraft:stick`), the ids
     /// `transfer_recipe`, `transfer_recipe_check`, `place_recipe` and
     /// `known_recipes` use: one for each way the recipe book shows it, in the
-    /// book's order, whether or not the player's book holds it. For a recipe
-    /// viewer, which has the recipe from `recipes_of_type` and needs its id
-    /// for "+". Empty for a recipe the book doesn't show (campfire,
-    /// stonecutting, smithing, a mod's own type), an unknown id, and outside
-    /// a world. A server numbers the recipes it sends itself and they follow
-    /// its recipes once those arrived (`recipes_received`): ask again after
-    /// that hook rather than keeping them.
+    /// book's order. For a recipe viewer, which has the recipe from
+    /// `recipes_of_type` and needs its id for "+". A server numbers its
+    /// recipes itself and names none of them, so an id is given only when the
+    /// server sent the recipe book entry with that number and this client's
+    /// own numbering of the recipe agrees with it: the entry is the same
+    /// recipe (the same result, category and ingredients). Empty otherwise: a
+    /// recipe the server sent no entry for (the player's book does not hold
+    /// it, or it was removed), one the server numbers differently, one the
+    /// book doesn't show (campfire, stonecutting, smithing, a mod's own
+    /// type), an unknown id, and outside a world. The answer changes when
+    /// the server adds, replaces or removes entries and when recipes reload
+    /// or arrive (`recipes_received`): ask again after those rather than
+    /// keeping it.
     #[access(WorldOnly)]
     fn recipe_book_ids(&mut self, recipe_id: &str) -> Arc<[i32]>;
 }
