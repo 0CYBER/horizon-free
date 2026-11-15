@@ -47,6 +47,12 @@ pub(super) struct MemorySlider {
 }
 
 impl MemorySlider {
+    /// A new sheet starts from the saved value: nothing left typed in the box carries over.
+    pub(super) fn forget_typing(&mut self) {
+        self.typing = None;
+        self.shown = None;
+    }
+
     fn total(&mut self) -> u32 {
         *self.total.get_or_insert_with(launch::total_memory_mb)
     }
@@ -238,6 +244,24 @@ impl Launcher {
         self.reload_instances();
     }
 
+    /// The memory instance settings would save for the instance it edits: the box's text while
+    /// the row shows that instance (typed or not), else the slider's draft. Err: the box holds
+    /// something that isn't a size. Ok(None): nothing set in the sheet.
+    pub(super) fn sheet_memory(&self) -> Result<Option<u32>, ()> {
+        let Some(d) = self.instances.dialog.as_ref() else {
+            return Ok(None);
+        };
+        let Some(id) = d.editing.as_deref() else {
+            return Ok(None);
+        };
+        if self.memory_slider.shown.as_deref() != Some(id) {
+            return Ok(d.memory);
+        }
+        launch::parse_memory(self.servers.value(Field::MemoryLimit))
+            .map(|typed| Some(typed.unwrap_or(instances::DEFAULT_MEMORY_MB)))
+            .map_err(|_| ())
+    }
+
     /// The value the row shows: the sheet's draft for the instance it edits, else the saved one.
     fn shown_memory(&self, instance: &instances::Instance) -> Option<u32> {
         (self.instances.dialog.as_ref())
@@ -414,7 +438,8 @@ impl Launcher {
 
     /// Maximum memory in the glass look: a `SettingRow` of the instance's Edit dialog, the name
     /// and what it does on the left, the mockup's `Slider` (as Settings' Glass and Blur) and the
-    /// box in MB on the right. Saved to the instance as it is set, as on Home.
+    /// box in MB on the right. In instance settings it is part of the draft (Save keeps it);
+    /// on Home it is saved as it is set.
     pub(super) fn glass_memory_row(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         use crate::glass_ui as ui;
         const TRACK: f32 = 208.;

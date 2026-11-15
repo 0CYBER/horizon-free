@@ -302,8 +302,10 @@ impl Launcher {
 
     pub(super) fn open_instance_dialog(&mut self, editing: Option<Instance>) {
         self.version_menu = false;
-        // The hook fields start again from the saved instance, not from what was left typed.
+        // The hook fields start again from the saved instance, not from what was left typed, and
+        // so does the memory box.
         self.launch = None;
+        self.memory_slider.forget_typing();
         let editing_one = editing.is_some();
         let (name, group) = editing
             .as_ref()
@@ -467,6 +469,16 @@ impl Launcher {
                 self.draft_plays(i)
                     .filter(|to| *to != instances::Plays::of(i))
             });
+        // Maximum memory as the box holds it, typed or not; text that isn't a size stops Save.
+        let Ok(memory) = self.sheet_memory() else {
+            if let Some(d) = &mut self.instances.dialog {
+                d.error = Some(
+                    tr("Maximum memory: enter a whole number of MB, or leave it empty for the default.")
+                        .into(),
+                );
+            }
+            return;
+        };
         let Some(d) = self.instances.dialog.as_mut().filter(|d| !d.busy) else {
             return;
         };
@@ -478,7 +490,6 @@ impl Launcher {
             .map(|p| p.as_ref().map(|c| c.png.clone()));
         let editing = d.editing.clone();
         let edited = editing.is_some();
-        let memory = d.memory;
         let copy = selected.filter(|_| d.copy);
         // The picture choice this save keeps: once kept, it is no longer an unsaved edit.
         let sent_picture = picture.clone();
