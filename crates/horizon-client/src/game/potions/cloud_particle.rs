@@ -59,6 +59,7 @@ fn tag_rgb(tag: Option<&Tag>) -> Option<[f32; 3]> {
 /// `BlockPos.CODEC` (`Codec.INT_STREAM`, three ints).
 fn tag_block_pos(tag: Option<&Tag>) -> Option<[i32; 3]> {
     match tag? {
+        Tag::IntArray(values) if values.len() == 3 => Some([values[0], values[1], values[2]]),
         Tag::List(l) if l.len() == 3 => {
             let mut pos = [0; 3];
             for (slot, value) in pos.iter_mut().zip(l) {
@@ -157,7 +158,7 @@ pub(in crate::game) fn particle_options(
             let Some(Tag::String(kind)) = dest.get(&"type".into()) else {
                 return None;
             };
-            if kind.to_string_lossy() != "minecraft:block" {
+            if !matches!(kind.to_string_lossy().as_ref(), "block" | "minecraft:block") {
                 return None;
             }
             let pos = tag_block_pos(dest.get(&"pos".into()))?;
@@ -288,6 +289,19 @@ mod tests {
         );
         let spell = decode(vec![("type", s("effect"))]).unwrap();
         assert_eq!(spell.color[..3], [1.0, 1.0, 1.0]);
+        let vibration = decode(vec![
+            ("type", s("vibration")),
+            (
+                "destination",
+                Tag::compound([("type", s("block")), ("pos", Tag::IntArray(vec![0, 64, 0]))]),
+            ),
+            ("arrival_in_ticks", Tag::Int(20)),
+        ])
+        .unwrap();
+        assert_eq!(
+            vibration.vibration,
+            Some((PositionSource::Block([0, 64, 0]), [0.5, 64.5, 0.5], 20))
+        );
         assert!(decode(vec![("type", s("sculk_charge"))]).is_none());
         assert!(decode(vec![("type", s("shriek"))]).is_none());
         assert_eq!(
