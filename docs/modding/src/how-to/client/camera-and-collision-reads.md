@@ -110,7 +110,7 @@ The local `PlayerRef` also supports `within_entity_reach(host, target, rule)`: i
 predicted eyes, the target's displayed bounding box, the synchronized interaction-range
 attribute and the main hand's attack-range component. `EntityReach::Interact` and `Container`
 use strict limits; `Attack` includes the outer boundary. Only the local player can make this
-client query, and the result sends nothing or authorizes an action on the server.
+client query, and the result sends nothing and authorizes no action on the server.
 
 ## Local player reads
 
