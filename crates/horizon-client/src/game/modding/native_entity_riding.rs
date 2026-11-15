@@ -1500,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mob_gets_off_where_the_query_says() {
         use super::super::{
             boats::Boat,
