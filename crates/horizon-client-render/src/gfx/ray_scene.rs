@@ -21,6 +21,12 @@
 //! them back to front through an index list of its own (gfx/translucency.rs), which the scene
 //! never reads, so a camera that moves builds nothing here. Their vertices are copied into the
 //! store as they are.
+//!
+//! Video memory running out is not fatal: what grows with the world (the store, each part's
+//! BLAS and its compacted copy, the TLAS) is made inside an out-of-memory scope
+//! (`out_of_memory_free`). A part whose slot or BLAS can't be made waits as at a full store, a
+//! TLAS that can't grow leaves the frame's scene as it was, and without room for the first store
+//! or TLAS there is no scene.
 
 use glam::DVec3;
 
@@ -168,6 +174,13 @@ pub(in crate::gfx) struct RayScene {
     slots: Slots,
     /// Whether the log said the store is at its largest.
     full_logged: bool,
+    /// Whether the log said the TLAS couldn't grow.
+    tlas_logged: bool,
+    /// The instances wanted, and the camera's column, when the TLAS last couldn't grow: the
+    /// same again doesn't ask video memory again.
+    refused: Option<(usize, (i32, i32))>,
+    /// A frame kept the old TLAS: the next one that can builds it again.
+    rebuild: bool,
     /// How many TLAS and stores were made: a bind group made at another count holds an old one.
     generation: u64,
     /// `Resident::removals` when the scene last dropped the sections no longer resident:
@@ -193,7 +206,8 @@ pub(in crate::gfx) struct Traced<'a> {
 }
 
 impl RayScene {
-    /// The scene, when the device has ray queries (`ray_query`).
+    /// The scene, when the device has ray queries (`ray_query`) and video memory for the first
+    /// TLAS and store.
     pub(in crate::gfx) fn new(device: &wgpu::Device) -> Option<Self> {
         if !super::on(device) {
             return None;
@@ -207,15 +221,18 @@ impl RayScene {
         Some(Self {
             blas: FxHashMap::default(),
             dirty: Vec::new(),
-            tlas: create_tlas(device, 1024),
+            tlas: out_of_memory_free(device, || create_tlas(device, 1024))?,
             solid_instances: 0,
             anchor: None,
             reach,
             to_compact: Vec::new(),
             compacting: Vec::new(),
-            unpacker: Unpacker::new(device, slots.capacity),
+            unpacker: Unpacker::new(device, slots.capacity)?,
             slots,
             full_logged: false,
+            tlas_logged: false,
+            refused: None,
+            rebuild: false,
             generation: 0,
             removals: 0,
         })
@@ -258,7 +275,7 @@ impl RayScene {
 
     /// Compacts BLAS built on earlier frames: built with room to spare, a compacted copy (made
     /// once the GPU has measured it) takes about a quarter. Whether a BLAS was replaced.
-    fn compact(&mut self, queue: &wgpu::Queue) -> bool {
+    fn compact(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
         let mut changed = false;
         let blas = &mut self.blas;
         self.compacting.retain(|(key, b)| {
@@ -268,8 +285,11 @@ impl RayScene {
             if !b.ready_for_compaction() {
                 return true;
             }
-            blas.insert(*key, queue.compact_blas(b));
-            changed = true;
+            // Without the memory for the copy the part keeps its uncompacted BLAS.
+            if let Some(compact) = out_of_memory_free(device, || queue.compact_blas(b)) {
+                blas.insert(*key, compact);
+                changed = true;
+            }
             false
         });
         // Built and submitted last frame: the GPU can now measure them.
@@ -303,11 +323,13 @@ impl RayScene {
         // of video memory); those past `reach + 2` lose theirs, so walking along a chunk border
         // doesn't build the same ones over and over.
         let keep = self.reach + 2;
-        let mut changed = self.compact(queue);
+        let mut changed = self.compact(device, queue) | std::mem::take(&mut self.rebuild);
         if self.removals != sections.removals() {
             self.removals = sections.removals();
             changed |= drop_released(&mut self.blas, &mut self.slots, |k| sections.contains(k));
         }
+        // A frame that keeps the old TLAS takes back what it added here.
+        let dirty_before = self.dirty.len();
         if self.anchor != Some(column) {
             changed |= leave(&mut self.blas, &mut self.slots, column, keep);
             for (key, s, _) in sections.iter() {
@@ -319,6 +341,40 @@ impl RayScene {
                         self.dirty.push((key, layer));
                     }
                 }
+            }
+        }
+        // Room in the TLAS for every part this frame may add, before any is built: one too small
+        // that can't grow keeps the frame's scene as it was (the TLAS with its instances and
+        // solid count, the anchor, the store unwritten), and a later frame tries again once the
+        // parts wanted or the camera's column change. A cut instance list would put parts on the
+        // wrong side of `solid_instances`. The first frame needs no more than the first TLAS
+        // holds (`BUILDS_PER_FRAME`), so it never keeps one that was never built.
+        let near = |part: &Part| within(&part.0, column, self.reach);
+        let wanted = instances_wanted(&self.blas, &self.dirty, near);
+        let len = self.tlas.get().len();
+        let retry = self.refused != Some((wanted, column));
+        match tlas_room(&mut self.tlas, len, wanted, |capacity| {
+            retry
+                .then(|| out_of_memory_free(device, || create_tlas(device, capacity)))
+                .flatten()
+        }) {
+            Some(grown) => {
+                self.refused = None;
+                changed |= grown;
+                self.generation += u64::from(grown);
+            }
+            None => {
+                self.refused = Some((wanted, column));
+                if !self.tlas_logged {
+                    self.tlas_logged = true;
+                    log::warn!(
+                        "Horizon renderer: no video memory for a ray tracing TLAS of {wanted} \
+                         instances; the scene stays as it is until there is"
+                    );
+                }
+                self.rebuild = true;
+                self.dirty.truncate(dirty_before);
+                return;
             }
         }
         let mut builds: Vec<Build<'_>> = Vec::new();
@@ -340,22 +396,36 @@ impl RayScene {
                 Some(s) => {
                     let quads = layer.quads(s);
                     // A part meshed again leaves its old slot: its old BLAS goes from the
-                    // TLAS below, before anything traces the part written over it.
-                    let Some(first) = self.slots.alloc(part, u64::from(quads) * 4) else {
-                        // The store is at its largest: the part keeps its old BLAS and
-                        // slot, if it has them, and waits for a later frame's room.
+                    // TLAS below, before anything traces the part written over it. A store
+                    // too small grows here, before this frame's unpack pass writes into it.
+                    let old = self.slots.slot(part);
+                    let (unpacker, generation) = (&mut self.unpacker, &mut self.generation);
+                    let first = self.slots.alloc(part, u64::from(quads) * 4, |vertices| {
+                        // Asked only for a larger store: true is a new one.
+                        let grown = unpacker.fit(device, encoder, vertices);
+                        *generation += u64::from(grown);
+                        grown
+                    });
+                    // Only with a slot: a full store makes no BLAS each frame a part waits.
+                    let blas = first.and_then(|_| new_blas(device, quads));
+                    if first.is_some() && blas.is_none() {
+                        self.slots.restore(part, old);
+                    }
+                    let (Some((size, blas)), Some(first)) = (blas, first) else {
+                        // The store is at its largest, or video memory has no room for the
+                        // BLAS: the part keeps its old BLAS and slot, if it has them, and waits
+                        // for a later frame.
                         if !self.full_logged {
                             self.full_logged = true;
                             log::warn!(
-                                "Horizon renderer: the ray tracing scene's store is full ({} \
-                                 vertices); some sections wait for room",
+                                "Horizon renderer: the ray tracing scene is out of room (a store \
+                                 of {} vertices); some sections wait for room",
                                 self.slots.capacity
                             );
                         }
                         deferred.push(part);
                         continue;
                     };
-                    let (size, blas) = new_blas(device, quads);
                     builds.push(Build {
                         part,
                         s,
@@ -373,10 +443,6 @@ impl RayScene {
         }
         self.dirty.drain(..taken);
         self.dirty.extend(deferred);
-        // Before the unpack pass writes into the store.
-        if self.unpacker.fit(device, encoder, self.slots.capacity) {
-            self.generation += 1;
-        }
         if builds.is_empty() && !changed && self.anchor == Some(column) {
             return;
         }
@@ -386,12 +452,8 @@ impl RayScene {
             self.blas.insert(b.part, b.blas.clone());
             self.to_compact.push((b.part, b.blas.clone()));
         }
-        let near = |part: &Part| within(&part.0, column, self.reach);
-        let count = self.blas.keys().filter(|part| near(part)).count();
-        if count > self.tlas.get().len() {
-            self.tlas = create_tlas(device, (count as u32).next_power_of_two());
-            self.generation += 1;
-        }
+        // `instances_wanted` counted these, and more.
+        debug_assert!(self.blas.keys().filter(|part| near(part)).count() <= self.tlas.get().len());
         let min_y = sections.min_y();
         let mut n = 0;
         // The solid layer's instances first: a hit tells its layer by its instance's index.
@@ -472,6 +534,33 @@ fn leave<T>(
     blas.len() != before
 }
 
+/// Instances the TLAS may need this frame at most: the parts with a BLAS `near` the camera, and
+/// as many again as the `dirty` parts without one that the frame may build.
+fn instances_wanted<B>(
+    blas: &FxHashMap<Part, B>,
+    dirty: &[Part],
+    near: impl Fn(&Part) -> bool,
+) -> usize {
+    let built = blas.keys().filter(|part| near(part)).count();
+    let new = dirty.iter().filter(|part| !blas.contains_key(part)).count();
+    built + new.min(BUILDS_PER_FRAME)
+}
+
+/// Room in `tlas` (`len` instances) for `wanted`: it as it is, or a larger one from `make`
+/// (whether it was replaced). None, with `tlas` as it was, when `make` has no memory for it.
+fn tlas_room<T>(
+    tlas: &mut T,
+    len: usize,
+    wanted: usize,
+    make: impl FnOnce(u32) -> Option<T>,
+) -> Option<bool> {
+    if wanted <= len {
+        return Some(false);
+    }
+    *tlas = make((wanted as u32).next_power_of_two())?;
+    Some(true)
+}
+
 /// Vertices the store may grow to on a device with `limits`: the unpack pass binds it whole.
 fn largest_store(limits: &wgpu::Limits) -> u64 {
     let bytes = limits
@@ -516,16 +605,21 @@ struct Unpacker {
 }
 
 impl Unpacker {
-    fn new(device: &wgpu::Device, capacity: u64) -> Self {
-        Self {
+    /// None without the video memory for the first store.
+    fn new(device: &wgpu::Device, capacity: u64) -> Option<Self> {
+        // The store first: a scene that is asked for again each frame without room for it must
+        // not compile the pipeline each time.
+        let store = store_buffer(device, capacity)?;
+        Some(Self {
             pipeline: unpack_pipeline(device),
-            store: store_buffer(device, capacity),
-        }
+            store,
+        })
     }
 
     /// A store of `vertices` when it holds fewer: the larger one gets the old contents first
     /// (recorded before this frame's unpack pass), so every slot keeps its place. The old one
-    /// lives on in `encoder` until it is submitted. Whether the store is a new one.
+    /// lives on in `encoder` until it is submitted. False, with the store as it was, when video
+    /// memory has no room for the larger one.
     fn fit(
         &mut self,
         device: &wgpu::Device,
@@ -533,9 +627,16 @@ impl Unpacker {
         vertices: u64,
     ) -> bool {
         if vertices * STRIDE <= self.store.size() {
-            return false;
+            return true;
         }
-        let store = store_buffer(device, vertices);
+        let Some(store) = store_buffer(device, vertices) else {
+            log::warn!(
+                "Horizon renderer: no video memory for a ray tracing store of {vertices} \
+                 vertices; it stays at {}",
+                self.store.size() / STRIDE
+            );
+            return false;
+        };
         encoder.copy_buffer_to_buffer(&self.store, 0, &store, 0, self.store.size());
         self.store = store;
         true
@@ -672,16 +773,25 @@ pub(in crate::gfx) fn unpack_shader() -> String {
     crate::gfx::terrain_shader() + include_str!("../rt_unpack.wgsl")
 }
 
-fn store_buffer(device: &wgpu::Device, vertices: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Ray tracing: section vertices"),
-        size: vertices * STRIDE,
-        usage: wgpu::BufferUsages::STORAGE
+fn store_buffer(device: &wgpu::Device, vertices: u64) -> Option<wgpu::Buffer> {
+    crate::gfx::arena::try_create(
+        device,
+        "Ray tracing: section vertices",
+        vertices * STRIDE,
+        wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::BLAS_INPUT
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    )
+}
+
+/// What `make` makes, or None when video memory had no room for it: an out-of-memory error
+/// raised outside a scope is fatal (`arena::try_create`).
+fn out_of_memory_free<T>(device: &wgpu::Device, make: impl FnOnce() -> T) -> Option<T> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let made = make();
+    // Native error scopes resolve at once.
+    pollster::block_on(scope.pop()).is_none().then_some(made)
 }
 
 fn create_tlas(device: &wgpu::Device, capacity: u32) -> wgpu::Tlas {
@@ -693,11 +803,11 @@ fn create_tlas(device: &wgpu::Device, capacity: u32) -> wgpu::Tlas {
     })
 }
 
-/// A new BLAS for `quads` quads, and its size.
+/// A new BLAS for `quads` quads, and its size; None without the video memory for it.
 fn new_blas(
     device: &wgpu::Device,
     quads: u32,
-) -> (wgpu::BlasTriangleGeometrySizeDescriptor, wgpu::Blas) {
+) -> Option<(wgpu::BlasTriangleGeometrySizeDescriptor, wgpu::Blas)> {
     let size = wgpu::BlasTriangleGeometrySizeDescriptor {
         vertex_format: wgpu::VertexFormat::Float32x3,
         vertex_count: quads * 4,
@@ -706,18 +816,20 @@ fn new_blas(
         // Not opaque: rays test cut-out texels (leaves, plants) and clear ones themselves.
         flags: wgpu::AccelerationStructureGeometryFlags::empty(),
     };
-    let blas = device.create_blas(
-        &wgpu::CreateBlasDescriptor {
-            label: None,
-            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
-                | wgpu::AccelerationStructureFlags::ALLOW_COMPACTION,
-            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
-        },
-        wgpu::BlasGeometrySizeDescriptors::Triangles {
-            descriptors: vec![size.clone()],
-        },
-    );
-    (size, blas)
+    let blas = out_of_memory_free(device, || {
+        device.create_blas(
+            &wgpu::CreateBlasDescriptor {
+                label: None,
+                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
+                    | wgpu::AccelerationStructureFlags::ALLOW_COMPACTION,
+                update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+            },
+            wgpu::BlasGeometrySizeDescriptors::Triangles {
+                descriptors: vec![size.clone()],
+            },
+        )
+    })?;
+    Some((size, blas))
 }
 
 /// Build entries reading each part's vertices in the store (`pos` is `TerrainVertex`'s first
@@ -746,7 +858,8 @@ fn build_entries<'a>(
 }
 
 /// Where each part's vertices sit in the store: first fit over the free ranges, which merge
-/// with their neighbours when freed. A store with no range to fit grows, up to `most`.
+/// with their neighbours when freed. A store with no range to fit grows, up to `most` and as far
+/// as video memory lets it.
 struct Slots {
     taken: FxHashMap<Part, (u64, u64)>,
     /// Free (first vertex, vertices), in order, none touching another.
@@ -771,10 +884,25 @@ impl Slots {
         self.taken.get(&key).map(|s| s.0)
     }
 
+    /// Part `key`'s slot: first vertex and vertices.
+    fn slot(&self, key: Part) -> Option<(u64, u64)> {
+        self.taken.get(&key).copied()
+    }
+
+    /// Puts part `key` back in `old`, its slot (if any) before `alloc` moved it.
+    fn restore(&mut self, key: Part, old: Option<(u64, u64)>) {
+        self.free(key);
+        if let Some(old) = old {
+            self.take(old);
+            self.taken.insert(key, old);
+        }
+    }
+
     /// A slot of `vertices` for part `key` in place of its old one, the first that fits, in
-    /// a store twice as large (at least large enough) when none does. None at `most`: `key`
-    /// then keeps its old slot.
-    fn alloc(&mut self, key: Part, vertices: u64) -> Option<u64> {
+    /// a store twice as large (at least large enough) when none does: `grow` makes that store,
+    /// and false from it (no video memory) makes the current size the largest. None at the
+    /// largest: `key` then keeps its old slot.
+    fn alloc(&mut self, key: Part, vertices: u64, grow: impl FnOnce(u64) -> bool) -> Option<u64> {
         let old = self.taken.remove(&key);
         if let Some(old) = old {
             self.release(old);
@@ -785,7 +913,9 @@ impl Slots {
             let capacity = (self.capacity * 2)
                 .max(self.capacity + vertices)
                 .min(self.most);
-            if capacity > self.capacity {
+            if capacity > self.capacity && !grow(capacity) {
+                self.most = self.capacity;
+            } else if capacity > self.capacity {
                 self.release((self.capacity, capacity - self.capacity));
                 self.capacity = capacity;
                 at = fits(&self.free);
@@ -892,17 +1022,22 @@ mod tests {
     /// Section A's translucent quads.
     const A_CLEAR: Part = ((0, 0, 0), Layer::Translucent);
 
+    /// A store that video memory lets grow.
+    fn grows(_: u64) -> bool {
+        true
+    }
+
     #[test]
     fn freed_slots_merge_and_are_taken_first_fit() {
         let mut slots = Slots::new(64, 64);
-        assert_eq!(slots.alloc(A, 16), Some(0));
-        assert_eq!(slots.alloc(B, 16), Some(16));
-        assert_eq!(slots.alloc(C, 16), Some(32));
+        assert_eq!(slots.alloc(A, 16, grows), Some(0));
+        assert_eq!(slots.alloc(B, 16, grows), Some(16));
+        assert_eq!(slots.alloc(C, 16, grows), Some(32));
         slots.free(B);
         slots.free(A);
         // 32 fit only where A's and B's slots merged; the 16 left at the end come next.
-        assert_eq!(slots.alloc(A, 32), Some(0));
-        assert_eq!(slots.alloc(B, 8), Some(48));
+        assert_eq!(slots.alloc(A, 32, grows), Some(0));
+        assert_eq!(slots.alloc(B, 8, grows), Some(48));
         assert_eq!(slots.capacity, 64);
     }
 
@@ -911,7 +1046,7 @@ mod tests {
         let mut slots = Slots::new(64, 64);
         let mut blas = FxHashMap::default();
         for key in [A, B, C] {
-            slots.alloc(key, 8);
+            slots.alloc(key, 8, grows);
             blas.insert(key, ());
         }
         // B's column was unloaded without a new mesh.
@@ -919,38 +1054,38 @@ mod tests {
         assert_eq!(blas.len(), 2);
         assert!(!blas.contains_key(&B));
         assert_eq!(slots.first(B), None);
-        assert_eq!(slots.alloc(B, 8), Some(8), "its slot is free again");
+        assert_eq!(slots.alloc(B, 8, grows), Some(8), "its slot is free again");
         assert!(!drop_released(&mut blas, &mut slots, |_| true));
     }
 
     #[test]
     fn a_section_meshed_again_leaves_its_old_slot() {
         let mut slots = Slots::new(64, 64);
-        slots.alloc(A, 8);
-        slots.alloc(B, 8);
-        assert_eq!(slots.alloc(A, 4), Some(0));
+        slots.alloc(A, 8, grows);
+        slots.alloc(B, 8, grows);
+        assert_eq!(slots.alloc(A, 4, grows), Some(0));
         // Its old 8 are free again, but 16 don't fit before B.
-        assert_eq!(slots.alloc(A, 16), Some(16));
-        assert_eq!(slots.alloc(C, 8), Some(0));
+        assert_eq!(slots.alloc(A, 16, grows), Some(16));
+        assert_eq!(slots.alloc(C, 8, grows), Some(0));
         assert_eq!(slots.first(B), Some(8));
     }
 
     #[test]
     fn a_section_s_translucent_quads_come_and_go_beside_its_solid_ones() {
         let mut slots = Slots::new(64, 64);
-        assert_eq!(slots.alloc(A, 16), Some(0));
-        assert_eq!(slots.alloc(A_CLEAR, 8), Some(16));
-        assert_eq!(slots.alloc(B, 8), Some(24));
+        assert_eq!(slots.alloc(A, 16, grows), Some(0));
+        assert_eq!(slots.alloc(A_CLEAR, 8, grows), Some(16));
+        assert_eq!(slots.alloc(B, 8, grows), Some(24));
         // Water placed in the section: both parts are meshed again, each into a slot of its own.
-        assert_eq!(slots.alloc(A, 16), Some(0));
-        assert_eq!(slots.alloc(A_CLEAR, 12), Some(32));
+        assert_eq!(slots.alloc(A, 16, grows), Some(0));
+        assert_eq!(slots.alloc(A_CLEAR, 12, grows), Some(32));
         // The water is gone: its slot goes, the solid quads stay where they are.
         slots.free(A_CLEAR);
         assert_eq!((slots.first(A), slots.first(A_CLEAR)), (Some(0), None));
-        assert_eq!(slots.alloc(C, 32), Some(32));
+        assert_eq!(slots.alloc(C, 32, grows), Some(32));
         // Only translucent quads left (a section of water alone): they take the solid ones' room.
         slots.free(A);
-        assert_eq!(slots.alloc(A_CLEAR, 16), Some(0));
+        assert_eq!(slots.alloc(A_CLEAR, 16, grows), Some(0));
         assert_eq!((slots.first(A), slots.first(B)), (None, Some(24)));
     }
 
@@ -958,21 +1093,21 @@ mod tests {
     fn the_translucent_layer_grows_the_store_and_waits_at_its_cap() {
         const B_CLEAR: Part = ((1, 0, 0), Layer::Translucent);
         let mut slots = Slots::new(16, 48);
-        assert_eq!(slots.alloc(A, 16), Some(0));
-        assert_eq!(slots.alloc(A_CLEAR, 8), Some(16));
+        assert_eq!(slots.alloc(A, 16, grows), Some(0));
+        assert_eq!(slots.alloc(A_CLEAR, 8, grows), Some(16));
         assert_eq!(slots.capacity, 32);
-        assert_eq!(slots.alloc(B, 8), Some(24));
+        assert_eq!(slots.alloc(B, 8, grows), Some(24));
         // Grown to its largest, the store has 16 free: B's water waits, and nothing moved.
-        assert_eq!(slots.alloc(B_CLEAR, 32), None);
+        assert_eq!(slots.alloc(B_CLEAR, 32, grows), None);
         assert_eq!(slots.capacity, 48);
         let firsts = [A, A_CLEAR, B, B_CLEAR].map(|p| slots.first(p));
         assert_eq!(firsts, [Some(0), Some(16), Some(24), None]);
         // A's water spreads: no room for it either, so it keeps its old slot.
-        assert_eq!(slots.alloc(A_CLEAR, 24), None);
+        assert_eq!(slots.alloc(A_CLEAR, 24, grows), None);
         assert_eq!(slots.first(A_CLEAR), Some(16));
         // Another world: every slot of both layers is free.
         slots.clear();
-        assert_eq!(slots.alloc(B_CLEAR, 48), Some(0));
+        assert_eq!(slots.alloc(B_CLEAR, 48, grows), Some(0));
     }
 
     #[test]
@@ -982,7 +1117,7 @@ mod tests {
         let mut slots = Slots::new(64, 64);
         let mut blas = FxHashMap::default();
         for (part, vertices) in [(A, 8), (A_CLEAR, 8), (FAR, 16), (FAR_CLEAR, 8)] {
-            slots.alloc(part, vertices);
+            slots.alloc(part, vertices, grows);
             blas.insert(part, ());
         }
         assert!(leave(&mut blas, &mut slots, (1, 0), 10));
@@ -991,7 +1126,7 @@ mod tests {
         assert_eq!(kept, [A, A_CLEAR]);
         assert_eq!((slots.first(FAR), slots.first(FAR_CLEAR)), (None, None));
         // Their 24 vertices are free again, after A's two slots.
-        assert_eq!(slots.alloc(C, 48), Some(16));
+        assert_eq!(slots.alloc(C, 48, grows), Some(16));
         assert!(!leave(&mut blas, &mut slots, (1, 0), 10));
     }
 
@@ -1012,11 +1147,11 @@ mod tests {
     #[test]
     fn a_full_store_grows_and_every_slot_stays() {
         let mut slots = Slots::new(16, 1 << 26);
-        assert_eq!(slots.alloc(A, 16), Some(0));
-        assert_eq!(slots.alloc(B, 8), Some(16));
+        assert_eq!(slots.alloc(A, 16, grows), Some(0));
+        assert_eq!(slots.alloc(B, 8, grows), Some(16));
         assert_eq!(slots.capacity, 32);
         // Larger than twice the store: the store takes it whole after its free 8.
-        assert_eq!(slots.alloc(C, 100), Some(24));
+        assert_eq!(slots.alloc(C, 100, grows), Some(24));
         assert_eq!(slots.capacity, 132);
         assert_eq!((slots.first(A), slots.first(B)), (Some(0), Some(16)));
     }
@@ -1024,17 +1159,98 @@ mod tests {
     #[test]
     fn at_the_largest_store_a_section_waits_in_its_old_slot() {
         let mut slots = Slots::new(16, 32);
-        slots.alloc(A, 16);
-        slots.alloc(B, 16);
-        assert_eq!(slots.alloc(C, 4), None);
-        assert_eq!(slots.alloc(A, 20), None);
+        slots.alloc(A, 16, grows);
+        slots.alloc(B, 16, grows);
+        assert_eq!(slots.alloc(C, 4, grows), None);
+        assert_eq!(slots.alloc(A, 20, grows), None);
         assert_eq!(slots.first(A), Some(0));
         // Nothing was lost on the way: A's slot was taken back.
-        assert_eq!(slots.alloc(C, 4), None);
+        assert_eq!(slots.alloc(C, 4, grows), None);
         slots.free(B);
-        assert_eq!(slots.alloc(A, 20), Some(0));
+        assert_eq!(slots.alloc(A, 20, grows), Some(0));
         slots.clear();
-        assert_eq!(slots.alloc(C, 32), Some(0));
+        assert_eq!(slots.alloc(C, 32, grows), Some(0));
+    }
+
+    #[test]
+    fn a_store_video_memory_cant_grow_keeps_every_slot() {
+        let mut slots = Slots::new(16, 1 << 26);
+        slots.alloc(A, 8, grows);
+        slots.alloc(A_CLEAR, 8, grows);
+        let mut asked = Vec::new();
+        assert_eq!(
+            slots.alloc(B, 12, |n| {
+                asked.push(n);
+                false
+            }),
+            None
+        );
+        assert_eq!(asked, [32]);
+        assert_eq!((slots.first(A), slots.first(A_CLEAR)), (Some(0), Some(8)));
+        assert_eq!(slots.capacity, 16);
+        // That size is now the largest: no part asks again, and freed room is used.
+        assert_eq!(slots.alloc(C, 4, |_| unreachable!()), None);
+        slots.free(A_CLEAR);
+        assert_eq!(slots.alloc(B, 8, |_| unreachable!()), Some(8));
+    }
+
+    #[test]
+    fn a_part_whose_blas_failed_goes_back_to_its_old_slot() {
+        let mut slots = Slots::new(64, 64);
+        slots.alloc(A, 8, grows);
+        slots.alloc(A_CLEAR, 8, grows);
+        slots.alloc(B, 8, grows);
+        // A's water spreads; its new slot is given, then its BLAS fails.
+        let old = slots.slot(A_CLEAR);
+        assert_eq!(slots.alloc(A_CLEAR, 16, grows), Some(24));
+        slots.restore(A_CLEAR, old);
+        assert_eq!(slots.slot(A_CLEAR), Some((8, 8)));
+        // The 16 it was given are free again, merged with the rest.
+        assert_eq!(slots.alloc(C, 40, grows), Some(24));
+        // A part new to the scene goes back to none.
+        let new = ((3, 0, 0), Layer::Translucent);
+        slots.free(C);
+        assert_eq!(slots.alloc(new, 8, grows), Some(24));
+        slots.restore(new, None);
+        assert_eq!(slots.first(new), None);
+        assert_eq!(slots.alloc(C, 40, grows), Some(24));
+    }
+
+    #[test]
+    fn a_tlas_that_cant_grow_stays_as_it_was() {
+        // Instances in TLAS order: the solid ones first.
+        let mut tlas = vec![A, B, A_CLEAR];
+        let mut asked = Vec::new();
+        let mut no_memory = |n| {
+            asked.push(n);
+            None
+        };
+        assert_eq!(tlas_room(&mut tlas, 4, 5, &mut no_memory), None);
+        assert_eq!(
+            (tlas.as_slice(), asked.as_slice()),
+            ([A, B, A_CLEAR].as_slice(), [8].as_slice())
+        );
+        // Room enough: nothing is made.
+        assert_eq!(tlas_room(&mut tlas, 4, 4, |_| unreachable!()), Some(false));
+        assert_eq!(
+            tlas_room(&mut tlas, 4, 5, |n| Some(vec![C; n as usize])),
+            Some(true)
+        );
+        assert_eq!(tlas.len(), 8);
+    }
+
+    #[test]
+    fn the_tlas_makes_room_for_both_layers_before_building() {
+        let mut blas = FxHashMap::default();
+        for part in [A, A_CLEAR, ((20, 0, 0), Layer::Solid)] {
+            blas.insert(part, ());
+        }
+        let near = |part: &Part| within(&part.0, (0, 0), 8);
+        // A and its water are built and near; B's two layers and A's again may come.
+        let dirty = [B, ((1, 0, 0), Layer::Translucent), A_CLEAR];
+        assert_eq!(instances_wanted(&blas, &dirty, near), 4);
+        let many = vec![C; BUILDS_PER_FRAME + 10];
+        assert_eq!(instances_wanted(&blas, &many, near), 2 + BUILDS_PER_FRAME);
     }
 
     #[test]
