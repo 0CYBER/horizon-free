@@ -204,6 +204,18 @@ pub struct PayloadBusy {
     pub held_millis: u64,
 }
 
+impl PayloadBusy {
+    /// Constructs a contention snapshot with every diagnostic field supplied.
+    pub fn new(owner: Arc<str>, export: Arc<str>, thread: Arc<str>, held_millis: u64) -> Self {
+        Self {
+            owner,
+            export,
+            thread,
+            held_millis,
+        }
+    }
+}
+
 impl std::fmt::Display for PayloadBusy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
