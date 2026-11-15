@@ -5,13 +5,17 @@ Fails on a malformed row, a test listed in two files, a folder with no rows or w
 and README.md, and a file at the retired single-list path. The shared reader validates both `needs`
 and `needs-plain` fixture rows; neither is a known failure. Every `daily` row must name a package of a workspace (the game's or the launcher's) and
 one of its test targets, and some leg of the daily run's matrix must run it: its package's shard, or the `daily-rows`
-leg (tools/ci/ignored_shards.py), so no moved test runs nowhere. Builds nothing.
+leg (tools/ci/ignored_shards.py), so no moved test runs nowhere. Builds only the source-inventory helper,
+not the game or SDK.
 
 Every `#[ignore]`d test that no daily shard runs (rowless_problems) has a row of some mark: `daily`, a known
 failure, `needs`, `manual`, ...; otherwise it would run nowhere unseen. In a shard's own targets a rowless
 `#[ignore]` is fine: the shard runs it with `--include-ignored`, and it must pass.
 
-The rows and the source agree both ways (read with tools/ci/rust_tests.py): every function marked
+In addition to the legacy physical-source checks below, the canonical inventory checks package, target and
+full logical test path.
+
+The legacy rows and physical-source checks agree both ways (read with tools/ci/rust_tests.py): every function marked
 `#[ignore = "daily"]` in a workspace package's sources has a daily row of that package whose test path ends in its
 name, and every daily row names a function of that name marked so in its package's sources. A source file compiled
 into two targets (horizon-client-render's gfx/sunrise_fan.rs, also built by its `sunrise_shader` test) has one
@@ -29,7 +33,7 @@ from tools.ci import ignored_inventory, ignored_shards, ignored_tests, rust_test
 
 ROOT = Path(__file__).resolve().parents[2]
 ADD_ROW = ("add its row: `python3 tools/ci/move_to_daily.py apply LIST` (its docstring has the list format), or write "
-           "`PACKAGE TEST TARGET daily REASON` into tools/ci/ignored-tests/daily-PACKAGE.txt")
+           "`PACKAGE TEST TARGET daily REASON` into tools/ci/ignored-tests/daily-PACKAGE-TOPIC.txt")
 
 
 def daily_problems(rows, targets, matrix):

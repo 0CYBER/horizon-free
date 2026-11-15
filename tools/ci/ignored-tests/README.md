@@ -24,14 +24,15 @@ failure. The one-process runner selects it with `--exact` without `--ignored`; o
 when the variable is absent and require it to pass when present.
 
 `daily` marks a test moved out of `verify` into the daily run (CONTRIBUTING.md "CI tiers"): it is
-`#[ignore = "daily"]` in its source, and its row, in `daily-<package>.txt` with the rows sorted, names its cargo target
+`#[ignore = "daily"]` in its source, and its row, in a new `daily-PACKAGE-TOPIC.txt` with the rows sorted,
+names its cargo target
 (`lib`, `bin:NAME` or `test:NAME`) and why it is a daily test (`slow`, `game-boot`, `resources`, `child-process`,
 `network`, `wasm-fixture`). It is not a known failure: it runs every day and must pass, and a row whose test no
 longer runs fails. Its package's shard runs it when that shard builds its target, and the `daily-rows` leg runs
 every other one; verify-static fails a row no leg runs. `python3 tools/ci/move_to_daily.py apply LIST` writes the
 attribute and the row (its docstring has the list format). The attribute is the source's mark and the row is the
 daily run's list of what must run: an attribute without a row in a package no shard covers would run nowhere.
-A launcher test is moved the same way (`daily-horizon-launcher.txt`): its own leg, `daily-rows-launcher`, runs it
+A launcher test is moved the same way (a new `daily-horizon-launcher-TOPIC.txt`): its own leg, `daily-rows-launcher`, runs it
 from `launcher/`, its own workspace, against its own lockfile. A launcher test that starts the launcher binary also belongs to
 the Windows release job `launcher-processes` (`launcher-windows-check.yml`), which runs those `tests/` targets by
 `--test` name: add its target there too.
