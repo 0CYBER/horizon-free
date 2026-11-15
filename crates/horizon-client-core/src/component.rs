@@ -354,7 +354,7 @@ pub(crate) fn shadow_color(value: &Value) -> Option<u32> {
     Some(channels[3] << 24 | channels[0] << 16 | channels[1] << 8 | channels[2])
 }
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
-/// are resolved by `resolve` (ComponentUtils.updateForEntity).
+/// are resolved by `resolve` (ComponentUtils.resolve).
 pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
     to_text_with(v, resolve, &mut |_| None)
 }
