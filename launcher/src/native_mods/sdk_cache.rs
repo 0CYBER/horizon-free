@@ -145,7 +145,7 @@ impl std::fmt::Display for Refusal {
                 &[("build", build), ("why", why)],
             ),
             Self::Host => {
-                tr("E_NATIVE_HOST: no prebuilt game supports this computer; use a supported host").into()
+                tr("Native mods can't be built on this computer: Horizon has no game package for its system yet.").into()
             }
             Self::Cache(why) => trf(
                 "Could not keep the mod tools: {why}",
