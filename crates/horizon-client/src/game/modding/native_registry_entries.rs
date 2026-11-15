@@ -111,7 +111,7 @@ impl Game<'_> {
             .or_else(|| {
                 // The same lazy, frozen/current table the server's next connection receives. Never
                 // reconstruct a dynamic registry from the prepared files at a mod call boundary.
-                super::lan::sync_data(
+                super::lan::sync::sync_data(
                     &self.options.resources,
                     &self.res.core.item_data,
                     &self.pack_files(),

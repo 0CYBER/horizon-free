@@ -290,7 +290,7 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     assert_eq!(host(game).registry_entries(registry), None);
                     assert_eq!(host(game).registry_entry(registry, "minecraft:oak"), None);
                 }
-                let sync = super::lan::sync_data(
+                let sync = super::lan::sync::sync_data(
                     &game.options.resources,
                     &game.res.core.item_data,
                     &game.pack_files(),
