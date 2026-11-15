@@ -349,10 +349,20 @@ impl crate::Surface for super::Surface {
 
     unsafe fn acquire_texture(
         &self,
-        _timeout: Option<core::time::Duration>, // TODO
+        timeout: Option<core::time::Duration>,
         _fence: &super::Fence,
     ) -> Result<crate::AcquiredSurfaceTexture<super::Api>, crate::SurfaceError> {
-        let render_layer = self.render_layer.lock();
+        // Own the layer, then drop the mutex. `nextDrawable` blocks, and the
+        // main thread reconfigures this layer; holding the mutex across that
+        // wait deadlocks a resize against a present.
+        let render_layer = self.render_layer.lock().clone();
+
+        #[cfg(target_os = "macos")]
+        let off_main = objc2::MainThreadMarker::new().is_none();
+        #[cfg(not(target_os = "macos"))]
+        let off_main = false;
+        #[cfg(not(target_os = "macos"))]
+        let _ = timeout;
 
         #[cfg(target_os = "macos")]
         {
@@ -360,11 +370,19 @@ impl crate::Surface for super::Surface {
             // When the window is occluded on macOS, presented drawables get stuck waiting
             // for vsync. Check the window's occlusion state and skip acquisition if
             // the window is not visible - this avoids a 1-second hang in nextDrawable().
-            use objc2::rc::Retained;
-
-            // The CAMetalLayer is typically a sublayer; find the hosting window
-            // and skip acquisition while it is occluded.
-            if let Some(window) = hosting_window(Retained::into_super(render_layer.clone())) {
+            //
+            // `NSWindow` is main-thread-only. Frame generation acquires here from
+            // its present thread while the main thread waits on that thread for
+            // render targets. An occlusion query there never reaches the main
+            // run loop, so both sides wait and the cursor spins. The check stays
+            // on the main thread, which is where the game acquires with frame
+            // generation off.
+            let window = if off_main {
+                None
+            } else {
+                hosting_window(Retained::into_super(render_layer.clone()))
+            };
+            if let Some(window) = window {
                 const NS_WINDOW_OCCLUSION_STATE_VISIBLE: usize = 1 << 1;
                 let occlusion_state: usize = unsafe { objc2::msg_send![&*window, occlusionState] };
                 if occlusion_state & NS_WINDOW_OCCLUSION_STATE_VISIBLE == 0 {
@@ -373,13 +391,27 @@ impl crate::Surface for super::Surface {
             }
         }
 
-        let (drawable, texture) = match autoreleasepool(|_| {
+        // Configure turns the drawable timeout off so a visible window can wait
+        // out a long frame. Off the main thread that wait has no bound: the
+        // present thread sits in `nextDrawable`, and the main thread sits in
+        // its channel recv. Allow the timeout for this call only.
+        let bound_wait = off_main && timeout.is_some();
+        if bound_wait && available!(macos = 10.13, ios = 11.0, tvos = 11.0, visionos = 1.0) {
+            render_layer.setAllowsNextDrawableTimeout(true);
+        }
+
+        let acquired = autoreleasepool(|_| {
             render_layer
                 .nextDrawable()
                 .map(|drawable| (drawable.to_owned(), drawable.texture().to_owned()))
-        }) {
-            Some(pair) => pair,
-            None => return Err(crate::SurfaceError::Timeout),
+        });
+
+        if bound_wait && available!(macos = 10.13, ios = 11.0, tvos = 11.0, visionos = 1.0) {
+            render_layer.setAllowsNextDrawableTimeout(false);
+        }
+
+        let Some((drawable, texture)) = acquired else {
+            return Err(crate::SurfaceError::Timeout);
         };
 
         let swapchain_format = self.swapchain_format.read().unwrap();
