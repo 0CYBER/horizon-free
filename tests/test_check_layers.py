@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -245,6 +246,31 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
 
     def test_verbatim_upstream_edge_and_assignment_pass(self):
         self.assertEqual(self.problems("game -> cosmetics"), [])
+
+    def run_main(self, allowed):
+        packages = [{"name": "game", "dependencies": [{"name": "cosmetics", "kind": None, "path": "/x/cosmetics"}]},
+                    {"name": "cosmetics", "dependencies": []}]
+        config = dict(self.config, allowed=allowed)
+        with mock.patch.object(check_layers, "load_config", return_value=config), \
+                mock.patch.object(check_layers, "base_config", return_value=self.base_config), \
+                mock.patch.object(check_layers, "workspace_packages", return_value=packages), \
+                mock.patch.object(merge_base, "verified_sync_config", wraps=merge_base.verified_sync_config) as spy, \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            return check_layers.main(["--base", self.base]), spy
+
+    def test_a_violation_the_upstream_inventory_excuses_looks_it_up_once(self):
+        code, spy = self.run_main(["game -> cosmetics"])
+        self.assertEqual(code, 0)
+        spy.assert_called_once()
+
+    def test_a_merge_without_a_violation_never_reaches_the_network(self):
+        packages = [{"name": "game", "dependencies": []}]
+        with mock.patch.object(check_layers, "load_config", return_value=self.base_config), \
+                mock.patch.object(check_layers, "base_config", return_value=self.base_config), \
+                mock.patch.object(check_layers, "workspace_packages", return_value=packages), \
+                mock.patch.object(merge_base, "fetch_upstream_main", side_effect=AssertionError("network")), \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(check_layers.main(["--base", self.base]), 0)
 
     def test_fork_only_edge_fails(self):
         self.assertTrue(self.problems("game -> mod-api"))

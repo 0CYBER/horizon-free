@@ -22,7 +22,8 @@ A branch with no merge of upstream main (a fake SHA, an old base ancestor, a for
 sync, and nothing is restored. A PR could still merge a real upstream commit and add unrelated rows: review
 confirms that this is an upstream sync and that each restored row is justified.
 
-The fetch is required whenever the branch merges a commit the merge base lacks; an unreachable upstream, a
+Both checks look this up lazily: only when they have a violation, or when their inventory file differs from the
+merge base's, so an ordinary PR or rollup never touches the network. When they look, an unreachable upstream, a
 timeout, a shallow checkout or missing history fails closed, even if a previous fetch left a cached ref.
 `HORIZON_UPSTREAM_URL` overrides the URL for local bare-repo tests; normal CI leaves it unset.
 

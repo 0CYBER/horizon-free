@@ -83,7 +83,8 @@ def verified_sync_config(base, config_path):
     """(upstream's `config_path` inventory, errors) for a sync in base..HEAD, else (None, []).
 
     A sync is a merge in the branch whose non-first parent is a commit of upstream main that the merge base lacks;
-    the newest such parent is the sync's upstream commit, and sync_provenance proves it."""
+    the newest such parent is the sync's upstream commit, and sync_provenance proves it. Callers ask lazily (check_layers
+    and check_addresses only on a violation or a changed inventory), because this fetches upstream main."""
     merge_base = git("merge-base", base, "HEAD").strip()
     merges = git("rev-list", "--merges", "--parents", f"{merge_base}..HEAD").splitlines()
     parents = [parent for row in merges for parent in row.split()[2:]]

@@ -202,11 +202,16 @@ class PullRequestMergeTests(unittest.TestCase):
             run("commit", "-q", "-m", "main allows an address")
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge work", "work")
+            fetch = mock.Mock(return_value=["no network"])
             with mock.patch.object(check_addresses, "ROOT", root), mock.patch.object(merge_base, "ROOT", root), \
+                    mock.patch.object(merge_base, "fetch_upstream_main", fetch), \
                     mock.patch("sys.stdout", new_callable=io.StringIO) as out:
                 self.assertEqual(check_addresses.main(["--base", base, "--pull-request-merge"]), 0)
-                # Against the branch's old base, main's new entry was charged to the pull request.
+                fetch.assert_not_called()  # a merge and no violation never reaches the network
+                # Against the branch's old base, main's new entry was charged to the pull request, and only that
+                # violation looks for an upstream inventory that could excuse it.
                 self.assertEqual(check_addresses.main(["--base", base]), 1)
+                fetch.assert_called_once()
             self.assertIn("relay.playhorizon.dev", out.getvalue())
 
 

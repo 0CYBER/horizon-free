@@ -302,9 +302,15 @@ def main(argv=None):
         for host in sorted(by_host):
             print(f"{host}: {', '.join(sorted(by_host[host]))}")
         return 0
-    upstream_rows, provenance = restored_upstream_rows(args.base) if args.base else (set(), [])
-    problems, notes = check(config, found, base_config(args.base) if args.base else None, upstream_rows)
-    problems = provenance + problems
+    base = base_config(args.base) if args.base else None
+    problems, notes = check(config, found, base)
+    if args.base and (problems or config != base):
+        # Only a violation, or an inventory that differs from the base's, can need rows a verified sync restored:
+        # every other run stays off the network.
+        upstream_rows, provenance = restored_upstream_rows(args.base)
+        if upstream_rows or provenance:
+            problems, notes = check(config, found, base, upstream_rows)
+        problems = provenance + problems
     for note in notes:
         print(f"note: {note}")
     if problems:

@@ -218,13 +218,16 @@ def main(argv=None):
         for edge in ups:
             print(f"  {edge}")
         return 0
-    if args.base:
+    base = base_config(args.base) if args.base else None
+    optional = optional_edges(packages)
+    problems, notes = check(config, graph, base, optional)
+    if args.base and (problems or config != base):
+        # Only a violation, or an inventory that differs from the base's, can need what a verified sync restored:
+        # every other run stays off the network.
         upstream, provenance = merge_base.verified_sync_config(args.base, CONFIG_PATH)
-    else:
-        upstream, provenance = None, []
-    problems, notes = check(config, graph, base_config(args.base) if args.base else None,
-                            optional_edges(packages), upstream)
-    problems = provenance + problems
+        if upstream is not None or provenance:
+            problems, notes = check(config, graph, base, optional, upstream)
+        problems = provenance + problems
     problems += portable(config, packages)
     for note in notes:
         print(f"note: {note}")
