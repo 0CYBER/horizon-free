@@ -300,7 +300,7 @@ public final class VanillaChatScreenOracle {
                 case "key" -> screen.keyPressed(key(o.get("key").getAsString()));
                 case "click" -> {
                     var event = new MouseButtonEvent(o.get("x").getAsDouble(), o.get("y").getAsDouble(), info);
-                    screen.mouseClicked(event, false);
+                    screen.mouseClicked(event, o.has("doubleClick") && o.get("doubleClick").getAsBoolean());
                     screen.mouseReleased(event);
                 }
                 default -> throw new IllegalArgumentException(o.toString());

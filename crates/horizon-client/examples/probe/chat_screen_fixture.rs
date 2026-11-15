@@ -62,11 +62,12 @@ pub fn main() -> horizon_client::Result<()> {
             match a["type"].as_str().unwrap_or_default() {
                 "type" => screen.type_text(&m, &c, a["text"].as_str().unwrap_or_default()),
                 "click" => {
-                    screen.click(
+                    screen.click_event(
                         &m,
                         &c,
                         a["x"].as_f64().unwrap_or(0.0),
                         a["y"].as_f64().unwrap_or(0.0),
+                        a["doubleClick"].as_bool().unwrap_or(false),
                     );
                 }
                 "key" => {

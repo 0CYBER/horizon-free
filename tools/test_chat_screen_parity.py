@@ -121,6 +121,14 @@ def cases(count):
                 'actions': [{'type': 'type', 'text': 'draft'}, {'type': 'key', 'key': 'up'},
                             {'type': 'key', 'key': 'up'}, {'type': 'key', 'key': 'home'},
                             {'type': 'key', 'key': 'down'}, {'type': 'key', 'key': 'down'}]})
+    # MouseHandler supplies the double-click flag; executing two events quickly
+    # must not silently turn the second single click into word selection.
+    for double_click in (False, True):
+        out.append({'width': 320, 'height': 240, 'initial': 'hello world', 'history': [],
+                    'autoSuggest': False, 'chatOnly': True, 'opacity': 0.5,
+                    'mouse': [0, 0], 'blink': 0,
+                    'actions': [{'type': 'click', 'x': 48, 'y': 232},
+                                {'type': 'click', 'x': 48, 'y': 232, 'doubleClick': double_click}]})
     return out
 
 

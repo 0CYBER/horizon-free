@@ -331,6 +331,28 @@ fn a_double_click_in_the_chat_box_selects_the_word() {
 }
 
 #[test]
+fn explicit_single_clicks_do_not_turn_into_word_selection() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "hello world", false, 0, 640, 360, full());
+    let x = f64::from(screen.input.x) + f64::from(font.width("hello world")) - 1.0;
+    let y = f64::from(screen.input.y) + 2.0;
+    for _ in 0..2 {
+        assert!(screen.click_event(&m, &c, x, y, false));
+        assert!((10..=11).contains(&screen.input.cursor));
+        assert_eq!(screen.input.highlight, screen.input.cursor);
+        assert_eq!(screen.input.selected_text(), "");
+    }
+    assert!(screen.click_event(&m, &c, x, y, true));
+    assert_eq!(screen.input.selected_text(), "world");
+}
+
+#[test]
 fn history_arrows_recall_messages_and_restore_the_draft() {
     use winit::keyboard::KeyCode::{ArrowDown, ArrowUp};
 
