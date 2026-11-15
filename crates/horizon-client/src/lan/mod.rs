@@ -447,8 +447,9 @@ pub struct Shared {
     /// `DedicatedServer.setAcceptsTransfers`: whether a login by transfer from another server
     /// is accepted (`accepts-transfers`), live.
     accepts_transfers: AtomicBool,
-    /// PlayerList.players in join order: profile id and name.
-    online: Mutex<Vec<(u128, String)>>,
+    /// PlayerList.players in join order: profile id, name, and `ServerPlayer.allowsListing`
+    /// (the client's "Allow Server Listings", true until its client information says otherwise).
+    online: Mutex<Vec<(u128, String, bool)>>,
     next: AtomicU32,
     stop: AtomicBool,
     random: Mutex<u64>,
@@ -499,7 +500,7 @@ impl Shared {
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|(_, online)| online.eq_ignore_ascii_case(name))
+                .any(|(_, online, _)| online.eq_ignore_ascii_case(name))
         {
             return Some(translatable("multiplayer.disconnect.name_taken", &[]));
         }
@@ -526,7 +527,10 @@ impl Shared {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        self.online.lock().unwrap().push((uuid, name.to_owned()));
+        self.online
+            .lock()
+            .unwrap()
+            .push((uuid, name.to_owned(), true));
         None
     }
     /// A stop has begun: every login from now on is refused as the server's shutdown.
@@ -534,7 +538,11 @@ impl Shared {
         self.shutting_down.store(true, Ordering::Relaxed);
     }
     fn is_online(&self, uuid: u128) -> bool {
-        self.online.lock().unwrap().iter().any(|(u, _)| *u == uuid)
+        self.online
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(u, _, _)| *u == uuid)
     }
     pub fn motd(&self) -> String {
         self.motd.lock().unwrap().clone()
@@ -572,7 +580,16 @@ impl Shared {
         self.accepts_transfers.store(accept, Ordering::Relaxed);
     }
     pub fn release(&self, uuid: u128) {
-        self.online.lock().unwrap().retain(|(u, _)| *u != uuid);
+        self.online.lock().unwrap().retain(|(u, _, _)| *u != uuid);
+    }
+    /// `ServerPlayer.updateOptions`: whether the player's client allows server listings, which
+    /// `MinecraftServer.buildPlayerStatus` reads for the status sample.
+    pub fn set_listed(&self, uuid: u128, listed: bool) {
+        for entry in self.online.lock().unwrap().iter_mut() {
+            if entry.0 == uuid {
+                entry.2 = listed;
+            }
+        }
     }
     pub fn online(&self) -> usize {
         self.online.lock().unwrap().len()
@@ -594,7 +611,7 @@ impl Shared {
     pub fn status_json_for(&self, protocol: i32) -> String {
         use crate::server::json::Json;
         let motd = self.motd.lock().unwrap().clone();
-        let online: Vec<(u128, String)> = self.online.lock().unwrap().clone();
+        let online: Vec<(u128, String, bool)> = self.online.lock().unwrap().clone();
         let count = self.online();
         let mut players = vec![
             (
@@ -606,7 +623,7 @@ impl Shared {
         if !self.hide_online_players() && !online.is_empty() {
             let size = online.len().min(12);
             let offset = self.next_random(online.len() - size + 1);
-            let mut sample: Vec<(u128, String)> = online[offset..offset + size].to_vec();
+            let mut sample: Vec<(u128, String, bool)> = online[offset..offset + size].to_vec();
             for i in (1..sample.len()).rev() {
                 let j = self.next_random(i + 1);
                 sample.swap(i, j);
@@ -616,6 +633,14 @@ impl Shared {
                 Json::Array(
                     sample
                         .into_iter()
+                        // ANONYMOUS_PLAYER_PROFILE for a player who allows no listing.
+                        .map(|(u, n, listed)| {
+                            if listed {
+                                (u, n)
+                            } else {
+                                (0, "Anonymous Player".to_owned())
+                            }
+                        })
                         .map(|(u, n)| {
                             Json::Object(vec![
                                 ("id".to_owned(), Json::String(uuid_string(u))),
@@ -1237,6 +1262,40 @@ mod tests {
         let hidden = lan.shared.status_json();
         assert!(!hidden.contains("\"sample\""));
         assert!(!hidden.contains("Player"));
+    }
+
+    /// MinecraftServer.buildPlayerStatus: a player whose client turned off "Allow Server Listings"
+    /// is in the sample as ANONYMOUS_PLAYER_PROFILE (the nil uuid, "Anonymous Player"); turned on
+    /// again, as itself.
+    #[test]
+    fn a_player_who_allows_no_listing_is_an_anonymous_player_in_the_status_sample() {
+        let config = NetConfig {
+            announce: false,
+            listen: false,
+            ..NetConfig::loopback(0, "Status".into(), 8)
+        };
+        let lan = Lan::start_with(Arc::new(data::SyncData::empty()), config).unwrap();
+        let uuid = 0x1234_5678_9abc_def0_1234_5678_9abc_def0;
+        assert!(lan.shared.try_admit(MEMORY_ADDRESS, uuid, "Shy").is_none());
+        lan.shared.set_listed(uuid, false);
+        let status = lan.shared.status_json();
+        assert!(
+            status.contains(
+                r#""sample":[{"id":"00000000-0000-0000-0000-000000000000","name":"Anonymous Player"}]"#
+            ),
+            "{status}"
+        );
+        assert!(!status.contains("Shy"), "{status}");
+        assert!(!status.contains("12345678-9abc-def0"), "{status}");
+        assert!(status.contains(r#""online":1"#), "{status}");
+        lan.shared.set_listed(uuid, true);
+        let status = lan.shared.status_json();
+        assert!(
+            status.contains(
+                r#""sample":[{"id":"12345678-9abc-def0-1234-56789abcdef0","name":"Shy"}]"#
+            ),
+            "{status}"
+        );
     }
 
     /// One public address takes at most [`PER_ADDRESS`] places, its own coming back as they end;

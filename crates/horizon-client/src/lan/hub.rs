@@ -4081,13 +4081,13 @@ impl Hub {
                     }
                     g.center = None;
                     let hat = g.info.model_customisation & 0x40 != 0;
-                    let uuid = g.uuid;
+                    self.lan.shared.set_listed(g.uuid, g.info.allows_listing);
                     // ServerGamePacketListenerImpl.handleClientInformation: UPDATE_HAT to everyone.
                     if hat != was_hat {
                         self.broadcast(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
                             actions: 128,
                             entries: vec![play::PlayerInfo {
-                                uuid,
+                                uuid: self.guests[i].uuid,
                                 show_hat: Some(hat),
                                 ..Default::default()
                             }],
