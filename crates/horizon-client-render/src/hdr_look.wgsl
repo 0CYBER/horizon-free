@@ -1,5 +1,6 @@
 // Horizon's HDR look (docs/design/hdr-linear-light.md, "Horizon's look"): what shines past paper
-// white with HDR on and no shader pack, and how brightly. Its numbers and its maths, as plain
+// white with HDR on and no shader pack, how brightly, and the tone curve that fits light to the
+// display. Its numbers and its maths, as plain
 // functions of their arguments: nothing here names the renderer (no binding, uniform or
 // override), so a shader pack of API 0.2 can list this file as a shared source and draw the
 // same look. The renderer's own shaders start with it (gfx/wgsl_prefix.rs `HDR_LIGHT`).
@@ -18,7 +19,8 @@ const HDR_LIFT_START = vec4<f32>(0.08, 0.14, 0.14, 0.14);
 const HDR_LIFT_FULL = vec4<f32>(0.09, 0.38, 0.38, 0.38);
 const HDR_GAIN = vec4<f32>(1.6, 2.4, 2.8, 4.0);
 // The scene's peak, in multiples of paper white: just above the brightest light the world
-// writes (the sun's disc, white at the very bright tier's 4). The world is mastered for a
+// writes (the sun's disc, white at the very bright tier's 4), and what the tone curve maps onto
+// the display's peak (`hdr_tone_scale`). The world is mastered for a
 // 1000-nit display at ITU-R BT.2408's 203-nit reference white, as HDR10 content usually is:
 // there it shows as written, a dimmer display eases its highlights into its peak, and a
 // brighter one shows it as at 1000, but for the sun's disc.
@@ -122,4 +124,79 @@ fn hdr_sun_lit(color: vec3<f32>, headroom: f32, on: bool) -> Lit {
 // lightmap, so a shade can be brighter than `full`, and lifting doesn't darken.
 fn hdr_unshade(shade: vec3<f32>, lift: f32, full: f32) -> f32 {
     return mix(1.0, max(full / max(max(shade.r, max(shade.g, shade.b)), 1e-4), 1.0), lift);
+}
+
+// SMPTE ST 2084: nits (up to 10000) to the PQ signal.
+fn pq(nits: vec3<f32>) -> vec3<f32> {
+    let y = pow(clamp(nits / 10000.0, vec3(0.0), vec3(1.0)), vec3(0.1593017578125));
+    return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), vec3(78.84375));
+}
+
+// ST 2084's inverse: the PQ signal to nits.
+fn pq_nits(e: vec3<f32>) -> vec3<f32> {
+    let p = pow(clamp(e, vec3(0.0), vec3(1.0)), vec3(1.0 / 78.84375));
+    let y = max(p - 0.8359375, vec3(0.0)) / (18.8515625 - 18.6875 * p);
+    return 10000.0 * pow(y, vec3(1.0 / 0.1593017578125));
+}
+
+// Where the light's range is unknown (`hdr_tone_scale`), the tone curve's knee: up to it light
+// stays as it is. 60% of the headroom, so bright textures keep their detail; at least paper
+// white.
+fn hdr_tone_knee(headroom: f32) -> f32 {
+    return max(0.6 * headroom, 1.0);
+}
+
+// The tone curve, what a `[tonemap]` stage multiplies its pixel's light by: the scale for light
+// whose brightest channel is `top`, in units of paper white `paper` nits, so it ends at most
+// `headroom` (T), the display's peak over paper white. ITU-R BT.2390's EETF in PQ, without its
+// black level lift: the same up to its knee, then a Hermite spline reaching T at the source's
+// peak, past which light shows at T. The brightest channel sets the scale for all three, so
+// light keeps its hue (lava stays orange) and no channel passes T.
+//
+// `scene_peak` is where the light ends. The look's world ends at the scene's peak S
+// (HDR_SCENE_PEAK): its light is the same on every display, light past S is held at S, and
+// where T reaches S that is all, so a display above S shows the world as one at S. The sun's
+// disc is the exception: where T passes S it alone is written past S, up to the sun's peak
+// (`hdr_sun_peak`: T, capped), so there the hold is at the sun's peak and everything up to it
+// shows as written; up to T = S the sun's peak is S. With `scene_peak` 0 the light's range is
+// unknown (light the look didn't lift: the Vanilla look, a shader pack's own): the source
+// follows the display, the peak that puts the EETF's knee at `hdr_tone_knee`, PQ's 10 000
+// nits at most.
+//
+// The two ranges share this one body on purpose. With a curve each, DX12's compiler rounds the
+// spline they would each carry differently, and a few pixels come out a step apart.
+fn hdr_tone_scale(top: f32, scene_peak: f32, headroom: f32, paper: f32) -> f32 {
+    let sun_peak = hdr_sun_peak(headroom);
+    let peak = pq(vec3(headroom * paper)).x;
+    var source: f32;
+    var e: f32;
+    var held = 1.0;
+    if scene_peak > 0.0 {
+        held = min(1.0, sun_peak / max(top, 1e-6));
+        if scene_peak <= headroom {
+            return held;
+        }
+        source = pq(vec3(scene_peak * paper)).x;
+        e = pq(vec3(min(top, scene_peak) * paper)).x / source;
+    } else {
+        if top <= hdr_tone_knee(headroom) {
+            return 1.0;
+        }
+        source = min(3.0 * peak - 2.0 * pq(vec3(hdr_tone_knee(headroom) * paper)).x, 1.0);
+        e = pq(vec3(top * paper)).x / source;
+    }
+    let max_lum = peak / source;
+    // At least 0: past 3 to 1 in PQ the knee would leave the source's range.
+    let ks = max(1.5 * max_lum - 0.5, 0.0);
+    if e >= 1.0 {
+        return headroom / top;
+    }
+    if e <= ks {
+        return held;
+    }
+    let t = (e - ks) / (1.0 - ks);
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let p = (2.0 * t3 - 3.0 * t2 + 1.0) * ks + (t3 - 2.0 * t2 + t) * (1.0 - ks) + (3.0 * t2 - 2.0 * t3) * max_lum;
+    return pq_nits(vec3(p * source)).x / paper / top;
 }

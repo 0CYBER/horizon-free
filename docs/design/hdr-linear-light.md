@@ -270,7 +270,7 @@ pack path keeps those features; #16126 lists each as its own step, and the flip 
 
 **One look file, two users.** `hdr_look.wgsl` holds the look's constants (the tiers' windows and gains,
 `HDR_SCENE_PEAK`, `HDR_SUN_CAP`) and pure functions (brightness, the lift's window and gain, `hdr_unshade`, the sun's
-peak from the headroom), with no engine name in it.
+peak from the headroom, the tone curve), with no engine name in it.
 
 - Until the flip, the default pipelines compile it in: today's bytes and cost. The compiled-in copy is removed at the
   flip (step 16 of #16126); the file survives in the pack. The display reaches it as `Frame.headroom` does a
@@ -421,8 +421,13 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
    - 7b (done): the lift's numbers and maths in `hdr_look.wgsl`, which the renderer's own shaders start with. The
      windows' and gains' uniforms and the duplicated functions are gone, and the writers read the display's
      headroom where they read the sun's peak.
-   - 7c: the lifted world's tone curve in the look file (`scene_peak` and the sun's peak leave `hdr.wgsl`'s
-     parameters).
+   - 7c (done): the tone curve in the look file (`hdr_tone_scale`), which `hdr.wgsl`'s pass calls. `scene_peak` and
+     the sun's peak are gone from that pass's parameters: the look works the sun's peak out of the headroom, and
+     the pass says only whether the look lifted the world. A `[tonemap]` shares the curve's scale, not the pass's
+     bytes: the pass scales the stored colour in gamma and leaves what the curve doesn't move exactly as stored,
+     where a stage takes linear light and returns it, through a decode and an encode. The curve for light of
+     unknown range stays in the same function, and the scene's peak reaches it as a run-time value: DX12's compiler
+     rounds a split curve, and a constant peak, a step apart in a few pixels.
    - 7d: `emission_threshold`, `light_source` and `full_light` in the API and its reference, then wired into the
      material and entity stages.
    - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The gate

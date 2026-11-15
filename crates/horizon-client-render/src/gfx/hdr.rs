@@ -7,7 +7,7 @@
 //! tiers, up to its scene peak), and the tone curve alone fits it to the display's peak
 //! (docs/design/hdr-linear-light.md, step 6a). Lit surfaces get no gain: diffuse white stays at
 //! paper white, and HDR's range above it is the light sources' and the sun's. The sun's disc
-//! alone follows the display past the scene's peak (`SUN_CAP`).
+//! alone follows the display past the scene's peak (`HDR_SUN_CAP`).
 
 /// The swapchain HDR output presents to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -117,18 +117,12 @@ struct Layered {
     params: wgpu::Buffer,
 }
 
-/// The scene's peak, in multiples of paper white: just above the brightest light the world
-/// writes (the sun's disc, white at the very bright tier's 4), and what the tone curve maps
-/// onto the display's peak; light past it (where the sky adds onto the sun) is held at it. The
-/// world is mastered for a 1000-nit display at ITU-R BT.2408's 203-nit reference white, as
-/// HDR10 content usually is: there it shows as written, a dimmer display eases its highlights
-/// into its peak (BT.2390's EETF), and a brighter one shows it as at 1000, but for the sun's
-/// disc (`SUN_CAP`).
+/// The look's scene peak and its sun's cap, in multiples of paper white, as the tests expect
+/// them of the shaders (hdr_look.wgsl `HDR_SCENE_PEAK`, `HDR_SUN_CAP`): the renderer itself
+/// reads neither.
+#[cfg(test)]
 pub const SCENE_PEAK: f32 = 1000.0 / 203.0;
-/// How far the sun's disc may pass the scene's peak, in multiples of paper white: on a display
-/// above `SCENE_PEAK` its white is the display's peak, up to this, 2000 nits at a paper white of
-/// 203. Nothing else the world writes passes the scene's peak, so a brighter display shows a
-/// brighter sun and the same world.
+#[cfg(test)]
 pub const SUN_CAP: f32 = 2000.0 / 203.0;
 
 /// Which pixels of a light source's sprite may shine (`hdr_stats.wgsl`), as a fraction of
@@ -814,12 +808,6 @@ impl Hdr {
         })
     }
 
-    /// The sun's disc's white, in multiples of paper white: the scene's peak, and on a display
-    /// above it the display's, up to `SUN_CAP`.
-    fn sun_peak(&self) -> f32 {
-        (self.peak / self.paper_white.max(1.0)).clamp(SCENE_PEAK, SUN_CAP)
-    }
-
     /// The display's headroom: its peak over paper white, at least 1.
     fn headroom(&self) -> f32 {
         (self.peak / self.paper_white.max(1.0)).max(1.0)
@@ -838,13 +826,9 @@ impl Hdr {
     /// hdr.wgsl's `Params`.
     fn params(&self, world: bool, pq: bool) -> [f32; 12] {
         let paper = self.paper_white.max(1.0);
-        // Only Horizon's lifted world is known to end at the scene's peak; elsewhere (HDR
-        // Lighting off, a pack's own light, the title) the curve's source follows the display.
-        let (scene_peak, sun_peak) = if world && self.lighting {
-            (SCENE_PEAK, self.sun_peak())
-        } else {
-            (0.0, 0.0)
-        };
+        // Only Horizon's lifted world is known to end at the look's scene peak; elsewhere (the
+        // Vanilla look, a pack's own light, the title) the curve's source follows the display.
+        let look = f32::from(u8::from(world && self.lighting));
         let c = self.calibration;
         [
             paper / 80.0,
@@ -852,9 +836,9 @@ impl Hdr {
             f32::from(u8::from(pq)),
             self.black.clamp(0.0, paper),
             self.ui,
-            scene_peak,
-            sun_peak,
-            // Pads `calibration` to its 16-byte alignment.
+            look,
+            // Pad `calibration` to its 16-byte alignment.
+            0.0,
             0.0,
             c.map_or(0.0, |c| c.step as f32),
             c.map_or(0.0, |c| c.nits),
@@ -1196,26 +1180,25 @@ var<private> params: ReferenceParams;
     }
 
     /// The world's writers read no gain from the display (docs/design/hdr-linear-light.md, step
-    /// 6a). Of the display only its headroom reaches them, for the sun's disc's peak, as the
-    /// tone curve holds light at it: the scene's up to a display at it, so there nothing
-    /// differs; above it the display's, up to `SUN_CAP`.
+    /// 6a). Of the display only its headroom reaches them, for the sun's disc's peak, and the
+    /// tone curve, which holds light at that peak: the look works both out of the headroom
+    /// (hdr_look.wgsl `hdr_sun_peak`), so the renderer says only whether the look is on.
     #[test]
     fn the_writers_light_is_the_same_on_every_display_but_the_suns_disc() {
         let Some((device, queue)) = gpu() else {
             return;
         };
         let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
-        let (scene, cap) = (super::SCENE_PEAK, super::SUN_CAP);
-        for (paper, peak, sun) in [
-            (203.0, 300.0, scene),
-            (203.0, 600.0, scene),
-            (203.0, 1000.0, scene),
-            (400.0, 600.0, scene),
-            (480.0, 200.0, scene),
-            (203.0, 1500.0, 1500.0 / 203.0),
-            (203.0, 2000.0, cap),
-            (203.0, 4000.0, cap),
-            (80.0, 10000.0, cap),
+        for (paper, peak) in [
+            (203.0, 300.0),
+            (203.0, 600.0),
+            (203.0, 1000.0),
+            (400.0, 600.0),
+            (480.0, 200.0),
+            (203.0, 1500.0),
+            (203.0, 2000.0),
+            (203.0, 4000.0),
+            (80.0, 10000.0),
         ] {
             (hdr.paper_white, hdr.peak) = (paper, peak);
             assert_eq!(
@@ -1224,7 +1207,11 @@ var<private> params: ReferenceParams;
                 "{paper}/{peak}"
             );
             let params = hdr.params(true, false);
-            assert_eq!((params[5], params[6]), (scene, sun), "{paper}/{peak}");
+            assert_eq!(
+                (params[1], params[5]),
+                ((peak / paper).max(1.0), 1.0),
+                "{paper}/{peak}"
+            );
         }
         // The title, and frames Horizon doesn't light (the Vanilla look, a pack drawing):
         // nothing says where their light ends, so the curve's source follows the display.
