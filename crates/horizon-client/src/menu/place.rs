@@ -206,6 +206,17 @@ impl Menu {
             super::Role::MerchantResult | super::Role::Output | super::Role::StoneResult
         ) || (role == super::Role::CombineResult && self.kind == Kind::Smithing);
         if rest {
+            // The smithing notice describes the output that moved, not the empty remainder
+            // passed to vanilla's onTake for its crafted-item accounting.
+            if role == super::Role::CombineResult
+                && self.kind == Kind::Smithing
+                && self.item_smithed_hook
+                && env.loop_context.side() == super::LoopSide::Server
+                && clicked.count > stack.count
+            {
+                let inputs = [0, 1, 2].map(|i| self.containers[super::MAIN][i].clone());
+                self.item_smithed.push((inputs, clicked.clone()));
+            }
             return self.on_take(env, index, stack);
         }
         let left = if self.slots[index].role == super::Role::CraftResult {

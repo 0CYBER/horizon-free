@@ -209,7 +209,14 @@ impl Game<'_> {
             return None;
         }
         match self.container_kind() {
-            None if self.container.is_none() => Some(BookType::Crafting),
+            None if self.container.is_none()
+                && self
+                    .remote
+                    .as_ref()
+                    .is_none_or(|r| r.menu.as_ref().is_none()) =>
+            {
+                Some(BookType::Crafting)
+            }
             Some(BlockEntity::Furnace(f)) => Some(match f.kind {
                 FurnaceKind::Furnace => BookType::Furnace,
                 FurnaceKind::BlastFurnace => BookType::BlastFurnace,

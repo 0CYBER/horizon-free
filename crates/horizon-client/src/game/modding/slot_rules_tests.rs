@@ -91,11 +91,10 @@ fn a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order() {
         with_game(|game| {
             reset(None, false);
             let mut menu = chest(("minecraft:stone", 8));
-            // Eight stone into an empty slot: placement is asked (`Slot.mayPlace`), then the
-            // slot's capacity (`Slot.getMaxStackSize`), each for slot 0 and the cursor's stack.
+            // Placement and capacity share one rule answer for the same slot and stack.
             assert_eq!(pickup(game, &mut menu), (8, 0));
             let stone = |_| (0, "minecraft:stone".to_owned(), 8);
-            assert_eq!(asked(), [(); 2].map(stone));
+            assert_eq!(asked(), [stone(())]);
             // Taking the stack back asks once: `Slot.allowModification` is `mayPickup` and
             // `mayPlace` of the slot's own stack, eight stone in slot 0.
             reset(None, false);
@@ -232,16 +231,16 @@ fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
             // The hub's click ran with the LAN host lifted out of the game, and is back. The
             // `Host` read meanwhile answered as if no LAN were open: the guest is not found.
             assert!(game.lan.is_some());
-            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [false, false]);
+            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [false]);
             assert!(game.player(12).is_some());
             // The local click of the same state asks the same, in the same order.
             reset(None, false);
             let mut menu = chest(("minecraft:stone", 8));
             assert_eq!(pickup(game, &mut menu), (8, 0));
             assert_eq!(lan, asked());
-            assert_eq!(lan.len(), 2);
+            assert_eq!(lan.len(), 1);
             // A click made with the game whole (the local route) reaches the guest.
-            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [true, true]);
+            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [true]);
             let placed = game.world.block_entities.get(&pos).unwrap().slots()[0]
                 .as_ref()
                 .map_or(0, |s| s.count);
