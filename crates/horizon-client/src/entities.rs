@@ -2589,7 +2589,7 @@ mod fire_environment_tests {
         let mut heard = Vec::new();
         let result = protected.environment_tick_with_hook(
             &mut world,
-            &facts,
+            facts,
             assets.registry,
             &can_hurt,
             |_, damage| {
@@ -2695,7 +2695,7 @@ mod fire_environment_tests {
         stand.fire_ticks = 20;
         let mut heard = Vec::new();
         assert_eq!(
-            stand.environment_tick_with_hook(&mut world, &facts, assets.registry, |_, damage| {
+            stand.environment_tick_with_hook(&mut world, facts, assets.registry, |_, damage| {
                 heard.push(damage.to_owned());
                 damage == "minecraft:on_fire"
             }),
@@ -2706,7 +2706,7 @@ mod fire_environment_tests {
         assert_eq!(stand.fire_ticks, 19);
         stand.fire_ticks = 20;
         assert_eq!(
-            stand.environment_tick(&world, &facts, assets.registry),
+            stand.environment_tick(&world, facts, assets.registry),
             Some("minecraft:on_fire")
         );
     }

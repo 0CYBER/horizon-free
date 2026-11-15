@@ -5706,7 +5706,7 @@ mod tests {
             (21.0, depth, depth),
             (25.5, 0.0, 0.0),
         ] {
-            let mut player = PlayerMotion::new(&resources, Vec3::new(x, 4.0, 20.5)).unwrap();
+            let mut player = PlayerMotion::new(resources, Vec3::new(x, 4.0, 20.5)).unwrap();
             player.ground.on_ground = true;
             let mut w = MotionWorld {
                 tag_items: None,
@@ -5716,9 +5716,9 @@ mod tests {
                 entities: &[],
                 player: &mut player,
                 scene: &mut scene,
-                assets: &assets,
-                collision_binding: &binding,
-                resources: &resources,
+                assets,
+                collision_binding: binding,
+                resources,
                 health: &resources.health,
             };
             w.fluid_base_tick().unwrap();
