@@ -53,6 +53,51 @@ flag. A zombified piglin schedules its first anger sound and next alert when it 
 from none, not when switching between targets. Targeting a player does not count as player damage.
 
 
+## Part state
+
+An entity Part that keeps a value on each entity of its type (a robot's charge, a mob's mood)
+declares it with `EntityPartState` and attaches with `r.entity_part_with_state(kind, part)`, beside
+`entity_part`. The value lives in the entity's attachment map, saved with the entity through the
+attachment codec and kept by transactions, through the same calls and rules as
+[block entity Part state](block-entity-types.md#part-state).
+
+```rust,ignore
+impl EntityPartState for Robot {
+    type Data = u32;
+    const DATA: &'static AttachmentType<u32> = &CHARGE;
+}
+r.entity_part_with_state("mymod:robot", Robot)?;
+
+let full = Robot::edit_state(host, robot, |_, charge| {
+    *charge += 1;
+    *charge >= 100
+})?;
+```
+
+- `state` and `state_existing` read a snapshot and insert nothing; `edit_state` runs in a nested
+  transaction of its own, as for block entities.
+- Every call checks the handle first:
+  - a handle of another world open, or of an entity that was removed (or whose removal waits for
+    the root commit), unloaded or moved under a new id, gives `PartStateError::Stale`, and
+    `edit_state` creates no map;
+  - an entity resident in another level than the host's gives `OtherLevel`;
+  - an entity out of its level's lists for its own tick gives `HolderBusy`.
+- A reloaded entity has a new handle, which reads the saved value; a value without a codec is gone.
+- Changing level, a lone mob or general entity is rebuilt under a new id: the old handle is `Stale`,
+  and the state arrives with the entity under its new id. A vehicle a player rides keeps its id, and
+  its handle still resolves in the new level. Travel fires no join or leave hook, and Part state
+  expects none: a mod that needs continuity follows the entity's UUID, not its `EntityRef`.
+- Inside an action that is rolled back after the entity changed level, the state stays with the
+  entity under its new id, and the old handle stays `Stale`. The map's own writes inside the action
+  roll back, and the old level's attachment queries still see the entity until the action ends.
+- Only mob types (vanilla and mod) and mod general entity types keep Part state, the kinds whose
+  entity Parts the game consults. The type is checked once every type is known, when the game loads:
+  `minecraft:player` (a player's respawn identity is not decided yet), every other vanilla family
+  (boats, minecarts, items, projectiles, armor stands...) and an unknown id refuse the load with
+  `PartStateRefusal::EntityKind`, naming the type. `entity_part` itself checks no type.
+- The declaration is refused at the call as for block entities, copying on death included. Like
+  `entity_part`, `entity_part_with_state` is native-only; Part state is server-side for now.
+
 ## Brain behaviors
 
 `EntityPart::register_behaviors` receives a `BehaviorRegistrar` whenever a brain-driven species builds or rebuilds its brain. Use `add(activity, priority, min_duration, max_duration, requirements, behavior)` to join a fresh `Behavior` to the species' supported activity. Registration returns a `BehaviorRefusal` for an unsupported activity or invalid duration. Behaviors start and stop in vanilla `Brain.tick` order: priority, activity bucket, then insertion order, with mod behaviors after vanilla behaviors in the same bucket. Their state is not saved. `BehaviorCx` provides the mob, host, random source and typed brain memory access; each species refuses memories it does not support.
