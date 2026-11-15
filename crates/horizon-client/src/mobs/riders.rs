@@ -1067,6 +1067,7 @@ mod tests {
     /// spider takes the spider's fixed seat — 0.3125 of its scale, and a cave
     /// spider's 0.21875 — and a wider one the type's default.
     #[test]
+    #[ignore = "daily"]
     fn a_spider_sits_by_its_own_rule_on_a_narrow_vehicle() {
         // World-gated: without the extracted data the body never runs.
         let _ = crate::mobs::world::with_test_world(&[], |_, types| {

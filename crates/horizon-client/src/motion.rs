@@ -3137,6 +3137,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_glide_that_just_ended_moves_slowly_until_the_pose_changes() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             eprintln!("skipped glide exit regression: prepared resources unavailable");
@@ -3160,6 +3161,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn sword_sweep_requires_charge_ground_and_slow_horizontal_movement() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             eprintln!("skipped sword sweep regression: prepared resources unavailable");
@@ -3188,6 +3190,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn max_health_modifier_changes_clamp_health() {
         // #8573: LivingEntity.onAttributeUpdated clamps health to max_health
         // for every modifier change, with no explicit clamp call.
@@ -3261,6 +3264,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn attribute_bases_survive_a_save_and_reload() {
         // #4425: LivingEntity.addAdditionalSaveData writes AttributeMap.pack
         // and readAdditionalSaveData applies it (before the health).
@@ -3351,6 +3355,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn player_stands_walks_sneaks_and_jumps_on_ghast() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3425,6 +3430,7 @@ mod tests {
     /// `MovingPistonBlock.getCollisionShape`: a block halfway through a push
     /// up is solid at its moving position, so a player lands on it.
     #[test]
+    #[ignore = "daily"]
     fn a_player_lands_on_a_block_a_piston_is_moving() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3489,6 +3495,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_lava_cauldron_burns_the_player_inside_it() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3532,6 +3539,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_water_cauldron_puts_out_a_burning_player() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3586,6 +3594,7 @@ mod tests {
     /// `PowderSnowBlock.entityInside`: a burning player in powder snow asks
     /// for the block to be destroyed, and EXTINGUISH puts the fire out.
     #[test]
+    #[ignore = "daily"]
     fn a_burning_player_melts_powder_snow() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3641,6 +3650,7 @@ mod tests {
     /// flying player (whose own client never lands) is still hurt by a fall it
     /// carries, as `Player.makeStuckInBlock` ignores it.
     #[test]
+    #[ignore = "daily"]
     fn a_server_player_landing_in_a_web_or_bush_takes_no_fall_damage() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3702,6 +3712,7 @@ mod tests {
     /// it into the column is not counted (`fall_one_cm`) and the stone under
     /// the column does not hurt. The same sink with no snow in it is hurt.
     #[test]
+    #[ignore = "daily"]
     fn a_server_player_sinking_in_powder_snow_takes_no_fall_damage() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3768,6 +3779,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn standing_in_a_wither_rose_asks_for_its_effect() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3846,6 +3858,7 @@ mod tests {
     /// in powder snow and thaws out of it (`LivingEntity.aiStep`), or the frostbite overlay,
     /// which reads `ticks_frozen`, never shows.
     #[test]
+    #[ignore = "daily"]
     fn a_passenger_in_powder_snow_freezes_and_thaws() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3914,6 +3927,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn walking_through_powder_snow_asks_for_a_snowflake() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4011,6 +4025,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn server_travel_moves_only_the_velocity() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4074,6 +4089,7 @@ mod tests {
     /// (`handleMovePlayer` gives the server copy its delta movement), so the
     /// loss is the speed the glide actually flew at.
     #[test]
+    #[ignore = "daily"]
     fn a_glide_into_a_wall_hurts_by_the_speed_it_lost() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4124,6 +4140,7 @@ mod tests {
     /// it (`handleFallFlyingCollisions`' playSound runs on both sides, the
     /// hurt is the server's alone), so the glider hears it.
     #[test]
+    #[ignore = "daily"]
     fn a_clients_own_glide_into_a_wall_plays_the_fall_sound_and_does_not_hurt_it() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4183,6 +4200,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn spectator_scroll_speed_controls_horizontal_and_vertical_flight() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4225,6 +4243,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resident_spectator_flight_ignores_solid_and_climbable_blocks() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4286,6 +4305,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn creative_and_spectator_preserve_hunger_when_switching_from_survival() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -4371,6 +4391,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -4572,6 +4593,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_glide_tick_matches_vanilla_to_the_bit() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4631,6 +4653,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_glide_that_is_not_diving_keeps_the_fall_distance_at_one() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4678,6 +4701,7 @@ mod tests {
     /// none while standing (gravity still moves the player every tick), one
     /// per `nextStep` metre while walking.
     #[test]
+    #[ignore = "daily"]
     fn resident_water_landing_cancels_a_preset_fall() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4723,6 +4747,7 @@ mod tests {
     /// `Player.doWaterSplashEffect`: a spectator entering water makes no splash
     /// sound, particles or game event; everyone else does.
     #[test]
+    #[ignore = "daily"]
     fn a_spectator_entering_water_makes_no_splash() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4754,6 +4779,7 @@ mod tests {
     /// does (`Entity.hurt` on a client), so a server that cancels fall damage
     /// leaves the screen still.
     #[test]
+    #[ignore = "daily"]
     fn a_clients_own_fall_does_not_hurt_it() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4807,6 +4833,7 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "daily"]
     fn slow_falling_clears_the_fall_distance_so_landing_does_not_hurt() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4846,6 +4873,7 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "daily"]
     fn a_server_copy_of_a_riptide_spin_counts_down_and_stands_again() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4890,6 +4918,7 @@ mod tests {
     /// tick the server checks the player's moves with a 0.06 × 0.18 box, not
     /// the 0.6 × 1.8 one that sent a small player back from every wall.
     #[test]
+    #[ignore = "daily"]
     fn a_server_copy_takes_its_new_scale_box_the_next_tick() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4937,6 +4966,7 @@ mod tests {
     /// (`Entity.updateSwimming` needs `!isPassenger()`) and `updatePlayerPose`
     /// sits them up, eye at 1.62 instead of the swim's 0.4.
     #[test]
+    #[ignore = "daily"]
     fn a_passenger_stops_swimming_and_stands() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4969,6 +4999,7 @@ mod tests {
     /// #4509: a cushion seat clips the feet into the floor, so `can_fit_pose`
     /// rejects standing and would leave a swim pose; sit up anyway.
     #[test]
+    #[ignore = "daily"]
     fn a_swimming_passenger_sits_up_even_when_standing_does_not_fit() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5001,6 +5032,7 @@ mod tests {
     /// The movement prediction plays a tick again on a copy: what the copy
     /// does (sprinting edits the speed attribute) stays in the copy.
     #[test]
+    #[ignore = "daily"]
     fn a_copied_player_moves_on_its_own() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5034,6 +5066,7 @@ mod tests {
     /// boat drowned and suffocated a player whose own screen showed them
     /// sitting up. Getting out starts the swim again, so it cannot stick off.
     #[test]
+    #[ignore = "daily"]
     fn a_riding_guest_keeps_no_swim_in_the_fluid_phase() {
         // The boxes the flag picks, before the prepared resources below: the
         // swim's eye is the one at the waterline. Nothing here needs assets.
@@ -5083,6 +5116,7 @@ mod tests {
         assert!(w.player.swimming);
     }
     #[test]
+    #[ignore = "daily"]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5125,6 +5159,7 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "daily"]
     fn a_landing_glide_lasts_a_tick_so_a_jump_keeps_its_speed() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5173,6 +5208,7 @@ mod tests {
     /// clear clears it before the server's `SetEntityData` and the movement of
     /// the tick after the landing is air travel where vanilla still glides.
     #[test]
+    #[ignore = "daily"]
     fn a_server_client_glides_until_the_servers_flag_clears() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5232,6 +5268,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resident_water_and_lava_are_not_treated_as_air() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             eprintln!("skipping resident water/lava test: prepared resources unavailable");
@@ -5489,6 +5526,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resident_swimming_uses_previous_eyes_and_requires_water_at_the_feet() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5563,6 +5601,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resident_fire_precedes_first_tick_lava_and_water_extinguishing() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5616,6 +5655,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resident_bubble_columns_and_nautilus_preserve_their_air_rules() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5687,6 +5727,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resident_mixed_fluids_use_lava_height_for_ground_jumps() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5741,6 +5782,7 @@ mod tests {
     /// that surface less 4 deep in each fluid it touches, from its own bottom, as a mob is
     /// (`mobs::living::fluid_heights`): lava, water, both where they meet (a tie), or neither.
     #[test]
+    #[ignore = "daily"]
     fn resident_fluid_heights_are_measured_from_the_feet() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             eprintln!("Prepared resources unavailable; the player fluid heights did not run");
@@ -5790,6 +5832,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn footsteps_follow_the_walked_distance_not_the_tick() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5844,6 +5887,7 @@ mod tests {
     /// it with the sprint key and stops it only on a vanilla stop condition.
     /// Releasing the key while swimming keeps the sprint and its swim speed.
     #[test]
+    #[ignore = "daily"]
     fn a_sprint_survives_the_sprint_key_coming_up_while_swimming() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5913,6 +5957,7 @@ mod tests {
     /// while the sprint state holds, so a jump taken after the sprint key
     /// comes up is still a sprint jump.
     #[test]
+    #[ignore = "daily"]
     fn a_sprint_jump_keeps_its_impulse_when_the_sprint_key_comes_up() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -5969,6 +6014,7 @@ mod tests {
     /// double-tap of forward, from starting a sprint; an item that allows it
     /// (a spear) does not.
     #[test]
+    #[ignore = "daily"]
     fn an_item_in_use_stops_a_sprint_from_starting_unless_it_allows_sprinting() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -6019,6 +6065,7 @@ mod tests {
     /// (`Player.isMobilityRestricted`) keeps the sprint key from starting a
     /// sprint and stops a running one (`shouldStopRunSprinting`).
     #[test]
+    #[ignore = "daily"]
     fn blindness_stops_a_sprint_and_keeps_one_from_starting() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -6062,6 +6109,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn server_forced_flight_survives_without_permission_to_toggle_it() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             eprintln!("skipped forced flight: prepared resources unavailable");
@@ -6118,6 +6166,7 @@ mod tests {
     /// speed, doubled while the sprint state holds. The sprint key starts the
     /// state; releasing it does not change the speed.
     #[test]
+    #[ignore = "daily"]
     fn the_flight_speed_follows_the_sprint_state_not_the_sprint_key() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -6177,6 +6226,7 @@ mod tests {
     /// `updateFallFlying` sees last tick's count plus one: the glider wears
     /// on the 20th glide tick, not the 19th.
     #[test]
+    #[ignore = "daily"]
     fn a_glider_wears_on_the_twentieth_glide_tick() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -6215,6 +6265,7 @@ mod tests {
     /// chunk below is not loaded skips gravity and falls at 0.1 a tick
     /// (above `getMinY`), before the 0.98 vertical drag.
     #[test]
+    #[ignore = "daily"]
     fn a_client_over_an_unloaded_chunk_falls_at_a_tenth() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -6253,6 +6304,7 @@ mod tests {
     /// ladder whether it sneaks or not. The server's player (`ServerPlayer` has no override) only
     /// looks at the sneak.
     #[test]
+    #[ignore = "daily"]
     fn a_flying_client_does_not_stop_sliding_down_a_ladder_by_sneaking() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;

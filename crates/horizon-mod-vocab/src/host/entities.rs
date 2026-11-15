@@ -13,6 +13,14 @@ pub trait EntitiesHost {
     #[access(WorldOnly)]
     fn entity(&self, id: u32) -> Option<EntityRef>;
     /// Side: both.
+    /// Where the entity `entity` names is now, as its Part state (`EntityPartState`) checks it:
+    /// resident in the level this host is in, out of its lists for its own tick, resident in
+    /// another level, or gone (removed or its removal pending, unloaded, moved under a new
+    /// id, or a handle of another world open). On a client, in place for an entity the
+    /// client has in the level it shows.
+    #[access(WorldOnly)]
+    fn entity_residency(&self, entity: EntityRef) -> EntityResidency;
+    /// Side: both.
     /// The level `dimension` (`minecraft:the_nether`) as a handle: on a client,
     /// the level it shows, whatever the server calls it, and each level the
     /// server opened for viewing (`horizon:levels`) while that view is open. A

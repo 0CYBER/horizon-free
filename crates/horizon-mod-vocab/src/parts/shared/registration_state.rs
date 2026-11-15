@@ -21,6 +21,7 @@ pub(crate) struct Installed {
     pub(crate) attribute_widenings: Vec<super::attributes::AttributeBoundsWidening>,
     pub(crate) general_entity_types: Vec<crate::parts::entity_types::GeneralEntityTypeDeclaration>,
     pub(crate) spawn_placements: Vec<SpawnPlacementDeclaration>,
+    pub(crate) entity_part_states: Vec<crate::entity::part_state::EntityPartStateDeclaration>,
     pub(crate) biome_modifiers: Vec<BiomeModifierDeclaration>,
     pub(crate) biome_regions: Vec<BiomeRegionDeclaration>,
     pub(crate) datapack_registries:

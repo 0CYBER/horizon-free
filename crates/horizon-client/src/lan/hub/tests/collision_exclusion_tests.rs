@@ -67,6 +67,7 @@ fn walk(
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_server_checks_a_guests_moves_through_the_same_exclusions_as_its_client() {
     let Some(fixture) = crate::test_fixtures::vanilla() else {
         return;

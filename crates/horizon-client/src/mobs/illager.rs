@@ -957,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn spellcasters_remember_an_unseen_player() {
         use crate::mobs::world::{test_player, with_test_world};
         let ran = with_test_world(&[], |w, types| {
@@ -1002,7 +1003,7 @@ mod tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     fn pillager() -> Mob {
@@ -1056,6 +1057,7 @@ mod tests {
     /// sturdy up face, not for a full cube. Soul sand is 14/16 high and still
     /// supports a fang, which a full-collision test drops into the block.
     #[test]
+    #[ignore = "daily"]
     fn a_fang_stands_on_a_soul_sand_floor() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -1081,7 +1083,7 @@ mod tests {
             // the first sturdy block and the fang sits at 65.
             assert_eq!(fang_floor(w, 0.5, 0.5, 64.0, 65.875), Some(65.0));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Vindicator.setCustomName` latches `isJohnny` the first time the name is
@@ -1154,6 +1156,7 @@ mod tests {
     /// `TargetingConditions.forNonCombat().range(16)`: an invisible sheep at
     /// five blocks is out of range, one at two blocks is not.
     #[test]
+    #[ignore = "daily"]
     fn an_invisible_blue_sheep_is_not_wololoed_from_five_blocks() {
         use crate::mobs::world::with_test_world;
         let mut outcomes = Vec::new();
@@ -1202,6 +1205,7 @@ mod tests {
     /// reads the flag, so a flagged sheep at fourteen blocks is out of range
     /// (0.07 of 16, floored to 2) while a visible one is picked.
     #[test]
+    #[ignore = "daily"]
     fn a_flagged_invisible_blue_sheep_is_not_wololoed_from_fourteen_blocks() {
         use crate::mobs::world::with_test_world;
         let mut outcomes = Vec::new();

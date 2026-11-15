@@ -258,8 +258,14 @@ pub(super) fn run_loading(
     started: Instant,
 ) -> Result<()> {
     let progress = Progress::new();
-    let (receiver, loader) =
-        startup_menu::spawn_loader(&options, &settings, &vanilla_root, started, &progress)?;
+    let (receiver, loader) = startup_menu::spawn_loader(
+        &options,
+        &settings,
+        mods::LoadRole::startup(options.execution_role),
+        &vanilla_root,
+        started,
+        &progress,
+    )?;
     let menu = startup_menu::StartupMenu::new(&options, pack_error.as_deref())?;
     let loading = Loading {
         window: None,

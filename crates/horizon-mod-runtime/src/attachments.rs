@@ -789,6 +789,13 @@ impl Attachments {
         }
     }
 
+    /// Detach the publisher without retiring it, for a caller that retires it later: the
+    /// index keeps the map's rows as they are now, and later writes no longer reach them.
+    #[doc(hidden)]
+    pub fn take_index_binding(&mut self) -> Option<AttachmentRegistration> {
+        self.registration.take()
+    }
+
     /// Install this authoritative map in key order, invalidating any prior binding
     /// for the holder. Rebind a detached COW map before its first attachment write.
     /// The weak publisher does not keep the dimension alive. Map Drop never unloads;

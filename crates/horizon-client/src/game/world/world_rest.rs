@@ -145,6 +145,9 @@ pub(super) fn load_world_rest(
             }
             mob_data.register_mod_spawn(&declaration.id, &declaration.rule);
         }
+        crate::game::entity_part_state::refuse_entity_part_state_kinds(|kind| {
+            mob_types.contains_key(kind)
+        })?;
         mob_data.cem = std::sync::RwLock::new(Arc::new(if draws {
             horizon_client::mobs::cem::CemModels::load(resource_root.source(), &mob_types)
         } else {

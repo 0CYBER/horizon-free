@@ -389,6 +389,7 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
 pub(super) fn spawn_loader(
     options: &Options,
     settings: &Settings,
+    load_role: mods::LoadRole,
     vanilla_root: &std::path::Path,
     started: Instant,
     progress: &Progress,
@@ -399,7 +400,6 @@ pub(super) fn spawn_loader(
     let mut mod_sources = options.mods.clone();
     mod_sources.capture_code_switches(&settings.mods.disabled);
     let world = launch_world(options).map(str::to_owned);
-    let role = options.execution_role;
     let progress = progress.clone();
     let handle = horizon_guest_stack::builder()
         .name("resource-loader".into())
@@ -421,7 +421,7 @@ pub(super) fn spawn_loader(
                         &settings,
                         started,
                         true,
-                        role,
+                        load_role,
                         &progress,
                         &mut |gui, root| {
                             let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
@@ -1458,6 +1458,7 @@ impl Loading {
         let (receiver, handle) = spawn_loader(
             options,
             &self.settings,
+            options.execution_role.into(),
             &self.vanilla_root,
             self.started,
             &self.progress,

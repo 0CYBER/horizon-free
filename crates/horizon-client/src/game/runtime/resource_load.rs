@@ -162,11 +162,12 @@ pub(super) struct GameplayTables {
 pub(super) fn load_core(
     resources: &horizon_assets::resource_source::ResourceRoot,
     additional_data: &[Arc<horizon_client::datapack::DataPack>],
-    role: execution_role::ExecutionRole,
+    load_role: mods::LoadRole,
     parallel: bool,
     progress: &Progress,
     launch_world: Option<&str>,
 ) -> std::result::Result<std::result::Result<CoreTables, String>, String> {
+    let role = load_role.execution;
     let root = resources.prepared();
     let headless = !role.is_client();
     // The model library reads every file under `assets/` and needs no
@@ -199,7 +200,8 @@ pub(super) fn load_core(
         Err(e) => return Ok(Err(e.to_string())),
     };
     progress.set(1);
-    let item_data = Arc::new(mods::load_item_data(root, role).map_err(|e| e.to_string())?);
+    let item_data =
+        Arc::new(mods::load_item_data(root, role, load_role.owning).map_err(|e| e.to_string())?);
     let registry = assets.registry;
     let entity_models_for_render = entity_models.clone();
     let (render, gameplay, visibility, biomes, environment, collision) = std::thread::scope(
@@ -538,10 +540,12 @@ pub(super) fn load_resources(
     settings: &Settings,
     started: Instant,
     menu: bool,
-    role: execution_role::ExecutionRole,
+    role: impl Into<mods::LoadRole>,
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
 ) -> Result<Loaded> {
+    let load_role: mods::LoadRole = role.into();
+    let role = load_role.execution;
     let mut root = resolved.prepared().to_path_buf();
     let headless = !role.is_client();
     let (runtime_sprites, texture_atlases) = if headless {
@@ -606,7 +610,14 @@ pub(super) fn load_resources(
                 // it waits for the core that loaded.
                 let early = launch_world.filter(|_| root == vanilla_root);
                 startup::time("core", || {
-                    load_core(&resolved, &additional_data, role, parallel, progress, early)
+                    load_core(
+                        &resolved,
+                        &additional_data,
+                        load_role,
+                        parallel,
+                        progress,
+                        early,
+                    )
                 })
             });
             let ui = load_ui(resolved.source()).map(|ui| offer(ui, &root));

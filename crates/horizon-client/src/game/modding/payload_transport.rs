@@ -51,7 +51,7 @@ impl Game<'_> {
             .payload_endpoint();
         self.queue_current_payload(endpoint, id, bytes)
     }
-    fn queue_current_payload(
+    pub(super) fn queue_current_payload(
         &mut self,
         endpoint: Endpoint,
         id: &PayloadId,
