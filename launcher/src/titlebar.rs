@@ -104,6 +104,52 @@ pub fn render(theme: &Theme, window: &Window) -> Option<Div> {
         .border_color(theme.outline)
         .child(drag);
 
+    // Hypr Neon's night: lit dots (amber, green, red), each glowing in its colour, in place of
+    // the buttons.
+    if theme.dark && theme.edge.is_some() {
+        let dot = |id: &'static str, c: u32| {
+            let c = gpui::Hsla::from(gpui::rgb(c));
+            div()
+                .id(id)
+                .group(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(px(22.))
+                .h_full()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .size(px(12.))
+                        .rounded_full()
+                        .bg(c)
+                        .shadow(vec![gpui::BoxShadow {
+                            color: c.opacity(0.7),
+                            offset: gpui::point(px(0.), px(0.)),
+                            blur_radius: px(8.),
+                            spread_radius: px(0.),
+                            inset: false,
+                        }])
+                        .group_hover(id, |s| s.opacity(0.75)),
+                )
+        };
+        let mut dots = div().flex().flex_none().items_center().h_full().mr(px(8.));
+        if controls.minimize {
+            dots = dots.child(
+                dot("window-minimize", 0xfebc2e).on_click(|_, window, _| window.minimize_window()),
+            );
+        }
+        if controls.maximize {
+            dots = dots.child(
+                dot("window-maximize", 0x28c840).on_click(|_, window, _| window.zoom_window()),
+            );
+        }
+        dots = dots
+            .child(dot("window-close", 0xff5f57).on_click(|_, window, _| window.remove_window()));
+        return Some(bar.child(dots));
+    }
+
     if controls.minimize {
         let color = theme.ink_soft;
         let hover = theme.raised;
@@ -325,11 +371,14 @@ pub fn apply_appearance(_: &Window, _: Appearance) {}
 mod windows {
     use super::*;
     use crate::glass::{self, Kind};
+    use crate::glass_ui::{color, hover_edge, white};
     use crate::{blocks, mark};
-    use gpui::{div, prelude::*, px, FontWeight, Stateful, WindowControlArea};
+    use gpui::{div, prelude::*, px, FontWeight, Hsla, SharedString, Stateful, WindowControlArea};
 
     const HEIGHT: f32 = 32.;
-    const BUTTON_WIDTH: f32 = 46.;
+    const BUTTON_WIDTH: f32 = 30.;
+    const BUTTON_HEIGHT: f32 = 26.;
+    const RADIUS: f32 = 8.;
     const RESIZE_INSET: f32 = 5.;
 
     #[derive(Clone, Copy)]
@@ -357,13 +406,16 @@ mod windows {
         }
     }
 
-    fn control_icon(control: Control, maximized: bool, theme: &Theme) -> Div {
-        let square = || {
+    fn control_icon(control: Control, maximized: bool, rest: Hsla, hover: Hsla) -> Div {
+        let name = control.name();
+        let square = move || {
             div()
                 .absolute()
-                .size(px(10.))
+                .size(px(9.))
+                .rounded(px(1.5))
                 .border_1()
-                .border_color(theme.ink_soft)
+                .border_color(rest)
+                .group_hover(name, move |s| s.border_color(hover))
         };
         let icon = div().relative().size(px(14.));
         match control {
@@ -374,33 +426,37 @@ mod windows {
                     .top(px(7.))
                     .w(px(10.))
                     .h(px(1.))
-                    .bg(theme.ink_soft),
+                    .bg(rest)
+                    .group_hover(name, move |s| s.bg(hover)),
             ),
             Control::Maximize if maximized => icon
                 .child(
                     div()
                         .absolute()
                         .left(px(4.))
-                        .top_0()
-                        .size(px(10.))
+                        .top(px(1.))
+                        .size(px(9.))
+                        .rounded(px(1.5))
                         .border_t_1()
                         .border_r_1()
-                        .border_color(theme.ink_soft),
+                        .border_color(rest)
+                        .group_hover(name, move |s| s.border_color(hover)),
                 )
-                .child(square().left(px(1.)).top(px(3.))),
-            Control::Maximize => icon.child(square().left(px(2.)).top(px(2.))),
-            Control::Close => {
-                let hover_color = theme.page;
-                icon.child(
-                    blocks::icon("close", 14., theme.ink_soft)
-                        .group_hover("window-close", move |style| style.text_color(hover_color)),
-                )
-            }
+                .child(square().left(px(1.)).top(px(4.))),
+            Control::Maximize => icon.child(square().left(px(2.5)).top(px(2.5))),
+            Control::Close => icon.child(
+                blocks::icon("close", 14., rest).group_hover(name, move |s| s.text_color(hover)),
+            ),
         }
     }
 
-    fn control_button(control: Control, theme: &Theme, maximized: bool) -> Stateful<Div> {
-        let theme = *theme;
+    /// Hypr Neon's window buttons: lit dots (amber, green, red), each glowing in its colour.
+    fn dot_button(control: Control) -> Stateful<Div> {
+        let c = match control {
+            Control::Minimize => 0xfebc2e,
+            Control::Maximize => 0x28c840,
+            Control::Close => 0xff5f57,
+        };
         div()
             .id(control.name())
             .group(control.name())
@@ -408,20 +464,75 @@ mod windows {
             .flex_none()
             .items_center()
             .justify_center()
+            .w(px(22.))
+            .h(px(BUTTON_HEIGHT))
+            .window_control_area(control.area())
+            .child(
+                div()
+                    .size(px(12.))
+                    .rounded_full()
+                    .bg(color(c))
+                    .shadow(vec![gpui::BoxShadow {
+                        color: color(c).opacity(0.7),
+                        offset: gpui::point(px(0.), px(0.)),
+                        blur_radius: px(8.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                    .group_hover(control.name(), |s| s.opacity(0.75)),
+            )
+    }
+
+    fn control_button(control: Control, maximized: bool) -> Stateful<Div> {
+        let id: SharedString = control.name().into();
+        let close = matches!(control, Control::Close);
+        let rest = white(0.65);
+        let hover = if close { gpui::white() } else { white(1.) };
+        // The eased hover layer: the close button goes red, the others take the glass fill and edge.
+        let layer = if close {
+            crate::hover_fade(
+                &id,
+                || {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .rounded(px(RADIUS))
+                },
+                |d, t| {
+                    d.bg(color(0xe5484d).opacity(0.85 * t))
+                        .border_1()
+                        .border_color(color(0xe5484d).opacity(t))
+                },
+            )
+        } else {
+            hover_edge(&id, RADIUS, 0.10, false)
+        };
+        let el = div()
+            .id(id.clone())
+            .group(control.name())
+            .relative()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
             .w(px(BUTTON_WIDTH))
-            .h_full()
-            .text_color(theme.ink_soft)
+            .h(px(BUTTON_HEIGHT))
+            .rounded(px(RADIUS))
+            // Pressed: darker. Native hit tests may not report the press.
+            .active(|s| s.bg(gpui::black().opacity(0.25)))
             // GPUI maps these to native non-client hit tests, retaining Snap Layouts,
             // Alt+Space and close handling. Click callbacks would run the action twice.
             .window_control_area(control.area())
-            .hover(move |style| match control {
-                Control::Close => style.bg(theme.danger).text_color(theme.page),
-                _ => style.bg(theme.raised),
-            })
-            .child(control_icon(control, maximized, &theme))
+            .child(layer)
+            .child(control_icon(control, maximized, rest, hover).relative());
+        crate::track_hover(el, id)
     }
 
     pub fn render(theme: &Theme, window: &Window) -> Option<Div> {
+        let dots = theme.dark && theme.edge.is_some();
         let drag = div()
             .id("window-drag")
             .flex()
@@ -456,9 +567,22 @@ mod windows {
                 .border_b_1()
                 .border_color(theme.outline)
                 .child(drag)
-                .children(
-                    [Control::Minimize, Control::Maximize, Control::Close]
-                        .map(|control| control_button(control, theme, window.is_maximized())),
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(4.))
+                        .mr(px(6.))
+                        .children([Control::Minimize, Control::Maximize, Control::Close].map(
+                            |control| {
+                                if dots {
+                                    dot_button(control)
+                                } else {
+                                    control_button(control, window.is_maximized())
+                                }
+                            },
+                        )),
                 ),
         )
     }

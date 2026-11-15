@@ -64,21 +64,27 @@ impl Launcher {
         .pt_0()
         .mb_0();
         let open = self.mods.kind;
-        let mut tabs = div().flex().flex_none().items_center().gap(px(4.));
-        for (kind, label, _) in KINDS {
-            tabs = tabs.child(
-                small_tab(
-                    SharedString::from(format!("mods-tab-{label}")),
-                    kind == open,
-                    &t,
-                )
-                .child(tr(label).to_string())
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.mods_set_kind(kind);
-                    cx.notify();
-                })),
-            );
-        }
+        let active = KINDS.iter().position(|(k, _, _)| *k == open).unwrap_or(0);
+        let items: Vec<_> = KINDS
+            .into_iter()
+            .map(|(kind, label, _)| {
+                small_tab(format!("mods-tab-{label}").into(), kind == open, &t)
+                    .child(tr(label).to_string())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.mods_set_kind(kind);
+                        cx.notify();
+                    }))
+            })
+            .collect();
+        let tabs = ui::pill_strip(
+            "mods-kinds",
+            active,
+            32.,
+            0.,
+            div().flex().flex_none().items_center().gap(px(4.)),
+            items,
+        )
+        .flex_none();
         let wide = self.window_width >= crate::glass_home::SIDE_BY_SIDE;
         let header = if wide {
             div()
@@ -216,27 +222,36 @@ impl Launcher {
     fn glass_source_switch(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let current = self.mods.source;
-        let mut row = div().flex().items_center().gap(px(4.));
-        for (source, label) in SOURCES {
-            row = row.child(
-                small_tab(
-                    SharedString::from(format!("mods-source-{label}")),
-                    source == current,
-                    &t,
-                )
-                .child(tr(label).to_string())
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if this.mods.source != source {
-                        this.mods.source = source;
-                        this.mods.browse.filters = Default::default();
-                        this.mods.browse.open = None;
-                        this.mods.picked = None;
-                        this.mods_search(0);
-                    }
-                    cx.notify();
-                })),
-            );
-        }
+        let active = SOURCES.iter().position(|(s, _)| *s == current).unwrap_or(0);
+        let items: Vec<_> = SOURCES
+            .into_iter()
+            .map(|(source, label)| {
+                small_tab(format!("mods-source-{label}").into(), source == current, &t)
+                    .child(tr(label).to_string())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if this.mods.source != source {
+                            this.mods.source = source;
+                            this.mods.browse.filters = Default::default();
+                            this.mods.browse.open = None;
+                            this.mods.picked = None;
+                            this.mods_search(0);
+                        }
+                        cx.notify();
+                    }))
+            })
+            .collect();
+        let row = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(ui::pill_strip(
+                "mods-sources",
+                active,
+                32.,
+                0.,
+                div().flex().items_center().gap(px(4.)),
+                items,
+            ));
         row.child(
             div()
                 .flex()
@@ -343,10 +358,24 @@ impl Launcher {
         let t = self.theme;
         let m = &self.mods;
         if let Some(e) = &m.error {
-            return ui::text(14., FontWeight::NORMAL, 0.6)
-                .px(px(16.))
-                .py(px(24.))
-                .child(e.clone());
+            // A failed search stays visible as an amber banner with a way to try again.
+            return div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .m(px(8.))
+                .px(px(14.))
+                .py(px(12.))
+                .rounded(px(radius::ROW))
+                .border_1()
+                .border_color(ui::warn())
+                .child(ui::dot(ui::Tone::Warn))
+                .child(
+                    ui::text(14., FontWeight::NORMAL, ink::FULL)
+                        .flex_1()
+                        .min_w_0()
+                        .child(e.clone()),
+                );
         }
         if m.results.is_empty() {
             let line = if m.searching || !m.searched {
@@ -390,8 +419,21 @@ impl Launcher {
             let checking = m.checking(&p);
             let can_install =
                 !installed && !checking && m.busy.is_none() && m.support(&p).installable();
-            let action: AnyElement = if installed || busy || checking || m.support(&p).installable()
-            {
+            let action: AnyElement = if installed {
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    .px(px(8.))
+                    .child(ui::dot(ui::Tone::Live))
+                    .child(
+                        ui::text(13., FontWeight::MEDIUM, ink::FULL)
+                            .text_color(ui::live())
+                            .child(tr("Installed")),
+                    )
+                    .into_any_element()
+            } else if busy || checking || m.support(&p).installable() {
                 let label = if installed {
                     tr("Installed")
                 } else if checking {
@@ -729,31 +771,12 @@ impl Launcher {
 }
 
 /// The mockup's `Tabs` at size `sm`: 32 px, 13 px, white at 12 % on the open one.
+/// A tab of the Mods page's small strips: a [`ui::pill_tab`] 32 tall at 13 px.
 fn small_tab(id: SharedString, open: bool, t: &theme::Theme) -> Stateful<Div> {
-    keyboard(
-        div()
-            .id(id)
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(6.))
-            .h(px(32.))
-            .px(px(12.))
-            .rounded(px(10.))
-            .cursor_pointer()
-            .font_family(horizon_theme::glass::FONT)
-            .text_size(px(13.))
-            .when(open, |d| {
-                d.bg(white(0.12))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(white(ink::FULL))
-            })
-            .when(!open, |d| {
-                d.text_color(white(0.7))
-                    .hover(|s| s.text_color(white(ink::FULL)))
-            }),
-        t,
-    )
+    ui::pill_tab(id, open, 32., t)
+        .flex_none()
+        .gap(px(6.))
+        .text_size(px(13.))
 }
 
 /// One project's kind, for a Modrinth result's second word (`Resource pack`).

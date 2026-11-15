@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тиэмэ",
+  "Motion": "Хамсыыр",
+  "Reduced": "Кыччатыллыбыт",
+  "Full": "Толору",
+  "Aa Text": "Aa Тиэкис",
+  "Prepare & play": "Бэлэмнэн уонна оонньоо",
+  "Name it, pick what it plays, then an icon.": "Ааты биэр, туох оонньуурун тал, онтон значок.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Барыга босхо. Каждай тиэмэ сырдьык уонна хараҥа тас көстүүлээх, уонна кини иһигэр талбыт акцент өҥүн өйдөөн хааллар.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Кыччатыллыбыт халлааны, сүтэрүүлэри уонна сыҕарыйыылары тохтотор; тюҥкүүлэр тута ылар. Систиэмэ көмпүүтэр настройкатын үтүктэр.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Сырдьык эбэтэр хараҥа, тиэмэ, акцент өҥө, өстүөкүлэ, дьүһүннээһин уонна Төрүт сир фона Horizon бастапкы туругар төннөр.",
+  "The launcher's look is back to how Horizon ships": "Запускник көрүҥө Horizon бастапкы туругар төннөннө",
+  "The launcher's look is reset for now, but it could not be saved": "Запускник көрүҥэ кыратык уларытылла сылдьар, ол эрээри хараллыбата",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Өстүөкүлэ уонна Дьүһүннээһин хараҥа тас көстүү матовай панелларын түһэрэллэр; сырдьык үрүҥ толору панеллары уурар.",
+  "Performance mode draws solid panels, without glass or blur.": "Үлэ көрдөрүү режимэ өстүөкүлэ уонна дьүһүннээһин суох толору панеллары уурар.",
+  "This theme's night draws solid panels, without glass or blur.": "Бу тиэмэ түүнэ өстүөкүлэ уонна дьүһүннээһин суох толору панеллары уурар."
 }

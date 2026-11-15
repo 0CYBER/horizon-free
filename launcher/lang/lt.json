@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Judesys",
+  "Reduced": "Sumažintas",
+  "Full": "Pilnas",
+  "Aa Text": "Aa Tekstas",
+  "Prepare & play": "Paruošti ir žaisti",
+  "Name it, pick what it plays, then an icon.": "Suteikite pavadinimą, pasirinkite, ką paleidžia, tada piktogramą.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Nemokama visiems. Kiekviena tema turi šviesią ir tamsią išvaizdą ir prisimena joje pasirinktą akcento spalvą.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Sumažintas stabdo dangų, blankimus ir slinkimus; mygtukai vis tiek reaguoja iškart. Sistema seka jūsų kompiuterio nustatymą.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Šviesu arba tamsu, tema, akcento spalva, stiklas, suliejimas ir Pradžios fonas grįžta į numatytąsias Horizon reikšmes.",
+  "The launcher's look is back to how Horizon ships": "Paleidyklės išvaizda grįžo į numatytąją Horizon išvaizdą",
+  "The launcher's look is reset for now, but it could not be saved": "Paleidyklės išvaizda kol kas atkurta, bet jos nepavyko išsaugoti",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Stiklas ir Suliejimas formuoja tamsios išvaizdos matinius skydus; šviesioji piešia vientisus baltus skydus.",
+  "Performance mode draws solid panels, without glass or blur.": "Našumo režimas piešia vientisus skydus, be stiklo ir suliejimo.",
+  "This theme's night draws solid panels, without glass or blur.": "Šios temos naktis piešia vientisus skydus, be stiklo ir suliejimo."
 }

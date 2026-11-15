@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Þema",
+  "Motion": "Hreyfing",
+  "Reduced": "Minni",
+  "Full": "Full",
+  "Aa Text": "Aa Texti",
+  "Prepare & play": "Undirbúa og spila",
+  "Name it, pick what it plays, then an icon.": "Gefðu nafn, veldu hvað hún spilar og svo tákn.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Ókeypis fyrir alla. Hvert þema hefur ljóst og dökkt útlit og man áherslulitinn sem þú velur undir því.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Minni stöðvar himinninn, dofnana og rennislöðina; hnappar svara strax. Kerfi fylgir stillingu tölvunnar þinnar.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Ljóst eða dökkt, þema, áherslulitur, gler, móða og bakgrunnur Heima fara aftur í það ástand sem Horizon kemur í.",
+  "The launcher's look is back to how Horizon ships": "Útlit ræsiforritsins er aftur í því ástandi sem Horizon kemur í",
+  "The launcher's look is reset for now, but it could not be saved": "Útlit ræsiforritsins hefur verið endurstillt í bili, en það tókst ekki að vista það",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Gler og Móða forma hrímuðu spjöldin í dökka útlitinu; það ljósa teiknar gegnsæi hvít spjöld.",
+  "Performance mode draws solid panels, without glass or blur.": "Afkastastilling teiknar gegnsæi spjöld, án glers og móðu.",
+  "This theme's night draws solid panels, without glass or blur.": "Nótt þessa þema teiknar gegnsæi spjöld, án glers og móðu."
 }

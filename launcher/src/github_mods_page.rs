@@ -394,7 +394,7 @@ impl Launcher {
     }
 
     /// GitHub-specific actions, shared by both installed-mod lists.
-    fn github_actions(&self, origin: &Origin, busy: bool, cx: &Context<Self>) -> Div {
+    pub(super) fn github_actions(&self, origin: &Origin, busy: bool, cx: &Context<Self>) -> Div {
         let t = self.theme;
         let id = origin.id.clone();
         let mut right = div().flex().flex_wrap().items_center().gap(px(8.));

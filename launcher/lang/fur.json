@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Teme",
+  "Motion": "Moviment",
+  "Reduced": "Ridusût",
+  "Full": "Complêt",
+  "Aa Text": "Aa Test",
+  "Prepare & play": "Preparâ e zugâ",
+  "Name it, pick what it plays, then an icon.": "Dâi un non, sielç ce che al zuie, po une icone.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis par ducj. Ogni teme al à un aspiet clâr e un scûr e si visât dal acent che tu sielzis dentri di lui.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Ridusût al ferme il cîl, i svaniments e lis scorladis; i botons a rispontin daûr subit. Sisteme al va daûr de impostazion dal vuestri ordenadôr.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Clâr o scûr, teme, colôr di acent, veri, sfume e il fondâl de Cjase a tornin a cemût che Horizon al spedis.",
+  "The launcher's look is back to how Horizon ships": "L'aspiet dal lançadôr al è tornât a cemût che Horizon al spedis",
+  "The launcher's look is reset for now, but it could not be saved": "L'aspiet dal lançadôr al è azernât par cumò, ma nol è stât salvât",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Veri e Sfume a formin i panels smalziâts dal aspiet scûr; chel clâr al disene panels blancs solits.",
+  "Performance mode draws solid panels, without glass or blur.": "Modalitât di prestazion al disene panels solits, cence veri ni sfume.",
+  "This theme's night draws solid panels, without glass or blur.": "La gnot di chest teme e disene panels solits, cence veri ni sfume."
 }

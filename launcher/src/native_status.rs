@@ -58,6 +58,28 @@ pub fn state(enabled: &[Mod], built: Option<&[Mod]>) -> State {
     }
 }
 
+/// A `.hmod`'s digest as a build records it: its files without the uses table, which the
+/// mod tool packs beside the source but the build's own digest of the copied source never holds
+/// (else every mod packed with a uses table read Needs rebuild after each build).
+fn archive_digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
+    use horizon_mod_package::mod_surface::uses::USES_FILE;
+    native_mods::digest(files.filter(|(name, _)| *name != USES_FILE))
+}
+
+/// The mods turned on that the played build doesn't have as they are now: each one's own "Needs
+/// build" on the Mods tab, so changing one mod never marks the others. Every one when the
+/// version played is no native build.
+pub fn unbuilt(enabled: &[Mod], built: Option<&[Mod]>) -> Vec<String> {
+    let same = |a: &Mod, b: &Mod| {
+        a.0 == b.0 && a.1 == b.1 && (a.2.is_none() || b.2.is_none() || a.2 == b.2)
+    };
+    enabled
+        .iter()
+        .filter(|m| !built.is_some_and(|built| built.iter().any(|b| same(m, b))))
+        .map(|m| m.0.clone())
+        .collect()
+}
+
 /// What a native build was made from, as the Mods page and the instance list show it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Build {
@@ -159,9 +181,8 @@ pub fn enabled(home: &Path) -> Vec<Mod> {
         match horizon_mod_package::index::native::Bundle::read(&path) {
             Ok(b) => {
                 if java::is_enabled(home, &b.manifest.id) {
-                    let digest = native_mods::digest(
-                        b.files.iter().map(|(n, d)| (n.as_str(), d.as_slice())),
-                    );
+                    let digest =
+                        archive_digest(b.files.iter().map(|(n, d)| (n.as_str(), d.as_slice())));
                     out.push((b.manifest.id, b.manifest.version, Some(digest)));
                 }
             }
@@ -349,6 +370,45 @@ fn stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_uses_table_is_not_part_of_a_mods_digest() {
+        let source = [("Cargo.toml", b"a".as_slice()), ("src/lib.rs", b"b")];
+        let packed = [source[0], source[1], ("uses.json", b"{}".as_slice())];
+        assert_eq!(
+            archive_digest(packed.into_iter()),
+            archive_digest(source.into_iter())
+        );
+        assert_eq!(
+            archive_digest(source.into_iter()),
+            native_mods::digest(source.into_iter())
+        );
+    }
+
+    #[test]
+    fn only_the_changed_mod_needs_a_build() {
+        let m = |id: &str, v: &str, d: Option<&str>| (id.into(), v.into(), d.map(Into::into));
+        let built = [m("ores", "1.0", Some("a")), m("maps", "2.0", Some("b"))];
+        // `maps` updated, `ores` untouched, `tools` new: only the changed and new ones build.
+        let enabled = [
+            m("ores", "1.0", Some("a")),
+            m("maps", "2.1", Some("c")),
+            m("tools", "1.0", None),
+        ];
+        assert_eq!(unbuilt(&enabled, Some(&built)), ["maps", "tools"]);
+        // Same version, other files (a reinstalled local `.hmod`): that one builds again.
+        assert_eq!(
+            unbuilt(&[m("ores", "1.0", Some("z"))], Some(&built)),
+            ["ores"]
+        );
+        // An old record without digests still counts as built.
+        assert!(unbuilt(
+            &[m("ores", "1.0", Some("a"))],
+            Some(&[m("ores", "1.0", None)])
+        )
+        .is_empty());
+        assert_eq!(unbuilt(&enabled[..1], None), ["ores"]);
+    }
+
     use super::*;
 
     fn m(id: &str, version: &str) -> Mod {

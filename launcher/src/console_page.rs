@@ -9,6 +9,15 @@ use horizon_launcher::game_log::{self, Shared};
 
 pub(super) struct Console {
     follow: bool,
+    /// Which lines show: every one, warnings and errors, or errors only.
+    level: Level,
+    /// The last `latest.log` read, shown while this run has no lines: its path, when it changed
+    /// and its last lines.
+    file: Option<(
+        std::path::PathBuf,
+        Option<std::time::SystemTime>,
+        Vec<String>,
+    )>,
     scroll: Scrollbar,
     /// Lines and search at the last draw: a change means scroll down when following.
     seen: (usize, String),
@@ -21,12 +30,33 @@ impl Default for Console {
     fn default() -> Self {
         Console {
             follow: true,
+            level: Level::All,
+            file: None,
             scroll: Scrollbar::default(),
             seen: (0, String::new()),
             confirm_share: false,
             sharing: false,
             shared: None,
         }
+    }
+}
+
+/// The log's level filter (the mockup's All, Warnings, Errors).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Level {
+    All,
+    Warnings,
+    Errors,
+}
+
+/// How bad a log line is: 0 for information, 1 for a warning, 2 for an error.
+fn severity(line: &str) -> u8 {
+    if line.contains("/ERROR]") || line.contains("ERROR:") || line.contains(" ERROR ") {
+        2
+    } else if line.contains("/WARN]") || line.contains(" WARN ") || line.contains("WARN:") {
+        1
+    } else {
+        0
     }
 }
 
@@ -316,11 +346,43 @@ impl Launcher {
         use crate::glass_ui::{self as ui, white};
         use horizon_theme::glass::{ink, radius};
         let t = self.theme;
-        if self.prepare_log.is_empty() && self.client.is_none() {
-            return None;
+        let logs = self
+            .client_home
+            .clone()
+            .or_else(|| self.selected_instance().map(|i| i.home.clone()))
+            .unwrap_or_else(backend::game_home)
+            .join("logs");
+        let latest = logs.join("latest.log");
+        // No line from this run: the last run's latest.log, read again only when it changed.
+        let from_file = self.prepare_log.is_empty() && self.client.is_none();
+        if from_file {
+            let changed = std::fs::metadata(&latest).and_then(|m| m.modified()).ok();
+            let stale = match &self.console.file {
+                Some((path, when, _)) => *path != latest || *when != changed,
+                None => true,
+            };
+            if stale {
+                let text = std::fs::read_to_string(&latest).unwrap_or_default();
+                let all: Vec<&str> = text.lines().collect();
+                let tail = all[all.len().saturating_sub(LOG_LINES)..]
+                    .iter()
+                    .map(|l| l.to_string())
+                    .collect();
+                self.console.file = Some((latest.clone(), changed, tail));
+            }
         }
-        let count = self.prepare_log.len();
+        let source: &[String] = match (&self.console.file, from_file) {
+            (Some((_, _, lines)), true) => lines,
+            _ => self.prepare_log.make_contiguous(),
+        };
+        let count = source.len();
         let note = match self.client {
+            _ if from_file && count == 0 => tr("No game log yet").to_string(),
+            _ if from_file => trf(
+                "latest.log, {count} lines from the last run",
+                &[("count", &count.to_string())],
+            )
+            .to_string(),
             Some(_) => trf(
                 "{count} lines, the game is running",
                 &[("count", &count.to_string())],
@@ -331,10 +393,15 @@ impl Launcher {
             ),
         };
         let search = self.servers.value(Field::ConsoleSearch).trim().to_string();
-        let lines: Vec<String> = self
-            .prepare_log
+        let level = self.console.level;
+        let floor = match level {
+            Level::All => 0,
+            Level::Warnings => 1,
+            Level::Errors => 2,
+        };
+        let lines: Vec<String> = source
             .iter()
-            .filter(|l| game_log::matches(l, &search))
+            .filter(|l| severity(l) >= floor && game_log::matches(l, &search))
             .cloned()
             .collect();
         let now = (count, search);
@@ -362,12 +429,24 @@ impl Launcher {
                 cx.notify();
             }));
         let copied = lines.join("\n");
-        let logs = self
-            .client_home
-            .clone()
-            .or_else(|| self.selected_instance().map(|i| i.home.clone()))
-            .unwrap_or_else(backend::game_home)
-            .join("logs");
+        let this = cx.entity().downgrade();
+        let levels = ui::segments(
+            "console-level",
+            &[
+                (Level::All, "All"),
+                (Level::Warnings, "Warnings"),
+                (Level::Errors, "Errors"),
+            ],
+            level,
+            &t,
+            move |pick, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.console.level = pick;
+                    this.console.seen.0 = usize::MAX;
+                    cx.notify();
+                });
+            },
+        );
         let share = ui::quiet("console-share", tr("Share log…"), 36., &t);
         let share = match self.console.sharing {
             true => share.opacity(0.4).cursor_default(),
@@ -383,7 +462,8 @@ impl Launcher {
             .gap(px(8.))
             .px(px(12.))
             .pb(px(12.))
-            .child(self.field(Field::ConsoleSearch, tr("Search the log"), 240., cx))
+            .child(self.field(Field::ConsoleSearch, tr("Search the log"), 220., cx))
+            .child(levels)
             .child(div().ml(px(8.)).child(follow))
             .child(div().flex_1())
             .child(
@@ -406,11 +486,18 @@ impl Launcher {
                     false,
                     &t,
                 )
+                .tooltip(ui::tip(tr("Open the logs folder")))
                 .on_click(move |_, _, cx| {
                     let _ = std::fs::create_dir_all(&logs);
                     crate::glass_toast::open(cx, &logs);
                 }),
-            );
+            )
+            .when(latest.is_file(), |d| {
+                d.child(
+                    ui::quiet("console-open-file", tr("Open file"), 36., &t)
+                        .on_click(move |_, _, cx| crate::glass_toast::open(cx, &latest)),
+                )
+            });
         let mut body = div()
             .flex()
             .flex_col()
@@ -497,28 +584,88 @@ impl Launcher {
                 None => None,
             };
         let shown = lines.len().saturating_sub(LOG_LINES);
+        let empty = lines.is_empty();
+        let filtered = count > 0;
+        // The terminal (the mockup's `logbox`): black under the glass, Geist Mono 12 on 1.7, the
+        // warnings and errors in their colours, a caret after the last line while the game runs.
+        let title = if from_file { "latest.log" } else { "horizon" };
+        let dot = |c: u32| {
+            div()
+                .size(px(10.))
+                .rounded_full()
+                .bg(ui::color(c).opacity(0.85))
+        };
+        let bar = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(7.))
+            .h(px(32.))
+            .px(px(12.))
+            .border_b_1()
+            .border_color(white(0.08))
+            .child(dot(0xff5f57))
+            .child(dot(0xfebc2e))
+            .child(dot(0x28c840))
+            .child(
+                div()
+                    .flex_1()
+                    .text_center()
+                    .font_family(theme::MONO)
+                    .text_size(px(11.5))
+                    .text_color(white(ink::QUIET))
+                    .child(title),
+            )
+            .child(div().w(px(44.)));
         let log = div()
             .id("console-lines")
             .track_scroll(&self.console.scroll.handle)
-            .h(px(320.))
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .take_wheel(&self.console.scroll)
-            .p(px(16.))
-            .rounded(px(radius::ROW))
-            .bg(gpui::black().opacity(0.25))
+            .px(px(14.))
+            .py(px(10.))
             .font_family(theme::MONO)
             .text_size(px(12.))
-            .line_height(px(21.))
+            .line_height(px(20.))
             .children(lines.into_iter().skip(shown).map(|line| {
-                let color = if line.contains("/ERROR]") || line.contains("ERROR:") {
-                    ui::danger()
-                } else if line.contains("/WARN]") {
-                    ui::warn()
-                } else {
-                    white(0.75)
+                let color = match severity(&line) {
+                    2 => ui::danger(),
+                    1 => ui::warn(),
+                    _ => white(0.75),
                 };
                 div().text_color(color).child(line)
-            }));
-        Some(body.children(status).child(log))
+            }))
+            .when(empty, |d| {
+                d.child(div().text_color(white(ink::DIM)).child(if filtered {
+                    tr("No line matches. Clear the search or pick All.")
+                } else {
+                    tr("The game's log shows here as soon as it starts.")
+                }))
+            })
+            .when(self.client.is_some(), |d| {
+                d.child(
+                    div()
+                        .mt(px(2.))
+                        .w(px(7.))
+                        .h(px(14.))
+                        .bg(ui::color(ui::look().accent)),
+                )
+            });
+        let terminal = div()
+            .flex()
+            .flex_col()
+            .h(px(380.))
+            .mx(px(12.))
+            .mb(px(12.))
+            .rounded(px(12.))
+            .overflow_hidden()
+            .bg(gpui::black().opacity(0.42))
+            .border_1()
+            .border_color(white(0.12))
+            .child(bar)
+            .child(log);
+        Some(body.children(status).child(terminal))
     }
 }

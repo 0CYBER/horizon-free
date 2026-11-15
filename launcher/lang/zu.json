@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Itimu",
+  "Motion": "Ukunyakaza",
+  "Reduced": "Kuncishisiwe",
+  "Full": "Okuphelele",
+  "Aa Text": "Aa Umbhalo",
+  "Prepare & play": "Lungiselela bese udlala",
+  "Name it, pick what it plays, then an icon.": "Nikeza igama, khetha lokho ekudlala, bese isithombe-sikhashana.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Mahhala kuwo wonke umuntu. Itimu ngamunye inokubukeka okukhanyayo nokumnyama, futhi ikhumbula umbala we-accent owukhetha ngaphansi kwawo.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Kuncishisiwe kumisa isibhakabhaka, ukunyamalala kanye nokushelela; izinkunzi zisaphendula masinyane. Isistimu ilandela usetho wekhompyutha yakho.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Ukukhanya noma okumnyama, itimu, umbala we-accent, ingilazi, ukufiphala kanye nesokudla sangemuva se-Ikhaya zibuyela endleleni Horizon ngayo.",
+  "The launcher's look is back to how Horizon ships": "Ukubukeka kwesiqalisi kubuyele endleleni Horizon ngayo",
+  "The launcher's look is reset for now, but it could not be saved": "Ukubukeka kwesiqalisi kusethwe kabusha okwesikhashana, kodwa akugciniwe",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Ingilazi Nokufiphala kuklama amaphaneli angilazi okubukeka okumnyama; okukhanyayo kudweba amaphaneli amhlophe aqinile.",
+  "Performance mode draws solid panels, without glass or blur.": "Imodi yokusebenza idweba amaphaneli aqinile, ngaphandle kwezingilazi noma ukufiphala.",
+  "This theme's night draws solid panels, without glass or blur.": "Usuku lokubala kwale thimu idweba amaphaneli aqinile, ngaphandle kwezingilazi noma ukufiphala."
 }

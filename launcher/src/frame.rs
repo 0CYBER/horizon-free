@@ -12,9 +12,63 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// The sidebar's width and its distance from the window's edges (`w-[248px]`, `m-3.5`).
-pub const SIDEBAR: f32 = 248.;
+/// The rail's distance from the window's edges (`m-3.5`).
 pub const MARGIN: f32 = 14.;
+
+/// The rail's width at rest (icons) and open (icons and names), while the pointer is on it.
+pub const RAIL: f32 = 80.;
+pub const RAIL_OPEN: f32 = 248.;
+/// How the rail opens and shuts: quick, settling from a little past its width.
+const RAIL_MOTION: horizon_theme::Motion = horizon_theme::Motion {
+    name: "rail",
+    ms: 320,
+    curve: [0.22, 0.9, 0.3, 1.08],
+};
+/// Discord's own blurple, in every theme, and under the pointer.
+const DISCORD: u32 = 0x5865F2;
+const DISCORD_HOVER: u32 = 0x4752C4;
+
+/// The rail's state: whether the pointer is on it, and where its last opening or shutting began.
+#[derive(Default)]
+pub struct Rail {
+    pub hovered: bool,
+    open: bool,
+    since: Option<Instant>,
+    from: f32,
+    at: f32,
+}
+
+impl Rail {
+    /// How far open the rail is, 0 to 1 (a little past 1 as it settles). `pinned`: something it
+    /// opened is still open (a row's menu), so it stays open without the pointer. Frames are asked
+    /// for only while it moves; under reduced motion it jumps.
+    pub fn progress(&mut self, window: &mut Window, pinned: bool) -> f32 {
+        // `HORIZON_LAUNCHER_RAIL_OPEN=1` holds it open, for screenshots.
+        static HELD: std::sync::LazyLock<bool> =
+            std::sync::LazyLock::new(|| std::env::var_os("HORIZON_LAUNCHER_RAIL_OPEN").is_some());
+        let want = self.hovered || pinned || *HELD;
+        if want != self.open {
+            self.open = want;
+            self.from = self.at;
+            self.since = Some(Instant::now());
+        }
+        let to = if want { 1. } else { 0. };
+        let t = match self.since {
+            Some(since) if !crate::motion::still() => {
+                since.elapsed().as_secs_f32() / RAIL_MOTION.secs()
+            }
+            _ => 1.,
+        };
+        if t >= 1. {
+            self.since = None;
+            self.at = to;
+            return to;
+        }
+        self.at = self.from + (to - self.from) * RAIL_MOTION.ease(t);
+        window.request_animation_frame();
+        self.at
+    }
+}
 
 /// The ⋮ menu of a sidebar row while open: whose, and whether Delete… was pressed once.
 #[derive(Clone, Default)]
@@ -152,7 +206,14 @@ impl Launcher {
     }
 
     /// The instances by group (`sections` in the mockup): those without a group first.
-    fn glass_instances(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// `open`: the rail shows names (else icons alone, the name on hover); `label`: how far the
+    /// names have faded in.
+    fn glass_instances(
+        &mut self,
+        open: bool,
+        label: f32,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let t = self.theme;
         let selected = self.selected_instance().map(|i| i.id.clone());
         let on_packs = self.page == Page::Mods && self.mods.on_modpacks();
@@ -163,16 +224,18 @@ impl Launcher {
             out.push(list.into_any_element());
             div().flex().flex_col().gap(px(4.))
         };
-        for i in self.instances.list.clone() {
+        for (order, i) in self.instances.list.clone().into_iter().enumerate() {
             if i.group != group {
                 list = flush(list, &mut out);
                 group = i.group.clone();
-                if let Some(g) = &group {
+                if let Some(g) = group.as_ref().filter(|_| open) {
                     out.push(
                         ui::text(12., FontWeight::MEDIUM, ink::DIM)
                             .px(px(8.))
                             .pt(px(16.))
                             .pb(px(6.))
+                            .opacity(label)
+                            .whitespace_nowrap()
                             .child(g.clone())
                             .into_any_element(),
                     );
@@ -192,7 +255,7 @@ impl Launcher {
             let state = self.row_state(&i);
             let icon = self.glass_instance_icon(&i, 38.);
             let clicked = i.clone();
-            let open = self
+            let menu_open = self
                 .row_menu
                 .open
                 .as_ref()
@@ -214,7 +277,7 @@ impl Launcher {
                         32.,
                         18.,
                         radius::SMALL,
-                        open,
+                        menu_open,
                         &t,
                     )
                     .on_click(cx.listener(
@@ -228,78 +291,158 @@ impl Launcher {
                         },
                     )),
                 );
-            list = list.child(
+            list = list.child(crate::motion::enter(
+                ElementId::named_usize(format!("side-enter-{}", i.id), 0),
+                order,
                 div()
                     .relative()
                     .child(measure(&self.row_menu.rows, i.id.clone()))
                     .child(
-                        ui::row(format!("side-instance-{}", i.id), current, 40., &t)
-                            .child(div().relative().flex_none().child(icon))
-                            .child(ui::row_text(i.name.clone(), state))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                match clicked.kind {
-                                    InstanceKind::Default | InstanceKind::Own => {
-                                        this.select_instance(&clicked);
-                                        this.go(Page::Play);
-                                    }
-                                    InstanceKind::Port => {
-                                        this.show_modpack(Some(clicked.id["port:".len()..].into()))
-                                    }
-                                    InstanceKind::Pack => this.show_modpack(None),
+                        ui::row(
+                            format!("side-instance-{}", i.id),
+                            current,
+                            if open { 40. } else { 8. },
+                            &t,
+                        )
+                        .child(div().relative().flex_none().child(icon))
+                        .child(
+                            ui::row_text(i.name.clone(), state)
+                                .overflow_hidden()
+                                .opacity(label),
+                        )
+                        .when(!open, |d| d.tooltip(ui::tip(i.name.clone())))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            match clicked.kind {
+                                InstanceKind::Default | InstanceKind::Own => {
+                                    this.select_instance(&clicked);
+                                    this.go(Page::Play);
                                 }
-                                cx.notify();
-                            }))
-                            // The ⋮ menu, from a right click anywhere on the row.
-                            .on_mouse_down(
-                                gpui::MouseButton::Right,
-                                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                                    // The open menu's mouse-down-out already closed it on this
-                                    // press: reopening here would make the toggle a no-op.
-                                    if this.menu_closed_at.take() == Some(event.position) {
-                                        cx.notify();
-                                        return;
-                                    }
-                                    this.row_menu.open =
-                                        row_menu_after_press(this.row_menu.open.take(), &right_id);
+                                InstanceKind::Port => {
+                                    this.show_modpack(Some(clicked.id["port:".len()..].into()))
+                                }
+                                InstanceKind::Pack => this.show_modpack(None),
+                            }
+                            cx.notify();
+                        }))
+                        // The ⋮ menu, from a right click anywhere on the row.
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                // The open menu's mouse-down-out already closed it on this
+                                // press: reopening here would make the toggle a no-op.
+                                if this.menu_closed_at.take() == Some(event.position) {
                                     cx.notify();
-                                }),
-                            ),
+                                    return;
+                                }
+                                this.row_menu.open =
+                                    row_menu_after_press(this.row_menu.open.take(), &right_id);
+                                cx.notify();
+                            }),
+                        ),
                     )
-                    .child(more),
-            );
+                    .when(open, |d| d.child(more)),
+            ));
         }
         out.push(list.into_any_element());
         out
     }
 
-    /// The glass sidebar: a plate 248 wide, 14 from the window's edges.
-    pub(super) fn glass_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+    /// The rail: a strip of instance icons that opens into names, states and links while the
+    /// pointer is on it (or one of its menus is open). The page beside it gives way as it opens,
+    /// so nothing is ever covered. Its foot keeps the launcher's update, Sculk's card, Discord,
+    /// the project's links, Settings and the version.
+    pub(super) fn glass_rail(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let t = self.theme;
         let soft = self.look.accent_soft;
         self.load_packs();
-        let add = ui::icon_button(
-            "add-instance",
-            "plus-sign",
-            36.,
-            16.,
-            radius::CONTROL,
-            false,
+        let pinned = self.row_menu.open.is_some();
+        let p = self.rail.progress(window, pinned);
+        let open = p > 0.5;
+        // Names and lines fade in over the second half of the opening, as the width arrives.
+        let label = ((p - 0.35) / 0.65).clamp(0., 1.);
+        let fade = move |d: Div| d.min_w_0().overflow_hidden().opacity(label);
+
+        // A rail button: an icon, its name beside it once the rail opens.
+        let button = |id: SharedString, icon: &'static str, name: SharedString, active: bool| {
+            keyboard(
+                track_hover(
+                    div()
+                        .id(id.clone())
+                        .relative()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(12.))
+                        .w_full()
+                        .h(px(42.))
+                        .px(px(17.5))
+                        .rounded(px(radius::ROW))
+                        .border_1()
+                        .border_color(if active {
+                            white(ui::edge::STRONG)
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .when(active, |d| d.bg(white(fill::ACTIVE)))
+                        .cursor_pointer()
+                        .child(ui::hover_edge(&id, radius::ROW, fill::ROW_HOVER, true))
+                        .child(ui::icon(icon, 19., white(ink::SOFT)).relative())
+                        .child(
+                            fade(ui::text(14., FontWeight::MEDIUM, ink::STRONG).relative())
+                                .whitespace_nowrap()
+                                .child(name.clone()),
+                        )
+                        // Narrow, the rail shows icons alone: the name on hover.
+                        .when(!open, |d| d.tooltip(ui::tip(name))),
+                    id,
+                ),
+                &t,
+            )
+        };
+
+        // Add instance: the accent's outline, not the sun gradient, so Play stays the one bright
+        // button on Home.
+        let add = keyboard(
+            track_hover(
+                div()
+                    .id("add-instance")
+                    .relative()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(12.))
+                    .w_full()
+                    .h(px(42.))
+                    .px(px(17.5))
+                    .rounded(px(radius::ROW))
+                    .bg(ui::color(self.look.accent).opacity(0.08))
+                    .border_1()
+                    .border_color(ui::color(self.look.accent).opacity(0.5))
+                    .hover(|s| {
+                        s.bg(ui::color(self.look.accent).opacity(0.16))
+                            .border_color(ui::color(self.look.accent).opacity(0.8))
+                    })
+                    .cursor_pointer()
+                    .child(ui::icon("plus-sign", 19., ui::color(soft)))
+                    .child(
+                        fade(ui::text(14., FontWeight::SEMIBOLD, ink::FULL))
+                            .whitespace_nowrap()
+                            .child(tr("Add instance")),
+                    )
+                    .when(!open, |d| d.tooltip(ui::tip(tr("Add instance"))))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.open_instance_dialog(None);
+                        cx.notify();
+                    })),
+                "add-instance".into(),
+            ),
             &t,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.open_instance_dialog(None);
-            cx.notify();
-        }));
-        let header = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .px(px(16.))
-            .pt(px(16.))
-            .pb(px(8.))
-            .child(ui::text(13., FontWeight::MEDIUM, ink::NOTE).child(tr("Instances")))
-            .child(add);
+        );
+
         let mut list = div()
             .id("side-list")
             .flex()
@@ -307,11 +450,9 @@ impl Launcher {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .px(px(10.))
-            .children(self.glass_instances(cx));
+            .children(self.glass_instances(open, label, cx));
 
-        // The player's hosted servers: not in the mockup (its Servers page lists them), kept as
-        // one more section in its pattern.
+        // The player's hosted servers, one more section under the instances.
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
@@ -319,20 +460,26 @@ impl Launcher {
             .unwrap_or_else(|| self.side_servers.clone());
         if !servers.is_empty() {
             list = list.child(
-                ui::text(12., FontWeight::MEDIUM, ink::DIM)
+                div()
+                    .h(px(22.))
+                    .flex()
+                    .items_end()
                     .px(px(8.))
-                    .pt(px(16.))
-                    .pb(px(6.))
-                    .child(tr("Servers")),
+                    .pb(px(4.))
+                    .child(
+                        fade(ui::text(12., FontWeight::MEDIUM, ink::DIM))
+                            .whitespace_nowrap()
+                            .child(tr("Servers")),
+                    ),
             );
         }
-        let mut server_rows = div().flex().flex_col().gap(px(4.));
+        let mut server_rows = div().flex().flex_col().gap(px(2.));
         for e in &servers {
             let up = self.servers.is_up(&e.dir);
-            let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
+            let shown = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
             let dir = e.dir.clone();
             server_rows = server_rows.child(
-                ui::row(format!("side-server-{}", e.dir.display()), open, 8., &t)
+                ui::row(format!("side-server-{}", e.dir.display()), shown, 8., &t)
                     .child(
                         div()
                             .relative()
@@ -345,14 +492,15 @@ impl Launcher {
                             .bg(white(fill::BUTTON))
                             .child(ui::icon("computer-terminal-01", 18., white(ink::STRONG))),
                     )
-                    .child(ui::row_text(
+                    .child(fade(ui::row_text(
                         e.name.clone(),
                         if up {
                             (Tone::Live, tr("Running").into())
                         } else {
                             (Tone::Off, tr("Stopped").into())
                         },
-                    ))
+                    )))
+                    .when(!open, |d| d.tooltip(ui::tip(e.name.clone())))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.open_server(dir.clone());
                         this.go(Page::Servers);
@@ -362,75 +510,257 @@ impl Launcher {
         }
         let list = list.child(server_rows);
 
+        // A hairline set in from the rail's sides: between the instances and the buttons, and
+        // between Settings and the version.
+        let rule = || {
+            div()
+                .flex_none()
+                .h(px(1.))
+                .mx(px(10.))
+                .my(px(4.))
+                .bg(white(0.1))
+        };
         let mut foot = div()
             .flex()
             .flex_col()
             .flex_none()
-            .px(px(10.))
-            .pt(px(16.))
-            .pb(px(12.));
-        // The launcher's own update (the mockup's card), while one downloads or waits.
+            .gap(px(2.))
+            .pt(px(4.))
+            .child(rule());
+        // The launcher's own update: the card while open; a dot on Settings while narrow.
+        let updating = match self.self_update {
+            SelfUpdate::Downloading(..) | SelfUpdate::Ready(_) => true,
+            SelfUpdate::Stuck(_) => !self.self_update_hidden,
+            _ => false,
+        };
+        if open {
+            foot = foot.children(self.rail_update_card(soft, cx));
+            // Sculk's card (a sponsor), only where the rail is wide enough to show it.
+            if !self.settings.partner_hidden && p > 0.98 {
+                let rows = self.instances.list.len() + servers.len();
+                let free = f32::from(window.viewport_size().height) - 420. - 52. * rows as f32;
+                let mut side = div().relative().mb(px(6.)).child(partner::card(
+                    "partner-side",
+                    RAIL_OPEN - 24.,
+                    free < partner::TALL_HEIGHT,
+                    &t,
+                ));
+                if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
+                    side = side.child(partner::hide_button("partner-hide", &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.settings.partner_hidden = true;
+                            this.save_settings();
+                            cx.notify();
+                        }),
+                    ));
+                }
+                foot = foot.child(side);
+            }
+        }
+
+        // Discord keeps its own blurple in every theme: a filled square while the rail is
+        // narrow, the square and "Join the Discord" while it is open. No pulse.
+        if !self.links.discord.is_empty() {
+            let url = self.links.discord.clone();
+            let did = SharedString::from("discord");
+            let hovered = crate::hover_is(&did);
+            foot = foot.child(keyboard(
+                track_hover(
+                    div()
+                        .id(did.clone())
+                        .relative()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(12.))
+                        .w_full()
+                        .h(px(42.))
+                        .mb(px(4.))
+                        .px(px(17.5))
+                        .rounded(px(radius::ROW))
+                        .bg(ui::color(if hovered { DISCORD_HOVER } else { DISCORD }))
+                        .shadow(ui::glows(vec![
+                            gpui::BoxShadow {
+                                color: gpui::white().opacity(if hovered { 0.2 } else { 0.12 }),
+                                offset: point(px(0.), px(0.)),
+                                blur_radius: px(0.5),
+                                spread_radius: px(0.5),
+                                inset: true,
+                            },
+                            gpui::BoxShadow {
+                                color: ui::color(DISCORD).opacity(if hovered { 0.9 } else { 0.7 }),
+                                offset: point(px(0.), px(if hovered { 10. } else { 6. })),
+                                blur_radius: px(if hovered { 28. } else { 20. }),
+                                spread_radius: px(-6.),
+                                inset: false,
+                            },
+                        ]))
+                        .cursor_pointer()
+                        .child(ui::icon("discord", 19., gpui::white()))
+                        .child(
+                            fade(ui::text(14., FontWeight::SEMIBOLD, 1.))
+                                .text_color(gpui::white())
+                                .whitespace_nowrap()
+                                .child(tr("Join the Discord")),
+                        )
+                        .when(!open, |d| d.tooltip(ui::tip(tr("Join the Discord"))))
+                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                    did,
+                ),
+                &t,
+            ));
+        }
+        let links = [
+            (
+                "sponsor",
+                tr("Sponsor"),
+                "favourite",
+                self.links.sponsor.clone(),
+            ),
+            ("roadmap", tr("Roadmap"), "map", self.links.roadmap.clone()),
+            ("docs", tr("Documentation"), "book", self.links.docs.clone()),
+            (
+                "website",
+                tr("Website"),
+                "globe-02",
+                self.links.website.clone(),
+            ),
+        ];
+        for (id, name, icon, url) in links {
+            if url.is_empty() {
+                continue;
+            }
+            foot = foot.child(
+                button(SharedString::from(id), icon, name.into(), false)
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+            );
+        }
+        let settings_open = self.page == Page::Settings;
+        foot = foot.child(
+            button(
+                "rail-settings".into(),
+                "sliders-horizontal",
+                tr("Settings").into(),
+                settings_open,
+            )
+            .child(
+                // The launcher's update waits: a dot on Settings while the rail is narrow.
+                div()
+                    .absolute()
+                    .top(px(9.))
+                    .left(px(27.))
+                    .when(!(updating && !open), |d| d.invisible())
+                    .child(ui::dot(Tone::Accent(soft))),
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.go(Page::Settings);
+                cx.notify();
+            })),
+        );
+        // The launcher's version under it: "Launcher 0.2.0" open, the number alone while narrow.
+        let version: SharedString = if open {
+            trf("Launcher {version}", &[("version", backend::VERSION)]).into()
+        } else {
+            backend::VERSION.into()
+        };
+        foot = foot.child(rule()).child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(20.))
+                .px(px(if open { 12. } else { 0. }))
+                .when(!open, |d| d.justify_center())
+                .child(
+                    ui::text(11.5, FontWeight::NORMAL, ink::DIM)
+                        .id("launcher-version")
+                        .whitespace_nowrap()
+                        .truncate()
+                        .child(version),
+                ),
+        );
+
+        let width = RAIL + (RAIL_OPEN - RAIL) * p;
+        crate::glass::plate(radius::PANEL)
+            .id("rail")
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(px(10.))
+            .w(px(width))
+            .px(px(12.))
+            .py(px(12.))
+            .overflow_hidden()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.rail.hovered = *hovered;
+                cx.notify();
+            }))
+            .child(add)
+            .child(list.relative())
+            .child(foot.relative())
+    }
+
+    /// The launcher's own update, as a card at the open rail's foot (while one downloads, waits,
+    /// or could not be applied).
+    fn rail_update_card(&mut self, soft: u32, cx: &mut Context<Self>) -> Option<Div> {
+        let t = self.theme;
         let card = |title: String, right: Option<String>| {
             div()
                 .flex()
                 .flex_col()
+                .mb(px(6.))
                 .rounded(px(radius::ROW))
                 .bg(white(fill::FIELD))
-                .p(px(14.))
+                .border_1()
+                .border_color(white(ui::edge::REST))
+                .p(px(12.))
                 .child(
                     div()
                         .flex()
                         .items_baseline()
                         .justify_between()
-                        // The title wraps within the card: a long translation takes a second line.
                         .child(
-                            ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
+                            ui::text(13.5, FontWeight::SEMIBOLD, ink::FULL)
                                 .flex_1()
                                 .min_w_0()
                                 .child(title),
                         )
                         .children(
-                            right.map(|r| ui::text(13., FontWeight::NORMAL, ink::NOTE).child(r)),
+                            right.map(|r| ui::text(12.5, FontWeight::NORMAL, ink::NOTE).child(r)),
                         ),
                 )
         };
         match &self.self_update {
-            SelfUpdate::Downloading(version, f) => {
-                foot = foot.child(
-                    card(
-                        trf("Launcher {version}", &[("version", version)]),
-                        Some(format!("{:.0}%", f * 100.)),
+            SelfUpdate::Downloading(version, f) => Some(
+                card(
+                    trf("Launcher {version}", &[("version", version)]),
+                    Some(format!("{:.0}%", f * 100.)),
+                )
+                .child(div().mt(px(10.)).child(ui::bar(*f, soft))),
+            ),
+            SelfUpdate::Ready(version) => Some(
+                card(tr("A new version is available").to_string(), None)
+                    .child(
+                        ui::text(12.5, FontWeight::NORMAL, ink::NOTE)
+                            .mt(px(4.))
+                            .child(trf("Launcher {version}", &[("version", version)])),
                     )
-                    .child(div().mt(px(10.)).child(ui::bar(*f, soft))),
-                );
-            }
-            SelfUpdate::Ready(version) => {
-                foot = foot.child(
-                    // The version on a line of its own: the title fills the card's width.
-                    card(tr("A new version is available").to_string(), None)
-                        .child(
-                            ui::text(13., FontWeight::NORMAL, ink::NOTE)
-                                .mt(px(4.))
-                                .child(trf("Launcher {version}", &[("version", version)])),
-                        )
-                        .child(
-                            ui::solid("update-launcher", tr("Update"), 32., 13., &t)
-                                .mt(px(12.))
-                                .w_full()
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.apply_launcher_update(cx);
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
+                    .child(
+                        ui::solid("update-launcher", tr("Update"), 32., 13., &t)
+                            .mt(px(10.))
+                            .w_full()
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.apply_launcher_update(cx);
+                                cx.notify();
+                            })),
+                    ),
+            ),
             SelfUpdate::Stuck(error) if !self.self_update_hidden => {
                 let why = self.launcher_update_help(error.as_deref());
                 let url = backend::download_page(&self.links.website);
-                foot = foot.child(
+                Some(
                     card(tr("A new version is available").to_string(), None)
                         .child(
-                            ui::text(13., FontWeight::NORMAL, ink::NOTE)
+                            ui::text(12.5, FontWeight::NORMAL, ink::NOTE)
                                 .mt(px(6.))
                                 .child(why),
                         )
@@ -439,7 +769,7 @@ impl Launcher {
                                 .flex()
                                 .flex_col()
                                 .gap(px(6.))
-                                .mt(px(12.))
+                                .mt(px(10.))
                                 .when(self.launcher_download_available(), |actions| {
                                     actions.child(
                                         ui::solid(
@@ -470,169 +800,33 @@ impl Launcher {
                                     )),
                                 ),
                         ),
-                );
+                )
             }
-            _ => {}
+            _ => None,
         }
-
-        // Sculk's card (not in the mockup, kept: a sponsor), where the old sidebar had it: at
-        // the sidebar's foot above the links, on every page (Servers shows the wide banner too).
-        // Tall where the sidebar has the height for it besides its rows, compact otherwise.
-        if !self.settings.partner_hidden {
-            let rows = self.instances.list.len() + servers.len();
-            let free = f32::from(window.viewport_size().height)
-                - 2. * MARGIN
-                - 52.
-                - 56. * rows as f32
-                - 190.;
-            let mut side = div().relative().mt(px(12.)).child(partner::card(
-                "partner-side",
-                SIDEBAR - 20.,
-                free < partner::TALL_HEIGHT,
-                &t,
-            ));
-            if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
-                side = side.child(
-                    partner::hide_button("partner-hide", &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.settings.partner_hidden = true;
-                            this.save_settings();
-                            cx.notify();
-                        },
-                    )),
-                );
-            }
-            foot = foot.child(side);
-        }
-
-        if !self.links.discord.is_empty() {
-            let url = self.links.discord.clone();
-            foot = foot.child(keyboard(
-                div()
-                    .id("discord")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(10.))
-                    .mt(px(12.))
-                    // At least 40 high: a long translation wraps onto a second line, which grows the
-                    // button instead of spilling out of it.
-                    .min_h(px(40.))
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(px(radius::ROW))
-                    .bg(ui::color(horizon_theme::glass::DISCORD))
-                    .hover(|s| s.bg(ui::color(horizon_theme::glass::DISCORD_HOVER)))
-                    .cursor_pointer()
-                    .child(ui::icon("discord", 18., gpui::white()))
-                    .child(
-                        ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                            .min_w_0()
-                            .text_center()
-                            .child(tr("Join the Discord")),
-                    )
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
-                &t,
-            ));
-        }
-        let link = |id: &'static str, label: &'static str, icon: &'static str, url: String| {
-            let id = SharedString::from(id);
-            keyboard(
-                track_hover(
-                    div()
-                        .id(id.clone())
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .h(px(36.))
-                        .px(px(8.))
-                        .rounded(px(radius::ROW))
-                        .cursor_pointer()
-                        .text_color(white(ink::SOFT))
-                        .hover(|s| s.text_color(white(ink::FULL)))
-                        .child(hover_layer(&id, white(fill::HOVER), radius::ROW, 0.))
-                        .child(ui::icon(icon, 17., white(ink::SOFT)).relative())
-                        .child(
-                            div()
-                                .relative()
-                                .font_family(horizon_theme::glass::FONT)
-                                .text_size(px(14.))
-                                .child(label),
-                        )
-                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                    id,
-                ),
-                &t,
-            )
-        };
-        let mut links = div().flex().flex_col().mt(px(8.));
-        if !self.links.sponsor.is_empty() {
-            links = links.child(link(
-                "sponsor",
-                tr("Sponsor"),
-                "favourite",
-                self.links.sponsor.clone(),
-            ));
-        }
-        if !self.links.roadmap.is_empty() {
-            links = links.child(link(
-                "roadmap",
-                tr("Roadmap"),
-                "map",
-                self.links.roadmap.clone(),
-            ));
-        }
-        if !self.links.docs.is_empty() {
-            links = links.child(link(
-                "docs",
-                tr("Documentation"),
-                "book",
-                self.links.docs.clone(),
-            ));
-        }
-        if !self.links.website.is_empty() {
-            links = links.child(link(
-                "website",
-                tr("Website"),
-                "globe-02",
-                self.links.website.clone(),
-            ));
-        }
-        foot = foot.child(links).child(
-            ui::text(12., FontWeight::NORMAL, ink::DIM)
-                .id("launcher-version")
-                .px(px(8.))
-                .pt(px(8.))
-                .child(trf("Launcher {version}", &[("version", backend::VERSION)])),
-        );
-
-        crate::glass::plate(radius::PANEL)
-            .flex()
-            .flex_col()
-            .flex_none()
-            .w(px(SIDEBAR))
-            .my(px(MARGIN))
-            .ml(px(MARGIN))
-            .overflow_hidden()
-            .child(header.relative())
-            .child(list.relative())
-            .child(foot.relative())
     }
 
-    /// The glass top bar: the pages in a glass strip, then the player, Microsoft sign-in and
-    /// Settings (`px-8 pt-3.5`).
+    /// The glass top bar, across the window above the rail and the page: the edition switch over
+    /// the rail, the pages, then search (the palette), the last native build's log and the player.
+    /// Launcher settings live in the rail.
     pub(super) fn glass_topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let wide = self.window_width >= crate::glass_home::TOP_BAR_WIDE;
         let compact = self.window_width < crate::glass_home::COMPACT;
+        let mark = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(RAIL))
+            .child(self.edition_switch(cx));
         let mut tabs = div()
             .flex()
             .items_center()
             .gap(px(if compact { 2. } else { 4. }))
             .min_w_0();
         for (page, label, _) in Page::in_top_bar(self.wardrobe_shown()) {
-            let mut item = ui::tab(format!("nav-{label}"), tr(label), self.page == page, &t);
+            let mut item = ui::nav_tab(format!("nav-{label}"), tr(label), self.page == page, &t);
             if compact {
                 item = item.px(px(8.));
             }
@@ -643,8 +837,9 @@ impl Launcher {
                 })),
             );
         }
-        let strip = crate::glass::plate(radius::LARGE)
-            .p(px(4.))
+        let strip = div()
+            .flex()
+            .items_center()
             .min_w_0()
             .when(wide, |d| d.flex_none())
             .when(!wide, |d| d.flex_shrink(1.).overflow_hidden())
@@ -656,6 +851,9 @@ impl Launcher {
         let (name, how) = self.who_plays();
         let face = self.accounts.selected().map(|a| a.uuid.clone());
         let open = self.account_menu;
+        // Signed out, the chip is only the face: the Sign in with Microsoft button beside it
+        // says it once, and the page tabs keep their room.
+        let signed_in = face.is_some();
         let chip =
             div()
                 .id("account")
@@ -676,7 +874,7 @@ impl Launcher {
                             .draw(face.as_deref(), 26., self.scale, &t),
                     ),
                 )
-                .child(
+                .children(signed_in.then(|| {
                     div()
                         .flex()
                         .flex_col()
@@ -691,8 +889,8 @@ impl Launcher {
                             ui::text(12., FontWeight::NORMAL, ink::QUIET)
                                 .line_height(px(15.))
                                 .child(how)
-                        })),
-                )
+                        }))
+                }))
                 .child(
                     ui::icon("arrow-down-01", 16., white(ink::FAINT))
                         .ml(px(4.))
@@ -743,51 +941,77 @@ impl Launcher {
                 &t,
             )
         });
-        let settings = ui::icon_button(
-            "nav-Settings",
-            "sliders-horizontal",
-            40.,
-            19.,
-            radius::CONTROL,
-            self.page == Page::Settings,
-            &t,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.go(if this.page == Page::Settings {
-                Page::Play
-            } else {
-                Page::Settings
-            });
-            cx.notify();
-        }));
-        // The last native build's log (not in the mockup, kept), as a quiet button.
-        let build_log = self.native_log.available.then(|| {
-            keyboard(
+        // Search: the palette (⌘K or Ctrl+K anywhere), as a field-shaped button.
+        let sid = SharedString::from("topbar-search");
+        let key: &str = if cfg!(target_os = "macos") {
+            "⌘K"
+        } else {
+            tr("Ctrl K")
+        };
+        let search = keyboard(
+            track_hover(
                 div()
-                    .id("topbar-native-log")
+                    .id(sid.clone())
+                    .relative()
                     .flex()
+                    .flex_none()
                     .items_center()
-                    .h(px(36.))
-                    .px(px(14.))
+                    .gap(px(10.))
+                    .h(px(38.))
+                    .w(px(if compact { 38. } else { 230. }))
+                    .when(compact, |d| d.justify_center())
+                    .when(!compact, |d| d.px(px(12.)))
                     .rounded(px(radius::CONTROL))
-                    .bg(white(fill::BUTTON))
-                    .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
+                    .bg(white(fill::FIELD))
+                    .border_1()
+                    .border_color(white(ui::edge::REST))
                     .cursor_pointer()
-                    .child(ui::text(14., FontWeight::MEDIUM, ink::FULL).child(tr("Build log")))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.native_log_open();
+                    .child(ui::hover_edge(&sid, radius::CONTROL, fill::HOVER, true))
+                    .child(ui::icon("search-01", 16., white(ink::QUIET)).relative())
+                    .when(!compact, |d| {
+                        d.child(
+                            ui::text(13.5, FontWeight::NORMAL, ink::QUIET)
+                                .relative()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(tr("Search…")),
+                        )
+                        .child(
+                            ui::text(11.5, FontWeight::MEDIUM, ink::DIM)
+                                .relative()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .h(px(20.))
+                                .px(px(6.))
+                                .rounded(px(5.))
+                                .border_1()
+                                .border_color(white(ui::edge::REST))
+                                .child(key.to_string()),
+                        )
+                    })
+                    .when(compact, |d| d.tooltip(ui::tip(tr("Search…"))))
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.palette_toggle(window, cx);
                         cx.notify();
                     })),
-                &t,
-            )
-        });
+                sid,
+            ),
+            &t,
+        );
+        // The build log isn't a top-bar button: it pushed the pages off the bar during a build.
+        // It opens from the build card and from each mod's menu.
         div()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(12.))
-            .px(px(32.))
-            .pt(px(14.))
+            .h(px(64.))
+            .pl(px(MARGIN))
+            .pr(px(MARGIN + 8.))
+            .pt(px(4.))
+            .child(mark)
             .child(strip)
             .children(self.toast_in_topbar())
             .child(
@@ -796,11 +1020,10 @@ impl Launcher {
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(px(6.))
-                    .children(build_log)
+                    .gap(px(8.))
+                    .child(search)
                     .child(account)
-                    .children(sign_in)
-                    .child(settings),
+                    .children(sign_in),
             )
     }
 
@@ -962,7 +1185,7 @@ impl Launcher {
                 item("edit", "pencil-edit-02", edit_label.into()).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         this.row_menu.open = None;
-                        this.open_instance_dialog(Some(edit.clone()));
+                        this.open_instance_sheet(edit.clone(), glass_sheet::SheetTab::General);
                         cx.notify();
                     },
                 )),
@@ -990,9 +1213,7 @@ impl Launcher {
                 item("export", "upload-04", export_label.into()).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         pick(this, &export);
-                        if this.export.is_none() {
-                            this.toggle_export();
-                        }
+                        this.open_instance_sheet(export.clone(), glass_sheet::SheetTab::Storage);
                         cx.notify();
                     },
                 )),
@@ -1001,10 +1222,7 @@ impl Launcher {
                 item("launch", "sliders-horizontal", launch_label.into()).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         pick(this, &launch);
-                        this.home_tab = home_tabs::HomeTab::Overview;
-                        // A panel left open for another instance must not turn this into Close.
-                        this.launch = None;
-                        this.toggle_launch();
+                        this.open_instance_sheet(launch.clone(), glass_sheet::SheetTab::Launch);
                         cx.notify();
                     },
                 )),

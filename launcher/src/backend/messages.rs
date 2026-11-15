@@ -50,7 +50,9 @@ pub enum Msg {
     /// The modpacks other launchers keep on this computer (`modpacks::found_on_this_computer`).
     FoundPacks(Vec<crate::other_launchers::Found>),
     /// Where the native-mods build is (`native_mods::Step::label`).
-    NativeProgress(String, crate::native_mods::Progress),
+    /// A build step, its progress, and the mod it compiles now with how far through the mods
+    /// ("fast-ore · 2 of 3"), when the step names one.
+    NativeProgress(String, crate::native_mods::Progress, Option<String>),
     NativeRegistryConsent(
         crate::native_mods::RegistryInventory,
         std::sync::mpsc::Sender<bool>,

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Թեմա",
+  "Motion": "Շարժում",
+  "Reduced": "Նվազեցված",
+  "Full": "Ամբողջական",
+  "Aa Text": "Aa Տեքստ",
+  "Prepare & play": "Պատրաստել և խաղալ",
+  "Name it, pick what it plays, then an icon.": "Անվանիր այն, ընտրիր, թե ինչ է խաղում, ապա պատկերակ։",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Անվճար բոլորի համար։ Յուրաքանչյուր թեմա ունի լուսավոր և մուգ տեսք և հիշում է դրանում ընտրած շեշտագրման գույնը։",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Նվազեցվածը կանգնեցնում է երկինքը, մարումներն ու սահումները. կոճակները միանգամից են արձագանքում։ Համակարգը հետևում է ձեր համակարգչի կարգավորմանը։",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Լուսավոր կամ մուգ, թեման, շեշտագրման գույնը, ապակին, լղոզումը և Տան ֆոնը վերադառնում են Horizon-ի սկզբնական վիճակին։",
+  "The launcher's look is back to how Horizon ships": "Գործարկիչի տեսքը վերադարձել է Horizon-ի սկզբնական վիճակին",
+  "The launcher's look is reset for now, but it could not be saved": "Գործարկիչի տեսքը մի պահ վերակայվել է, բայց չի պահպանվել",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Ապակին և Լղոզումը ձևավորում են մուգ տեսքի մշուշոտ վահանակները. լուսավորը գծում է անընդմեջ սպիտակ վահանակներ։",
+  "Performance mode draws solid panels, without glass or blur.": "Կատարողական ռեժիմը գծում է անընդմեջ վահանակներ՝ առանց ապակու և լղոզման։",
+  "This theme's night draws solid panels, without glass or blur.": "Այս թեմայի գիշերը գծում է անընդմեջ վահանակներ՝ առանց ապակու և լղոզման։"
 }

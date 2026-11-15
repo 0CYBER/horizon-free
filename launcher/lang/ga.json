@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Téama",
+  "Motion": "Gluaiseacht",
+  "Reduced": "Laghdaithe",
+  "Full": "Iomlán",
+  "Aa Text": "Aa Téacs",
+  "Prepare & play": "Ullmhú agus imirt",
+  "Name it, pick what it plays, then an icon.": "Ainmnigh é, roghnaigh cad a imríonn sé, ansin deilbhín.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Saor in aisce do chách. Tá cuma éadrom agus cuma dhorcha ag gach téama, agus cuimhníonn sé an dath aiceanta a roghnaíonn tú faoi.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Cuireann Laghdaithe stop leis an spéir, leis na céimnithe agus leis na sleamhnáin; freagraíonn na cnaipí láithreach. Leanann an Córas socrú do ríomhaire.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Éadrom nó dorcha, téama, dath aiceanta, gloine, doiléire agus cúlra an Bhaile téann siad ar ais chuig an tslí a sheoltar Horizon.",
+  "The launcher's look is back to how Horizon ships": "Tá cuma an tosaitheora ar ais chuig an tslí a sheoltar Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Tá cuma an tosaitheora athshocraithe faoi láthair, ach níor sábháladh é",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Cruthaíonn Gloine agus Doiléire na painéil reoite den chuma dhorcha; tarraingíonn an chuma éadrom painéil bhána sholadacha.",
+  "Performance mode draws solid panels, without glass or blur.": "Tarraingíonn mód feidhmíochta painéil sholadacha, gan ghloine ná doiléire.",
+  "This theme's night draws solid panels, without glass or blur.": "Tarraingíonn oíche an téama seo painéil sholadacha, gan ghloine ná doiléire."
 }

@@ -589,3 +589,13 @@ fn switching_what_an_instance_plays_keeps_its_worlds_mods_and_settings() {
     assert_eq!(files(&home.join("saves")), home_files);
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn an_instance_without_a_channel_is_nightly_and_an_unknown_one_too() {
+    let meta: Meta = serde_json::from_str("{}").unwrap();
+    assert_eq!(meta.channel.unwrap_or_default(), Channel::Nightly);
+    let meta: Meta = serde_json::from_str(r#"{"channel":"stable","group":"g"}"#).unwrap();
+    assert_eq!(meta.channel, Some(Channel::Stable));
+    let meta: Meta = serde_json::from_str(r#"{"channel":"beta","group":"g"}"#).unwrap();
+    assert_eq!((meta.channel, meta.group.as_deref()), (None, Some("g")));
+}

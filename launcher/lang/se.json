@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Fáddá",
+  "Motion": "Lihkadeapmi",
+  "Reduced": "Unnibeapmi",
+  "Full": "Ollas",
+  "Aa Text": "Aa Teaksta",
+  "Prepare & play": "Válmmaštuvvo ja speallá",
+  "Name it, pick what it plays, then an icon.": "Geafii nama, vállje mii speallá, ja dalle govaš.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Nuvttá buohkaide. Juohke fáddás lea čuvgga ja seavdnjat ođđa, ja ii vájde muittus akseantaivnni maid válljet dan vuolde.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Unnibeapmi bisfaha almmi, jávkanemiid ja lihkadeami; boalut vástidit oidnovuotii. Systema čuvgu dahje seavdnjadaga du dihtora.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Čuvgga dahje seavdnjat, fáddá, akseantaivdni, láse, blur ja Ruovttu duogáš mannet ruovttoluotta dasa mo Horizon sáddejuvvo.",
+  "The launcher's look is back to how Horizon ships": "Álggaheaddji hápmi lea fas dasa mo Horizon sáddejuvvo",
+  "The launcher's look is reset for now, but it could not be saved": "Álggaheaddji hápmi lea dál nuppástuhtti, muhto ii sáhttán vurkejuvvot",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Láse ja Blur hápmidit gálbmalásipaneelaid seavdnjat hámis; čuvgga ravggaha dearvvaš vilges panealaid.",
+  "Performance mode draws solid panels, without glass or blur.": "Doaibmavuohki ravggaha dearvvaš panealaid, haga láse ja blur.",
+  "This theme's night draws solid panels, without glass or blur.": "Mannu dáhpáhus fáddá ravggaha dearvvaš panealaid, haga láse ja blur."
 }

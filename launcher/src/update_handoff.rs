@@ -6,9 +6,9 @@
 //! process holds, which closes with it). If the launcher in place is already that version or newer
 //! it changes nothing. Otherwise it checks the signed SHA-256 again and puts the new launcher in
 //! place ([`backend::place_checked`], the same code `horizon-launcher update` uses), then starts
-//! it. When that fails it starts the old one again, which says why ([`take_failure`]). A window
-//! closed with an update staged hands it over the same way without the restart ([`on_quit`]), so a
-//! launcher nobody updates by hand still updates itself.
+//! it. When that fails it starts the old one again, which says why ([`take_failure`]). Nothing
+//! goes in without Update: a window closed with an update staged drops it ([`forget`]), and the
+//! next start checks again.
 //!
 //! `main` handles the command before the CLI parser, so MCP and the completions never list it.
 //! Every launcher keeps it: the installer is whatever launcher file is in place when Update is
@@ -31,7 +31,7 @@ const SHA256_ENV: &str = "HORIZON_LAUNCHER_UPDATE_SHA256";
 /// under a running launcher too (the old file is moved aside, not overwritten).
 const WAIT: Duration = Duration::from_secs(60);
 
-/// The update a closing window hands over ([`on_quit`]).
+/// The update Update hands over ([`start_now`]).
 static PENDING: Mutex<Option<Staged>> = Mutex::new(None);
 
 pub fn set_pending(staged: Option<Staged>) {
@@ -44,15 +44,6 @@ pub fn forget() {
     let staged = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(staged) = staged {
         backend::remove_stage(&backend::update_work_dir(), &staged.payload);
-    }
-}
-
-/// The window is closing: a staged update goes in once it has exited, and the next start is the
-/// new launcher.
-pub fn on_quit() {
-    let staged = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take();
-    if let Some(staged) = staged {
-        let _ = hand_over(&staged, false);
     }
 }
 

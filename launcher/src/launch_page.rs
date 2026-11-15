@@ -624,3 +624,153 @@ impl Launcher {
         )
     }
 }
+
+impl Launcher {
+    /// The instance sheet's Launch section in the glass look: the commands around the game, its
+    /// variables, and the Linux switches this computer can use. Opens the panel's state for the
+    /// selected instance when it isn't yet.
+    pub(super) fn glass_hooks(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        use crate::glass_ui as ui;
+        use horizon_theme::glass::ink;
+        let t = self.theme;
+        let selected = self.selected_instance()?.clone();
+        if self.launch.as_ref().map(|p| &p.instance) != Some(&selected.id) {
+            self.launch = None;
+            self.toggle_launch();
+        }
+        let panel = self.launch.as_ref()?;
+        let (saved, found) = (panel.saved.clone(), panel.found);
+        let row = |this: &mut Self,
+                   cx: &mut Context<Self>,
+                   label: &'static str,
+                   field: Field,
+                   placeholder: &'static str,
+                   about: &'static str| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(ui::text(13.5, FontWeight::MEDIUM, ink::FULL).child(tr(label)))
+                .child(this.field(field, tr(placeholder), 560., cx))
+                .child(ui::text(12.5, FontWeight::NORMAL, ink::NOTE).child(tr(about)))
+        };
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(18.))
+            .child(row(
+                self,
+                cx,
+                "Before the game",
+                Field::PreLaunch,
+                "For example ./backup.sh",
+                "A shell command, run in the instance's folder. The game starts only if it succeeds.",
+            ))
+            .child(row(
+                self,
+                cx,
+                "Run the game through",
+                Field::Wrapper,
+                "For example nice -n 5",
+                "A program and its arguments; the game's command line goes after them.",
+            ))
+            .child(row(
+                self,
+                cx,
+                "After the game",
+                Field::PostExit,
+                "For example ./backup.sh",
+                "A shell command, run in the instance's folder once the game has exited.",
+            ))
+            .child(row(
+                self,
+                cx,
+                "Environment variables",
+                Field::LaunchEnv,
+                "For example NAME=value OTHER=\"two words\"",
+                "For the game and the commands; INST_NAME, INST_DIR and the other instance variables are set too.",
+            ));
+        let result = saved.map(|s| match s {
+            Ok(Some(what)) => ui::text(12.5, FontWeight::NORMAL, ink::NOTE)
+                .child(trf("Saved: the next Play {what}.", &[("what", &what)])),
+            Ok(None) => ui::text(12.5, FontWeight::NORMAL, ink::NOTE)
+                .child(tr("Saved: nothing runs around the game.")),
+            Err(e) => ui::text(12.5, FontWeight::NORMAL, ink::FULL)
+                .text_color(ui::color(horizon_theme::glass::DANGER_HOVER))
+                .child(e),
+        });
+        body =
+            body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(ui::solid("launch-save", tr("Save"), 36., 14., &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.save_launch();
+                            cx.notify();
+                        }),
+                    ))
+                    .children(result),
+            );
+        // Linux only, and only what this computer has (`launch::Found`).
+        if found.any() {
+            let now = selected.launch.clone();
+            let gpu_about = match found.nvidia {
+                true => "NVIDIA render offload: __NV_PRIME_RENDER_OFFLOAD and its Vulkan layer.",
+                false => "Mesa's DRI_PRIME=1, so Vulkan picks the other card.",
+            };
+            let mut list =
+                div().flex().flex_col().gap(px(12.)).child(
+                    ui::text(13.5, FontWeight::MEDIUM, ink::FULL).child(tr("On this computer")),
+                );
+            for (toggle, shown, on, label, about) in [
+                (
+                    Toggle::GameMode,
+                    found.gamemode,
+                    now.gamemode,
+                    "GameMode",
+                    "Feral's gamemoderun: CPU and scheduler tuned while you play.",
+                ),
+                (
+                    Toggle::MangoHud,
+                    found.mangohud,
+                    now.mangohud,
+                    "MangoHud",
+                    "The frame time, CPU and GPU overlay.",
+                ),
+                (
+                    Toggle::Gpu,
+                    found.two_gpus,
+                    now.dedicated_gpu,
+                    "Dedicated graphics card",
+                    gpu_about,
+                ),
+            ] {
+                if !shown {
+                    continue;
+                }
+                list = list.child(ui::setting_row(
+                    tr(label),
+                    Some(div().child(tr(about)).into_any_element()),
+                    Some(
+                        ui::toggle(
+                            SharedString::from(format!("hook-{label}")),
+                            on,
+                            self.look.accent,
+                            self.look.on_accent,
+                            &t,
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.flip(toggle);
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    ),
+                ));
+            }
+            body = body.child(list);
+        }
+        Some(body)
+    }
+}

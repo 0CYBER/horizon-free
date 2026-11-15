@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Chủ đề",
+  "Motion": "Chuyển động",
+  "Reduced": "Giảm",
+  "Full": "Đầy đủ",
+  "Aa Text": "Aa Văn bản",
+  "Prepare & play": "Chuẩn bị và chơi",
+  "Name it, pick what it plays, then an icon.": "Đặt tên, chọn nó chạy gì, rồi một biểu tượng.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Miễn phí cho mọi người. Mỗi chủ đề có giao diện sáng và giao diện tối, và nhớ màu nhấn bạn chọn trong đó.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Giảm dừng bầu trời, hiệu ứng mờ dần và trượt; các nút vẫn phản hồi ngay lập tức. Hệ thống theo cài đặt của máy tính bạn.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Sáng hoặc tối, chủ đề, màu nhấn, kính, độ mờ và nền của Trang chủ trở về mặc định của Horizon.",
+  "The launcher's look is back to how Horizon ships": "Giao diện launcher đã về mặc định của Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Giao diện launcher đã được đặt lại tạm thời, nhưng không lưu được",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Kính và Độ mờ tạo hình các bảng kính mờ của giao diện tối; giao diện sáng vẽ bảng trắng đặc.",
+  "Performance mode draws solid panels, without glass or blur.": "Chế độ hiệu suất vẽ bảng đặc, không kính, không độ mờ.",
+  "This theme's night draws solid panels, without glass or blur.": "Ban đêm của chủ đề này vẽ bảng đặc, không kính, không độ mờ."
 }

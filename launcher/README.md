@@ -349,8 +349,8 @@ every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloa
 against the release's signed `SHA256SUMS`, and says "A new version is available" in the sidebar with
 **Update**: the window closes, the launcher's own file runs again as the installer (`apply-update`,
 `src/update_handoff.rs`), which waits for the window's process to exit, puts the new launcher in place (the
-binary, the `.app` bundle or the AppImage) and starts it. Closing the window with an update downloaded installs
-it the same way, so the next start is the new launcher. When the installer can't put it in place, the old
+binary, the `.app` bundle or the AppImage) and starts it. Nothing goes in without **Update**: closing the window
+drops a downloaded update, and the next start checks again. When the installer can't put it in place, the old
 launcher starts again and says why. Each process stages in its own folder, and the installer checks the signed
 SHA-256 again before anything goes in; when the launcher in place is already that version or newer, it changes
 nothing. Servers keep running through **Update**. A copy that can't replace itself says so at once and offers

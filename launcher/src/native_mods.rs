@@ -43,7 +43,7 @@ mod picker;
 mod prebuilt;
 pub mod sdk_cache;
 
-pub use isolate::LeftOut;
+pub use isolate::{LeftOut, Why};
 pub use picker::{Route, Routes};
 pub use prebuilt::Refusal;
 pub use registry_inventory::Inventory as RegistryInventory;
@@ -961,6 +961,12 @@ pub enum Step {
     BackedUp(String),
     /// The mods compile against the prebuilt game.
     PrebuiltMods,
+    /// One mod's own library starts compiling: which, and how far through the mods.
+    Mod {
+        id: String,
+        done: usize,
+        total: usize,
+    },
     Install,
     /// This mod was left out of the build.
     LeftOut(LeftOut),
@@ -1025,6 +1031,10 @@ impl Step {
                 total.filter(|t| *t > 0).map(|t| *done as f32 / t as f32),
             ),
             Self::PrebuiltMods => (Stage::Compile, None),
+            Self::Mod { done, total, .. } => (
+                Stage::Compile,
+                (*total > 0).then(|| done.saturating_sub(1) as f32 / *total as f32),
+            ),
             Self::Install => (Stage::Install, None),
             Self::Done { .. } => (Stage::Install, Some(1.)),
         };
@@ -1062,6 +1072,14 @@ impl Step {
                 count => trf("Checking {count} mods", &[("count", &count.to_string())]),
             },
             Self::PrebuiltMods => tr("Compiling the mods against the prebuilt game").into(),
+            Self::Mod { id, done, total } => trf(
+                "Compiling {mod} ({done} of {total})",
+                &[
+                    ("mod", id),
+                    ("done", &done.to_string()),
+                    ("total", &total.to_string()),
+                ],
+            ),
             Self::Plan(plan, profile) => format!("{} ({})", plan.label(), profile.name()),
             Self::Compile {
                 done,
@@ -1259,7 +1277,7 @@ fn with_app_control(error: String) -> String {
 }
 
 /// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
-fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
+pub fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
     let end = diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"));
     let first: Vec<&str> = errors
         .iter()
@@ -2162,6 +2180,13 @@ fn pipeline(
             &declared,
             &resolution,
             options.registry_consent,
+            &|id, done, total| {
+                progress(Step::Mod {
+                    id: id.to_owned(),
+                    done,
+                    total,
+                })
+            },
         )
         .map_err(blame)?;
         // The whole step; the tool's own build and the function replacement have their lines.
@@ -2697,7 +2722,7 @@ mod tests {
 
     #[test]
     fn isolation_keeps_cancellation_exact_after_a_retry() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let mut attempts = 0;
         let result = isolated(
             |skip| {
@@ -2725,7 +2750,7 @@ mod tests {
     #[test]
     fn a_mod_saved_into_a_world_is_never_switched_off_without_the_players_choice() {
         use horizon_platform::world::nbt::{self, Limits, Tag};
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let home = dir("guard-worlds");
         let world = home.join("saves").join("Home");
         fs::create_dir_all(&world).unwrap();
@@ -2825,7 +2850,7 @@ mod tests {
 
     #[test]
     fn isolation_bounds_recompiles_and_keeps_the_failure() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let mut attempts = 0;
         let result = isolated(
             |skip| {
@@ -2949,6 +2974,31 @@ mod tests {
         );
         assert!(!carried_over(OsStr::new(backend::CLIENT), Target::Server));
         assert!(carried_over(OsStr::new("resources"), Target::Server));
+    }
+
+    /// Takes the shared test lock after checking that settings, build log and builds resolve
+    /// under the lib tests' scratch home, never a real install (no env changes: they race). A
+    /// home the developer set with `HORIZON_LAUNCHER_HOME` / `HORIZON_HOME` is theirs to choose.
+    pub(super) fn scratch_state() -> std::sync::MutexGuard<'static, ()> {
+        let scratch = crate::data_location::test_home();
+        let set = |name| std::env::var_os(name).is_some();
+        if !set("HORIZON_LAUNCHER_HOME") {
+            assert!(
+                backend::data_dir().starts_with(&scratch),
+                "settings outside the scratch home"
+            );
+            assert!(
+                backend::build_dir().starts_with(&scratch),
+                "builds outside the scratch home"
+            );
+        }
+        if !set("HORIZON_HOME") {
+            assert!(
+                backend::game_home().starts_with(&scratch),
+                "game outside the scratch home"
+            );
+        }
+        TEST_STATE.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub(super) fn dir(name: &str) -> PathBuf {
@@ -3428,7 +3478,7 @@ mod tests {
 
     #[test]
     fn a_native_build_without_a_record_is_refused_before_preparation() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let lease = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
         let Err(error) = pipeline(
             &lease,
@@ -3755,7 +3805,7 @@ mod tests {
     /// and no instance is edited or version selected.
     #[test]
     fn a_server_build_refuses_an_existing_output_before_building() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         backend::Settings::load().allow_native_mods().unwrap();
         let output = dir("server-output");
         let folder = dir("server-mods");
@@ -3802,7 +3852,7 @@ mod tests {
 
     #[test]
     fn automatic_build_does_not_save_its_effective_profile() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let original = backend::Settings::load();
         backend::Settings::load().allow_native_mods().unwrap();
         let file = backend::data_dir().join("instances.json");
@@ -3834,7 +3884,7 @@ mod tests {
 
     #[test]
     fn folder_planning_reuses_the_build_snapshot_without_restaging_packages() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let original = backend::Settings::load();
         backend::Settings::load().allow_native_mods().unwrap();
         let folder = dir("profile-snapshot");
@@ -3864,7 +3914,7 @@ mod tests {
     #[test]
     fn missing_consent_blocks_all_build_routes_before_http_or_staging() {
         use std::net::TcpListener;
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         let original = backend::Settings::load();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -3936,7 +3986,7 @@ mod tests {
     /// one log file.
     #[test]
     fn the_log_is_fresh_per_attempt_and_keeps_early_failures() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         backend::Settings::load().allow_native_mods().unwrap();
         clear_log().unwrap();
         append_log("the last build's output").unwrap();
@@ -4233,7 +4283,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_build_smart_app_control_blocked_says_how_to_build() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         clear_log().unwrap();
         // cargo's output on Windows 11 25H2 with Smart App Control on (the report in #5911).
         let mut cmd = Command::new("sh");
@@ -4264,7 +4314,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn each_command_logs_its_time() {
-        let _guard = TEST_STATE.lock().unwrap();
+        let _guard = scratch_state();
         clear_log().unwrap();
         // Its stdout, which goes to the log, does not end its line.
         let mut cmd = Command::new("sh");

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тэма",
+  "Motion": "Рух",
+  "Reduced": "Паменшаны",
+  "Full": "Поўны",
+  "Aa Text": "Aa Тэкст",
+  "Prepare & play": "Падрыхтаваць і згуляць",
+  "Name it, pick what it plays, then an icon.": "Дайце імя, выберыце, што яна запускае, потым значок.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Бясплатна для ўсіх. У кожнай тэмы ёсць светлы і цёмны выгляд, і яна помніць акцэнтны колер, выбраны пад ёй.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Паменшаны спыняе неба, згасанні і перасоўванні; кнопкі адразу адказваюць. Сістэма прытрымліваецца налады вашага камп'ютара.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Светлы або цёмны, тэма, акцэнтны колер, шкло, размыццё і фон Галоўнай вяртаюцца да таго, з чым пастаўляецца Horizon.",
+  "The launcher's look is back to how Horizon ships": "Выгляд лаўнчара зноў такі, з чым пастаўляецца Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Выгляд лаўнчара пакуль скінуты, але яго не ўдалося захаваць",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Шкло і Размыццё фарміруюць матавыя панэлі цёмнага афармлення; светлае малюе суцэльныя белыя панэлі.",
+  "Performance mode draws solid panels, without glass or blur.": "Рэжым прадукцыйнасці малюе суцэльныя панэлі, без шкла і размыцця.",
+  "This theme's night draws solid panels, without glass or blur.": "Ноч гэтай тэмы малюе суцэльныя панэлі, без шкла і размыцця."
 }

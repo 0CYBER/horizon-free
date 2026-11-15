@@ -57,6 +57,8 @@ pub(super) struct InstanceDialog {
     pub(super) java: new_instance::JavaChoice,
     /// The Horizon version it keeps (`Instance::version`); None follows the launcher's.
     pub(super) pin: Option<String>,
+    /// The builds "latest" follows (`Instance::channel`); a new instance starts on Stable.
+    pub(super) channel: instances::Channel,
     /// The loader logo `picture` was made from, when it was one.
     pub(super) logo: Option<&'static str>,
 }
@@ -105,7 +107,16 @@ impl Launcher {
     pub(super) fn version_of(&self, instance: &Instance) -> Option<&String> {
         match &instance.version {
             Some(own) => self.installed.iter().find(|t| *t == own),
-            None => self.launcher_version(),
+            // Latest of its channel: the newest installed Stable build, or the launcher's
+            // version (which follows the newest Nightly; also what is left offline).
+            None => match instance.channel {
+                instances::Channel::Stable => self
+                    .stable_builds()
+                    .iter()
+                    .find_map(|b| self.installed.iter().find(|t| **t == b.tag))
+                    .or_else(|| self.launcher_version()),
+                instances::Channel::Nightly => self.launcher_version(),
+            },
         }
     }
 
@@ -275,7 +286,18 @@ impl Launcher {
     }
 
     /// Opens the dialog for a new instance, or for changing `editing`.
+    /// The instance sheet for `instance`, open on `tab`. It picks the instance, since Launch and
+    /// Storage act on the one picked.
+    pub(super) fn open_instance_sheet(&mut self, instance: Instance, tab: glass_sheet::SheetTab) {
+        if matches!(instance.kind, InstanceKind::Default | InstanceKind::Own) {
+            self.select_instance(&instance);
+        }
+        self.sheet_tab = tab;
+        self.open_instance_dialog(Some(instance));
+    }
+
     pub(super) fn open_instance_dialog(&mut self, editing: Option<Instance>) {
+        self.version_menu = false;
         let editing_one = editing.is_some();
         let (name, group) = editing
             .as_ref()
@@ -283,6 +305,17 @@ impl Launcher {
             .unwrap_or_default();
         self.servers.text(Field::InstanceName).set(name);
         self.servers.text(Field::InstanceGroup).set(group);
+        let game = editing
+            .as_ref()
+            .and_then(|i| i.java.clone())
+            .unwrap_or_default();
+        let (width, height) = game
+            .window
+            .map(|(w, h)| (w.to_string(), h.to_string()))
+            .unwrap_or_default();
+        self.servers.text(Field::JavaArgs).set(game.jvm_args);
+        self.servers.text(Field::WindowWidth).set(width);
+        self.servers.text(Field::WindowHeight).set(height);
         self.servers.focus_soon = Some(Field::InstanceName);
         // What it plays now: Edit can switch it (`instances::switch`).
         let java = match editing.as_ref().and_then(|i| i.java.as_ref()) {
@@ -303,6 +336,9 @@ impl Launcher {
         self.instances.dialog = Some(InstanceDialog {
             icon: editing.as_ref().and_then(|i| i.icon.clone()),
             pin: editing.as_ref().and_then(|i| i.version.clone()),
+            channel: editing
+                .as_ref()
+                .map_or(instances::Channel::Stable, |i| i.channel),
             logo: None,
             picture: None,
             editing: editing.map(|i| i.id),
@@ -347,6 +383,17 @@ impl Launcher {
         let selected = self.selected_instance().map(|i| i.id.clone());
         let name = self.servers.value(Field::InstanceName).trim().to_string();
         let group = Some(self.servers.value(Field::InstanceGroup).to_string());
+        // A Java instance's arguments and window (the sheet's Launch): both sizes or neither.
+        let jvm_args = self.servers.value(Field::JavaArgs).trim().to_string();
+        let size = |f: Field| {
+            self.servers
+                .value(f)
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+        };
+        let window = size(Field::WindowWidth).zip(size(Field::WindowHeight));
         // A Horizon version picked but not installed downloads once the instance is saved.
         let download = self
             .draft_horizon()
@@ -367,7 +414,7 @@ impl Launcher {
             return;
         };
         let icon = d.icon.clone();
-        let pin = d.pin.clone();
+        let (pin, channel) = (d.pin.clone(), d.channel);
         let picture = d
             .picture
             .as_ref()
@@ -422,8 +469,13 @@ impl Launcher {
                 m.name = Some(name);
                 m.group = group;
                 m.icon = icon;
+                if let Some(game) = m.java.as_mut().filter(|_| edited) {
+                    game.jvm_args = jvm_args;
+                    game.window = window;
+                }
                 if plays_horizon {
                     m.version = pin;
+                    m.channel = Some(channel);
                 }
             })?;
             if let Some(png) = picture {
@@ -868,7 +920,11 @@ impl Launcher {
 
 impl Launcher {
     /// Delete…, for every instance but Horizon's own (the game's home); not while a game runs.
-    fn delete_button(&self, instance: &Instance, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    pub(super) fn delete_button(
+        &self,
+        instance: &Instance,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
         if instance.kind == InstanceKind::Default {
             return None;
         }
@@ -888,7 +944,11 @@ impl Launcher {
     }
 
     /// "Move it to the Trash?" under the actions, once Delete… is pressed.
-    fn delete_confirmation(&self, instance: &Instance, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn delete_confirmation(
+        &self,
+        instance: &Instance,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         if self.instances.confirm_delete.as_ref() != Some(&instance.id) {
             return None;
         }

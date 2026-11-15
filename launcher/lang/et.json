@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Teema",
+  "Motion": "Liikumine",
+  "Reduced": "Vähendatud",
+  "Full": "Täielik",
+  "Aa Text": "Aa Tekst",
+  "Prepare & play": "Valmista ette ja mängi",
+  "Name it, pick what it plays, then an icon.": "Anna nimi, vali, mida see mängib, seejärel ikoon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Tasuta kõigile. Igal teemal on heled ja tume välimus ning see jätab meelde aktsentvärvi, mille seal valid.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Vähendatud peatab taeva, hääbumised ja libisemised; nupud vastavad kohe. Süsteem järgib teie arvuti seadistust.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Hele või tume, teema, aktsentvärv, klaas, udustus ja Kodu taust lähevad tagasi Horizoni algseadetele.",
+  "The launcher's look is back to how Horizon ships": "Käivitaja välimus on tagasi Horizoni algseadete juures",
+  "The launcher's look is reset for now, but it could not be saved": "Käivitaja välimus on praegu lähtestatud, aga seda ei õnnestunud salvestada",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Klaas ja Udustus kujundavad tumeda välimuse hägusad paneelid; heled joonib ühtlaselt valged paneelid.",
+  "Performance mode draws solid panels, without glass or blur.": "Jõudlusrežiim joonib ühtlased paneelid, ilma klaasi ja udustuseta.",
+  "This theme's night draws solid panels, without glass or blur.": "Selle teema öö joonib ühtlased paneelid, ilma klaasi ja udustuseta."
 }

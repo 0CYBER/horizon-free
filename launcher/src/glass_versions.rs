@@ -58,7 +58,8 @@ fn badge(tone: Tone, label: &str) -> Div {
 fn nightly_card_text(release: &Release) -> Option<(String, String)> {
     release.nightly.as_ref()?;
     let date = published(&release.date, "");
-    let title = format!("{} · {date}", tr("Nightly"));
+    // Named as everywhere else ("Nov 7 update"); the commit stays the detail under it.
+    let title = trf("{date} update", &[("date", &date)]);
     let commit = horizon_launcher::nightly::label(&release.tag)
         .and_then(|label| {
             label
@@ -256,10 +257,10 @@ impl Launcher {
                     line = published(&release.date, &release.time);
                 }
                 let right = self.glass_release_action(&release, cx);
-                let notes = self.notes_section(&release, cx);
+                let notes = self.glass_whats_new(&release, i == 0, cx);
                 let card = self
                     .glass_version_card(&release.tag, title, &mut line, i == 0, on_disk, right)
-                    .child(notes);
+                    .children(notes);
                 if i == 1 {
                     div()
                         .flex()
@@ -267,7 +268,7 @@ impl Launcher {
                         .gap(px(10.))
                         .child(
                             ui::text(13., FontWeight::NORMAL, ink::QUIET)
-                                .child(tr("Older versions kept")),
+                                .child(tr("Older versions")),
                         )
                         .child(card)
                 } else {
@@ -351,7 +352,10 @@ impl Launcher {
                                     .when(latest, |d| {
                                         d.child(badge(Tone::Accent(look.accent_soft), "Latest"))
                                     })
-                                    .when(in_use, |d| d.child(badge(Tone::Live, "In use"))),
+                                    .when(in_use, |d| d.child(badge(Tone::Live, "In use")))
+                                    .when(installed && !in_use, |d| {
+                                        d.child(badge(Tone::Off, "Installed"))
+                                    }),
                             )
                             .child(
                                 ui::text(13., FontWeight::NORMAL, 0.6)
@@ -534,7 +538,12 @@ impl Launcher {
             for tag in tags {
                 let mut line = Vec::new();
                 if let Some(about) = native_mods::about(&tag) {
-                    line.push(trf("Built on {base}", &[("base", &about.base)]));
+                    line.push(trf(
+                        "Built on {base}",
+                        &[("base", &crate::glass_instance::version_label(&about.base))],
+                    ));
+                    // The build's own name stays in the details, for reports.
+                    line.push(tag.clone());
                 }
                 if let Some(about) = build_import::about(&tag) {
                     let base = horizon_launcher::nightly::label(&about.base).unwrap_or(about.base);
@@ -548,9 +557,13 @@ impl Launcher {
                 } else {
                     self.glass_version_actions(&tag, cx).into_any_element()
                 };
-                let title = horizon_launcher::nightly::label(&tag)
-                    .or_else(|| build_import::label(&tag))
-                    .unwrap_or_else(|| tag.trim_start_matches('v').to_string());
+                let title = if native_mods::is_native(&tag) {
+                    crate::glass_instance::version_label(&tag)
+                } else {
+                    horizon_launcher::nightly::label(&tag)
+                        .or_else(|| build_import::label(&tag))
+                        .unwrap_or_else(|| tag.trim_start_matches('v').to_string())
+                };
                 d = d.child(self.glass_version_card(&tag, title, &mut line, false, on_disk, right));
             }
             d
@@ -621,6 +634,113 @@ impl Launcher {
     }
 }
 
+impl Launcher {
+    /// The tag Home's "What's new" opens: the played build's, else the newest with notes.
+    pub(super) fn whats_new_tag(&self) -> Option<String> {
+        let Load::Ready(list) = &self.releases else {
+            return None;
+        };
+        let has = |r: &&Release| !crate::glass_home_tabs::patch_sections(&r.body).is_empty();
+        let played = self
+            .selected()
+            .filter(|_| self.selected_instance().is_some_and(|i| i.java.is_none()));
+        list.iter()
+            .filter(has)
+            .find(|r| Some(&r.tag) == played)
+            .or_else(|| list.iter().filter(has).find(|r| r.nightly.is_some()))
+            .map(|r| r.tag.clone())
+    }
+
+    /// A card's "What's new" toggle and, opened, its notes by section. None without notes.
+    fn glass_whats_new(
+        &self,
+        release: &Release,
+        newest: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let sections = crate::glass_home_tabs::patch_sections(&release.body);
+        if sections.is_empty() {
+            return None;
+        }
+        let open = match &self.whats_new_open {
+            Some(set) => set.contains(&release.tag),
+            None => newest,
+        };
+        let many = sections.len() > 1;
+        let tag = release.tag.clone();
+        let turn = ui::icon("arrow-down-01", 16., ui::white(ink::NOTE)).with_transformation(
+            gpui::Transformation::rotate(gpui::radians(if open {
+                std::f32::consts::PI
+            } else {
+                0.
+            })),
+        );
+        let toggle = div()
+            .id(SharedString::from(format!("whats-new-{tag}")))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .cursor_pointer()
+            .child(ui::text(14., FontWeight::MEDIUM, ink::BODY).child(tr("What's new")))
+            .child(turn)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                let was_newest = matches!(&this.releases, Load::Ready(l) if l.first().is_some_and(|r| r.tag == tag));
+                let set = this.whats_new_open.get_or_insert_with(|| {
+                    if was_newest { std::iter::once(tag.clone()).collect() } else { Default::default() }
+                });
+                if !set.remove(&tag) {
+                    set.insert(tag.clone());
+                }
+                cx.notify();
+            }));
+        let list =
+            open.then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .max_w(px(640.))
+                    .children(sections.into_iter().map(|(section, items)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .children(many.then(|| {
+                                ui::text(13., FontWeight::MEDIUM, ink::QUIET).child(section)
+                            }))
+                            .child(div().mt(px(6.)).flex().flex_col().gap(px(6.)).children(
+                                items.into_iter().map(|item| {
+                                    div()
+                                        .flex()
+                                        .gap(px(10.))
+                                        .child(
+                                            div()
+                                                .flex_none()
+                                                .mt(px(9.))
+                                                .size(px(5.))
+                                                .rounded_full()
+                                                .bg(ui::white(0.4)),
+                                        )
+                                        .child(
+                                            ui::text(14., FontWeight::NORMAL, ink::STRONG)
+                                                .line_height(px(21.))
+                                                .min_w_0()
+                                                .child(item),
+                                        )
+                                }),
+                            ))
+                    }))
+            });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(toggle)
+                .children(list),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,8 +759,7 @@ mod tests {
         };
 
         let (title, commit) = nightly_card_text(&release).expect("nightlies have card text");
-        assert!(title.contains("Nightly"));
-        assert!(title.contains("Nov 7"));
+        assert_eq!(title, "Nov 7 update");
         assert_eq!(commit, "4aa6854");
     }
 }

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тема",
+  "Motion": "Рух",
+  "Reduced": "Зменшений",
+  "Full": "Повний",
+  "Aa Text": "Aa Текст",
+  "Prepare & play": "Підготувати і грати",
+  "Name it, pick what it plays, then an icon.": "Дайте назву, оберіть, що вона запускає, потім значок.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Безкоштовно для всіх. Кожна тема має світлий і темний вигляд і запам'ятовує колір акценту, який ви обрали в ній.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Зменшений зупиняє небо, згасання і зсуви; кнопки реагують одразу. «Як у системі» повторює налаштування вашого комп'ютера.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Світла чи темна, тема, колір акценту, скло, розмиття і фон Головної повертаються до початкових у Horizon.",
+  "The launcher's look is back to how Horizon ships": "Вигляд лаунчера знову як початковий у Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Вигляд лаунчера поки скинуто, але не вдалося зберегти",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Скло і Розмиття формують матові панелі темного вигляду; світлий малює суцільні білі панелі.",
+  "Performance mode draws solid panels, without glass or blur.": "Режим продуктивності малює суцільні панелі, без скла і розмиття.",
+  "This theme's night draws solid panels, without glass or blur.": "Ніч цієї теми малює суцільні панелі, без скла і розмиття."
 }

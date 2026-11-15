@@ -499,6 +499,7 @@ pub(super) fn danger_line(message: String) -> Div {
 pub(super) fn danger_button(id: SharedString, label: SharedString) -> Stateful<Div> {
     div()
         .id(id)
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -506,9 +507,13 @@ pub(super) fn danger_button(id: SharedString, label: SharedString) -> Stateful<D
         .px(px(12.))
         .rounded(px(radius::CONTROL))
         .cursor_pointer()
-        .hover(|s| s.bg(gpui::rgba(horizon_theme::glass::DANGER_HOVER << 8 | 0x1f)))
+        .child(ui::back_tint(
+            radius::CONTROL,
+            gpui::rgba(horizon_theme::glass::DANGER_HOVER << 8 | 0x1f).into(),
+        ))
         .child(
             ui::text(13., FontWeight::MEDIUM, ink::FULL)
+                .relative()
                 .text_color(ui::danger())
                 .child(label),
         )

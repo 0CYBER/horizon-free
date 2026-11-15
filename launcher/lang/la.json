@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Motus",
+  "Reduced": "Minutus",
+  "Full": "Plenus",
+  "Aa Text": "Aa Textus",
+  "Prepare & play": "Para et lude",
+  "Name it, pick what it plays, then an icon.": "Nomen da, quid ludat elige, deinde signum.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis omnibus. Quaeque tema speciem lucidam et obscuram habet et colorem insignem quem sub ea eligis meminit.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Minutus caelum, evanescumenta et lapsus stat; restant tamen Clausea: statim respondent. Systema computatri tui rationem sequitur.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Lucidum vel obscurum, tema, color insignis, vitrum, obscuratio et initii fundus ad modum Horizon redditur.",
+  "The launcher's look is back to how Horizon ships": "Vultus Launcher est reditus ad modum Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Vultus Launcher nunc restitutus est, sed servari non potuit",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Vitrum et Obscuratio tabulata vitrea speciei obscurae formant; lucida tabulata alba solida pingit.",
+  "Performance mode draws solid panels, without glass or blur.": "Modus efficientiae tabulata solida pingit, sine vitro et obscurazione.",
+  "This theme's night draws solid panels, without glass or blur.": "Nox huius tematis tabulata solida pingit, sine vitro et obscurazione."
 }

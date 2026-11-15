@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Téma",
+  "Motion": "Pohyb",
+  "Reduced": "Omezený",
+  "Full": "Plný",
+  "Aa Text": "Aa Text",
+  "Prepare & play": "Připravit a hrát",
+  "Name it, pick what it plays, then an icon.": "Pojmenujte ji, vyberte, co hraje, a pak ikonu.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Zdarma pro všechny. Každé téma má světlý a tmavý vzhled a pamatuje si barvu přízvuku, kterou pod ním zvolíte.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Omezený zastaví oblohu, prolínačky a posuny; tlačítka odpovídají hned. Systém sleduje nastavení počítače.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Světlo či tma, téma, barva přízvuku, sklo, rozostření a pozadí Domů se vrátí do výchozího stavu Horizonu.",
+  "The launcher's look is back to how Horizon ships": "Vzhled launcheru je zpět ve výchozím stavu Horizonu",
+  "The launcher's look is reset for now, but it could not be saved": "Vzhled launcheru je pro teď obnovený, ale nepodařilo se ho uložit",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Sklo a Rozostření tvarují matné panely tmavého vzhledu; světlý kreslí plné bílé panely.",
+  "Performance mode draws solid panels, without glass or blur.": "Režim výkonu kreslí plné panely, bez skla a rozostření.",
+  "This theme's night draws solid panels, without glass or blur.": "Noc tohoto tématu kreslí plné panely, bez skla a rozostření."
 }
