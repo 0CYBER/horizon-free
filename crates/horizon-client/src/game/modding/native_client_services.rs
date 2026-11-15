@@ -15,6 +15,23 @@ impl Game<'_> {
     pub(super) fn native_gui_paint(&self, batch: &mut HudBatch, draws: &[GuiDraw]) {
         horizon_client::hud_layout::paint(batch, &self.gui.atlas, draws);
     }
+    /// `GuiGraphics.fillGradient` for [`mod_api::DrawContext::fill_gradient`]: `rect` is
+    /// `[x, y, w, h]` and `top` / `bottom` are ARGB. An empty, reversed or non-finite rectangle
+    /// draws nothing.
+    pub(super) fn native_fill_gradient(
+        &self,
+        batch: &mut HudBatch,
+        rect: [f32; 4],
+        top: u32,
+        bottom: u32,
+    ) {
+        let [x, y, w, h] = rect;
+        if !(rect.iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0) {
+            return;
+        }
+        let abgr = horizon_client::hud_layout::abgr;
+        batch.fill_gradient(&self.gui.atlas, (x, y, w, h), abgr(top), abgr(bottom));
+    }
     /// Vanilla's nine-slice widget rendering. `color` is ARGB, as `fill` uses.
     pub(super) fn native_gui_nine_slice(
         &self,

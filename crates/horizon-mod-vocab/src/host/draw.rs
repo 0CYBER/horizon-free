@@ -43,6 +43,14 @@ pub trait DrawContext {
     fn fill(&mut self, rect: [f32; 4], argb: u32) {
         unimplemented!("DrawContext::fill")
     }
+    /// `GuiGraphics.fillGradient`: rectangle `rect` (`[x, y, w, h]` in GUI pixels, as
+    /// [`fill`](Self::fill) takes it) blending from ARGB `top` along its top edge to `bottom`
+    /// along its bottom edge, vanilla's colour order. It follows the current pose and clip
+    /// ([`push_clip`](Self::push_clip)) as `fill` does. An empty or reversed rectangle
+    /// (`w <= 0` or `h <= 0`), or one with a non-finite coordinate, draws nothing.
+    fn fill_gradient(&mut self, rect: [f32; 4], top: u32, bottom: u32) {
+        unimplemented!("DrawContext::fill_gradient")
+    }
     /// Part `src` (`[x, y, w, h]` in the sprite's own pixels) of sprite
     /// `name` (vanilla's `gui/...`, or a content mod's GUI texture
     /// `mymod:gui/...`), drawn stretched into `dst` (`[x, y, w, h]` in GUI
