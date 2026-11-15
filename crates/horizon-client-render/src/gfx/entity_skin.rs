@@ -13,6 +13,9 @@
 //! The rest stays on the CPU path. Item models come too ([`SkinJob::item`]):
 //! their quads all face an axis, and their shading is baked into the colour.
 
+use horizon_shader_api::stages::RAY_ENTITY_QUAD;
+
+use super::native_entity::EntityRuns;
 use super::upload::Uploads;
 use crate::mesher::Vertex;
 
@@ -184,6 +187,9 @@ pub(super) struct EntitySkin {
     jobs: Grow,
     /// The jobs with `dst` moved to the frame's gap, as uploaded.
     staged: Vec<SkinJob>,
+    /// For a native pack's `[entity]` stage: the runs of the next frame's posed vertices that
+    /// it lights (`Renderer::take_entity_runs`).
+    pub(super) kinds: EntityRuns,
     /// The bind group and the buffers it binds (buffers compare by identity).
     group: Option<(wgpu::BindGroup, [wgpu::Buffer; 4])>,
 }
@@ -265,6 +271,7 @@ impl EntitySkin {
                 buffer: None,
             },
             staged: Vec::new(),
+            kinds: EntityRuns::default(),
             group: None,
         })
     }
@@ -324,7 +331,9 @@ impl EntitySkin {
 
     /// Records the frame's jobs: they write `frame.vertices` vertices into
     /// `out` from vertex `base` on, and the outline jobs `frame.outline_vertices`
-    /// from vertex `outline_base` on. Call after the CPU vertices' upload.
+    /// from vertex `outline_base` on. Call after the CPU vertices' upload. A job in one
+    /// of `kinds`' runs writes its kind into the layer, as `EntityBatch` does into the
+    /// CPU copies' (a job is one draw: a run never splits it); the silhouettes take none.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dispatch(
         &mut self,
@@ -336,16 +345,19 @@ impl EntitySkin {
         base: u32,
         outline_base: u32,
     ) {
+        let kinds = std::mem::take(&mut self.kinds);
+        let bits = kinds.bits(frame.jobs.iter().map(|job| job.dst));
         self.dispatch_jobs(
             device,
             uploads,
             encoder,
             &frame.parts,
-            frame
-                .jobs
-                .iter()
-                .map(|job| SkinJob {
+            (frame.jobs.iter().zip(bits))
+                .map(|(job, kind)| SkinJob {
                     dst: job.dst + base,
+                    // As `EntityBatch::tag_kinds` marks the CPU copies: a quad with a kind is in
+                    // the ray scene's entity layer too.
+                    overlay: job.overlay | if kind == 0 { 0 } else { kind | RAY_ENTITY_QUAD },
                     ..*job
                 })
                 .chain(frame.outline_jobs.iter().map(|job| SkinJob {
@@ -354,6 +366,8 @@ impl EntitySkin {
                 })),
             out,
         );
+        self.kinds = kinds;
+        self.kinds.clear();
     }
 
     /// A standard pack owns the body output; glowing silhouettes keep the ordinary
@@ -528,7 +542,8 @@ fn expand_jobs(
 /// range) or one of Horizon's own (`native_pack`: its passes, the shadow map's included, draw
 /// the entity buffer from its start, posed range and all) keeps the CPU copies while a native
 /// mod reads them (`mod_reads`: `RenderNeeds::entity_spans`): `native_world_drawn` hands it
-/// only the CPU stream.
+/// only the CPU stream. A native pack's `[entity]` stage changes nothing: posed vertices carry
+/// their kind as the CPU copies do (`EntitySkin::dispatch`).
 pub(super) fn poses(
     frame_gen: bool,
     other_pack: Option<bool>,
@@ -550,6 +565,7 @@ mod tests {
     fn a_native_pack_poses_unless_a_mod_reads_the_cpu_entities() {
         let no_mod = || false;
         let mod_reads = || true;
+        // A native pack, with an `[entity]` stage or without.
         assert!(poses(false, None, true, no_mod));
         assert!(!poses(false, None, true, mod_reads));
         assert!(!poses(true, None, true, no_mod));
@@ -840,5 +856,106 @@ mod tests {
             );
             assert!(data[last..].iter().all(|b| *b == 0xab), "suffix {i}");
         }
+    }
+
+    /// Under a native pack's `[entity]` stage, a posed quad carries its run's kind in its
+    /// layer, as `EntityBatch` writes it into the CPU copy of the same quad; one in no run, and
+    /// every silhouette, carries none.
+    #[test]
+    fn posed_quads_carry_the_kind_of_their_run_as_the_cpu_copies_do() {
+        use crate::gfx::{entity_batch::EntityBatch, native_entity::EntityKind};
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let Some(mut skin) = EntitySkin::new(&device, true) else {
+            eprintln!("no compute shaders: skipped");
+            return;
+        };
+        let model: Vec<SkinVertex> = cube(0).into_iter().chain(cube(1)).collect();
+        let turn = glam::Mat4::from_rotation_y(0.7);
+        let job = |dst, overlay| SkinJob {
+            first: 0,
+            count: 48,
+            dst,
+            rect: [0.25, 0.5, 0.375, 0.5625],
+            color: u32::MAX,
+            light: 0xf0_70,
+            overlay,
+            ..Default::default()
+        };
+        let mut frame = SkinFrame {
+            new_model: model.clone(),
+            parts: vec![part(turn, glam::Mat3::from_mat4(turn)); 2],
+            // A mob (its HDR tier in the overlay word), an item entity drawn after it, then
+            // a mob whose jobs are an ordinary and an eyes layer.
+            jobs: vec![
+                job(0, 3 << 16),
+                job(48, 0),
+                job(96, 7),
+                SkinJob {
+                    mode: SkinJob::FLAT,
+                    ..job(144, crate::gfx::OIT_ENTITY | 5)
+                },
+            ],
+            vertices: 192,
+            ..Default::default()
+        };
+        frame.outline_since(2, 0xff20_c0e0);
+        let runs = || {
+            let mut runs = EntityRuns::default();
+            runs.push(0..48, EntityKind::Entity);
+            runs.push(96..192, EntityKind::Entity);
+            runs
+        };
+        // The CPU path's copies of the same draws, through the batch.
+        let mut batch = EntityBatch::default();
+        batch.kinds = runs();
+        batch.update(&expand(&model, &frame), &[], &[], &[], false);
+        let layers = |v: &[Vertex]| v.iter().map(|v| v.layer).collect::<Vec<_>>();
+        let cpu = layers(&batch.combined);
+        let kind = |layer: u32| layer >> super::super::native_entity::KIND_SHIFT & 7;
+        assert_eq!(kind(cpu[0]), 1);
+        assert_eq!(kind(cpu[48]), 0);
+
+        let outline_base = frame.vertices;
+        let size = u64::from(outline_base + frame.outline_vertices) * 44;
+        let out = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: EntitySkin::usage(true) | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut uploads = Uploads::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(skin.register(&device, &mut uploads, &mut encoder, &frame));
+        skin.kinds = runs();
+        skin.dispatch(
+            &device,
+            &mut uploads,
+            &mut encoder,
+            &frame,
+            &out,
+            0,
+            outline_base,
+        );
+        assert_eq!(skin.kinds, EntityRuns::default(), "one frame's runs");
+        encoder.copy_buffer_to_buffer(&out, 0, &read, 0, size);
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = read.slice(..).get_mapped_range().unwrap();
+        let got: &[Vertex] = bytemuck::cast_slice(&data);
+        let (posed, silhouettes) = got.split_at(outline_base as usize);
+        assert_eq!(layers(posed), cpu);
+        assert_eq!(layers(silhouettes), layers(&expand_outline(&model, &frame)));
     }
 }

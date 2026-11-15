@@ -143,7 +143,7 @@ impl Game<'_> {
             if culling.hides_entity() {
                 continue;
             }
-            let entity_start = out.len();
+            let (entity_start, posed_start) = (out.len(), self.posed_vertices());
             self.mark_motion(entity_start, (1 << 32) | u64::from(mob.id));
             self.mark_entity(entity_start, &mob.kind.id);
             if !culling.rays_only() {
@@ -206,7 +206,7 @@ impl Game<'_> {
                 } else if outline.is_none() {
                     self.culled_for_rays(|| self.cull_entity_vertices(out, entity_start));
                 }
-                self.lit_entity(entity_start..out.len());
+                self.lit_posed_entity(entity_start..out.len(), posed_start);
                 continue;
             }
             if mob.species() == Species::SulfurCube
@@ -363,7 +363,7 @@ impl Game<'_> {
             }
             // The mob with what it holds and wears, once nothing more can drop it. Its beam,
             // next, is no surface of it: Horizon's to draw.
-            self.lit_entity(entity_start..out.len());
+            self.lit_posed_entity(entity_start..out.len(), posed_start);
             // GuardianRenderer: the laser to the locked target.
             if let Some((time, scale)) = beam
                 && let Some(target) = self.beam_target(mob.ai.target, alpha)

@@ -844,6 +844,7 @@ impl Game<'_> {
         self.entity_motion.borrow_mut().clear();
         self.entity_motion_posed.borrow_mut().clear();
         self.native_shaders.entity_runs.borrow_mut().clear();
+        self.native_shaders.posed_runs.borrow_mut().clear();
     }
 
     fn push_span(&self, start: usize, stage: &str, id: i32) {

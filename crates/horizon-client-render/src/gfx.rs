@@ -6624,12 +6624,10 @@ impl Renderer {
     }
 
     /// Whether ordinary entity models may be posed on the GPU (`Frame::skin`, `entity_skin::poses`).
-    /// Not under a pack's `[entity]` stage: the game names the runs the stage lights by their
-    /// place in the CPU vertices (`take_entity_runs`), and posed models are not in them. Nor
-    /// while the ray scene has the entity layer (`traces_entities`), which is built from them.
+    /// Not while the ray scene has the entity layer (`traces_entities`): its BLAS is built from
+    /// the CPU-posed vertices.
     pub fn skins_entities(&self) -> bool {
         self.entity_skin.is_some()
-            && !self.draws_entity_stage()
             // The ray scene's entity BLAS is built from the CPU-posed vertices.
             && !self.traces_entities()
             && entity_skin::poses(
