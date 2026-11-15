@@ -2,5 +2,4 @@
 # where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
 horizon-core biome::tests::corner_jitter_matches_quart_at_block lib daily slow
 horizon-core biome::tests::quart_at_block_matches_reference lib daily slow
-horizon-core java_character::tests::matches_java_character lib daily child-process
 horizon-core paletted::tests::index_check_matches_an_entry_by_entry_scan lib daily slow
