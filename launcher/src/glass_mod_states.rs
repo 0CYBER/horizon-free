@@ -392,6 +392,11 @@ impl Launcher {
                 // Left out by a build, which ran after the player allowed native mods.
                 self.settings.native_mods_allowed_at = Some(1);
                 self.mod_preview.left_out = left_out();
+                // A build counts the mods it left out as tried (`native_status::built`): the
+                // build is up to date, and only Switch off changes anything.
+                self.mod_preview.state = Some(native_status::State::UpToDate);
+                *self.mods.native_state.borrow_mut() =
+                    Some((String::new(), native_status::State::UpToDate, Vec::new()));
             }
             ("trust", "registry") => {
                 let (reply, _answer) = std::sync::mpsc::channel();
