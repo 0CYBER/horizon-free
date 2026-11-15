@@ -189,6 +189,12 @@ impl Game<'_> {
             .filter_map(|t| t.gateway.and_then(GatewayJob::source_chunk))
             .collect()
     }
+
+    /// The gateway jobs of the trips still waiting to arrive.
+    pub(super) fn gateway_trip_jobs(&self) -> impl Iterator<Item = GatewayJob> + '_ {
+        self.server_trips.iter().filter_map(|t| t.gateway)
+    }
+
     /// A server player's `tp` inside their level, where the chunks round `target` have not loaded: vanilla loads
     /// them before the player arrives, so the player is held as a trip holds them (their body is left alone, their
     /// client's moves ignored) until the chunks are lit, then placed there again (#15727).
@@ -985,7 +991,13 @@ impl Game<'_> {
                 }
             } else if let Some(job) = trip.gateway {
                 match self.resolve_gateway(job, trip.target) {
-                    Ok(at) => (at, yaw),
+                    Ok(Some(at)) => (at, yaw),
+                    // The exit search waits for a candidate chunk to load.
+                    Ok(None) => {
+                        self.server_trips.insert(k, trip);
+                        k += 1;
+                        continue;
+                    }
                     Err(e) => {
                         log::error!("End gateway exit: {e}");
                         (trip.target, yaw)
