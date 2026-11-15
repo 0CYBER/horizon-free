@@ -695,7 +695,7 @@ mod tests {
     /// `ChatScreen.init` and `InBedChatScreen.init` worked by hand for the
     /// test's 1280x720 window.
     #[test]
-    #[ignore = "needs prepared resources and isolated homes"]
+    #[ignore = "daily"]
     fn the_chat_box_is_resized_by_the_build_not_the_draw() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             use horizon_client::chat::{ChatAbilities, ChatScreen, ChatVisibility, Commands};
@@ -736,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and isolated homes"]
+    #[ignore = "daily"]
     fn production_screen_build_geometry() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.screen = Screen::Inventory;
@@ -1178,7 +1178,7 @@ mod tests {
     /// then `observe_screen`): the effects hook still fires once, and the next
     /// frame fires it again. A mod's once-per-frame side effect stays once.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_effects_answer_is_taken_once_a_frame() {
         use mod_api::{ClientHost, Hooks, ModEntry, ScreenRenderInventoryMobEffectsEvent};
         use std::sync::{

@@ -50,7 +50,7 @@ fn serve(game: &mut super::Game<'_>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_server_answers_vanilla_and_mod_ids() {
     let Some(root) =
         declared_part_root("game::native_registry_ids_tests::a_server_answers_vanilla_and_mod_ids")
@@ -92,7 +92,7 @@ fn a_server_answers_vanilla_and_mod_ids() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_answers_its_own_connections_registries() {
     with_client_game(|game| {
         assert_eq!(

@@ -411,7 +411,7 @@ mod tests {
     /// A chunk saved and read back keeps the biomes the source placed: the
     /// region file stores them by name, through the world's biome table.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_registered_sources_biomes_survive_saving_and_loading() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let assets = crate::assets::Assets::load(&root).unwrap();

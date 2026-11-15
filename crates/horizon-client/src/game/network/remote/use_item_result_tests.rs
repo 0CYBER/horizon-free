@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn item_part_results_control_real_server_and_client_use() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -51,7 +51,7 @@ fn item_part_results_control_real_server_and_client_use() {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn failed_item_part_still_tries_the_off_hand() {
     let observer = Observer::default();
     let mods: mod_api::Mods =
@@ -93,7 +93,7 @@ fn failed_item_part_still_tries_the_off_hand() {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn default_part_answer_preserves_vanilla_shield_use() {
     mod_platform::testing::with_mods(Vec::<mod_api::ModEntry>::new().into(), || {
         for client in [false, true] {

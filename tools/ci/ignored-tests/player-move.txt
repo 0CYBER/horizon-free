@@ -1,5 +1,0 @@
-# The `player_move` game tests read the prepared 26.3 data (REFERENCE is the variable); the shards without it refuse them by name.
-horizon-client game::native_player_move_tests::a_veto_corrects_the_player_and_a_pass_commits_the_report HORIZON_TEST_RESOURCES needs
-horizon-client game::native_player_move_tests::two_reports_in_one_tick_are_heard_in_order_each_from_the_one_before_when_both_pass HORIZON_TEST_RESOURCES needs
-horizon-client game::native_player_move_tests::a_veto_of_the_first_of_two_reports_in_one_tick_corrects_and_the_second_is_not_heard HORIZON_TEST_RESOURCES needs
-horizon-client game::native_player_move_tests::two_reports_in_one_tick_with_no_listener_are_committed_in_the_one_pass HORIZON_TEST_RESOURCES needs

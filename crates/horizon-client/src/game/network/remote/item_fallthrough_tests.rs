@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn targeted_item_fallthrough_keeps_hand_and_fail_vetoes_item_action() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -41,7 +41,7 @@ fn targeted_item_fallthrough_keeps_hand_and_fail_vetoes_item_action() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_pass_falls_through_but_fail_and_success_stop_the_apple() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -87,7 +87,7 @@ fn block_pass_falls_through_but_fail_and_success_stop_the_apple() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn entity_pass_falls_through_but_success_stops_the_apple() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -140,7 +140,7 @@ fn entity_pass_falls_through_but_success_stops_the_apple() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn air_use_fires_once_and_passing_hands_fire_in_main_off_order() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -191,7 +191,7 @@ fn with_packet_game(test: impl FnOnce(&mut Game<'_>)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn server_use_item_packet_fires_once_after_use_item_on_with_block_crosshair() {
     use horizon_protocol::packets::play::{self, Serverbound as S};
     let observer = Observer::default();
@@ -325,7 +325,7 @@ fn assert_block_item_before_fallthrough(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bone_meal_grows_grass_before_item_fallthrough() {
     assert_block_item_before_fallthrough(
         "minecraft:bone_meal",
@@ -336,7 +336,7 @@ fn bone_meal_grows_grass_before_item_fallthrough() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn axe_strips_oak_log_before_item_fallthrough() {
     assert_block_item_before_fallthrough(
         "minecraft:iron_axe",
@@ -347,7 +347,7 @@ fn axe_strips_oak_log_before_item_fallthrough() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn stone_places_before_item_fallthrough() {
     assert_block_item_before_fallthrough(
         "minecraft:stone",
@@ -358,7 +358,7 @@ fn stone_places_before_item_fallthrough() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn apple_on_stone_passes_to_item_fallthrough_once() {
     assert_block_item_before_fallthrough(
         "minecraft:apple",

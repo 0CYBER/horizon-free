@@ -43,7 +43,7 @@ impl Hooks for TestMod {
     }
 }
 #[test]
-#[ignore = "requires prepared resources; isolated canonical block entity membership"]
+#[ignore = "daily"]
 fn block_entity_data_received_after_merge() {
     if run_fresh_cases(
         "game::remote::block_entity_data_tests::block_entity_data_received_after_merge",

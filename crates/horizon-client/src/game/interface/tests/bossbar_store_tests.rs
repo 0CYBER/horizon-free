@@ -31,7 +31,7 @@ fn bar(game: &Game<'_>) -> (i32, i32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bossbar_store_keeps_the_number_it_is_given() {
     let mut game = game();
     assert!(game.run_command("bossbar add demo:bar Demo"));
@@ -57,7 +57,7 @@ fn bossbar_store_keeps_the_number_it_is_given() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bossbar_name_compares_components_not_their_spelling() {
     let mut game = game();
     assert!(game.run_command("bossbar add demo:bar Demo"));

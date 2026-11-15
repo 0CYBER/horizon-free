@@ -3305,7 +3305,7 @@ mod tnt_impact_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_powered_rail_pushes_a_resting_cart_away_from_soul_sand() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -3329,7 +3329,7 @@ mod tnt_impact_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_tnt_cart_stopped_head_on_by_a_wall_does_not_blow_up() {
         // OldMinecartBehavior.moveAlongTrack: the move zeroes the blocked x
         // and the track's re-pointing scales what is left, so MinecartTNT
@@ -3342,7 +3342,7 @@ mod tnt_impact_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_tnt_cart_off_its_rails_glancing_off_a_wall_blows_up() {
         // comeOffTrack keeps the delta the move resolved: the wall zeroes x,
         // z goes on at over a tenth of a block a tick.
@@ -3354,7 +3354,7 @@ mod tnt_impact_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_cart_on_a_slope_presses_a_plate_at_its_temporary_position() {
         // OldMinecartBehavior.moveAlongTrack places the cart at the rail's top
         // height, moves it horizontally (Entity.move records the step) and settles
@@ -3402,7 +3402,7 @@ mod tnt_impact_tests {
     /// but `AbstractMinecart.move` sweeps its blocks while it is still at the
     /// rail's top height, so the plate clocks on and off.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_cart_resting_against_a_fence_keeps_toggling_the_plate_above_it() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -3493,7 +3493,7 @@ mod cart_push_tests {
     /// the push runs on copies of the ticked cart, and the one still holding
     /// its mineshaft roll keeps the roll, so it is saved as its loot table.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pushed_chest_cart_keeps_its_pending_loot() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -3546,7 +3546,7 @@ mod cart_push_tests {
     /// own team's collision rule and the target's; a still cart keeps vanilla's
     /// unfiltered minecart push.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_moving_carts_team_rules_which_carts_it_pushes() {
         use crate::game::{Game, commands::Target};
         use horizon_client::scoreboard::CollisionRule;
@@ -3624,7 +3624,7 @@ mod cart_push_tests {
     /// `EntitySelector.pushableBy(cart)` for mobs: a moving rideable cart on a
     /// `never` team neither boards nor pushes the cow in its path.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_moving_carts_team_keeps_it_from_boarding_a_cow() {
         use crate::game::commands::Target;
         use horizon_client::{mobs::Mob, scoreboard::CollisionRule};
@@ -3699,7 +3699,7 @@ mod container_drop_tests {
     /// `chestVehicleDestroyed`; the hull item takes the item entity's own
     /// random. The level random must end where vanilla's does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_broken_chest_vehicle_draws_the_level_random_like_vanilla() {
         let mut slots = vec![None; 27];
         slots[0] = Some(ItemStack::new("minecraft:diamond", 5));
@@ -3771,7 +3771,7 @@ mod rejected_passenger_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn rejected_cart_passenger_occupies_capacity_physics_pickup_and_interaction() {
         with_game(|game| {
             game.world.chunks.insert(
@@ -3835,7 +3835,7 @@ mod rejected_passenger_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn cart_destruction_ejects_rejected_rider_and_snaps_frozen_descendant() {
         with_game(|game| {
             game.world.chunks.insert(
@@ -3899,7 +3899,7 @@ mod hook_mutation_regressions {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn activator_preserves_a_later_passengers_callback_reparenting() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -3939,7 +3939,7 @@ mod hook_mutation_regressions {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn activator_does_not_snap_a_rider_discarded_by_its_callback() {
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
             "mutate_rider",
@@ -3991,7 +3991,7 @@ mod hook_mutation_regressions {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_damage_callback_discard_does_not_also_destroy_or_drop_the_vehicle() {
         for cart in [false, true] {
             let destroyed = Arc::new(Mutex::new(0));
@@ -4086,7 +4086,7 @@ mod cart_cost_bench {
     /// `CARTS_PARKED` (default 600) carts each on its own rail piece, and
     /// `CARTS_MOVING` (default 100) on powered tracks. Prints the ms per tick.
     #[test]
-    #[ignore = "a timing, needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn tick_carts_with_many_parked_carts() {
         let n = |key: &str, default: usize| {
             std::env::var(key)

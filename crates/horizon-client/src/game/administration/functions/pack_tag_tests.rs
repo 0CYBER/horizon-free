@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// function library), so a function whose `if items`/`if block` names a tag
 /// its own pack defines loads and, run, tests the tag's members.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
     use crate::game::game_tests::tests::server_game;
     let mut resources = None;

@@ -2464,7 +2464,7 @@ mod vehicle_damage_command_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn generic_commands_reach_actual_vehicle_damage_and_drop() {
         with_game(|game| {
             game.creative = true; // issuer creative is not an attacker
@@ -2642,7 +2642,7 @@ mod vehicle_damage_command_tests {
             .count()
     }
     #[test]
-    #[ignore = "needs prepared resources; real registered Guest context and issuer feedback"]
+    #[ignore = "daily"]
     fn direct_guest_attributes_adopt_the_target_and_restore_the_issuer() {
         use crate::game::commands::Target;
         use horizon_client::motion::PlayerMotion;
@@ -2770,7 +2770,7 @@ mod vehicle_damage_command_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources; existing target/operation reply controls"]
+    #[ignore = "daily"]
     fn existing_attribute_operations_keep_their_exact_success_messages() {
         use horizon_client::motion::PlayerMotion;
         use horizon_core::geometry::Vec3;

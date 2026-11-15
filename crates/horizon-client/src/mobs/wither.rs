@@ -571,7 +571,7 @@ mod tests {
     /// The break sound waits for the game's verdict only when a listener can
     /// cancel the break: an installed mod that does not listen leaves it plain.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn break_sound_defers_only_for_a_destroy_listener() {
         use std::sync::Arc;
         let build = |world: &mut crate::world::World,
@@ -626,7 +626,7 @@ mod tests {
     /// its yes breaks bedrock (`#wither_immune`), an unanswered block keeps
     /// vanilla's rule, and with griefing off nothing breaks whatever it says.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn the_wither_breaks_what_block_parts_allow() {
         use std::sync::Arc;
         struct Parts;

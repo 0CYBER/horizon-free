@@ -89,7 +89,7 @@ fn posted() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_egg_used_on_a_mob_posts_entity_interact() {
     let mut game = game();
     watch();
@@ -121,7 +121,7 @@ fn an_egg_used_on_a_mob_posts_entity_interact() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mooshroom_egg_child_rolls_the_colour_flip() {
     let mut game = game();
     // `MushroomCow.getBreedOffspring(level, this)` on the egg path: the mate is

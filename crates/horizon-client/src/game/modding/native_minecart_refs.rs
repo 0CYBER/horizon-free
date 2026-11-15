@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_furnace_carts_push_is_read_and_set_through_its_handle() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_carts_display_block_and_offset_round_trip_through_its_handle() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn minecart_handles_narrow_read_and_write_by_kind() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

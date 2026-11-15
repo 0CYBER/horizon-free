@@ -4,7 +4,7 @@ use horizon_client::motion::PlayerMotion;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

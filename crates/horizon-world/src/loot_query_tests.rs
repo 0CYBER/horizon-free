@@ -156,7 +156,7 @@ fn queried_context_and_ability_reach_native_adapter() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn queried_ability_tags_use_prepared_world_sets() {
     crate::native_load_hooks::testing::install();
     let root = std::path::PathBuf::from(

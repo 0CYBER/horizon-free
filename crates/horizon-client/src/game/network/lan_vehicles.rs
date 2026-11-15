@@ -804,7 +804,7 @@ mod controller_tests {
     /// seat's client, which still sends where it sees the boat, used to put
     /// the boat back every tick (#11541).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_first_rider_in_drives_the_boat() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -985,7 +985,7 @@ mod controller_tests {
     /// on the ground, lands the horse: `AbstractHorse.causeFallDamage` of the
     /// whole fall. The horse used to keep no fall at all (#13042).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_guests_horse_falls_and_lands() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

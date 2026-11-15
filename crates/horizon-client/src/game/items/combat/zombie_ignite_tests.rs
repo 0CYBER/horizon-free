@@ -84,7 +84,7 @@ fn blows(cases: &[Case]) -> Vec<(i32, f32)> {
 /// 0.7309677600860596 for 0, so each expected pair below is that seed's first
 /// float where the chance was not drawn and its second where it was.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_burning_zombies_burn_rides_a_blow_that_landed() {
     let (normal, hard) = (Difficulty::Normal, Difficulty::Hard);
     let zombie = "minecraft:zombie";

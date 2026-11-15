@@ -257,7 +257,7 @@ mod tests {
     /// applied at the next audio update; a stopped play never starts. Unknown handles and a
     /// server read as over or none.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_follows_stops_and_fades_its_own_sounds() {
         let kept = Arc::new(Mutex::new(Vec::new()));
         let mods: mod_api::Mods =
@@ -309,7 +309,7 @@ mod tests {
     /// drops the plays still queued: their handles read `Stopped`, nothing plays later, and
     /// handles are still never reused.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn stopped_and_level_cleared_plays_never_reach_the_engine() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             game.audio.heard.clear();

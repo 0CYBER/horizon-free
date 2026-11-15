@@ -99,7 +99,7 @@ fn camera(game: &super::Game<'_>, conn: u32) -> Option<i32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_guests_camera_is_heard_starting_once_and_stopping() {
     with_probe(|game, take| {
         // Guest 12 (index 0) watches guest 13's entity.
@@ -121,7 +121,7 @@ fn a_guests_camera_is_heard_starting_once_and_stopping() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn switching_straight_to_another_target_is_one_start_and_no_stop() {
     with_probe(|game, take| {
         game.guest_set_camera(0, Some(13));
@@ -133,7 +133,7 @@ fn switching_straight_to_another_target_is_one_start_and_no_stop() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_target_that_is_gone_sets_no_camera_and_is_not_heard() {
     with_probe(|game, take| {
         game.guest_set_camera(0, Some(9999));
@@ -149,7 +149,7 @@ fn a_target_that_is_gone_sets_no_camera_and_is_not_heard() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_start_is_heard_once_the_camera_has_moved() {
     with_probe(|game, take| {
         // Guest 12 stands at NEAR; guest 14 at FAR. The listener reads 12 already at FAR: the

@@ -26,7 +26,7 @@ impl mod_api::Hooks for Deny {
 /// game's checks and the mob AI's; another entity keeps the rule, and a
 /// check with no entity reads the rule without asking.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_mod_denies_one_entity_griefing() {
     let heard = Arc::default();
     let (denied, other) = (900, 901);

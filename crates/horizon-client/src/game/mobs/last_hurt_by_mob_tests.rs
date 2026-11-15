@@ -95,7 +95,7 @@ fn saved(game: &mut Game<'_>, who: &str) -> (bool, bool, bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mob_saves_the_mob_that_hurt_it_for_100_ticks() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -154,7 +154,7 @@ fn fields(game: &mut Game<'_>, i: usize) -> (Option<Tag>, Option<Tag>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_saved_hurt_by_mob_follows_the_live_record_only() {
     use horizon_client::mobs::Who;
     let mut resources = None;
@@ -204,7 +204,7 @@ fn the_saved_hurt_by_mob_follows_the_live_record_only() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_loaded_hurt_by_mob_is_read_back_and_ends_after_100_ticks() {
     use horizon_client::mobs::Who;
     let mut resources = None;
@@ -234,7 +234,7 @@ fn a_loaded_hurt_by_mob_is_read_back_and_ends_after_100_ticks() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_loaded_hurt_by_mob_of_a_dead_attacker_ends_at_the_next_tick() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -249,7 +249,7 @@ fn a_loaded_hurt_by_mob_of_a_dead_attacker_ends_at_the_next_tick() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_saved_hurt_timestamp_uses_java_integer_wrapping() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -262,7 +262,7 @@ fn a_saved_hurt_timestamp_uses_java_integer_wrapping() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_loaded_hurt_by_mob_naming_no_entity_stays_until_it_arrives() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -291,7 +291,7 @@ fn a_loaded_hurt_by_mob_naming_no_entity_stays_until_it_arrives() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_loaded_hurt_by_mob_naming_the_mob_itself_resolves_and_ends_after_100_ticks() {
     use horizon_client::mobs::Who;
     // `EntityReference.getEntity` looks the UUID up in the level and does not

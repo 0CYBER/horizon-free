@@ -263,7 +263,7 @@ fn queried_ability_default_sets_have_literal_outcomes() {
     assert!(!items.vanilla_can_perform("minecraft:diamond_sword", "sword_sweep"));
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn queried_ability_tags_use_prepared_item_sets() {
     let root = std::path::PathBuf::from(
         std::env::var_os("HORIZON_TEST_RESOURCES")

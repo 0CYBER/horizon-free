@@ -121,7 +121,7 @@ fn health(game: &super::Game<'_>, id: u32) -> f32 {
 /// cancel leaves the mob unhurt, `hurt_enemy` silent and the sword unworn, while an item
 /// without the Part, or a Part that lets the blow through, hits as before.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_part_cancels_the_blow_before_it_lands() {
     let probe = Probe::default();
     with_probe(&probe, || {
@@ -179,7 +179,7 @@ fn a_part_cancels_the_blow_before_it_lands() {
 /// `swing_hand` asks the item in that hand first: a cancel starts no swing, a pass swings as
 /// before, and a hand holding an item without the Part is not asked.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_part_keeps_the_swing_from_starting() {
     let probe = Probe::default();
     with_probe(&probe, || {

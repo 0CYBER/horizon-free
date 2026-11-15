@@ -560,19 +560,19 @@ mod nested_spawn_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn impact_handoff_balances_the_active_owner() {
         impact_handoff_balances_the_pass(false);
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn impact_handoff_balances_the_parked_owner() {
         impact_handoff_balances_the_pass(true);
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn impact_exposure_retains_the_existing_spawn_buffer_for_the_next_pass() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             fn shot(id: u32) -> Projectile {
@@ -637,7 +637,7 @@ mod pearl_hit_tests {
     /// `ender_pearl_teleport`'s hit fields: a block and its face normal, or an
     /// entity with the cell of its hit point and no face.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pearl_tells_the_block_face_or_the_entity_it_hit() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let wall = Hit::Block {
@@ -662,7 +662,7 @@ mod pearl_hit_tests {
 
     /// A dragon part is the dragon and the local player is its own entity.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pearl_names_the_dragon_for_a_part_and_the_local_player_by_its_own_id() {
         use crate::game::dragon::Dragon;
         crate::game::native_entity_refs::tests::with_game(|game| {
@@ -690,7 +690,7 @@ mod pearl_hit_tests {
 
     /// A listener hears the hit through `native_pearl_teleport` and its write comes back.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_listening_mod_hears_the_pearls_hit_and_its_target_comes_back() {
         use crate::game::dragon::Dragon;
         use mod_api::{EnderPearlTeleportEvent, Flow, Hooks, ModEntry, ServerHost};

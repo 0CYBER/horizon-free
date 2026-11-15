@@ -50,7 +50,7 @@ mod tests {
     use mod_api::WorldEpoch;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn real_hook_lifetime_survives_a_body_loan_and_retires_only_at_physical_sweep() {
         use horizon_mod_runtime::attachments::{
             AttachmentType, Attachments, HasAttachmentLifetime, Holder, index::AttachmentIndex,
@@ -98,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_cast_hook_narrows_reads_its_catch_and_goes_when_discarded() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_live_hook_keeps_its_uuid_across_memory_pruning() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_hook_belongs_to_the_player_who_cast_it() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

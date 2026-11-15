@@ -2547,7 +2547,7 @@ mod experience_tests;
 mod fire_environment_tests {
     use super::*;
     #[test]
-    #[ignore = "requires prepared resources"]
+    #[ignore = "daily"]
     fn ordinary_items_burn_but_native_netherite_resists_lava() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -2741,7 +2741,7 @@ mod destroyed_bundle_environment_tests {
     /// hands its stacks to the item tick (`ItemUtils.onContainerDestroyed`),
     /// and the bundle keeps none of them.
     #[test]
-    #[ignore = "requires prepared resources"]
+    #[ignore = "daily"]
     fn lava_that_destroys_a_bundle_spills_its_contents() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;

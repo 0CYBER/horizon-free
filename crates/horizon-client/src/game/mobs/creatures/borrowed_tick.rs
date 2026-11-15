@@ -877,7 +877,7 @@ mod off_level_tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn borrowed_tick_resolves_the_retained_controller() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             use horizon_client::mobs::goals::{JUMP, LOOK, MOVE};
@@ -919,7 +919,7 @@ mod off_level_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn resident_descendant_does_not_tick_until_detached() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());

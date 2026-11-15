@@ -48,7 +48,7 @@ fn health(game: &Game<'_>) -> f32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_sting_event_goes_out_once_per_accepted_hit() {
     with_fish(false, |g| {
         g.touch_pufferfish();
@@ -65,7 +65,7 @@ fn the_sting_event_goes_out_once_per_accepted_hit() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_silent_fish_damages_and_poisons_without_the_sting() {
     with_fish(true, |g| {
         g.touch_pufferfish();

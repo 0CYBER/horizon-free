@@ -65,7 +65,7 @@ fn assert_blend(game: &Game<'_>, living: LivingRef, expected: [f32; 6]) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn ordinary_effect_blends_follow_the_client_lifecycle() {
     with_client(|game, living, speed| {
         assert_eq!(
@@ -111,7 +111,7 @@ fn ordinary_effect_blends_follow_the_client_lifecycle() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn ordinary_effect_first_read_does_not_restart_the_blend() {
     for duration in [100, -1] {
         for ticks in [1, 2] {
@@ -136,7 +136,7 @@ fn ordinary_effect_first_read_does_not_restart_the_blend() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn ordinary_effect_infinite_partial_ticks_follow_the_blend_direction() {
     with_client(|game, living, speed| {
         update(game, speed, 100, 10);
@@ -189,7 +189,7 @@ fn ordinary_effect_infinite_partial_ticks_follow_the_blend_direction() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn ordinary_effect_packets_preserve_or_skip_the_blend() {
     with_client(|game, living, speed| {
         // forceAddEffect copies the old blend, even when shouldBlend is false.

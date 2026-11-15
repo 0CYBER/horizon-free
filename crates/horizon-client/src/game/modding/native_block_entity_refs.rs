@@ -677,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn retained_handles_reject_replacements_and_rollback_restores_identity() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -776,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_opens_provider_and_refuses_non_provider() {
         use mod_api::*;
         if super::super::native_entity_refs::tests::run_fresh_cases(
@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn viewers_follow_open_menus_per_level_and_leave_out_fake_players() {
         use super::super::Dim;
         use horizon_world::chunk::BlockState;
@@ -1150,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn writes_merge_data_name_and_roll_back_with_a_transaction() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
         use mod_api::BlockUpdateFlags;
@@ -1310,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_abort_puts_back_the_lock_and_the_loot_table_roll() {
         use super::super::native_entity_refs::tests::with_game;
         use mod_api::BlockUpdateFlags;
@@ -1361,7 +1361,7 @@ mod tests {
     /// `LevelWriteHost::set_block` in a level hook: the block entity goes with
     /// its block and comes with the new one, as the Host's write does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_hook_set_block_replaces_whole_states_and_their_block_entities() {
         use super::super::mod_api_host::LevelTicks;
         use super::super::native_entity_refs::tests::with_game;

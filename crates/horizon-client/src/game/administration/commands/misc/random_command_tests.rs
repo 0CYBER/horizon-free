@@ -121,7 +121,7 @@ fn server_with_guests() -> (Game<'static>, Vec<mpsc::Receiver<Out>>) {
 /// PlayerList.broadcastSystemMessage: a guest's roll reaches every player,
 /// the rolling guest once (its copy is the command's captured output).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn a_guests_roll_reaches_every_player_once() {
     let (mut game, receivers) = server_with_guests();
     let (ok, lines) = game
@@ -160,7 +160,7 @@ fn a_guests_roll_reaches_every_player_once() {
 /// CommandSourceStack.getDisplayName: a command block names itself, the
 /// console says "Server".
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn a_blocks_roll_names_the_block_and_the_console_says_server() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
@@ -195,7 +195,7 @@ fn a_blocks_roll_names_the_block_and_the_console_says_server() {
 /// RandomSequences.forAllSequences: the server's answer to the chat box's
 /// completion of `/random reset ` lists the sequences the world has made.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn the_reset_argument_offers_the_sequences_the_world_has() {
     let (mut game, receivers) = server_with_guests();
     assert!(game.run_command("random value 1..10 minecraft:test"));

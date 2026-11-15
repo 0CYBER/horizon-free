@@ -2177,7 +2177,7 @@ mod tests {
     /// built from the template's, so the reads of #1469 and #1493 answer the
     /// declared values with no second copy.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_declared_entity_attributes_reach_spawn_and_the_live_map() {
         use horizon_client::mobs::Mob;
         use horizon_core::geometry::Vec3;
@@ -2246,7 +2246,7 @@ mod tests {
     /// by string id — a guest's catalog built from the same mods decodes the
     /// same network id.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_declared_attribute_reaches_rows_the_live_map_saves_and_sync() {
         use horizon_client::lan;
         use horizon_client::living_attributes::{self, LivingAttributes};
@@ -2393,7 +2393,7 @@ mod tests {
     /// ghoul's 40 health) gives way to the template's, so a mob of the type
     /// spawns with what the live attribute map answers (#845, review).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_declared_type_spawns_with_its_merged_row_not_its_content_row() {
         use horizon_client::mobs::Mob;
         use horizon_core::geometry::Vec3;

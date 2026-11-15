@@ -209,7 +209,7 @@ mod tests {
     /// A tick and a frame reach no clipboard, read or write; a click from the window does,
     /// and its copy is what the clipboard holds after.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_reaches_the_clipboard_only_while_input_is_handled() {
         let reads = Reads::default();
         let mods: mod_api::Mods = vec![ModEntry::new("paste", Box::new(Mod(reads.clone())))].into();

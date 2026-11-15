@@ -645,7 +645,7 @@ mod jukebox_play_tests {
     /// particle it already drew. Horizon drew the particle and kept the
     /// listeners deaf: a sculk sensor beside a playing jukebox never clicked.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_playing_jukebox_posts_jukebox_play_every_twenty_ticks() {
         let Some(lines) = playing(41) else { return };
         let plays: Vec<&String> = lines
@@ -674,7 +674,7 @@ mod jukebox_play_tests {
     /// ticks of a playing song do. Its insert's `BLOCK_CHANGE` events are the
     /// only ones there.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stopped_jukebox_posts_no_play_event() {
         let Some(lines) = playing(0) else { return };
         assert!(
@@ -689,7 +689,7 @@ mod saved_song_clock_tests {
     use crate::game::native_entity_refs::tests::with_game;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_start_tick_stop_and_loaded_record_use_the_modeled_clock() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -802,7 +802,7 @@ mod jukebox_component_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_jukebox_reads_the_discs_own_jukebox_component() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -839,7 +839,7 @@ mod jukebox_component_tests {
     /// `JukeboxBlock.useItemOn` asks the stack for `JUKEBOX_PLAYABLE`: a disc
     /// whose component was removed is not taken, any item given one is.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_jukebox_takes_what_the_stacks_component_makes_playable() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -889,7 +889,7 @@ mod block_change_tests {
     /// `JukeboxBlockEntity.notifyItemChangedInJukebox`: the disc coming or
     /// going posts `block_change` at the box, so sculk sensors hear it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_disc_change_posts_block_change() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

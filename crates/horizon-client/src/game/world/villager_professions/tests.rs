@@ -104,7 +104,7 @@ fn fixture(mods: mod_api::Mods, run: impl FnOnce(&mut Game<'_>)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_engineer_registration_and_assembler_job_acquisition() {
     let valid = Arc::new(AtomicBool::new(true));
     fixture(
@@ -121,7 +121,7 @@ fn villager_engineer_registration_and_assembler_job_acquisition() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_failed_reload_keeps_profession_poi_and_trade_snapshot() {
     let valid = Arc::new(AtomicBool::new(true));
     fixture(
@@ -183,7 +183,7 @@ fn refused(mods: mod_api::Mods, expected: &[&str]) {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_duplicate_owners_publish_zero_entries() {
     let valid = Arc::new(AtomicBool::new(true));
     refused(
@@ -208,7 +208,7 @@ fn villager_duplicate_owners_publish_zero_entries() {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_reserved_profession_publishes_zero_entries() {
     refused(
         vec![ModEntry::new(
@@ -223,7 +223,7 @@ fn villager_reserved_profession_publishes_zero_entries() {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_overlapping_poi_publishes_zero_entries() {
     let valid = Arc::new(AtomicBool::new(true));
     refused(
@@ -248,7 +248,7 @@ fn villager_overlapping_poi_publishes_zero_entries() {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_no_mods_world_retains_farmer_composter_and_five_levels() {
     let scratch = tempfile::tempdir().unwrap();
     mod_platform::testing::with_mods(vec![].into(), || {
@@ -355,7 +355,7 @@ impl Hooks for TradeFiles {
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_wasm_engineer_declaration_resolves_with_assembler() {
     // Instantiate and invoke the real wasm guest on the production-sized stack.
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
@@ -499,7 +499,7 @@ fn saved_engineer(kind: &str) -> Tag {
     ])
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_game_load_resolves_saved_names_for_both_species_without_reroll() {
     fixture(
         vec![ModEntry::new(
@@ -555,7 +555,7 @@ fn villager_game_load_resolves_saved_names_for_both_species_without_reroll() {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_game_missing_mod_keeps_both_species_unresolved_and_offers_untouched() {
     fixture(vec![].into(), |game| {
         for kind in ["minecraft:villager", "minecraft:zombie_villager"] {
@@ -598,7 +598,7 @@ fn villager_game_missing_mod_keeps_both_species_unresolved_and_offers_untouched(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_load_world_save_dir_preserves_custom_workstation() {
     fixture(
         vec![ModEntry::new(
@@ -651,7 +651,7 @@ fn villager_load_world_save_dir_preserves_custom_workstation() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_native_slots_ignore_declaring_mod_order() {
     struct NativeProfession(ProfessionDefinition);
     #[mod_api::__subscriptions]
@@ -702,7 +702,7 @@ fn villager_native_slots_ignore_declaring_mod_order() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_wasm_slots_ignore_declaring_mod_order() {
     // Instantiate and invoke the real wasm guest on the production-sized stack.
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {

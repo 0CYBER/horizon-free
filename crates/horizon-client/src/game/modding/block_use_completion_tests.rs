@@ -43,7 +43,7 @@ impl Drop for Recording {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn consuming_cancellation_has_one_outer_on_local_and_packet_routes() {
     let _recording = Recording::start();
     struct Listener(Arc<AtomicUsize>);
@@ -263,7 +263,7 @@ fn consuming_cancellation_has_one_outer_on_local_and_packet_routes() {
 /// ServerPlayerGameMode.useItemOn copies the hand before RespawnAnchorBlock
 /// consumes fuel; handleUseItemOn fires ANY_BLOCK_USE only after that result.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn resource_gated_block_use_order_and_stacks_on_server_and_guest() {
     let _recording = Recording::start();
     crate::game::native_guest_turn_tests::with_guests(|g| {
@@ -347,7 +347,7 @@ fn resource_gated_block_use_order_and_stacks_on_server_and_guest() {
 /// MapItem.useOn toggles the marker once; the shared pre-block snapshot must
 /// not cause a second ITEM_USED_ON_BLOCK emission in the enclosing use path.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn resource_gated_map_on_banner_fires_once_and_toggles_the_real_marker() {
     let _recording = Recording::start();
     crate::game::native_guest_turn_tests::with_guests(|g| {
@@ -441,7 +441,7 @@ fn any_block_use_stacks() -> Vec<ItemStack> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_original_shrink_and_damage_values() {
     let _recording = Recording::start();
     crate::game::native_guest_turn_tests::with_guests(|g| {
@@ -468,7 +468,7 @@ fn block_use_original_shrink_and_damage_values() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_listener_replacements_keep_original_on_both_routes() {
     // Instantiate and invoke the real wasm guest on the production-sized stack.
     crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
@@ -607,7 +607,7 @@ fn block_use_listener_replacements_keep_original_on_both_routes() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_nested_originals_and_replacements_are_isolated() {
     let _recording = Recording::start();
     crate::game::native_guest_turn_tests::with_guests(|g| {
@@ -634,7 +634,7 @@ fn block_use_nested_originals_and_replacements_are_isolated() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_registry_guard_final_hand_matches_original() {
     mod_platform::__private::install(Arc::from([]));
     let _recording = Recording::start();
@@ -792,7 +792,7 @@ fn run_block_use_regression(g: &mut Game<'_>, packet: bool, stack: ItemStack) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_hive_bottles_report_shrink_and_exhaustion_on_both_routes() {
     mod_platform::__private::install(Arc::from([]));
     let _recording = Recording::start();
@@ -840,7 +840,7 @@ fn block_use_hive_bottles_report_shrink_and_exhaustion_on_both_routes() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_lodestone_reports_component_edit_on_both_routes() {
     use horizon_core::nbt::Tag;
     mod_platform::__private::install(Arc::from([]));

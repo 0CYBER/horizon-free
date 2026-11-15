@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_notice_reads_each_applied_set_of_server_tags() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mods = vec![ModEntry::new("tags_probe", Box::new(Probe(seen.clone())))].into();
@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn remote_tag_packets_rebuild_vanilla_enchant_providers_and_transmitters_without_mods() {
         use crate::game::enchant_power_beam_tests::{enchant_particles, place};
         mod_platform::testing::with_mods(Vec::new().into(), || {
@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn remote_enchant_snapshot_follows_tag_rebinding_and_tags_updated_callbacks() {
         use crate::game::enchant_power_beam_tests::{enchant_particles, place};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

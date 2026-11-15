@@ -554,7 +554,7 @@ pub(in crate::game) mod tests {
     /// is refused with nothing registered; a removal frees its place once. A stale handle
     /// and a client register nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_numbers_its_passages_and_refuses_past_its_caps() {
         with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -625,7 +625,7 @@ pub(in crate::game) mod tests {
     /// with no passage and its whole caps, and numbering goes on (1 is not given again).
     /// A failed open retires everything, the window's copy too.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn passages_go_with_their_level_and_world() {
         with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -728,7 +728,7 @@ pub(in crate::game) mod tests {
     /// chunk is told to nobody; the hub then sends the chunk and the passage follows it, to
     /// the Horizon client only. A removal reaches it at the next tick's end.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_passage_follows_its_chunk_to_the_horizon_clients() {
         with_guests(|game| {
             game.native_lifecycle.world_open_ready().unwrap();
@@ -793,7 +793,7 @@ pub(in crate::game) mod tests {
     /// trace, however often; the changes kept stay within the live passages and the told
     /// ones removed.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn churn_before_the_tick_end_keeps_and_sends_nothing() {
         with_guests(|game| {
             game.native_lifecycle.world_open_ready().unwrap();
@@ -841,7 +841,7 @@ pub(in crate::game) mod tests {
     /// it sends from its start, so a Horizon guest that joins it is sent the passage with
     /// the chunk the first tick sends, before that tick's `flush_passages`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_reopened_lan_records_chunks_for_the_live_passages() {
         use crate::game::lan::LanSettings;
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
@@ -933,7 +933,7 @@ pub(in crate::game) mod tests {
     /// A Horizon arrival held for a hand-over is sent its chunks, so it is told their
     /// passages too; a held vanilla client is not.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_held_arrival_is_told_its_chunks_passages() {
         with_guests(|game| {
             game.native_lifecycle.world_open_ready().unwrap();
@@ -977,7 +977,7 @@ pub(in crate::game) mod tests {
     /// rest. The removal still reaches 12, which ends with no passage, and 13 is told
     /// only the removal.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn a_passage_sent_with_its_chunk_and_removed_in_the_same_tick_leaves_no_ghost() {
         use horizon_client::lan::chunk_watch::{
             ChunkWatch, ChunkWatchKind, ChunkWatchLog, LevelWatches,
@@ -1047,7 +1047,7 @@ pub(in crate::game) mod tests {
     /// server could not have registered, one for a chunk it does not hold, and a 257th,
     /// across packets; a number sent again replaces its passage.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_window_keeps_only_passages_it_can_hold() {
         with_client_game(|game| {
             game.world

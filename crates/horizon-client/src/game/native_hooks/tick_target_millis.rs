@@ -45,7 +45,7 @@ mod tick_target_millis_tests {
     /// included, and its answer paces the client; an answer that is not a positive number keeps
     /// vanilla's, and without a listener the length is vanilla's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_sets_how_long_a_client_tick_lasts() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.execution_role = super::ExecutionRole::Client;

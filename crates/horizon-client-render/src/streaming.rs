@@ -3621,7 +3621,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn late_generated_saves_yield_before_writing_in_all_receive_loops() {
         use crate::{
             assets::Assets, biome::Biomes, light::LightTables, mesher::MeshTables, models,

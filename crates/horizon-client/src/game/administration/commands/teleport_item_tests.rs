@@ -2,7 +2,7 @@ use crate::game::native_entity_refs::tests::with_game;
 use horizon_core::geometry::Vec3;
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn relative_item_teleports_keep_only_relative_horizontal_motion() {
     with_game(|game| {
         game.ui.registries.permission = 4;
@@ -26,7 +26,7 @@ fn relative_item_teleports_keep_only_relative_horizontal_motion() {
 /// `Entity.teleportTo(ServerLevel, ..)` -> `teleportCrossDimension`), and its
 /// transition has no delta and no `Relative.DELTA`: the item arrives still.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn an_item_teleported_into_another_level_arrives_there_still() {
     with_game(|game| {
         game.ui.registries.permission = 4;
@@ -53,7 +53,7 @@ fn an_item_teleported_into_another_level_arrives_there_still() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_command_items_merge_immediately() {
     with_game(|game| {
         game.build_registries();

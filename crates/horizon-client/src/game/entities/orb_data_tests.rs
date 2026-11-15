@@ -28,7 +28,7 @@ fn run(game: &mut Game<'_>, command: &str) -> (bool, Option<String>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_merged_age_reaches_the_same_live_orb() {
     game(|game| {
         let saved = parse_snbt(
@@ -99,7 +99,7 @@ fn orb<'a>(game: &'a Game<'_>, id: u32) -> &'a horizon_client::entities::Experie
 /// stale one; and the portal cooldown is read while a live portal process
 /// stays.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_merge_keeps_the_live_orb_and_its_portal_process() {
     use horizon_client::nether_portal::{PortalState, Process};
     game(|game| {

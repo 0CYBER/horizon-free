@@ -41,7 +41,7 @@ impl Hooks for Second {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_living_handle_dispatches_custom_kinds_with_same_kind_recursion_refused() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![

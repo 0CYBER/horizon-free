@@ -402,7 +402,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn dimension_shape_reads_current_parked_and_stale_levels() {
         use super::super::Dim;
         use horizon_client::chunk::LevelShape;
@@ -444,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn rain_at_a_position_checks_sky_roof_and_biome() {
         with_game(|game| {
             game.install_live_features();
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn enabled_features_default_to_vanilla_and_follow_the_world() {
         with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -526,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn native_mod_reads_registered_bool_rule_by_key() {
         use std::sync::OnceLock;
         static KEY: OnceLock<mod_api::BoolGameRuleKey> = OnceLock::new();
@@ -634,7 +634,7 @@ mod tests {
     /// A listener of a change no player made reads every server rule through its host: the new
     /// value and the others as they stand.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_game_rule_listener_reads_the_whole_rule_set() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mods: mod_api::Mods = vec![ModEntry::new(
@@ -672,7 +672,7 @@ mod tests {
     /// `level_set_game_rule` writes what `/gamerule` accepts, refuses what it refuses, and
     /// `level_set_clock_time` moves the level's clock as `/time set` does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_sets_game_rules_and_the_clock() {
         use mod_api::WorldEpoch;
         with_game(|game| {
@@ -806,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn rule_reads_distinguish_unknown_stale_and_unavailable_and_snapshot_values() {
         use super::super::execution_role::ExecutionRole;
         use mod_api::{LevelReadError, WorldEpoch};
@@ -867,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn weather_read_resolves_levels_and_refuses_stale_or_unavailable_handles() {
         use super::super::execution_role::ExecutionRole;
         use mod_api::{LevelRef, WorldEpoch};

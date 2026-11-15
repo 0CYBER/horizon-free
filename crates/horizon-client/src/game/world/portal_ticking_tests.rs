@@ -11,7 +11,7 @@ use horizon_core::geometry::Vec3;
 use std::sync::Arc;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
     with_game(|game| {
         game.world

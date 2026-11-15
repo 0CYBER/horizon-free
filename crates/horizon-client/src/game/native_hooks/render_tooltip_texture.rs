@@ -73,7 +73,7 @@ mod render_tooltip_texture_tests {
     /// back to the fills when no pack has it; its colours change the fills; and an unheard
     /// tooltip draws as before.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_gives_a_tooltip_its_own_texture_or_colours() {
         let stick = ItemStack::new("minecraft:stick", 1);
         let stone = ItemStack::new("minecraft:stone", 1);

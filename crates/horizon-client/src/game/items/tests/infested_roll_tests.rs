@@ -107,7 +107,7 @@ fn silverfish(game: &Game<'_>) -> usize {
 /// `InfestedMobEffect.onMobHurt` chance, which `actuallyHurt` — and so
 /// `CombatTracker.recordDamage` — never sees.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_absorbed_hit_still_rolls_the_infested_effect() {
     let mut g = game_with_fish();
     g.give_player_effect("minecraft:infested", 200, 0);
@@ -147,7 +147,7 @@ fn an_absorbed_hit_still_rolls_the_infested_effect() {
 /// Infested starving player rolls the same 10% chance. The starvation hurt
 /// builds its own damage environment, which must carry the status flags.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_starving_infested_player_rolls_the_infested_effect() {
     let mut g = game_with_player();
     g.give_player_effect("minecraft:infested", 200, 0);

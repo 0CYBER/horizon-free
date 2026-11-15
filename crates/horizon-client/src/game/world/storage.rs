@@ -588,7 +588,7 @@ mod tests {
     /// `ChestBlockEntity`'s opener counter plays the block's own hinge
     /// sound: a copper chest's, by weather state, not the wooden chest's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_player_opens_and_closes_a_chest_with_its_own_hinge_sound() {
         let mut resources = None;
         let mut game = super::super::game_tests::tests::server_game(&mut resources);
@@ -670,7 +670,7 @@ mod reach_tests {
     /// asks both halves): breaking the half the player did not click ends the
     /// six-row menu instead of leaving a three-row one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn breaking_the_other_half_closes_the_open_double_chest() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -724,7 +724,7 @@ mod lock_tests {
     /// `createMenu`, so the block is never set as the open container. A hand
     /// holding the lock's item opens it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_locked_container_refuses_the_local_players_open() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -779,7 +779,7 @@ mod lock_tests {
     /// `canOpen` of both halves, so a lock on the half the player did not
     /// click still refuses the six-row menu.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_lock_on_either_half_refuses_a_double_chest() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

@@ -457,7 +457,7 @@ mod tests {
     /// call for another mod's file is refused. In a fresh process, run in a
     /// scratch folder, since `config/` is beside the game's working folder.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_mod_saves_its_config_through_the_game_and_the_reload_hears_it() {
         use mod_api::{
             self, ConfigLoadingEvent, ConfigReloadingEvent, Hooks, HostSide, ModEntry, Mods,

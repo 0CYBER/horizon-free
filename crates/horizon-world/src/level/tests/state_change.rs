@@ -129,7 +129,7 @@ fn a_state_change_is_heard_after_the_neighbours_settled_and_only_when_the_write_
 }
 
 #[test]
-#[ignore = "requires prepared block behaviour resources"]
+#[ignore = "daily"]
 fn a_nested_write_is_heard_after_the_updates_it_queued() {
     let Some(f) = fixture() else {
         return;
@@ -168,7 +168,7 @@ fn a_nested_write_is_heard_after_the_updates_it_queued() {
 }
 
 #[test]
-#[ignore = "requires prepared block behaviour resources"]
+#[ignore = "daily"]
 fn nested_writes_are_heard_in_the_order_they_were_made() {
     let Some(f) = fixture() else {
         return;

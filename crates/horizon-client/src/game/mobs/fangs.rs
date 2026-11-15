@@ -392,7 +392,7 @@ mod tests {
     use horizon_core::random::LegacyRandom;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn taken_fangs_tick_keeps_survivors_before_both_spawns() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.fangs.list.clear();

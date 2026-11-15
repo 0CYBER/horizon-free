@@ -36,7 +36,7 @@ fn chunk_game(game: &mut Game<'_>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn attached_items_are_undone_by_an_abort_and_saved_by_their_codec() {
     with_game(|game| {
         chunk_game(game);
@@ -60,7 +60,7 @@ fn attached_items_are_undone_by_an_abort_and_saved_by_their_codec() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn attached_energy_refuses_past_its_capacity() {
     with_game(|game| {
         chunk_game(game);

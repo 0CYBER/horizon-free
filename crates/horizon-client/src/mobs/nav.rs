@@ -866,7 +866,7 @@ mod recompute_tests {
 mod tests {
     use super::*;
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn surface_search_uses_the_world_build_range() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         assert!(crate::mobs::world::with_resource_test_world(
@@ -894,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn surface_search_from_above_keeps_the_top_nonsolid_block() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         assert!(crate::mobs::world::with_resource_test_world(

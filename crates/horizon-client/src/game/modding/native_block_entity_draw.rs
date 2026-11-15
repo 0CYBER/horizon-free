@@ -1614,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and software Vulkan"]
+    #[ignore = "daily"]
     fn prepared_model_entity_pixels() {
         use mod_api::__private::game::Fields;
         let _fixture =
@@ -1690,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_full_instance_buffer_bakes_the_tail_after_the_cut() {
         use super::super::minecarts::PreparedModelFace;
         use horizon_client::gfx::cap_prepared_instance_slots;
@@ -1800,7 +1800,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and software Vulkan"]
+    #[ignore = "daily"]
     fn prepared_instance_matches_cpu_pixels() {
         use glam::DVec3;
         use horizon_client::gfx::fail_next_prepared_upload;
@@ -1924,7 +1924,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn resolved_model_draws_and_resource_replacement_invalidates_it() {
         use super::super::host::draw::GameBlockEntityDrawContext;
         use mod_api::BlockEntityDrawContext;
@@ -2122,7 +2122,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and software Vulkan"]
+    #[ignore = "daily"]
     fn model_tint_alpha_agrees_on_keep_deferred_and_batch() {
         use super::super::host::draw::{GameBlockEntityDrawContext, GameWorldDrawContext};
         use horizon_client::gfx::entity_pixel_test::{self, PreparedInstanceDraw};
@@ -2290,7 +2290,7 @@ mod tests {
     /// vertices in a block-entity run, so our probe pack (one flat colour per program) paints
     /// both with `gbuffers_block`. Without a pack the batch marks no run and bakes the same.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and software Vulkan"]
+    #[ignore = "daily"]
     fn a_pack_shades_batch_and_per_copy_models_with_one_program() {
         use super::super::host::draw::{GameBlockEntityDrawContext, GameWorldDrawContext};
         use horizon_client::gfx::entity_pixel_test::{self, PACK_COLOURS};
@@ -2450,7 +2450,7 @@ mod tests {
     /// the text's styles: bold widens it and doubles its glyphs, and an outline (black too)
     /// rings each glyph with eight copies behind the text.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn text_lays_glyphs_out_under_the_pose_in_the_frames_light() {
         use super::super::host::draw::GameBlockEntityDrawContext;
         use mod_api::BlockEntityDrawContext;
@@ -2543,7 +2543,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fractional_text_advance_rounds_up_for_drawing_and_measurement() {
         use super::super::host::draw::GameBlockEntityDrawContext;
         use horizon_assets::resource_source::{Resource, ResourceSource};
@@ -2572,7 +2572,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn animation_clock_survives_pause_freeze_resume_and_time_updates() {
         use horizon_protocol::packets::play;
         use std::time::Duration;
@@ -2615,7 +2615,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn atlas_reset_discards_queued_text_uploads() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.text_patches
@@ -2636,7 +2636,7 @@ mod tests {
     /// `BlockEntityDrawContext::cube`, its UVs cut from the sprite; an unknown sprite's face
     /// is left out and the call says so.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_built_cube_face_draws_in_its_sprite() {
         use super::super::host::draw::GameBlockEntityDrawContext;
         use mod_api::BlockEntityDrawContext;
@@ -2766,7 +2766,7 @@ mod tests {
     /// south face, (0, 0, 1) to (1, 1, 1) in its part's frame, sits a block east of the part's
     /// origin and then the frame's 10.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_registered_layer_bakes_and_draws_before_and_after_a_reload() {
         use horizon_core::geometry::Direction as Face;
         use mod_api::{CubeListBuilder, LayerDefinition, MeshDefinition, PartPose};

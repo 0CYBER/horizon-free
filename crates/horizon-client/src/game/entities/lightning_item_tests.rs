@@ -5,7 +5,7 @@ use horizon_client::items::ItemStack;
 use horizon_core::geometry::Vec3;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn lightning_items_take_five_damage_per_strike() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_game(|game| {
@@ -79,7 +79,7 @@ impl mod_api::Hooks for Spare {
     }
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn lightning_item_listener_can_refuse_damage() {
     mod_platform::testing::with_mods(
         vec![mod_api::ModEntry::new("spare", Box::new(Spare))].into(),

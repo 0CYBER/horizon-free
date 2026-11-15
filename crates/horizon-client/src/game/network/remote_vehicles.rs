@@ -907,7 +907,7 @@ mod tests {
     /// ×0.98 through `LocalPlayer.modifyInput`), so a press reaches it a tick
     /// late and a release a tick late too, as the server's anticheats expect.
     #[test]
-    #[ignore = "requires prepared resources (HORIZON_TEST_RESOURCES)"]
+    #[ignore = "daily"]
     fn a_driven_horse_moves_on_the_riders_last_tick_input() {
         use super::super::{
             Audio, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
@@ -998,7 +998,7 @@ mod tests {
 #[cfg(test)]
 mod plugin_seat_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn controlling_client_copies_sneak_press_and_release_into_rider() {
         use horizon_client::sprint::Keys;
         crate::game::mounts::sneak_dismount_tests::with_horse(|game, horse, _, _| {
@@ -1024,7 +1024,7 @@ mod plugin_seat_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn local_rider_uses_attachments_and_follows_a_moving_seat_chain() {
         use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::{mobs::Mob, motion::PlayerMotion, sprint::Keys};

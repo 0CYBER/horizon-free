@@ -3,7 +3,7 @@ use super::destination_tests::Fixture;
 use std::io::{Cursor, Write};
 
 #[test]
-#[ignore = "requires a host GPU with compute and fragment storage"]
+#[ignore = "daily"]
 fn a_reset_pack_draws_its_buffers_images_storage_and_shadow_from_the_start() {
     let _gpu = crate::gfx::test_gpu::lock();
     let gpu = Fixture::new().expect("a GPU is required for this reset regression");

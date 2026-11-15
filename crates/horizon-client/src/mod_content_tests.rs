@@ -463,7 +463,7 @@ fn state_light_from_native_declarations_invalidates_the_content_cache() {
 }
 
 #[test]
-#[ignore = "full content root: run explicitly with prepared resources"]
+#[ignore = "daily"]
 fn block_aliases_keep_the_original_item_in_placement_context() {
     use horizon_core::{
         geometry::{Direction, Vec3},
@@ -1229,7 +1229,7 @@ fn ruby_mod_with_pistons(dir: &Path, pistons: bool) -> ContentMod {
 /// new blocks behave like their templates with the overrides, and vanilla's
 /// states are where they were.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_loads_with_every_table() {
     let Some(base) = prepared() else {
         return;
@@ -1757,7 +1757,7 @@ use horizon_world::loot::PackOverlay;
 use horizon_world::registry::BlockStateId;
 
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn shared_behaviour_document_matches_independent_loaders() {
     let Some(root) = prepared() else { return };
     let assets = Assets::load(&root).expect("assets");
@@ -1820,7 +1820,7 @@ fn shared_behaviour_document_matches_independent_loaders() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     let Some(base) = prepared() else { return };
     let scratch = std::env::temp_dir().join(format!("horizon-json-reloads-{}", std::process::id()));
@@ -1942,7 +1942,7 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
 /// A built root is kept for later starts, and built again when a mod's
 /// files change.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_is_reused_until_a_mod_changes() {
     let Some(base) = prepared() else {
         return;
@@ -2002,7 +2002,7 @@ fn content_root_is_reused_until_a_mod_changes() {
 /// set, pool and templates join the bundles, and its biome tag keeps only
 /// what the loader knows.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_carries_a_structure_mod() {
     let Some(base) = prepared() else {
         return;
@@ -2191,7 +2191,7 @@ fn content_root_carries_a_structure_mod() {
 /// `structure_overrides` allow (the classic flat world: strongholds and villages) on its
 /// flat ground, and no other set, with the layers where the terrain would be.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_superflat_world_runs_its_structure_sets_on_flat_ground() {
     use crate::streaming::ChunkGenerator;
     let Some(base) = prepared() else {
@@ -2271,7 +2271,7 @@ fn a_superflat_world_runs_its_structure_sets_on_flat_ground() {
 /// flowers and trees even with no structure set (`structure_overrides: []`, or
 /// `generate_structures` off), and without `features` the same layers stay bare.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_decorated_superflat_world_without_structures_grows_its_features() {
     use crate::streaming::ChunkGenerator;
     let Some(base) = prepared() else {
@@ -2347,7 +2347,7 @@ fn a_decorated_superflat_world_without_structures_grows_its_features() {
 /// strongholds are in the same place on every seed; a layer that is not opaque to
 /// `MOTION_BLOCKING` is `null`, left out of `buildTerrain` for the fill after the structures.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_superflat_world_keeps_its_strongholds_on_every_seed_and_leaves_null_layers_for_the_fill() {
     use crate::streaming::ChunkGenerator;
     let Some(base) = prepared() else {
@@ -2432,7 +2432,7 @@ fn a_superflat_world_keeps_its_strongholds_on_every_seed_and_leaves_null_layers_
 /// `structure_overrides` is a lenient field: a list naming a structure set that does not exist
 /// fails to decode and counts as absent, so every set generates.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_superflat_structure_override_naming_no_set_lets_every_set_generate() {
     let Some(base) = prepared() else {
         return;
@@ -2486,7 +2486,7 @@ fn a_superflat_structure_override_naming_no_set_lets_every_set_generate() {
 /// and its server alike, and joins the ids `/effect` and its suggestions
 /// check.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_registers_a_mod_mob_effect() {
     let Some(base) = prepared() else {
         return;
@@ -2535,7 +2535,7 @@ fn content_root_registers_a_mod_mob_effect() {
 /// A mod that adds only an item still moves the item network ids, so a game
 /// without it must fail the content check rather than show other items.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_with_only_an_item_checks_its_identity() {
     let Some(base) = prepared() else {
         return;
@@ -2576,7 +2576,7 @@ fn content_root_with_only_an_item_checks_its_identity() {
 /// a mod's thrown entity type gets the network id after vanilla's last, the
 /// commands accept it, and it changes the content identity.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_registers_a_mod_entity_type() {
     let Some(base) = prepared() else {
         return;
@@ -2653,7 +2653,7 @@ fn content_root_registers_a_mod_entity_type() {
 /// a mod's menu type gets the menu network id after vanilla's last, and it
 /// changes the content identity.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_registers_a_mod_menu_type() {
     let Some(base) = prepared() else {
         return;
@@ -2842,7 +2842,7 @@ fn mods_sharing_a_namespace_are_refused() {
 }
 
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn conditional_tag_layers_replace_only_when_server_inventory_accepts_them() {
     let Some(base) = prepared() else { return };
     let scratch =
@@ -2984,7 +2984,7 @@ fn a_replacing_mod_tag_reaches_the_root() {
 /// `StructureCheck.onStructureLoad`: the references a chunk saved for its start
 /// count, so a map skips a start a vanilla map already pointed at.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn exploration_maps_skip_the_starts_a_chunk_saved_as_referenced() {
     let Some(base) = prepared() else {
         return;
@@ -3028,7 +3028,7 @@ fn exploration_maps_skip_the_starts_a_chunk_saved_as_referenced() {
 /// the same chunks asks the save nothing it asked before (#10255: a chest with
 /// exploration maps took a growing second per open reading them again).
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_saved_chunks_record_is_read_once_across_map_searches() {
     let Some(base) = prepared() else {
         return;
@@ -3086,7 +3086,7 @@ fn a_saved_chunks_record_is_read_once_across_map_searches() {
 /// exploration map that skips known structures points at a start no map
 /// pointed at before, and a reopened world remembers which.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn exploration_maps_skip_the_structures_maps_pointed_at() {
     let Some(base) = prepared() else {
         return;
@@ -3145,7 +3145,7 @@ fn exploration_maps_skip_the_structures_maps_pointed_at() {
 /// `NoiseBasedChunkGenerator.addDebugScreenInfo`: F3's `Density` line lists
 /// the noise settings' `debug_functions` with three decimals.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn debug_density_line_lists_the_noise_settings_functions() {
     let Some(base) = prepared() else {
         return;
@@ -3187,7 +3187,7 @@ fn debug_density_line_lists_the_noise_settings_functions() {
 }
 
 #[test]
-#[ignore = "full content root: needs prepared vanilla data"]
+#[ignore = "daily"]
 fn content_shapes_drive_outline_and_collision() {
     use horizon_core::{
         geometry::{Aabb, Axis, Vec3},
@@ -3382,7 +3382,7 @@ fn shapes_reject_unknown_or_missing_template_values() {
 /// tag) joins itself and its tag's blocks on each side, needs no support, and
 /// leaves vanilla's chorus plant as it was.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn connecting_blocks_and_vanilla_fences_use_content_tags() {
     use horizon_core::position::BlockPos;
     use horizon_core::random::LegacyRandom;
@@ -3578,7 +3578,7 @@ fn connecting_blocks_and_vanilla_fences_use_content_tags() {
 /// them. A legacy structure with no loader is the generator's own start when it has the same
 /// pieces' box, and name and box alone when it has not.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn an_old_chunks_saved_village_comes_back_with_its_pieces() {
     use horizon_core::position::ChunkPos;
     use {
@@ -3744,7 +3744,7 @@ fn an_old_chunks_saved_village_comes_back_with_its_pieces() {
 /// A recipe's `result` is a stack's fields or a bare item id, as vanilla's `ItemStackTemplate`
 /// codec reads it (#4904): a mod's recipes make its own items either way.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn mod_recipe_results_are_an_item_stack_or_a_bare_item_id() {
     let Some(base) = prepared() else {
         return;
@@ -3845,7 +3845,7 @@ fn mod_recipe_results_are_an_item_stack_or_a_bare_item_id() {
 /// slot, with only the items the game has; its new items join the search tab
 /// under their English names.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn creative_tabs_come_on_their_own_page() {
     let Some(base) = prepared() else {
         return;
@@ -4182,7 +4182,7 @@ fn declared_partial_shapes_observe_waterlogging_and_template_light_overrides() {
 /// A declared waterlogged property changes a fluid-dependent class override,
 /// but not TransparentBlock's constant skylight rule.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn declared_waterlogged_vegetation_uses_resolved_fluid_for_skylight() {
     use crate::{
         blocks::Fluid,
@@ -4260,7 +4260,7 @@ fn declared_waterlogged_vegetation_uses_resolved_fluid_for_skylight() {
 
 /// Load the actual generated tables as the renderer and world generator do.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn declared_shapes_reach_render_and_worldgen_occlusion() {
     use crate::{
         chunk::Chunk,
@@ -5658,7 +5658,7 @@ fn biome_modifiers_change_mob_spawns_and_spawn_costs() {
 /// world's chunk; without the modifier the same placed feature does not
 /// (its `biome` filter only passes in biomes that list it).
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn content_root_generates_a_biome_modifier_ore() {
     use crate::streaming::{ChunkGenerator, Proto};
     let Some(base) = prepared() else {
@@ -5783,7 +5783,7 @@ fn biome_modifiers_take_one_biome_or_a_list() {
 /// inside the content mod of their namespace, or as one of their own, with
 /// ids after vanilla's as files' are.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn blocks_and_items_declared_in_code_get_ids() {
     use horizon_mod_package::content::{Block, Item};
     let Some(base) = prepared() else {
@@ -5957,7 +5957,7 @@ fn a_file_item_whose_remainder_was_refused_takes_only_its_mod_out() {
 /// its wood from its declaration, and its item places the wall form it names
 /// and is that form's item too. A `road_sign` of stone is no sign.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn signs_take_their_form_wood_and_wall_block_from_their_declaration() {
     use horizon_world::level::{Behaviours, ItemKind};
 
@@ -6070,7 +6070,7 @@ fn signs_take_their_form_wood_and_wall_block_from_their_declaration() {
 /// `close_sound` replace `WoodType.fenceGateOpen` and `fenceGateClose`, the one
 /// value a use, a redstone change and an explosion all read.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_content_fence_gate_plays_its_own_sounds_or_its_woods() {
     use horizon_world::level::Behaviours;
 
@@ -6148,7 +6148,7 @@ fn a_content_fence_gate_plays_its_own_sounds_or_its_woods() {
 /// `item` false. A `block_item` that is no item refuses the load. Pick-block's item
 /// is that value unless the block declares a `pick_item` of its own.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_block_yields_the_item_it_names_or_its_own_or_none() {
     use horizon_world::level::Behaviours;
 
@@ -6276,7 +6276,7 @@ fn a_block_yields_the_item_it_names_or_its_own_or_none() {
 /// `WorldGenRegion.setBlock`: a feature that places a mod's sign leaves it its
 /// block entity, which goes by the template's class and not the block's name.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_feature_gives_a_mods_sign_its_block_entity() {
     use crate::containers::BlockEntity;
     use crate::streaming::{ChunkGenerator, Proto};
@@ -6629,7 +6629,7 @@ fn only_assets_and_data_switch_live() {
 /// never changes a root a game was given, and a set seen before reuses its
 /// root without building it again.
 #[test]
-#[ignore = "full content root: CI and pr_ready run it"]
+#[ignore = "daily"]
 fn a_data_mod_loads_unloads_and_loads_again() {
     let Some(base) = prepared() else {
         return;
@@ -7200,7 +7200,7 @@ fn structure_modifiers_evaluate_conditions_before_required_fields() {
 /// Exercise the production resource-root cache and the spawn consumer against
 /// prepared vanilla data, including switching back to the unmodified root.
 #[test]
-#[ignore = "full content root: requires prepared resources"]
+#[ignore = "daily"]
 fn structure_modifiers_prepared_root_reloads_spawn_overrides() {
     use crate::mobs::spawn_selection::StructureSpawns;
     let Some(base) = prepared() else {

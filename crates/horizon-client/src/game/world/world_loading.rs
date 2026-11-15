@@ -1440,7 +1440,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn creation_rule_selection_reaches_the_saved_world() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::gamerules::{GameRules, Rule, RuleRegistry, Value};
@@ -1513,7 +1513,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_loaded_missing_biome_survives_a_game_save_with_an_enabled_biome_pack() {
         use super::super::native_entity_refs::tests::with_game;
         let root = std::env::temp_dir().join(format!(
@@ -1585,7 +1585,7 @@ mod tests {
     /// save records the loaded list, so the reopened world fires nothing, as a
     /// world without the list doesn't.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_world_saved_with_other_mod_versions_fires_mod_mismatch() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
         // The warning is read back from the process's logger and its last 50 lines. In the shared
@@ -1773,7 +1773,7 @@ mod tests {
     /// worldgen entries; the Overworld's noise stays the game's. Ignored as it
     /// installs the process-wide tables.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stem_naming_a_mods_generator_opens_on_mod_terrain() {
         use horizon_client::streaming::ChunkGenerator as _;
         use horizon_world::worldgen::{
@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes"]
+    #[ignore = "daily"]
     fn both_server_roles_record_regions_before_world_generation() {
         mod_platform::__private::initialize().unwrap();
         use super::super::native_entity_refs::tests::with_game_role;
@@ -1953,7 +1953,7 @@ mod unused_feature_startup_tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_world_prepare_rejects_unused_invalid_feature() {
         let resources = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2060,7 +2060,7 @@ mod unused_feature_preservation_tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn startup_leaf_preservation_other_id_and_unrelated_feature() {
         let resources = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

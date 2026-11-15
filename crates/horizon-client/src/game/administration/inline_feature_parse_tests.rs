@@ -96,7 +96,7 @@ fn stored(game: &mut Game<'_>, feature: &str) -> (i32, i32, bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_malformed_inline_feature_fails_before_the_command_runs() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -140,7 +140,7 @@ fn a_malformed_inline_feature_fails_before_the_command_runs() {
 /// `to_place`), and leaves what it does not cover to the run, as before
 /// (preservation, not parity).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_parse_check_is_the_live_feature_codec_and_only_where_it_exists() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

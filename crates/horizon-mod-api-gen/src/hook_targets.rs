@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 fn definitions(root: &Path) -> Result<BTreeMap<String, (String, syn::Signature)>, String> {
     let mut targets = BTreeMap::new();
-    for path in crate::native_hook_files(root)? {
+    for path in horizon_game_discovery::native_hook_files(root)? {
         let area = path.file_stem().unwrap().to_str().unwrap();
         let file = syn::parse_file(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;

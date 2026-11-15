@@ -1606,7 +1606,7 @@ mod warden_owned_memory_tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources; actual full Mob ticks, no skipped coverage"]
+    #[ignore = "daily"]
     fn actual_mob_ticks_expire_owned_memories_and_noai_retains_them() {
         let build = |world: &mut crate::world::World, registry: &BlockRegistry| {
             world

@@ -110,7 +110,7 @@ fn fixture(run: impl FnOnce(&mut crate::game::Game<'_>, &Arc<AtomicBool>, &mut M
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn successful_reload_removes_secondary_tag_entries() {
     fixture(|game, enabled, mob| {
         enabled.store(false, Ordering::SeqCst);
@@ -121,7 +121,7 @@ fn successful_reload_removes_secondary_tag_entries() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn failed_reload_preparation_keeps_secondary_tag_entries() {
     fixture(|game, enabled, mob| {
         enabled.store(false, Ordering::SeqCst);

@@ -129,7 +129,7 @@ mod inside_walk_tests {
     /// The fire's pushes and its wither effect reach the mob in its own tick,
     /// one contact a block, in the shared walk's order.
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn a_part_pushes_a_mob_once_a_block_in_walk_order() {
         let _test = TEST_LOCK
             .lock()
@@ -181,7 +181,7 @@ mod inside_walk_tests {
     /// A killing write stops the mob's flush: the walk still reaches both
     /// blocks, the writes after the death never apply.
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn a_killing_write_stops_the_mobs_flush() {
         let _test = TEST_LOCK
             .lock()
@@ -224,7 +224,7 @@ mod inside_walk_tests {
     /// lifted rows themselves are #2285's restoration, its own tests'; the
     /// item batch test proves the lifted pair end to end).
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn a_panicking_part_leaves_the_mobs_tick_restored() {
         let _test = TEST_LOCK
             .lock()
@@ -274,7 +274,7 @@ mod inside_walk_tests {
     /// nothing of the part plumbing applies, exactly what main did with no
     /// listener.
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn a_mob_without_a_part_keeps_vanilla_behavior() {
         let _test = TEST_LOCK
             .lock()
@@ -316,7 +316,7 @@ mod inside_walk_tests {
     /// The walk's block order on a diagonal move is vanilla's own sweep: the
     /// x cells of the move come before the z cells the box enters.
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn a_diagonal_move_walks_blocks_in_vanillas_order() {
         let _test = TEST_LOCK
             .lock()
@@ -1650,7 +1650,7 @@ mod powder_snow_particle_tests {
     /// A ridden mount uses the controlling player's known movement for the
     /// powder-snow roll, even when the mount's own delta is zero.
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn a_controlled_mount_uses_its_riders_known_movement() {
         let seed = (0..1000)
             .find(|seed| {
@@ -2684,7 +2684,7 @@ mod selector_restore_tests {
     // Exercise the production acquisition site, not just the restoration helper.
     // This is an engine Goal callback, not native Game integration coverage.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn server_ai_step_restores_live_selectors_after_goal_unwind() {
         use crate::mobs::world::with_resource_test_world;
         use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -4724,7 +4724,7 @@ mod same_vehicle_push_tests {
     use crate::mobs::world::with_test_world;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn zombie_horse_sunburn_checks_body_not_head() {
         assert!(with_test_world(&[], |world, types| {
             let mut world = world.clone();
@@ -4762,7 +4762,7 @@ mod same_vehicle_push_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn leather_body_armor_prevents_freezing() {
         assert!(with_test_world(&[], |w, types| {
             let mut horse = Mob::new(
@@ -5320,7 +5320,7 @@ mod bed_wake_tests {
     use crate::mobs::world::with_test_world;
 
     #[test]
-    #[ignore = "needs prepared vanilla resources"]
+    #[ignore = "daily"]
     fn loaded_sleeping_position_refreshes_in_actual_mob_tick() {
         use horizon_core::nbt::Tag;
         let build = |world: &mut crate::world::World,
@@ -6294,7 +6294,7 @@ mod burn_and_rose_tests {
     /// (not 299) after its first tick, and the hit that tick starts has its
     /// full invulnerable time.
     #[test]
-    #[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn lava_ignites_to_the_full_time_and_hits_after_the_timers_count_down() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -6939,7 +6939,7 @@ mod flight_effect_fall_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn flight_effects_reset_accumulated_fall_distance_even_without_ai() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let ran = crate::mobs::world::with_resource_test_world(
@@ -7016,7 +7016,7 @@ mod breathing_effect_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn breathing_effects_and_bubble_columns_preserve_mob_air() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let ran = crate::mobs::world::with_resource_test_world(
@@ -7365,7 +7365,7 @@ mod happy_ghast_ambient_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn natural_happy_ghast_ambient_uses_entity_position() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let ran = crate::mobs::world::with_resource_test_world(
@@ -7568,7 +7568,7 @@ mod trader_llama_no_ai_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn eligible_trader_llama_delay_advances_in_actual_no_ai_tick() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),

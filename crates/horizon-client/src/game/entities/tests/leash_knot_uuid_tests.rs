@@ -30,7 +30,7 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mob_leashed_to_a_knots_uuid_is_tied_to_its_post() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -50,7 +50,7 @@ fn a_mob_leashed_to_a_knots_uuid_is_tied_to_its_post() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_boat_leashed_to_a_knots_uuid_is_tied_to_its_post() {
     let mut resources = None;
     let mut game = game(&mut resources);

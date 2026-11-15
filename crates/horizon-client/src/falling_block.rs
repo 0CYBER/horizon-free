@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(step(1.5, 5.5, 5.46, -0.04), (-0.04, 2.0));
     }
     #[test]
-    #[ignore = "requires prepared entity models/data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn impact_hurts_only_living_intersecting_noninvulnerable_mobs() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();

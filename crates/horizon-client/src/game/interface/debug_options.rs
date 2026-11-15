@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn title_debug_overlay_draws_without_a_level() {
         use horizon_client::debug_keys::KeyAction;
         let mut resources = None;
@@ -697,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn title_debug_options_open_draw_and_return_without_a_level() {
         use horizon_client::debug_keys::KeyAction;
         let mut resources = None;

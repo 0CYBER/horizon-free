@@ -92,7 +92,7 @@ fn ingredient_depth_128_matches_clones_and_drops_on_two_mib_stack() {
 }
 
 #[test]
-#[ignore = "requires prepared vanilla recipe corpus"]
+#[ignore = "daily"]
 fn vanilla_recipe_corpus_preserves_ingredient_membership_and_order() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client/26.3/data/minecraft/recipe");

@@ -3314,7 +3314,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn auto_jump_detects_collidable_entities() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
@@ -6299,7 +6299,7 @@ mod tests {
     /// at y -59.8 over soul sand (its top at -60.125) or gliding there moves as
     /// it does over grass; walking on the soul sand it keeps 0.4 of its speed.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_flying_or_gliding_player_is_not_slowed_by_soul_sand() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;

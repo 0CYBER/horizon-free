@@ -8,50 +8,6 @@ pub(crate) fn declarations(game: &Path) -> Result<String, String> {
     horizon_game_discovery::declarations(game, &["native_hooks", "host", "creatures"])
 }
 
-pub(crate) fn lan_action_modules(directory: &Path) -> Result<String, String> {
-    let mut declarations = String::new();
-    for module in Catalog::modules(directory)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .chain(std::iter::once("mod".to_owned()))
-    {
-        let path = directory.join(format!("{module}.rs"));
-        if matches!(module.as_str(), "mod" | "shared") {
-            let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let file = syn::parse_file(&source).map_err(|e| e.to_string())?;
-            for item in file.items {
-                let syn::Item::Impl(item) = item else {
-                    continue;
-                };
-                let syn::Type::Path(ty) = &*item.self_ty else {
-                    continue;
-                };
-                if ty.path.segments.len() != 1 || ty.path.segments[0].ident != "Game" {
-                    continue;
-                }
-                if module == "shared"
-                    && item.items.iter().all(|member| {
-                        matches!(member, syn::ImplItem::Fn(method)
-                        if (method.sig.ident == "vehicle_has_other_viewers"
-                            || method.sig.ident.to_string().starts_with("__fnr_"))
-                            && method.sig.receiver().is_none())
-                    })
-                {
-                    continue;
-                }
-                return Err(format!(
-                    "{}: put Game methods in an action area",
-                    path.display()
-                ));
-            }
-            continue;
-        }
-        let absolute = path.canonicalize().map_err(|e| e.to_string())?;
-        declarations.push_str(&format!("#[path = {absolute:?}] mod {module};\n"));
-    }
-    Ok(declarations)
-}
-
 /// Expand the same directory-derived include before source traversal, without needing OUT_DIR.
 /// Other includes are left alone: source tools must not evaluate arbitrary build-time code.
 pub(crate) fn expand(path: &Path, source: &str) -> Result<String, String> {
@@ -75,7 +31,11 @@ pub(crate) fn expand(path: &Path, source: &str) -> Result<String, String> {
             let declarations = match lines[line].trim_end_matches(['\r', '\n']) {
                 INCLUDE => declarations(&path.with_extension(""))?,
                 LAN => {
-                    lan_action_modules(path.parent().ok_or("LAN actions source has no parent")?)?
+                    let directory = path.parent().ok_or("LAN actions source has no parent")?;
+                    horizon_game_discovery::lan_action_modules(
+                        directory,
+                        Catalog::modules(directory).map_err(|e| e.to_string())?,
+                    )?
                 }
                 HOST => crate::build::game_host_modules(
                     path.canonicalize()
@@ -84,7 +44,7 @@ pub(crate) fn expand(path: &Path, source: &str) -> Result<String, String> {
                         .nth(6)
                         .ok_or("game host source outside the game tree")?,
                 )?,
-                NATIVE => crate::build::native_hook_modules(
+                NATIVE => horizon_game_discovery::native_hook_modules(
                     path.canonicalize()
                         .map_err(|e| e.to_string())?
                         .ancestors()
@@ -225,7 +185,13 @@ mod tests {
             "impl Game<'_> { fn vehicle_has_other_viewers() {} } impl Game<'_> { fn __fnr_vehicle_has_other_viewers(f: fn()) -> bool { true } fn __fnr_get_vehicle_has_other_viewers() -> Option<fn()> { None } }", 
         )
         .unwrap();
-        assert!(lan_action_modules(&directory).is_ok());
+        assert!(
+            horizon_game_discovery::lan_action_modules(
+                &directory,
+                Catalog::modules(&directory).unwrap()
+            )
+            .is_ok()
+        );
         for file in ["shared.rs", "mod.rs"] {
             fs::write(
                 directory.join(file),
@@ -233,15 +199,23 @@ mod tests {
             )
             .unwrap();
             assert!(
-                lan_action_modules(&directory)
-                    .unwrap_err()
-                    .contains("action area")
+                horizon_game_discovery::lan_action_modules(
+                    &directory,
+                    Catalog::modules(&directory).unwrap()
+                )
+                .unwrap_err()
+                .contains("action area")
             );
             fs::write(directory.join(file), "").unwrap();
         }
         fs::remove_dir_all(directory).unwrap();
         let game = Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-client/src/game");
-        let actual = lan_action_modules(&game.join("network/lan_actions")).unwrap();
+        let directory = game.join("network/lan_actions");
+        let actual = horizon_game_discovery::lan_action_modules(
+            &directory,
+            Catalog::modules(&directory).unwrap(),
+        )
+        .unwrap();
         assert!(!actual.contains("mod shared;"));
         assert!(actual.contains("mod packets;"));
     }

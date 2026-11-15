@@ -191,7 +191,7 @@ fn place(game: &mut Game<'_>, level: LevelRef, pos: [i32; 3], block: &str) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_contents_notice_reads_the_root_commit_and_not_aborted_writes() {
     with_changes(
         "game::machines::contents_changed_tests::a_contents_notice_reads_the_root_commit_and_not_aborted_writes",
@@ -269,7 +269,7 @@ fn a_contents_notice_reads_the_root_commit_and_not_aborted_writes() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_self_write_does_not_reenter_but_another_backing_block_notifies() {
     with_changes(
         "game::machines::contents_changed_tests::a_self_write_does_not_reenter_but_another_backing_block_notifies",
@@ -359,7 +359,7 @@ fn a_self_write_does_not_reenter_but_another_backing_block_notifies() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_panicking_part_does_not_leave_its_contents_notice_guarded() {
     with_changes(
         "game::machines::contents_changed_tests::a_panicking_part_does_not_leave_its_contents_notice_guarded",
@@ -384,7 +384,7 @@ fn a_panicking_part_does_not_leave_its_contents_notice_guarded() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_double_container_notifies_each_backing_block_once() {
     with_changes(
         "game::machines::contents_changed_tests::a_double_container_notifies_each_backing_block_once",
@@ -455,7 +455,7 @@ fn a_double_container_notifies_each_backing_block_once() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_native_types_inherited_block_part_reads_the_committed_payload() {
     with_changes(
         "game::machines::contents_changed_tests::a_native_types_inherited_block_part_reads_the_committed_payload",
@@ -496,7 +496,7 @@ fn a_native_types_inherited_block_part_reads_the_committed_payload() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_crafter_notices_its_source_but_not_a_vehicles_placeholder() {
     with_changes(
         "game::machines::contents_changed_tests::a_crafter_notices_its_source_but_not_a_vehicles_placeholder",
@@ -556,7 +556,7 @@ fn a_crafter_notices_its_source_but_not_a_vehicles_placeholder() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn notices_come_in_first_write_order_once_each_whatever_the_journal_keeps() {
     with_changes(
         "game::machines::contents_changed_tests::notices_come_in_first_write_order_once_each_whatever_the_journal_keeps",
@@ -603,7 +603,7 @@ fn notices_come_in_first_write_order_once_each_whatever_the_journal_keeps() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_reads_the_open_transaction_its_depth_and_the_root_commits_phase() {
     with_changes(
         "game::machines::contents_changed_tests::a_mod_reads_the_open_transaction_its_depth_and_the_root_commits_phase",
@@ -664,7 +664,7 @@ fn a_mod_reads_the_open_transaction_its_depth_and_the_root_commits_phase() {
 /// A notice that opens and closes a transaction of its own leaves the root's closing phase as it
 /// was, and the phase ends with the root.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_notice_that_opens_a_transaction_keeps_the_root_closing_phase() {
     with_changes(
         "game::machines::contents_changed_tests::a_notice_that_opens_a_transaction_keeps_the_root_closing_phase",
@@ -692,7 +692,7 @@ fn a_notice_that_opens_a_transaction_keeps_the_root_closing_phase() {
 /// A notice that panics while the root commits leaves no closing phase behind: after the caught
 /// panic nothing is open, and the next transaction reads Open.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_panicking_root_commit_notice_leaves_the_phase_none() {
     with_changes(
         "game::machines::contents_changed_tests::a_panicking_root_commit_notice_leaves_the_phase_none",

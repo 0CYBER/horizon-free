@@ -5,7 +5,7 @@ use super::{FISHING_TABLE, fishing_loot};
 use horizon_world::loot::LootStack;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cave_air_above_a_water_source_is_open_water_and_catches_treasure() {
     let mut resources = None;
     let mut game = crate::game::game_tests::tests::server_game(&mut resources);

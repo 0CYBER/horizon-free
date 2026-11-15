@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tools.ci import ignored_shards, ignored_tests, rust_tests
+from tools.ci import ignored_inventory, ignored_shards, ignored_tests, rust_tests
 
 ROOT = Path(__file__).resolve().parents[2]
 ADD_ROW = ("add its row: `python3 tools/ci/move_to_daily.py apply LIST` (its docstring has the list format), or write "
@@ -141,6 +141,7 @@ if __name__ == "__main__":
     functions = [(path, line, name, packages) for path, line, name, packages, _, daily in ignored if daily]
     problems += source_problems(daily, functions)
     problems += rowless_problems(rows, ignored)
+    problems += ignored_inventory.problems(rows, ignored_inventory.tests(), ignored_inventory.exceptions())
     for problem in problems:
         print(f"::error::{problem}")
     print(f"{len(daily)} daily rows, {len(functions)} #[ignore = \"daily\"] functions, {len(ignored)} ignored tests; "

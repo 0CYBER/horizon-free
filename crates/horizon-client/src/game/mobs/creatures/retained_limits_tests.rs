@@ -54,7 +54,7 @@ fn prepare(game: &mut Game<'_>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn same_mob_guest_attack_survives_movement_panic() {
     crate::entry::install_client_hooks();
     let probe = Arc::new(MovementPanic {
@@ -144,7 +144,7 @@ fn same_mob_guest_attack_survives_movement_panic() {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn repeated_producer_panic_has_bounded_batches() {
     crate::entry::install_client_hooks();
     let probe = Arc::new(MovementPanic {
@@ -319,7 +319,7 @@ impl mod_api::Hooks for InterruptedConsumer {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn interrupted_refusal_stays_latched_until_empty() {
     crate::entry::install_client_hooks();
     let producer = Arc::new(MovementPanic {
@@ -429,7 +429,7 @@ fn interrupted_refusal_stays_latched_until_empty() {
 }
 
 #[test]
-#[ignore = "needs prepared resources and an isolated HORIZON_HOME"]
+#[ignore = "daily"]
 fn push_only_failed_passes_are_refused_and_delivered_without_loss() {
     crate::entry::install_client_hooks();
     let probe = Arc::new(MovementPanic {
@@ -547,7 +547,7 @@ impl mod_api::Hooks for RepeatedConsumerHooks {
 }
 
 #[test]
-#[ignore = "needs prepared resources and an isolated HORIZON_HOME"]
+#[ignore = "daily"]
 fn successful_mixed_producers_are_bounded_behind_a_repeatedly_failing_consumer() {
     crate::entry::install_client_hooks();
     let probe = Arc::new(RepeatedConsumer {

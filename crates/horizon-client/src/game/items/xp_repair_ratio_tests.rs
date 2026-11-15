@@ -97,7 +97,7 @@ fn mend(game: &mut Game<'_>, part: &Ratio, damage: u32, answer: Option<f32>) -> 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn the_ratio_a_part_answers_scales_the_repair() {
     with_parts(|game, pickaxe, helmet| {
         // No answer is vanilla: 5 points repair 10.
@@ -122,7 +122,7 @@ fn the_ratio_a_part_answers_scales_the_repair() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn bad_ratios_never_break_the_repair() {
     with_parts(|game, pickaxe, _| {
         // Not finite: refused, vanilla's repair of 10.
@@ -138,7 +138,7 @@ fn bad_ratios_never_break_the_repair() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn give_experience_points_repairs_through_the_part() {
     with_parts(|game, pickaxe, _| {
         game.player = Some(
@@ -171,7 +171,7 @@ fn give_experience_points_repairs_through_the_part() {
 /// by 0.3, 7 points repair floor(2.1) = 2, so the ratio arrives as 2/7, and a
 /// part that writes it back unchanged still repairs exactly 2.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_data_packs_mending_arrives_as_the_ratio() {
     with_parts(|game, pickaxe, _| {
         let root = std::env::temp_dir().join(format!("horizon-xp-repair-{}", std::process::id()));

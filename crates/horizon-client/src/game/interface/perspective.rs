@@ -1928,7 +1928,7 @@ mod preview_tests {
     }
 
     #[test]
-    #[ignore = "requires prepared model data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_render_transform_uses_vanilla_avatar_scale() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),

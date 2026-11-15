@@ -1747,7 +1747,7 @@ mod tests {
     use horizon_core::geometry::Vec3;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+    #[ignore = "daily"]
     fn mob_armour_obeys_negative_cancel_and_breaking_answers() {
         with_wear_part("minecraft:iron_helmet", Rule::Set(-1), |game, wear| {
             let kind = game
@@ -1814,7 +1814,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn thorns_and_boots_wear_break_the_equipped_piece() {
         use horizon_client::items::ItemStack;
         use horizon_client::motion::PlayerMotion;

@@ -279,7 +279,7 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_living_type_draws_its_layers_in_the_order_they_were_added() {
     in_scene(
         "a_living_type_draws_its_layers_in_the_order_they_were_added",
@@ -302,7 +302,7 @@ fn a_living_type_draws_its_layers_in_the_order_they_were_added() {
 /// The one lookup a mob gets a frame finds its own type's or player model's layers and nothing for a
 /// type without: what decides whether the draw keeps its posed parts, and what draws over it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mob_looks_up_only_its_own_types_or_models_layers() {
     in_scene(
         "a_mob_looks_up_only_its_own_types_or_models_layers",
@@ -328,7 +328,7 @@ fn a_mob_looks_up_only_its_own_types_or_models_layers() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_player_draws_the_layers_of_its_model() {
     in_scene("a_player_draws_the_layers_of_its_model", |game, scene| {
         assert_eq!(
@@ -346,7 +346,7 @@ fn a_player_draws_the_layers_of_its_model() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn this_windows_player_is_told_its_own_entity_id() {
     in_scene(
         "this_windows_player_is_told_its_own_entity_id",
@@ -407,7 +407,7 @@ fn this_windows_player_is_told_its_own_entity_id() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failing_layer_is_dropped_until_a_resource_reload_adds_it_again() {
     in_scene(
         "a_failing_layer_is_dropped_until_a_resource_reload_adds_it_again",

@@ -188,7 +188,7 @@ fn ticked(ticks: &[([i32; 3], i32)]) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_clients_frames_tick_its_declared_copies_until_they_go() {
     use crate::game::execution_role::ExecutionRole;
     use horizon_client::{
@@ -331,7 +331,7 @@ fn request(world: &Path) -> WorldRequest {
 
 /// A world's own ticks (a server's) never tell a client tick, a declared type's included.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_server_never_ticks_a_client_ticker() {
     if run_fresh_cases(
         "game::native_hooks::block_entity_client_tick_tests::a_server_never_ticks_a_client_ticker",

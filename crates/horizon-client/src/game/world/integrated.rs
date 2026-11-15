@@ -1539,7 +1539,7 @@ pub(super) mod tests {
     use mod_api::prelude::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn posted_native_panic_writes_one_server_report() {
         let scratch = tempfile::tempdir().unwrap();
         let home = scratch.path().to_path_buf();
@@ -1637,7 +1637,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn integrated_rules_screen_shares_server_session_registry() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             let registry = Arc::new(horizon_client::gamerules::RuleRegistry::with_categories(&[
@@ -1670,7 +1670,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_session_identifies_only_its_own_integrated_server() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             let _pipe = super::super::native_client_session::tests::logged_client(game);
@@ -1710,7 +1710,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn integrated_tick_panic_saves_changed_world() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let root = std::env::temp_dir().join(format!(

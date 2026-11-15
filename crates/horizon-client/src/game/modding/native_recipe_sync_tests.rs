@@ -28,7 +28,7 @@ impl mod_api::Hooks for Selection {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn datapack_sync_selects_once_per_join_and_reload_for_each_recipient() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
@@ -164,7 +164,7 @@ impl mod_api::Hooks for MarkedSelection {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn datapack_sync_decision_precedes_join_recipe_packets() {
     let senders = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let decided = Arc::new(Mutex::new(Vec::new()));
@@ -238,7 +238,7 @@ fn datapack_sync_decision_precedes_join_recipe_packets() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn datapack_sync_disconnect_before_ask_sends_nothing_and_empty_reload_asks_nobody() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(

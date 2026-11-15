@@ -83,7 +83,7 @@ fn assert_resident_mobs(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_despawn_listener_panic_preserves_owned_rows_and_lent_random() {
     eprintln!("MOB_PANIC_ASSERTIONS_DISABLED:{}", !cfg!(debug_assertions));
     for case in [

@@ -146,7 +146,7 @@ fn a_pack_text_shader_reads_the_light_as_vanilla_does() {
 }
 
 #[test]
-#[ignore = "requires prepared resources in HORIZON_TEST_RESOURCES or .local/horizon-client/26.3, and a GPU"]
+#[ignore = "daily"]
 fn vanillas_text_shader_makes_both_world_text_pipelines() {
     let _gpu = crate::gfx::test_gpu::lock();
     let root = std::env::var_os("HORIZON_TEST_RESOURCES")

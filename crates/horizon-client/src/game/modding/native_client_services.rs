@@ -110,7 +110,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn tooltip_helpers_read_live_keys_and_draw_count_overrides() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             use winit::keyboard::KeyCode;
@@ -140,7 +140,7 @@ mod tests {
     /// field as `ui::EditBox` draws it, answering where each shown character ends so a press
     /// lands on it, and scrolling on to keep the cursor in view.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_widgets_draw_as_the_games_own() {
         use mod_api::client::widgets::{TextField, Widgets};
         super::super::native_entity_refs::tests::with_client_game(|game| {

@@ -96,7 +96,7 @@ fn aim_at_mob(game: &mut Game<'_>) {
 /// `damageStatsAndHearts`, no `setLastHurtMob` and no `causeFoodExhaustion`. `Player.onAttack`
 /// still starts the attack strength again.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hit_that_deals_no_damage_has_no_knockback_anger_or_exhaustion() {
     let mut game = game(false);
     summon_pig(&mut game, "");
@@ -136,7 +136,7 @@ fn a_hit_that_deals_no_damage_has_no_knockback_anger_or_exhaustion() {
 /// `causeExtraKnockback` adds it on top of the 0.4 `dealDefaultKnockback` already applied,
 /// halving what the default left.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_melee_knockback_scales_with_the_attackers_attack_knockback() {
     let mut game = game(false);
     summon_pig(&mut game, "");
@@ -173,7 +173,7 @@ fn the_melee_knockback_scales_with_the_attackers_attack_knockback() {
 /// `Entity.isInvulnerableToBase`: `Invulnerable` refuses a hit unless the source bypasses
 /// it or `source.isCreativePlayer()` — a creative player's melee still damages the mob.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_creative_player_hurts_an_invulnerable_mob() {
     let mut game = game(false);
     summon_pig(&mut game, ",Invulnerable:1b");

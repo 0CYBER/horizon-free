@@ -3,7 +3,7 @@ use crate::game::api_values::TryIntoApi;
 use mod_api::{Hooks, Host};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn registered_contents_and_rebuilt_tables_are_read_through_public_host() {
     use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
     if run_fresh_cases(

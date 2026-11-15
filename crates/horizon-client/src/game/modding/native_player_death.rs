@@ -125,7 +125,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_players_last_death_location_reads_from_their_record() {
         with_game(|game| {
             let player = add_guest(game);
@@ -203,7 +203,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_acting_players_location_reads_and_writes_through_their_turn() {
         with_game(|game| {
             let player = add_guest(game);
@@ -233,7 +233,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_death_location_survives_a_playerdata_save_and_load() {
         use horizon_client::lan::playerdata;
 
@@ -266,7 +266,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_death_records_the_floored_block_and_dimension() {
         with_game(|game| {
             let player = add_guest(game);

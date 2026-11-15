@@ -172,7 +172,7 @@ impl Hooks for Fixture {
 }
 
 #[test]
-#[ignore = "needs prepared resources; runs each scenario in an isolated scratch process"]
+#[ignore = "daily"]
 fn native_tick_publishes_or_rejects_item_proposals_with_writeback() {
     const NAME: &str = "game::block_entity_tick_items_tests::native_tick_publishes_or_rejects_item_proposals_with_writeback";
     // Instantiate and invoke the real wasm guest on the production-sized stack.

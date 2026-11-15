@@ -76,7 +76,7 @@ pub(in crate::game) fn with_guests_at(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn player_dimensions_validate_identity_on_both_server_roles() {
     use super::execution_role::ExecutionRole;
     let previous_extra = super::EXTRA_DIMS.read().unwrap().clone();
@@ -167,7 +167,7 @@ fn player_dimensions_validate_identity_on_both_server_roles() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn refused_wire_reload_preserves_hub_and_engine_generation() {
     with_guests(|game| {
         let before = game.lan.as_ref().unwrap().hub.lan.shared.sync();
@@ -224,7 +224,7 @@ fn refused_wire_reload_preserves_hub_and_engine_generation() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn level_event_excludes_its_source_even_during_another_guests_turn() {
     use horizon_client::lan::PlayerSender;
     use horizon_world::level::{LevelEvent, LevelEventPlayer};
@@ -282,7 +282,7 @@ fn level_event_excludes_its_source_even_during_another_guests_turn() {
 /// Before #228, the host was absent during a guest turn and B and the
 /// online list were invisible to native handles.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_guest_and_online_players_are_visible_during_a_turn() {
     with_guests(|game| {
         let rider = game.entity(13).unwrap();
@@ -302,7 +302,7 @@ fn another_guest_and_online_players_are_visible_during_a_turn() {
 /// B's live menu and motion stay available while A acts, but displaced
 /// menus and an outer turn's motion must not use the swapped-out records.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_guests_menu_and_push_work_during_a_turn() {
     use horizon_client::items::ItemStack;
 
@@ -378,7 +378,7 @@ fn another_guests_menu_and_push_work_during_a_turn() {
 /// Native services can reach B during A's turn without exposing displaced
 /// inventories or changing ordinary command resolution during nested turns.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_guests_services_work_during_a_turn() {
     use super::{
         commands::Target,
@@ -533,7 +533,7 @@ fn another_guests_services_work_during_a_turn() {
 
 /// The body/saddle store and existing armor/offhand move with nested turns.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn nested_guest_turns_restore_each_equipment_store() {
     use horizon_client::items::ItemStack;
     use horizon_items::equipment::{BODY, SADDLE};
@@ -584,7 +584,7 @@ fn nested_guest_turns_restore_each_equipment_store() {
 
 /// A merchant's live session belongs to B even while A is acting.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_guests_live_merchant_session_is_visible_during_a_turn() {
     use super::{
         native_merchant_refs::tests::{offer, spawn},
@@ -632,7 +632,7 @@ fn another_guests_live_merchant_session_is_visible_during_a_turn() {
 
 /// The passenger walk (horizon-rust/horizon#8383) keeps #228's host visibility.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_guest_follows_a_vehicle_teleported_during_a_turn() {
     with_guests(|game| {
         game.lan
@@ -665,7 +665,7 @@ fn another_guest_follows_a_vehicle_teleported_during_a_turn() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
     use super::native_sound_refs::tests::packets;
     use horizon_protocol::packets::play::{Clientbound as C, relative};
@@ -746,7 +746,7 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
 /// The split services retain connected identities even while another player's
 /// body is swapped in, and still queue acting-player messages after the hook.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn server_services_preserve_identity_and_message_delivery() {
     use horizon_protocol::packets::play::Clientbound as C;
     use mod_api::{ServerHost, Text};
@@ -866,7 +866,7 @@ fn server_services_preserve_identity_and_message_delivery() {
 /// Permission reads keep the existing owner and fake-player contracts, not
 /// just the connected-player list that the services enumerate.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn canonical_permissions_preserve_owner_and_fake_player_reads() {
     use horizon_client::motion::PlayerMotion;
     use mod_api::GameMode;
@@ -949,7 +949,7 @@ pub(in crate::game) fn place_host(game: &mut super::Game<'_>) {
 /// A turn lists the acting player once, under their own UUID and with their
 /// live body. The host's body is displaced for the turn, so it is not listed.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn level_players_name_each_body_once_during_turns() {
     with_guests(|game| {
         place_host(game);
@@ -972,7 +972,7 @@ fn level_players_name_each_body_once_during_turns() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn level_players_exclude_guests_in_other_levels() {
     with_guests(|game| {
         place_host(game);
@@ -988,7 +988,7 @@ fn level_players_exclude_guests_in_other_levels() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn level_players_exclude_fake_players() {
     with_guests(|game| {
         let _serving = super::integrated::tests::install_serving(game, false);
@@ -1020,7 +1020,7 @@ fn level_players_exclude_fake_players() {
 /// A listener sees the newly granted criterion before its recipe reward on
 /// both a player's first tick and a resource reload.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tick_advancement_notice_precedes_recipe_reward() {
     use crate::game::native_entity_refs::tests::run_fresh_cases;
     use mod_api::{Hooks, ModEntry, Mods, PlayerAdvancementProgressEvent, ServerHost};
@@ -1102,7 +1102,7 @@ fn tick_advancement_notice_precedes_recipe_reward() {
 /// `PlayerRef::set_selected_slot` from inside the guest's own turn: their state is in place, so
 /// the slot is written there, and their client is still told (`leave_guest` sends nothing).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn set_selected_slot_tells_an_acting_guests_client() {
     with_guests(|game| {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1138,7 +1138,7 @@ fn set_selected_slot_tells_an_acting_guests_client() {
 /// `PlayerRef::drop_stack` hands a refused stack back: an empty one, and one a mod's `item_toss`
 /// vetoes, which the game itself would discard.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_vetoed_drop_gives_the_stack_back() {
     use super::api_values::TryIntoApi;
     use horizon_client::items::ItemStack;
@@ -1190,7 +1190,7 @@ impl mod_api::Hooks for PanicOnce {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn guest_damage_unwind_restores_and_next_same_connection_hit_lands() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -1274,7 +1274,7 @@ fn guest_damage_unwind_restores_and_next_same_connection_hit_lands() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 /// A real native panic inside `as_guest_messaged` puts the outer message capture back, and the
 /// same connection's next messaged turn runs and captures nothing outside it (#2244).
 fn guest_message_capture_is_restored_after_a_real_native_panic() {
@@ -1359,7 +1359,7 @@ impl mod_api::Hooks for PanicOnFood {
 /// food change still lets the guest swap be restored and the turn's progress be written back,
 /// and the same connection's next turn runs and is heard (#2240).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_panic_in_a_turn_end_callback_still_restores_the_guest() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -1446,7 +1446,7 @@ fn told_since(game: &super::Game<'_>, before: usize) -> bool {
 /// entity's own (a guest's is 0 here), with no ceiling. `TickCommand` needs admins (3), so game
 /// masters (2) are refused it and admins run it; `GiveCommand` needs game masters.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn run_command_checks_the_line_at_the_level_given() {
     use mod_api::PermissionLevel::{Admins, All, Gamemasters, Owners};
 
@@ -1468,7 +1468,7 @@ fn run_command_checks_the_line_at_the_level_given() {
 /// position, not the server spawn's (from there the stand would end at (2, 64, -1)). A player
 /// out of a turn, the acting player and another player during that turn are each `@s`.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn run_command_runs_as_the_entity_from_where_it_is() {
     use super::native_inventories::NativeInventoryKind::Player;
     use horizon_client::items::ItemStack;
@@ -1511,7 +1511,7 @@ fn run_command_runs_as_the_entity_from_where_it_is() {
 /// (`ServerPlayer.commandSource`); another entity's says nothing to anyone, not even the
 /// player whose turn it runs in (`CommandSource.NULL`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn run_command_answers_a_player_and_no_one_for_another_entity() {
     use mod_api::PermissionLevel::Admins;
 
@@ -1536,7 +1536,7 @@ fn run_command_answers_a_player_and_no_one_for_another_entity() {
 /// A line that doesn't parse, or parses and fails, answers false without a panic, and so does a
 /// handle of an earlier open or of an entity that is gone.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn run_command_answers_false_for_a_bad_line_or_a_stale_handle() {
     use mod_api::PermissionLevel::Owners;
 
@@ -1568,7 +1568,7 @@ fn run_command_answers_false_for_a_bad_line_or_a_stale_handle() {
 /// the player (`give @s`) nor the part about the server (`gamerule`). Back in the level in
 /// place, the same player and line run.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn run_command_refuses_a_player_whose_level_is_parked() {
     use super::native_inventories::NativeInventoryKind::Player;
     use horizon_client::{gamerules::vanilla::SEND_COMMAND_FEEDBACK, items::ItemStack};
@@ -1610,7 +1610,7 @@ fn run_command_refuses_a_player_whose_level_is_parked() {
 /// for it and for the acting player in their own turn. From the outer source, `~1 ~ ~ ~10 ~`
 /// would put them at (51, 80, 50) facing yaw 100, pitch 30.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn run_command_runs_from_the_players_own_place_inside_an_outer_command() {
     use super::commands::execute::Source;
     use mod_api::PermissionLevel::Gamemasters;

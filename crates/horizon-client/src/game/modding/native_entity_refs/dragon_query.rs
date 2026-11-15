@@ -31,7 +31,7 @@ mod tests {
     use horizon_client::mobs::Mob;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn entity_uuid_lookup_includes_the_dragon_and_excludes_its_parts() {
         use crate::game::creatures::SpawnSite;
         use horizon_client::lan::playerdata::uuid_ints;
@@ -70,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn all_entities_uses_lookup_order_without_bounds_or_parts() {
         with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn ordinary_entities_precede_dragon_parts() {
         with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn entities_in_includes_dragon_and_separate_parts() {
         with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_lists_the_dragon_and_its_parts_in_a_box() {
         use crate::game::execution_role::ExecutionRole;
         use horizon_protocol::connection::Pipe;

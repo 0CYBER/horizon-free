@@ -2266,19 +2266,19 @@ mod brewing_fuel_transfer_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn empty_hopper_dispatches_prepare_transfer() {
         check_prepare_transfer(false);
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn prepare_transfer_inventory_write_is_ejected() {
         check_prepare_transfer(true);
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn hopper_brewing_fuel_transfer_respects_stack_components() {
         with_game(|game| {
             game.world.chunks.insert(
@@ -2698,7 +2698,7 @@ mod part_front_tests {
     /// A crafter facing west into a pipe that hands on east, back into the crafter: the four
     /// sticks land in its grid, and using up the planks takes none of them.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_part_handing_a_crafters_output_back_into_its_grid_loses_none() {
         let Some(root) = declared_part_root(
             "game::machines::part_front_tests::a_part_handing_a_crafters_output_back_into_its_grid_loses_none",
@@ -2759,7 +2759,7 @@ mod part_front_tests {
     /// A dropper facing west into a pipe that hands on east, back into the dropper: the item
     /// goes round, and taking it from its slot as it is then keeps both.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_part_handing_a_droppers_item_back_into_it_loses_none() {
         let Some(root) = declared_part_root(
             "game::machines::part_front_tests::a_part_handing_a_droppers_item_back_into_it_loses_none",
@@ -2817,7 +2817,7 @@ mod part_front_tests {
     /// they put out in a container's place; a part answering more than it was offered has its
     /// move undone, so the dropper keeps its item and the crafter's result is dispensed.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_dropper_and_a_crafter_put_into_a_mod_part_in_front_of_them() {
         let Some(root) = declared_part_root(
             "game::machines::part_front_tests::a_dropper_and_a_crafter_put_into_a_mod_part_in_front_of_them",
@@ -2934,7 +2934,7 @@ mod hopper_cart_transfer_tests {
     use horizon_core::nbt::Tag;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn chest_boat_automation_does_not_award_player_loot() {
         use horizon_client::advancements::Tree;
         use horizon_world::loot::PackOverlay;
@@ -2984,7 +2984,7 @@ mod hopper_cart_transfer_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn chest_boat_with_items_drops_pending_table_without_rolling() {
         with_game(|game| {
             let sentinel = Some(ItemStack::new("minecraft:diamond", 17));
@@ -3077,7 +3077,7 @@ mod hopper_cart_transfer_tests {
     /// tick (the old behaviour) or a block hopper's eight-tick cooldown both
     /// fail this.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn hopper_cart_takes_one_item_a_tick() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -3164,7 +3164,7 @@ mod pot_hopper_insertion_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_hopper_ticks_insert_into_the_saved_pot_slot() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -3248,7 +3248,7 @@ mod pot_hopper_insertion_tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_hopper_pulls_from_the_saved_pot_slot() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -3295,7 +3295,7 @@ mod tests {
     /// `ShelfBlockEntity.setChanged` (no arguments) posts `BLOCK_ACTIVATE`:
     /// a container writing a shelf's slot is a block activation.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_container_writing_a_shelf_posts_block_activate() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -3345,7 +3345,7 @@ mod can_take_tests {
     /// `ChiseledBookShelfBlockEntity.canTakeItem`: a hopper takes a book only
     /// when it has a free slot or a matching stack with room.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_full_hopper_cannot_take_a_book_from_a_chiseled_shelf() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -3402,7 +3402,7 @@ mod can_take_tests {
     /// has no slots, so `view` returns `None`. The hopper does not treat it as a
     /// container, allowing item entities resting on the rim to be picked up.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn non_container_block_entity_above_hopper_does_not_block_item_suction() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

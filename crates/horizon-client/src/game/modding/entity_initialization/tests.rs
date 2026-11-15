@@ -67,7 +67,7 @@ fn tag(kind: &str, uuid: i32) -> Tag {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn spawn_summon_and_disk_load_initialize_before_first_attachment_read() {
     observe(|calls| {
         with_game(|game| {
@@ -138,7 +138,7 @@ fn spawn_summon_and_disk_load_initialize_before_first_attachment_read() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
     observe(|calls| {
         with_game(|game| {
@@ -292,7 +292,7 @@ fn spawn_info() -> horizon_protocol::packets::play::SpawnInfo {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn client_login_tracking_and_retracking_initialize_the_client_store_once() {
     use horizon_protocol::packets::play::{self, Clientbound as C};
     observe(|calls| {
@@ -404,7 +404,7 @@ fn client_login_tracking_and_retracking_initialize_the_client_store_once() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn server_players_initialize_on_join_and_new_respawn_but_not_rebind() {
     observe(|calls| {
         crate::game::native_guest_turn_tests::with_guests(|game| {
@@ -476,7 +476,7 @@ impl Hooks for Saving {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_loaded_entity_reads_its_saved_attachments_over_the_listeners_and_is_named_by_type() {
     let kinds = Kinds::default();
     let mods = vec![mod_api::ModEntry::new(
@@ -592,7 +592,7 @@ fn a_loaded_entity_reads_its_saved_attachments_over_the_listeners_and_is_named_b
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_constructor_first_store_binds_only_the_resident_lifetime() {
     use mod_api::AttachmentQueries;
     observe(|_| {
@@ -628,7 +628,7 @@ fn mob_constructor_first_store_binds_only_the_resident_lifetime() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn marker_constructor_store_reaches_its_real_owned_map() {
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Store(Arc<AtomicBool>);
@@ -660,7 +660,7 @@ fn marker_constructor_store_reaches_its_real_owned_map() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_mob_creation_forgets_constructor_payload_and_identity() {
     struct Cancel;
     #[mod_api::__subscriptions]
@@ -706,7 +706,7 @@ fn cancelled_mob_creation_forgets_constructor_payload_and_identity() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn dragon_part_constructor_first_read_indexes_payload_and_same_id_replacement_reconstructs() {
     use mod_api::AttachmentQueries;
     observe(|calls| {

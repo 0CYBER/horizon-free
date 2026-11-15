@@ -114,7 +114,7 @@ fn played(game: &mut super::Game<'_>) -> Vec<(String, f32, f32)> {
 /// a coin-flip sound draws twice when it plays and not at all when it
 /// doesn't, and the next effect's draws follow on.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn requirements_draw_the_level_random_before_each_effect() {
     let coin = json!({"condition": "minecraft:random_chance", "chance": 0.5});
     let effects = json!([
@@ -168,7 +168,7 @@ fn requirements_draw_the_level_random_before_each_effect() {
 /// order and each enchantment's effect order; an arrow fired from its own
 /// item runs that item's effects once.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn stack_then_weapon_in_component_order() {
     let defs = [
         (
@@ -257,7 +257,7 @@ fn stack_then_weapon_in_component_order() {
 /// whatever its count, leaves the stack alone, and refuses a stack with an
 /// effect the engine does not apply yet before drawing anything.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn owner_launch_applies_the_supplied_stacks_effects() {
     let defs = [
         ("hot", json!([{"effect": ignite(4.0)}])),

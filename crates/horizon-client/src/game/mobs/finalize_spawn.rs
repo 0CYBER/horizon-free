@@ -271,7 +271,7 @@ mod tests {
     /// every observable outcome, and the level random advances by exactly
     /// the draws the finalization made.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn finalize_plain_draws_the_level_random_in_vanilla_order() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let mut mob = zombie(game);
@@ -302,7 +302,7 @@ mod tests {
     /// changes nothing: `finalize_with` finalizes exactly as `finalize_plain`
     /// does, on the same level stream.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn finalize_with_without_listeners_finalizes_like_finalize_plain() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let mut with = zombie(game);
@@ -334,7 +334,7 @@ mod tests {
     /// `WitherSkeleton.finalizeSpawn`: attack damage base 4.0, not the
     /// default 2.0.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn runtime_wither_skeletons_hit_for_four() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let mut w = mob_of(game, 1, "minecraft:wither_skeleton");
@@ -348,7 +348,7 @@ mod tests {
     /// #2783: runtime spawns run `Mob.finalizeSpawn`: the follow range
     /// bonus and 5 percent left-handed mobs, drawn from the level random.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn runtime_spawns_run_the_mob_finalize_spawn() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let difficulty = game.local_difficulty([8.0, 65.0, 8.0]);
@@ -394,7 +394,7 @@ mod tests {
     /// `Zombie` / `AbstractSkeleton` halloween garb: 25% of empty heads, never
     /// on other mobs, and not when it is not Halloween.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn halloween_pumpkins_only_undead_on_halloween() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let mut pumpkins = 0;
@@ -440,7 +440,7 @@ mod tests {
     /// (`ServerLevel.isSpawningMonsters`: the difficulty and the `spawn_mobs`
     /// and `spawn_monsters` gamerules), not the difficulty alone.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_striders_piglin_rider_needs_spawning_monsters() {
         use horizon_client::gamerules::Value as RuleValue;
         crate::game::native_guest_turn_tests::with_guests(|game| {

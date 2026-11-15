@@ -35,7 +35,7 @@ mod tests {
     use horizon_core::geometry::Vec3;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_tick_drains_actual_bound_owner_events_without_a_lookup() {
         with_client_game(|game| {
             let (client, server) = horizon_protocol::connection::Pipe::pair();

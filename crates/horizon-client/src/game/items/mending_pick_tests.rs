@@ -82,7 +82,7 @@ fn repair(id: &str, chest: bool, table: &Enchantments) -> (u32, u32) {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn mending_pick_data_pack_effect() {
     assert_eq!(
         repair("test:patch", false, &table("test:patch", &["any"], true)),
@@ -91,7 +91,7 @@ fn mending_pick_data_pack_effect() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn mending_pick_redefined_mending_without_effect() {
     assert_eq!(
         repair(
@@ -104,7 +104,7 @@ fn mending_pick_redefined_mending_without_effect() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn mending_pick_head_effect_excludes_chestplate() {
     assert_eq!(
         repair("test:patch", true, &table("test:patch", &["head"], true)),
@@ -129,7 +129,7 @@ impl mod_api::Hooks for GrantMending {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn mending_pick_uses_hook_granted_enchantment() {
     crate::game::api_values::install_stack_hooks();
     let _ = horizon_items::native_enchantment_hooks::install(

@@ -80,7 +80,7 @@ mod client_information_updated_tests {
     /// The information a guest joins with is heard once, from the defaults,
     /// before the login.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_joined_client_information_is_heard_before_the_login() {
         let heard = Heard::default();
         let mods: mod_api::Mods =

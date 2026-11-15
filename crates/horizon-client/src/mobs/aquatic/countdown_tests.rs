@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
-#[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn mob_tick_keeps_glow_squid_countdowns_with_no_ai() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],

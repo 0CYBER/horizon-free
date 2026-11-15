@@ -2,7 +2,7 @@ use super::*;
 use horizon_core::geometry::Vec3;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn empty_tag_selectors_follow_actual_tag_edits() {
     use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
     use horizon_client::motion::PlayerMotion;

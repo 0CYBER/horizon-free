@@ -186,7 +186,7 @@ fn calls(id: u32) -> Vec<&'static str> {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn goals_register_after_the_species_own_and_only_on_their_type() {
     EVENTS.lock().unwrap().clear();
     let mut bare = Vec::new();
@@ -221,7 +221,7 @@ fn goals_register_after_the_species_own_and_only_on_their_type() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn two_mobs_keep_independent_state_and_random_streams() {
     EVENTS.lock().unwrap().clear();
     install_game_mods();
@@ -260,7 +260,7 @@ fn two_mobs_keep_independent_state_and_random_streams() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn reads_answer_the_tick_view_and_refuse_what_it_lacks() {
     EVENTS.lock().unwrap().clear();
     READS.lock().unwrap().clear();
@@ -288,7 +288,7 @@ fn reads_answer_the_tick_view_and_refuse_what_it_lacks() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_higher_priority_goal_interrupts_a_running_mod_goal() {
     EVENTS.lock().unwrap().clear();
     install_game_mods();
@@ -331,7 +331,7 @@ fn a_higher_priority_goal_interrupts_a_running_mod_goal() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn set_target_follows_the_write_rules() {
     use horizon_client::mobs::Who;
     struct SetTarget;
@@ -387,7 +387,7 @@ fn set_target_follows_the_write_rules() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn mobs_without_mod_goals_tick_as_before() {
     EVENTS.lock().unwrap().clear();
     with_game(|game| {
@@ -405,7 +405,7 @@ fn mobs_without_mod_goals_tick_as_before() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_host_answers_without_panicking() {
     /// Reads a block, a tag, the neighbour as a living and the day time
     /// through `cx.host()`, reporting what came back.
@@ -584,7 +584,7 @@ fn view_player(at: [f64; 3]) -> horizon_client::mobs::PlayerView {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_client_copy_registers_no_mod_goals() {
     install_game_mods();
     with_game(|game| {
@@ -619,7 +619,7 @@ fn a_client_copy_registers_no_mod_goals() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_goal_jump_goes_through_the_jump_control_input() {
     struct Jumper;
     impl Goal for Jumper {
@@ -671,7 +671,7 @@ fn a_goal_jump_goes_through_the_jump_control_input() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn set_target_refuses_what_the_write_handle_refuses() {
     use horizon_client::mobs::Who;
     /// What the `SetTarget` goal's call returned.
@@ -781,7 +781,7 @@ fn set_target_refuses_what_the_write_handle_refuses() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn move_and_look_inputs_pass_the_navigation_boundary() {
     /// The `move_to` answers, and what the look control ended up wanting.
     static RESULTS: Mutex<Vec<(bool, bool, Option<[f64; 3]>)>> = Mutex::new(Vec::new());
@@ -846,7 +846,7 @@ fn move_and_look_inputs_pass_the_navigation_boundary() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_player_the_tick_sees_resolves_by_its_captured_identity() {
     /// What each read of the tick's player found: by uuid, by id (and where
     /// it stands), and whether it narrows to a mob handle.
@@ -1015,7 +1015,7 @@ impl Hooks for GoalsAndFinalize {
 /// attached when the mob was made (`part_goals::attach`, whose copies carry
 /// no goal and name themselves `ModGoal`) is still the mob's own afterwards.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_finalize_spawn_listener_keeps_the_mod_goals() {
     // The mods install before the game opens: a game that opens resolves
     // the parts of whatever is installed, and the worker block metadata

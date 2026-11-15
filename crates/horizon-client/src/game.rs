@@ -11642,7 +11642,7 @@ fn test_server_load() -> horizon_world::native_load_context::LoadContext {
 #[cfg(test)]
 mod nested_orb_spawn_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn experience_pickup_keeps_nested_orbs_until_the_next_ordered_pass() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.world.chunks.insert(

@@ -80,7 +80,7 @@ fn mods(listener: &Listener, changed: &Arc<Mutex<Vec<bool>>>) -> mod_api::Mods {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_part_hears_a_state_change_after_the_neighbours_shapes_settled() {
     let listener = Listener::default();
     let changed = Arc::new(Mutex::new(Vec::new()));
@@ -125,7 +125,7 @@ fn api(state: horizon_world::registry::BlockStateId) -> BlockState {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_hears_each_block_the_server_sends_and_each_write_of_a_piston_replay() {
     use super::super::execution_role::ExecutionRole;
     use horizon_client::level_loading::Reason;

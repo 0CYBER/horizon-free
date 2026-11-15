@@ -34,7 +34,7 @@ impl Hooks for Oily {
 }
 
 #[test]
-#[ignore = "needs prepared resources and an isolated process for native mods"]
+#[ignore = "daily"]
 fn a_mods_fluid_is_placed_flows_is_collected_and_saved() {
     if run_fresh_cases(
         "game::world_fluid_tests::a_mods_fluid_is_placed_flows_is_collected_and_saved",

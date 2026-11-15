@@ -5,7 +5,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn explicit_deadline_exits_the_live_idle_path_without_frame_limit() {
         use crate::game::event_loop::EventLoopCtl;
         use std::cell::Cell;

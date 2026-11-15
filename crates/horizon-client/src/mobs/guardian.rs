@@ -655,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared entity resources"]
+    #[ignore = "daily"]
     fn thorns_return_to_attacker_after_target_changes() {
         assert!(with_test_world(&[], |world, types| {
             let selection = PlayerSelection::new(

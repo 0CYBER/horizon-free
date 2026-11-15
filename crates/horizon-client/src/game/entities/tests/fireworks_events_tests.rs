@@ -81,7 +81,7 @@ fn tick_particles(game: &mut Game<'_>) {
 /// `FireworkParticles.Starter.playSound`: a silent rocket launches quietly (as
 /// it already did) and bursts quietly too, drawing its sparks and flash only.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_silent_rocket_bursts_without_blast_or_twinkle() {
     with_game(|game| {
         let stack = ItemStack::new("minecraft:firework_rocket", 1);
@@ -171,7 +171,7 @@ fn stop_events() {
 /// the rocket, once, with and without explosions; a rocket nobody owns (a
 /// dispenser's) has no source entity.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_detonating_rocket_posts_one_explode_from_its_owner() {
     with_game(|game| {
         let stack = ItemStack::new("minecraft:firework_rocket", 1);
@@ -224,7 +224,7 @@ fn a_detonating_rocket_posts_one_explode_from_its_owner() {
 /// `ItemStack.useOn` awards `ITEM_USED` for `FireworkRocketItem.useOn`'s
 /// SUCCESS; `FireworkRocketItem.use` while gliding awards its own.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn launching_from_a_block_and_while_gliding_use_the_rocket_up() {
     with_game(|game| {
         game.creative = false;
@@ -252,7 +252,7 @@ fn launching_from_a_block_and_while_gliding_use_the_rocket_up() {
 }
 
 #[test]
-#[ignore = "prepared resources; actual registered load, Game tick and posted events"]
+#[ignore = "daily"]
 fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
     with_game(|game| {
         // Commands and collisions need resident terrain for both rocket columns.

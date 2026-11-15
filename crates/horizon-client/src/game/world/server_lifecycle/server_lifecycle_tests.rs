@@ -23,7 +23,7 @@ struct StoppedProbe {
 
 /// Exercise the real stop/save paths, not just direct calls to hook dispatch.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
     struct Log(
         Arc<Mutex<Vec<&'static str>>>,

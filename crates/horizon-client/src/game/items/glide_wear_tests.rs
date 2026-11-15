@@ -69,27 +69,27 @@ const OFF_HAND: &str = "[minecraft:glider={},minecraft:equippable={slot:\"offhan
 const NO_DAMAGE: &str = "[minecraft:glider={},minecraft:equippable={slot:\"mainhand\"},minecraft:max_damage=10,minecraft:max_stack_size=1]";
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn main_hand_glide_wear() {
     assert_eq!(glide(4, false, Some(MAIN_HAND)), 1);
 }
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn off_hand_glide_wear() {
     assert_eq!(glide(5, false, Some(OFF_HAND)), 1);
 }
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn creative_glide_wear() {
     assert_eq!(glide(4, true, Some(MAIN_HAND)), 0);
 }
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn chest_glide_wear() {
     assert_eq!(glide(1, false, None), 1);
 }
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_glider_without_a_damage_component_glides_but_never_wears() {
     assert_eq!(glide(4, false, Some(NO_DAMAGE)), 0);
 }

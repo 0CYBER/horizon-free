@@ -121,7 +121,7 @@ mod tests {
     /// players only where the stack's `can_place_on` matches the block
     /// clicked, which lies opposite the face from the placed position.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn item_use_follows_the_mode_the_stack_and_the_clicked_block() {
         with_guests(|game| {
             game.world
@@ -169,7 +169,7 @@ mod tests {
     /// `ServerPlayer.canHarmPlayer`: the `pvp` rule first, then the teams
     /// (allies hurt each other only with friendly fire on).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn one_player_may_harm_another_by_the_pvp_rule_and_their_teams() {
         use horizon_client::gamerules::Value;
         with_guests(|game| {

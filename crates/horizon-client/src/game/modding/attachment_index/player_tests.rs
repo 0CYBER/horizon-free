@@ -30,7 +30,7 @@ fn snapshot(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_placement_respawn_removal_and_reconnect_publish_player_rows() {
     with_guests(|game| {
         game.world_root = game.save.root.clone();
@@ -97,7 +97,7 @@ fn saved_placement_respawn_removal_and_reconnect_publish_player_rows() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn first_stores_bind_once_and_guest_turns_preserve_the_registration() {
     with_guests(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -137,7 +137,7 @@ fn first_stores_bind_once_and_guest_turns_preserve_the_registration() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn travel_moves_rows_before_guest_callbacks_and_keeps_captured_values() {
     with_guests(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -176,7 +176,7 @@ fn travel_moves_rows_before_guest_callbacks_and_keeps_captured_values() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn queued_level_teleport_moves_the_player_row_and_later_writes_stay_in_the_destination() {
     with_guests(|game| {
         game.options.dedicated = Some(Vec::new());

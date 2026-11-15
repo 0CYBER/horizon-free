@@ -694,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_servers_report_names_its_entities_and_players_and_leaves_the_rest_unattributed() {
         use crate::game::test_pos_guest_tests::{GUEST, game};
         use horizon_client::mobs::Mob;

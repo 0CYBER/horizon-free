@@ -5,7 +5,7 @@ use mod_api::HostTransaction;
 use std::sync::Arc;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn crack_packets_wait_for_root_commit_and_preserve_fifo() {
     use super::native_guest_turn_tests::with_guests;
     use horizon_client::lan::{Out, PlayerSender};
@@ -81,7 +81,7 @@ fn crack_packets_wait_for_root_commit_and_preserve_fifo() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn break_progress_and_block_updates_wait_for_the_commit() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -120,7 +120,7 @@ fn break_progress_and_block_updates_wait_for_the_commit() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bone_meal_on_an_invalid_block_changes_nothing() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -144,7 +144,7 @@ fn bone_meal_on_an_invalid_block_changes_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn biome_writes_roll_back_and_only_the_root_commit_notifies_clients() {
     use super::native_guest_turn_tests::with_guests;
     use horizon_client::lan::PlayerSender;
@@ -247,7 +247,7 @@ fn biome_writes_roll_back_and_only_the_root_commit_notifies_clients() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn biome_negative_min_y_and_unwind_restore_without_publication() {
     use super::native_guest_turn_tests::with_guests;
     use horizon_client::lan::PlayerSender;

@@ -43,7 +43,7 @@ fn mob(types: &MobTypes, id: &str, y: f64) -> Mob {
 }
 
 #[test]
-#[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn powder_snow_move_standing_and_sinking() {
     fixture("minecraft:powder_snow", |w, types| {
         for (id, boots, stands) in [
@@ -75,7 +75,7 @@ fn powder_snow_move_standing_and_sinking() {
 }
 
 #[test]
-#[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn powder_snow_move_landing() {
     fixture("minecraft:powder_snow", |w, types| {
         let mut mob = mob(types, "minecraft:pig", 70.0);
@@ -94,7 +94,7 @@ fn powder_snow_move_landing() {
 
 /// Vanilla 26.3 returns SHAPE_STABLE above scaffolding, including while holding it.
 #[test]
-#[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn powder_snow_move_main_hand_scaffolding() {
     fixture("minecraft:scaffolding", |w, types| {
         let mut mob = mob(types, "minecraft:zombie", 65.0);

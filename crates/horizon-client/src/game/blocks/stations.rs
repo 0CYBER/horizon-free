@@ -2512,7 +2512,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn anvil_subscriber_probe_and_answer_cache() {
         use mod_api::{self, AnvilUpdateEvent, Flow, HookId, Hooks, HostSide, ModEntry};
         use std::sync::{
@@ -2563,7 +2563,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn resource_tooltip_uses_inventory_lines_and_explicit_flags() {
         use mod_api::{ItemResource, TooltipElement};
 
@@ -2594,7 +2594,7 @@ mod tests {
     /// the advanced id line; `item_tooltip` (`ItemTooltipEvent`) then gets the whole tooltip, with
     /// its flags, and its changes are what shows. A stick whose tooltip is hidden asks neither.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn tooltip_part_lines_come_after_the_name_and_never_for_a_hidden_tooltip() {
         use mod_api::{
             self, ClientHost, Hooks, ItemPart, ItemTooltipEvent, ModEntry, Mods, Registrar,
@@ -2695,7 +2695,7 @@ mod tests {
     /// `add_attribute_tooltips` line lands right after what is left, with the local player
     /// handed to both.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn attribute_tooltip_hooks_hide_modifiers_and_add_lines_after_them() {
         use mod_api::{
             self, AddAttributeTooltipsEvent, ClientHost, GatherSkippedAttributeTooltipsEvent,
@@ -2758,7 +2758,7 @@ mod tests {
     /// anything is wrapped or measured: unset, `max_width` leaves the lines alone; a mod that sets
     /// it wraps them with `Font.split`, can add an image of its own, and a cancel draws nothing.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn gathered_tooltip_components_wrap_only_when_a_mod_sets_the_width() {
         use horizon_client::text::Text;
         use mod_api::{
@@ -3032,7 +3032,7 @@ mod cycling_tests {
     /// `render_tooltip_pre` sees a tooltip's lines, stack and screen, can move the point it hangs
     /// from, and cancels it; with no mod the point is the cursor's.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_tooltip_pre_answer_moves_or_cancels_the_tooltip() {
         use horizon_client::text::Text;
         use mod_api::{

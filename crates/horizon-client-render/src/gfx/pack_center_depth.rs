@@ -305,7 +305,7 @@ mod tests {
     /// Inline and on the submit thread: each finished frame's depth, then none left to
     /// take; several outstanding samples are refused.
     #[test]
-    #[ignore = "requires a host GPU"]
+    #[ignore = "daily"]
     fn a_finished_frame_s_depth_is_taken_alone_never_an_older_one() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, raw)) = test_device() else {

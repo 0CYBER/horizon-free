@@ -63,7 +63,7 @@ fn writes(game: &mut Game<'_>, name: &str) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_rejected_wildcard_set_keeps_the_storage_s_cleared_array() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -131,7 +131,7 @@ fn saved(
 /// failure on an id that is not stored, or one that changed nothing, stores
 /// nothing new. An entity's data stays a copy.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_failure_keeps_the_save_state_and_stores_nothing_new() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

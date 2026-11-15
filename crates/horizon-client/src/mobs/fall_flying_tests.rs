@@ -32,7 +32,7 @@ fn tick_once(m: &mut Mob, w: &MobWorld) {
 
 /// `LivingEntity.readAdditionalSaveData`: `setSharedFlag(7, FallFlying)`.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_loaded_mob_keeps_its_saved_glide_flag() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -70,7 +70,7 @@ fn a_loaded_mob_keeps_its_saved_glide_flag() {
 /// `LivingEntity.addAdditionalSaveData`: `putBoolean(FallFlying, isFallFlying())`,
 /// whatever the tag the mob was loaded from said.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_saved_mob_writes_its_current_glide_flag() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -101,7 +101,7 @@ fn a_saved_mob_writes_its_current_glide_flag() {
 /// whose next damage breaks it, stops gliding on its first tick, NoAI or not;
 /// a whole elytra keeps the flag.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_mob_that_cannot_glide_stops_gliding_on_its_first_tick() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -126,7 +126,7 @@ fn a_mob_that_cannot_glide_stops_gliding_on_its_first_tick() {
 /// `LivingEntity.canGlide`: on the ground, riding, or levitating, a mob with
 /// a whole elytra stops gliding too, with or without AI.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_grounded_riding_or_levitating_mob_stops_gliding() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -159,7 +159,7 @@ fn a_grounded_riding_or_levitating_mob_stops_gliding() {
 /// the mob's own tick and on no other; a mob that stops gliding counts from
 /// 0 again.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_glider_wears_on_the_twentieth_and_fortieth_glide_ticks() {
     use horizon_core::equipment_slot::EquipmentSlot;
     let ran = crate::mobs::world::with_built_test_world(
@@ -202,7 +202,7 @@ fn a_glider_wears_on_the_twentieth_and_fortieth_glide_ticks() {
 /// one `nextInt(size)` from the mob's own random and picks that slot; the
 /// other glide ticks, and a refused glide, draw nothing.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn the_wear_draws_once_from_the_mobs_own_random() {
     use horizon_core::equipment_slot::EquipmentSlot;
     let ran = crate::mobs::world::with_built_test_world(
@@ -273,7 +273,7 @@ fn the_wear_draws_once_from_the_mobs_own_random() {
 /// the glider it picked: checked for every damage of the elytra's own
 /// maximum.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn the_wear_of_a_glide_never_breaks_the_glider() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -300,7 +300,7 @@ fn the_wear_of_a_glide_never_breaks_the_glider() {
 /// `updateFallFlying` posts `ELYTRA_GLIDE` at the mob on every 10th glide
 /// tick, after the wear on the 20th, and on no other tick.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_gliding_mob_posts_elytra_glide_on_every_tenth_glide_tick() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],

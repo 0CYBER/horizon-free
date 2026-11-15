@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 thread_local! { pub(super) static TYPE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn ground_friction_averages_intersecting_blocks_and_only_builds_a_kind_for_listeners() {
     let calls = mod_platform::__private::part_tests::friction_game_thread();
     crate::entry::install_client_hooks();

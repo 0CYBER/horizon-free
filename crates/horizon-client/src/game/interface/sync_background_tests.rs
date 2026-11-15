@@ -26,7 +26,7 @@ mod background {
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_background_keeps_custom_geometry_and_one_blur_request() {
     mod_platform::testing::with_mods(
         vec![ModEntry::new("background", background::hooks())].into(),
@@ -80,7 +80,7 @@ mod claims {
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancelled_landing_restores_farmland_before_its_crop_is_notified() {
     let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     mod_platform::testing::with_mods(

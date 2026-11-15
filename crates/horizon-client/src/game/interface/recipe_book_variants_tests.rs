@@ -169,7 +169,7 @@ fn grant(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_recipe_with_eight_displays_sends_eight_entries() {
     let mut resources = None;
     let (mut game, rx) = game(&mut resources);
@@ -219,7 +219,7 @@ fn ghosts(rx: &mpsc::Receiver<horizon_client::lan::Out>) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_a_multi_display_recipe_still_has_no_ghost() {
     let mut resources = None;
     let (mut game, rx) = game(&mut resources);

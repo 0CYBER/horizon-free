@@ -14,7 +14,7 @@ mod tests {
     use crate::game::api_values::TryIntoApi;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn host_resolves_stack_particle_sprites() {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             mod_api::__private::resolve_particles(["minecraft:item"], |id| {

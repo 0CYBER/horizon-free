@@ -79,7 +79,7 @@ fn hurting_motion(v: Vec3) -> Vec3 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_dragons_fireball_starts_at_its_start_with_a_tenth_of_its_direction() {
     let mut resources = None;
     let mut game = end_game(&mut resources);
@@ -97,7 +97,7 @@ fn the_dragons_fireball_starts_at_its_start_with_a_tenth_of_its_direction() {
 /// The old engine's first End world tick (recorded, then compared with
 /// `AbstractHurtingProjectile.tick`'s).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_dragons_fireball_first_world_tick() {
     let mut resources = None;
     let mut game = end_game(&mut resources);
@@ -138,7 +138,7 @@ fn the_dragons_fireball_first_world_tick() {
 /// `assignDirectionalMovement`): for (1, 0, -1) one normalization gives
 /// 0.07071067811865475 and two give 0.07071067811865477.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_dragons_fireball_direction_is_normalized_twice() {
     let mut resources = None;
     let mut game = end_game(&mut resources);

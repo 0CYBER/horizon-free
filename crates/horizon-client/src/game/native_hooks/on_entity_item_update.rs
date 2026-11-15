@@ -207,7 +207,7 @@ mod on_entity_item_update_tests {
     /// cancel ticks as vanilla does after the write; an item without a part ticks
     /// and merges as before and is never told.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+    #[ignore = "daily"]
     fn a_canceling_part_holds_its_own_item_and_nothing_else() {
         crate::game::in_own_process(
             "game::native_hooks::on_entity_item_update::on_entity_item_update_tests::a_canceling_part_holds_its_own_item_and_nothing_else",
@@ -346,7 +346,7 @@ mod on_entity_item_update_tests {
 
     /// With no part attached to any item, every item ticks and merges as it did before the hook.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn without_parts_items_tick_and_merge() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             floor(game);

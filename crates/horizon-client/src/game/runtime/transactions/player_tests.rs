@@ -45,7 +45,7 @@ fn rows(index: &Arc<Mutex<AttachmentIndex<AttachmentHolder>>>, name: &str) -> Ve
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn nested_player_turns_preserve_binding_and_rollback_whole_membership() {
     with_guests(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -123,7 +123,7 @@ fn nested_player_turns_preserve_binding_and_rollback_whole_membership() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn retained_player_records_and_save_snapshots_do_not_keep_residency() {
     with_guests(|game| {
         game.options.dedicated = Some(Vec::new());

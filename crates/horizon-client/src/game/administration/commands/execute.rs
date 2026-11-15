@@ -1378,7 +1378,7 @@ mod passenger_relation_tests {
         assert_eq!(game.score.board.score("#s", "h150u").unwrap().value, 1);
     }
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn h150_actual_registered_passengers_select_direct_live_mob_and_boat_children() {
         with_game(|game| {
             game.build_registries();
@@ -1598,7 +1598,7 @@ mod terminal_fork_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn terminal_conditions_keep_the_fork_state_and_callbacks() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();

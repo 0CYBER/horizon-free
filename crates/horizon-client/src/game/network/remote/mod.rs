@@ -11036,7 +11036,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn menu_title_snapshot_tracks_open_replacement_and_close() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             let (client, _server) = horizon_protocol::connection::Pipe::pair();
@@ -11052,7 +11052,7 @@ pub(crate) mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn menu_title_snapshot_follows_packet_and_close_paths() {
         use horizon_core::nbt::Tag;
         use horizon_protocol::packets::play::{self, Clientbound as C};
@@ -11167,7 +11167,7 @@ pub(crate) mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn stopping_a_retained_client_dig_aborts_only_once() {
         use crate::game::{Hit, native_entity_refs::tests::with_client_game};
         use horizon_client::{chunk::Chunk, motion::PlayerMotion};
@@ -11268,7 +11268,7 @@ pub(crate) mod tests {
     }
     /// The remote player animation uses the scoped item answer once per tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn remote_player_use_animation_dispatches_once() {
         use mod_api::{ClientHost, Hooks, ItemPart, ModEntry, Mods, Registrar, UseAnimationEvent};
         use std::sync::{
@@ -11335,7 +11335,7 @@ pub(crate) mod tests {
     /// keeps no attribute state of its own on the client, so its reads are
     /// `None` there.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn update_attributes_answers_the_local_players_living_reads() {
         use super::super::native_entity_refs::tests::with_client_game;
         use horizon_client::{mobs::Mob, motion::PlayerMotion};
@@ -11425,7 +11425,7 @@ pub(crate) mod tests {
     /// a red-bed constant. Missing client data must not replace a server pose
     /// or decide to wake the player.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_client::{chunk::Chunk, mobs::Mob, motion::PlayerMotion};
@@ -11615,7 +11615,7 @@ pub(crate) mod tests {
     /// shows, a cancelled system line never shows, and a cancelled message
     /// held by Chat Delay lets the next one through in the same tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mods_replace_and_cancel_received_chat() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_core::nbt::Tag;
@@ -11702,7 +11702,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_chat_needs_a_joined_player_and_what_the_chat_option_allows() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_protocol::connection::Pipe;
@@ -11730,7 +11730,7 @@ pub(crate) mod tests {
     /// `ChatComponent.addClientSystemMessage`: the line joins this client's
     /// chat history and no packet leaves for the server.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_chat_line_shows_locally_and_sends_nothing() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_protocol::connection::{Connection, Pipe};
@@ -11769,7 +11769,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn rejected_menu_packets_retire_the_previous_client_menu() {
         use super::super::{
             Screen, execution_role::ExecutionRole, native_entity_refs::tests::with_game,
@@ -11815,7 +11815,7 @@ pub(crate) mod tests {
     /// `LivingEntity.handleEntityEvent(55)` is `swapHandItems`: the whole
     /// stacks trade hands, not just their ids.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_hand_swap_event_keeps_whole_stacks() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::{items::ItemStack, mobs::Mob};
@@ -11898,7 +11898,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn transactional_bucket_hands_reach_the_owning_client() {
         use super::super::{
             native_entity_refs::tests::with_client_game, native_guest_turn_tests::with_guests,
@@ -12061,7 +12061,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn dimension_transition_screen_is_selected_at_entry_drawn_and_dropped() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_client::{hud::HudBatch, level_loading::Reason};
@@ -12176,7 +12176,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_menu_reads_follow_packets_and_lifetimes() {
         use super::super::{
             Screen, execution_role::ExecutionRole, native_entity_refs::tests::with_game,
@@ -12508,7 +12508,7 @@ pub(crate) mod tests {
     /// `MenuRef::close` and `click_button` go through the screen's own close
     /// and the button packet, and refuse a menu that is not open or stale.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_menu_close_and_button_click_reach_the_server() {
         use super::super::{
             Screen, execution_role::ExecutionRole, native_entity_refs::tests::with_game,
@@ -12604,7 +12604,7 @@ pub(crate) mod tests {
     /// A client names the level it shows by the server's key, even where `Dim` has
     /// no name for it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_handles_reach_a_custom_level() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_client::level_loading::Reason;
@@ -12776,7 +12776,7 @@ pub(crate) mod tests {
     /// player's health, effects, equipment and last death, the blocks and time
     /// of day of the level it shows and the entities it tracks.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_handle_reads_answer_from_the_clients_copy() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_client::{
@@ -12991,7 +12991,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_day_time_reads_overworld_clock_across_packets_and_levels() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_protocol::{
@@ -13216,7 +13216,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_camera_entity_returns_to_player_after_removal() {
         use super::super::{
             Game, native_entity_refs::tests::with_client_game, native_lifecycle::NativeLifecycle,
@@ -13342,7 +13342,7 @@ pub(crate) mod tests {
     /// The local player's own state reads answer on a client from what the
     /// server sent it (`LocalPlayer`); another player reads None there.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_player_reads_answer_from_the_local_players_copy() {
         use super::super::{execution_role::ExecutionRole, native_entity_refs::tests::with_game};
         use horizon_client::{level_loading::Reason, motion::PlayerMotion};
@@ -13461,7 +13461,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_epochs_follow_level_replacement_and_logout() {
         use super::super::{
             execution_role::ExecutionRole, native_entity_refs::tests::with_game,
@@ -13566,7 +13566,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn connection_and_dimension_replacement_clear_every_particle_group() {
         use super::super::{
             execution_role::ExecutionRole, native_entity_refs::tests::with_game,
@@ -13612,7 +13612,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn forgetting_and_closing_remote_columns_clear_their_data() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::{chunk::Chunk, containers::BlockEntity};
@@ -13672,7 +13672,7 @@ pub(crate) mod tests {
     /// is a chunk packet's doing (`remote_chunk`), not the streaming
     /// level's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn every_free_route_returns_the_columns_it_freed_once() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::Chunk;
@@ -13708,7 +13708,7 @@ pub(crate) mod tests {
     /// again (`remote_chunk`), never an unload and a load — so a forget
     /// returns exactly it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn streaming_adoption_and_resend_stay_resident_until_the_forget() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::Chunk;
@@ -13726,7 +13726,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn joining_a_server_empties_the_off_hand_too() {
         // ClientPacketListener.handleLogin makes a new LocalPlayer, whose whole Inventory is
         // empty: a server that never sends slot 45 must not leave the last server's item.
@@ -13802,7 +13802,7 @@ pub(crate) mod tests {
     };
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn tracking_emitters_follow_the_packet_target() {
         use crate::game::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole,
@@ -13972,7 +13972,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_alias_survival_consumption_and_client_prediction() {
         use crate::game::{Audio, Game, Options, Progress, Settings, World, load_resources};
         use horizon_client::{
@@ -14124,7 +14124,7 @@ pub(crate) mod tests {
     /// runs fast (a potion drunk starts the same way). A client a tick off is what GrimAC's
     /// Simulation flagged.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_servers_client_takes_its_speed_from_the_attributes_not_the_effect() {
         use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::motion::PlayerMotion;
@@ -14272,7 +14272,7 @@ pub(crate) mod tests {
     /// A mod's pre-filled chat opens only over the world, with its text
     /// typed in and nothing sent.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_open_chat_fills_the_box_only_over_the_world() {
         use super::super::{
             Audio, Game, Options, Progress, Screen, Settings, execution_role::ExecutionRole,
@@ -14340,7 +14340,7 @@ pub(crate) mod tests {
     /// sit plugin can use an area-effect cloud, whose server position stops updating
     /// while it rides a player, with a player or marker stand as its own passenger.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn plugin_player_stack_follows_network_moves_and_local_carriers() {
         use super::super::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
@@ -14553,7 +14553,7 @@ pub(crate) mod tests {
     /// getSituationalMusic is MENU, and ServerReconfigScreen (no
     /// LevelLoadingScreen) lets MusicManager.tick start it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_reconfiguring_client_plays_menu_music_and_never_indexes_past_the_biomes() {
         use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::{chunk::Chunk, music::Music};
@@ -15617,7 +15617,7 @@ pub(crate) mod tests {
     /// click (returning true), so when held with an unusable off-hand item, the
     /// click does not fall through to UseItem or try the off hand.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn flint_and_steel_use_on_ends_the_click() {
         use super::super::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,

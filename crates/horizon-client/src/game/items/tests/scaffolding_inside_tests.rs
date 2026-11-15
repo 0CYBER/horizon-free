@@ -19,7 +19,7 @@ fn name(game: &Game<'_>, pos: [i32; 3]) -> String {
 /// Sneaking then sends the placement up the column; a click that lost the flag
 /// goes to the clicked side instead, and one that lost the face beside it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_click_from_inside_a_scaffolding_block_places_on_the_opposite_face() {
     const COLUMN: [i32; 3] = [2, 5, 0];
     let mut resources = None;

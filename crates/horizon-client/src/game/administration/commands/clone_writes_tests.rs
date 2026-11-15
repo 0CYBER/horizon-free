@@ -90,7 +90,7 @@ fn cloned(game: &mut Game<'_>, command: &str) -> (bool, Option<String>, i32) {
 /// The destination reaches one block above the build height, so that write
 /// fails: vanilla reports the one block it did write, not the two it copied.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_clone_whose_destination_leaves_the_world_counts_only_the_writes_that_landed() {
     let mut game = game();
     load_chunk(&mut game, 0, 0);
@@ -112,7 +112,7 @@ fn a_clone_whose_destination_leaves_the_world_counts_only_the_writes_that_landed
 /// column: a destination at y=255 writes one block and the y=256 write is
 /// refused, so vanilla counts one.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_clone_into_the_nether_counts_by_the_nether_build_height() {
     let mut game = game();
     let here = game.dim;
@@ -157,7 +157,7 @@ fn a_clone_into_the_nether_counts_by_the_nether_build_height() {
 /// The corners' columns are loaded, a column a box spans is not: vanilla
 /// refuses the clone (`Level.hasChunksAt` walks every column of both boxes).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_clone_refuses_a_box_that_spans_an_unloaded_column() {
     let mut game = game();
     load_chunk(&mut game, 0, 0);

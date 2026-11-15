@@ -3194,7 +3194,7 @@ mod breeding_variant_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn chicken_breeding_coin_precedes_same_tick_egg_with_or_without_listener() {
         #[derive(Debug, Clone)]
         struct SeedAtBreed(Breed);
@@ -3265,7 +3265,7 @@ mod breeding_variant_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn variant_and_experience_are_drawn_in_order_before_later_goal_work() {
         assert!(with_test_world(&[], |world, types| {
             for id in [
@@ -3593,7 +3593,7 @@ mod remove_all_tests {
     /// lock it held, and moves the locks behind the removed one, so the next
     /// tick still finds the survivor that kept its place.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn remove_all_stops_the_running_goal_and_moves_the_locks() {
         let ran = with_built_test_world_rules(
             &[],
@@ -4089,7 +4089,7 @@ mod target_change_hook_tests {
     }
 
     #[test]
-    #[ignore = "requires prepared entity resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn nearest_target_goal_respects_cancellation() {
         assert!(
             with_test_world(&[], |world, types| {

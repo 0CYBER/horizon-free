@@ -1538,7 +1538,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn queued_creation_is_reconciled_at_handoff() {
         use horizon_client::gamerules::Value;
         use mod_api::{Hooks, Registrar, RegistrationContext};
@@ -1606,7 +1606,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn live_gui_scale_uses_the_current_owner() {
         let (_, receiver) = std::sync::mpsc::channel();
         let mut first = loading(receiver);
@@ -1635,7 +1635,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn resource_pack_drops_import_from_startup_and_game_options() {
         if super::super::native_entity_refs::tests::run_fresh_cases(
             "game::startup_menu::tests::resource_pack_drops_import_from_startup_and_game_options",
