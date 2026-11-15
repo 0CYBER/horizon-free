@@ -255,7 +255,7 @@ mod tests {
                     [face + 0.44999998807907104, eye_height - 0.45, 0.0],
                     [0.0; 3],
                 );
-                let pig = game.entity(id).unwrap();
+                let pig = game.entity(id as u32).unwrap();
                 let host = &*game as &dyn mod_api::ClientHost;
                 assert_eq!(pig.bounding_box(host).unwrap()[0][0], face);
                 for (rule, expected) in [
