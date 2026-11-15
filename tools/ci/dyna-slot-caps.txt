@@ -1,8 +1,0 @@
-# Dyna's per-host cap on a CI slot's /build, in GiB: over it when a runner starts, the slot loses target/ first,
-# and everything only if it is still over. Dyna does not expose it to the job, so it is kept here (room dyna,
-# 2026-11-12). Host name (as in the runner name dyna-ci-<host>-<id>) and cap; a host not listed reads as 80.
-ovh-rise5 43
-desktop 46
-lt-24-005 50
-arch 80
-hermeslab 80
