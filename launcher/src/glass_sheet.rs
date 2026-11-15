@@ -6,7 +6,7 @@
 use super::*;
 use crate::glass_instance::section;
 use crate::glass_ui::{self as ui, white};
-use horizon_launcher::instances::{Instance, Kind as InstanceKind};
+use horizon_launcher::instances::{Channel, Icon, Instance, Kind as InstanceKind, Plays};
 use horizon_theme::glass::{ink, radius};
 use new_instance::NewKind;
 use servers_page::Field;
@@ -99,7 +99,81 @@ fn group(title: Option<SharedString>, rows: Div) -> Div {
         )
 }
 
+/// What the dialog would keep, as typed or picked.
+struct Draft {
+    name: String,
+    group: String,
+    icon: Option<Icon>,
+    /// A picture chosen, or the saved one removed.
+    picture: bool,
+    /// Horizon's version and builds, for an instance that plays Horizon.
+    horizon: Option<(Option<String>, Channel)>,
+    plays: Plays,
+    /// A Java instance's arguments and window size.
+    java: (String, Option<(u32, u32)>),
+    /// The hook fields (before, wrapper, after, variables), once the Hooks section was opened.
+    hooks: Option<[String; 4]>,
+}
+
+impl Draft {
+    /// Whether Save would change `saved`.
+    fn differs(&self, saved: &Instance) -> bool {
+        let hooks = [
+            saved.launch.pre_launch.clone(),
+            saved.launch.wrapper.clone(),
+            saved.launch.post_exit.clone(),
+            horizon_launcher::launch::env_line(&saved.launch.env),
+        ];
+        self.name != saved.name
+            || self.group != saved.group.clone().unwrap_or_default()
+            || self.icon != saved.icon
+            || self.picture
+            || self.plays != Plays::of(saved)
+            || self
+                .horizon
+                .as_ref()
+                .is_some_and(|(pin, channel)| *pin != saved.version || *channel != saved.channel)
+            || saved
+                .java
+                .as_ref()
+                .is_some_and(|j| self.java != (j.jvm_args.trim().to_string(), j.window))
+            || self.hooks.as_ref().is_some_and(|typed| *typed != hooks)
+    }
+}
+
 impl Launcher {
+    /// Whether the sheet holds edits its Save has not kept.
+    pub(super) fn sheet_changed(&self) -> bool {
+        let Some(d) = self.instances.dialog.as_ref() else {
+            return false;
+        };
+        let Some(saved) = d
+            .editing
+            .as_ref()
+            .and_then(|id| self.instances.list.iter().find(|i| &i.id == id))
+        else {
+            return false;
+        };
+        let draft = Draft {
+            name: self.servers.value(Field::InstanceName).trim().to_string(),
+            group: self.servers.value(Field::InstanceGroup).to_string(),
+            icon: d.icon.clone(),
+            picture: match d.picture {
+                Some(Some(_)) => true,
+                Some(None) => saved.home.join(instances::PICTURE).is_file(),
+                None => false,
+            },
+            horizon: (d.java.kind == NewKind::Horizon).then(|| (d.pin.clone(), d.channel)),
+            plays: self.draft_plays(saved).unwrap_or_else(|| Plays::of(saved)),
+            java: (
+                self.servers.value(Field::JavaArgs).trim().to_string(),
+                self.typed_window(),
+            ),
+            hooks: self.hooks_typed(&saved.id),
+        };
+        draft.differs(saved)
+    }
+
     /// What `instance` plays, as its rows and the sheet's head name it: "Nightly · 514ecf9", or
     /// "26.3 · Fabric" for a Java one.
     pub(super) fn sheet_version(&self, instance: &Instance) -> String {
@@ -128,7 +202,7 @@ impl Launcher {
     pub(super) fn instance_sheet(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let t = self.theme;
         let d = self.instances.dialog.as_ref()?;
-        let (busy, copy, error, kind) = (d.busy, d.copy, d.error.clone(), d.java.kind);
+        let (busy, error, kind) = (d.busy, d.error.clone(), d.java.kind);
         let id = d.editing.clone()?;
         let editing = self.instances.list.iter().find(|i| i.id == id).cloned()?;
         // Launch, Hooks and Storage act on the selected instance (`launch_page`, `export_page`).
@@ -270,8 +344,6 @@ impl Launcher {
                     )
                     .child(ui::text(13., FontWeight::NORMAL, ink::NOTE).child(tr(about))),
             );
-        // The dialog's Save keeps name, group, icon and version: those two sections end with it.
-        let mut save = false;
         let not_selected = || {
             ui::empty().child(tr(
                 "Pick this instance on Home to change how it launches and to export it.",
@@ -298,7 +370,6 @@ impl Launcher {
                     .child(self.icon_choice(Some(&editing), kind, cx))
                     .child(self.sheet_actions(&editing, &version, cx))
                     .children(self.sheet_danger(&editing, cx));
-                save = true;
             }
             SheetTab::Installation => {
                 pane = pane.children(self.switch_notice(&editing));
@@ -311,7 +382,6 @@ impl Launcher {
                         pane = pane.child(self.loader_choice(cx));
                     }
                 }
-                save = true;
             }
             SheetTab::Launch if selected => {
                 let memory = self.glass_memory_row(cx);
@@ -325,7 +395,6 @@ impl Launcher {
                     .children(memory.map(|row| group(Some(tr("Memory").into()), div().child(row))));
                 if editing.java.is_some() {
                     pane = pane.child(self.sheet_java(cx));
-                    save = true;
                 }
             }
             SheetTab::Hooks if selected => {
@@ -349,57 +418,70 @@ impl Launcher {
             }
         }
 
-        // The foot: Save and Cancel for what the dialog keeps, else the folder and the facts.
-        let foot = if save {
-            self.instance_foot(Some(&editing), copy, busy, error, cx)
-                .px(px(20.))
-                .py(px(14.))
-        } else {
-            let home = editing.home.clone();
-            let played = if editing.played.is_zero() {
-                tr("Not played yet").to_string()
-            } else {
-                trf(
-                    "{time} played",
-                    &[("time", &instances::play_time(editing.played))],
-                )
-                .to_string()
-            };
+        // One foot for every section: the folder on the left, Cancel and Save on the right. Save
+        // keeps everything the dialog holds, whichever section shows, and waits for a change.
+        let changed = self.sheet_changed();
+        let home = editing.home.clone();
+        let cancel = ui::quiet("instance-cancel", tr("Cancel"), 44., &t);
+        let save = ui::solid("instance-save", tr("Save"), 44., 14., &t).px(px(24.));
+        let buttons = if busy {
             div()
                 .flex()
-                .items_center()
-                .gap(px(12.))
-                .px(px(20.))
-                .py(px(12.))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(theme::MONO)
-                        .text_size(px(12.))
-                        .text_color(white(ink::QUIET))
-                        .child(short(&editing.home)),
-                )
-                .child(
-                    ui::text(12.5, FontWeight::NORMAL, ink::QUIET)
-                        .flex_none()
-                        .child(played),
-                )
-                .child(
-                    ui::quiet_icon(
-                        "sheet-foot-folder",
-                        Some("folder-01"),
-                        tr("Open folder"),
-                        32.,
-                        &t,
-                    )
-                    .on_click(move |_, _, cx| {
-                        let _ = std::fs::create_dir_all(&home);
-                        crate::glass_toast::open(cx, &home);
-                    }),
-                )
+                .gap(px(8.))
+                .opacity(0.5)
+                .child(cancel)
+                .child(save)
+        } else {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(cancel.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.instances.dialog = None;
+                    cx.notify();
+                })))
+                .child(if changed {
+                    save.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.save_instance(cx);
+                        cx.notify();
+                    }))
+                } else {
+                    save.opacity(0.4).cursor_default()
+                })
         };
+        let foot = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(12.))
+            .px(px(20.))
+            .py(px(14.))
+            // Why Save failed takes the folder's place.
+            .child(match error {
+                Some(e) => ui::text(13., FontWeight::NORMAL, ink::FULL)
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(ui::danger())
+                    .child(e),
+                None => ui::text(12.5, FontWeight::NORMAL, ink::QUIET)
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(short(&editing.home)),
+            })
+            .child(
+                ui::quiet_icon(
+                    "sheet-foot-folder",
+                    Some("folder-01"),
+                    tr("Open folder"),
+                    44.,
+                    &t,
+                )
+                .on_click(move |_, _, cx| {
+                    let _ = std::fs::create_dir_all(&home);
+                    crate::glass_toast::open(cx, &home);
+                }),
+            )
+            .child(buttons.flex_none());
 
         // Centred over the page, as Settings is: the same plate, size and frosted dimming.
         let sheet = ui::dialog_plate(radius::MODAL)
@@ -708,5 +790,74 @@ impl Launcher {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn saved() -> Instance {
+        Instance {
+            id: "mine".into(),
+            name: "Mine".into(),
+            kind: InstanceKind::Own,
+            work: Default::default(),
+            home: Default::default(),
+            icon: None,
+            group: None,
+            version: None,
+            channel: Channel::Stable,
+            native_profile: Default::default(),
+            played: Default::default(),
+            last_played: None,
+            launch: Default::default(),
+            java: None,
+        }
+    }
+
+    fn untouched(saved: &Instance) -> Draft {
+        Draft {
+            name: saved.name.clone(),
+            group: String::new(),
+            icon: None,
+            picture: false,
+            horizon: Some((None, Channel::Stable)),
+            plays: Plays::Horizon,
+            java: (String::new(), None),
+            hooks: None,
+        }
+    }
+
+    #[test]
+    fn save_waits_for_a_change_in_any_section() {
+        let saved = saved();
+        assert!(!untouched(&saved).differs(&saved));
+        let edits: [fn(&mut Draft); 7] = [
+            |d| d.name = "Renamed".into(),
+            |d| d.group = "Friends".into(),
+            |d| d.icon = Some(Icon::Colour("#6b4bff".into())),
+            |d| d.picture = true,
+            |d| d.horizon = Some((Some("nightly-2026-11-13-aaaaaaa".into()), Channel::Stable)),
+            |d| d.horizon = Some((None, Channel::Nightly)),
+            // The Hooks section was opened and a command typed.
+            |d| {
+                d.hooks = Some([
+                    "./backup.sh".into(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ])
+            },
+        ];
+        for edit in edits {
+            let mut draft = untouched(&saved);
+            edit(&mut draft);
+            assert!(draft.differs(&saved));
+        }
+        // Hooks opened and left as they were is no edit.
+        let mut draft = untouched(&saved);
+        draft.hooks = Some(Default::default());
+        assert!(!draft.differs(&saved));
     }
 }

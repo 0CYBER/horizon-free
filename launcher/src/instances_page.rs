@@ -298,6 +298,8 @@ impl Launcher {
 
     pub(super) fn open_instance_dialog(&mut self, editing: Option<Instance>) {
         self.version_menu = false;
+        // The hook fields start again from the saved instance, not from what was left typed.
+        self.launch = None;
         let editing_one = editing.is_some();
         let (name, group) = editing
             .as_ref()
@@ -377,14 +379,8 @@ impl Launcher {
         false
     }
 
-    /// Creates or changes the instance as the dialog says. A copy can be gigabytes of worlds, so
-    /// the work runs in the background.
-    pub(super) fn save_instance(&mut self, cx: &mut Context<Self>) {
-        let selected = self.selected_instance().map(|i| i.id.clone());
-        let name = self.servers.value(Field::InstanceName).trim().to_string();
-        let group = Some(self.servers.value(Field::InstanceGroup).to_string());
-        // A Java instance's arguments and window (the sheet's Launch): both sizes or neither.
-        let jvm_args = self.servers.value(Field::JavaArgs).trim().to_string();
+    /// The game window's size as typed: both sizes or neither.
+    pub(super) fn typed_window(&self) -> Option<(u32, u32)> {
         let size = |f: Field| {
             self.servers
                 .value(f)
@@ -393,7 +389,40 @@ impl Launcher {
                 .ok()
                 .filter(|n| *n > 0)
         };
-        let window = size(Field::WindowWidth).zip(size(Field::WindowHeight));
+        size(Field::WindowWidth).zip(size(Field::WindowHeight))
+    }
+
+    /// Creates or changes the instance as the dialog says. A copy can be gigabytes of worlds, so
+    /// the work runs in the background.
+    pub(super) fn save_instance(&mut self, cx: &mut Context<Self>) {
+        let edited_id = self
+            .instances
+            .dialog
+            .as_ref()
+            .filter(|d| !d.busy)
+            .and_then(|d| d.editing.clone());
+        if let Some(id) = &edited_id {
+            // Nothing to save, as the footer's Save says.
+            if !self.sheet_changed() {
+                return;
+            }
+            // The hook fields, when the Hooks section was opened, are kept with the rest.
+            if self.hooks_typed(id).is_some() {
+                self.save_launch();
+                if let Some(e) = self.hooks_error() {
+                    if let Some(d) = &mut self.instances.dialog {
+                        d.error = Some(e);
+                    }
+                    return;
+                }
+            }
+        }
+        let selected = self.selected_instance().map(|i| i.id.clone());
+        let name = self.servers.value(Field::InstanceName).trim().to_string();
+        let group = Some(self.servers.value(Field::InstanceGroup).to_string());
+        // A Java instance's arguments and window (the sheet's Launch): both sizes or neither.
+        let jvm_args = self.servers.value(Field::JavaArgs).trim().to_string();
+        let window = self.typed_window();
         // A Horizon version picked but not installed downloads once the instance is saved.
         let download = self
             .draft_horizon()

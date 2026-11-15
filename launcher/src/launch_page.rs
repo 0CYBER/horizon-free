@@ -84,6 +84,24 @@ impl Launcher {
         });
     }
 
+    /// What the hook fields hold now, when the panel is open for `id`: the commands before and
+    /// after the game, the wrapper and the variables, as typed.
+    pub(super) fn hooks_typed(&self, id: &str) -> Option<[String; 4]> {
+        self.launch.as_ref().filter(|p| p.instance == id)?;
+        let typed = |f: Field| self.servers.value(f).trim().to_string();
+        Some([
+            typed(Field::PreLaunch),
+            typed(Field::Wrapper),
+            typed(Field::PostExit),
+            typed(Field::LaunchEnv),
+        ])
+    }
+
+    /// Why the last save of the hook fields failed.
+    pub(super) fn hooks_error(&self) -> Option<String> {
+        self.launch.as_ref()?.saved.as_ref()?.clone().err()
+    }
+
     pub(super) fn save_launch(&mut self) {
         let Some(id) = self.launch.as_ref().map(|p| p.instance.clone()) else {
             return;
@@ -699,20 +717,7 @@ impl Launcher {
                 .text_color(ui::color(horizon_theme::glass::DANGER_HOVER))
                 .child(e),
         });
-        body =
-            body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(ui::solid("launch-save", tr("Save"), 36., 14., &t).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.save_launch();
-                            cx.notify();
-                        }),
-                    ))
-                    .children(result),
-            );
+        body = body.child(div().flex().items_center().gap(px(12.)).children(result));
         // Linux only, and only what this computer has (`launch::Found`).
         if found.any() {
             let now = selected.launch.clone();
