@@ -847,10 +847,10 @@ pub(super) fn content_overlay(
     if !errors.is_empty() {
         return Err(errors.join("\n").into());
     }
-    let declared_ids = (blocks.iter().map(|b| b.id.as_str()))
-        .chain(items.iter().map(|i| i.id.as_str()))
-        .chain(types.iter().map(|t| t.id.as_str()))
-        .chain(fluids.iter().map(|f| f.id.as_str()));
+    let declared_ids = (blocks.iter().map(|b| ("block", b.id.as_str())))
+        .chain(items.iter().map(|i| ("item", i.id.as_str())))
+        .chain(types.iter().map(|t| ("block entity type", t.id.as_str())))
+        .chain(fluids.iter().map(|f| ("fluid", f.id.as_str())));
     for m in packages.iter().map(|s| s.manifest) {
         if let Some(e) = m.server_only_declaration(declared_ids.clone()) {
             return Err(e.into());

@@ -663,20 +663,21 @@ impl Manifest {
         std::iter::once(self.id.as_str()).chain(self.namespaces.iter().map(String::as_str))
     }
     /// The refusal of a `side = "server"` mod whose code declares registry content (one of
-    /// `ids`, in a namespace it owns), naming the mod: every client must have that content.
+    /// `declared`, each its registry kind and id, in a namespace it owns), naming the mod, the
+    /// kind and the id: every client must have that content.
     pub fn server_only_declaration<'a>(
         &self,
-        mut ids: impl Iterator<Item = &'a str>,
+        mut declared: impl Iterator<Item = (&'a str, &'a str)>,
     ) -> Option<String> {
         if self.side != Side::Server {
             return None;
         }
-        let id = ids.find(|id| {
+        let (kind, id) = declared.find(|(_, id)| {
             let ns = id.split_once(':').map_or("", |(ns, _)| ns);
             self.owned_namespaces().any(|owned| owned == ns)
         })?;
         Some(format!(
-            "{}: a side = \"server\" mod declares {id}, which every client must have; \
+            "{}: a side = \"server\" mod declares the {kind} {id}, which every client must have; \
              declare side = \"both\"",
             self.id
         ))
@@ -1431,15 +1432,19 @@ capabilities = ["registries"]
         let id = &server.id;
         assert_eq!(
             server.server_only_declaration(
-                ["minecraft:stone", &format!("{id}:marker")[..]].into_iter()
+                [
+                    ("block", "minecraft:stone"),
+                    ("item", &format!("{id}:marker")[..])
+                ]
+                .into_iter()
             ),
             Some(format!(
-                "{id}: a side = \"server\" mod declares {id}:marker, which every client must have; \
-                 declare side = \"both\""
+                "{id}: a side = \"server\" mod declares the item {id}:marker, which every client \
+                 must have; declare side = \"both\""
             ))
         );
         assert_eq!(
-            server.server_only_declaration(["minecraft:stone"].into_iter()),
+            server.server_only_declaration([("block", "minecraft:stone")].into_iter()),
             None
         );
     }
