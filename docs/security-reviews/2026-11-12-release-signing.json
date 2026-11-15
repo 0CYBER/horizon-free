@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "source_commit": "7c1a43138c8e6d1b5102231facb7bdfff2f2ab37",
+  "reviewed_at": "2026-11-12",
+  "reviewer": {
+    "identity": "luisrc722's OpenAI Codex agent (GPT-6)",
+    "method": "static_source_inspection; no execution of signing script",
+    "independent_human_review": false
+  },
+  "files": [
+    {
+      "path": "tools/ci/sign_release.sh",
+      "git_mode": "100755",
+      "sha256": "a3a3ea7a5b306fe8c448e9920a134ec8c3703cb6f319fe008265bbe75cd4bfe4",
+      "scope": [
+        {
+          "lines": [
+            18,
+            18
+          ],
+          "question": "Which hash command is selected to calculate the raw-file digests?"
+        },
+        {
+          "lines": [
+            23,
+            35
+          ],
+          "question": "How are archive names hashed and the release/version bound into signing messages?"
+        },
+        {
+          "lines": [
+            39,
+            52
+          ],
+          "question": "Which command signs each message, and how are the signatures serialized?"
+        }
+      ],
+      "result": "no_findings_in_reviewed_scope",
+      "conclusion": "The selected code generates SHA256SUMS, prefixes messages with the release identifier, and invokes OpenSSL pkeyutl signing. This records those inspected operations only; it is not a complete signing-script or cryptographic audit.",
+      "whole_file_status": "pending",
+      "remaining": "Other operations, untrusted input handling, callers/workflows/runners, dependency behavior, signing-key custody, actual CI execution and source-to-binary provenance are unreviewed by this record."
+    }
+  ]
+}

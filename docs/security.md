@@ -104,6 +104,9 @@ and some are waiting for Ludovic:
 
 ## What this doesn't solve
 
+For version-pinned records of what a source review actually covered, see
+[Records of scoped source reviews](security-reviews.md). Hashes identify bytes; they do not certify safe code.
+
 - **Code that merges is code that ships.** Signing proves a build came from Horizon's pipeline, not that the code
   is good. Against a bad change, the safety nets are the checks and harnesses, review, the release smoke test and
   the release-blocker label. Since the single channel there is no 6-hour beta: a change reaches every player
