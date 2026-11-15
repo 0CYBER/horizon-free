@@ -1,0 +1,2 @@
+horizon-client game::native_menu_inventory_tests::menu_player_inventory_after_world_save_reload lib daily game-boot
+horizon-client game::native_menu_inventory_tests::menu_player_inventory_transactions lib daily game-boot

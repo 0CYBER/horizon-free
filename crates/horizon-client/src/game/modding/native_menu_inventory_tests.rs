@@ -169,13 +169,13 @@ fn exercise(reopen: bool) {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn menu_player_inventory_transactions() {
     exercise(false);
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn menu_player_inventory_after_world_save_reload() {
     exercise(true);
 }
