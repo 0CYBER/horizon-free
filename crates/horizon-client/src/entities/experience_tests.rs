@@ -7,6 +7,7 @@ fn death_reward_uses_levels_and_caps_the_recoverable_points() {
             level,
             progress: 0.75,
             total: 10_000,
+            score: 3,
         };
         assert_eq!(xp.death_reward(false), reward);
         assert_eq!(xp.death_reward(true), 0);
@@ -22,9 +23,11 @@ fn a_point_lost_at_level_zero_zeroes_the_total() {
         level: 0,
         progress: 0.0,
         total: 100,
+        score: 10,
     };
     assert_eq!(xp.give(-1), None);
     assert_eq!((xp.level, xp.progress, xp.total), (0, 0.0, 0));
+    assert_eq!(xp.score, 9);
 }
 
 /// The mirror: above level 0 the same loss only takes the point given and
@@ -35,6 +38,7 @@ fn a_point_lost_above_level_zero_only_takes_that_point() {
         level: 5,
         progress: 0.0,
         total: 100,
+        score: 10,
     };
     assert_eq!(xp.give(-1), None);
     assert_eq!(xp.total, 99);
@@ -50,11 +54,11 @@ fn a_point_lost_above_level_zero_only_takes_that_point() {
 fn respawn_clears_all_xp_unless_it_is_kept() {
     let mut xp = Experience::default();
     xp.give(155);
-    let before = (xp.level, xp.progress, xp.total);
+    let before = (xp.level, xp.progress, xp.total, xp.score);
     xp.respawn(true);
-    assert_eq!((xp.level, xp.progress, xp.total), before);
+    assert_eq!((xp.level, xp.progress, xp.total, xp.score), before);
     xp.respawn(false);
-    assert_eq!((xp.level, xp.progress, xp.total), (0, 0.0, 0));
+    assert_eq!((xp.level, xp.progress, xp.total, xp.score), (0, 0.0, 0, 0));
     xp.give(7);
-    assert_eq!((xp.level, xp.progress, xp.total), (1, 0.0, 7));
+    assert_eq!((xp.level, xp.progress, xp.total, xp.score), (1, 0.0, 7, 7));
 }

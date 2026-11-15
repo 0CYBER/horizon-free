@@ -12,6 +12,10 @@ use horizon_client::{
 use horizon_world::nbt::Tag;
 use winit::keyboard::KeyCode;
 
+#[cfg(test)]
+#[path = "player_score_tests.rs"]
+mod player_score_tests;
+
 impl Screen {
     /// The screens whose own `keyPressed` takes every press: the social
     /// screen, the command block and block editors, the debug options.
@@ -768,7 +772,7 @@ impl Game<'_> {
         let score = Text::translate(
             "deathScreen.score.value",
             &[Text::colored(
-                self.experience.total.to_string(),
+                self.experience.score.to_string(),
                 text::YELLOW,
             )],
         );

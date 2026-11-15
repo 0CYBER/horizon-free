@@ -338,7 +338,7 @@ struct Kept {
         usize,
     )>,
     ender: Option<Vec<Option<crate::items::ItemStack>>>,
-    experience: Option<(i32, f32, i32, i32)>,
+    experience: Option<(i32, f32, i32, i32, i32)>,
     health: Option<(f32, Option<f32>, i32, f32)>,
     effects: Option<crate::effects::PlayerEffects>,
     game_mode: Option<(i32, bool, f32)>,
@@ -376,6 +376,7 @@ impl Kept {
                 g.xp_level,
                 g.xp_progress,
                 g.xp_total,
+                g.score,
                 g.xp_seed,
             )),
             health: (!has("health")).then_some((
@@ -420,8 +421,9 @@ impl Kept {
         if let Some(ender) = self.ender {
             g.ender_items = ender;
         }
-        if let Some((level, progress, total, seed)) = self.experience {
-            (g.xp_level, g.xp_progress, g.xp_total, g.xp_seed) = (level, progress, total, seed);
+        if let Some((level, progress, total, score, seed)) = self.experience {
+            (g.xp_level, g.xp_progress, g.xp_total, g.score, g.xp_seed) =
+                (level, progress, total, score, seed);
         }
         if let Some((health, absorption, food, saturation)) = self.health {
             (g.health, g.saved_absorption, g.food, g.saturation) =

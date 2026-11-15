@@ -1743,6 +1743,7 @@ pub struct Experience {
     pub level: i32,
     pub progress: f32,
     pub total: i32,
+    pub score: i32,
 }
 impl Experience {
     /// `Player.getBaseExperienceReward`: keep-inventory and spectators drop none.
@@ -1753,7 +1754,7 @@ impl Experience {
             self.level.wrapping_mul(7).clamp(0, 100) as u32
         }
     }
-    /// `ServerPlayer.restoreFrom`: only keep-inventory and spectators retain XP.
+    /// `ServerPlayer.restoreFrom`: only keep-inventory and spectators keep XP and the score.
     pub fn respawn(&mut self, keep: bool) {
         if !keep {
             *self = Self::default();
@@ -1772,6 +1773,7 @@ impl Experience {
     /// first multiple of 5 the player reached, where each level gained would
     /// play the level-up sound (`Player.giveExperienceLevels`).
     pub fn give(&mut self, points: i32) -> Option<i32> {
+        self.score = self.score.wrapping_add(points);
         let mut sound_level = None;
         self.progress += points as f32 / Self::needed(self.level) as f32;
         self.total = self.total.saturating_add(points).clamp(0, i32::MAX);
@@ -1782,7 +1784,8 @@ impl Experience {
                 self.progress = 1.0 + remaining / Self::needed(self.level) as f32;
             } else {
                 // `giveExperienceLevels(-1)` at level 0 zeroes the total with it.
-                *self = Self::default();
+                self.progress = 0.0;
+                self.total = 0;
             }
         }
         while self.progress >= 1.0 {
@@ -1822,11 +1825,9 @@ impl LevelUpSound {
         }
     }
 }
-
 #[cfg(test)]
 mod level_up_sound {
     use super::LevelUpSound;
-
     #[test]
     fn players_have_independent_ages_and_cooldowns() {
         let mut a = LevelUpSound::default();

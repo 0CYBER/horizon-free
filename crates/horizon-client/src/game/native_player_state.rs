@@ -284,6 +284,7 @@ impl Game<'_> {
                     level,
                     progress,
                     total,
+                    score: game.experience.score,
                 };
             }
             if let (Some(health), Some(p)) = (health, game.player.as_mut()) {
