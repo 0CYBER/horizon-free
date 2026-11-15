@@ -22,7 +22,9 @@ impl GoalCx<'_, '_> {
             match self.resolve(handle) {
                 Some(Resolved::Own) if !self.m.removed => Some(Some(&*self.m)),
                 Some(Resolved::Live(mob)) if !mob.removed => Some(Some(mob)),
-                Some(Resolved::Seen(_) | Resolved::Own | Resolved::Live(_)) => None,
+                Some(Resolved::Seen(_) | Resolved::Own | Resolved::Live(_) | Resolved::Removed) => {
+                    None
+                }
                 _ if self.is_game_entity(handle) => Some(None),
                 _ => None,
             }

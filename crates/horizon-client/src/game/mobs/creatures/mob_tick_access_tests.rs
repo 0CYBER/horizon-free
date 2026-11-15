@@ -1,0 +1,369 @@
+//! #795, the mob slice: a handle fired inside a mob's own tick resolves the
+//! mob the tick holds out of the game, without a copy or a placeholder.
+use super::*;
+use crate::game::Dim;
+use crate::game::native_entity_refs::tests::with_game;
+use horizon_client::chunk::Chunk;
+use mod_api::{Despawn, EntityTickListenedEvent, EntityTickPreEvent, Flow, ModEntry, ServerHost};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU32, Ordering},
+};
+
+/// The `mob_despawn` facts a listener reads through its handle: its own
+/// position, and another mob's through a nested lookup.
+#[derive(Debug, Default)]
+struct DespawnRecords(Vec<(u32, Option<[f64; 3]>, Option<[f64; 3]>)>);
+
+struct DespawnProbe {
+    records: Arc<Mutex<DespawnRecords>>,
+    other: Arc<AtomicU32>,
+    allow: Arc<AtomicU32>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for DespawnProbe {
+    fn mob_despawn(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEvent<'_>) {
+        let id = event.mob.entity().id();
+        let own = event.mob.entity().position(host);
+        let other_id = self.other.load(Ordering::Relaxed);
+        let other = host
+            .entity(other_id)
+            .and_then(|entity| entity.position(host));
+        self.records.lock().unwrap().0.push((id, own, other));
+        if id == self.allow.load(Ordering::Relaxed) {
+            *event.result = Despawn::Allow;
+        }
+    }
+}
+
+/// Reads and moves the mob in its `entity_tick_pre`, through its handle.
+struct MoveOnPre {
+    id: u32,
+    seen: Arc<Mutex<Vec<Option<[f64; 3]>>>>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for MoveOnPre {
+    fn entity_tick_listened(&self, _: &mut dyn ServerHost, event: &mut EntityTickListenedEvent) {
+        event.listened = true;
+    }
+    fn entity_tick_pre(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut EntityTickPreEvent<'_>,
+    ) -> Flow {
+        if event.entity == self.id {
+            let entity = host.entity(self.id).expect("a live handle in its own Pre");
+            let at = entity
+                .position(host)
+                .expect("the tick view reads its position");
+            self.seen.lock().unwrap().push(Some(at));
+            assert!(
+                entity.teleport_to(host, [at[0], at[1] + 10.0, at[2]], None),
+                "the tick view writes its position"
+            );
+        }
+        Flow::Continue
+    }
+}
+
+/// Two idle pigs in an entity-ticking chunk, at x = 1 and x = 2, ready for
+/// the real creature pass.
+fn with_two_pigs(test: impl FnOnce(&mut Game<'_>)) {
+    let root = std::env::temp_dir().join(format!(
+        "horizon-mob-tick-access-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    with_game(|game| {
+        game.world_root = root.clone();
+        game.enter_level(Dim::Overworld).unwrap();
+        game.options.dedicated = Some(Vec::new());
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        assert!(
+            game.entity_ticking_area()(1, 0),
+            "fixture chunk is not entity-ticking"
+        );
+        let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+        for (id, x) in [(71u32, 1.0f64), (72u32, 2.0f64)] {
+            let mut mob = Mob::new(id, kind.clone(), Vec3::new(x, 80.0, 0.5), 0.0);
+            mob.no_ai = true;
+            mob.no_gravity = true;
+            mob.on_ground = true;
+            game.mobs.push(mob);
+        }
+        test(game);
+    });
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Removes the mob it names, and records what every despawn callback reads of
+/// that mob's handle: the victim's own callback runs before the removal, a
+/// later callback after it.
+struct RemovedPeerProbe {
+    victim: u32,
+    records: Arc<Mutex<Vec<(u32, Option<[f64; 3]>)>>>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for RemovedPeerProbe {
+    fn mob_despawn(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEvent<'_>) {
+        let id = event.mob.entity().id();
+        let victim = host
+            .entity(self.victim)
+            .and_then(|entity| entity.position(host));
+        self.records.lock().unwrap().push((id, victim));
+        if id == self.victim {
+            *event.result = Despawn::Allow;
+        }
+    }
+}
+
+/// The view's removed state is authoritative: once the first mob is removed by
+/// its own callback, a later callback asking for its handle gets nothing, even
+/// though the removed row stays indexed with its old position.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+fn a_removed_mob_handle_resolves_nothing_in_a_later_callback() {
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-tick-removed-peer",
+        Box::new(RemovedPeerProbe {
+            victim: 71,
+            records: records.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.tick_creature_entities().unwrap();
+            let records = records.lock().unwrap();
+            assert_eq!(records.len(), 2, "both mobs heard their despawn check");
+            // 71 runs first and is removed only after its own answer.
+            assert_eq!(records[0].0, 71);
+            assert_eq!(
+                records[0].1,
+                Some([1.0, 80.0, 0.5]),
+                "the victim still resolves inside its own callback"
+            );
+            // 72 runs after 71's removal: its row is indexed but marked removed.
+            assert_eq!(records[1].0, 72);
+            assert_eq!(
+                records[1].1, None,
+                "a removed mob's handle resolves nothing"
+            );
+            assert!(
+                !game.mobs.iter().any(|mob| mob.id == 71),
+                "the allowed mob was removed"
+            );
+            assert!(
+                game.mobs.iter().any(|mob| mob.id == 72),
+                "the denied mob stayed"
+            );
+        });
+    });
+}
+
+/// The mob the pass holds out of the game answers its own handle, and the
+/// handle of the other mob (the tick snapshot) too; `Allow` removes the
+/// mob and its handle then resolves nothing.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+fn mob_despawn_handles_resolve_the_ticking_mob_and_its_peers() {
+    let records = Arc::new(Mutex::new(DespawnRecords::default()));
+    let other = Arc::new(AtomicU32::new(72));
+    let allow = Arc::new(AtomicU32::new(72));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-tick-access",
+        Box::new(DespawnProbe {
+            records: records.clone(),
+            other: other.clone(),
+            allow: allow.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.tick_creature_entities().unwrap();
+            let records = records.lock().unwrap();
+            assert_eq!(records.0.len(), 2, "both mobs heard their despawn check");
+            for (id, own, peer) in &records.0 {
+                let own = own.expect("the ticking mob's own handle resolves");
+                assert_eq!(own[0], f64::from(*id - 70), "own position, mob {id}");
+                let peer = peer.expect("the other mob's handle resolves in the same tick");
+                assert!((1.0..=2.0).contains(&peer[0]), "peer position, mob {id}");
+            }
+            // `Allow` removed 72 during the pass; 71 is still there.
+            assert!(
+                game.mobs.iter().any(|mob| mob.id == 71),
+                "the denied mob stayed"
+            );
+            assert!(
+                !game.mobs.iter().any(|mob| mob.id == 72),
+                "the allowed mob was removed"
+            );
+        });
+    });
+}
+
+/// A mob's own `entity_tick_pre` handle reads where it stands and moves it;
+/// the real tick then starts from the position the handle wrote.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+fn entity_tick_pre_reads_and_moves_the_ticking_mob() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-tick-pre-access",
+        Box::new(MoveOnPre {
+            id: 71,
+            seen: seen.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.tick_creature_entities().unwrap();
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                &[Some([1.0, 80.0, 0.5])],
+                "the Pre handle read the mob's position once"
+            );
+            let mob = game.mobs.iter().find(|mob| mob.id == 71).unwrap();
+            assert_eq!(
+                mob.position.y, 90.0,
+                "the tick started from the position the handle wrote"
+            );
+        });
+    });
+}
+
+/// Extends the lifetime of the dropped item it names, through `extra_life`.
+struct ExtendLife {
+    id: Arc<AtomicU32>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for ExtendLife {
+    fn item_expire(&self, _: &mut dyn ServerHost, event: &mut mod_api::ItemExpireEvent<'_>) {
+        if event.entity == self.id.load(Ordering::Relaxed) {
+            event.extra_life += 100;
+        }
+    }
+}
+
+/// The item family keeps its own contract while the mob slice changes: the
+/// item tick still lifts its list, and an `item_expire` listener still edits
+/// the item's lifetime, which the engine applies when the tick ends.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+fn item_lifetime_edit_in_the_item_tick_still_lands() {
+    let named = Arc::new(AtomicU32::new(0));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "item-lifetime-access",
+        Box::new(ExtendLife { id: named.clone() }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-item-lifetime-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        with_game(|game| {
+            game.world_root = root.clone();
+            game.enter_level(Dim::Overworld).unwrap();
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.push_item_entity(
+                ItemStack::new("minecraft:apple", 1),
+                [1.5, 64.0, 1.5],
+                Some([0.0, 0.0, 0.0]),
+                0,
+                None,
+            );
+            let id = game.dropped.last().unwrap().id;
+            named.store(id, Ordering::Relaxed);
+            game.ticked_entities_through = id;
+            game.dropped.last_mut().unwrap().age = 6000;
+            let mut round = game.native_tick_round();
+            game.tick_dropped_items(&mut round);
+            let item = game
+                .dropped
+                .iter()
+                .find(|item| item.id == id)
+                .expect("the extended item stayed");
+            assert_eq!(
+                item.age, 5900,
+                "the listener's 100 ticks landed on the item's age"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    });
+}
+
+/// Discards another mob from the first mob's `entity_tick_pre`: a hook that
+/// re-enters the entity handles while a tick is running.
+struct DiscardOnPre {
+    id: u32,
+    victim: u32,
+    seen: Arc<Mutex<Vec<(u32, bool, bool)>>>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for DiscardOnPre {
+    fn entity_tick_listened(&self, _: &mut dyn ServerHost, event: &mut EntityTickListenedEvent) {
+        event.listened = true;
+    }
+    fn entity_tick_pre(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut EntityTickPreEvent<'_>,
+    ) -> Flow {
+        if event.entity == self.id {
+            let victim = host
+                .entity(self.victim)
+                .expect("the other mob is live at the Pre");
+            let discarded = victim.discard(host);
+            let self_live = host.entity(self.id).is_some();
+            self.seen
+                .lock()
+                .unwrap()
+                .push((self.victim, discarded, self_live));
+        }
+        Flow::Continue
+    }
+}
+
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+fn a_tick_hook_discards_another_mob_nested() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-tick-nested-discard",
+        Box::new(DiscardOnPre {
+            id: 71,
+            victim: 72,
+            seen: seen.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.tick_creature_entities().unwrap();
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                &[(72, true, true)],
+                "the nested discard ran, and the actor's handle still resolved"
+            );
+            assert!(game.mobs.iter().any(|mob| mob.id == 71));
+            assert!(!game.mobs.iter().any(|mob| mob.id == 72));
+        });
+    });
+}
