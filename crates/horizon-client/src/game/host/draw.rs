@@ -100,6 +100,9 @@ impl DrawContext for GameDrawContext<'_, '_> {
     fn pop_clip(&mut self) -> Result<(), GuiClipRefusal> {
         self.clips.pop(self.surface)
     }
+    fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
+        self.game.native_draw_entity(&mut *self.surface, entity, view)
+    }
     fn draw_menu_background(&mut self, rect: [f32; 4], in_world: bool) {
         self.game
             .native_draw_menu_background(&mut *self.surface, rect, in_world)
