@@ -644,7 +644,7 @@ fn a_project_made_for_the_earlier_mod_system_says_it_cant_be_installed() {
     let p = project_of(&index, index.project("coords_hud").unwrap()).unwrap();
     assert!(!p.support().installable());
     assert!(p.support().reason().unwrap().contains("earlier mod system"));
-    // It comes after a mod that installs, however many more downloads it has.
+    // Beside a mod that installs, with fewer downloads:
     let mut other = index.project("coords_hud").unwrap().clone();
     other.id = "lanterns_plus".into();
     other.versions[0].capabilities = Default::default();
@@ -656,10 +656,15 @@ fn a_project_made_for_the_earlier_mod_system_says_it_cant_be_installed() {
         .find(|p| p.id == "coords_hud")
         .unwrap()
         .downloads = 1_000_000;
-    let order: Vec<String> = search(&index, &Query::new("", Kind::Mod))
-        .into_iter()
-        .map(|p| p.id)
-        .collect();
+    let ids = |everything: bool| -> Vec<String> {
+        let mut q = Query::new("", Kind::Mod);
+        q.everything = everything;
+        search(&index, &q).into_iter().map(|p| p.id).collect()
+    };
+    // The list leaves it out, as the note above it says.
+    assert!(!ids(false).iter().any(|id| id == "coords_hud"));
+    // Asked for everything, it comes after what installs, despite its downloads.
+    let order = ids(true);
     let at = |id: &str| order.iter().position(|o| o == id).unwrap();
     assert!(at("lanterns_plus") < at("coords_hud"), "{order:?}");
     // The same project with a version this Horizon can use installs as before.

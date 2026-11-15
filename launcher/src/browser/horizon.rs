@@ -74,11 +74,20 @@ pub fn is_native_mod(id: &str) -> bool {
 /// read (never the network): None when no index was read.
 pub fn projects_left_out() -> Option<usize> {
     let index = known_index()?;
+    // With those listed whose versions for this game all are (`Blocked::EarlierSystem`), which
+    // the list hides too.
     let mut ids: Vec<&str> = index
         .left_out
         .iter()
         .filter(|l| l.version.is_none() && index.project(&l.id).is_none())
         .map(|l| l.id.as_str())
+        .chain(
+            index
+                .projects
+                .iter()
+                .filter(|p| matches!(blocked(&index, p), Some(Blocked::EarlierSystem)))
+                .map(|p| p.id.as_str()),
+        )
         .collect();
     ids.sort_unstable();
     ids.dedup();
@@ -380,22 +389,40 @@ pub fn trust_and_capabilities(
     lines
 }
 
+/// Why a project has versions for this game but none this Horizon may install.
+enum Blocked {
+    /// They ask for capabilities this Horizon doesn't have: made for the earlier mod system.
+    EarlierSystem,
+    /// They were taken down, for this reason.
+    TakenDown(String),
+}
+
+fn blocked(index: &Index, p: &index::Project) -> Option<Blocked> {
+    let for_game: Vec<&index::Version> = p.versions.iter().filter(|v| v.game == GAME).collect();
+    if for_game.is_empty() || index.installable(p, GAME).is_some() {
+        return None;
+    }
+    let revoked = for_game
+        .iter()
+        .find_map(|v| index.revoked(&p.id, &v.file.sha256));
+    Some(match revoked {
+        Some(r) if for_game.iter().all(|v| v.capabilities.unknown().is_empty()) => {
+            Blocked::TakenDown(r.reason.clone())
+        }
+        _ => Blocked::EarlierSystem,
+    })
+}
+
 fn project_of(index: &Index, p: &index::Project) -> Option<Project> {
     let mut game_versions: Vec<String> = p.versions.iter().map(|v| v.game.clone()).collect();
     game_versions.dedup();
     // Versions for this game, none of which this Horizon may install: say why, once, here.
-    let for_game: Vec<&index::Version> = p.versions.iter().filter(|v| v.game == GAME).collect();
-    let blocked = (!for_game.is_empty() && index.installable(p, GAME).is_none()).then(|| {
-        match for_game
-            .iter()
-            .find_map(|v| index.revoked(&p.id, &v.file.sha256))
-        {
-            Some(r) if for_game.iter().all(|v| v.capabilities.unknown().is_empty()) => {
-                trf("Taken down: {reason}", &[("reason", &r.reason)]).to_string()
-            }
-            _ => {
-                tr("Made for Horizon's earlier mod system: it can't be installed yet.").to_string()
-            }
+    let blocked = blocked(index, p).map(|why| match why {
+        Blocked::TakenDown(reason) => {
+            trf("Taken down: {reason}", &[("reason", &reason)]).to_string()
+        }
+        Blocked::EarlierSystem => {
+            tr("Made for Horizon's earlier mod system: it can't be installed yet.").to_string()
         }
     });
     Some(Project {
@@ -505,7 +532,8 @@ pub const SORTS: [super::details::Sort; 3] = [
 /// The projects of the query's kind whose words match and that have every category and tag the
 /// filters ask for, for this game unless `everything`: the
 /// most downloaded first, or the newest (first published) or most recently updated (latest
-/// version) when the query asks, ties by downloads; those no version of which installs here last.
+/// version) when the query asks, ties by downloads; those no version of which installs here are
+/// left out, or last with `everything`.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
     use super::details::Sort;
     let mut found: Vec<&index::Project> = index
@@ -543,10 +571,12 @@ fn search(index: &Index, query: &Query) -> Vec<Project> {
         }),
         _ => found.sort_by_key(|p| std::cmp::Reverse(p.downloads)),
     }
-    // What can't be installed here goes after what can, each in the order asked for.
+    // What can't be installed here is left out (the note above the list counts it), or with
+    // `everything` goes after what can, each in the order asked for.
     let mut found: Vec<Project> = found
         .into_iter()
         .filter_map(|p| project_of(index, p))
+        .filter(|p| query.everything || p.blocked.is_none())
         .collect();
     found.sort_by_key(|p| p.blocked.is_some());
     found
