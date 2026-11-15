@@ -650,9 +650,29 @@ impl Launcher {
                             cx.notify();
                         }))
                     }
+                    // No account here owns the game: the button says "Sign in to play", so a
+                    // press signs in, as the top bar's Sign in with Microsoft does.
+                    (None, PlayPress::Nothing) if owner == Some(false) => {
+                        main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.picker.open = false;
+                            this.sign_in_to_play();
+                            cx.notify();
+                        }))
+                    }
                     (None, PlayPress::Nothing) => main.opacity(0.5).cursor_default(),
                 };
-                base.bg(ui::grad(135., accent, ui::color(ui::accent2())))
+                // The gradient's far end leans away from the label's ink (deeper under white
+                // ink, lighter under dark ink), so the label and the menu dots on that end
+                // keep their contrast across the whole button.
+                let (accent_hex, ink) = (self.look.accent, self.look.on_accent);
+                let far = if horizon_theme::contrast(ink, 0x000000)
+                    > horizon_theme::contrast(ink, 0xffffff)
+                {
+                    horizon_theme::glass::mix_oklab(accent_hex, 0x000000, 0.75)
+                } else {
+                    ui::accent2()
+                };
+                base.bg(ui::grad(135., accent, ui::color(far)))
                     .border_color(white(0.16))
                     .shadow(ui::glows(vec![
                         // The site's primary: a light line along the top edge, a glow under it.
