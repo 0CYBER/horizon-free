@@ -744,6 +744,9 @@ impl Game<'_> {
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
             e.needs_sync = p.needs_sync;
+            // AbstractHurtingProjectile.accelerationPower, which goes to the
+            // clients bundled with the velocity (a breeze's deflection halves it).
+            e.acceleration_power = p.acceleration_power();
             // Projectile.getAddEntityPacket: the owner's id.
             e.data = data;
             let uuid = e.uuid;

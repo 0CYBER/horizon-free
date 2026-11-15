@@ -131,7 +131,10 @@ fn push_waits_for_tick<T: PartialOrd>(
 ) -> bool {
     ticks_after_projectiles && charge.is_some_and(|c| joined < c)
 }
-/// `Projectile.deflect` with `ProjectileDeflection.REVERSE`.
+/// `Projectile.deflect` with `ProjectileDeflection.REVERSE`, as a breeze's
+/// deflection is: the motion turns around at half speed, the yaw by
+/// `170 + 20 * jitter` degrees, `needsSync` sends that at once, and
+/// `AbstractHurtingProjectile.onDeflection` by no attack halves the power.
 pub(super) fn reverse(p: &mut Projectile, jitter: f32) {
     p.velocity = Vec3::new(
         p.velocity.x * -0.5,
@@ -139,6 +142,8 @@ pub(super) fn reverse(p: &mut Projectile, jitter: f32) {
         p.velocity.z * -0.5,
     );
     p.yaw += 170.0 + jitter * 20.0;
+    p.needs_sync = true;
+    p.on_deflection(false);
 }
 /// `AbstractWindCharge.tick`: a charge whose block Y is above the level's
 /// `getMaxY() + 30` bursts where it is, whatever it would have met. `shape`
@@ -941,5 +946,38 @@ mod tests {
         reverse(&mut p, 0.5);
         assert!((p.velocity.x + 1.0).abs() < 1e-9 && (p.velocity.y - 0.5).abs() < 1e-9);
         assert!((p.yaw - 180.0).abs() < 1e-4);
+        // ProjectileDeflection.REVERSE sets needsSync, so ServerEntity sends
+        // the turn this tick instead of at the snowball's tenth.
+        assert!(p.needs_sync, "the turn goes out at once");
+        // A snowball is no AbstractHurtingProjectile: Projectile.onDeflection
+        // is empty, so the power it carries is left as it was.
+        assert_eq!(p.acceleration, 0.1);
+    }
+
+    #[test]
+    fn a_breeze_deflect_halves_a_fireballs_power() {
+        // Breeze.PROJECTILE_DEFLECTION: ProjectileDeflection.REVERSE at power
+        // (1, 1, 1), then Projectile.deflect calls
+        // AbstractHurtingProjectile.onDeflection(false), which halves
+        // accelerationPower from 0.1 to 0.05 and so slows it down.
+        let mut p = Projectile::fireball(
+            ProjectileKind::LargeFireball { power: 1 },
+            Vec3::new(0.0, 64.0, 0.0),
+            Some(Who::Mob(3)),
+            [1.0, 0.0, 0.0],
+        );
+        assert_eq!(p.acceleration, 0.1);
+        reverse(&mut p, 0.25);
+        assert!(p.needs_sync);
+        assert_eq!(p.acceleration, 0.05);
+        assert!((p.velocity.x + 0.05).abs() < 1e-12, "{:?}", p.velocity);
+        // AbstractHurtingProjectile.addAdditionalSaveData saves that power,
+        // so a deflected fireball comes back from a save as slow.
+        let tag = crate::entity_nbt::fireball_to_nbt(&p, [1, 2, 3, 4], None, None)
+            .expect("a fireball is saved");
+        let back = crate::entity_nbt::fireball_from_nbt(&tag, None).expect("and loaded");
+        assert_eq!(back.acceleration, 0.05);
+        // The power a server sends with the turn is the halved one.
+        assert_eq!(p.acceleration_power(), Some(0.05));
     }
 }

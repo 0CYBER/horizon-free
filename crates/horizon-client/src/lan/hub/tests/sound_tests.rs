@@ -49,6 +49,7 @@ fn a_trident_joining_after_tracking_is_paired_before_its_throw_sound() {
         kind: "minecraft:trident".into(),
         position: [0.5, 65.5, 0.5],
         velocity: [0.25, 0.0, 0.0],
+        acceleration_power: None,
         ..EntityState::default()
     };
     hub.note_joined(std::slice::from_ref(&trident));

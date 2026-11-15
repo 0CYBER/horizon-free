@@ -47,6 +47,10 @@ pub struct EntityState {
     pub head_yaw: f32,
     pub on_ground: bool,
     pub velocity: [f64; 3],
+    /// `AbstractHurtingProjectile.accelerationPower`, which goes to the
+    /// clients bundled with the velocity it accelerates (none for an entity
+    /// that is no hurting projectile).
+    pub acceleration_power: Option<f64>,
     /// NewMinecartBehavior steps drained from the simulation since its last
     /// export. None selects the ordinary entity movement packets.
     pub minecart_steps: Option<Vec<play::MinecartStep>>,
@@ -116,6 +120,7 @@ impl EntityState {
         (self.yaw, self.pitch, self.head_yaw) = (0.0, 0.0, 0.0);
         self.on_ground = false;
         self.velocity = [0.0; 3];
+        self.acceleration_power = None;
         self.minecart_steps = None;
         self.data = 0;
         self.meta.clear();
@@ -193,8 +198,9 @@ fn is_arrow(kind: &str) -> bool {
     )
 }
 
-/// `AbstractHurtingProjectile.accelerationPower` (0.1, none for wind
-/// charges), sent with each velocity update.
+/// `AbstractHurtingProjectile.accelerationPower` by entity type (0.1, 0.0 for
+/// a wind charge), sent with each velocity update; what a state that carries
+/// none of its own falls back to.
 fn acceleration_power(kind: &str) -> Option<f64> {
     match kind {
         "minecraft:fireball"
@@ -375,7 +381,7 @@ impl ServerEntity {
             interval,
             track_deltas,
             arrow: is_arrow(&e.kind),
-            power: acceleration_power(&e.kind),
+            power: e.acceleration_power.or_else(|| acceleration_power(&e.kind)),
             base: e.position,
             rotation: (pack_degrees(e.pitch), pack_degrees(e.yaw)),
             head: pack_degrees(e.head_yaw),
@@ -612,7 +618,7 @@ impl ServerEntity {
                         id: e.id,
                         velocity: e.velocity,
                     });
-                    match self.power {
+                    match e.acceleration_power.or(self.power) {
                         // A bundle: the motion and the projectile's power.
                         Some(power) => out.extend([
                             play::Clientbound::BundleDelimiter(horizon_protocol::packets::Empty),
@@ -1668,6 +1674,7 @@ mod tests {
             head_yaw: 0.0,
             on_ground: true,
             velocity: [0.0; 3],
+            acceleration_power: None,
             minecart_steps: None,
             data: 0,
             meta: Vec::new(),
@@ -1962,6 +1969,35 @@ mod tests {
                 play::Clientbound::MoveEntityPos(_),
             ] if power == 0.1
         ));
+    }
+
+    #[test]
+    fn a_deflected_fireballs_bundle_carries_its_halved_power() {
+        // ServerEntity.sendChanges bundles the velocity with
+        // `projectile.accelerationPower`. A breeze's deflection halves it and
+        // sets needsSync, so the guest is told 0.05 in the same tick it turns.
+        let mut e = state(0.0);
+        e.kind = "minecraft:fireball".into();
+        e.on_ground = false;
+        e.acceleration_power = Some(0.1);
+        let mut s = added(&e);
+        e.acceleration_power = Some(0.05);
+        e.velocity = [0.0, 0.0, -0.05];
+        e.needs_sync = true;
+        let out = changes(&mut s, &e);
+        assert!(
+            matches!(
+                out[..],
+                [
+                    play::Clientbound::BundleDelimiter(_),
+                    play::Clientbound::SetEntityMotion(_),
+                    play::Clientbound::ProjectilePower(play::ProjectilePower { power, .. }),
+                    play::Clientbound::BundleDelimiter(_),
+                    play::Clientbound::MoveEntityPos(_),
+                ] if power == 0.05
+            ),
+            "{out:?}"
+        );
     }
 
     #[test]

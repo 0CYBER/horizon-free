@@ -363,13 +363,17 @@ impl ThrownTrident {
 }
 const HALF: f64 = 0.25;
 /// `Breeze.PROJECTILE_DEFLECTION`: `ProjectileDeflection.REVERSE` at power
-/// `(1, 1, 1)`. Each axis is multiplied by `-0.5`, and the yaw turns by
-/// `170 + nextFloat * 20`.
-fn breeze_deflect(velocity: Vec3, yaw: f32, jitter: f32) -> (Vec3, f32) {
-    (
-        Vec3::new(velocity.x * -0.5, velocity.y * -0.5, velocity.z * -0.5),
-        yaw + 170.0 + jitter * 20.0,
-    )
+/// `(1, 1, 1)`. Each axis is multiplied by `-0.5`, the yaw turns by
+/// `170 + nextFloat * 20`, and `needsSync` sends that at once. A trident is
+/// no `AbstractHurtingProjectile`, so `onDeflection` has no power to halve.
+fn breeze_deflect(t: &mut ThrownTrident, jitter: f32) {
+    t.velocity = Vec3::new(
+        t.velocity.x * -0.5,
+        t.velocity.y * -0.5,
+        t.velocity.z * -0.5,
+    );
+    t.yaw += 170.0 + jitter * 20.0;
+    t.needs_sync = true;
 }
 /// The entry distance of a segment into a box, if it crosses it.
 fn segment_box(from: Vec3, d: Vec3, b: Aabb) -> Option<f64> {
@@ -1035,9 +1039,7 @@ impl Game<'_> {
                                 1.0,
                             );
                             let jitter = t.random.next_float();
-                            let (velocity, yaw) = breeze_deflect(t.velocity, t.yaw, jitter);
-                            t.velocity = velocity;
-                            t.yaw = yaw;
+                            breeze_deflect(&mut t, jitter);
                             t.deflected_by = Some(id);
                         }
                     } else {
@@ -1621,12 +1623,18 @@ mod tests {
     }
 
     /// `ProjectileDeflection.REVERSE` at power 1: half speed, the other way,
-    /// and a turn of 170 degrees plus a fifth of the random draw.
+    /// a turn of 170 degrees plus a fifth of the random draw, and the turn
+    /// sent at once instead of at the trident's next update interval.
     #[test]
     fn a_breeze_turns_a_trident_around_at_half_speed() {
-        let (velocity, yaw) = breeze_deflect(Vec3::new(4.0, -2.0, 1.0), 10.0, 0.25);
-        assert_eq!(velocity, Vec3::new(-2.0, 1.0, -0.5));
-        assert_eq!(yaw, 185.0);
+        let mut t = ThrownTrident::remote(42, Vec3::ZERO, 0.0, 0.0);
+        t.velocity = Vec3::new(4.0, -2.0, 1.0);
+        t.yaw = 10.0;
+        assert!(!t.needs_sync);
+        breeze_deflect(&mut t, 0.25);
+        assert_eq!(t.velocity, Vec3::new(-2.0, 1.0, -0.5));
+        assert_eq!(t.yaw, 185.0);
+        assert!(t.needs_sync, "the turn goes out at once");
     }
 
     #[test]

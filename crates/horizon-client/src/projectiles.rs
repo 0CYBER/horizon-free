@@ -11,6 +11,8 @@ use horizon_core::{
     random::RandomSource,
 };
 
+mod deflection;
+
 /// `AbstractArrow.startFalling`'s per-axis random velocity damping.
 pub fn start_falling_velocity(
     velocity: Vec3,
@@ -809,15 +811,7 @@ impl Projectile {
         // that movement. AbstractHurtingProjectile.applyInertia reads the
         // movement it already has: fireballs, wither skulls and wind charges
         // have no gravity step before the bubbles.
-        let hurting = matches!(
-            self.kind,
-            ProjectileKind::SmallFireball
-                | ProjectileKind::LargeFireball { .. }
-                | ProjectileKind::DragonFireball
-                | ProjectileKind::WitherSkull { .. }
-                | ProjectileKind::WindCharge
-                | ProjectileKind::BreezeWindCharge
-        );
+        let hurting = self.is_hurting();
         let throwable = matches!(
             self.kind,
             ProjectileKind::Snowball

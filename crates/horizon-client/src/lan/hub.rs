@@ -3256,6 +3256,7 @@ impl Hub {
             head_yaw: rot.2,
             on_ground,
             velocity: [0.0; 3],
+            acceleration_power: None,
             data: 0,
             meta,
             // The effect swirls go back to none.
@@ -3273,11 +3274,7 @@ impl Hub {
             stepped: false,
             idle: false,
             bare: false,
-            minecart_steps: None,
-            leash: None,
-            spectator: false,
-            watching: false,
-            hidden: None,
+            ..Default::default()
         }
     }
 

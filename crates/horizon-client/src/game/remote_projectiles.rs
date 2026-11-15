@@ -160,15 +160,7 @@ pub(super) fn remote_projectile_item(projectiles: &mut [Projectile], id: u32, st
 /// anything else is ignored.
 pub(super) fn remote_projectile_power(projectiles: &mut [Projectile], id: i32, power: f64) {
     if let Some(p) = projectiles.iter_mut().find(|p| p.id == id as u32)
-        && matches!(
-            p.kind,
-            ProjectileKind::SmallFireball
-                | ProjectileKind::LargeFireball { .. }
-                | ProjectileKind::DragonFireball
-                | ProjectileKind::WitherSkull { .. }
-                | ProjectileKind::WindCharge
-                | ProjectileKind::BreezeWindCharge
-        )
+        && p.is_hurting()
     {
         p.acceleration = power;
     }

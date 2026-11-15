@@ -8,6 +8,7 @@ fn trident() -> EntityState {
         kind: "minecraft:trident".into(),
         position: [0.5, 65.5, 0.5],
         velocity: [0.25, 0.0, 0.0],
+        acceleration_power: None,
         ..EntityState::default()
     }
 }
