@@ -233,14 +233,14 @@ mod tests {
                     .map(|d| (d.id, d.join_seq().get()))
                     .collect()
             };
-            let before = joins(&game);
+            let before = joins(game);
             let out = game.dropped.lift();
             let hooked = game
                 .level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 0)
                 .unwrap();
-            assert_eq!(joins(&game).len(), 1);
+            assert_eq!(joins(game).len(), 1);
             game.put_back_dropped(out);
-            let after = joins(&game);
+            let after = joins(game);
             assert_eq!(after[..before.len()], before[..]);
             assert_eq!(after[before.len()].0, hooked.id());
             assert!(after[before.len()].1 > before.iter().map(|j| j.1).max().unwrap());
