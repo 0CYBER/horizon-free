@@ -186,7 +186,8 @@ uniform! {
         /// something happened in the world. All 0 when no mod sets them.
         mods: [[f32; 4]; 8],
         /// Unit vector toward the body casting this frame's shadows: the sun by day, the moon
-        /// by night.
+        /// by night, as `sun_direction` and `moon_direction` have them, also without a
+        /// `[shadow]` stage.
         light_direction: [f32; 3],
         /// 1 while `shadow_map` holds this frame's shadow map, else 0.
         has_shadow: u32,

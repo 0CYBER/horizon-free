@@ -677,7 +677,7 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 | `has_reflection` | `u32` | 516 | 1 while the material stage's `reflection` holds this frame's water mirror, else 0. |
 | `reflection_resolution` | `vec2<f32>` | 520 | The size of `reflection`, in pixels: half the world's picture. |
 | `mods` | `array<vec4<f32>, 8>` | 528 | Eight values a native mod hands its own pack each frame (`native_shader_params`, docs/native-mods.md): what they mean is that mod's, such as where and when something happened in the world. All 0 when no mod sets them. |
-| `light_direction` | `vec3<f32>` | 656 | Unit vector toward the body casting this frame's shadows: the sun by day, the moon by night. |
+| `light_direction` | `vec3<f32>` | 656 | Unit vector toward the body casting this frame's shadows: the sun by day, the moon by night, as `sun_direction` and `moon_direction` have them, also without a `[shadow]` stage. |
 | `has_shadow` | `u32` | 668 | 1 while `shadow_map` holds this frame's shadow map, else 0. |
 | `shadow_view_proj` | `mat4x4<f32>` | 672 | Camera-relative world to the shadow camera's clip space, before the distortion (orthographic, looking along `-light_direction`; z 0 at the light, 1 away from it). |
 | `shadow_distance` | `f32` | 736 | Half the side of the square the shadow map covers, in blocks (the manifest's `[shadow] distance`); 0 without a shadow map. |

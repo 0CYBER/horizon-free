@@ -271,6 +271,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-15: API 0.2 (experimental): `frame.light_direction` is the sun by day and the moon by night also for a pack
+  without a `[shadow]` stage, where it now equals the frame's `sun_direction` or `moon_direction`; it read straight up
+  (0, 1, 0) at every time of day until now, so a pack that traced its shadows along it got them straight down. Packs
+  with `[shadow]` see the same value as before. A fix of a value; no WGSL name changes.
 - 2026-11-14: API 0.2 (**breaking**, experimental): the entity stage keeps the engine's coverage unless the pack
   declares it, with `[entity] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` the texture's alpha
   times the layer's opacity is cut and blends, not the returned alpha, and `horizon-shader check` refuses a `discard`

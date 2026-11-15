@@ -500,13 +500,18 @@ pub fn tilt_matrix(tilt: f32) -> Mat4 {
 
 /// The world direction of the shadow light (7.1): the sun by day, the moon by night.
 pub fn shadow_light(frame: &Frame, shadow: &Shadow) -> Vec3 {
+    body(light_angle(frame), shadow.sun_path_rotation).normalize()
+}
+
+/// The sky angle in degrees of the body that lights the frame: the sun by day, the moon by
+/// night.
+pub fn light_angle(frame: &Frame) -> f32 {
     let sun_angle = (frame.sky.sun_angle / 360.0 + 0.25).rem_euclid(1.0);
-    let angle = if sun_angle < 0.5 {
+    if sun_angle < 0.5 {
         frame.sky.sun_angle
     } else {
         frame.sky.moon_angle
-    };
-    body(angle, shadow.sun_path_rotation).normalize()
+    }
 }
 
 /// A sky angle in degrees as the fraction of a day Iris 1.11.7 gives packs (`sunAngle`,

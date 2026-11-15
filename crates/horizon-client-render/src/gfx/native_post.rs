@@ -1635,7 +1635,7 @@ pub fn frame_inputs(
         mods: pack.mod_params,
         light_direction: match shadow {
             Some(s) => super::pack_uniforms::shadow_light(frame, s),
-            None => Vec3::Y,
+            None => body(super::pack_uniforms::light_angle(frame)),
         }
         .to_array(),
         has_shadow: u32::from(shadow.is_some()),
@@ -1803,6 +1803,36 @@ mod tests {
     use horizon_shader_api::{MANIFEST, Pack, check};
 
     const SDR: DisplayValues = DisplayValues::SDR;
+
+    /// `light_direction` is the sun by day and the moon by night, as the same frame's
+    /// `sun_direction` and `moon_direction` have them, also for a pack without a shadow map; a
+    /// pack with `[shadow]` gets the shadow camera's light as before, to the bit.
+    #[test]
+    fn the_light_is_the_sun_by_day_and_the_moon_by_night_with_or_without_a_shadow_map() {
+        let hud = crate::hud::HudBatch::new([4, 4]);
+        let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let shadow = crate::gfx::native_shadow::camera(&Default::default());
+        let light = |frame: &Frame, shadow| {
+            frame_inputs(frame, [4, 4], 0.0, 0, shadow)
+                .light_direction
+                .map(f32::to_bits)
+        };
+        // Morning and night, where the sun, the moon and straight up all differ.
+        for (sun, moon, by_day, shadowed) in [
+            (35.0, 215.0, true, [0xbf12_d5e7, 0x3f51_b3f3, 0xb2d7_5d86]),
+            (200.0, 20.0, false, [0xbeaf_1d43, 0x3f70_8fb3, 0xb280_6bc8]),
+        ] {
+            (frame.sky.sun_angle, frame.sky.moon_angle) = (sun, moon);
+            let inputs = frame_inputs(&frame, [4, 4], 0.0, 0, None);
+            let body = if by_day {
+                inputs.sun_direction
+            } else {
+                inputs.moon_direction
+            };
+            assert_eq!(light(&frame, None), body.map(f32::to_bits), "{sun}");
+            assert_eq!(light(&frame, Some(&shadow)), shadowed, "{sun}");
+        }
+    }
 
     #[test]
     fn wetness_rises_slower_than_it_dries() {
