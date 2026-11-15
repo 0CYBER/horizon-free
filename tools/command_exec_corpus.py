@@ -7466,6 +7466,32 @@ def loaded_wolf_taming():
                        f'/forceload remove {x0} {z0}')
 
 
+def loaded_dragon_health_above_max():
+    """#16724: `LivingEntity.readAdditionalSaveData` reads the ender dragon's `Health` through
+    `setHealth` too, which clamps it to its max health of 200. Read after summoning and after an
+    unload and reload (frozen, so only the save and the load count)."""
+    x0, y0, z0 = 4032, 260, 3776
+    chunk = [[x0 >> 4, z0 >> 4]]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
+    uuids = []
+    # One dragon: Horizon has a single dragon per level, so it refuses to summon a second.
+    for n, health in enumerate(('1000.0f',), 1):
+        uuids.append(f'00004154-0000-0000-0000-{n:04x}00000001')
+        ops.append(cmd(f'/summon ender_dragon {x0 + 8}.5 {y0 + 12 * n} {z0 + 8}.5 '
+                       f'{{UUID:[I;16724,0,{n},1],Health:{health},NoAI:1b}}', expect_result=1))
+
+    def reads():
+        for uuid in uuids:
+            ops.append(cmd(f'/data get entity {uuid} Health'))
+
+    reads()
+    ops += [cmd('/tick freeze', False), cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+            cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1),
+            cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
+    reads()
+    return ops + setup('/tick unfreeze', *[f'/kill {uuid}' for uuid in uuids], f'/forceload remove {x0} {z0}')
+
+
 def loaded_dead_mob():
     """#13199: `LivingEntity.readAdditionalSaveData` reads `Health` through `setHealth`, which
     clamps a negative value to 0 and keeps the body: a mob summoned dead is there, `/data` reads
@@ -8771,6 +8797,7 @@ def groups():
         ('loaded dead mob', loaded_dead_mob()),
         ('loaded health above max', loaded_health_above_max()),
         ('loaded wolf taming', loaded_wolf_taming()),
+        ('loaded dragon health above max', loaded_dragon_health_above_max()),
         ('falling block fall float', falling_block_fall_float()),
         ('explosion infested blocks', explosion_infested_blocks()),
         ('jigsaw default joint', jigsaw_default_joint()),
