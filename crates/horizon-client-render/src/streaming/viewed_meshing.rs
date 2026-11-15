@@ -36,7 +36,7 @@ pub const VIEWED_LINGER: Duration = Duration::from_secs(5);
 /// level's 2048 columns of 24 sections (`viewed_worlds::MAX_COLUMNS`), as most of a column is air
 /// and keeps no mesh. Further sections wait, dirty, until some leave.
 pub const MAX_VIEWED_SECTIONS: usize = 8192;
-/// The workers viewed levels mesh on at once: one, or a quarter of the pool where that is fewer.
+/// Viewed levels mesh on one worker, capped at a quarter of the pool with a one-worker floor.
 /// A pool under four workers keeps one too (a quarter of it is none), and the player's level
 /// still goes first there: a viewed job only starts on a worker no job of it is queued for.
 pub const VIEWED_MESH_WORKERS: usize = 1;
@@ -562,24 +562,26 @@ mod tests {
         assert!(log[8..].iter().all(|entry| entry.starts_with("viewed")));
     }
 
-    /// On a pool of four workers, viewed sections are meshed one at a time.
+    /// Small pools retain the one-worker floor, so viewed levels always make progress.
     #[test]
     fn viewed_levels_mesh_on_one_worker_at_once() {
-        let pool = Pool::new(4, "viewed-share");
-        let mut meshing = ViewedMeshing::in_pool(&pool);
-        let busy = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
-        let seen = busy.clone();
-        let source = MeshSource::custom(move |_, _| {
-            let now = seen[0].fetch_add(1, Ordering::SeqCst) + 1;
-            seen[1].fetch_max(now, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(2));
-            seen[0].fetch_sub(1, Ordering::SeqCst);
-            drawn()
-        });
-        let mut world = level();
-        let sections = world.layout().sections();
-        mesh_until(&mut meshing, &source, &mut world, sections);
-        assert_eq!(busy[1].load(Ordering::SeqCst), 1);
+        for workers in [1, 2, 3, 4] {
+            let pool = Pool::new(workers, "viewed-share");
+            let mut meshing = ViewedMeshing::in_pool(&pool);
+            let busy = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+            let seen = busy.clone();
+            let source = MeshSource::custom(move |_, _| {
+                let now = seen[0].fetch_add(1, Ordering::SeqCst) + 1;
+                seen[1].fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(2));
+                seen[0].fetch_sub(1, Ordering::SeqCst);
+                drawn()
+            });
+            let mut world = level();
+            let sections = world.layout().sections();
+            mesh_until(&mut meshing, &source, &mut world, sections);
+            assert_eq!(busy[1].load(Ordering::SeqCst), 1);
+        }
     }
 
     /// Nothing is meshed for a level no view names; a wanted one's finished sections enter its
