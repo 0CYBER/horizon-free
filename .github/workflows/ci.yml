@@ -19,6 +19,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  # The push run asks whether the merge queue's run of the same commit passed (the `queued` steps).
+  actions: read
 concurrency:
   # A new push to a pull request replaces its running checks. On main, the running check finishes and only the
   # newest push waits behind it: GitHub cancels a waiting run when a newer one joins the group. A burst of merges
@@ -28,6 +30,7 @@ concurrency:
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   HORIZON_TELEMETRY_URL: "off"
+
 jobs:
   # verify runs as three jobs side by side, so a run takes as long as its slowest part (the Rust tests), not the sum:
   # one job doing them in turn took 14-21 minutes on GitHub's runners (main's run 43595807302: 859 s), and every merge
@@ -35,11 +38,12 @@ jobs:
   # each passed or had nothing to do. It runs even in a cancelled run (`always()`), so it fails there instead of being
   # skipped, which GitHub would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the others.
   #
-  # Where (docs/ci-runners.md): our checks runners (label horizon-checks: the desktop's, an isolated user, so a fork's
-  # pull request runs there too) take the pull requests whose number ends in 0 or 1, about what their three runners
-  # can do; GitHub's runners take the others and main's pushes (which also save the Rust cache GitHub's pull request
-  # runs read), so both pools work at once. The repository variable SELF_HOSTED_CI moves them: `all` every job to
-  # ours, `light` (the desktop paused) or `off` every job to GitHub's. On ours the build folder persists
+  # Where (docs/ci-runners.md): our checks runners (label horizon-checks: the desktop's) take this repository's own
+  # pull requests whose number ends in 0 or 1, about what their three runners can do; GitHub's runners take the others,
+  # forks' pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs read), so both
+  # pools work at once. The repository variable SELF_HOSTED_CI moves them: `all` every job to ours, `light` (the
+  # desktop paused) or `off` every job to GitHub's. A fork's pull request sees no repository variable, so no switch
+  # could move it off a machine that is off: it always runs on GitHub's. On ours the build folder persists
   # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.
   verify-tree:
     name: verify (tree and tools)
@@ -54,6 +58,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
+      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
+      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
+      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
+      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
+      # caches hold (the steps below say which).
+      - name: Did the merge queue already verify this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
+            tested=true
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v7
         if: runner.environment == 'github-hosted'
         with:
@@ -61,6 +84,7 @@ jobs:
       # A pull request or a merge group adds only its own commits to main, so it reads those; main's pushes read every
       # ref's history.
       - name: Keep game artifacts out of Git
+        if: steps.queued.outputs.tested != 'true'
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
@@ -82,24 +106,30 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
           echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
+      # On a pull request, the next two checks compare with HEAD^1: the main that GitHub's merge commit puts the pull
+      # request on. pull_request.base.sha is main at the pull request's last push and falls behind, so main's own
+      # changes since then would count as the pull request's (#13874).
       # docs/layers.md: a crate depends only on its own layer or a lower one; today's exceptions only shrink.
       - name: Crates follow the layers
+        if: steps.queued.outputs.tested != 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 tools/check_layers.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: python3 tools/check_layers.py ${BASE:+--base "$BASE"}
       # docs/layers.md#built-in-addresses: every built-in outside address in the Horizon layer's home; the rest only shrinks.
       - name: Built-in addresses stay in their home
+        if: steps.queued.outputs.tested != 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 tools/check_addresses.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
-      - name: Check the mod API type boundary (including negative control)
-        run: python3 tools/ci/check_api_boundary.py --source-only
-      - name: Vocabulary state has explicit ownership
-        run: python3 tools/check_mod_vocabulary_state.py
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: python3 tools/check_addresses.py ${BASE:+--base "$BASE"}
       - name: Test offline research tooling
+        if: steps.queued.outputs.tested != 'true'
         run: python -m unittest discover -s tests -v
+  # Not in the merge queue: GitHub's 20 concurrent jobs are what the queue waits for, every pull request passed this
+  # job on its own head, and main's push after the merge still runs clippy (a combination that breaks a lint shows
+  # there). The required `verify` counts a skipped job as passed.
   verify-lint:
     name: verify (format and lint)
+    if: github.event_name != 'merge_group'
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
@@ -111,6 +141,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
+      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
+      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
+      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
+      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
+      # caches hold (the steps below say which).
+      - name: Did the merge queue already verify this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
+            tested=true
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
       - name: Does this pull request need Rust checks?
         if: github.event_name == 'pull_request'
         id: rust
@@ -134,26 +183,72 @@ jobs:
             sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies checked by clippy, saved from main's runs (pull requests read main's cache).
+      # Dependencies and the workspace crates' own clippy output, saved from main's runs (pull requests read main's
+      # cache). rust-cache leaves the workspace crates out by default, so clippy re-checked all of them on every run;
+      # cache-workspace-crates keeps them, and a new key each UTC day makes main save a fresh copy once a day (the
+      # restore falls back to the newest older one). .ci-built holds the commit that copy was checked at.
+      - name: Which day's lint cache
+        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        id: lint-day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify-lint
+          key: ${{ steps.lint-day.outputs.day }}
+          cache-workspace-crates: true
+          cache-directories: .ci-built
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Cargo rebuilds a crate whose source file is newer than its saved output, and a checkout stamps every file with
+      # the time of the checkout. So on a pull request the files are dated old again, except those that changed since
+      # the cached commit, and clippy re-checks only those crates and what depends on them. Without a usable
+      # .ci-built/sha the script does nothing and clippy checks everything, as before.
+      - name: Date unchanged files as the cache saw them
+        if: >-
+          github.event_name == 'pull_request' && steps.rust.outputs.required != 'false' &&
+          runner.environment == 'github-hosted'
+        run: tools/ci/pin_mtimes.sh .ci-built
       - name: Check formatting and lint
         if: steps.rust.outputs.required != 'false'
+        # A commit the queue verified skips the format check but still runs clippy: its build is what verify-lint's
+        # rust-cache saves from main, and a run that saved nothing would leave pull requests an emptier cache.
+        env:
+          TESTED: ${{ steps.queued.outputs.tested }}
         run: |
-          cargo +stable fmt --all -- --check
-          find crates/horizon-mod-api/src crates/horizon-mod-vocab/src -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --check --config skip_children=true
-          find crates/horizon-client/src/game -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --config skip_children=true --check
-          rustup run stable rustfmt --edition 2024 --check crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*.rs crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs
-          rustup run stable rustfmt --edition 2024 --check crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback/*.rs
+          [ "$TESTED" = true ] || cargo +stable fmt --all -- --check
           cargo +stable clippy --workspace --all-targets --locked -- -D warnings
-          # The server build (released as horizon-engine): the game without sound or controllers.
-          cargo +stable clippy -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --locked --no-default-features -- -D warnings
-      - name: Check generated mod API signatures
+      # The server build (released as horizon-engine): the game without sound or controllers. Its libraries and
+      # binaries, not the tests and examples the first clippy already checked. Every pull request runs it: the merge
+      # queue no longer runs this job, so a change that breaks only the server build must stop on its own pull request
+      # (a crate below the client can break it without touching one).
+      - name: Lint the server build
         if: steps.rust.outputs.required != 'false'
-        run: python3 tools/ci/check_api_boundary.py
+        run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
+      # Wasm mods link the mod API, so it must build for wasm32: checked when a pull request changes it or a crate it
+      # builds, and on every push to main.
+      - name: Does this change touch the mod API?
+        if: steps.rust.outputs.required != 'false'
+        id: mod-api
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed=true
+          if [ -n "$BASE_SHA" ] && ! git diff --name-only "$BASE_SHA"...HEAD | grep -qE '^(crates/horizon-(mod-api|mod-api-macros|mod-api-gen|mod-vocab|mod-runtime|core)/|Cargo\.(toml|lock)$)'; then
+            changed=false
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+      - name: The mod API builds for wasm32
+        if: steps.mod-api.outputs.changed == 'true'
+        run: |
+          rustup target add wasm32-unknown-unknown --toolchain stable
+          cargo +stable check -p horizon-mod-api --target wasm32-unknown-unknown --locked
+      # Only main's passing run records its commit; pull requests restore it and never save it.
+      - name: Record the commit this lint cache was checked at
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.environment == 'github-hosted'
+        run: |
+          mkdir -p .ci-built
+          git rev-parse HEAD > .ci-built/sha
   verify-test:
     name: verify (Rust tests)
     runs-on: >-
@@ -167,6 +262,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
+      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
+      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
+      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
+      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
+      # caches hold (the steps below say which).
+      - name: Did the merge queue already verify this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
+            tested=true
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
       - name: Does this pull request need Rust checks?
         if: github.event_name == 'pull_request'
         id: rust
@@ -181,28 +295,67 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
           echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
-      - name: Install Rust toolchain and the ALSA and udev headers the client links against
+      - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
         if: steps.rust.outputs.required != 'false'
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
           if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev mold
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
+      # Dependencies, and for pull requests the workspace's own build too, saved from main's runs (pull requests read
+      # main's cache). The key is the UTC date, so main saves a fresh one each day and a pull request restores the
+      # latest. .ci-built/sha, written below, says which main commit that build is of.
+      - name: Which day's build cache
+        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        id: build-day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify
+          key: ${{ steps.build-day.outputs.day }}
+          cache-workspace-crates: true
+          cache-directories: .ci-built
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Cargo rebuilds a crate when a source file is newer than its build. Checkout gives every file today's time, so
+      # a pull request pins the unchanged files to 2001 and touches the ones that differ from main's built commit. The
+      # merge queue and main's pushes skip this and rebuild in full, so a wrong reuse can never reach main.
+      - name: Rebuild only what this pull request changed
+        if: >-
+          github.event_name == 'pull_request' && steps.rust.outputs.required != 'false' &&
+          runner.environment == 'github-hosted'
+        run: tools/ci/pin_mtimes.sh .ci-built
+      # sccache through GitHub's cache, GitHub's runners only (ours keep their build folder): rust-cache keeps the
+      # dependencies but cleans the workspace crates and the path-patched ones (third_party), so cargo rebuilt ~70
+      # crates on every run. sccache knows them by their content. Only main's pushes write to it: an entry a pull
+      # request writes is scoped to that pull request, no other run can read it, and it would push main's entries out
+      # of the repository's 10 GB. Pull requests and the merge queue read main's. RUSTC_WRAPPER is set after
+      # rust-cache, whose key hashes the RUST* variables.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        with:
+          version: v0.19.0
+      - name: Compile through sccache
+        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        env:
+          WRITE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          if [ "$WRITE" != true ]; then echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"; fi
+      # The mold linker, GitHub's runners only (installed above): linking the test binaries was a large part of this
+      # job. Rust uses its own lld on x86_64 Linux by default; -linker-features=-lld turns that off so mold's
+      # -fuse-ld applies. Set after rust-cache, whose key hashes the RUST* variables, and the same on every event so
+      # sccache's hashes match between main and pull requests.
+      - name: Link with mold
+        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
       # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
       # these 4-core runners it was no faster (#4978).
-      - name: Build the runtime holder test actor
-        if: steps.rust.outputs.required != 'false'
-        run: cargo +stable build -p horizon-mod-package --features runtime-process --example holder_actor
       # A pull request tests the crates it changes, the crates that depend on them, and the crates whose tests read
       # its files (tools/ci/test_scope.py); a change outside every crate tests the whole workspace. main's pushes
       # always test the whole workspace, so a missed crate shows on main.
@@ -217,13 +370,29 @@ jobs:
         if: steps.rust.outputs.required != 'false'
         env:
           PACKAGES: ${{ steps.scope.outputs.packages }}
+          TESTED: ${{ steps.queued.outputs.tested }}
         run: |
+          # A commit the queue already tested is only built, with the same arguments, for the caches main saves.
+          if [ "$TESTED" = true ]; then
+            cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests --no-run
+            exit 0
+          fi
           cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests
           # The full content-root tests (#[ignore]d: minutes each on a laptop). The same build as above; they need the
           # prepared vanilla data, so without it they pass at once. Keep the target selection identical to avoid
           # recompiling the workspace with a different dependency graph.
           cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
           cargo +stable test --locked ${PACKAGES:---workspace} --doc
+      # What main's cache holds is a build of this commit: pull requests compare their files against it.
+      - name: Record the commit this build is of
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        run: mkdir -p .ci-built && git rev-parse HEAD > .ci-built/sha
+      - name: What sccache reused
+        if: always() && steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        run: |
+          "$SCCACHE_PATH" --show-stats
   verify:
     needs: [verify-tree, verify-lint, verify-test]
     if: always()
@@ -241,9 +410,13 @@ jobs:
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
   # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
-  # changes it or a crate it builds is checked here, and so is every push to main: two pull requests can each pass
-  # alone and break it together (#2059 and the registry ratings did, 2026-10-26).
+  # changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
+  # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
+  # after their merge shows it. Not in the merge queue, which waits on GitHub's 20 concurrent jobs and does not need
+  # this one (only `verify` is required). A push's range is the commits it added to main; a range the job cannot read
+  # (a push with no earlier commit, or one a force push removed) runs everything.
   launcher:
+    if: github.event_name != 'merge_group'
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
@@ -255,20 +428,45 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Does this pull request change the launcher or a crate it builds?
-        if: github.event_name == 'pull_request'
+          filter: blob:none
+      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
+      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
+      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
+      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
+      # caches hold (the steps below say which).
+      - name: Did the merge queue already verify this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
+            tested=true
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+      - name: Does this change the launcher or a crate it builds?
+        if: github.event_name != 'workflow_dispatch'
         id: launcher
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
+            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "No earlier commit to compare with: the launcher is checked"
+          else
+            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install Rust and the headers GPUI links against
         if: steps.launcher.outputs.required != 'false'
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
           if [ "$HOSTED" = true ]; then
-            bash tools/ci/install_launcher_deps.sh libxkbcommon-x11-dev libwayland-dev \
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
               libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
@@ -281,10 +479,17 @@ jobs:
       - name: Check the launcher's formatting, lint and tests
         if: steps.launcher.outputs.required != 'false'
         working-directory: launcher
+        env:
+          TESTED: ${{ steps.queued.outputs.tested }}
+        # A commit the queue verified is only built (clippy, test binaries) for the cache main saves, not run.
         run: |
-          cargo +stable fmt --check
+          [ "$TESTED" = true ] || cargo +stable fmt --check
           cargo +stable clippy --all-targets --locked -- -D warnings
-          cargo +stable test --locked --lib --bins
+          if [ "$TESTED" = true ]; then
+            cargo +stable test --locked --lib --bins --no-run
+          else
+            cargo +stable test --locked --lib --bins
+          fi
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
   # (`gh workflow run checks --ref <branch>`): GitHub's runner queue is the bottleneck, and main's runs gate the
   # releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this
@@ -305,8 +510,9 @@ jobs:
         run: |
           $cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
           "CARGO_BUILD_JOBS=$cores" >> $env:GITHUB_ENV
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
         with:
+          toolchain: stable
           targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -402,7 +608,7 @@ jobs:
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
           changed=$(git diff --name-only "$(git merge-base "$BASE_SHA" HEAD)" HEAD)
-          harness=$(grep -E '^(tools/test_[a-z0-9_]+_parity\.py|tools/(parity[a-z_]*|lab)\.py|tools/parity_hosts\.json|mods/horizon/src/test/|crates/[^/]+/examples/|crates/horizon-client/src/game/([a-z_]+/)?[a-z_]*(fixture|harness)\.rs|\.github/workflows/parity[a-z-]*\.yml)' <<< "$changed" || true)
+          harness=$(grep -E '^(tools/test_[a-z0-9_]+_parity\.py|tools/(parity[a-z_]*|lab)\.py|tools/parity_hosts\.json|mods/horizon/src/test/|crates/[^/]+/examples/|crates/horizon-client/src/game/[a-z_]*(fixture|harness)\.rs|\.github/workflows/parity[a-z-]*\.yml)' <<< "$changed" || true)
           if [ -n "$harness" ] || [[ " $LABELS " == *" run-parity "* ]] || [[ " $LABELS " == *" frame-identity "* ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "The pull request runs its harnesses: ${harness:-label run-parity}"
@@ -419,358 +625,8 @@ jobs:
       head: ${{ github.event.pull_request.head.sha }}
       full: ${{ contains(github.event.pull_request.labels.*.name, 'full-parity') }}
       frame_identity: ${{ contains(github.event.pull_request.labels.*.name, 'frame-identity') }}
-  # Horizon never downloads the game. These jobs need a self-hosted Linux runner
-  # (label horizon-game) holding the maintainer's own copy: the official launcher's
-  # game directory in HORIZON_MINECRAFT_DIR and the pinned server jar in
-  # HORIZON_SERVER_JAR. Start them by hand: gh workflow run checks --ref <branch>.
-  vanilla-parity:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, linux, horizon-game]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '25'
-      - name: Compare Rust foundations with pinned vanilla client and server bytecode
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_rust_parity.py --prepare
-      - name: Check Rust world-data interoperability with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_world_parity.py
-      - name: Compare scheduled ticks and saved tick data with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_tick_parity.py
-      - name: Compare simulation geometry and cached block collision shapes
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: |
-          python tools/test_geometry_parity.py
-          python tools/test_collision_parity.py
-      - name: Compare noise samplers and density kernels with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_noise_parity.py
-      - name: Compare compiled density samplers with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_density_parity.py
-      - name: Compare world-generation JSON codecs with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_worldgen_parity.py
-      - name: Compare heightmap predicates and chunk mutations with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_heightmap_parity.py
-      - name: Compare pre-light chunk status transitions and block writes
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_chunk_stage_parity.py
-      - name: Compare feature placement into resident neighboring chunks
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_feature_region_parity.py
-      - name: Compare nested feature selectors and sequences
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_feature_graph_parity.py
-      - name: Compare named feature holders and placed-feature tags
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_feature_catalog_parity.py
-      - name: Compare configured fill-layer block placement
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_fill_layer_parity.py
-      - name: Compare replacement-rule codecs and evaluation
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_rule_test_parity.py
-      - name: Compare simple-block placement and feature composition
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_simple_block_parity.py
-      - name: Compare block-column sampling and obstruction
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_column_parity.py
-      - name: Compare vertical pillars and cap feature placement
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_pillar_parity.py
-      - name: Compare exactly-one-neighbor feature spreading
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_neighbor_spread_parity.py
-      - name: Compare block-pile support and placement
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_pile_parity.py
-      - name: Compare disk replacement and postprocessing
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_disk_parity.py
-      - name: Compare block-blob support search and geometry
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_blob_parity.py
-      - name: Compare spring placement and fluid tick scheduling
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_spring_parity.py
-      - name: Compare vine attachment priority and placement
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_vines_parity.py
-      - name: Compare underwater magma floor scans and occlusion
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_underwater_magma_parity.py
-      - name: Compare blue-ice seeding and growth attempts
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_blue_ice_parity.py
-      - name: Compare spike geometry and discontinuous roots
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_spike_parity.py
-      - name: Compare End podium construction and destruction requests
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_end_podium_parity.py
-      - name: Rust End gateway parity
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_end_gateway_parity.py
-      - name: Compare bonus chest placement and conditional loot seeding
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_bonus_chest_parity.py
-      - name: Compare recursive chorus generation and connection refreshes
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_chorus_plant_parity.py
-      - name: Compare small speleothem patches and waterlogged points
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_speleothem_parity.py
-      - name: Compare replacement blob search and Manhattan shells
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_replace_blobs_parity.py
-      - name: Compare bamboo stalks, podzol patches and leafy caps
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_bamboo_parity.py
-      - name: Compare Nether delta rims and shifted contents
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_delta_parity.py
-      - name: Compare biome freezing and snow eligibility
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_weather_parity.py
-      - name: Compare frozen top layers and snowy ground updates
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_snow_freeze_parity.py
-      - name: Compare generation-stage tick storage and routing
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_generation_tick_parity.py
-      - name: Compare below-zero upgrade metadata codecs
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_retrogen_data_parity.py
-      - name: Compare below-zero upgrade lifecycle and block transformations
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_retrogen_chunk_parity.py
-      - name: Compare chunk-status metadata, ordering and codecs
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_chunk_status_parity.py
-      - name: Compare proto-chunk block-entity storage and coordinates
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_entity_storage_parity.py
-      - name: Compare ordered single-block replacement features
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_replace_block_parity.py
-      - name: Compare scattered ore placement and air-exposure checks
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_scattered_ore_parity.py
-      - name: Compare resident bulk-section access and raw writes
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_bulk_section_parity.py
-      - name: Compare biome feature ordering and cycle detection
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_feature_sort_parity.py
-      - name: Compare world-generation random wrappers and seeding
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_worldgen_random_parity.py
-      - name: Compare biome filtering and top-level feature context
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_placement_parity.py
-      - name: Compare biome decoration feature scheduling and seeding
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_decoration_parity.py
-      - name: Compare decoration against resident biome and terrain sections
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_decoration_region_parity.py
-      - name: Compare block-state provider choices and rotation
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_state_provider_parity.py
-      - name: Compare contained fluids and height queries with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_fluid_parity.py
-      - name: Compare entity obstruction with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_entity_obstruction_parity.py
-      - name: Compare block solidity and replaceability with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_properties_parity.py
-      - name: Compare face slicing and block support with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_face_support_parity.py
-      - name: Compare cached block support with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_support_parity.py
-      - name: Compare dynamic block support with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_dynamic_support_parity.py
-      - name: Compare moving-piston collision and interpolation with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_piston_shape_parity.py
-      - name: Compare supported block survival rules with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_survival_parity.py
-      - name: Compare noise-stage chunk filling with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_terrain_parity.py
-      - name: Compare structure terrain-adaptation density with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_structure_density_parity.py
-      - name: Compare seeded material bands and surface queries with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_material_surface_parity.py
-      - name: Compare material condition codecs and rule evaluation with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_material_condition_parity.py
-      - name: Compare biome temperatures and cache behavior with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_temperature_parity.py
-      - name: Compare badlands and frozen-ocean extensions with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_material_extension_parity.py
-      - name: Compare bundled material-rule libraries with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_material_rule_library_parity.py
-      - name: Compare fixed, checkerboard and End biome sources with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_source_parity.py
-      - name: Compare seeded cave paths and failure state with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_cave_carver_parity.py
-      - name: Compare seeded canyon paths and width factors with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_canyon_carver_parity.py
-      - name: Compare initial block-writing feature algorithms with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_basic_feature_parity.py
-      - name: Compare feature placement chains with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_feature_placement_parity.py
-      - name: Compare feature placement primitives with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_placement_parity.py
-      - name: Compare anchored height providers with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_height_provider_parity.py
-      - name: Compare scalar value providers with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_value_provider_parity.py
-      - name: Compare cave and canyon geometric primitives with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_carving_geometry_parity.py
-      - name: Compare carving-mask traversal and callback mutations with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_carving_mask_parity.py
-      - name: Compare registry-bound biome-source codecs with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_source_codec_parity.py
-      - name: Compare all four biome-source kinds in chunk generation with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_generation_parity.py
-      - name: Compare chunk biome filling and failure state with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_chunk_parity.py
-      - name: Compare biome zoom and seed obfuscation with pinned vanilla
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_biome_zoom_parity.py
-      - name: Compare surface-stage chunks with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_material_stage_parity.py
-      - name: Compare block-state JSON codecs with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_block_state_codec_parity.py
-      - name: Compare vertical anchors with pinned vanilla client and server
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_anchor_parity.py
-      - name: Compare float logarithms at domain and rounding boundaries
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: python tools/test_float_log_parity.py
+  # JFR analysis uses JDK-generated fixture recordings on the self-hosted Linux runner.
+  # Start a manual checks dispatch with: gh workflow run checks --ref <branch>.
   jfr-analysis:
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, horizon-game]
