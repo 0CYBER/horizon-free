@@ -294,6 +294,52 @@ pub fn text(size: f32, weight: FontWeight, a: f32) -> Div {
         .text_color(white(a))
 }
 
+/// The widths text was laid out in, by key, as [`room`] recorded them on the last frame: what
+/// [`cut`] compares a text's own width against.
+pub type Rooms = Rc<RefCell<HashMap<SharedString, f32>>>;
+
+/// Fills its (relative) parent and records the parent's laid-out width in `rooms` under `key`.
+pub fn room(rooms: &Rooms, key: SharedString) -> impl IntoElement {
+    let rooms = rooms.clone();
+    gpui::canvas(
+        move |bounds, _, _| {
+            rooms.borrow_mut().insert(key, f32::from(bounds.size.width));
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// Whether `text` in `family` at `size` and `weight` is wider than the room recorded under `key`,
+/// so a truncating parent cuts it: decides a full-text hover label. False until a room is known.
+pub fn cut(
+    cx: &App,
+    rooms: &Rooms,
+    key: &str,
+    text: &str,
+    family: &'static str,
+    size: f32,
+    weight: FontWeight,
+) -> bool {
+    let Some(room) = rooms.borrow().get(key).copied() else {
+        return false;
+    };
+    let system = cx.text_system();
+    let font = system.resolve_font(&gpui::Font {
+        weight,
+        ..gpui::font(family)
+    });
+    let width: f32 = text
+        .chars()
+        .filter_map(|c| system.advance(font, px(size), c).ok())
+        .map(|a| f32::from(a.width))
+        .sum();
+    width > room + 0.5
+}
+
 /// One of the mockup's Hugeicons, stroked in `color`.
 pub fn icon(name: &'static str, size: f32, color: Hsla) -> Svg {
     svg()

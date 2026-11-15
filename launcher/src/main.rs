@@ -324,6 +324,10 @@ struct Launcher {
     consent_error: Option<String>,
     /// The instance (id) the build under way, or the last one's error, is for.
     native_for: Option<String>,
+    /// The native mods the build under way (or the last one) was given (`native_build.rs`).
+    native_built_mods: Vec<String>,
+    /// Where truncating texts were laid out, for their full-text hover labels (`glass_ui::cut`).
+    rooms: glass_ui::Rooms,
     /// What each installed native build was made from, by version. A build's version names its
     /// contents, so an entry never goes stale.
     native_builds:

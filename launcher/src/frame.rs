@@ -277,6 +277,16 @@ impl Launcher {
             }
             // As in the mockup, the chosen instance stays marked on every page, unless a ported
             // pack's page is open: that row is the one shown then.
+            let room_key = SharedString::from(format!("rail-name-{}", i.id));
+            let cut = ui::cut(
+                cx,
+                &self.rooms,
+                &room_key,
+                &i.name,
+                horizon_theme::glass::FONT,
+                14.,
+                FontWeight::SEMIBOLD,
+            );
             let current = match i.kind {
                 InstanceKind::Default | InstanceKind::Own => {
                     !(on_packs && self.pack_open.is_some()) && selected.as_ref() == Some(&i.id)
@@ -342,13 +352,12 @@ impl Launcher {
                         .child(
                             ui::row_text(i.name.clone(), state)
                                 .overflow_hidden()
-                                .opacity(label),
+                                .opacity(label)
+                                .child(ui::room(&self.rooms, room_key.clone())),
                         )
                         // Narrow, icons alone; open, a name too long for the row is cut: the full
                         // name on hover either way.
-                        .when(!open || i.name.chars().count() > 16, |d| {
-                            d.tooltip(ui::tip(i.name.clone()))
-                        })
+                        .when(!open || cut, |d| d.tooltip(ui::tip(i.name.clone())))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             match clicked.kind {
                                 InstanceKind::Default | InstanceKind::Own => {

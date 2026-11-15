@@ -142,6 +142,8 @@ impl Launcher {
             pending_consent: None,
             consent_error: None,
             native_for: None,
+            native_built_mods: Vec::new(),
+            rooms: Default::default(),
             native_builds: Default::default(),
             native_log: Default::default(),
             confirm_remove: None,

@@ -240,6 +240,15 @@ impl Launcher {
             return div();
         };
         let edit = instance.clone();
+        let cut = ui::cut(
+            cx,
+            &self.rooms,
+            "home-title",
+            &instance.name,
+            horizon_theme::glass::DISPLAY_FONT,
+            44.,
+            FontWeight::SEMIBOLD,
+        );
         let version = self.version_chip(cx);
         let whats_new = self.whats_new_link(cx);
         div()
@@ -262,6 +271,7 @@ impl Launcher {
             .child(
                 div()
                     .id("home-title")
+                    .relative()
                     .min_w_0()
                     .truncate()
                     .font_family(horizon_theme::glass::DISPLAY_FONT)
@@ -270,9 +280,8 @@ impl Launcher {
                     .line_height(px(48.))
                     .text_color(white(ink::FULL))
                     // A long name is cut at the header's width: the whole of it on hover.
-                    .when(instance.name.chars().count() > 18, |d| {
-                        d.tooltip(ui::tip(instance.name.clone()))
-                    })
+                    .when(cut, |d| d.tooltip(ui::tip(instance.name.clone())))
+                    .child(ui::room(&self.rooms, "home-title".into()))
                     .child(instance.name),
             )
             .child(div().flex_1())
