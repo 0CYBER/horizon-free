@@ -4,8 +4,8 @@ use super::{
     Mob, MobEvent, MobWorld,
     anim::{Poses, State},
     goals::{
-        Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll,
-        Tempt, goal_clone,
+        AnimalPanic, Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, RandomLookAround,
+        Stroll, Tempt, goal_clone,
     },
 };
 use horizon_core::geometry::trig::Mth;
@@ -28,7 +28,7 @@ pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
     // CamelAi speed modifiers (times the 0.09 movement speed attribute).
     g.add(0, Float);
-    g.add(1, CamelPanic(Panic::new(4.0)));
+    g.add(1, CamelPanic(AnimalPanic::new(4.0)));
     g.add(2, Breed::new(1.0));
     g.add(3, Tempt::new(2.5, tempt, false));
     // CamelAi's `triggerIf(Predicate.not(Camel::refuseToMove), ...)` around
@@ -353,7 +353,7 @@ fn sound(m: &Mob, name: &'static str, events: &mut Vec<MobEvent>) {
 }
 /// `CamelAi.CamelPanic`: standing up at once to flee.
 #[derive(Clone, Debug)]
-struct CamelPanic(Panic);
+struct CamelPanic(AnimalPanic);
 impl Goal for CamelPanic {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -372,8 +372,14 @@ impl Goal for CamelPanic {
         stand_up_instantly(m);
         self.0.start(m, cx);
     }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx);
+    }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.0.stop(m, cx);
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
     }
 }
 /// `CamelAi.RandomSitting`: after 20 seconds in a pose, sit or stand.

@@ -560,7 +560,7 @@ fn generic(m: &mut Mob) {
             // activities are not here): panic 2.0, AnimalMakeLove, tempting
             // with goat_food and baby follow at 1.25, then stroll.
             g.add(0, Float);
-            g.add(1, Panic::new(2.0));
+            g.add(1, AnimalPanic::new(2.0));
             g.add(2, Breed::new(1.0));
             g.add(3, Tempt::new(1.25, m.kind.food.clone(), false));
             g.add(4, FollowParent::new(1.25));

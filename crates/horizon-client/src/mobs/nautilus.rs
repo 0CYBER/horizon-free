@@ -7,7 +7,7 @@ use super::{
     Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
     control::{LookKind, MoveKind, Operation},
-    goals::{Breed, Cx, Goal, LOOK, MOVE, Panic, Stroll, Tempt, goal_clone},
+    goals::{AnimalPanic, Breed, Cx, Goal, LOOK, MOVE, Stroll, Tempt, goal_clone},
     keyframes::Animation,
     nav::NavKind,
 };
@@ -58,7 +58,7 @@ pub fn register(m: &mut Mob) {
         g.add(2, Charge::new(0.5));
         g.add(3, Stroll::swimming(1.0, 1));
     } else {
-        g.add(0, Panic::new(1.6));
+        g.add(0, AnimalPanic::new(1.6));
         g.add(1, Breed::new(0.4));
         let mut t = Tempt::new(1.3, tempt, false);
         t.stop_distance = stop;

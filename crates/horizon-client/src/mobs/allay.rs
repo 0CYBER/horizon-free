@@ -5,7 +5,7 @@ use super::{
     Mob, MobEvent, MobWorld,
     anim::{Poses, State as AnimState},
     control::MoveKind,
-    goals::{Cx, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, goal_clone},
+    goals::{AnimalPanic, Cx, Goal, LookAtPlayer, MOVE, RandomLookAround, Stroll, goal_clone},
     nav::NavKind,
 };
 use crate::items::ItemStack;
@@ -237,7 +237,7 @@ pub fn register(m: &mut Mob) {
     // FlyingPathNavigation.setRequiredPathLength(48).
     m.set_required_path_length(48.0);
     let g = &mut m.ai.goals;
-    g.add(0, Panic::new(2.5));
+    g.add(0, AnimalPanic::new(2.5));
     g.add(1, Fetch);
     g.add(2, Deliver);
     g.add(3, StayClose);

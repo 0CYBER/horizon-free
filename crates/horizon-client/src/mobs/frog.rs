@@ -9,8 +9,8 @@
 use super::{
     Mob, MobEvent, MobWorld, Species, Who,
     goals::{
-        Breed, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, Tempt,
-        goal_clone,
+        AnimalPanic, Breed, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, RandomLookAround, Stroll,
+        Tempt, goal_clone,
     },
     sync,
 };
@@ -117,7 +117,7 @@ pub fn register(m: &mut Mob) {
     g.add(0, Float);
     // `FrogAi.initCoreActivity`: `AnimalPanic(2.0)` — the panic speed
     // multiplier is 2.0, not the 1.25 its temptation uses.
-    g.add(1, Panic::new(2.0));
+    g.add(1, AnimalPanic::new(2.0));
     // `FrogAi.initIdleActivity`: `AnimalMakeLove` first, then `FollowTemptation(1.25)`.
     g.add(2, Breed::new(1.0));
     g.add(3, Unless(is_pregnant, Tempt::new(1.25, food, false)));
@@ -1198,7 +1198,15 @@ mod tests {
                     events: &mut events,
                 };
                 let mut goals = std::mem::take(&mut m.ai.goals);
-                goals.tick(&mut m, &mut cx);
+                // `AnimalPanic` looks for a spot every tick until
+                // `LandRandomPos` finds one; the walk target carries the
+                // speed multiplier.
+                for _ in 0..20 {
+                    goals.tick(&mut m, &mut cx);
+                    if m.ai.nav.speed_modifier == 2.0 {
+                        break;
+                    }
+                }
                 assert!(goals.is_running("Panic"), "the hurt frog should flee");
                 m.ai.goals = goals;
                 assert!(m.ai.panicking);
