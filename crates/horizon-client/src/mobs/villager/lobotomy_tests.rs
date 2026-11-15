@@ -152,14 +152,15 @@ fn used_librarian_offer() -> Trader {
 fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
     // (block at the remembered site, its x, day time, restocked)
     for (block, x, day_time, restocked) in [
-        ("minecraft:lectern", 3, 3_000, true),
-        ("minecraft:lectern", 3, 14_000, false),
-        ("minecraft:air", 3, 3_000, false),
-        ("minecraft:bell", 3, 3_000, false),
-        ("minecraft:composter", 3, 3_000, false),
-        // The villager stands at x = 0.5: a lectern in the wall beside it is in reach, one 2 blocks off is not.
+        // The villager stands at x = 0.5: a block in the wall beside it (x = 1) is in WorkAtPoi's 1.73.
         ("minecraft:lectern", 1, 3_000, true),
+        ("minecraft:lectern", 1, 14_000, false),
+        ("minecraft:air", 1, 3_000, false),
+        ("minecraft:bell", 1, 3_000, false),
+        ("minecraft:composter", 1, 3_000, false),
+        // A lectern 2 blocks off or further is not.
         ("minecraft:lectern", 2, 3_000, false),
+        ("minecraft:lectern", 3, 3_000, false),
         ("minecraft:lectern", -4, 3_000, false),
     ] {
         with_built_test_world(
