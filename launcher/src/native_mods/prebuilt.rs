@@ -677,16 +677,8 @@ pub(super) fn compile(
     let key = kept_build(rust, package)?;
     if route == Route::Api {
         let out = &builds.join(format!("api-{key}"));
-        let built = super::api_route::compile(
-            rust,
-            &package.runtime,
-            &package.api,
-            out,
-            projects,
-            declared,
-            resolution,
-            on_mod,
-        );
+        let built =
+            super::api_route::compile(rust, package, out, projects, declared, resolution, on_mod);
         // Stamped after the route has made its folder again, failed or not.
         if out.exists() {
             crate::storage::mark_used(out).map_err(super::cache_error)?;
