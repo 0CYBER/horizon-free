@@ -503,7 +503,8 @@ impl Launcher {
         card
     }
 
-    /// The button for the way on a refused build offers: another game build, or a report.
+    /// The button for the way on a refused build offers: another game build, a report, or
+    /// another try once the connection is back.
     fn refusal_button(&self, error: &str, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let t = self.theme;
         Some(match native_mods::sdk_cache::way_on(error)? {
@@ -523,6 +524,14 @@ impl Launcher {
             native_mods::sdk_cache::WayOn::Report => {
                 button("native-report", tr("Report"), Kind::Secondary, &t)
                     .on_click(|_, _, cx| cx.open_url(&backend::issues_url()))
+            }
+            native_mods::sdk_cache::WayOn::Retry => {
+                button("native-retry", tr("Try again"), Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.build_native();
+                        cx.notify();
+                    },
+                ))
             }
         })
     }

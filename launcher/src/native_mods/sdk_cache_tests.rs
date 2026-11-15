@@ -518,11 +518,14 @@ fn a_refusal_offers_the_way_on_its_text_promises() {
         }),
         Some(WayOn::Report)
     );
-    assert_eq!(
-        way(Refusal::Offline {
-            build: build(),
-            bytes: None
-        }),
-        None
-    );
+    for bytes in [None, Some(212_000_000)] {
+        assert_eq!(
+            way(Refusal::Offline {
+                build: build(),
+                bytes
+            }),
+            Some(WayOn::Retry)
+        );
+    }
+    assert_eq!(way(Refusal::Host), None);
 }

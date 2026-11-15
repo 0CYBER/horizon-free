@@ -70,11 +70,25 @@ pub enum WayOn {
     OtherBuild,
     /// The problem is Horizon's: report it.
     Report,
+    /// Nothing is wrong but the connection: build again once it is back.
+    Retry,
 }
 
 /// The way on a refusal's `text` offers, found from the sentences it was written with (a build
 /// reaches the player as text only).
 pub fn way_on(text: &str) -> Option<WayOn> {
+    // An offline refusal's size, when known, sits after the build: its opening says it all.
+    let offline_opening = |text: &str| {
+        let probe = Refusal::Offline {
+            build: "\0".to_owned(),
+            bytes: None,
+        }
+        .to_string();
+        probe
+            .split('\0')
+            .next()
+            .is_some_and(|opening| text.contains(opening))
+    };
     let said = |refusal: Refusal| {
         let probe = refusal.to_string();
         probe.split('\0').all(|piece| text.contains(piece))
@@ -92,6 +106,8 @@ pub fn way_on(text: &str) -> Option<WayOn> {
         why: mark(),
     }) {
         Some(WayOn::Report)
+    } else if offline_opening(text) {
+        Some(WayOn::Retry)
     } else {
         None
     }
