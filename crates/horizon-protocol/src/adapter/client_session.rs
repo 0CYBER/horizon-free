@@ -726,6 +726,15 @@ fn layout_then_ids(
     id: i32,
     payload: &[u8],
 ) -> Result<Sent> {
+    if state == State::Play
+        && id == packet_ids::play::clientbound::COMMANDS
+        && version.at_most(ServerVersion::V26_2)
+    {
+        let absent = |registry: &str| synced::absent(version, registry);
+        return Ok(Sent::Rewritten(layout_26_2::commands(
+            ids, absent, payload,
+        )?));
+    }
     if version.at_most(ServerVersion::V26_2) && layout_26_2::enabled() {
         match layout_26_2::clientbound(ids, state, id, payload)? {
             layout_26_2::Out::Untouched => {}

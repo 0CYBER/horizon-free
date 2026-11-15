@@ -44,7 +44,6 @@ pub fn clientbound(ids: &'static Ids, state: State, id: i32, payload: &[u8]) -> 
         (State::Play, cb::LOGIN) => Out::Rewritten(login(payload)?),
         (State::Play, cb::RESPAWN) => Out::Rewritten(respawn(payload)?),
         (State::Play, cb::UPDATE_ADVANCEMENTS) => Out::Rewritten(advancements(ids, payload)?),
-        (State::Play, cb::COMMANDS) => Out::Rewritten(commands(ids, payload)?),
         (State::Play, cb::MAP_ITEM_DATA) => Out::Rewritten(map_item_data(ids, payload)?),
         (State::Play, cb::AWARD_STATS) => Out::Rewritten(award_stats(ids, payload)?),
         _ => Out::Untouched,
@@ -173,16 +172,35 @@ fn advancements(ids: &'static Ids, payload: &[u8]) -> Result<Vec<u8>> {
 /// `brigadier:string`, the same id in 26.2 and 26.3.
 const STRING_PARSER: i32 = 5;
 
-/// Each argument node's parser in 26.2's numbering. A parser 26.2 lacks becomes a string (a greedy one on
-/// a node nothing follows, a word otherwise) whose suggestions the client asks the server for, so the
-/// command still parses on the client and the server checks the argument.
-fn commands(ids: &Ids, payload: &[u8]) -> Result<Vec<u8>> {
+/// Each argument node's parser in the client's numbering (`ids`). A parser the client lacks, or a registry
+/// argument naming a registry it lacks (`absent`, e.g. `/time`'s `minecraft:world_clock` for 1.21.11), becomes
+/// a string (a greedy one on a node nothing follows, a word otherwise) whose suggestions the client asks the
+/// server for, so the command still parses on the client and the server checks the argument. Every release
+/// before the pinned one gets this, whatever [`enabled`] says: a parser id or registry the client can't
+/// resolve fails its whole `commands` packet and ends the login.
+pub(super) fn commands(
+    ids: &Ids,
+    absent: impl Fn(&str) -> bool,
+    payload: &[u8],
+) -> Result<Vec<u8>> {
     let mut tree = play::Commands::read(&mut Reader::new(payload))?;
     for node in &mut tree.nodes {
-        let Some((parser, _)) = &node.parser else {
+        let Some((parser, props)) = &node.parser else {
             continue;
         };
-        match ids.command_argument_type.down(*parser) {
+        let lacks_registry = match play::ArgumentProperties::decode(*parser, props) {
+            Ok(play::ArgumentProperties::Registry(name)) => absent(&if name.contains(':') {
+                name
+            } else {
+                format!("minecraft:{name}")
+            }),
+            _ => false,
+        };
+        match ids
+            .command_argument_type
+            .down(*parser)
+            .filter(|_| !lacks_registry)
+        {
             Some(old) => {
                 if let Some(p) = &mut node.parser {
                     p.0 = old;
@@ -376,7 +394,7 @@ mod tests {
         };
         let mut w = Writer::new();
         play::Commands::write(&tree, &mut w);
-        let body = commands(ids(), &w.data).unwrap();
+        let body = commands(ids(), |_| false, &w.data).unwrap();
         let out = play::Commands::read(&mut Reader::new(&body)).unwrap();
         let uuid_down = ids().command_argument_type.down(uuid);
         match uuid_down {
@@ -391,6 +409,57 @@ mod tests {
             Some(old) => assert_eq!(out.nodes[1].parser.as_ref().unwrap().0, old),
         }
         assert_eq!(out.nodes[2].parser, Some((3, vec![0])));
+    }
+
+    #[test]
+    fn a_registry_argument_the_client_lacks_becomes_a_string() {
+        let resource = play::ARGUMENT_TYPES
+            .iter()
+            .position(|&n| n == "minecraft:resource")
+            .unwrap() as i32;
+        let registry = |name: &str| {
+            let mut w = Writer::new();
+            w.string(name);
+            w.data
+        };
+        let node = |children: Vec<i32>, parser: Option<(i32, Vec<u8>)>| play::CommandNode {
+            kind: if parser.is_some() { 2 } else { 0 },
+            executable: parser.is_some(),
+            restricted: false,
+            children,
+            redirect: None,
+            name: if parser.is_some() {
+                "x".into()
+            } else {
+                String::new()
+            },
+            parser,
+            suggestions: None,
+        };
+        let tree = play::Commands {
+            nodes: vec![
+                node(vec![1, 2], None),
+                node(vec![], Some((resource, registry("minecraft:world_clock")))),
+                node(vec![], Some((resource, registry("minecraft:block")))),
+            ],
+            root: 0,
+        };
+        let mut w = Writer::new();
+        play::Commands::write(&tree, &mut w);
+        // A 1.21.11 client has no world_clock registry: its `commands` packet failed with
+        // "Registry minecraft:world_clock not found" and the login ended.
+        let body = commands(ids(), |r| r == "minecraft:world_clock", &w.data).unwrap();
+        let out = play::Commands::read(&mut Reader::new(&body)).unwrap();
+        assert_eq!(out.nodes[1].parser, Some((STRING_PARSER, vec![2])));
+        assert_eq!(
+            out.nodes[1].suggestions.as_deref(),
+            Some("minecraft:ask_server")
+        );
+        let kept = ids().command_argument_type.down(resource).unwrap();
+        assert_eq!(
+            out.nodes[2].parser,
+            Some((kept, registry("minecraft:block")))
+        );
     }
 
     #[test]
