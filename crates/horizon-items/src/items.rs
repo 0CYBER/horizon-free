@@ -262,9 +262,31 @@ pub struct BlocksAttacks {
     pub reductions: Vec<BlockReduction>,
     /// item_damage: (threshold, base, factor)
     pub item_damage: (f32, f32, f32),
-    pub bypassed_by: Option<String>,
+    /// `bypassed_by`: damage type ids and `#tags`, as `RegistryCodecs.holderSet` takes them.
+    pub bypassed_by: Option<Vec<String>>,
     pub block_sound: Option<String>,
     pub disabled_sound: Option<String>,
+}
+/// A holder set's JSON forms: one id (or `#tag`), or a list of them
+/// (`ExtraCodecs.compactListCodec`).
+fn holder_set(v: &Value) -> Option<Vec<String>> {
+    match v {
+        Value::String(s) => Some(vec![s.clone()]),
+        Value::Array(a) => Some(
+            a.iter()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+/// `SoundEvent.CODEC`: an id, or the inline `{sound_id, range}`.
+fn sound_event(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(o) => o.get("sound_id")?.as_str().map(str::to_owned),
+        _ => None,
+    }
 }
 impl BlocksAttacks {
     /// The `blocks_attacks` `stack` has (`ItemStack.get(DataComponents.BLOCKS_ATTACKS)`):
@@ -291,21 +313,12 @@ impl BlocksAttacks {
             return None;
         }
         let f = |v: &Value, d: f64| v.as_f64().unwrap_or(d) as f32;
-        let text = |v: &Value| v.as_str().map(str::to_owned);
         let reductions = match v["damage_reductions"].as_array() {
             Some(list) => list
                 .iter()
                 .map(|r| BlockReduction {
                     horizontal_angle: f(&r["horizontal_blocking_angle"], 90.0),
-                    types: match &r["type"] {
-                        Value::String(s) => Some(vec![s.clone()]),
-                        Value::Array(a) => Some(
-                            a.iter()
-                                .filter_map(|t| t.as_str().map(str::to_owned))
-                                .collect(),
-                        ),
-                        _ => None,
-                    },
+                    types: holder_set(&r["type"]),
                     base: f(&r["base"], 0.0),
                     factor: f(&r["factor"], 0.0),
                 })
@@ -332,9 +345,9 @@ impl BlocksAttacks {
             } else {
                 (1.0, 0.0, 1.0)
             },
-            bypassed_by: text(&v["bypassed_by"]),
-            block_sound: text(&v["block_sound"]),
-            disabled_sound: text(&v["disabled_sound"]),
+            bypassed_by: holder_set(&v["bypassed_by"]),
+            block_sound: sound_event(&v["block_sound"]),
+            disabled_sound: sound_event(&v["disabled_sound"]),
         })
     }
 }
@@ -3369,41 +3382,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stacks_own_blocks_attacks_component_counts() {
-        let plain = ItemStack::new("minecraft:diamond_sword", 1);
-        assert!(BlocksAttacks::of_stack(&plain, None).is_none());
-        let mut sword = plain.clone();
-        let component = json!({
-            "block_delay_seconds": 0.0,
-            "disable_cooldown_scale": 0.0,
-            "damage_reductions": [{"horizontal_blocking_angle": 180.0, "base": -0.5, "factor": 0.5}],
-            "item_damage": {"threshold": 1.0e9, "base": 0.0, "factor": 0.0},
-            "bypassed_by": "#minecraft:bypasses_armor",
-        });
-        sword.data_mut().other.push((
-            "minecraft:blocks_attacks".into(),
-            horizon_client_core::scoreboard::json_to_tag(&component),
-        ));
-        let b = BlocksAttacks::of_stack(&sword, None).expect("the stack's own component");
-        assert_eq!(b.delay_seconds, 0.0);
-        assert_eq!(b.disable_scale, 0.0);
-        assert_eq!(b.reductions.len(), 1);
-        assert_eq!(b.reductions[0].horizontal_angle, 180.0);
-        assert_eq!((b.reductions[0].base, b.reductions[0].factor), (-0.5, 0.5));
-        assert_eq!(b.item_damage.0, 1.0e9);
-        assert_eq!(b.bypassed_by.as_deref(), Some("#minecraft:bypasses_armor"));
-        // An empty compound is the codec's defaults: a shield's 90 degrees.
-        let mut bare = plain.clone();
-        bare.data_mut().other.push((
-            "minecraft:blocks_attacks".into(),
-            horizon_client_core::scoreboard::json_to_tag(&json!({})),
-        ));
-        let b = BlocksAttacks::of_stack(&bare, None).expect("defaults");
-        assert_eq!(b.reductions[0].horizontal_angle, 90.0);
-        assert_eq!(b.disable_scale, 1.0);
-    }
-
-    #[test]
     fn loaded_block_and_item_tags_answer_membership() {
         let mut items = super::Items::for_tests(std::collections::HashMap::from([(
             "test:items".into(),
@@ -4072,6 +4050,10 @@ pub fn take_held_drop(
     }
     Some(thrown)
 }
+#[cfg(test)]
+#[path = "blocks_attacks_tests.rs"]
+mod blocks_attacks_tests;
+
 #[cfg(test)]
 mod held_drop_tests {
     use super::*;
