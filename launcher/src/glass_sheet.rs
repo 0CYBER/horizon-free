@@ -202,7 +202,7 @@ impl Launcher {
     pub(super) fn instance_sheet(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let t = self.theme;
         let d = self.instances.dialog.as_ref()?;
-        let (busy, error, kind) = (d.busy, d.error.clone(), d.java.kind);
+        let (busy, error, kind, discarding) = (d.busy, d.error.clone(), d.java.kind, d.discarding);
         let id = d.editing.clone()?;
         let editing = self.instances.list.iter().find(|i| i.id == id).cloned()?;
         // Launch, Hooks and Storage act on the selected instance (`launch_page`, `export_page`).
@@ -210,10 +210,8 @@ impl Launcher {
         let tab = self.sheet_tab;
         let version = self.sheet_version(&editing);
 
-        let close = cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-            if !busy {
-                this.instances.dialog = None;
-            }
+        let close = cx.listener(|this, _: &MouseDownEvent, _, cx| {
+            this.close_instance_dialog();
             cx.notify();
         });
         let what = match kind {
@@ -285,7 +283,7 @@ impl Launcher {
                 .tooltip(ui::tip(tr("Close")))
                 .when(!busy, |b| {
                     b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.instances.dialog = None;
+                        this.close_instance_dialog();
                         cx.notify();
                     }))
                 }),
@@ -544,8 +542,80 @@ impl Launcher {
                         .bg(ui::scrim().opacity(if ui::light() { 0.2 } else { 0.4 }))
                         .on_mouse_down(gpui::MouseButton::Left, close),
                 )
-                .child(sheet),
+                .child(sheet)
+                .children(discarding.then(|| self.discard_prompt(cx))),
         )
+    }
+
+    /// Over the sheet closed with edits not saved: keep editing, or drop them.
+    fn discard_prompt(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let answer = |this: &mut Self, discard: bool, cx: &mut Context<Self>| {
+            if discard {
+                this.instances.dialog = None;
+            } else if let Some(d) = &mut this.instances.dialog {
+                d.discarding = false;
+            }
+            cx.notify();
+        };
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(ui::scrim().opacity(0.4))
+            .occlude()
+            .child(
+                ui::dialog_plate(radius::MODAL)
+                    .id("discard-prompt")
+                    .occlude()
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.))
+                    .w(px(380.))
+                    .p(px(24.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .font_family(horizon_theme::glass::DISPLAY_FONT)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(18.))
+                                    .text_color(white(ink::FULL))
+                                    .child(tr("Discard your changes?")),
+                            )
+                            .child(
+                                ui::text(13., FontWeight::NORMAL, ink::NOTE)
+                                    .child(tr("What you changed here has not been saved.")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                ui::quiet("discard-keep", tr("Keep editing"), 44., &t).on_click(
+                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        answer(this, false, cx)
+                                    }),
+                                ),
+                            )
+                            .child(
+                                ui::solid("discard-yes", tr("Discard"), 44., 14., &t)
+                                    .px(px(24.))
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        answer(this, true, cx)
+                                    })),
+                            ),
+                    ),
+            )
     }
 
     /// General's rows: the version it plays (Installation changes it), a copy, a desktop shortcut

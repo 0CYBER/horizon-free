@@ -61,6 +61,8 @@ pub(super) struct InstanceDialog {
     pub(super) channel: instances::Channel,
     /// The loader logo `picture` was made from, when it was one.
     pub(super) logo: Option<&'static str>,
+    /// The sheet was closed with edits not saved: asking whether to drop them.
+    pub(super) discarding: bool,
 }
 
 /// The instances and their icons as images, kept between frames.
@@ -342,6 +344,7 @@ impl Launcher {
                 .as_ref()
                 .map_or(instances::Channel::Stable, |i| i.channel),
             logo: None,
+            discarding: false,
             picture: None,
             editing: editing.map(|i| i.id),
             copy: false,
@@ -370,13 +373,34 @@ impl Launcher {
         }
     }
 
-    /// Escape closes the dialog. Whether it did.
-    pub(super) fn instance_escape(&mut self) -> bool {
-        if self.instances.dialog.as_ref().is_some_and(|d| !d.busy) {
-            self.instances.dialog = None;
-            return true;
+    /// Closes the dialog; a sheet holding edits not saved asks first. A dialog that is saving
+    /// stays.
+    pub(super) fn close_instance_dialog(&mut self) {
+        let changed = self.sheet_changed();
+        if let Some(d) = self.instances.dialog.as_mut().filter(|d| !d.busy) {
+            if changed {
+                d.discarding = true;
+            } else {
+                self.instances.dialog = None;
+            }
         }
-        false
+    }
+
+    /// Escape closes the dialog, or answers the question about the edits with "Keep editing".
+    /// Whether it did anything.
+    pub(super) fn instance_escape(&mut self) -> bool {
+        match self.instances.dialog.as_mut() {
+            Some(d) if d.busy => false,
+            Some(d) if d.discarding => {
+                d.discarding = false;
+                true
+            }
+            Some(_) => {
+                self.close_instance_dialog();
+                true
+            }
+            None => false,
+        }
     }
 
     /// The game window's size as typed: both sizes or neither.
