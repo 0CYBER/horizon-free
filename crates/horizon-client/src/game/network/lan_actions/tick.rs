@@ -41,7 +41,8 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| host.hub.here(g) && g.loaded)
+            // hasClientLoaded gates incoming actions, not ServerPlayer.doTick.
+            .filter(|g| host.hub.here(g))
             .map(|g| g.conn)
             .collect();
         // The players' pickups ask which columns items reach before
