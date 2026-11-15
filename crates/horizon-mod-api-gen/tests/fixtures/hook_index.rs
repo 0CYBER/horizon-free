@@ -22,6 +22,9 @@ pub enum HookId {
     Proof,
 }
 pub mod __private {
+    pub fn explosion_resistance_key_pure(_: crate::BlockKey) -> bool {
+        true
+    }
     pub fn has_scoped_hook(_: crate::HookId) -> bool {
         true
     }
