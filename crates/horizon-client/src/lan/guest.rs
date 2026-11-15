@@ -880,24 +880,10 @@ impl Guest {
             Err(error) => eprintln!("[lan] send refused: {error}"),
         }
     }
-    /// Whether the guest is placed and on a Horizon client (the only one that
-    /// reads synced attachments).
-    pub fn reads_attachment_sync(&self) -> bool {
-        self.placed && self.brand == "horizon"
-    }
-    /// A holder's synced attachments, if the guest reads them; a message too big
-    /// for one payload is not sent.
-    pub fn send_attachment_sync(&self, message: &attachment_sync::Message) {
-        if !self.reads_attachment_sync() {
-            return;
-        }
-        match attachment_sync::encode(message) {
-            Ok(data) => self.send(&play::Clientbound::CustomPayload(CustomPayload {
-                channel: attachment_sync::CHANNEL.into(),
-                data,
-            })),
-            Err(e) => log::debug!("Horizon: attachment sync not sent: {e}"),
-        }
+    /// Whether the guest's play epoch has attachment sync negotiated (a vanilla client never
+    /// offers it).
+    pub fn negotiated_attachment_sync(&self) -> bool {
+        crate::raw_payloads::negotiated(self.sender.payload_transport(), attachment_sync::CHANNEL)
     }
     /// Passages to hold or forget (#3775), if the guest is on a Horizon client, the only
     /// one that reads them, and placed or held (a hand-over's arrival is sent its chunks,

@@ -2,6 +2,10 @@
 //! Application packets retain their declared vanilla custom-payload channel.
 pub mod connection;
 mod encode;
+mod engine;
+pub use engine::{is_engine, negotiated};
+#[cfg(test)]
+mod engine_tests;
 pub use encode::{encode, encoded_len};
 mod incoming;
 pub use incoming::{Body, Classified, Failure, Incoming};
@@ -81,19 +85,20 @@ pub struct Local {
     )>,
 }
 impl Local {
-    /// Capture only enabled declarations. Client setup refuses missing client callbacks;
-    /// dedicated servers do not require callbacks that they cannot receive.
+    /// Capture only enabled declarations, then the engine's own (`engine`), which every
+    /// installation offers. Client setup refuses missing client callbacks; dedicated servers
+    /// do not require callbacks that they cannot receive.
     pub fn capture(side: Side) -> Result<Arc<Self>, String> {
-        let Some(registry) = installed_payloads() else {
-            return Ok(Self::empty());
-        };
-        if side == Side::Client {
+        let registry = installed_payloads();
+        if side == Side::Client
+            && let Some(registry) = &registry
+        {
             registry
                 .validate_client_handlers()
                 .map_err(|errors| errors.join("; "))?;
         }
         let mut manifest = Manifest::builder();
-        for declaration in registry.declarations() {
+        for declaration in registry.iter().flat_map(|registry| registry.declarations()) {
             if horizon_protocol::packets::custom_payload::is_reserved_channel(&declaration.id.0) {
                 return Err(format!(
                     "payload {} is reserved for an engine service or transport control",
@@ -120,19 +125,17 @@ impl Local {
                 )
                 .map_err(|error| error.to_string())?;
         }
+        engine::register(&mut manifest).map_err(|error| error.to_string())?;
         let manifest = manifest.finish().map_err(|error| error.to_string())?;
         // Raw channels are a server's plugin-channel policy: a client sends none.
-        let raw: HashMap<_, _> = match side {
-            Side::Server => registry
+        let raw: HashMap<_, _> = match (side, &registry) {
+            (Side::Server, Some(registry)) => registry
                 .raw_channels()
                 .map(|id| (id.to_owned(), registry.raw_receivers(id)))
                 .collect(),
-            Side::Client => HashMap::new(),
+            _ => HashMap::new(),
         };
-        if manifest.entries().is_empty() && raw.is_empty() {
-            return Ok(Self::empty());
-        }
-        let mut local = Self::new(manifest, Some(registry));
+        let mut local = Self::new(manifest, registry);
         local.raw = raw;
         Ok(Arc::new(local))
     }
@@ -193,6 +196,15 @@ impl Local {
     pub fn has_declarations(&self) -> bool {
         !self.manifest.entries().is_empty() || !self.raw.is_empty()
     }
+    /// Whether a mod declared a negotiated payload, beside the engine's own declarations.
+    /// Only then does a client open negotiation itself: otherwise it answers the server's
+    /// query, so a vanilla server is sent nothing it was not sent before.
+    pub fn has_mod_declarations(&self) -> bool {
+        self.manifest
+            .entries()
+            .iter()
+            .any(|entry| !engine::is_engine(entry.phase(), entry.id()))
+    }
     /// Whether `id` is a raw play channel a mod declared on this server.
     pub fn is_raw(&self, id: &str) -> bool {
         self.raw.contains_key(id)
@@ -218,7 +230,8 @@ impl Local {
                     (entry.flow(), side),
                     (Flow::ToClient, Side::Client) | (Flow::ToServer, Side::Server)
                 );
-            let receiver = if receives {
+            // An engine declaration is received by the engine's own decoder.
+            let receiver = if receives && !engine::is_engine(entry.phase(), entry.id()) {
                 let protocol = match entry.phase() {
                     Phase::Configuration => PayloadProtocol::Configuration,
                     Phase::Play => PayloadProtocol::Play,
@@ -288,6 +301,24 @@ impl Peer {
             Some(None) => Err(PayloadSendError::WrongDirection(PayloadId(id.to_owned()))),
             None => Err(self.missing(phase, id)),
         }
+    }
+    /// Whether `id` is an engine declaration this side receives and the peer offered: its
+    /// message goes to the engine's decoder as an ordinary custom payload.
+    pub fn engine_receives(&self, phase: Phase, id: &str) -> bool {
+        engine::is_engine(phase, id)
+            && self.phases[index(phase)].contains_key(id)
+            && self.local.declarations[index(phase)]
+                .get(id)
+                .is_some_and(|flow| *flow == Flow::Bidirectional || *flow != self.side.outgoing())
+    }
+    /// Whether `id` is an engine declaration this side sends and the peer offered. Unlike
+    /// [`Self::can_send`] it builds no id, for a check made per player and holder.
+    pub fn engine_sends(&self, phase: Phase, id: &str) -> bool {
+        engine::is_engine(phase, id)
+            && self.phases[index(phase)].contains_key(id)
+            && self.local.declarations[index(phase)]
+                .get(id)
+                .is_some_and(|flow| *flow == Flow::Bidirectional || *flow == self.side.outgoing())
     }
     /// Resolve local authority, phase, direction and peer support before preparing bytes.
     pub fn can_send(&self, phase: Phase, id: &PayloadId) -> Result<(), PayloadSendError> {

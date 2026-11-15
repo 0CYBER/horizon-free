@@ -11,7 +11,8 @@ Replace the legacy envelope transport, its broadcast hooks, old send methods, br
 30,000-byte envelope bound and 32-message counters outright. Application packets
 use their declared namespaced custom-payload channel and exact opaque body bytes.
 There is no Horizon application envelope and no second path for typed payloads.
-Existing attachment synchronization is outside this raw transport migration.
+Attachment synchronization rides this transport as an engine declaration (#813 step 4a;
+see the typed-payload design note).
 
 Registration runs in dependency order during mod loading. `PayloadRegistrar`
 provides play, configuration and common registrations, each ToClient, ToServer or

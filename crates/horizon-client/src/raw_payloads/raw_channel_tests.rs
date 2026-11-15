@@ -72,7 +72,7 @@ fn with_vanilla_peer(run: impl FnOnce(Arc<Transport>)) {
             .unwrap();
         let transport = Transport::capture(Side::Server).unwrap();
         assert!(
-            transport.local.manifest.entries().is_empty(),
+            !transport.local.has_mod_declarations(),
             "raw channels are never offered"
         );
         assert!(transport.connection.is_some(), "raw-only still keeps state");
