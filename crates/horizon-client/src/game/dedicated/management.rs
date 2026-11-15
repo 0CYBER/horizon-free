@@ -245,7 +245,7 @@ impl Game<'_> {
                 rpc(format!(
                     "Update simulation distance from {current} to {distance}"
                 ));
-                self.set_simulation_distance(distance);
+                self.management_simulation_distance(distance);
                 state.view.1 = distance.max(0) as u32;
                 self.store_property("simulation-distance", distance.to_string());
                 return json!({
@@ -272,7 +272,7 @@ impl Game<'_> {
                     .as_ref()
                     .map_or(0, |host| host.hub.config.view_distance);
                 rpc(format!("Update view distance from {current} to {distance}"));
-                self.set_view_distance(distance);
+                self.management_view_distance(distance);
                 state.view.0 = distance.max(0) as u32;
                 self.store_property("view-distance", distance.to_string());
                 return json!({
@@ -726,6 +726,22 @@ impl Game<'_> {
         json!({ "ok": true })
     }
 
+    /// `DedicatedServer.setSimulationDistance`, through `PlayerList.setSimulationDistance`: the players are
+    /// told (the hub), and every level's `DistanceManager` follows, which here are the server's own tickets
+    /// (`update_chunk_tickets` reads `settings.simulation_distance`).
+    fn management_simulation_distance(&mut self, distance: i32) {
+        self.set_simulation_distance(distance);
+        self.settings.simulation_distance = distance;
+    }
+
+    /// `DedicatedServer.setViewDistance`, through `PlayerList.setViewDistance`: the players are told and
+    /// tracked at the new radius (the hub), and `ChunkMap.setServerViewDistance` moves the server's own
+    /// tickets (`update_chunk_tickets` reads `settings.render_distance`, clamped to 2..32 as vanilla's).
+    fn management_view_distance(&mut self, distance: i32) {
+        self.set_view_distance(distance);
+        self.settings.render_distance = distance;
+    }
+
     /// `addUserBan`, then the banned player, if online, is sent away.
     fn management_add_ban(&mut self, rpc: &impl Fn(String), state: &ServerState, ban: Ban) {
         let reason = ban.reason.clone().unwrap_or_else(|| {
@@ -853,6 +869,61 @@ fn management_ip_ban(entry: &Value, ip: String) -> IpBan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `DedicatedServer.setSimulationDistance` and `setViewDistance` reach `PlayerList`, which tells the players
+    /// and moves every level's tickets (`ServerChunkCache.setSimulationDistance`, `setViewDistance`). The
+    /// players are the hub; the server's own tickets read `settings` (`update_chunk_tickets`).
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_management_distance_change_moves_the_servers_tickets_too() {
+        use crate::game::lan::LanSettings;
+        use horizon_client::lan::{NetConfig, hub::HubConfig};
+        let mut game = crate::game::native_machines::tests::server_game();
+        game.build_registries();
+        game.lan_host(
+            LanSettings {
+                port: 0,
+                guest_commands: false,
+                force_game_mode: false,
+            },
+            NetConfig {
+                announce: false,
+                ..NetConfig::loopback(0, "management-distances".into(), 2)
+            },
+            HubConfig {
+                default_game_mode: 0,
+                guest_commands: false,
+                force_game_mode: false,
+                hardcore: false,
+                view_distance: 10,
+                simulation_distance: 10,
+                dimension: "minecraft:overworld".into(),
+                allow_flight: false,
+                seed: 0,
+                max_players: 2,
+                integrated: false,
+                levels: Default::default(),
+            },
+        )
+        .unwrap();
+        game.settings.render_distance = 10;
+        game.settings.simulation_distance = 10;
+        game.management_simulation_distance(4);
+        game.management_view_distance(6);
+        let hub = &game.lan.as_ref().unwrap().hub;
+        assert_eq!(
+            (hub.config.view_distance, hub.config.simulation_distance),
+            (6, 4)
+        );
+        assert_eq!(
+            (
+                game.settings.render_distance,
+                game.settings.simulation_distance
+            ),
+            (6, 4),
+            "the server's tickets follow"
+        );
+    }
 
     #[test]
     fn a_game_rule_is_written_as_vanillas_typed_codec_does() {
