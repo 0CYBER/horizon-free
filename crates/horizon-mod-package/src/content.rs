@@ -1162,6 +1162,12 @@ impl Content {
             else {
                 continue;
             };
+            // A server package's registry declaration refuses the whole package by name
+            // (`server_only_refusal`), so it is not parsed: a malformed one must not turn
+            // that refusal into a skipped content error.
+            if manifest.side == crate::manifest::Side::Server {
+                continue;
+            }
             let parse = |kind: &str| -> Option<String> {
                 let path = decl
                     .strip_prefix(kind)?

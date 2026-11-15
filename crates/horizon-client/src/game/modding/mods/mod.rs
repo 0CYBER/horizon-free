@@ -2831,6 +2831,63 @@ mod tests {
         );
     }
 
+    /// A `side = "server"` content package goes through the real loader: a registry
+    /// declaration fails the load by name even when it would not parse, and assets load.
+    #[test]
+    #[ignore = "daily"]
+    fn a_server_package_is_refused_at_load_for_registry_files_and_loads_with_assets() {
+        const MODE: &str = "HORIZON_SERVER_PACKAGE_TEST";
+        if std::env::var_os(MODE).is_none() {
+            run_in_child(
+                "game::mods::tests::a_server_package_is_refused_at_load_for_registry_files_and_loads_with_assets",
+                MODE,
+            );
+            return;
+        }
+        let f = Fixture::new("server-package");
+        let package = f.0.join("srv");
+        let write = |file: &str, text: &str| {
+            let path = package.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "horizon-mod.toml",
+            "id='srv'\nname='srv'\nversion='1'\napi='0.2'\nside='server'\ncapabilities=['registries']\n",
+        );
+        write("data/srv/horizon/item/gem.json", "{ not json");
+        let base = f.0.join("resources");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("horizon-resources.json"), "{}").unwrap();
+        let mut sources = ModsState {
+            dev: vec![package.clone()],
+            ..Default::default()
+        };
+        let enabled = Default::default();
+        sources.select(&f.0, &enabled);
+        let error = content_overlay(&base, &sources, &f.0.join("jars"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            error,
+            "srv: a side = \"server\" mod carries data/srv/horizon/item/gem.json, which every \
+             client must have; declare side = \"both\""
+        );
+        std::fs::remove_dir_all(package.join("data")).unwrap();
+        write("assets/srv/lang/en_us.json", "{}");
+        sources.select(&f.0, &enabled);
+        let overlay = content_overlay(&base, &sources, &f.0.join("jars")).unwrap();
+        assert_eq!(
+            overlay
+                .mods
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            ["srv"]
+        );
+    }
+
     #[test]
     #[ignore = "daily"]
     fn native_content_follows_the_build_and_misplaced_content_follows_its_selection() {
