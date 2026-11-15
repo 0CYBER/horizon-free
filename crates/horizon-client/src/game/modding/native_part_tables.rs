@@ -38,7 +38,9 @@ impl Game<'_> {
             },
         )
         .filter(|faces| faces.iter().any(|&faces| faces != 0))
-        .map_or(FluidTable::EMPTY, |faces| FluidTable::new(fluids.len(), faces));
+        .map_or(FluidTable::EMPTY, |faces| {
+            FluidTable::new(fluids.len(), faces)
+        });
         let tables = &self.pack.context.tables;
         let vanilla = |state: BlockStateId| tables.vanilla_fluid_overlay(state.0);
         let fluid_overlay = Self::resolve_per_state_fluid(
@@ -54,10 +56,14 @@ impl Game<'_> {
             },
         )
         .filter(|overlay| {
-            (overlay.chunks(fluids.len()).enumerate())
-                .any(|(state, row)| row.iter().any(|&o| o != vanilla(BlockStateId(state as u32))))
+            (overlay.chunks(fluids.len()).enumerate()).any(|(state, row)| {
+                row.iter()
+                    .any(|&o| o != vanilla(BlockStateId(state as u32)))
+            })
         })
-        .map_or(FluidTable::EMPTY, |overlay| FluidTable::new(fluids.len(), overlay));
+        .map_or(FluidTable::EMPTY, |overlay| {
+            FluidTable::new(fluids.len(), overlay)
+        });
         PartTables {
             hidden_fluid_faces,
             fluid_overlay,

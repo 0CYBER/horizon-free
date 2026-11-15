@@ -53,7 +53,11 @@ fn with_proxy(test: impl FnOnce(BlockState, &WasmHandler)) {
         })
         .unwrap();
         mod_api::__private::resolve_fluids(
-            &["minecraft:empty", "minecraft:flowing_water", "minecraft:water"],
+            &[
+                "minecraft:empty",
+                "minecraft:flowing_water",
+                "minecraft:water",
+            ],
             &[],
         )
         .unwrap();
@@ -83,7 +87,11 @@ fn with_proxy(test: impl FnOnce(BlockState, &WasmHandler)) {
 
 /// Water as the tables ask it: a source at amount 8, or flowing at amount 7.
 fn water(source: bool) -> mod_api::FluidState {
-    let id = if source { "minecraft:water" } else { "minecraft:flowing_water" };
+    let id = if source {
+        "minecraft:water"
+    } else {
+        "minecraft:flowing_water"
+    };
     let key = mod_api::__private::fluid_key(id).unwrap();
     mod_api::__private::fluid_state(key, if source { 8 } else { 7 }, false, source)
 }
@@ -99,7 +107,10 @@ fn wire_loopback_should_hide_adjacent_fluid_face_carries_direction_and_fluid() {
                 hidden: false,
             };
             proxy.should_hide_adjacent_fluid_face(&Client, &mut event);
-            assert_eq!((event.state, event.direction, event.fluid), (state, direction, fluid));
+            assert_eq!(
+                (event.state, event.direction, event.fluid),
+                (state, direction, fluid)
+            );
             event.hidden
         };
         assert!(ask(mod_api::Direction::Up, water(true)));

@@ -144,7 +144,10 @@ fn a_part_hiding_the_fluid_face_removes_that_side_only() {
     let hidden = faces(&tables, &parts);
     for side in Direction::ALL {
         if side == Direction::East {
-            assert!(hidden[side as usize].is_empty(), "the hidden side draws nothing");
+            assert!(
+                hidden[side as usize].is_empty(),
+                "the hidden side draws nothing"
+            );
         } else {
             assert_eq!(hidden[side as usize], vanilla[side as usize], "{side:?}");
         }
@@ -187,7 +190,10 @@ fn a_part_choosing_the_overlay_changes_the_sprite_of_that_side_only() {
     };
     let overlaid = faces(&plain, &parts);
     assert_eq!(overlaid[Direction::East as usize], [WATER_OVERLAY]);
-    for side in Direction::ALL.into_iter().filter(|&side| side != Direction::East) {
+    for side in Direction::ALL
+        .into_iter()
+        .filter(|&side| side != Direction::East)
+    {
         assert_eq!(overlaid[side as usize], vanilla[side as usize], "{side:?}");
     }
     // Beside glass, vanilla's overlay; a part answering false gives the flow sprite back.
@@ -200,5 +206,8 @@ fn a_part_choosing_the_overlay_changes_the_sprite_of_that_side_only() {
         fluid_overlay: beside_water(false),
         ..PartTables::NONE
     };
-    assert_eq!(faces(&glass, &parts)[Direction::East as usize], [WATER_FLOW; 2]);
+    assert_eq!(
+        faces(&glass, &parts)[Direction::East as usize],
+        [WATER_FLOW; 2]
+    );
 }

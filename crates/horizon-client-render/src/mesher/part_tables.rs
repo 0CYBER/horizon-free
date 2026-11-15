@@ -37,7 +37,9 @@ impl<T: Copy> FluidTable<T> {
         if fluid >= self.fluids {
             return None;
         }
-        self.answers.get(state as usize * self.fluids + fluid).copied()
+        self.answers
+            .get(state as usize * self.fluids + fluid)
+            .copied()
     }
 }
 impl<T: Copy> Default for FluidTable<T> {
@@ -83,7 +85,9 @@ impl super::MeshTables {
     /// Vanilla's overlay test for a fluid's side beside `state` (`HalfTransparentBlock` or
     /// `LeavesBlock`), where `should_display_fluid_overlay` starts.
     pub fn vanilla_fluid_overlay(&self, state: u32) -> bool {
-        self.info.get(state as usize).is_some_and(|info| info.overlay)
+        self.info
+            .get(state as usize)
+            .is_some_and(|info| info.overlay)
     }
 }
 /// No tables, for a mesher built without a worker context.
