@@ -134,7 +134,7 @@ impl Launcher {
             native_step: None,
             native_progress: None,
             first_build: None,
-            play_after_build: false,
+            play_after_build: None,
             native_done: None,
             native_error: None,
             native_failed_mods: Vec::new(),

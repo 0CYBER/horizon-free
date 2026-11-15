@@ -505,10 +505,10 @@ impl Launcher {
                 .cursor_pointer()
                 .hover(|s| s.bg(gpui::black().opacity(0.2)))
                 .child(ui::icon("stop", 18., glyph))
-                .tooltip(ui::tip(tr("Cancel the build")))
+                .tooltip(ui::tip(tr("Stop the build")))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    this.play_after_build = false;
+                    this.play_after_build = None;
                     native_mods::cancel();
                     cx.notify();
                 }))
@@ -628,7 +628,7 @@ impl Launcher {
                 let main = match (&update, press) {
                     (None, PlayPress::Play) if build_first => {
                         main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.play_after_build = true;
+                            this.play_after_build = this.selected_instance().map(|i| i.id.clone());
                             if this.settings.native_mods_allowed_at.is_some() {
                                 this.build_native();
                             } else {

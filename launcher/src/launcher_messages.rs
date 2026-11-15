@@ -237,8 +237,12 @@ impl Launcher {
                     let last = self.native_step.take();
                     self.native_progress = None;
                     self.first_build = None;
-                    // Build and play: the game starts once the build worked.
-                    let play_now = std::mem::take(&mut self.play_after_build) && result.is_ok();
+                    // Build and play: the game starts once the build worked, and only for the
+                    // instance it was pressed for (another may have been picked meanwhile).
+                    let wanted = self.play_after_build.take();
+                    let play_now = result.is_ok()
+                        && wanted.is_some()
+                        && wanted.as_deref() == self.selected_instance().map(|i| i.id.as_str());
                     let cancelled = matches!(&result, Err(native_mods::Failed::Other(error)) if error == native_mods::CANCELLED);
                     self.native_done = match (&result, cancelled) {
                         (Ok(_), _) => last,

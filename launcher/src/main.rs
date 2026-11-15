@@ -307,9 +307,9 @@ struct Launcher {
     native_progress: Option<native_mods::Progress>,
     /// The first build's one-time download (the compiler), in bytes; `None` once it is there.
     first_build: Option<u64>,
-    /// Play was pressed while the instance's native mods needed a build (Build and play): the
-    /// game starts once the build worked.
-    play_after_build: bool,
+    /// Play was pressed while this instance's native mods needed a build (Build and play): the
+    /// game starts once the build worked, if it is still the instance selected.
+    play_after_build: Option<String>,
     /// How the last native build ended ("Your mods are built", or "Up to date").
     native_done: Option<String>,
     native_error: Option<String>,
