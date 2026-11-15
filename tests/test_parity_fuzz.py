@@ -79,5 +79,31 @@ class FamilyTests(unittest.TestCase):
                 self.assertTrue(any(op.get('read') for op in fuzz.render(scenario, 1)), (name, seed))
 
 
+class ReloadWitnessTests(unittest.TestCase):
+    def test_a_reload_witnesses_the_chunk_and_every_entity_summoned_before_it(self):
+        scenario = {'family': 'persist', 'seed': 1, 'steps': [
+            {'k': 'summon', 'type': 'pig', 'at': [1.5, 0, 1.5], 'n': 0, 'nbt': {}},
+            {'k': 'reload'},
+            {'k': 'summon', 'type': 'cow', 'at': [2.5, 0, 2.5], 'n': 1, 'nbt': {}},
+            {'k': 'reload'}, {'k': 'read_entity', 'n': 1}]}
+        pig, cow = (fuzz.uuid_text(fuzz.uuid_words(0, n)) for n in (0, 1))
+        chunk = '/execute unless loaded 4096 300 4096'
+        guards = [(op['guard'], op['cmd']) for op in fuzz.render(scenario, 0) if op.get('guard')]
+        self.assertEqual(guards, [('chunk', chunk), ('entity', f'/execute if entity {pig}'),
+                                  ('chunk', chunk), ('entity', f'/execute if entity {pig}'),
+                                  ('entity', f'/execute if entity {cow}')])  # the second reload sees both
+        entity = {'cmd': f'/execute if entity {pig}', 'guard': 'entity'}
+        gone = {'cmd': entity['cmd'], 'results': [[False, 0]]}
+        kept = {'cmd': entity['cmd'], 'results': [[True, 1]]}
+        self.assertEqual(fuzz.witness('persist', entity, gone, gone), (None, None))
+        self.assertEqual(fuzz.witness('persist', entity, kept, kept)[0],
+                         'vanilla kept the entity loaded: [[True, 1]]')
+        self.assertEqual(fuzz.witness('persist', entity, gone, kept)[1][0], 'persist|chunk|<unload>')
+        chunk_op = {'cmd': chunk, 'guard': 'chunk'}
+        chunk_stayed = {'cmd': chunk, 'results': [[False, 0]]}  # `/execute unless loaded` failed
+        self.assertEqual(fuzz.witness('persist', chunk_op, chunk_stayed, chunk_stayed)[0],
+                         'vanilla kept the chunk loaded: [[False, 0]]')
+
+
 if __name__ == '__main__':
     unittest.main()
