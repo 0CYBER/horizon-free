@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Gerakan",
+  "Reduced": "Dikurangkan",
+  "Full": "Penuh",
+  "Aa Text": "Aa Teks",
+  "Prepare & play": "Sediakan dan main",
+  "Name it, pick what it plays, then an icon.": "Namakan ia, pilih apa yang dimainkannya, kemudian ikon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Percuma untuk semua orang. Setiap tema mempunyai penampilan cerah dan gelap, dan mengingat warna aksen yang anda pilih di bawahnya.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Dikurangkan menghentikan langit, pudar dan leretan; butang tetap gerak balas serta-merta. Sistem mengikut tetapan komputer anda.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Cerah atau gelap, tema, warna aksen, kaca, kabur dan latar belakang Rumah kembali kepada keadaan asal Horizon.",
+  "The launcher's look is back to how Horizon ships": "Penampilan pelancar kembali kepada keadaan asal Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Penampilan pelancar ditetapkan semula buat sementara, tetapi tidak dapat disimpan",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Kaca dan Kabur membentuk panel berkaca penampilan gelap; yang cerah melukis panel putih pepejal.",
+  "Performance mode draws solid panels, without glass or blur.": "Mod prestasi melukis panel pepejal, tanpa kaca atau kabur.",
+  "This theme's night draws solid panels, without glass or blur.": "Malam tema ini melukis panel pepejal, tanpa kaca atau kabur."
 }

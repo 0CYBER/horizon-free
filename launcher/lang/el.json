@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Θέμα",
+  "Motion": "Κίνηση",
+  "Reduced": "Μειωμένη",
+  "Full": "Πλήρης",
+  "Aa Text": "Aa Κείμενο",
+  "Prepare & play": "Προετοιμασία και παιχνίδι",
+  "Name it, pick what it plays, then an icon.": "Δώστε του όνομα, επιλέξτε τι παίζει και μετά ένα εικονίδιο.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Δωρεάν για όλους. Κάθε θέμα έχει φωτεινή και σκούρα εμφάνιση και θυμάται το χρώμα έμφασης που διαλέγετε μέσα σε αυτό.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Η μειωμένη σταματά τον ουρανό, τις εξαθλιώσεις και τις ολισθήσεις· τα κουμπιά αποκρίνονται αμέσως. Το σύστημα ακολουθεί τη ρύθμιση του υπολογιστή σας.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Φωτεινό ή σκούρο, θέμα, χρώμα έμφασης, γυαλί, θόλωμα και το φόντο της Αρχικής επανέρχονται όπως τα φέρνει το Horizon.",
+  "The launcher's look is back to how Horizon ships": "Η εμφάνιση του launcher επανήλθε όπως την φέρνει το Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Η εμφάνιση του launcher επαναφέρθηκε προς το παρόν, αλλά δεν μπόρεσε να αποθηκευτεί",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Γυαλί και Θόλωμα διαμορφώνουν τα θαμπά πάνελ της σκούρας εμφάνισης· η φωτεινή σχεδιάζει συμπαγή λευκά πάνελ.",
+  "Performance mode draws solid panels, without glass or blur.": "Η λειτουργία Performance σχεδιάζει συμπαγή πάνελ, χωρίς γυαλί ή θόλωμα.",
+  "This theme's night draws solid panels, without glass or blur.": "Η νύχτα αυτού του θέματος σχεδιάζει συμπαγή πάνελ, χωρίς γυαλί ή θόλωμα."
 }

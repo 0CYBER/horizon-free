@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тақырып",
+  "Motion": "Қозғалыс",
+  "Reduced": "Азайтылған",
+  "Full": "Толық",
+  "Aa Text": "Aa Мәтін",
+  "Prepare & play": "Дайындап ойнау",
+  "Name it, pick what it plays, then an icon.": "Атауын беріңіз, нені ойнататынын таңдаңыз, содан кейін белгіше.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Барлығына тегін. Әр тақырыптың жарық және қараңғы көрінісі бар, ол астында таңдаған екпін түсін есте сақтайды.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Азайтылған аспанды, біртіндеп өшулерді және сырғанақтарды тоқтатады; түймелер бірден жауап береді. Жүйе компьютеріңіздің параметрін қадағалайды.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Жарық немесе қараңғы, тақырып, екпін түсі, шыны, бұлыңғырлық және Үй бетінің фоны Horizon-ның бастапқы күйіне қайтады.",
+  "The launcher's look is back to how Horizon ships": "Іске қосу құралының көрінісі Horizon-ның бастапқы күйіне қайта орнады",
+  "The launcher's look is reset for now, but it could not be saved": "Іске қосу құралының көрінісі әзірге қалпына келтірілді, бірақ сақталмады",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Шыны мен Бұлыңғырлық қараңғы көріністің бұлыңғыр панельдерін қалыптастырады; жарық көрініс қатты ақ панельдер салады.",
+  "Performance mode draws solid panels, without glass or blur.": "Өнімділік режимі шынысыз және бұлыңғырлықсыз қатты панельдер салады.",
+  "This theme's night draws solid panels, without glass or blur.": "Осы тақырыптың түні шынысыз және бұлыңғырлықсыз қатты панельдер салады."
 }

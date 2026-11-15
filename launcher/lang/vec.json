@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Movimento",
+  "Reduced": "Ridoto",
+  "Full": "Complète",
+  "Aa Text": "Aa Testo",
+  "Prepare & play": "Prepara e zuga",
+  "Name it, pick what it plays, then an icon.": "Seghe un nome, sieli cosa che'l fa xirare, po' n'icona.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis par tuti. Ogni tema el gà un aspèto ciaro e un scuro e se recorda el cołor de asento che ti sièli drento de łù.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Ridoto el ferma el çiel, i sfumaduri e i corimenti; i botoni i respondi subito. El sistema el va drio a ła inpostasion del to computer.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Ciaro o scuro, tema, cołor de asento, véro, sfocatura e 'l fondo de ła Caxa i va indrìo a come Horizon el vien spedìo.",
+  "The launcher's look is back to how Horizon ships": "L'aspèto del lansador el xe tornà a come Horizon el vien spedìo",
+  "The launcher's look is reset for now, but it could not be saved": "L'aspèto del lansador el xe stà reseta par deso, ma no'l xe stà salvà",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Véro e Sfocatura i forma i paneti opachi de l'aspèto scuro; quel ciaro el disegna paneti bianchi sołidi.",
+  "Performance mode draws solid panels, without glass or blur.": "Modałità prestasion ła disegna paneti sołidi, sensa véro né sfocatura.",
+  "This theme's night draws solid panels, without glass or blur.": "La note de sto tema ła disegna paneti sołidi, sensa véro né sfocatura."
 }

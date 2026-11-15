@@ -12,26 +12,33 @@ use horizon_telemetry::{outbox, Choices, Consent, Item, Kind, Payload, Source};
 
 use crate::{account::Accounts, backend};
 
-/// Each switch: its name, and in plain words exactly what it sends.
-pub const SWITCHES: [(Kind, &str, &str); 4] = [
+/// How the data question and Settings open: the switches are off, the ping is on.
+pub const OPENING: &str = "These reports are off until you turn them on. The \"I'm playing\" ping is on until you turn it off.";
+
+/// Each switch: its name, what it is for in one plain sentence, and exactly what it sends.
+pub const SWITCHES: [(Kind, &str, &str, &str); 4] = [
     (
         Kind::Perf,
         "Performance statistics",
+        "How smoothly Horizon runs on your computer, so slowdowns can be found and fixed.",
         "After each session: frame-time percentiles and a 14-bucket histogram, tick times, peak memory and startup times, with your machine (OS, CPU and its cores and clocks, memory size, GPU, its memory and driver, drive type, screen size and refresh rate, laptop or desktop, on battery or not) and the settings that change performance.",
     ),
     (
         Kind::Crash,
         "Crash reports",
+        "A short report when the game crashes, so the crash can be fixed.",
         "When the game crashes: the error, where in Horizon's code it happened, your graphics adapter and settings. No log, no world or server, no user name in paths.",
     ),
     (
         Kind::Bug,
         "Bug reports",
+        "Only the bug reports you write and send yourself.",
         "Only the reports you write and send yourself, with the game's log if you add it after reading it.",
     ),
     (
         Kind::Benchmark,
         "Benchmark uploads",
+        "Your benchmark results, for the community results page.",
         "The results of benchmarks you run, for the community results on playhorizon.dev.",
     ),
 ];
@@ -39,11 +46,21 @@ pub const SWITCHES: [(Kind, &str, &str); 4] = [
 /// Never sent, whatever the switches say.
 pub const NEVER: &str = "Never sent: your account name or UUID, world names, server addresses, chat, or your IP address. Each report is dated to the day, under a random install ID you can delete.";
 
-/// The anonymous "I'm playing" ping the game sends whatever the switches say (Ludovic's
-/// decision, 2026-10-22: count everyone, and tell them). Shown on the first-run question, in
-/// Settings, and once on the Play page to players who answered before it existed.
+/// The anonymous "I'm playing" ping the game sends (Ludovic's decision, 2026-10-22: count
+/// everyone, and tell them). On by default as upstream; this launcher also lets the player turn
+/// it off (`Settings::ping_off`), then starts the game with `HORIZON_NO_HEARTBEAT`. Shown on the
+/// first-run welcome and question, in Settings, and once on the Play page to players who
+/// answered before it existed.
 pub const PING_NAME: &str = "\"I'm playing\" ping";
-pub const PING: &str = "While you play, the game sends an anonymous \"I'm playing\" ping once a minute, so the launcher can show how many people play Horizon right now. It holds: a random number made when the game starts and forgotten when it closes, the Horizon version, your OS (Linux, macOS or Windows), and whether you have a world open to LAN or friends. It doesn't hold: your account, your install ID, world or server names, or anything you do in the game, and the server doesn't keep your IP address. It is sent whatever the switches say.";
+pub const PING_SUMMARY: &str = "Tells Horizon, anonymously, that you're playing, so the launcher can show how many people play right now.";
+pub const PING: &str = "While you play, the game sends an anonymous \"I'm playing\" ping once a minute, so the launcher can show how many people play Horizon right now. It holds: a random number made when the game starts and forgotten when it closes, the Horizon version, your OS (Linux, macOS or Windows), and whether you have a world open to LAN or friends. It doesn't hold: your account, your install ID, world or server names, or anything you do in the game, and the server doesn't keep your IP address. It is on unless you turn it off.";
+
+/// The game sends the [`PING`] unless the player turned it off (`Settings::ping_off`).
+pub fn ping_only_if_allowed(cmd: &mut std::process::Command, allowed: bool) {
+    if !allowed {
+        cmd.env("HORIZON_NO_HEARTBEAT", "1");
+    }
+}
 
 /// How many play Horizon now (exact), if the server says.
 pub fn playing_now() -> Option<u64> {

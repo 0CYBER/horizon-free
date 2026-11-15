@@ -278,7 +278,7 @@ impl Setup {
             Stage::Welcome if self.mode == Mode::Install => {
                 body = body
                     .child(text(night::UI, c(n.ink_soft)).child(
-                        tr(if cfg!(horizon_fork_launcher) { "Installs Horizon Fork Launcher (arismoko) for this account. No administrator needed." } else { "Installs Horizon Launcher for this account. No administrator needed." })
+                        tr("Installs Horizon Launcher for this account. No administrator needed.")
                             .to_string(),
                     ))
                     .child(self.folder_row(cx))
@@ -307,7 +307,7 @@ impl Setup {
             Stage::Welcome => {
                 body = body
                     .child(text(night::UI, c(n.ink_soft)).child(
-                        tr(if cfg!(horizon_fork_launcher) { "Removes Horizon Fork Launcher (arismoko) from this computer. Your worlds and the game's folder stay." } else { "Removes Horizon Launcher from this computer. Your worlds and the game's folder stay." })
+                        tr("Removes Horizon Launcher from this computer. Your worlds and the game's folder stay.")
                             .to_string(),
                     ))
                     .child(self.toggle(
@@ -346,18 +346,8 @@ impl Setup {
             }
             Stage::Done { left } => {
                 let said = match self.mode {
-                    Mode::Install => tr(if cfg!(horizon_fork_launcher) {
-                        "Horizon Fork Launcher (arismoko) is installed."
-                    } else {
-                        "Horizon Launcher is installed."
-                    })
-                    .to_string(),
-                    Mode::Uninstall => tr(if cfg!(horizon_fork_launcher) {
-                        "Horizon Fork Launcher (arismoko) was removed."
-                    } else {
-                        "Horizon Launcher was removed."
-                    })
-                    .to_string(),
+                    Mode::Install => tr("Horizon Launcher is installed.").to_string(),
+                    Mode::Uninstall => tr("Horizon Launcher was removed.").to_string(),
                 };
                 body = body.child(text(night::TITLE, c(n.ink)).child(said));
                 if !left.is_empty() {
@@ -381,7 +371,7 @@ impl Setup {
                             crate::button(
                                 "launch",
                                 tr(if cfg!(horizon_fork_launcher) {
-                                    "Launch Horizon Fork Launcher (arismoko)"
+                                    "Launch Horizon Launcher"
                                 } else {
                                     "Launch Horizon"
                                 }),
@@ -461,6 +451,7 @@ impl Render for Setup {
         let sky = if t.dark {
             self.scene.clone().into_any_element()
         } else {
+            crate::sky::frost(&t.night, (viewport.width.into(), viewport.height.into()));
             let (sky, next) = self.sky.render(
                 &t.night,
                 (viewport.width.into(), viewport.height.into()),

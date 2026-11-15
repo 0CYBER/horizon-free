@@ -7,7 +7,7 @@ use super::{
     details::{Details, GitHub, Link},
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
-use crate::i18n::trf;
+use crate::i18n::{tr, trf};
 use horizon_mod_package::index::{self, Index, Trust};
 use std::collections::HashMap;
 use std::fs;
@@ -67,6 +67,31 @@ pub fn is_native_mod(id: &str) -> bool {
     known_index()
         .and_then(|index| Some(index.project(id)?.kind == index::Kind::NativeMod))
         .unwrap_or(false)
+}
+
+/// How many of the registry's projects this Horizon left out because none of their versions
+/// passes the index's rules (mods published for the earlier mod system), by the index already
+/// read (never the network): None when no index was read.
+pub fn projects_left_out() -> Option<usize> {
+    let index = known_index()?;
+    // With those listed whose versions for this game all are (`Blocked::EarlierSystem`), which
+    // the list hides too.
+    let mut ids: Vec<&str> = index
+        .left_out
+        .iter()
+        .filter(|l| l.version.is_none() && index.project(&l.id).is_none())
+        .map(|l| l.id.as_str())
+        .chain(
+            index
+                .projects
+                .iter()
+                .filter(|p| matches!(blocked(&index, p), Some(Blocked::EarlierSystem)))
+                .map(|p| p.id.as_str()),
+        )
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    Some(ids.len())
 }
 
 /// The GitHub stars of the registry's project `id`, by the index already read (never the
@@ -319,21 +344,26 @@ pub fn trust_and_capabilities(
     let Some(p) = index.project(id) else {
         return Vec::new();
     };
+    // Shown to players: in their words, through `tr`; the policy is a link beside them
+    // ([`POLICY`]), not a bare address in the text.
     let mut lines = vec![if official(p) {
-        "Made by Horizon".to_owned()
+        tr("Made by Horizon").to_string()
     } else {
-        format!(
-            "Made by {}. Not made or endorsed by the Horizon project ({POLICY})",
-            p.authors.join(", ")
+        trf(
+            "Made by {authors}, not by the Horizon project",
+            &[("authors", &p.authors.join(", "))],
         )
     }];
     lines.push(match &p.key {
-        Some(_) => "Signed by its author: the launcher checks the signature".to_owned(),
-        None => "Unsigned: the launcher checks its checksum only".to_owned(),
+        Some(_) => tr("Signed by its author: Horizon checks it really is theirs").to_string(),
+        None => tr(
+            "Not signed by its author: Horizon checks the download arrives complete and unchanged",
+        )
+        .to_string(),
     });
     if p.kind == index::Kind::NativeMod {
         lines.push(
-            "Native code: it is compiled into the game and runs with full access to your computer. Its source was reviewed before it was listed".into(),
+            tr("Native code: it is built into the game and runs with full access to your computer. Its source was reviewed before it was listed").to_string(),
         );
         if let Some(v) = p.versions.iter().find(|v| v.game == GAME) {
             let pin = v.api.split('/').nth(1).unwrap_or_default();
@@ -341,9 +371,9 @@ pub fn trust_and_capabilities(
                 instance
                     .and_then(|i| crate::native_fit::line(i, pin))
                     .unwrap_or_else(|| {
-                        format!(
-                            "Built by the launcher on Horizon {}",
-                            &pin[..pin.len().min(7)]
+                        trf(
+                            "Built for {build}",
+                            &[("build", &crate::native_mods::sdk_cache::known_name(pin))],
                         )
                     }),
             );
@@ -354,25 +384,72 @@ pub fn trust_and_capabilities(
             v.capabilities
                 .known()
                 .iter()
-                .map(|c| format!("May {}", c.describe())),
+                .map(|c| trf("May {what}", &[("what", tr(c.describe()))])),
         );
-        lines.extend(unsupported_capabilities(&v.capabilities));
+        // Capabilities this Horizon lacks are the project's verdict (`Project::blocked`), said once.
         if v.capabilities.is_empty() {
-            lines.push("Asks for nothing beyond its own log".into());
+            lines.push(tr("Asks for nothing beyond its own log").to_string());
         }
     }
     lines
 }
 
-fn project_of(p: &index::Project) -> Option<Project> {
+/// How long the registry lets a summary be: it cuts a longer one there, mid-word.
+const SUMMARY_CUT: usize = 160;
+
+/// A registry summary as players read it: one the registry cut mid-word ends at its last whole
+/// word, with "…".
+fn summary(text: &str) -> String {
+    let cut = text.chars().count() >= SUMMARY_CUT
+        && text.chars().last().is_some_and(char::is_alphanumeric);
+    match text.rfind(char::is_whitespace).filter(|_| cut) {
+        Some(end) => format!("{}…", text[..end].trim_end_matches([',', ';', ':'])),
+        None => text.to_owned(),
+    }
+}
+
+/// Why a project has versions for this game but none this Horizon may install.
+enum Blocked {
+    /// They ask for capabilities this Horizon doesn't have: made for the earlier mod system.
+    EarlierSystem,
+    /// They were taken down, for this reason.
+    TakenDown(String),
+}
+
+fn blocked(index: &Index, p: &index::Project) -> Option<Blocked> {
+    let for_game: Vec<&index::Version> = p.versions.iter().filter(|v| v.game == GAME).collect();
+    if for_game.is_empty() || index.installable(p, GAME).is_some() {
+        return None;
+    }
+    let revoked = for_game
+        .iter()
+        .find_map(|v| index.revoked(&p.id, &v.file.sha256));
+    Some(match revoked {
+        Some(r) if for_game.iter().all(|v| v.capabilities.unknown().is_empty()) => {
+            Blocked::TakenDown(r.reason.clone())
+        }
+        _ => Blocked::EarlierSystem,
+    })
+}
+
+fn project_of(index: &Index, p: &index::Project) -> Option<Project> {
     let mut game_versions: Vec<String> = p.versions.iter().map(|v| v.game.clone()).collect();
     game_versions.dedup();
+    // Versions for this game, none of which this Horizon may install: say why, once, here.
+    let blocked = blocked(index, p).map(|why| match why {
+        Blocked::TakenDown(reason) => {
+            trf("Taken down: {reason}", &[("reason", &reason)]).to_string()
+        }
+        Blocked::EarlierSystem => {
+            tr("Made for Horizon's earlier mod system: it can't be installed yet.").to_string()
+        }
+    });
     Some(Project {
         source: SourceId::Horizon,
         id: p.id.clone(),
         slug: p.id.clone(),
         title: p.name.clone(),
-        summary: p.summary.clone(),
+        summary: summary(&p.summary),
         author: p.authors.join(", "),
         downloads: p.downloads,
         page: format!("{SITE}/{}", p.id),
@@ -381,6 +458,7 @@ fn project_of(p: &index::Project) -> Option<Project> {
         kind: kind_of(&p.kind)?,
         game_versions,
         loaders: vec![LOADER.into()],
+        blocked,
     })
 }
 
@@ -413,7 +491,7 @@ fn unsupported_capabilities(capabilities: &index::Capabilities) -> Option<String
     let unknown = capabilities.unknown();
     (!unknown.is_empty()).then(|| {
         trf(
-            "Can't install: it asks for {names}, which this Horizon doesn't have",
+            "Can't install: it was made for Horizon's earlier mod system ({names})",
             &[("names", &unknown.join(", "))],
         )
     })
@@ -473,7 +551,8 @@ pub const SORTS: [super::details::Sort; 3] = [
 /// The projects of the query's kind whose words match and that have every category and tag the
 /// filters ask for, for this game unless `everything`: the
 /// most downloaded first, or the newest (first published) or most recently updated (latest
-/// version) when the query asks, ties by downloads.
+/// version) when the query asks, ties by downloads; those no version of which installs here are
+/// left out, or last with `everything`.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
     use super::details::Sort;
     let mut found: Vec<&index::Project> = index
@@ -511,9 +590,16 @@ fn search(index: &Index, query: &Query) -> Vec<Project> {
         }),
         _ => found.sort_by_key(|p| std::cmp::Reverse(p.downloads)),
     }
+    // What can't be installed here is left out (the note above the list counts it), or with
+    // `everything` goes after what can, each in the order asked for.
+    let mut found: Vec<Project> = found
+        .into_iter()
+        .filter_map(|p| project_of(index, p))
+        .filter(|p| query.everything || p.blocked.is_none())
+        .collect();
+    found.sort_by_key(|p| p.blocked.is_some());
     found
         .into_iter()
-        .filter_map(project_of)
         .skip(query.offset)
         .take(query.limit)
         .collect()
@@ -553,7 +639,7 @@ impl Source for Registry {
         let p = index
             .project(id)
             .ok_or_else(|| format!("{id} isn't in Horizon's registry."))?;
-        project_of(p).ok_or_else(|| {
+        project_of(&index, p).ok_or_else(|| {
             format!(
                 "{} is a {} in Horizon's registry: this launcher can't install those yet.",
                 p.name,
@@ -834,7 +920,8 @@ fn install_version_guarded(
     progress: &dyn Fn(&str, f32),
 ) -> Result<installed::Entry, String> {
     let _lock = crate::browser::lock_home(home).map_err(|e| e.to_string())?;
-    let project = project_of(p).ok_or_else(|| format!("{} can't be installed here.", p.name))?;
+    let project =
+        project_of(index, p).ok_or_else(|| format!("{} can't be installed here.", p.name))?;
     if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
         return Err(format!("{} was taken down: {}", p.name, r.reason));
     }

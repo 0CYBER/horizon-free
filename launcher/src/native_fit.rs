@@ -37,13 +37,20 @@ pub fn fit(pin: &str, plays: &Plays) -> Fit {
 pub fn describe(fit: &Fit, plays: &Plays) -> String {
     match fit {
         Fit::Fits => tr("Made for the Horizon you play").to_owned(),
-        Fit::OtherRevision { pin } => trf(
-            "Made for {pin}; you play {yours}. Building checks whether it fits your game: it does when nothing it uses changed.",
-            &[
-                ("pin", &native_mods::sdk_cache::known_name(pin)),
-                ("yours", &native_mods::sdk_cache::known_name(&plays.revision)),
-            ],
-        ),
+        Fit::OtherRevision { pin } => {
+            let pin = native_mods::sdk_cache::known_name(pin);
+            // A version not known here has no name to give: say only that it differs.
+            match native_mods::sdk_cache::name_of(&plays.revision) {
+                None => trf(
+                    "Made for {pin}, not the Horizon you play. Building checks whether it fits your game: it does when nothing it uses changed.",
+                    &[("pin", &pin)],
+                ),
+                Some(yours) => trf(
+                    "Made for {pin}; you play {yours}. Building checks whether it fits your game: it does when nothing it uses changed.",
+                    &[("pin", &pin), ("yours", &yours)],
+                ),
+            }
+        }
     }
 }
 
@@ -133,7 +140,7 @@ mod tests {
         assert_eq!(fit(OTHER, &p), Fit::OtherRevision { pin: OTHER.into() });
         let said = describe(&fit(OTHER, &p), &p);
         assert!(
-            said.starts_with("Made for 2222222; you play 1111111."),
+            said.starts_with("Made for another Horizon version, not the Horizon you play."),
             "{said}"
         );
     }

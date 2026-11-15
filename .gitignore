@@ -38,3 +38,5 @@
 
 # Release-only compiled original exporter bundle.
 /exporters/
+# A local build's Microsoft client ID (launcher/build.rs): never committed.
+/launcher/.msa-client-id

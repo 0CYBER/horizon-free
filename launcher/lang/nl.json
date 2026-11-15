@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Thema",
+  "Motion": "Beweging",
+  "Reduced": "Verminderd",
+  "Full": "Volledig",
+  "Aa Text": "Aa Tekst",
+  "Prepare & play": "Voorbereiden en spelen",
+  "Name it, pick what it plays, then an icon.": "Geef het een naam, kies wat het speelt en dan een pictogram.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis voor iedereen. Elk thema heeft een licht en een donker uiterlijk en onthoudt de accentkleur die je eronder kiest.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Verminderd stopt de lucht, de fades en de schuifanimaties; knoppen reageren nog steeds meteen. Systeem volgt de instelling van je computer.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Licht of donker, thema, accentkleur, glas, vervaging en de achtergrond van Thuisscherm gaan terug naar hoe Horizon ze levert.",
+  "The launcher's look is back to how Horizon ships": "Het uiterlijk van de launcher is terug naar hoe Horizon het levert",
+  "The launcher's look is reset for now, but it could not be saved": "Het uiterlijk van de launcher is voor nu hersteld, maar kon niet worden opgeslagen",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Glas en Vervaging vormen de matte panelen van het donkere uiterlijk; het lichte tekent massief witte panelen.",
+  "Performance mode draws solid panels, without glass or blur.": "Prestatiemodus tekent massieve panelen, zonder glas of vervaging.",
+  "This theme's night draws solid panels, without glass or blur.": "De nacht van dit thema tekent massieve panelen, zonder glas of vervaging."
 }

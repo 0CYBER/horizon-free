@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Rörelse",
+  "Reduced": "Minskad",
+  "Full": "Full",
+  "Aa Text": "Aa Text",
+  "Prepare & play": "Förbered och spela",
+  "Name it, pick what it plays, then an icon.": "Ge den ett namn, välj vad den spelar och sedan en ikon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis för alla. Varje tema har ett ljust och ett mörkt utseende och minns accentfärgen du väljer under det.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Minskad stoppar himlen, toningarna och glidningarna; knappar svarar fortfarande direkt. System följer datorns inställning.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Ljust eller mörkt, tema, accentfärg, glas, oskärpa och bakgrunden på Hem återställs till hur Horizon levereras.",
+  "The launcher's look is back to how Horizon ships": "Launcherns utseende är tillbaka till hur Horizon levererar det",
+  "The launcher's look is reset for now, but it could not be saved": "Launcherns utseende är återställt för tillfället, men det kunde inte sparas",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Glas och Oskärpa formar de matta panelerna i det mörka utseendet; det ljusa ritar helvita vita paneler.",
+  "Performance mode draws solid panels, without glass or blur.": "Prestandaläge ritar helfyllda paneler, utan glas eller oskärpa.",
+  "This theme's night draws solid panels, without glass or blur.": "Det här temats natt ritar helfyllda paneler, utan glas eller oskärpa."
 }

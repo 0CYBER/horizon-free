@@ -249,7 +249,7 @@ impl Storage {
     }
 }
 
-pub(crate) fn allocated_bytes(path: &Path) -> Result<u64, Error> {
+pub fn allocated_bytes(path: &Path) -> Result<u64, Error> {
     walk(path, &mut HashSet::new())
 }
 
@@ -327,8 +327,11 @@ mod tests;
 // Turning native mods off is the Storage page's last row.
 impl crate::backend::Settings {
     /// Revoke consent before attempting to disable installed native packages.
+    /// Nothing changes, in memory or on disk, unless the revoked settings were saved: a failed
+    /// save leaves the permission as it was, with Turn off still there to try again.
     pub fn revoke_native_mods(&mut self) -> Result<(), String> {
-        self.native_mods_allowed_at = None;
+        let allowed = self.native_mods_allowed_at.take();
         self.save()
+            .inspect_err(|_| self.native_mods_allowed_at = allowed)
     }
 }

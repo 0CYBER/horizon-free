@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "테마",
+  "Motion": "모션",
+  "Reduced": "줄이기",
+  "Full": "전체",
+  "Aa Text": "Aa 텍스트",
+  "Prepare & play": "준비하고 플레이",
+  "Name it, pick what it plays, then an icon.": "이름을 정하고, 무엇을 실행할지 고른 뒤 아이콘을 고릅니다.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "모두에게 무료입니다. 각 테마에는 라이트와 다크 모양새가 있고, 그 아래에서 고른 강조색을 기억합니다.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "줄이기는 하늘, 페이드, 슬라이드를 멈춥니다. 버튼은 여전히 즉시 반응합니다. 시스템은 컴퓨터 설정을 따릅니다.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "라이트 또는 다크, 테마, 강조색, 유리, 흐림, 홈 배경이 Horizon 기본값으로 돌아갑니다.",
+  "The launcher's look is back to how Horizon ships": "런처 모양새가 Horizon 기본값으로 돌아갔습니다",
+  "The launcher's look is reset for now, but it could not be saved": "런처 모양새는 지금 초기화되었지만 저장하지 못했습니다",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "유리와 흐림은 다크 모양새의 반투명 패널을 만들고, 라이트는 단색 흰 패널을 그립니다.",
+  "Performance mode draws solid panels, without glass or blur.": "성능 모드는 유리나 흐림 없이 단색 패널을 그립니다.",
+  "This theme's night draws solid panels, without glass or blur.": "이 테마의 밤은 유리나 흐림 없이 단색 패널을 그립니다."
 }

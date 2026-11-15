@@ -55,9 +55,12 @@ pub struct Release {
     pub nightly: Option<String>,
 }
 
+mod look_settings;
 mod play_log;
 mod release_assets;
+mod release_notes;
 pub use release_assets::PLATFORMS;
+pub use release_notes::{markdown_to_text, notes_summary};
 
 /// `a == b`, in a const context.
 const fn same(a: &str, b: &str) -> bool {
@@ -901,14 +904,15 @@ pub fn data_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HORIZON_LAUNCHER_HOME").filter(|h| !h.is_empty()) {
         return PathBuf::from(home);
     }
+    if cfg!(test) {
+        return crate::data_location::test_home().join("launcher");
+    }
     // A location that does not open stands in as the default folders, as
     // `data_location::startup` makes it for the window: never a panic here.
     if let Ok(Some(roots)) = crate::data_location::configured_roots() {
         return roots.launcher;
     }
-    dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(crate::identity::LAUNCHER_FOLDER)
+    crate::identity::launcher_folder_in(&dirs::data_dir().unwrap_or_else(std::env::temp_dir))
 }
 
 /// A canonical path without Windows' verbatim prefix: `canonicalize` gives `\\?\C:\...` there,
@@ -939,7 +943,8 @@ fn tool_safe(path: &Path) -> bool {
 /// link (horizon-mixins refuses one, and macOS's /tmp is one). On Windows, when the resolved
 /// path isn't [`tool_safe`], [`windows_build_dir`] names the same folder a way MinGW-w64 can open.
 pub fn build_dir() -> PathBuf {
-    if std::env::var_os("HORIZON_LAUNCHER_HOME").is_none_or(|p| p.is_empty()) {
+    // Tests keep it inside their scratch launcher folder (`data_dir`).
+    if !cfg!(test) && std::env::var_os("HORIZON_LAUNCHER_HOME").is_none_or(|p| p.is_empty()) {
         // A location that does not open stands in as the default folders, as
         // `data_location::startup` makes it for the window: never a panic here.
         if let Ok(Some(roots)) = crate::data_location::configured_roots() {
@@ -2528,14 +2533,15 @@ pub fn game_home() -> PathBuf {
     if let Some(home) = std::env::var_os("HORIZON_HOME").filter(|h| !h.is_empty()) {
         return PathBuf::from(home);
     }
+    if cfg!(test) {
+        return crate::data_location::test_home().join("game");
+    }
     // A location that does not open stands in as the default folders, as
     // `data_location::startup` makes it for the window: never a panic here.
     if let Ok(Some(roots)) = crate::data_location::configured_roots() {
         return roots.game;
     }
-    dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(crate::identity::GAME_FOLDER)
+    crate::identity::game_folder_in(&dirs::data_dir().unwrap_or_else(std::env::temp_dir))
 }
 
 /// Whether No AI is on: every AI feature hidden and off (`horizon_platform::no_ai`, kept in the
@@ -2797,6 +2803,7 @@ pub fn client_command(tag: &str) -> Command {
     }
     crate::run_leases::mark(&mut cmd, &version_dir(tag));
     strip_launcher_render_env(&mut cmd);
+    crate::telemetry::ping_only_if_allowed(&mut cmd, !Settings::load().ping_off);
     cmd.current_dir(&home)
         .env("HORIZON_HOME", &home)
         .env_remove("HORIZON_ACCOUNT_SESSIONS")
@@ -3977,73 +3984,6 @@ pub fn restart() -> String {
     )
 }
 
-/// Plain text from markdown, for terminals: headings on their own lines, bullets as "- ",
-/// links followed by their address.
-pub fn markdown_to_text(md: &str) -> String {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
-    let mut out = String::new();
-    let mut links = Vec::new();
-    let mut lists: Vec<Option<u64>> = Vec::new();
-    for event in Parser::new(md) {
-        match event {
-            Event::Start(Tag::Item) => {
-                let depth = lists.len().saturating_sub(1);
-                out.push_str(&"  ".repeat(depth));
-                match lists.last_mut() {
-                    Some(Some(n)) => {
-                        out.push_str(&format!("{n}. "));
-                        *n += 1;
-                    }
-                    _ => out.push_str("- "),
-                }
-            }
-            Event::Start(Tag::List(start)) => {
-                if !out.ends_with('\n') && !out.is_empty() {
-                    out.push('\n');
-                }
-                lists.push(start)
-            }
-            Event::End(TagEnd::List(_)) => {
-                lists.pop();
-                if lists.is_empty() {
-                    out.push('\n');
-                }
-            }
-            Event::Start(Tag::Link { dest_url, .. }) => links.push(dest_url.to_string()),
-            Event::End(TagEnd::Link) => {
-                if let Some(url) = links.pop() {
-                    out.push_str(&format!(" ({url})"));
-                }
-            }
-            Event::End(TagEnd::Heading(_)) => out.push_str("\n\n"),
-            Event::End(TagEnd::Paragraph) => {
-                out.push_str(if lists.is_empty() { "\n\n" } else { "\n" })
-            }
-            Event::End(TagEnd::Item) if !out.ends_with('\n') => out.push('\n'),
-            Event::End(TagEnd::CodeBlock) => out.push('\n'),
-            Event::Text(t) | Event::Code(t) => out.push_str(&t),
-            Event::SoftBreak | Event::HardBreak => out.push('\n'),
-            Event::Rule => out.push_str("---\n\n"),
-            _ => {}
-        }
-    }
-    out.trim_end().to_string() + "\n"
-}
-
-/// The first sentence-like line of a release's notes, for a one-line summary.
-pub fn notes_summary(body: &str) -> Option<String> {
-    let text = markdown_to_text(body);
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|l| l.len() > 24 && !l.starts_with("---"))?;
-    let line = line.trim_start_matches("- ");
-    Some(match line.char_indices().nth(140) {
-        Some((i, _)) => format!("{}…", line[..i].trim_end()),
-        None => line.to_string(),
-    })
-}
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Job {
     Prepare,
@@ -4149,7 +4089,8 @@ pub fn spawn(job: Job, cmd: Command, tx: Sender<Msg>) -> Result<Running, String>
     Ok(Running { child, stdin })
 }
 
-/// The launcher's appearance, as the player picks it in Settings.
+/// The launcher's appearance, as older launchers saved it: a theme is one look now, and a saved
+/// `light` opens on the Taiga theme (`Settings::parse`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Appearance {
@@ -4243,13 +4184,24 @@ pub struct Settings {
     /// Unset means none: the environment's `HTTPS_PROXY` and `HTTP_PROXY` apply instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
-    /// Dark, Light, or the system's: the launcher's look. Dark by default.
+    /// Only read to move an old light appearance to the Taiga theme (`parse`): always dark now,
+    /// a theme being one look.
     #[serde(default)]
     pub appearance: Appearance,
     /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
+    /// The player turned the anonymous "I'm playing" ping off (`telemetry::PING`): the game is
+    /// started with `HORIZON_NO_HEARTBEAT`. On by default, as upstream sends it.
+    #[serde(default)]
+    pub ping_off: bool,
+    /// The look's flourishes, each on or off (`effects`): glow, gradients, the hover shine.
+    #[serde(default)]
+    pub effects: crate::effects::Effects,
+    /// The player has been through the first-run welcome (theme, accent, effects).
+    #[serde(default)]
+    pub welcomed: bool,
     /// The player without an account that owns the game has read, once, why the launcher needs
     /// one now (the owner gate's screen).
     #[serde(default)]
@@ -4300,6 +4252,15 @@ pub struct Settings {
     /// Managed cache limit in GiB (unset: 25; zero: no automatic cleanup). Player data isn't cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_limit_gib: Option<u64>,
+    /// The accent picked under each launcher theme, by its id (`themes::HORIZON` for Horizon's
+    /// own), so going back to a theme brings back its colour. A launcher older than this map
+    /// drops it when it saves: the themes then only start from their own accents again.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub theme_accents: std::collections::BTreeMap<String, crate::themes::Accent>,
+    /// Reduced motion: unset follows the system's, true keeps the launcher still, false lets it
+    /// move even when the system asks for less.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce_motion: Option<bool>,
 }
 
 impl Settings {
@@ -4352,6 +4313,7 @@ impl Settings {
                     fields.remove(key);
                 }
             }
+            look_settings::tidy(fields);
             // A language this launcher doesn't have yet follows the system's.
             if fields.get("language").is_some_and(|l| {
                 serde_json::from_value::<Option<crate::i18n::Language>>(l.clone()).is_err()
@@ -4359,7 +4321,9 @@ impl Settings {
                 fields.remove("language");
             }
         }
-        serde_json::from_value(value).unwrap_or_default()
+        let mut settings: Self = serde_json::from_value(value).unwrap_or_default();
+        look_settings::settle(&mut settings);
+        settings
     }
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {
@@ -5553,21 +5517,47 @@ pub fn {f}("
     }
 
     #[test]
-    fn the_appearance_is_dark_unless_picked_and_an_unknown_one_keeps_the_rest() {
+    fn an_old_appearance_moves_to_a_theme_and_an_unknown_one_keeps_the_rest() {
         assert_eq!(Settings::parse("{}").appearance, Appearance::Dark);
-        let light = Settings::parse(r#"{"appearance": "light", "game_args": "--x"}"#);
-        assert_eq!(light.appearance, Appearance::Light);
-        let future = Settings::parse(r#"{"appearance": "sepia", "game_args": "--x"}"#);
+        assert_eq!(Settings::parse("{}").theme, None);
+        // Light, alone or under a theme, opens on Taiga and keeps the rest.
+        for text in [
+            r#"{"appearance": "light", "game_args": "--x"}"#,
+            r#"{"appearance": "light", "theme": "deep_ocean", "game_args": "--x"}"#,
+        ] {
+            let light = Settings::parse(text);
+            assert_eq!(
+                (
+                    light.appearance,
+                    light.theme.as_deref(),
+                    light.game_args.as_str()
+                ),
+                (Appearance::Dark, Some("taiga"), "--x"),
+                "{text}"
+            );
+        }
+        // Dark and the system's keep the saved theme's look.
+        for appearance in ["dark", "system"] {
+            let text = format!(r#"{{"appearance": "{appearance}", "theme": "nord"}}"#);
+            let kept = Settings::parse(&text);
+            assert_eq!(
+                (kept.appearance, kept.theme.as_deref()),
+                (Appearance::Dark, Some("nord"))
+            );
+        }
+        let future =
+            Settings::parse(r#"{"appearance": "sepia", "theme": "nord", "game_args": "--x"}"#);
         assert_eq!(
-            (future.appearance, future.game_args.as_str()),
-            (Appearance::Dark, "--x")
+            (
+                future.appearance,
+                future.theme.as_deref(),
+                future.game_args.as_str()
+            ),
+            (Appearance::Dark, Some("nord"), "--x")
         );
-        let settings = Settings {
-            appearance: Appearance::System,
-            ..Settings::default()
-        };
-        let text = serde_json::to_string(&settings).unwrap();
-        assert!(text.contains(r#""appearance":"system""#), "{text}");
+        // Saved back as dark, so a migrated light stays on Taiga only until the player picks.
+        let text = serde_json::to_string(&Settings::parse(r#"{"appearance": "light"}"#)).unwrap();
+        assert!(text.contains(r#""appearance":"dark""#), "{text}");
     }
 
     #[test]
@@ -6101,6 +6091,19 @@ pub fn {f}("
         assert!(select_after_update(Some("v2026.10.12"), &installed));
         assert!(!select_after_update(Some("v2026.10.1"), &installed));
         assert!(select_after_update(None, &installed));
+        // A Nightly follows updates only from the newest one: an older pick is a rollback.
+        let nightlies = [
+            "nightly-2026-11-11-bbbbbbb".to_string(),
+            "nightly-2026-11-10-aaaaaaa".to_string(),
+        ];
+        assert!(select_after_update(
+            Some("nightly-2026-11-11-bbbbbbb"),
+            &nightlies
+        ));
+        assert!(!select_after_update(
+            Some("nightly-2026-11-10-aaaaaaa"),
+            &nightlies
+        ));
         assert!(!select_after_update(Some("developer-abc"), &[]));
         assert!(!select_after_update(Some("developer-abc"), &installed));
         assert!(!select_after_update(

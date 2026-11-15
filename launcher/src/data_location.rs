@@ -35,12 +35,27 @@ pub fn bootstrap_path() -> Result<PathBuf> {
     {
         return pointer_path(Path::new(&path));
     }
+    if cfg!(test) {
+        return Ok(test_home().join("location.json"));
+    }
     dirs::config_dir()
         .map(|p| {
-            p.join(crate::identity::LOCATION_FOLDER)
-                .join("location.json")
+            crate::identity::folder_in(
+                &p,
+                crate::identity::LOCATION_FOLDER,
+                crate::identity::LEGACY_LOCATION_FOLDER,
+            )
+            .join("location.json")
         })
         .ok_or_else(|| "Cannot locate the platform configuration folder for location.json".into())
+}
+
+/// Where the library's own tests keep the launcher's and the game's data (`launcher`, `game`,
+/// `location.json` inside) unless `HORIZON_LAUNCHER_HOME` or `HORIZON_HOME` name another:
+/// never a player's install. A fixed path, not an environment change, so it holds from the
+/// first call on any thread, and a test that runs its own binary again shares it.
+pub fn test_home() -> PathBuf {
+    std::env::temp_dir().join("horizon-launcher-lib-tests")
 }
 
 fn overridden(name: &str) -> bool {

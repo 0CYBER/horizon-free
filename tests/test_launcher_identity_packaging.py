@@ -48,11 +48,16 @@ class PackagingIdentity(unittest.TestCase):
                 subprocess.run(['rustc', '--edition=2021', str(source), '-o', str(binary), '--extern', f'horizon_addresses={addresses}', *flags], check=True)
                 output = subprocess.check_output([str(binary)], text=True)
                 outputs.append(dict(line.split('\t', 1) for line in output.splitlines()))
-            self.assertEqual(outputs[0], expected)
-            self.assertTrue(all(outputs[0][name] != outputs[1][name] for name in expected))
-            self.assertEqual(outputs[1]['KEYCHAIN_SERVICE'], 'io.github.arismoko.horizonfork.launcher')
-            self.assertEqual(outputs[1]['LAUNCHER_FOLDER'], 'horizon-fork-arismoko/launcher')
-            self.assertEqual(outputs[1]['GAME_FOLDER'], 'horizon-fork-arismoko/game')
+            upstream, fork = outputs
+            self.assertEqual(upstream, expected)
+            # A fork build presents as the Horizon launcher and opens its data folders and saved
+            # accounts, since it updates it; how it is installed keeps the fork's own names.
+            shared = {'WINDOW_TITLE', 'DISPLAY_NAME', 'KEYCHAIN_SERVICE', 'LOCATION_FOLDER', 'LAUNCHER_FOLDER', 'GAME_FOLDER'}
+            self.assertEqual({name: fork[name] for name in shared}, {name: upstream[name] for name in shared})
+            self.assertTrue(all(fork[name] != upstream[name] for name in expected.keys() - shared))
+            self.assertEqual(fork['APP_ID'], 'io.github.arismoko.horizonfork.launcher')
+            self.assertEqual(fork['EXECUTABLE'], 'horizon-fork-launcher')
+            self.assertEqual(fork['INSTALL_KEY'], 'Software\\ArismokoHorizonFork\\Launcher')
 
     def test_real_workflow_repository_input_and_matrix(self):
         workflow = (ROOT / '.github/workflows/launcher.yml').read_text()

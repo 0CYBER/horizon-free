@@ -109,7 +109,10 @@ impl Launcher {
             return None;
         }
         let panel = self.export.as_ref()?;
-        let formats = [(Format::Mrpack, ".mrpack"), (Format::Zip, ".zip")];
+        let formats = [
+            (Format::Mrpack, "For Modrinth (.mrpack)"),
+            (Format::Zip, "Plain zip (.zip)"),
+        ];
         let mut pick = div().flex().items_center().gap(px(6.));
         for (format, label) in formats {
             let on = panel.format == format;
@@ -131,10 +134,10 @@ impl Launcher {
         }
         let about = match panel.format {
             Format::Mrpack => tr(
-                "Modrinth's modpack format: resource packs from Modrinth are listed by their \
-                 download, the rest is carried in it.",
+                "Opens in Modrinth and the launchers that read its format. Packs from Modrinth \
+                 are fetched again from there; everything else travels inside the file.",
             ),
-            Format::Zip => tr("The game folder's own layout, zipped."),
+            Format::Zip => tr("The instance's folder as it is, in one zip file."),
         };
         let mut worlds = div().flex().flex_col().gap(px(6.));
         if panel.worlds.is_empty() {

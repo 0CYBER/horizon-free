@@ -1,6 +1,6 @@
 {
   "DISPLAY_NAME": "Horizon Launcher",
-  "WINDOW_TITLE": "Horizon",
+  "WINDOW_TITLE": "Horizon Launcher",
   "DESKTOP_ENTRY": "horizon-launcher.desktop",
   "EXECUTABLE": "horizon-launcher",
   "WINDOWS_EXECUTABLE": "horizon-launcher.exe",

@@ -84,6 +84,8 @@ pub(super) struct Mods {
     pub(super) report_list: cull::Cull,
     more: bool,
     error: Option<String>,
+    /// The failed search's own words are shown under its plain message.
+    pub(super) error_details: bool,
     pub(super) installed: Vec<installed::Entry>,
     /// The registry native mods' versions the player picked on their Versions tab, by id
     /// (`horizon::chosen`), read with `installed`.
@@ -111,9 +113,11 @@ pub(super) struct Mods {
     /// The project the glass detail card showed last.
     pub(super) shown: Option<Project>,
     /// An install awaiting explicit native-code consent, before any download.
-    /// The selected instance's native build state, and the `native_status::fingerprint` it was
-    /// read for: read again only when that changes.
-    pub(super) native_state: std::cell::RefCell<Option<(String, native_status::State)>>,
+    /// The selected instance's native build state, the mods it would build again
+    /// (`native_status::unbuilt`), and the `native_status::fingerprint` they were read for: read
+    /// again only when that changes.
+    pub(super) native_state:
+        std::cell::RefCell<Option<(String, native_status::State, Vec<String>)>>,
     /// Native routes read by a worker for this instance's files, consent and game version.
     pub(super) native_routes: std::cell::RefCell<Option<crate::build_mode::RouteMemo>>,
     /// What updating the native mods to a newer installed game would do, read in the background.
@@ -203,6 +207,7 @@ impl Mods {
             report_list: cull::Cull::default(),
             more: false,
             error: None,
+            error_details: false,
             installed: Vec::new(),
             chosen: Default::default(),
             checked_for: None,
@@ -499,7 +504,12 @@ impl Launcher {
     /// Searches; with `keep`, the rows already listed stay on screen until the new ones arrive,
     /// so the page doesn't shrink (and the scroll doesn't jump to the top) while it waits.
     pub(super) fn mods_search_keeping(&mut self, offset: usize, keep: bool) {
+        // The glass look offers Show everything for Modrinth only: carried over to Horizon's
+        // registry, where it can't be seen or turned off, it would list what the note says is
+        // hidden.
+        let glass = self.theme.glass;
         let m = &mut self.mods;
+        let everything = m.everything && !(glass && m.source == SourceId::Horizon);
         m.search += 1;
         m.searching = true;
         if offset == 0 {
@@ -517,7 +527,7 @@ impl Launcher {
                 ..target.search(m.text.text(), m.kind, &m.browse.filters)
             },
             None => Query {
-                everything: m.everything,
+                everything,
                 offset,
                 limit: PAGE,
                 filters: m.browse.filters.clone(),
@@ -1261,7 +1271,8 @@ impl Launcher {
         if self.mods.kind == PackKind::DataPack {
             return Some(self.mods_world_picker(&instance.name.clone(), cx));
         }
-        if self.mods.kind == PackKind::Modpack {
+        // The glass page's heading already says where installs go.
+        if self.mods.kind == PackKind::Modpack || self.theme.glass {
             return None;
         }
         let name = [("instance", instance.name.as_str())];
@@ -1410,15 +1421,11 @@ impl Launcher {
                 && entries
                     .iter()
                     .any(|e| native_status::is_native_file(&e.file));
-        let left_out = native
-            .then(|| {
-                self.selected_instance()
-                    .and_then(|instance| self.version_of(instance))
-                    .and_then(|version| self.native_build_of(version))
-            })
-            .flatten()
-            .map(|build| build.left_out)
-            .unwrap_or_default();
+        let left_out = if native {
+            self.native_left_out()
+        } else {
+            Vec::new()
+        };
         let instance = self.selected_instance().map(|i| i.name.clone());
         let row = |i: usize| {
             if i >= entries.len() {

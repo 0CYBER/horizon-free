@@ -49,7 +49,7 @@ pub enum Msg {
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
     /// The modpacks other launchers keep on this computer (`modpacks::found_on_this_computer`).
     FoundPacks(Vec<crate::other_launchers::Found>),
-    /// Where the native-mods build is (`native_mods::Step::label`).
+    /// Where the native-mods build is (`native_mods::Step::label`), and how far along.
     NativeProgress(String, crate::native_mods::Progress),
     NativeRegistryConsent(
         crate::native_mods::RegistryInventory,

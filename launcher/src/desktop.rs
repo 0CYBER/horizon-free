@@ -16,75 +16,39 @@ use std::path::{Path, PathBuf};
 const ICONS: [(&str, &[u8]); 9] = [
     (
         "16x16",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/16.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/16x16/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/16x16/apps/horizon.png"),
     ),
     (
         "24x24",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/24.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/24x24/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/24x24/apps/horizon.png"),
     ),
     (
         "32x32",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/32.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/32x32/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/32x32/apps/horizon.png"),
     ),
     (
         "48x48",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/48.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/48x48/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/48x48/apps/horizon.png"),
     ),
     (
         "64x64",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/64.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/64x64/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/64x64/apps/horizon.png"),
     ),
     (
         "128x128",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/128.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/128x128/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/128x128/apps/horizon.png"),
     ),
     (
         "256x256",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/256.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/256x256/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/256x256/apps/horizon.png"),
     ),
     (
         "512x512",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/512.png")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/512x512/apps/horizon.png")
-        },
+        include_bytes!("../../packaging/icons/hicolor/512x512/apps/horizon.png"),
     ),
     (
         "scalable",
-        if cfg!(horizon_fork_launcher) {
-            include_bytes!("../../packaging/icons/fork/launcher.svg")
-        } else {
-            include_bytes!("../../packaging/icons/hicolor/scalable/apps/horizon.svg")
-        },
+        include_bytes!("../../packaging/icons/hicolor/scalable/apps/horizon.svg"),
     ),
 ];
 
@@ -137,7 +101,7 @@ pub fn launcher_entry(exe: &Path) -> String {
     );
     if cfg!(horizon_fork_launcher) {
         entry
-            .replace("Name=Horizon\n", "Name=Horizon Fork Launcher (arismoko)\n")
+            .replace("Name=Horizon\n", "Name=Horizon Launcher\n")
             .replace("Icon=horizon\n", "Icon=horizon-fork-arismoko\n")
             .replace(
                 "StartupWMClass=horizon-launcher\n",

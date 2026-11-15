@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "טעמע",
+  "Motion": "באַוועגונג",
+  "Reduced": "רעדוצירט",
+  "Full": "פֿול",
+  "Aa Text": "Aa טעקסט",
+  "Prepare & play": "צוגרייטן און שפּילן",
+  "Name it, pick what it plays, then an icon.": "געב א נאמען, קלויב וואס עס שפילט, דען א סימבאל.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "אומזיסט פֿאַר אַלעמען. יעדער טעמע האט א ליכטיק און א טונקל אויסזען, און זי געדענקט דעם אַקצענט קאָליר וואס איר קלויבט אונטער איר.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "רעדוצירט שטעלט אפ דעם הימל, די פארשווינדונגען און די גליטשן; די קנעפּלעך ענטפערן נאך אלץ גלייך. סיסטעם פאלגט דיין קאָמפּיוטערס איינשטעלונג.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "ליכטיק אדער טונקל, טעמע, אַקצענט קאָליר, גלאָז, בלאַר און די היים אונטערגרונט גייען צוריק צו ווי Horizon שיפט זיך.",
+  "The launcher's look is back to how Horizon ships": "די קוק פון די לאָנטשער איז צוריק צו ווי Horizon שיפט זיך",
+  "The launcher's look is reset for now, but it could not be saved": "די קוק פון די לאָנטשער איז איצט רעסעטירט, אבער עס איז נישט געראטעוועט געווארן",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "גלאָז און בלאַר פארמען די פֿאַרנעפּלטע פּאַנעלן פונעם טונקלן אויסזען; דאס ליכטיקע צייכנט סאָלידע ווייסע פּאַנעלן.",
+  "Performance mode draws solid panels, without glass or blur.": "פאָרשטעלונג מאָדע צייכנט סאָלידע פּאַנעלן, אָן גלאָז און בלאַר.",
+  "This theme's night draws solid panels, without glass or blur.": "די נאכט פון דער טעמע צייכנט סאָלידע פּאַנעלן, אָן גלאָז און בלאַר."
 }

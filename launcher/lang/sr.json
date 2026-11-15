@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тема",
+  "Motion": "Покрет",
+  "Reduced": "Смањено",
+  "Full": "Потпуно",
+  "Aa Text": "Aa Текст",
+  "Prepare & play": "Припреми и играј",
+  "Name it, pick what it plays, then an icon.": "Именујте је, изаберите шта покреће, па иконицу.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Бесплатно за све. Свака тема има светли и тамни изглед и памти боју акцента коју изаберете у њој.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Смањено зауставља небо, ишчезавања и клизања; дугмади одмах реагују. Систем прати подешавање вашег рачунара.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Светло или тамно, тема, боја акцента, стакло, замућење и позадина Почетне враћају се на подешавања са којима Horizon долази.",
+  "The launcher's look is back to how Horizon ships": "Изглед покретача је враћен на подешавања са којима Horizon долази",
+  "The launcher's look is reset for now, but it could not be saved": "Изглед покретача је за сада ресетован, али није могао бити сачуван",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Стакло и Замућење обликују мат панеле тамног изгледа; светли црта пуне беле панеле.",
+  "Performance mode draws solid panels, without glass or blur.": "Режим перформанси црта пуне панеле, без стакла и замућења.",
+  "This theme's night draws solid panels, without glass or blur.": "Ноћ ове теме црта пуне панеле, без стакла и замућења."
 }

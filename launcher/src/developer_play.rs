@@ -8,6 +8,7 @@ impl Launcher {
     ) {
         self.load_auth_statuses(false);
         if let Some(tag) = self.starting_client.take() {
+            let instance_id = self.starting_instance.take();
             let mut cmd = backend::client_command(&tag);
             let pass = match session {
                 Ok(pass) => pass,
@@ -59,7 +60,19 @@ impl Launcher {
                     (applied, id)
                 }
                 None => {
-                    let instance = instances::selected();
+                    let Some(instance) = instances::list()
+                        .into_iter()
+                        .find(|i| Some(&i.id) == instance_id.as_ref())
+                    else {
+                        self.client_error = Some(
+                            tr("This instance no longer exists. Choose another instance to play.")
+                                .into(),
+                        );
+                        self.joining = None;
+                        self.quick_play = None;
+                        account::discard_unread_sessions();
+                        return;
+                    };
                     (instances::apply(&mut cmd, &instance), Some(instance.id))
                 }
             };

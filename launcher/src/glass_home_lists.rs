@@ -153,7 +153,8 @@ impl Launcher {
                 .child(ui::text(13., FontWeight::MEDIUM, ink::FULL).child(tr("Play")))
                 .child(ui::icon("arrow-right-01", 15., white(ink::FULL)))
         } else {
-            ui::text(13., FontWeight::NORMAL, ink::QUIET).child(megabytes(w.size))
+            ui::text(13., FontWeight::NORMAL, ink::QUIET)
+                .child(horizon_launcher::storage::format_bytes(w.size))
         };
         let more = ui::icon_button(
             SharedString::from(format!("{key}-more")),
@@ -164,6 +165,7 @@ impl Launcher {
             menu_open,
             &t,
         )
+        .tooltip(ui::tip(tr("More for this world")))
         .on_click(cx.listener({
             let key = key.clone();
             move |this, event: &ClickEvent, _, cx| {
@@ -398,13 +400,28 @@ impl Launcher {
             36.,
             &t,
         );
-        let join = if self.can_join_selected() && !offline {
+        // Signed out, Join signs in first, as Play does; otherwise a dimmed Join says why.
+        let signed_out =
+            self.owner == Some(false) && !horizon_launcher::developer_offline::selected();
+        let join = if signed_out && !offline {
+            join.tooltip(ui::tip(tr("Sign in to join")))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.sign_in_to_play();
+                    cx.notify();
+                }))
+        } else if self.can_join_selected() && !offline {
             join.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.quick_play("--server", ip.clone());
                 cx.notify();
             }))
         } else {
-            join.opacity(0.4).cursor_default()
+            join.opacity(0.4)
+                .cursor_default()
+                .tooltip(ui::tip(tr(if offline {
+                    "This server doesn't answer right now"
+                } else {
+                    "Wait for the game to finish starting or installing"
+                })))
         };
         let remove = (hovered || confirming).then(|| {
             if confirming {
@@ -429,6 +446,7 @@ impl Launcher {
                             false,
                             &t,
                         )
+                        .tooltip(ui::tip(tr("Remove this server")))
                         .on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| {
                                 this.multiplayer.confirm_remove = Some(i);
@@ -499,6 +517,7 @@ pub(super) fn danger_line(message: String) -> Div {
 pub(super) fn danger_button(id: SharedString, label: SharedString) -> Stateful<Div> {
     div()
         .id(id)
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -506,9 +525,13 @@ pub(super) fn danger_button(id: SharedString, label: SharedString) -> Stateful<D
         .px(px(12.))
         .rounded(px(radius::CONTROL))
         .cursor_pointer()
-        .hover(|s| s.bg(gpui::rgba(horizon_theme::glass::DANGER_HOVER << 8 | 0x1f)))
+        .child(ui::back_tint(
+            radius::CONTROL,
+            gpui::rgba(horizon_theme::glass::DANGER_HOVER << 8 | 0x1f).into(),
+        ))
         .child(
             ui::text(13., FontWeight::MEDIUM, ink::FULL)
+                .relative()
                 .text_color(ui::danger())
                 .child(label),
         )

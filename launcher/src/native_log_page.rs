@@ -6,8 +6,10 @@
 //! the panel never shows the last attempt as the latest, and an open panel reads again when a
 //! build starts or ends.
 use super::*;
+use crate::glass_ui::{self as ui, white};
 use gpui::{ClipboardItem, ScrollHandle, SharedString};
 use horizon_launcher::native_mods;
+use horizon_theme::glass::{ink, radius};
 
 /// How much of the log the panel shows: its last lines. Copy log still copies all of it.
 const SHOWN: usize = LOG_LINES;
@@ -181,7 +183,7 @@ impl Launcher {
         let open = path.clone();
         let reveal = path.clone();
         let copy = {
-            let b = button("native-log-copy", "Copy log", Kind::Ghost, &t);
+            let b = button("native-log-copy", "Copy log", Kind::Secondary, &t);
             match loaded {
                 Some(Ok(_)) => b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     // The whole file as it was read, never a stale or missing one.
@@ -202,7 +204,7 @@ impl Launcher {
             .gap(px(8.))
             .child(copy)
             .child({
-                let b = button("native-log-file", "Open full log", Kind::Ghost, &t);
+                let b = button("native-log-file", "Open full log", Kind::Secondary, &t);
                 if gone {
                     disabled(b)
                 } else {
@@ -210,7 +212,7 @@ impl Launcher {
                 }
             })
             .child({
-                let b = button("native-log-reveal", "Show in folder", Kind::Ghost, &t);
+                let b = button("native-log-reveal", "Show in folder", Kind::Secondary, &t);
                 if gone {
                     disabled(b)
                 } else {
@@ -218,7 +220,7 @@ impl Launcher {
                 }
             })
             .child(
-                button("native-log-refresh", "Refresh", Kind::Ghost, &t).on_click(cx.listener(
+                button("native-log-refresh", "Refresh", Kind::Secondary, &t).on_click(cx.listener(
                     |this, _: &ClickEvent, _, cx| {
                         this.native_log.stale = true;
                         cx.notify();
@@ -244,16 +246,19 @@ impl Launcher {
                     .flex_col()
                     .flex_1()
                     .min_w_0()
+                    .gap(px(4.))
                     .child(
-                        blocks::pixel(17., FontWeight::MEDIUM)
-                            .text_color(t.ink)
-                            .child(tr("Native build log")),
+                        div()
+                            .font_family(horizon_theme::glass::DISPLAY_FONT)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(18.))
+                            .text_color(white(ink::FULL))
+                            .child(tr("Mod build log")),
                     )
                     // The actual file the actions below work on, wrapping rather than cut off.
                     .child(
-                        text(theme::CAPTION)
+                        ui::text(12., FontWeight::NORMAL, ink::DIM)
                             .font_family(theme::MONO)
-                            .text_color(t.muted)
                             .min_w_0()
                             .line_height(px(18.))
                             .child(short(&path)),
@@ -269,7 +274,10 @@ impl Launcher {
             );
         let body = match loaded {
             None => centered(tr("Loading build log…"), &t),
-            Some(Err(Missing::None)) => centered(tr("No native build log is available yet."), &t),
+            Some(Err(Missing::None)) => centered(
+                tr("No mod has been built yet. The log appears here after the first build."),
+                &t,
+            ),
             Some(Err(Missing::Failed(e))) => notice(
                 trf(
                     "Could not read the build log: {error}",
@@ -299,10 +307,11 @@ impl Launcher {
                         .flex_1()
                         .min_h_0()
                         .overflow_scroll()
-                        .p(px(10.))
-                        .border_2()
-                        .border_color(t.outline)
-                        .bg(t.well)
+                        .p(px(12.))
+                        .rounded(px(radius::CONTROL))
+                        .border_1()
+                        .border_color(white(ui::edge::STRONG))
+                        .bg(gpui::black().opacity(0.25))
                         .font_family(theme::MONO)
                         .text_size(px(12.))
                         .children(
@@ -312,6 +321,35 @@ impl Launcher {
                         ),
                 ),
         };
+        // A standard glass dialog over the dimmed launcher; a click on the scrim closes it.
+        let card = ui::dialog_plate(radius::MODAL)
+            .id("native-log-card")
+            .occlude()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .w_full()
+            .max_w(px(960.))
+            .h_full()
+            .max_h(px(720.))
+            .min_w_0()
+            .overflow_hidden()
+            .p(px(24.))
+            .child(top.relative())
+            // What the build's failure means in plain words, above the compiler's own.
+            .children(self.native_error.as_ref().map(|e| {
+                ui::text(13., FontWeight::NORMAL, 1.)
+                    .text_color(ui::danger())
+                    .relative()
+                    .child(e.clone())
+            }))
+            .child(actions.relative())
+            .children(
+                self.native_step
+                    .as_ref()
+                    .map(|step| quiet_note(step.clone(), &t).relative()),
+            )
+            .child(body.flex_1().min_h_0().min_w_0().relative());
         Some(
             div()
                 .id("native-log")
@@ -319,24 +357,29 @@ impl Launcher {
                 .top_0()
                 .left_0()
                 .size_full()
-                .overflow_hidden()
-                .min_w_0()
                 .flex()
-                .flex_col()
-                .gap(px(14.))
-                .px(px(32.))
-                .py(px(24.))
-                .bg(t.page.opacity(0.96))
-                .on_scroll(|_, _, cx| cx.stop_propagation())
+                .items_center()
+                .justify_center()
+                .p(px(24.))
                 .occlude()
-                .child(top)
-                .child(actions)
-                .children(
-                    self.native_step
-                        .as_ref()
-                        .map(|step| quiet_note(step.clone(), &t)),
+                .on_scroll(|_, _, cx| cx.stop_propagation())
+                .child(ui::scrim_backdrop())
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(ui::scrim())
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.native_log_escape();
+                                cx.notify();
+                            }),
+                        ),
                 )
-                .child(body.flex_1().min_h_0().min_w_0()),
+                .child(card),
         )
     }
 }

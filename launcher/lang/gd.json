@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Ùrlar",
+  "Motion": "Gluasad",
+  "Reduced": "Lùghdaichte",
+  "Full": "Làn",
+  "Aa Text": "Aa Teacsa",
+  "Prepare & play": "Ullaich agus cluich",
+  "Name it, pick what it plays, then an icon.": "Thoir ainm air, tagh dè a chluicheas, agus an uairsin ìomhaigh.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "An-asgaidh dhan h-uile duine. Tha coltas soilleir agus coltas dorcha aig gach ùrlar, agus cuimhnichidh e dath an stràc a thaghas tu fo.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Lùghdaichte a' stad an adhair, nan seargadh agus nan sleamhnachadh; freagairidh na putanan sa bhad. Leanas an siostam roghainn a' choimpiutair agad.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Soillear no dorcha, ùrlar, dath stràc, glainne, agus cùlaibh an Dachaigh a' dol air ais gu mar a thig Horizon.",
+  "The launcher's look is back to how Horizon ships": "Tha coltas an lannsair air ais gu mar a thig Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Chaidh coltas an lannsair ath-shuidheachadh na choisise, ach cha deach a shàbhaladh",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Cruthaichidh Glainne agus Blur panail reòta choltas dorcha; tarraingidh an coltas soilleir panail geala fhìor.",
+  "Performance mode draws solid panels, without glass or blur.": "Tarraingidh modh coileanaidh panail fhìor, as aonais glainne no blur.",
+  "This theme's night draws solid panels, without glass or blur.": "Tarraingidh oidhche an ùrlair seo panail fhìor, as aonais glainne no blur."
 }

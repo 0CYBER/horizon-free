@@ -63,11 +63,61 @@ pub enum Refusal {
     Cache(String),
 }
 
+/// What a player can do about a refusal other than waiting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WayOn {
+    /// Play another game build (instance settings, Installation).
+    OtherBuild,
+    /// The problem is Horizon's: report it.
+    Report,
+    /// Nothing is wrong but the connection: build again once it is back.
+    Retry,
+}
+
+/// The way on a refusal's `text` offers, found from the sentences it was written with (a build
+/// reaches the player as text only).
+pub fn way_on(text: &str) -> Option<WayOn> {
+    // An offline refusal's size, when known, sits after the build: its opening says it all.
+    let offline_opening = |text: &str| {
+        let probe = Refusal::Offline {
+            build: "\0".to_owned(),
+            bytes: None,
+        }
+        .to_string();
+        probe
+            .split('\0')
+            .next()
+            .is_some_and(|opening| text.contains(opening))
+    };
+    let said = |refusal: Refusal| {
+        let probe = refusal.to_string();
+        probe.split('\0').all(|piece| text.contains(piece))
+    };
+    let mark = || "\0".to_owned();
+    if said(Refusal::NoSdk { build: mark() })
+        || said(Refusal::OlderRust {
+            build: mark(),
+            rust: mark(),
+        })
+    {
+        Some(WayOn::OtherBuild)
+    } else if said(Refusal::Unsigned {
+        build: mark(),
+        why: mark(),
+    }) {
+        Some(WayOn::Report)
+    } else if offline_opening(text) {
+        Some(WayOn::Retry)
+    } else {
+        None
+    }
+}
+
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             Self::NoSdk { build } => trf(
-                "The mod tools for {build} aren't ready yet. Pick another game build, or try again later.",
+                "The mod tools for {build} aren't ready yet. Pick another version, or try again later.",
                 &[("build", build)],
             ),
             Self::Offline { build, bytes: Some(bytes) } => trf(
@@ -87,7 +137,7 @@ impl std::fmt::Display for Refusal {
                 &[("build", build), ("what", what)],
             ),
             Self::OlderRust { build, rust } => trf(
-                "The mod tools for {build} are older than this launcher can build with. Pick a newer game build.\n(Rust {rust}; this launcher builds with {ours})",
+                "The mod tools for {build} are older than this launcher can build with. Pick a newer version.\n(Rust {rust}; this launcher builds with {ours})",
                 &[("build", build), ("rust", rust), ("ours", rust_toolchain::VERSION)],
             ),
             Self::Refused { build, why } => trf(
@@ -95,7 +145,7 @@ impl std::fmt::Display for Refusal {
                 &[("build", build), ("why", why)],
             ),
             Self::Host => {
-                tr("E_NATIVE_HOST: no prebuilt game supports this computer; use a supported host").into()
+                tr("Native mods can't be built on this computer: Horizon has no game package for its system yet.").into()
             }
             Self::Cache(why) => trf(
                 "Could not keep the mod tools: {why}",
@@ -114,25 +164,52 @@ fn megabytes(bytes: u64) -> String {
     )
 }
 
-/// A build as people read it: `nightly-2026-11-13 (afe471c)`, or its short commit.
+/// A build as people read it: as the Versions page names its Nightly ("the Nov 13 update"),
+/// found from an installed version when the index has no name, else "your Horizon version"
+/// (an imported build or a snapshot), never a commit. Anything but a build id (a mod's manifest
+/// may say anything) is shown as it is, cut where a character ends.
 pub fn shown(commit: &str, nightly: Option<&str>) -> String {
-    // A commit may come from a mod's manifest: cut only where a character ends.
-    let short = commit.get(..7).unwrap_or(commit);
-    match nightly {
-        Some(nightly) => format!("{nightly} ({short})"),
-        None => short.to_owned(),
+    let name = |name: &str| crate::nightly::update_name(name).unwrap_or_else(|| name.to_owned());
+    match nightly.map(str::to_owned).or_else(|| nightly_of(commit)) {
+        Some(nightly) => name(&nightly),
+        None if super::is_revision(commit) => crate::i18n::tr("your Horizon version").to_string(),
+        None => commit.get(..7).unwrap_or(commit).to_owned(),
     }
 }
 
-/// Build `commit` as people read it, with its Nightly name when its index is kept. `commit` may
-/// come from a mod's manifest: anything but a build id is shown as it is, never looked up.
-pub fn known_name(commit: &str) -> String {
-    let nightly = super::is_revision(commit)
-        .then(|| fs::read(root().join(commit).join(INDEX)).ok())
-        .flatten()
+/// Build `commit`'s Nightly name, from its kept index or an installed version made from it.
+fn nightly_of(commit: &str) -> Option<String> {
+    if !super::is_revision(commit) {
+        return None;
+    }
+    fs::read(root().join(commit).join(INDEX))
+        .ok()
         .and_then(|bytes| Index::build_of(&bytes).ok())
-        .and_then(|build| build.nightly);
-    shown(commit, nightly.as_deref())
+        .and_then(|build| build.nightly)
+        .or_else(|| {
+            crate::backend::installed()
+                .into_iter()
+                .find(|tag| tag.starts_with("nightly-") && tag.ends_with(&commit[..7]))
+        })
+}
+
+/// Build `commit`'s name as the Versions page gives it, when it is known here (a kept index, or
+/// an installed version). `commit` may come from a mod's manifest: anything but a build id is
+/// never looked up.
+pub fn name_of(commit: &str) -> Option<String> {
+    nightly_of(commit).map(|name| shown(commit, Some(&name)))
+}
+
+/// Build `commit` as players read it, for a mod's fit: [`name_of`], else "another Horizon
+/// version", never a commit.
+pub fn known_name(commit: &str) -> String {
+    match name_of(commit) {
+        Some(name) => name,
+        None if super::is_revision(commit) => {
+            crate::i18n::tr("another Horizon version").to_string()
+        }
+        None => commit.get(..7).unwrap_or(commit).to_owned(),
+    }
 }
 
 /// Where SDK releases are read from.

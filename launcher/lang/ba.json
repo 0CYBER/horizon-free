@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тема",
+  "Motion": "Хәрәкәт",
+  "Reduced": "Кәметелгән",
+  "Full": "Тулы",
+  "Aa Text": "Aa Текст",
+  "Prepare & play": "Әҙерләп уйна",
+  "Name it, pick what it plays, then an icon.": "Исемен бир, нимә уйнаясағын һайла, шунан значок.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Бөтәһенә лә бушлай. Һәр теманың яҡты һәм ҡараңғы күренеше бар, ул аҫтында һайлаған акцент төҫөн иҫтә тота.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Кәметелгән күкте, күсереүҙәрҙе һәм шыуыуҙарҙы туҡтата; төймәләр шунда уҡ яуап бирә. Система компьютерығыҙҙың көйләүенә эйәрә.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Яҡты йәки ҡараңғы, тема, акцент төҫө, быяла, томанлау һәм Төп биттең төше Horizon нисек ебәрһә, шулай була.",
+  "The launcher's look is back to how Horizon ships": "Лаунчерҙың тышҡы ҡиәфәте Horizon нисек ебәрһә, шулай булып ҡалды",
+  "The launcher's look is reset for now, but it could not be saved": "Лаунчерҙың тышҡы ҡиәфәте әлегә кире ҡайтарылды, ләкин һаҡланманы",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Быяла һәм Томанлау ҡараңғы күренештең мат панелдәрен формалаштыра; яҡтыһы ҡаты аҡ панелдәр һүрәтләй.",
+  "Performance mode draws solid panels, without glass or blur.": "Һөҙөмтәлелек режимы быялаһыҙ һәм томанлауһыҙ ҡаты панелдәр һүрәтләй.",
+  "This theme's night draws solid panels, without glass or blur.": "Ошо теманың төнө быялаһыҙ һәм томанлауһыҙ ҡаты панелдәр һүрәтләй."
 }

@@ -2934,6 +2934,7 @@ dependencies = [
  "horizon-core",
  "horizon-cosmetics",
  "horizon-friends",
+ "horizon-launcher-scenery",
  "horizon-mcp",
  "horizon-mod-api-gen",
  "horizon-mod-package",
@@ -2982,6 +2983,17 @@ dependencies = [
  "winreg",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "horizon-launcher-scenery"
+version = "0.1.0"
+dependencies = [
+ "gpui-fast",
+ "horizon-theme",
+ "image",
+ "objc2-app-kit 0.3.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

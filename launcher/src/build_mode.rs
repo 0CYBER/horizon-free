@@ -41,6 +41,15 @@ impl ModKind {
         }
     }
 
+    /// What the badge means, for its tooltip.
+    pub(super) fn hint(self) -> &'static str {
+        match self {
+            Self::Native => tr("Has its own program code. It runs inside your game and is built on this computer, so it needs your permission first."),
+            Self::Wasm => tr("Has its own program code, run in a protected sandbox. It never needs a build."),
+            Self::Content => tr("Only data and pictures, no program code. It never needs a build."),
+        }
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Native => tr("Native"),
@@ -88,8 +97,23 @@ impl Pal {
     }
 }
 
-/// The share of a whole build each stage covers, for the one percentage.
-fn percent(progress: Option<native_mods::Progress>) -> u32 {
+/// What a native mod's chip and menu say about how it reaches the game.
+pub(super) struct RouteFacts {
+    glyph: &'static str,
+    color: Hsla,
+    headline: SharedString,
+    reason: String,
+}
+
+impl RouteFacts {
+    pub(super) fn color(&self) -> Hsla {
+        self.color
+    }
+}
+
+/// The share of a whole build each stage covers, for the one percentage the card and the Play
+/// button both show.
+pub(super) fn percent(progress: Option<native_mods::Progress>) -> u32 {
     let Some(p) = progress else { return 0 };
     let (from, span) = match p.stage {
         Stage::Prepare => (0., 0.15),
@@ -128,6 +152,18 @@ impl Launcher {
             .map(|instance| (instance, stake.unbuilt.clone()));
     }
 
+    /// The mods the selected instance's native build left out, as the build recorded them.
+    pub(super) fn native_left_out(&self) -> Vec<native_mods::LeftOut> {
+        if self.mod_preview.active {
+            return self.mod_preview.left_out.clone();
+        }
+        self.selected_instance()
+            .and_then(|instance| self.version_of(instance))
+            .and_then(|version| self.native_build_of(version))
+            .map(|build| build.left_out)
+            .unwrap_or_default()
+    }
+
     /// The selected instance's build card: the build mode, and the build under way or its end.
     pub(super) fn native_build(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
@@ -137,21 +173,22 @@ impl Launcher {
         let mine = self.native_for.as_deref() == Some(instance.id.as_str());
         let building = self.native_step.as_ref().filter(|_| mine);
         let error = self.native_error.as_ref().filter(|_| mine);
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(self.mode_head(state, error, mine, pal, cx));
+        let update = (building.is_none() && error.is_none() && state != State::NoMods)
+            .then(|| self.update_card(instance, pal, cx))
+            .flatten();
+        let mut card = div().flex().flex_col().gap(px(12.)).child(self.mode_head(
+            state,
+            error,
+            mine,
+            update.is_some(),
+            pal,
+            cx,
+        ));
         card = match building {
             Some(step) => card.child(self.panel().child(self.building_card(step, pal, cx))),
             None => card.child(self.mode_status(error, mine, pal, cx)),
         };
-        if building.is_none() && error.is_none() && state != State::NoMods {
-            if let Some(update) = self.update_card(instance, pal, cx) {
-                card = card.child(update);
-            }
-        }
-        Some(card)
+        Some(card.children(update))
     }
 
     /// Before an update of an instance with native mods (design-fit §10.1): when a newer release
@@ -165,6 +202,9 @@ impl Launcher {
         pal: Pal,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
+        if let Some(check) = self.mod_preview.update.clone() {
+            return Some(self.update_panel(check, "nightly-2026-11-10", String::new(), pal, cx));
+        }
         if self.native_step.is_some() || self.settings.native_mods_allowed_at.is_none() {
             return None;
         }
@@ -218,9 +258,16 @@ impl Launcher {
     ) -> Div {
         let t = self.theme;
         let current = native_mods::about(plays).map_or_else(|| plays.to_owned(), |a| a.base);
+        // Two updates of one day share a name: the button then says it keeps what is played.
+        let same_name = horizon_launcher::nightly::update_name(&current).is_some()
+            && horizon_launcher::nightly::update_name(&current)
+                == horizon_launcher::nightly::update_name(&check.to);
         let stay = button(
             "native-update-stay",
-            native_mods::fit::stay(&current),
+            match same_name {
+                true => tr("Keep the version you have").to_string(),
+                false => native_mods::fit::stay(&current),
+            },
             if check.worlds.is_empty() {
                 Kind::Secondary
             } else {
@@ -273,7 +320,10 @@ impl Launcher {
     }
 
     /// Where the instance's native mods stand, read again only when what it depends on changes.
-    fn native_state_of(&self, instance: &instances::Instance) -> State {
+    pub(super) fn native_state_of(&self, instance: &instances::Instance) -> State {
+        if let Some(state) = self.mod_preview.state.filter(|_| self.mod_preview.active) {
+            return state;
+        }
         let version = self.version_of(instance).cloned();
         let home = self.mods.home();
         let profile = Profile::Optimized;
@@ -283,22 +333,40 @@ impl Launcher {
         );
         let mut memo = self.mods.native_state.borrow_mut();
         match memo.as_ref() {
-            Some((k, state)) if *k == key => *state,
+            Some((k, state, _)) if *k == key => *state,
             _ => {
                 let built = version.as_deref().and_then(native_status::built);
+                let enabled = native_status::enabled(&home);
                 let state = native_status::in_mode(
-                    native_status::state(&native_status::enabled(&home), built.as_deref()),
+                    native_status::state(&enabled, built.as_deref()),
                     version.as_deref().and_then(native_status::built_profile),
                     profile,
                 );
-                *memo = Some((key, state));
+                // A build in another mode rebuilds every mod; otherwise only the changed ones.
+                let unbuilt = match state {
+                    native_status::State::NotBuilt => enabled.into_iter().map(|m| m.0).collect(),
+                    _ => native_status::unbuilt(&enabled, built.as_deref()),
+                };
+                *memo = Some((key, state, unbuilt));
                 state
             }
         }
     }
 
+    /// Whether native mod `id` of the selected instance waits for a build ([`Self::native_state_of`]).
+    pub(super) fn native_mod_unbuilt(&self, id: &str) -> bool {
+        if let Some(instance) = self.selected_instance() {
+            self.native_state_of(instance);
+        }
+        self.mods
+            .native_state
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, _, unbuilt)| unbuilt.iter().any(|u| u == id))
+    }
+
     /// A bordered panel, as the build card and its warning sit on the page.
-    fn panel(&self) -> Div {
+    pub(super) fn panel(&self) -> Div {
         let t = self.theme;
         div()
             .flex()
@@ -320,49 +388,79 @@ impl Launcher {
         state: State,
         error: Option<&String>,
         mine: bool,
+        asking: bool,
         pal: Pal,
         cx: &mut Context<Self>,
     ) -> Div {
         let t = self.theme;
+        // Before permission the rows say "Needs permission": the header says the same.
+        let allowed = self.settings.native_mods_allowed_at.is_some();
         let needs = match state {
             State::NoMods | State::UpToDate => None,
+            _ if !allowed => Some(tr("Needs permission")),
             State::NotBuilt => Some(tr("Not built")),
-            State::Outdated => Some(tr("Needs rebuild")),
+            State::Outdated => Some(tr("Needs build")),
         };
+        // A failure, not the worlds question (which stopped to ask, and failed nothing).
+        let failed = error.is_some() && mine && self.worlds_stop(mine).is_none();
+        // Its card offers its own way on (Switch off, Try again, Change version, Report).
+        let way_on = error.and_then(|e| native_mods::sdk_cache::way_on(e));
+        let remedy = failed && (!self.native_failed_mods.is_empty() || way_on.is_some());
+        // The card's Try again is this same Build: one button for it.
+        let retry_in_card = failed && way_on == Some(native_mods::sdk_cache::WayOn::Retry);
         let can_build = self.pending_consent.is_none()
             && !(self.native_step.is_some() && mine)
             // While worlds are at stake the choice row below is the only decision.
             && self.worlds_stop(mine).is_none()
+            && !retry_in_card
             && (error.is_some() || needs.is_some());
         let mut right = div().flex().items_center().gap(px(8.));
         if self.native_step.is_none() {
-            if let Some(label) = needs {
+            // A failed build says so; its card below holds the way on.
+            if failed {
+                right = right.child(blocks::badge(tr("Build failed"), pal.danger, &t));
+            } else if let Some(label) = needs {
                 right = right.child(blocks::badge(label, pal.warn, &t));
-            } else if state == State::UpToDate {
+            } else if state == State::UpToDate && !asking {
+                // Not beside an open question about updating, where it would read as "no update".
                 right = right.child(blocks::badge(tr("Up to date"), pal.success, &t));
             }
         }
         if can_build && self.native_step.is_none() {
-            right = right.child(button("native-build", "Build", Kind::Primary, &t).on_click(
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    if this.settings.native_mods_allowed_at.is_some() {
-                        this.build_native();
-                    } else {
-                        this.request_native_build_consent();
-                    }
-                    cx.notify();
-                }),
-            ));
+            // Build is where permission is asked for, so it says so until it was given.
+            let label = match self.settings.native_mods_allowed_at {
+                Some(_) => tr("Build"),
+                None => tr("Allow and build"),
+            };
+            // Under a failure with its own way on, that is the main action: Build steps back.
+            let kind = match remedy {
+                true => Kind::Secondary,
+                false => Kind::Primary,
+            };
+            right = right.child(
+                button("native-build", label, kind, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        if this.settings.native_mods_allowed_at.is_some() {
+                            this.build_native();
+                        } else {
+                            this.request_native_build_consent();
+                        }
+                        cx.notify();
+                    },
+                )),
+            );
         }
+        // On the list's 12 px inset, like the count and Find mods above it.
         div()
             .flex()
             .items_center()
             .justify_between()
             .gap(px(12.))
+            .px(px(12.))
             .child(
                 text_in(14., pal.ink)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(tr("Native mod build")),
+                    .child(tr("Mod build")),
             )
             .child(right)
     }
@@ -379,29 +477,57 @@ impl Launcher {
         let t = self.theme;
         let other = self.native_step.is_some() && !mine;
         let mut card = div().flex().flex_col().gap(px(10.));
+        // Each message sits in the same card as the update question, its actions inside it.
         if let Some(e) = error {
-            card = card.child(
+            // An icon in the message's colour, the words in body ink, the actions under them.
+            let tone = match self.worlds_stop(mine) {
+                Some(_) => pal.warn,
+                None => pal.danger,
+            };
+            let mut message = self.panel().child(
                 div()
                     .flex()
-                    .items_start()
-                    .justify_between()
-                    .gap(px(12.))
-                    .child(text_in(13., pal.danger).flex_1().min_w_0().child(e.clone()))
+                    .flex_col()
+                    .gap(px(10.))
                     .child(
-                        button("native-show-log", "Show log", Kind::Ghost, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.native_log_open();
-                                cx.notify();
-                            }),
-                        ),
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(10.))
+                            .child(blocks::icon("info-box", 16., tone).mt(px(2.)))
+                            .child(text_in(13., pal.ink).flex_1().min_w_0().child(e.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(8.))
+                            .children(
+                                self.native_failed_mods
+                                    .iter()
+                                    .filter(|id| mine && !self.stop_names(id))
+                                    .map(|id| self.switch_off_button(id, cx)),
+                            )
+                            .children(self.refusal_button(e, cx))
+                            .child(
+                                button("native-show-log", tr("Show log"), Kind::Ghost, &t)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.native_log_open();
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             );
-        }
-        if let Some(stake) = self.worlds_stop(mine).filter(|_| error.is_some()) {
-            card = card.child(self.worlds_choice(stake, pal, cx));
+            if let Some(stake) = self.worlds_stop(mine) {
+                message = message.child(self.worlds_choice(stake, pal, cx));
+            }
+            card = card.child(message);
         }
         if let Some(done) = self.native_done.as_ref().filter(|_| mine) {
-            card = card.child(text_in(13., pal.muted).child(done.clone()));
+            card = card.child(
+                self.panel()
+                    .child(text_in(13., pal.muted).child(done.clone())),
+            );
         }
         if other {
             let name = self
@@ -409,12 +535,66 @@ impl Launcher {
                 .as_deref()
                 .and_then(|id| self.instances.list.iter().find(|i| i.id == id))
                 .map_or("", |i| i.name.as_str());
-            card = card.child(text_in(13., pal.muted).child(trf(
+            card = card.child(self.panel().child(text_in(13., pal.muted).child(trf(
                 "{instance} is building: one build at a time.",
                 &[("instance", name)],
-            )));
+            ))));
         }
         card
+    }
+
+    /// The button for the way on a refused build offers: another game build, a report, or
+    /// another try once the connection is back.
+    fn refusal_button(&self, error: &str, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let t = self.theme;
+        Some(match native_mods::sdk_cache::way_on(error)? {
+            native_mods::sdk_cache::WayOn::OtherBuild => {
+                let instance = self.selected_instance()?.clone();
+                button(
+                    "native-change-version",
+                    tr("Change version"),
+                    Kind::Primary,
+                    &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.open_instance_sheet(instance.clone(), glass_sheet::SheetTab::Installation);
+                    cx.notify();
+                }))
+            }
+            native_mods::sdk_cache::WayOn::Report => {
+                button("native-report", tr("Report"), Kind::Primary, &t)
+                    .on_click(|_, _, cx| cx.open_url(&backend::issues_url()))
+            }
+            native_mods::sdk_cache::WayOn::Retry => {
+                button("native-retry", tr("Try again"), Kind::Primary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.build_native();
+                        cx.notify();
+                    },
+                ))
+            }
+        })
+    }
+
+    /// The button that switches a mod that stopped the build off, as its row's menu does.
+    fn switch_off_button(&self, id: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        let mod_id = id.to_owned();
+        button(
+            SharedString::from(format!("native-off-{id}")),
+            trf("Switch off {mod}", &[("mod", id)]),
+            Kind::Primary,
+            &self.theme,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.mods.message =
+                horizon_launcher::browser::java::set_enabled(&this.mods.home(), &mod_id, false)
+                    .err()
+                    .map(Err);
+            this.native_error = None;
+            this.native_failed_mods.clear();
+            this.instance_mods_changed();
+            cx.notify();
+        }))
     }
 
     /// The choice when the build would switch off mods that worlds were saved with (the error
@@ -431,7 +611,7 @@ impl Launcher {
             .gap(px(8.))
             .child(text_in(13., pal.muted).child(trf(
                 "Backups go to {path}, one zip per world.",
-                &[("path", &stake.backups.display().to_string())],
+                &[("path", &short(&stake.backups))],
             )))
             .child(
                 div()
@@ -511,6 +691,7 @@ impl Launcher {
                     false,
                     &t,
                 )
+                .tooltip(ui::tip(tr("Mod build log")))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.native_log_open();
                     cx.notify();
@@ -518,6 +699,7 @@ impl Launcher {
             )
             .child(
                 ui::icon_button("native-build-cancel", "stop", 32., 16., radius, false, &t)
+                    .tooltip(ui::tip(tr("Stop the build")))
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                         native_mods::cancel();
                         cx.notify();
@@ -563,10 +745,19 @@ impl Launcher {
             )
             .child(bar)
             .child(text_in(13., pal.muted).truncate().child(step.to_owned()))
+            .children(self.first_build.map(|bytes| {
+                text_in(13., pal.muted).child(trf(
+                    "First time only: Horizon downloads a compiler ({size}) and the mod tools for this game. Later builds take seconds.",
+                    &[("size", &storage::format_bytes(bytes))],
+                ))
+            }))
     }
 
     /// Each turned-on native mod's route; filesystem and release reads never run while drawing.
-    fn native_routes(&self, cx: &mut Context<Self>) -> native_mods::Routes {
+    pub(super) fn native_routes(&self, cx: &mut Context<Self>) -> native_mods::Routes {
+        if self.mod_preview.active {
+            return self.mod_preview.routes.clone();
+        }
         let home = self.mods.home();
         let plays = self
             .selected_instance()
@@ -608,10 +799,9 @@ impl Launcher {
         native_mods::Routes::default()
     }
 
-    /// The chip that says how `mod_id` reaches the game, with its menu when open.
-    pub(super) fn route_chip(&self, mod_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let t = self.theme;
-        let pal = Pal::of(&t);
+    /// What the chip and menu of native mod `mod_id` say: its glyph and colour, a headline and why.
+    pub(super) fn route_facts(&self, mod_id: &str, cx: &mut Context<Self>) -> Option<RouteFacts> {
+        let pal = Pal::of(&self.theme);
         let instance = self.selected_instance()?;
         let state = self.native_state_of(instance);
         let busy = self.native_step.is_some();
@@ -689,6 +879,19 @@ impl Launcher {
                 ),
             }
         };
+        Some(RouteFacts {
+            glyph,
+            color,
+            headline,
+            reason,
+        })
+    }
+
+    /// The chip that says how `mod_id` reaches the game, with its menu when open.
+    pub(super) fn route_chip(&self, mod_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = self.theme;
+        let facts = self.route_facts(mod_id, cx)?;
+        let (glyph, color) = (facts.glyph, facts.color);
         let open = self.mods.route_open.as_deref() == Some(mod_id);
         let id = mod_id.to_owned();
         let chip = crate::keyboard(
@@ -717,118 +920,157 @@ impl Launcher {
         }));
         let mut wrap = div().relative().flex_none().child(chip);
         if open {
-            let home = self.mods.home();
-            // A mod the stop names is decided on the panel: turning it off here would skip the
-            // backup that keeps its worlds' content.
-            let named = self.stop_names(mod_id);
-            let off = {
-                let id = id.clone();
-                ui::menu_item(
-                    "route-off",
-                    trf("Turn off {mod}", &[("mod", mod_id)]).into(),
-                    if named {
-                        tr("Choose what to do about your worlds first").to_string()
-                    } else {
-                        tr("Keeps the file, leaves it out of the game").to_string()
-                    },
-                    busy || named,
-                    &t,
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if this.native_step.is_some() || named {
-                        return;
-                    }
-                    this.mods.message =
-                        horizon_launcher::browser::java::set_enabled(&home, &id, false)
-                            .err()
-                            .map(Err);
-                    this.mods.route_open = None;
-                    this.instance_mods_changed();
-                    cx.notify();
-                }))
-            };
-            let worlds_pending = stop.is_some();
-            let build_now = ui::menu_item(
-                "route-build",
-                tr("Build now").into(),
-                if worlds_pending {
-                    tr("Choose what to do about your worlds first").to_string()
-                } else {
-                    tr("Builds the game with your mods").to_string()
-                },
-                busy || state == State::NoMods || worlds_pending,
-                &t,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if this.native_step.is_some() || worlds_pending {
-                    return;
-                }
-                this.mods.route_open = None;
-                if this.settings.native_mods_allowed_at.is_some() {
-                    this.build_native();
-                } else {
-                    this.request_native_build_consent();
-                }
-                cx.notify();
-            }));
-            let log = ui::menu_item(
-                "route-log",
-                tr("Show last log").into(),
-                tr("What the last build printed").to_string(),
-                false,
-                &t,
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.mods.route_open = None;
-                this.native_log_open();
-                cx.notify();
-            }));
-            let backing = if ui::light() {
-                gpui::white().opacity(0.94)
-            } else {
-                ui::color(0x16112b).opacity(0.94)
-            };
-            let menu = ui::popover(280.)
-                .bg(backing)
-                .id("route-menu")
-                .occlude()
-                .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.mods.route_open = None;
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .px(px(12.))
-                        .py(px(8.))
-                        .child(
-                            text_in(14., pal.ink)
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(headline),
-                        )
-                        .children(reason.split('\n').map(|paragraph| {
-                            text_in(12., pal.muted)
-                                .pb(px(4.))
-                                .child(paragraph.to_owned())
-                        })),
-                )
-                .child(off)
-                .child(build_now)
-                .child(log);
             wrap = wrap.child(
                 gpui::deferred(
-                    div()
-                        .absolute()
-                        .top(px(34.))
-                        .right_0()
-                        .child(gpui::anchored().anchor(gpui::Anchor::TopRight).child(menu)),
+                    div().absolute().top(px(34.)).right_0().child(
+                        gpui::anchored()
+                            .anchor(gpui::Anchor::TopRight)
+                            .child(self.route_menu(mod_id, &facts, cx)),
+                    ),
                 )
                 .with_priority(1),
             );
         }
         Some(wrap.into_any_element())
+    }
+
+    /// The menu under a native mod's chip (or its status in the glass look): the headline and
+    /// why, then what can be done about it.
+    pub(super) fn route_menu(
+        &self,
+        mod_id: &str,
+        facts: &RouteFacts,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let t = self.theme;
+        let pal = Pal::of(&t);
+        let (headline, reason) = (facts.headline.clone(), facts.reason.clone());
+        let instance = self.selected_instance().map(|i| i.id.clone());
+        let state = self
+            .selected_instance()
+            .map_or(State::NoMods, |i| self.native_state_of(i));
+        let busy = self.native_step.is_some();
+        let mine = self.native_for.is_some() && self.native_for == instance;
+        let stop = self.worlds_stop(mine);
+        let id = mod_id.to_owned();
+        let home = self.mods.home();
+        // A mod the stop names is decided on the panel: turning it off here would skip the
+        // backup that keeps its worlds' content.
+        let named = self.stop_names(mod_id);
+        let off = {
+            let id = id.clone();
+            ui::menu_item(
+                "route-off",
+                trf("Turn off {mod}", &[("mod", mod_id)]).into(),
+                if named {
+                    tr("Choose what to do about your worlds first").to_string()
+                } else {
+                    tr("Keeps the file, leaves it out of the game").to_string()
+                },
+                busy || named,
+                &t,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if this.native_step.is_some() || named {
+                    return;
+                }
+                this.mods.message = horizon_launcher::browser::java::set_enabled(&home, &id, false)
+                    .err()
+                    .map(Err);
+                this.mods.route_open = None;
+                this.instance_mods_changed();
+                cx.notify();
+            }))
+        };
+        let worlds_pending = stop.is_some();
+        let build_now = ui::menu_item(
+            "route-build",
+            tr("Build now").into(),
+            if worlds_pending {
+                tr("Choose what to do about your worlds first").to_string()
+            } else {
+                tr("Builds the game with your mods").to_string()
+            },
+            busy || state == State::NoMods || worlds_pending,
+            &t,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            if this.native_step.is_some() || worlds_pending {
+                return;
+            }
+            this.mods.route_open = None;
+            if this.settings.native_mods_allowed_at.is_some() {
+                this.build_native();
+            } else {
+                this.request_native_build_consent();
+            }
+            cx.notify();
+        }));
+        let log = ui::menu_item(
+            "route-log",
+            tr("Show last log").into(),
+            tr("What the last build printed").to_string(),
+            false,
+            &t,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.mods.route_open = None;
+            this.native_log_open();
+            cx.notify();
+        }));
+        let backing = if ui::light() {
+            gpui::white().opacity(0.94)
+        } else {
+            ui::color(0x16112b).opacity(0.94)
+        };
+        // Native mods run as real code: until the player allows them, the menu offers the
+        // trust notice (the glass rows have no button of their own for it).
+        let allow = (t.glass && self.settings.native_mods_allowed_at.is_none()).then(|| {
+            let id = id.clone();
+            ui::menu_item(
+                "route-allow",
+                tr("Allow native mods").into(),
+                tr("Native mods have access to your computer.").to_string(),
+                false,
+                &t,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.mods.route_open = None;
+                this.pending_consent = Some(PendingConsent::Local(id.clone()));
+                cx.notify();
+            }))
+        });
+        let menu = ui::popover(280.)
+            .bg(backing)
+            .id("route-menu")
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.mods.route_open = None;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(12.))
+                    .py(px(8.))
+                    .child(
+                        text_in(14., pal.ink)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(headline),
+                    )
+                    .children(reason.split('\n').map(|paragraph| {
+                        text_in(12., pal.muted)
+                            .pb(px(4.))
+                            .child(paragraph.to_owned())
+                    })),
+            )
+            .child(off)
+            .child(build_now)
+            .child(log)
+            .children(allow);
+        menu
     }
 
     /// Declared game internals beside the mod's route.
@@ -881,9 +1123,10 @@ impl Launcher {
     }
 
     /// The kind badge beside a mod's name.
-    pub(super) fn kind_badge(&self, kind: ModKind) -> Div {
+    pub(super) fn kind_badge(&self, kind: ModKind) -> Stateful<Div> {
         let pal = Pal::of(&self.theme);
-        div()
+        let badge = div()
+            .id(SharedString::from(format!("kind-{}", kind.label())))
             .flex()
             .flex_none()
             .items_center()
@@ -891,7 +1134,8 @@ impl Launcher {
             .px(px(7.))
             .rounded_full()
             .bg(pal.faint)
-            .child(text_in(11., pal.muted).child(kind.label()))
+            .child(text_in(11., pal.muted).child(kind.label()));
+        self.with_reason(badge, kind.hint())
     }
 }
 

@@ -213,7 +213,7 @@ fn every_message_names_the_mod_the_builds_and_the_worlds() {
     let build = "nightly-2026-11-13 (afe471c)";
     assert_eq!(
         refusal("Greeter", &misfit, build),
-        "Greeter doesn't fit this game.\nIt was made for aaaaaaa and this instance runs \
+        "Greeter doesn't fit this game.\nIt was made for another Horizon version and this instance runs \
          nightly-2026-11-13 (afe471c). Since then the game changed 2 things that Greeter uses: the hook \
          player_logged_in (changed); the method ServerHost::give_item (removed).\nThe game will be \
          built without Greeter, which stays installed. Ask its author for an update made for this game."
@@ -223,7 +223,7 @@ fn every_message_names_the_mod_the_builds_and_the_worlds() {
     };
     assert_eq!(
         line("Greeter", &fits, build),
-        "Made for aaaaaaa. Fits this game: nightly-2026-11-13 (afe471c)."
+        "Made for another Horizon version. Fits this game too."
     );
     assert!(fits.usable() && Verdict::MadeFor.usable() && !misfit.usable());
     assert_eq!(
@@ -244,11 +244,11 @@ fn an_update_says_how_many_mods_fit_and_which_will_be_switched_off() {
     let build = "nightly-2026-11-20 (9a8b7c6)";
     assert_eq!(
         update_summary(build, 1, &[]),
-        "Update to nightly-2026-11-20 (9a8b7c6)? Your native mod fits it."
+        "Move to nightly-2026-11-20 (9a8b7c6)? Your native mod fits it."
     );
     assert_eq!(
         update_summary(build, 4, &[]),
-        "Update to nightly-2026-11-20 (9a8b7c6)? All 4 of your native mods fit it."
+        "Move to nightly-2026-11-20 (9a8b7c6)? All 4 of your native mods fit it."
     );
     let misfit = Verdict::DoesNotFit {
         made_for: OTHER_BUILD.into(),
@@ -260,7 +260,7 @@ fn an_update_says_how_many_mods_fit_and_which_will_be_switched_off() {
     let off = [("Greeter".to_owned(), short(&misfit))];
     assert_eq!(
         update_summary(build, 4, &off),
-        "Update to nightly-2026-11-20 (9a8b7c6)? 3 of your 4 native mods fit it.\nGreeter does \
+        "Move to nightly-2026-11-20 (9a8b7c6)? 3 of your 4 native mods fit it.\nGreeter does \
          not: the hook player_logged_in (changed). It will be switched off until its author makes a version that fits."
     );
     let exact = Verdict::Exact {

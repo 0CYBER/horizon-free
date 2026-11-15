@@ -112,6 +112,7 @@ pub(super) fn parse_hit(hit: &Value) -> Option<Project> {
         kind,
         game_versions: strings(&hit["versions"]),
         loaders: strings(&hit["categories"]),
+        blocked: None,
     })
 }
 
@@ -136,6 +137,7 @@ pub(super) fn parse_project(p: &Value) -> Option<Project> {
         kind,
         game_versions: strings(&p["game_versions"]),
         loaders: strings(&p["loaders"]),
+        blocked: None,
     })
 }
 

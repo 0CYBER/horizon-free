@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Mavzu",
+  "Motion": "Harakat",
+  "Reduced": "Kamaytirilgan",
+  "Full": "To'liq",
+  "Aa Text": "Aa Matn",
+  "Prepare & play": "Tayyorlang va o'ynang",
+  "Name it, pick what it plays, then an icon.": "Nom bering, nimani o'ynatishini tanlang, keyin belgicha.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Hamma uchun bepul. Har bir mavzuning yorug' va qorong'i ko'rinishi bor va u ostida tanlagan urg'u rangini eslab qoladi.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Kamaytirilgan osmonni, so'nishlarni va sirg'alishlarni to'xtatadi; tugmalar baribir zudlik bilan javob beradi. Tizim kompyuteringiz sozlamasiga amal qiladi.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Yorug' yoki qorong'i, mavzu, urg'u rangi, shisha, xiralash va Bosh sahifa fon Horizon'ning asl holatiga qaytadi.",
+  "The launcher's look is back to how Horizon ships": "Launcher ko'rinishi Horizon'ning asl holatiga qaytdi",
+  "The launcher's look is reset for now, but it could not be saved": "Launcher ko'rinishi hozircha tiklandi, lekin saqlanmadi",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Shisha va Xiralash qorong'i ko'rinishning xira panellarini shakllantiradi; yorug'i qattiq oq panellar chizadi.",
+  "Performance mode draws solid panels, without glass or blur.": "Unumdorlik rejimi shisha va xiralashsiz qattiq panellar chizadi.",
+  "This theme's night draws solid panels, without glass or blur.": "Bu mavzuning tuni shisha va xiralashsiz qattiq panellar chizadi."
 }

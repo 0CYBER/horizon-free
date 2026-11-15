@@ -3,11 +3,15 @@
 //! text and fills at a few opacities over [`glass`](crate::glass) plates; Geist throughout.
 use crate::{hover_fade, hover_is, keyboard, note_hover, theme::Theme, track_hover, Kind};
 use gpui::{
-    div, prelude::*, px, rgb, rgba, svg, App, ClickEvent, Div, FontWeight, Hsla, SharedString,
-    Stateful, Svg, TextRun, Window,
+    canvas, div, prelude::*, px, rgb, rgba, svg, AnimationExt, AnyElement, App, ClickEvent, Div,
+    ElementId, FontWeight, Hsla, Pixels, SharedString, Stateful, Svg, TextRun, Window,
 };
+use horizon_launcher::effects::Effects;
 use horizon_theme::glass::{fill, ink, radius, Glass};
 use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 thread_local! {
     /// Whether this frame's pages draw the glass look (the dark appearance).
@@ -18,6 +22,13 @@ thread_local! {
     static FLAT: Cell<bool> = const { Cell::new(false) };
     /// The light appearance: the glass look's white ink and fills turn to [`INK`].
     static LIGHT: Cell<bool> = const { Cell::new(false) };
+    /// The player's flourishes ([`effects`]).
+    static EFFECTS: Cell<Effects> = const { Cell::new(Effects::ALL) };
+    /// How many [`hover_back`] layers this frame has built so far: the next one's name.
+    static BACKS: Cell<usize> = const { Cell::new(0) };
+    /// Each [`hover_back`] layer's pointer: on or off, and since when.
+    static BACK_HOVER: RefCell<HashMap<SharedString, (bool, std::time::Instant)>> =
+        RefCell::new(HashMap::new());
 }
 
 /// The light appearance's ink: the mockup's text on white (`#100a1f`), at the opacities the dark
@@ -107,9 +118,13 @@ pub fn setting_row(
         .items_center()
         .gap_x(px(40.))
         .gap_y(px(12.))
-        .px(px(16.))
-        .py(px(16.))
-        .rounded(px(radius::LARGE))
+        .px(px(14.))
+        .py(px(13.))
+        .rounded(px(12.))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .relative()
+        .child(back_edge(12., 0.03, true))
         .child(
             div()
                 .flex()
@@ -118,8 +133,8 @@ pub fn setting_row(
                 .min_w(px(240.))
                 .gap(px(4.))
                 .child(
-                    text(15., FontWeight::SEMIBOLD, ink::FULL)
-                        .line_height(px(21.))
+                    text(14.5, FontWeight::SEMIBOLD, ink::FULL)
+                        .line_height(px(20.))
                         .child(title),
                 )
                 .children(note.map(|n| {
@@ -143,17 +158,21 @@ pub fn setting_row_stacked(
         .flex()
         .flex_col()
         .gap(px(16.))
-        .px(px(16.))
-        .py(px(16.))
-        .rounded(px(radius::LARGE))
+        .px(px(14.))
+        .py(px(13.))
+        .rounded(px(12.))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .relative()
+        .child(back_edge(12., 0.03, true))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(4.))
                 .child(
-                    text(15., FontWeight::SEMIBOLD, ink::FULL)
-                        .line_height(px(21.))
+                    text(14.5, FontWeight::SEMIBOLD, ink::FULL)
+                        .line_height(px(20.))
                         .child(title),
                 )
                 .children(note.map(|n| {
@@ -205,6 +224,7 @@ pub fn on() -> bool {
 /// Set as each frame's pages start being built.
 pub fn set_on(on: bool) {
     ON.set(on);
+    BACKS.set(0);
 }
 
 /// Set as each frame's pages start being built: the colours for the player's accent.
@@ -215,6 +235,38 @@ pub fn set_look(look: Glass) {
 /// The look's colours.
 pub fn look() -> Glass {
     LOOK.get()
+}
+
+/// Set as each frame's pages start being built: the flourishes the player keeps.
+pub fn set_effects(effects: Effects) {
+    EFFECTS.set(effects);
+}
+
+/// The flourishes the player keeps (Settings > Appearance).
+pub fn effects() -> Effects {
+    EFFECTS.get()
+}
+
+/// A two-colour fill from `from` to `to` at `angle`, or `from` alone with Gradients off.
+pub fn grad(angle: f32, from: Hsla, to: Hsla) -> gpui::Background {
+    if effects().gradients {
+        gpui::linear_gradient(
+            angle,
+            gpui::linear_color_stop(from, 0.),
+            gpui::linear_color_stop(to, 1.),
+        )
+    } else {
+        from.into()
+    }
+}
+
+/// `shadows` with Glow on; with it off only the inset ones (a control's edge light, not a halo).
+pub fn glows(shadows: Vec<gpui::BoxShadow>) -> Vec<gpui::BoxShadow> {
+    if effects().glow {
+        shadows
+    } else {
+        shadows.into_iter().filter(|s| s.inset).collect()
+    }
 }
 
 /// White at `a`: the dark look's ink and fills. In light, the ink at `a`, so every part keeps
@@ -242,6 +294,52 @@ pub fn text(size: f32, weight: FontWeight, a: f32) -> Div {
         .text_color(white(a))
 }
 
+/// The widths text was laid out in, by key, as [`room`] recorded them on the last frame: what
+/// [`cut`] compares a text's own width against.
+pub type Rooms = Rc<RefCell<HashMap<SharedString, f32>>>;
+
+/// Fills its (relative) parent and records the parent's laid-out width in `rooms` under `key`.
+pub fn room(rooms: &Rooms, key: SharedString) -> impl IntoElement {
+    let rooms = rooms.clone();
+    gpui::canvas(
+        move |bounds, _, _| {
+            rooms.borrow_mut().insert(key, f32::from(bounds.size.width));
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// Whether `text` in `family` at `size` and `weight` is wider than the room recorded under `key`,
+/// so a truncating parent cuts it: decides a full-text hover label. False until a room is known.
+pub fn cut(
+    cx: &App,
+    rooms: &Rooms,
+    key: &str,
+    text: &str,
+    family: &'static str,
+    size: f32,
+    weight: FontWeight,
+) -> bool {
+    let Some(room) = rooms.borrow().get(key).copied() else {
+        return false;
+    };
+    let system = cx.text_system();
+    let font = system.resolve_font(&gpui::Font {
+        weight,
+        ..gpui::font(family)
+    });
+    let width: f32 = text
+        .chars()
+        .filter_map(|c| system.advance(font, px(size), c).ok())
+        .map(|a| f32::from(a.width))
+        .sum();
+    width > room + 0.5
+}
+
 /// One of the mockup's Hugeicons, stroked in `color`.
 pub fn icon(name: &'static str, size: f32, color: Hsla) -> Svg {
     svg()
@@ -259,7 +357,234 @@ fn layer(r: f32) -> impl Fn() -> Div {
 /// `id`'s fill eased between `from` (white at that opacity) and `to` while hovered, as the
 /// mockup's `transition-colors` does.
 fn hover_fill(id: &SharedString, r: f32, from: f32, to: f32) -> gpui::AnyElement {
-    hover_fade(id, layer(r), move |d, t| d.bg(white((to - from) * t)))
+    hover_edge(id, r, to - from, false)
+}
+
+/// How opaque white outlines are: every control and inner card at rest, under the pointer, and
+/// open or chosen (redesign pass 2: outlines everywhere, stronger as the pointer comes).
+pub mod edge {
+    pub const REST: f32 = 0.10;
+    pub const HOVER: f32 = 0.24;
+    pub const STRONG: f32 = 0.30;
+}
+
+/// `id`'s hover layer: a white fill at `fill` and an outline at [`edge::HOVER`], both eased in
+/// and out. `bordered`: the element has its own 1 px outline, which the layer's covers.
+pub(crate) fn hover_edge(id: &SharedString, r: f32, fill: f32, bordered: bool) -> gpui::AnyElement {
+    let inset = if bordered { -1. } else { 0. };
+    hover_fade(
+        id,
+        move || {
+            div()
+                .absolute()
+                .top(px(inset))
+                .left(px(inset))
+                .right(px(inset))
+                .bottom(px(inset))
+                .rounded(px(r))
+        },
+        move |d, t| {
+            d.bg(white(fill * t))
+                .border_1()
+                .border_color(white(edge::HOVER * t))
+        },
+    )
+}
+
+/// A hover layer that hears the pointer itself, for an element with no id, or with hoverable
+/// parts in it ([`track_hover`] lights one element at a time, so a row would go dark under its own
+/// button): `paint` draws it at 0 (rest) to 1 (hovered), eased in and out on QUICK, at once under
+/// reduced motion. Put it first in a `relative` element, so the content is drawn over it. At rest
+/// it draws nothing and plays nothing.
+fn hover_back(inset: f32, r: f32, paint: impl Fn(Div, f32) -> Div + 'static) -> AnyElement {
+    let n = BACKS.get();
+    BACKS.set(n + 1);
+    // Named by its place in the frame's build: the pages are built in the same order each frame.
+    // shortcut: a row hovered as its page is swapped by the keyboard may stay lit until the
+    // pointer moves over it; give the callers ids if that shows.
+    let id = SharedString::from(format!("hover-back-{n}"));
+    let state = BACK_HOVER.with_borrow(|all| all.get(&id).copied());
+    let shown = back_phase(state, horizon_theme::QUICK.duration()).map(|(on, at)| {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let start = *START.get_or_init(std::time::Instant::now);
+        let key = ElementId::named_usize(
+            format!("{id}-{on}"),
+            at.saturating_duration_since(start).as_micros() as usize,
+        );
+        div()
+            .absolute()
+            .top(px(inset))
+            .left(px(inset))
+            .right(px(inset))
+            .bottom(px(inset))
+            .rounded(px(r))
+            .with_animation(
+                key,
+                crate::motion::eased(horizon_theme::QUICK),
+                move |d, t| paint(d, if on { t } else { 1. - t }),
+            )
+    });
+    let key = id.clone();
+    div()
+        .id(id)
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .on_hover(move |hovered, window, _| {
+            BACK_HOVER.with_borrow_mut(|all| {
+                all.insert(key.clone(), (*hovered, std::time::Instant::now()));
+            });
+            window.refresh();
+        })
+        .children(shown)
+        .into_any_element()
+}
+
+/// What a [`hover_back`] layer plays from its last pointer change (`state`): easing in while on,
+/// out for `len` after the pointer left, nothing at rest.
+fn back_phase(
+    state: Option<(bool, std::time::Instant)>,
+    len: std::time::Duration,
+) -> Option<(bool, std::time::Instant)> {
+    state.filter(|&(on, at)| on || at.elapsed() < len)
+}
+
+/// [`hover_back`] as [`hover_edge`]: white at `fill` and the hover outline. `bordered`: the
+/// element has its own 1 px outline, which the layer's covers.
+pub fn back_edge(r: f32, fill: f32, bordered: bool) -> AnyElement {
+    hover_back(if bordered { -1. } else { 0. }, r, move |d, t| {
+        d.bg(white(fill * t))
+            .border_1()
+            .border_color(white(edge::HOVER * t))
+    })
+}
+
+/// [`hover_back`] in one colour (white at a few %, a dark tint, the danger red), no outline.
+pub fn back_tint(r: f32, c: Hsla) -> AnyElement {
+    hover_back(0., r, move |d, t| d.bg(c.opacity(c.a * t)))
+}
+
+/// `a` towards `b` by `t`, for hover-eased colours.
+pub fn towards(a: Hsla, b: Hsla, t: f32) -> Hsla {
+    Hsla {
+        h: a.h + (b.h - a.h) * t,
+        s: a.s + (b.s - a.s) * t,
+        l: a.l + (b.l - a.l) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+/// A lifting card's glow under it, at `t` of its strength (the site's `0 14px 36px -12px`).
+fn lift_glow(t: f32) -> Vec<gpui::BoxShadow> {
+    glows(vec![gpui::BoxShadow {
+        color: color(look().accent).opacity(0.6 * t),
+        offset: gpui::point(px(0.), px(14.)),
+        blur_radius: px(36.),
+        spread_radius: px(-12.),
+        inset: false,
+    }])
+}
+
+/// The accent's lighter end, for the primary button's gradient (the mockup's `--accent2`).
+pub fn accent2() -> u32 {
+    horizon_theme::glass::mix_oklab(look().accent, 0xffffff, 0.25)
+}
+
+/// `d`, a card built by [`card`] with its children in, wrapped to rise [`crate::motion::LIFT`] px
+/// on the spring while the pointer is on it: its outline warms from white to the accent and a glow
+/// opens under it, as the site's cards do. Pressing sinks it [`crate::motion::PRESS`] px instead.
+pub fn lift(id: &SharedString, d: Stateful<Div>) -> AnyElement {
+    let rest = white(edge::REST + 0.03);
+    let warm = color(look().accent).opacity(0.65);
+    crate::hover_move(
+        id,
+        d.border_1().active(|s| s.top(px(crate::motion::PRESS))),
+        move |d, t| {
+            d.top(px(-crate::motion::LIFT * t))
+                .border_color(towards(rest, warm, t))
+                .shadow(lift_glow(t))
+        },
+    )
+}
+
+/// The site's card: white at 3.5 %, a quiet 1 px outline, `r` corners, its hover eased by [`lift`].
+/// The look (outline, rise, glow) is [`lift`]'s; a card that should not lift takes this alone.
+pub fn card(id: impl Into<SharedString>, r: f32, t: &Theme) -> Stateful<Div> {
+    let id = id.into();
+    keyboard(
+        track_hover(
+            div()
+                .id(id.clone())
+                .relative()
+                .rounded(px(r))
+                .bg(white(0.035))
+                .border_1()
+                .border_color(white(edge::REST + 0.03))
+                .cursor_pointer(),
+            id,
+        ),
+        t,
+    )
+}
+
+/// One pass of light across a primary button while the pointer is on it (the site's sheen): a
+/// narrow band of white, sliding through on the spring. Put it inside the button, before its
+/// label; it is gone again by the time the spring settles. Reduced motion shows nothing.
+pub fn sheen(id: &SharedString) -> AnyElement {
+    // Out of the flow in every state: an in-flow rest div would sit in the button's gap and
+    // widen it, so the button would narrow the moment the pointer arrives.
+    let nothing = || div().absolute().into_any_element();
+    if crate::motion::still() || !effects().sheen {
+        return nothing();
+    }
+    let hovered = crate::hover_is(id);
+    let since = HOVER_SINCE.with_borrow(|times| times.get(id).copied());
+    if !hovered {
+        return nothing();
+    }
+    let Some(at) = since else {
+        return nothing();
+    };
+    let band = div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(gpui::relative(0.55))
+        // shortcut: GPUI gradients stop at two colours, so the sheen fades in but not out
+        // again; a second band mirrored would restore the full pass.
+        .bg(gpui::linear_gradient(
+            105.,
+            gpui::linear_color_stop(gpui::white().opacity(0.), 0.),
+            gpui::linear_color_stop(gpui::white().opacity(0.3), 1.),
+        ));
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let start = *START.get_or_init(std::time::Instant::now);
+    let key =
+        gpui::ElementId::named_usize(format!("{id}-sheen"), (at - start).as_micros() as usize);
+    // One slow pass of light, as the site plays it (750 ms on a long ease-in-out).
+    const SHEEN: horizon_theme::Motion = horizon_theme::Motion {
+        name: "sheen",
+        ms: 750,
+        curve: [0.3, 0.7, 0.2, 1.],
+    };
+    band.with_animation(key, crate::motion::eased(SHEEN), |d, t| {
+        d.left(gpui::relative(-0.6 + 1.65 * t))
+    })
+    .into_any_element()
+}
+
+thread_local! {
+    /// When each element's hover began, for one-shot animations like [`sheen`].
+    static HOVER_SINCE: RefCell<HashMap<SharedString, std::time::Instant>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Records hover times for [`sheen`]; called from [`crate::note_hover`].
+pub(crate) fn note_hover_since(id: &SharedString, at: std::time::Instant) {
+    HOVER_SINCE.with_borrow_mut(|times| {
+        times.insert(id.clone(), at);
+    });
 }
 
 /// The state dot before a row's second line (`Dot`): live green, amber for busy (the mockup
@@ -316,11 +641,19 @@ pub fn row(id: impl Into<SharedString>, current: bool, pr: f32, t: &Theme) -> St
         .p(px(8.))
         .pr(px(pr))
         .rounded(px(radius::ROW))
+        .border_1()
         .cursor_pointer();
+    // The one shown: tinted with the accent and outlined in it.
     let d = if current {
-        d.bg(white(fill::SELECTED))
+        d.bg(color(look().accent).opacity(0.16))
+            .border_color(color(look().accent_soft).opacity(0.55))
     } else {
-        d.child(hover_fill(&id, radius::ROW, 0., fill::HOVER))
+        d.border_color(gpui::transparent_black()).child(hover_edge(
+            &id,
+            radius::ROW,
+            fill::ROW_HOVER,
+            true,
+        ))
     };
     keyboard(track_hover(d, id), t)
 }
@@ -382,6 +715,8 @@ pub fn icon_button(
         .cursor_pointer();
     let d = if active {
         d.bg(white(fill::ACTIVE))
+            .border_1()
+            .border_color(white(edge::STRONG))
     } else {
         d.child(hover_fill(&id, r, 0., fill::BUTTON))
     };
@@ -395,58 +730,83 @@ pub fn icon_button(
     keyboard(track_hover(d.child(glyph), id), t)
 }
 
-/// One tab of a tab strip (`Tabs`, size `md`): 36 px tall, 15 px; the open one white on 12 %,
-/// medium; the others white at 70 %, white under the pointer.
-pub fn tab(
+/// A top-bar page, as the site's nav: a naked tab — no plate, no pill — its label brightening and
+/// a faint fill arriving under the pointer, with the sunrise bar growing under it: a gradient
+/// line, half out on hover and all the way out with a glow on the page it names (`open`).
+pub fn nav_tab(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     open: bool,
     t: &Theme,
 ) -> Stateful<Div> {
     let id = id.into();
-    let d = div()
-        .id(id.clone())
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(6.))
-        .h(px(36.))
-        .px(px(14.))
-        .rounded(px(radius::CONTROL))
-        .cursor_pointer()
-        .font_family(horizon_theme::glass::FONT)
-        .text_size(px(15.))
-        .line_height(px(20.));
-    let d = if open {
-        d.bg(white(fill::ACTIVE))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(white(ink::FULL))
+    let look = look();
+    let bar = div()
+        .absolute()
+        .bottom(px(1.))
+        .h(px(2.))
+        .rounded(px(2.))
+        .bg(grad(90., color(look.accent_soft), color(look.accent)));
+    let bar = if open {
+        bar.left(px(12.))
+            .right(px(12.))
+            .shadow(glows(vec![gpui::BoxShadow {
+                color: color(look.accent).opacity(0.9),
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(10.),
+                spread_radius: px(0.),
+                inset: false,
+            }]))
+            .into_any_element()
     } else {
-        d.text_color(white(ink::BODY))
-            .hover(|s| s.text_color(white(ink::FULL)))
+        // Grows from the middle out to 80 % of the tab, at 70 % strength, on the spring.
+        crate::hover_ease(
+            &id,
+            move || {
+                div()
+                    .absolute()
+                    .bottom(px(1.))
+                    .h(px(2.))
+                    .rounded(px(2.))
+                    .bg(grad(90., color(look.accent_soft), color(look.accent)))
+            },
+            move |d, t| {
+                d.left(gpui::relative(0.5 - 0.4 * t))
+                    .right(gpui::relative(0.5 - 0.4 * t))
+                    .opacity(0.7 * t)
+            },
+            crate::motion::SPRING,
+        )
     };
     let label: SharedString = label.into();
-    let d = d.when(!label.is_empty(), |d| d.child(label));
-    keyboard(track_hover(d, id), t)
+    keyboard(
+        track_hover(
+            div()
+                .id(id.clone())
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .h(px(36.))
+                .px(px(13.))
+                .rounded(px(radius::CONTROL))
+                .cursor_pointer()
+                .font_family(horizon_theme::glass::FONT)
+                .text_size(px(14.5))
+                .line_height(px(20.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(white(if open { ink::FULL } else { ink::MUTED }))
+                .when(!open, |d| {
+                    d.hover(|s| s.text_color(white(ink::FULL)))
+                        .child(back_tint(radius::CONTROL, white(0.04)))
+                })
+                .child(div().relative().child(label))
+                .child(bar),
+            id,
+        ),
+        t,
+    )
 }
-
-/// A tab with an icon and a count (`Tabs`, size `md`): as [`tab`], the icon 16 px before the
-/// label, the count after it in white at 45 %.
-pub fn count_tab(
-    id: impl Into<SharedString>,
-    icon_name: Option<&'static str>,
-    label: impl Into<SharedString>,
-    count: Option<usize>,
-    open: bool,
-    t: &Theme,
-) -> Stateful<Div> {
-    let colour = white(if open { ink::FULL } else { ink::BODY });
-    tab(id, "", open, t)
-        .children(icon_name.map(|n| icon(n, 16., colour)))
-        .child(label.into())
-        .children(count.map(|n| div().text_color(white(ink::DIM)).child(n.to_string())))
-}
-
 const MENU_FONT_SIZE: f32 = 14.;
 const MENU_ICON_SIZE: f32 = 17.;
 const MENU_ROW_GAP: f32 = 12.;
@@ -596,8 +956,19 @@ pub fn solid(
             .rounded(px(radius::CONTROL))
             .text_center()
             .bg(paper())
+            .border_1()
+            .border_color(white(edge::REST))
             .cursor_pointer()
-            .hover(|s| s.opacity(0.9))
+            .hover(|s| {
+                s.opacity(0.94).shadow(vec![gpui::BoxShadow {
+                    color: gpui::black().opacity(0.25),
+                    offset: gpui::point(px(0.), px(4.)),
+                    blur_radius: px(14.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }])
+            })
+            .active(|s| s.opacity(0.85))
             .font_family(horizon_theme::glass::FONT)
             .text_size(px(size))
             .font_weight(FontWeight::MEDIUM)
@@ -618,6 +989,7 @@ pub fn big_icon(id: impl Into<SharedString>, name: &'static str, t: &Theme) -> S
         div()
             .id(id)
             .group(group)
+            .relative()
             .flex()
             .flex_none()
             .items_center()
@@ -625,9 +997,12 @@ pub fn big_icon(id: impl Into<SharedString>, name: &'static str, t: &Theme) -> S
             .size(px(56.))
             .rounded(px(radius::LARGE))
             .bg(white(fill::BUTTON))
-            .hover(|s| s.bg(white(0.13)))
+            .border_1()
+            .border_color(white(edge::REST))
+            .active(|s| s.bg(white(0.18)))
             .cursor_pointer()
-            .child(glyph),
+            .child(back_edge(radius::LARGE, 0.05, true))
+            .child(glyph.relative()),
         t,
     )
 }
@@ -735,28 +1110,31 @@ pub fn quiet_icon(
     h: f32,
     t: &Theme,
 ) -> Stateful<Div> {
-    keyboard(
-        div()
-            .id(id.into())
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .gap(px(8.))
-            .h(px(h))
-            .px(px(14.))
-            .rounded(px(radius::CONTROL))
-            .bg(white(fill::BUTTON))
-            .hover(|s| s.bg(white(0.14)))
-            .cursor_pointer()
-            .font_family(horizon_theme::glass::FONT)
-            .text_size(px(14.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(white(ink::FULL))
-            .children(name.map(|n| icon(n, 16., white(ink::FULL))))
-            .child(label.into()),
-        t,
-    )
+    let id = id.into();
+    let d = div()
+        .id(id.clone())
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .h(px(h))
+        .px(px(14.))
+        .rounded(px(radius::CONTROL))
+        .bg(white(fill::BUTTON))
+        .border_1()
+        .border_color(white(edge::REST))
+        .active(|s| s.bg(white(0.18)))
+        .cursor_pointer()
+        .font_family(horizon_theme::glass::FONT)
+        .text_size(px(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(white(ink::FULL))
+        .child(hover_edge(&id, radius::CONTROL, 0.06, true))
+        .children(name.map(|n| icon(n, 16., white(ink::FULL)).relative()))
+        .child(div().relative().child(label.into()));
+    keyboard(track_hover(d, id), t)
 }
 
 /// A list row (`ROW`): `rounded-[12px] px-3 py-2.5`, white at 6 % under the pointer. `on_hover`
@@ -774,6 +1152,8 @@ pub fn list_row(
     let fill = if held && !hover_is(&id) {
         layer(radius::ROW)()
             .bg(white(fill::ROW_HOVER))
+            .border_1()
+            .border_color(white(edge::HOVER))
             .into_any_element()
     } else {
         hover_fill(&id, radius::ROW, 0., fill::ROW_HOVER)
@@ -876,6 +1256,15 @@ pub fn field(focused: bool, invalid: bool) -> Div {
         .overflow_hidden()
         .rounded(px(radius::ROW))
         .bg(bg)
+        .border_1()
+        .border_color(if invalid {
+            color(horizon_theme::glass::DANGER_HOVER).opacity(0.6)
+        } else if focused {
+            color(look().accent_soft).opacity(0.7)
+        } else {
+            white(edge::REST)
+        })
+        .child(back_edge(radius::ROW, 0., true))
         .font_family(horizon_theme::glass::FONT)
         .text_size(px(14.))
 }
@@ -938,25 +1327,262 @@ pub fn button(id: SharedString, label: SharedString, kind: Kind, t: &Theme) -> S
         .line_height(px(20.))
         .font_weight(FontWeight::MEDIUM);
     let d = match kind {
-        Kind::Primary => d
-            .bg(color(look.accent))
-            .text_color(color(look.on_accent))
-            .font_weight(FontWeight::SEMIBOLD)
-            .hover(|s| s.opacity(0.92)),
+        Kind::Primary => {
+            let id2 = id.clone();
+            let accent2 = self::accent2();
+            d.overflow_hidden()
+                .bg(grad(135., color(look.accent), color(accent2)))
+                .border_1()
+                .border_color(white(0.16))
+                .text_color(color(look.on_accent))
+                .font_weight(FontWeight::SEMIBOLD)
+                .shadow(glows(vec![
+                    // The site's primary: a light line along the top edge, a glow under it.
+                    gpui::BoxShadow {
+                        color: gpui::white().opacity(0.22),
+                        offset: gpui::point(px(0.), px(1.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(0.),
+                        inset: true,
+                    },
+                    gpui::BoxShadow {
+                        color: color(look.accent).opacity(0.7),
+                        offset: gpui::point(px(0.), px(6.)),
+                        blur_radius: px(22.),
+                        spread_radius: px(-8.),
+                        inset: false,
+                    },
+                ]))
+                .hover(move |s| {
+                    s.border_color(white(0.34)).shadow(glows(vec![
+                        gpui::BoxShadow {
+                            color: gpui::white().opacity(0.28),
+                            offset: gpui::point(px(0.), px(1.)),
+                            blur_radius: px(0.),
+                            spread_radius: px(0.),
+                            inset: true,
+                        },
+                        gpui::BoxShadow {
+                            color: color(look.accent).opacity(0.95),
+                            offset: gpui::point(px(0.), px(12.)),
+                            blur_radius: px(34.),
+                            spread_radius: px(-8.),
+                            inset: false,
+                        },
+                        gpui::BoxShadow {
+                            color: color(look.accent).opacity(0.5),
+                            offset: gpui::point(px(0.), px(0.)),
+                            blur_radius: px(0.),
+                            spread_radius: px(1.),
+                            inset: false,
+                        },
+                    ]))
+                })
+                .active(|s| s.opacity(0.92).shadow(Vec::new()))
+                .child(sheen(&id2))
+        }
         Kind::Secondary => d
             .bg(white(fill::BUTTON))
+            .border_1()
+            .border_color(white(edge::REST))
             .text_color(white(ink::FULL))
-            .hover(|s| s.bg(white(fill::BUTTON_HOVER))),
+            .active(|s| s.bg(white(0.18)))
+            .child(hover_edge(&id, radius::CONTROL, 0.06, true)),
         Kind::Ghost => d
             .text_color(white(ink::BODY))
-            .hover(|s| s.bg(white(0.06)).text_color(white(ink::FULL))),
+            .hover(|s| s.text_color(white(ink::FULL)))
+            .active(|s| s.bg(white(0.1)))
+            .child(hover_edge(&id, radius::CONTROL, 0.06, false)),
     };
-    keyboard(track_hover(d.child(label), id), t)
+    keyboard(track_hover(d.child(div().relative().child(label)), id), t)
 }
 
-/// A segmented control in the glass look (the server dialog's difficulty): white at 4 % round
-/// at 14, 4 px around 32 px options round at 10; the chosen one white at 14 %, medium, the others
-/// white at 65 %, white under the pointer.
+/// A pill's resting place (left, width) and the slide it plays: when it began, and from where.
+type PillState = ((f32, f32), Option<(std::time::Instant, (f32, f32))>);
+
+thread_local! {
+    /// Where each segmented control's options were last drawn, and its pill: the option's place
+    /// and width from the control's left edge; where the pill rests, and the slide it is playing
+    /// (when it started, and where it came from) while one runs.
+    static SEG_BOUNDS: RefCell<HashMap<String, Vec<(f32, f32)>>> = RefCell::new(HashMap::new());
+    static SEG_PILL: RefCell<HashMap<String, PillState>> = RefCell::new(HashMap::new());
+}
+
+/// The pill's slide between a segmented control's options (the site's, a hair short of the
+/// card spring).
+const SEG_SLIDE: horizon_theme::Motion = horizon_theme::Motion {
+    name: "seg-slide",
+    ms: 280,
+    curve: [0.22, 0.9, 0.3, 1.12],
+};
+
+/// Where a row of options with a sliding pill starts: its options' places are kept from it.
+pub type PillOrigin = Rc<Cell<Option<gpui::Point<Pixels>>>>;
+
+/// Records the row's origin (an absolute layer filling the row).
+pub fn pill_origin(origin: &PillOrigin) -> impl IntoElement {
+    let origin = origin.clone();
+    canvas(
+        move |bounds, _, _| origin.set(Some(bounds.origin)),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// Records option `i`'s place and width in row `id` (an absolute layer filling the option).
+pub fn pill_probe(id: impl Into<String>, i: usize, origin: PillOrigin) -> impl IntoElement {
+    let key = id.into();
+    canvas(
+        move |bounds, _, _| {
+            if let Some(o) = origin.get() {
+                let left = f32::from(bounds.origin.x - o.x);
+                let width = f32::from(bounds.size.width);
+                SEG_BOUNDS.with_borrow_mut(|all| {
+                    let row = all.entry(key.clone()).or_default();
+                    if row.len() <= i {
+                        row.resize(i + 1, (0., 0.));
+                    }
+                    row[i] = (left, width);
+                });
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// The pill of row `id`, drawn by `base` (absolute, its height set) at option `active`'s
+/// recorded place, sliding there on [`SEG_SLIDE`] when it changes. None until the row has been
+/// drawn once.
+pub fn sliding_pill(id: &str, active: usize, base: impl Fn() -> Div) -> Option<AnyElement> {
+    let at = SEG_BOUNDS.with_borrow(|all| {
+        all.get(id)
+            .and_then(|row| row.get(active).copied())
+            .filter(|&(_, w)| w > 0.)
+    })?;
+    // A new place starts a slide; while one runs the pill keeps being built on its animation
+    // (a rebuild that drops it would snap it to the end), and once it is done the pill rests.
+    // As `motion::knob` does for a switch.
+    let running = SEG_PILL.with_borrow_mut(|pills| {
+        let entry = pills.entry(id.to_string()).or_insert((at, None));
+        if entry.0 != at {
+            entry.1 = Some((std::time::Instant::now(), entry.0));
+            entry.0 = at;
+        }
+        match entry.1 {
+            Some((since, from)) if since.elapsed() < SEG_SLIDE.duration() => Some((since, from)),
+            _ => {
+                entry.1 = None;
+                None
+            }
+        }
+    });
+    Some(match running {
+        None => base().left(px(at.0)).w(px(at.1)).into_any_element(),
+        Some((since, from)) => {
+            static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let start = *START.get_or_init(std::time::Instant::now);
+            let key = ElementId::named_usize(
+                format!("{id}-pill"),
+                since.saturating_duration_since(start).as_micros() as usize,
+            );
+            base()
+                .with_animation(key, crate::motion::eased(SEG_SLIDE), move |d, p| {
+                    d.left(px(from.0 + (at.0 - from.0) * p))
+                        .w(px(from.1 + (at.1 - from.1) * p))
+                })
+                .into_any_element()
+        }
+    })
+}
+
+/// A tab of a [`pill_strip`], `h` tall: one weight open or not (the pill and the ink mark the
+/// open one, so no name changes width), a faint fill under the pointer otherwise.
+pub fn pill_tab(id: impl Into<SharedString>, on: bool, h: f32, t: &Theme) -> Stateful<Div> {
+    let id = id.into();
+    keyboard(
+        track_hover(
+            div()
+                .id(id.clone())
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(7.))
+                .h(px(h))
+                .px(px(12.))
+                .rounded(px(radius::CONTROL))
+                .cursor_pointer()
+                .font_family(horizon_theme::glass::FONT)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(white(if on { ink::FULL } else { ink::BODY }))
+                .when(!on, |d| {
+                    d.child(hover_edge(&id, radius::CONTROL, 0.05, false))
+                        .hover(|s| s.text_color(white(ink::FULL)))
+                }),
+            id,
+        ),
+        t,
+    )
+}
+
+/// A row of [`pill_tab`]s (`h` tall, `top` below the row's top edge) whose open one, `active`,
+/// sits on a lit pane of glass that slides to the tab chosen. `row` lays the tabs out (its flex
+/// and padding); the strip records where each one is drawn.
+pub fn pill_strip(
+    id: &'static str,
+    active: usize,
+    h: f32,
+    top: f32,
+    row: Div,
+    tabs: impl IntoIterator<Item = Stateful<Div>>,
+) -> Div {
+    let origin = PillOrigin::default();
+    let row = row.relative().child(pill_origin(&origin)).children(
+        tabs.into_iter()
+            .enumerate()
+            .map(|(i, tab)| tab.child(pill_probe(id, i, origin.clone()))),
+    );
+    let accent = look().accent;
+    let pill = sliding_pill(id, active, move || {
+        div()
+            .absolute()
+            .top(px(top))
+            .h(px(h))
+            .rounded(px(radius::CONTROL))
+            .bg(grad(180., white(0.16), white(0.07)))
+            .border_1()
+            .border_color(white(edge::STRONG))
+            .shadow(glows(vec![
+                gpui::BoxShadow {
+                    color: gpui::white().opacity(0.18),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                },
+                gpui::BoxShadow {
+                    color: color(accent).opacity(0.45),
+                    offset: gpui::point(px(0.), px(6.)),
+                    blur_radius: px(18.),
+                    spread_radius: px(-8.),
+                    inset: false,
+                },
+            ]))
+    });
+    // The pill first, so the names are drawn over it.
+    div().relative().children(pill).child(row)
+}
+
+/// A segmented control in the glass look (the site's): white at 4 % round at 12, 3 px around
+/// 32 px options round at 9; the chosen one's place is held by a pill in the accent's tint that
+/// slides to it when the choice changes, and the labels stay put.
 pub fn segments<T: Copy + PartialEq + 'static>(
     id: &'static str,
     options: &[(T, &'static str)],
@@ -964,43 +1590,68 @@ pub fn segments<T: Copy + PartialEq + 'static>(
     t: &Theme,
     on_pick: impl Fn(T, &mut Window, &mut App) + Clone + 'static,
 ) -> Stateful<Div> {
-    div()
+    let origin = PillOrigin::default();
+    let mut seg = div()
         .id(id)
+        .relative()
         .flex()
         .flex_none()
-        .gap(px(4.))
-        .p(px(4.))
+        .gap(px(2.))
+        .p(px(3.))
         .rounded(px(radius::LARGE))
         .bg(white(0.04))
-        .children(options.iter().map(|&(value, label)| {
-            let active = current == value;
-            let pick = on_pick.clone();
-            let d = div()
-                .id(SharedString::from(format!("{id}-{label}")))
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .h(px(32.))
-                .px(px(12.))
-                .rounded(px(radius::CONTROL))
-                .cursor_pointer()
-                .font_family(horizon_theme::glass::FONT)
-                .text_size(px(14.))
-                .line_height(px(20.))
-                .when(active, |d| {
-                    d.bg(white(fill::BUTTON_HOVER))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(white(ink::FULL))
-                })
-                .when(!active, |d| {
-                    d.text_color(white(ink::MUTED))
-                        .hover(|s| s.text_color(white(ink::FULL)))
-                })
-                .child(crate::tr(label))
-                .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx));
-            keyboard(d, t)
-        }))
+        .border_1()
+        .border_color(white(edge::REST))
+        .child(pill_origin(&origin));
+    for (i, &(value, label)) in options.iter().enumerate() {
+        let active = current == value;
+        let pick = on_pick.clone();
+        let origin = origin.clone();
+        let key = id.to_string();
+        let d = div()
+            .id(SharedString::from(format!("{id}-{label}")))
+            .relative()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .h(px(32.))
+            .px(px(12.))
+            .rounded(px(radius::CONTROL - 1.))
+            .cursor_pointer()
+            .font_family(horizon_theme::glass::FONT)
+            .text_size(px(13.5))
+            .line_height(px(20.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(white(if active { ink::FULL } else { ink::MUTED }))
+            .when(!active, |d| d.hover(|s| s.text_color(white(ink::FULL))))
+            .child(crate::tr(label))
+            .child(pill_probe(key, i, origin))
+            .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx));
+        seg = seg.child(keyboard(d, t));
+    }
+    let active = options
+        .iter()
+        .position(|&(value, _)| value == current)
+        .unwrap_or(0);
+    let pill = sliding_pill(id, active, || {
+        div()
+            .absolute()
+            .top(px(3.))
+            .bottom(px(3.))
+            .rounded(px(radius::CONTROL - 1.))
+            .border_1()
+            .border_color(color(look().accent).opacity(0.6))
+            .bg(color(look().accent).opacity(0.2))
+            .shadow(glows(vec![gpui::BoxShadow {
+                color: color(look().accent).opacity(0.8),
+                offset: gpui::point(px(0.), px(4.)),
+                blur_radius: px(14.),
+                spread_radius: px(-6.),
+                inset: false,
+            }]))
+    });
+    seg.children(pill)
 }
 
 /// A page's head (`PageHead`): its title in Bricolage, 46 px at this width
@@ -1011,21 +1662,22 @@ pub fn page_head(title: impl Into<SharedString>, note: impl Into<SharedString>) 
     div()
         .flex()
         .flex_col()
-        .pt(px(40. - crate::glass::CONTENT_INSET))
-        .mb(px(28.))
+        .pt(px(28. - crate::glass::CONTENT_INSET))
+        .mb(px(20.))
         .child(
+            // A compact title: the page's content, not its name, gets the height.
             div()
                 .font_family(horizon_theme::glass::DISPLAY_FONT)
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_size(px(46.))
-                .line_height(px(46.))
+                .text_size(px(32.))
+                .line_height(px(36.))
                 .text_color(white(ink::FULL))
                 .child(title.into()),
         )
         .when(!note.is_empty(), |d| {
             d.child(
-                text(15., FontWeight::NORMAL, ink::BODY)
-                    .mt(px(12.))
+                text(14., FontWeight::NORMAL, ink::BODY)
+                    .mt(px(8.))
                     .max_w(px(615.))
                     .line_height(px(23.25))
                     .child(note),
@@ -1045,4 +1697,48 @@ pub fn card_note(label: impl Into<SharedString>) -> Div {
     text(13., FontWeight::NORMAL, ink::QUIET)
         .line_height(px(19.5))
         .child(label.into())
+}
+
+/// A tooltip's view: one line on a solid float, for controls shown by their icon alone.
+pub struct Tip(SharedString);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(360.))
+            .px(px(10.))
+            .py(px(6.))
+            .rounded(px(radius::CONTROL))
+            .bg(rgb(look().base))
+            .border_1()
+            .border_color(white(0.12))
+            .font_family(horizon_theme::glass::FONT)
+            .text_size(px(13.))
+            .text_color(white(ink::FULL))
+            .child(self.0.clone())
+    }
+}
+
+/// `.tooltip(ui::tip(label))`: the label of an icon-only control, on hover.
+pub fn tip(label: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView {
+    let label: SharedString = label.into();
+    move |_, cx| cx.new(|_| Tip(label.clone())).into()
+}
+
+#[cfg(test)]
+mod hover_back_tests {
+    use super::back_phase;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn plays_while_on_and_briefly_after() {
+        let len = Duration::from_millis(150);
+        assert_eq!(back_phase(None, len), None);
+        let now = Instant::now();
+        assert!(back_phase(Some((true, now)), len).is_some());
+        assert!(back_phase(Some((false, now)), len).is_some());
+        let old = now - Duration::from_secs(1);
+        assert!(back_phase(Some((true, old)), len).is_some());
+        assert_eq!(back_phase(Some((false, old)), len), None);
+    }
 }

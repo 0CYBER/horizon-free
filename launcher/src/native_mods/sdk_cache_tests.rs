@@ -154,7 +154,7 @@ fn a_signed_index_is_read_kept_and_used_offline() {
     let fixture = Fixture::new();
     let sdk = fixture.sdk(&[]).unwrap();
     assert_eq!(sdk.commit(), COMMIT);
-    assert_eq!(sdk.shown(), "nightly-2026-11-13 (0123456)");
+    assert_eq!(sdk.shown(), "the Nov 13 update");
     assert!(fixture.kept().join(COMMIT).join(INDEX).is_file());
     // With nothing at the base any more, the kept index serves.
     fs::remove_dir_all(fixture.scratch.path().join("base")).unwrap();
@@ -177,7 +177,7 @@ fn an_index_is_refused_by_name_when_its_signature_or_contents_do_not_hold() {
     assert_eq!(
         read().unwrap_err(),
         Refusal::NoSdk {
-            build: "0123456".into()
+            build: "your Horizon version".into()
         }
     );
     let good = index_of(&[], rust_toolchain::VERSION).to_json();
@@ -223,7 +223,7 @@ fn an_index_is_refused_by_name_when_its_signature_or_contents_do_not_hold() {
     assert_eq!(
         read().unwrap_err(),
         Refusal::OlderRust {
-            build: "nightly-2026-11-13 (0123456)".into(),
+            build: "the Nov 13 update".into(),
             rust: "1.0.0".into()
         }
     );
@@ -491,7 +491,42 @@ fn rust_versions_compare_by_number() {
 fn sizes_and_builds_read_plainly() {
     assert_eq!(megabytes(71_000_000), "71 MB");
     assert_eq!(megabytes(1), "1 MB");
-    assert_eq!(shown(COMMIT, None), "0123456");
+    // A build with no name here is never shown as its commit.
+    assert_eq!(shown(COMMIT, None), "your Horizon version");
     // A pin from a mod's manifest is cut only where a character ends.
     assert_eq!(shown("ééééé", None), "ééééé");
+}
+
+#[test]
+fn a_refusal_offers_the_way_on_its_text_promises() {
+    let build = || "nightly-2026-11-13".to_owned();
+    let way = |refusal: Refusal| way_on(&format!("{refusal}"));
+    assert_eq!(
+        way(Refusal::NoSdk { build: build() }),
+        Some(WayOn::OtherBuild)
+    );
+    assert_eq!(
+        way(Refusal::OlderRust {
+            build: build(),
+            rust: "1.80.0".into()
+        }),
+        Some(WayOn::OtherBuild)
+    );
+    assert_eq!(
+        way(Refusal::Unsigned {
+            build: build(),
+            why: "checksum mismatch".into()
+        }),
+        Some(WayOn::Report)
+    );
+    for bytes in [None, Some(212_000_000)] {
+        assert_eq!(
+            way(Refusal::Offline {
+                build: build(),
+                bytes
+            }),
+            Some(WayOn::Retry)
+        );
+    }
+    assert_eq!(way(Refusal::Host), None);
 }

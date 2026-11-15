@@ -53,6 +53,8 @@ horizon-prepare = { path = "../crates/horizon-prepare" }
 horizon-system = { path = "../crates/horizon-system" }
 horizon-protocol = { path = "../crates/horizon-protocol" }
 horizon-theme = { path = "../crates/horizon-theme" }
+# The sunset scene, painted skies, rain and frosted glass (`scenery/`).
+horizon-launcher-scenery = { path = "scenery" }
 # The engine, through the platform's public API (docs/layers.md): the pinned version, No AI, the preparer,
 # level.dat and servers.dat (the worlds and server lists of instances), and the official server's SRV record.
 horizon-platform = { path = "../crates/horizon-platform", features = ["prepare", "protocol", "world", "mod-build"] }
@@ -110,7 +112,7 @@ raw-window-handle = "0.6"
 keyring = { version = "3", features = ["windows-native"] }
 # Java's heap slider reads the computer's memory; the uninstaller hides its running copy; an
 # abandoned launcher update is one whose process has gone. Already in the lockfile.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 # Shortcuts written by the shell itself (shortcut::write_windows_link): the hand-laid Shell Link has
 # no target ID list, so Explorer shows an empty target and starts nothing.
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }
@@ -131,3 +133,8 @@ syn = "2"
 
 [profile.release]
 strip = true
+
+# The scenery's pixel loops (blurring a sky, baking the frosted plates) are optimised in debug
+# builds too: unoptimised, one Blur step took 0.7-1 s and one Glass step 70 ms.
+[profile.dev.package.horizon-launcher-scenery]
+opt-level = 3

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Kumuhana",
+  "Motion": "Kaʻina kaʻa",
+  "Reduced": "Hoʻemi ʻia",
+  "Full": "Piha",
+  "Aa Text": "Aa Kikokikona",
+  "Prepare & play": "Hoʻomākaukau a pāʻani",
+  "Name it, pick what it plays, then an icon.": "E hōʻo ia inoa, e koho i kāna pāʻani, a laila hōʻailona.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Manuahi no nā mea a pau. He kūʻokoʻa māmā a me ka poʻeleʻele kēlā me kēia kumuhana, a hoʻomanaʻo ana i ka kala koʻikoʻi āu e koho ai ma lalo ona.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Hoʻemi ʻia e pōʻoleʻole ai ka lani, nā ʻemi ʻana a me nā ʻanehe ʻana; e pane koke nō na pihi. Hahai ka Pūnaehana i ka hoʻonohonoho o kāu kamepiula.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Māmā a poʻeleʻele paha, ke kumuhana, ke kala koʻikoʻi, ke aniani, ka blur a me ka hōʻiliʻili o ka home hoʻi i ke ʻano ā Horizon e lawe mai ai.",
+  "The launcher's look is back to how Horizon ships": "Ua hoʻi ke ʻano o ka mea hoʻolaha i ke ʻano ā Horizon e lawe mai ai",
+  "The launcher's look is reset for now, but it could not be saved": "Ua hoʻoponopono hou ʻia ke ʻano o ka mea hoʻolaha no kēia manawa, akā ʻaʻole i mālama ʻia",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Hoʻohewa ka Aniani a me ka Blur i nā pā ʻōnohi o ke ʻano poʻeleʻele; ke kaha polū pololei ka mea māmā i nā pā keʻokeʻo paʻa.",
+  "Performance mode draws solid panels, without glass or blur.": "Ke kaha ka ʻano hana i nā pā paʻa, me ka ʻole o ke aniani a me ka blur.",
+  "This theme's night draws solid panels, without glass or blur.": "Ke kaha ka pō o kēia kumuhana i nā pā paʻa, me ka ʻole o ke aniani a me ka blur."
 }

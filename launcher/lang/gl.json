@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Movemento",
+  "Reduced": "Reducido",
+  "Full": "Completo",
+  "Aa Text": "Aa Texto",
+  "Prepare & play": "Preparar e xogar",
+  "Name it, pick what it plays, then an icon.": "Ponlle nome, escolle que executa e despois unha icona.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis para todos. Cada tema ten un aspecto claro e outro escuro, e lembra a cor de acento que elixas nel.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Reducido detén o ceo, os esvaecementos e os desprazamentos; os botóns responden ao instante. Sistema segue a configuración do teu ordenador.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Claro ou escuro, tema, cor de acento, vidro, desenfoque e o fondo de Casa volven ao xeito en que vén Horizon.",
+  "The launcher's look is back to how Horizon ships": "O aspecto do lanzador volve ao xeito en que vén Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "O aspecto do lanzador restableceuse por agora, pero non se puido gardar",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Vidro e Desenfoque moldean os paneis esmerilados do aspecto escuro; o claro debuxa paneis brancos sólidos.",
+  "Performance mode draws solid panels, without glass or blur.": "Modo rendemento debuxa paneis sólidos, sen vidro nin desenfoque.",
+  "This theme's night draws solid panels, without glass or blur.": "A noite deste tema debuxa paneis sólidos, sen vidro nin desenfoque."
 }

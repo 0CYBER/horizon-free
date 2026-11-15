@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Isiokwu",
+  "Motion": "Mmegharị",
+  "Reduced": "Ebelatara",
+  "Full": "Ozu",
+  "Aa Text": "Aa Ederede",
+  "Prepare & play": "Kwadebie ma gwoo",
+  "Name it, pick what it plays, then an icon.": "Kpọọ aha ya, họrọ ihe ọ na-egwu, wee were akara ngosi.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Ọfụma maka onye ọ bụla. Isiokwu ọ bụla nwere ọdịdị ìhè na ọchịchịrị, ma na-echeta agba mmesi ike ị họọrọ n'okpuru ya.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Ebelatara na-akwụsị eluigwe, mgbanyụ ọkụ na mgbada; bọtịnụ na-anabata ozugbo. Sistemu na-agbaso ntọala kọmputa gị.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Ìhè ma ọ bụ ọchịchịrị, isiokwu, agba mmesi ike, ugegbe, nchafu na ndabara Ụlọ na-alaghachi ka Horizon si ebute.",
+  "The launcher's look is back to how Horizon ships": "Ọdịdị onye mbido alaghachila ka Horizon si ebute",
+  "The launcher's look is reset for now, but it could not be saved": "A tọgharịrị ọdịdị onye mbido nwa oge, ma edokwaghị ya",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Ugegbe na Nchafu na-akpụ ọdịdị ọchịchịrị nke ogwe uzu na-enwu enwu; nke ìhè na-ese ogwe uzu ọcha siri ike.",
+  "Performance mode draws solid panels, without glass or blur.": "Ụdị arụmọrụ na-ese ogwe uzu siri ike, na-enweghị ugegbe ma ọ bụ nchafu.",
+  "This theme's night draws solid panels, without glass or blur.": "Abalị isiokwu a na-ese ogwe uzu siri ike, na-enweghị ugegbe ma ọ bụ nchafu."
 }

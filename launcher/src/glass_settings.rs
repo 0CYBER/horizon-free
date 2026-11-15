@@ -10,20 +10,104 @@
 
 use super::*;
 use crate::glass_ui::{self as ui, white};
-use horizon_theme::glass::{fill, ink, radius};
+use horizon_theme::glass::{ink, radius};
 
-/// The list's entries: name and icon. The settings sections.
-const SECTIONS: [(&str, &str); 9] = [
-    ("Account", "user"),
+/// The list's entries: name and icon. The settings sections, in the mockup's order.
+const SECTIONS: [(&str, &str); 10] = [
+    ("General", "sliders-horizontal"),
+    ("Appearance", "color-picker"),
+    ("Accounts", "user"),
     ("Updates", "refresh"),
-    ("Launcher", "computer"),
-    ("Network", "globe-02"),
     ("Game", "game-controller-01"),
-    ("Storage", "computer"),
+    ("Network", "globe-02"),
+    ("Storage", "package-01"),
+    ("Data & privacy", "view"),
     ("AI", "ai-chat-02"),
     ("About", "information-circle"),
-    ("Data collection", "view"),
 ];
+
+/// Who made the launcher's look, credited in About.
+const CREDIT: &str = "Xmilon";
+const CREDIT_URL: &str = horizon_addresses::LAUNCHER_LOOK_CREDIT;
+
+/// What the search finds in each section, in [`SECTIONS`]' order: its rows' names and words a
+/// player may look for them by. English; a query matches them and their translation.
+const INDEX: [&[&str]; 10] = [
+    &[
+        "Language",
+        "While playing",
+        "Show the Horizon logo at startup",
+    ],
+    &[
+        "Theme",
+        "Accent",
+        "Glass",
+        "Blur",
+        "Performance mode",
+        "Motion",
+        "Glow",
+        "Gradients",
+        "Shine on hover",
+        "Effects",
+        "Home background",
+        "Reset the launcher's look",
+        "Dark",
+        "Light",
+    ],
+    &[
+        "Microsoft account",
+        "Sign in with Microsoft",
+        "Sign out",
+        "Play as",
+        "Skin",
+    ],
+    &[
+        "Install new versions automatically",
+        "Delete old versions automatically",
+        "Check now",
+        "Nightly",
+    ],
+    &[
+        "Game architecture",
+        "Arguments",
+        "Update mods automatically",
+        "Memory",
+    ],
+    &["Proxy"],
+    &["Storage", "Disk space", "Cache"],
+    &["Data collection", "Telemetry", "Crash reports"],
+    &["No AI", "Agents", "MCP"],
+    &[
+        "UI made by Xmilon",
+        "Credits",
+        "GitHub",
+        "Version",
+        "Data folder",
+        "Logs",
+        "Applications menu",
+    ],
+];
+
+/// The settings `query` finds: (section, the row's name, or `None` when the section's own name
+/// matched). Every word of the query must be in the name, in English or translated.
+fn search(query: &str) -> Vec<(usize, Option<&'static str>)> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let finds = |en: &str| {
+        let hay = format!("{en} {}", tr(en)).to_lowercase();
+        words.iter().all(|w| hay.contains(w.as_str()))
+    };
+    let mut hits = Vec::new();
+    for (i, &(label, _)) in SECTIONS.iter().enumerate() {
+        if finds(label) {
+            hits.push((i, None));
+        }
+        hits.extend(INDEX[i].iter().filter(|e| finds(e)).map(|&e| (i, Some(e))));
+    }
+    hits
+}
 
 /// What `settings_page` builds before it knows which look draws it.
 pub(super) struct Built {
@@ -31,7 +115,6 @@ pub(super) struct Built {
     pub prune: Stateful<Div>,
     pub opening: Stateful<Div>,
     pub menu_entry: Stateful<Div>,
-    pub appearance: AnyElement,
     pub horizon: String,
     pub horizon_action: Option<AnyElement>,
     pub launcher: String,
@@ -43,7 +126,28 @@ fn card() -> Div {
     crate::glass::plate(radius::PANEL)
         .flex()
         .flex_col()
-        .p(px(8.))
+        .gap(px(2.))
+        .p(px(6.))
+}
+
+/// Section `i`'s card, under its heading: the section's icon in the accent and its name.
+fn section(i: usize) -> Div {
+    let (label, icon) = SECTIONS[i];
+    card().child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(14.))
+            .pt(px(12.))
+            .pb(px(4.))
+            .child(ui::icon(icon, 18., ui::color(ui::look().accent)))
+            .child(
+                ui::text(17., FontWeight::SEMIBOLD, ink::FULL)
+                    .font_family(horizon_theme::glass::DISPLAY_FONT)
+                    .child(tr(label).to_string()),
+            ),
+    )
 }
 
 /// A tile (the mockup's `AboutTile`, `rounded-[14px] bg-white/[0.045] p-5`): its lead, name, a
@@ -56,6 +160,8 @@ fn tile(lead: AnyElement, title: String, note: String, action: AnyElement) -> Di
         .min_w(px(140.))
         .rounded(px(radius::LARGE))
         .bg(white(0.045))
+        .border_1()
+        .border_color(white(ui::edge::REST))
         .p(px(20.))
         .child(div().child(lead))
         .child(
@@ -101,73 +207,137 @@ impl Launcher {
         }
         let t = self.theme;
         let sections = ui::flat_rows(|| self.glass_settings_sections(b, cx));
-        let active = self.settings_section(sections.len());
-        self.settings_marked = active;
+        let query = self.settings_query.text().trim().to_string();
+        let searching = !query.is_empty();
+        let hits = search(&query);
+        // While searching, the list shows what was found and the pane only the cards it is in.
+        let mut shown: Vec<usize> = hits.iter().map(|h| h.0).collect();
+        shown.dedup();
+        let active = if searching {
+            usize::MAX
+        } else {
+            let active = self.settings_section(sections.len());
+            self.settings_marked = active;
+            active
+        };
+        let found = !searching || !shown.is_empty();
+        let sections: Vec<Div> = if searching {
+            sections
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| shown.contains(i))
+                .map(|(_, d)| d)
+                .collect()
+        } else {
+            sections
+        };
         let wide = self.window_width >= crate::glass_home::COMPACT;
-        let items: Vec<_> = SECTIONS
-            .iter()
-            .enumerate()
-            .map(|(i, &(label, icon))| {
-                let on = i == active;
-                keyboard(
-                    div()
-                        .id(SharedString::from(format!("settings-nav-{i}")))
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(px(if wide { 12. } else { 8. }))
-                        .h(px(if wide { 40. } else { 34. }))
-                        .px(px(if wide { 12. } else { 10. }))
-                        .rounded(px(radius::ROW))
-                        .cursor_pointer()
-                        .font_family(horizon_theme::glass::FONT)
-                        .text_size(px(14.))
-                        .when(on, |d| {
-                            d.bg(white(fill::ACTIVE))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(white(ink::FULL))
-                        })
-                        .when(!on, |d| {
-                            d.text_color(white(0.65))
-                                .hover(|s| s.bg(white(0.05)).text_color(white(ink::FULL)))
-                        })
-                        .child(ui::icon(
-                            icon,
-                            17.,
-                            if on {
-                                ui::color(ui::look().accent_soft)
-                            } else {
-                                white(0.65)
-                            },
-                        ))
-                        .child(tr(label).to_string()),
-                    &t,
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.settings_pane.scroll_to_top_of_item(i);
-                    cx.notify();
-                }))
-            })
-            .collect();
+        let items: Vec<Stateful<Div>> = if searching {
+            hits.iter()
+                .enumerate()
+                .map(|(k, &(i, row))| {
+                    let (label, icon) = SECTIONS[i];
+                    let at = shown.iter().position(|&s| s == i).unwrap_or(0);
+                    let (title, sub) = match row {
+                        Some(row) => (tr(row).to_string(), Some(tr(label).to_string())),
+                        None => (tr(label).to_string(), None),
+                    };
+                    nav_item(
+                        format!("settings-hit-{k}"),
+                        icon,
+                        title,
+                        sub,
+                        false,
+                        wide,
+                        &t,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.settings_pane.scroll_to_top_of_item(at);
+                            cx.notify();
+                        },
+                    ))
+                })
+                .collect()
+        } else {
+            SECTIONS
+                .iter()
+                .enumerate()
+                .map(|(i, &(label, icon))| {
+                    let title = tr(label).to_string();
+                    nav_item(
+                        format!("settings-nav-{i}"),
+                        icon,
+                        title,
+                        None,
+                        i == active,
+                        wide,
+                        &t,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.settings_pane.scroll_to_top_of_item(i);
+                            cx.notify();
+                        },
+                    ))
+                })
+                .collect()
+        };
+        let field = self.settings_search_field(&query, cx);
         let nav = if wide {
             card()
                 .flex_none()
-                .w(px(210.))
+                .w(px(220.))
                 .gap(px(4.))
+                .child(field.mb(px(6.)))
+                .when(!found, |d| {
+                    d.child(
+                        ui::text(13., FontWeight::NORMAL, ink::QUIET)
+                            .px(px(12.))
+                            .py(px(8.))
+                            .child(tr("No setting has that name.")),
+                    )
+                })
                 .children(items)
                 .into_any_element()
         } else {
-            crate::glass::plate(radius::PANEL)
-                .id("settings-nav-strip")
+            div()
+                .flex()
+                .flex_col()
                 .flex_none()
                 .w_full()
-                .flex_row()
-                .overflow_x_scroll()
-                .on_scroll(|_, _, cx| cx.stop_propagation())
-                .gap(px(4.))
-                .p(px(6.))
-                .children(items)
+                .gap(px(8.))
+                .child(field)
+                .child(
+                    crate::glass::plate(radius::PANEL)
+                        .id("settings-nav-strip")
+                        .flex_none()
+                        .w_full()
+                        .flex_row()
+                        .overflow_x_scroll()
+                        .on_scroll(|_, _, cx| cx.stop_propagation())
+                        .gap(px(4.))
+                        .p(px(6.))
+                        .children(items),
+                )
                 .into_any_element()
+        };
+        let sections = if found {
+            sections
+        } else {
+            vec![card()
+                .items_center()
+                .gap(px(10.))
+                .py(px(48.))
+                .child(ui::icon("search-01", 28., white(ink::DIM)))
+                .child(ui::text(15., FontWeight::MEDIUM, ink::FULL).child(trf(
+                    "Nothing in Settings matches “{query}”",
+                    &[("query", &query)],
+                )))
+                .child(
+                    ui::text(13., FontWeight::NORMAL, ink::QUIET)
+                        .child(tr("Try another word, or clear the search.")),
+                )]
         };
         let pane = div()
             .id("settings-pane")
@@ -217,11 +387,115 @@ impl Launcher {
             .flex_col()
             .w_full()
             .h_full()
-            .child(ui::page_head(
-                tr("Settings"),
-                tr("Accounts, updates, and the launcher itself."),
-            ))
+            .child(
+                // The dialog's head: its name, with room on the right for its close button.
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .h(px(64.))
+                    .pr(px(48.))
+                    .child(
+                        ui::text(22., FontWeight::SEMIBOLD, ink::FULL)
+                            .font_family(horizon_theme::glass::DISPLAY_FONT)
+                            .child(tr("Settings").to_string()),
+                    ),
+            )
             .child(content)
+    }
+
+    /// Escape closes the Settings dialog, back to the page under it.
+    pub(super) fn settings_escape(&mut self) -> bool {
+        if self.theme.glass && self.page == Page::Settings {
+            self.go(self.behind);
+            return true;
+        }
+        false
+    }
+
+    /// Settings as a dialog over the page the player was on (the glass look): the list and
+    /// pane of [`Self::glass_settings`] on a plate, closed by its ✕, a press outside or Escape.
+    pub(super) fn settings_dialog(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let t = self.theme;
+        let body = self.settings_page(cx);
+        let close = ui::icon_button(
+            "settings-close",
+            "cancel-01",
+            36.,
+            18.,
+            radius::CONTROL,
+            false,
+            &t,
+        )
+        .tooltip(ui::tip(tr("Close")))
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.go(this.behind);
+            cx.notify();
+        }));
+        let card = ui::dialog_plate(radius::MODAL)
+            .id("settings-card")
+            .occlude()
+            .relative()
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(px(960.))
+            .h_full()
+            .max_h(px(660.))
+            .px(px(18.))
+            .pb(px(16.))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(body),
+            )
+            .child(div().absolute().top(px(14.)).right(px(14.)).child(close));
+        div()
+            .id("settings-dialog")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(24.))
+            .occlude()
+            .on_scroll(|_, _, cx| cx.stop_propagation())
+            // Frosted glass over the page the player was on: the blurred sky laid partly over it,
+            // so the page shows through softened, then the dimming. Performance mode keeps only
+            // the dimming, as the mockup does.
+            .when(!self.settings.performance(), |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .opacity(0.62)
+                        .child(ui::scrim_backdrop()),
+                )
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .bg(ui::scrim().opacity(if ui::light() { 0.2 } else { 0.4 }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.go(this.behind);
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child(card)
     }
 
     /// The section the list marks, from where the pane's sections are now ([`spy`]). A section's
@@ -277,17 +551,12 @@ impl Launcher {
         launcher: String,
         launcher_action: Option<AnyElement>,
     ) -> Div {
+        // Named as the Versions page names it; the exact build is on About.
         let installed = self
             .settings
             .selected
-            .clone()
-            .map(|tag| match &self.releases {
-                Load::Ready(list) => list
-                    .iter()
-                    .find(|r| r.tag == tag)
-                    .map_or(tag.clone(), |r| update_name(r).to_owned()),
-                _ => tag,
-            });
+            .as_deref()
+            .map(|tag| self.version_name(tag));
         let tone = if self.updates.horizon.is_some() {
             ui::Tone::Accent(ui::look().accent_soft)
         } else if self.update_error.is_some() {
@@ -350,8 +619,8 @@ impl Launcher {
     fn glass_settings_sections(&mut self, b: Built, cx: &mut Context<Self>) -> Vec<Div> {
         let t = self.theme;
         let n = 0;
-        let account = card().child(self.glass_account(cx));
-        let updates = card()
+        let account = section(2).child(self.glass_account(cx));
+        let updates = section(3)
             .child(self.update_tiles(b.horizon, b.horizon_action, b.launcher, b.launcher_action))
             .child(index_row(
                 0,
@@ -374,36 +643,33 @@ impl Launcher {
                 Some(b.prune.into_any_element()),
                 &t,
             ));
-        let launcher = card()
-            .child(index_row(
-                0,
-                tr("Appearance"),
-                note("Dark by default. System follows your computer's light or dark."),
-                Some(b.appearance),
-                &t,
-            ))
+        // No light or dark to pick: each theme is one look.
+        let appearance = section(1)
             .child(self.launcher_theme_row(cx))
             .child(self.glass_accent_row(cx))
             .child(self.look_slider_row(themes_page::LookKnob::Glass, cx))
             .child(self.look_slider_row(themes_page::LookKnob::Blur, cx))
             .child(self.performance_row(cx))
+            .child(self.motion_row(cx))
+            .children(self.effects_rows(cx))
             .child(self.home_background_row(cx))
+            .child(self.reset_look_row(cx));
+        let launcher = section(0)
             .child(self.language_row(cx))
             .child(self.while_playing_row(n, cx))
             .child(index_row(
                 0,
-                tr("Show the opening"),
-                note("The wordmark, while the release list loads."),
+                tr("Show the Horizon logo at startup"),
+                note("Shown for a moment while the version list loads."),
                 Some(b.opening.into_any_element()),
                 &t,
-            ))
-            .child(self.reset_look_row(cx));
-        let network = card().child(self.proxy_row(n, cx));
-        let game = card()
+            ));
+        let network = section(5).child(self.proxy_row(n, cx));
+        let game = section(4)
             .child(self.game_architecture_row(n, cx))
             .child(self.game_args_row(n + 1, cx))
             .child(self.mods_auto_update_row(cx));
-        let ai = card()
+        let ai = section(8)
             .child(self.no_ai_row(n, cx))
             .children(self.agents_section(cx));
         let mono = |s: String| {
@@ -413,7 +679,9 @@ impl Launcher {
                 .child(s)
                 .into_any_element()
         };
-        let about = card()
+        let about = section(9)
+            .child(self.credit_row(cx))
+            .child(self.version_row(&t))
             .child(self.location_row(0, cx).mb(px(0.)))
             .child(index_row(
                 0,
@@ -448,16 +716,292 @@ impl Launcher {
                 ))
             });
         vec![
+            launcher,
+            appearance,
             account,
             updates,
-            launcher,
-            network,
             game,
-            self.glass_storage(cx),
+            network,
+            section(6).child(self.glass_storage(cx)),
+            section(7).child(self.collection_section(cx)),
             ai,
             about,
-            card().child(self.collection_section(cx)),
         ]
+    }
+
+    /// About's credit: who made the launcher's look, their GitHub picture and profile.
+    fn credit_row(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        if !self.credit_asked {
+            self.credit_asked = true;
+            let picture = cx.background_spawn(async {
+                backend::get_bytes(&format!("{CREDIT_URL}.png?size=96"))
+            });
+            cx.spawn(async move |this, cx| {
+                if let Ok(bytes) = picture.await {
+                    let _ = this.update(cx, |this, cx| {
+                        // GitHub answers with a JPEG (or PNG for some accounts): decode what came.
+                        if let Some(format) = picture_format(&bytes) {
+                            this.credit_picture =
+                                Some(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)));
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+        let picture = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(44.))
+            .rounded(px(11.))
+            .overflow_hidden()
+            .border_1()
+            .border_color(white(ui::edge::REST))
+            .bg(white(0.06))
+            .child(match self.credit_picture.clone() {
+                Some(image) => gpui::img(image).size_full().into_any_element(),
+                None => ui::icon("github", 22., white(ink::BODY)).into_any_element(),
+            });
+        let open = button("credit-github", "Open GitHub profile", Kind::Secondary, &t)
+            .on_click(|_, _, cx| cx.open_url(CREDIT_URL));
+        div()
+            .flex()
+            .items_center()
+            .gap(px(16.))
+            .px(px(14.))
+            .py(px(12.))
+            .child(picture)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        ui::text(14., FontWeight::MEDIUM, ink::FULL)
+                            .child(trf("UI made by {name}", &[("name", CREDIT)])),
+                    )
+                    .child(
+                        ui::text(13., FontWeight::NORMAL, ink::QUIET)
+                            .mt(px(2.))
+                            .child(CREDIT_URL.trim_start_matches("https://")),
+                    ),
+            )
+            .child(open)
+    }
+
+    /// About's version line, with a button that copies it (for a bug report).
+    fn version_row(&self, t: &Theme) -> Div {
+        let nightly = tr("Nightly").to_string();
+        let line = trf(
+            "Launcher {launcher}, game {game}",
+            &[
+                ("launcher", env!("CARGO_PKG_VERSION")),
+                (
+                    "game",
+                    self.settings.selected.as_deref().unwrap_or(&nightly),
+                ),
+            ],
+        )
+        .to_string();
+        let copied = line.clone();
+        index_row(
+            0,
+            tr("Version"),
+            Some(div().child(line).into_any_element()),
+            Some(
+                button("copy-version", "Copy", Kind::Secondary, t)
+                    .on_click(move |_, _, cx| {
+                        copy_to_clipboard(cx, gpui::ClipboardItem::new_string(copied.clone()))
+                    })
+                    .into_any_element(),
+            ),
+            t,
+        )
+    }
+}
+
+/// An entry of the settings list: a section, or while searching a setting found (its section
+/// under it). The one being read is tinted with the accent, outlined in it and marked by a bar.
+pub(super) fn nav_item(
+    id: String,
+    icon: &'static str,
+    title: String,
+    sub: Option<String>,
+    on: bool,
+    wide: bool,
+    t: &Theme,
+) -> Stateful<Div> {
+    let id = SharedString::from(id);
+    let accent = ui::look().accent;
+    let soft = ui::look().accent_soft;
+    let d = div()
+        .id(id.clone())
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(if wide { 12. } else { 8. }))
+        .min_h(px(if wide { 40. } else { 34. }))
+        .py(px(if sub.is_some() { 6. } else { 0. }))
+        .px(px(if wide { 12. } else { 10. }))
+        .rounded(px(radius::ROW))
+        .border_1()
+        .cursor_pointer()
+        .font_family(horizon_theme::glass::FONT)
+        .text_size(px(14.))
+        .active(|s| s.bg(white(0.1)));
+    let d = if on {
+        d.bg(ui::color(accent).opacity(0.16))
+            .border_color(ui::color(soft).opacity(0.5))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(white(ink::FULL))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(-1.))
+                    .top(px(10.))
+                    .bottom(px(10.))
+                    .w(px(3.))
+                    .rounded_full()
+                    .bg(ui::color(soft)),
+            )
+    } else {
+        d.border_color(gpui::transparent_black())
+            .text_color(white(0.7))
+            .hover(|s| s.text_color(white(ink::FULL)))
+            .child(ui::hover_edge(&id, radius::ROW, 0.06, true))
+    };
+    let d = d
+        .child(
+            ui::icon(icon, 17., if on { ui::color(soft) } else { white(0.65) })
+                .relative()
+                .flex_none(),
+        )
+        .child(
+            div()
+                .relative()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(div().truncate().child(title))
+                .children(sub.map(|s| {
+                    ui::text(12., FontWeight::NORMAL, ink::QUIET)
+                        .truncate()
+                        .child(s)
+                })),
+        );
+    keyboard(track_hover(d, id), t)
+}
+
+impl Launcher {
+    /// The search over the settings list: what it holds filters the list and the pane. Escape
+    /// clears it, then leaves it.
+    fn settings_search_field(&mut self, query: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        let t = self.theme;
+        let focused = self.settings_query_focused;
+        let soft = ui::look().accent_soft;
+        let field = div()
+            .id("settings-search")
+            .track_focus(&self.settings_query_focus)
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .w_full()
+            .h(px(40.))
+            .pl(px(12.))
+            .pr(px(6.))
+            .overflow_hidden()
+            .rounded(px(radius::ROW))
+            .bg(white(if focused { 0.11 } else { 0.06 }))
+            .border_1()
+            .border_color(if focused {
+                ui::color(soft).opacity(0.7)
+            } else {
+                white(ui::edge::REST)
+            })
+            .child(ui::back_edge(radius::ROW, 0., true))
+            .cursor_text()
+            .font_family(horizon_theme::glass::FONT)
+            .text_size(px(14.))
+            .child(ui::icon(
+                "search-01",
+                16.,
+                if focused {
+                    ui::color(soft)
+                } else {
+                    white(ink::QUIET)
+                },
+            ))
+            .child(div().flex_1().min_w_0().child(line_edit::content_with(
+                &self.settings_query,
+                &t,
+                focused,
+                false,
+                false,
+                tr("Search settings").into(),
+            )))
+            .when(!query.is_empty(), |d| {
+                d.child(
+                    ui::icon_button(
+                        "settings-search-clear",
+                        "cancel-01",
+                        26.,
+                        14.,
+                        8.,
+                        false,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.settings_query.set(String::new());
+                        cx.stop_propagation();
+                        cx.notify();
+                    })),
+                )
+            })
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.settings_query_focus, cx);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.settings_query, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => {
+                        if this.settings_query.text().is_empty() {
+                            window.blur(cx);
+                        } else {
+                            this.settings_query.set(String::new());
+                        }
+                    }
+                    line_edit::Key::Edited => this.settings_pane.scroll_to_item(0),
+                    _ => {}
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        line_edit::mouse(field, cx, |this| &mut this.settings_query)
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::{search, SECTIONS};
+
+    #[test]
+    fn search_finds_rows_and_sections_by_every_word() {
+        let look = SECTIONS.iter().position(|s| s.0 == "Appearance").unwrap();
+        assert!(search("blur").contains(&(look, Some("Blur"))));
+        assert!(search("APPEAR").contains(&(look, None)));
+        assert!(search("old delete")
+            .iter()
+            .any(|h| h.1 == Some("Delete old versions automatically")));
+        assert!(search("zzzz nothing").is_empty());
+        assert!(search("   ").is_empty());
     }
 }
 
@@ -513,5 +1057,37 @@ mod tests {
     fn a_pane_that_does_not_scroll_marks_the_first() {
         assert_eq!(spy(&[0., 200.], 600., 0., 0.), 0);
         assert_eq!(spy(&[], 600., 0., 0.), 0);
+    }
+}
+
+/// A downloaded picture's format, by its first bytes; `None` for anything else (an HTML error
+/// page), which leaves the GitHub mark in its place.
+fn picture_format(bytes: &[u8]) -> Option<gpui::ImageFormat> {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => Some(gpui::ImageFormat::Jpeg),
+        [0x89, b'P', b'N', b'G', ..] => Some(gpui::ImageFormat::Png),
+        [b'G', b'I', b'F', b'8', ..] => Some(gpui::ImageFormat::Gif),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => {
+            Some(gpui::ImageFormat::Webp)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod picture_tests {
+    use super::picture_format;
+
+    #[test]
+    fn a_picture_is_read_as_the_format_its_bytes_say() {
+        assert_eq!(
+            picture_format(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some(gpui::ImageFormat::Jpeg)
+        );
+        assert_eq!(
+            picture_format(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A]),
+            Some(gpui::ImageFormat::Png)
+        );
+        assert_eq!(picture_format(b"<html>"), None);
     }
 }

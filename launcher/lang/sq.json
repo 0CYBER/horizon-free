@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Lëvizja",
+  "Reduced": "E ulët",
+  "Full": "E plotë",
+  "Aa Text": "Aa Teksti",
+  "Prepare & play": "Përgatit dhe luaj",
+  "Name it, pick what it plays, then an icon.": "Jepi një emër, zgjidh çë luan, pastaj një ikonë.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Falas për të gjithë. Çdo temë ka një pamje të çelët dhe një të errët, dhe kujton ngjyrën e theksit që zgjedh nën të.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "E ulët ndalon qiellin, venitjet dhe rrëshqitjet; butonat përgjigjen menjëherë. Sistemi ndjek rregullimin e kompjuterit tuaj.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "E çelët ose e errët, tema, ngjyra e theksit, xhami, mjegullimi dhe sfondi i Kreu kthehen siç vjen Horizon.",
+  "The launcher's look is back to how Horizon ships": "Pamja e lëshuesit u kthye siç vjen Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Pamja e lëshuesit është rivendosur për tani, por nuk u ruajt",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Xhami dhe Mjegullimi formojnë panelet e mjelmëta të pamjes së errët; e çelëta vizaton panele të bardha të ngurta.",
+  "Performance mode draws solid panels, without glass or blur.": "Modaliteti i performancës vizaton panele të ngurta, pa xhami as mjegullim.",
+  "This theme's night draws solid panels, without glass or blur.": "Nata e kësaj teme vizaton panele të ngurta, pa xhami as mjegullim."
 }

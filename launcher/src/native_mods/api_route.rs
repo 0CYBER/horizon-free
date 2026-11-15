@@ -13,6 +13,7 @@ const BIN: &str = "bin";
 
 /// Compile the mods in dependency order against API metadata and the runtime's dynamic
 /// closure. Return the unchanged executable and its runtime libraries, followed by mod dylibs.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile(
     rust: &Toolchain,
     runtime: &Path,
@@ -21,6 +22,7 @@ pub(super) fn compile(
     projects: &[api::Project<'_>],
     declared: &[Vec<dependencies::Dependency>],
     resolution: &dependencies::Resolution,
+    on_mod: &dyn Fn(&str, usize, usize),
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let sdk = prebuilt::identity(runtime)?;
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
@@ -37,8 +39,9 @@ pub(super) fn compile(
     }
     libraries.insert("mod_vocab", prebuilt::library(&runtime_deps, "mod_vocab")?);
     let mut rlibs: HashMap<&str, PathBuf> = HashMap::new();
-    for &index in &resolution.order {
+    for (n, &index) in resolution.order.iter().enumerate() {
         let project = &projects[index];
+        on_mod(&project.bundle.manifest.id, n + 1, resolution.order.len());
         let (rlib, _) = prebuilt::compile_mod(
             project,
             &declared[index],

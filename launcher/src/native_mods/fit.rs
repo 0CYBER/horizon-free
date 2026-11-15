@@ -195,10 +195,10 @@ pub fn changes(misfits: &[Misfit]) -> String {
 pub fn line(name: &str, verdict: &Verdict, build: &str) -> String {
     let made = |commit: &str| sdk_cache::known_name(commit);
     match verdict {
-        Verdict::MadeFor => trf("Made for this game ({build}).", &[("build", build)]),
+        Verdict::MadeFor => tr("Made for this game.").to_string(),
         Verdict::Fits { made_for } => trf(
-            "Made for {made_for}. Fits this game: {build}.",
-            &[("made_for", &made(made_for)), ("build", build)],
+            "Made for {made_for}. Fits this game too.",
+            &[("made_for", &made(made_for))],
         ),
         Verdict::Exact { made_for, why } if *why == "internals" => trf(
             "Made for {made_for} only: it uses the game's internals, so it works on exactly that build.",
@@ -249,7 +249,7 @@ pub fn headline(name: &str, verdict: &Verdict) -> String {
     match verdict {
         Verdict::MadeFor | Verdict::Fits { .. } => trf("{mod} fits this game.", &[("mod", name)]),
         Verdict::Exact { .. } | Verdict::NoList { .. } => {
-            trf("{mod} works on another game build only.", &[("mod", name)])
+            trf("{mod} works on another version only.", &[("mod", name)])
         }
         Verdict::DoesNotFit { .. } | Verdict::Points { .. } => {
             trf("{mod} doesn't fit this game.", &[("mod", name)])
@@ -287,18 +287,18 @@ pub fn update_summary(build: &str, total: usize, off: &[(String, String)]) -> St
     if off.is_empty() {
         return if total == 1 {
             trf(
-                "Update to {build}? Your native mod fits it.",
+                "Move to {build}? Your native mod fits it.",
                 &[("build", build)],
             )
         } else {
             trf(
-                "Update to {build}? All {count} of your native mods fit it.",
+                "Move to {build}? All {count} of your native mods fit it.",
                 &[("build", build), ("count", &total.to_string())],
             )
         };
     }
     let head = trf(
-        "Update to {build}? {fit} of your {count} native mods fit it.",
+        "Move to {build}? {fit} of your {count} native mods fit it.",
         &[
             ("build", build),
             ("fit", &total.saturating_sub(off.len()).to_string()),
@@ -356,6 +356,14 @@ pub fn did_not_build(name: &str) -> String {
     )
 }
 
+/// What the card says when a mod's own compile failed: no compiler text, the way on.
+pub fn compile_failed(name: &str) -> String {
+    trf(
+        "{mod} couldn't be built. The problem is in the mod, not in your game. Switch it off to play, or send the log to its author.",
+        &[("mod", name)],
+    )
+}
+
 /// The mod's menu while the stop for worlds saved with it is on screen: nothing is switched off
 /// until the player chooses.
 pub fn did_not_build_pending(name: &str) -> String {
@@ -405,9 +413,11 @@ fn worlds_body(name: &str, worlds: &[String]) -> String {
     }
 }
 
-/// The choice that keeps everything as it is, said on its button.
+/// The choice that keeps everything as it is, said on its button: the version `current` (a
+/// game build's tag) named as the Versions page names it.
 pub fn stay(current: &str) -> String {
-    trf("Stay on {build}", &[("build", current)])
+    let name = crate::nightly::update_name(current).unwrap_or_else(|| current.to_owned());
+    trf("Stay on {build}", &[("build", &name)])
 }
 
 /// The other choice, said on its button.

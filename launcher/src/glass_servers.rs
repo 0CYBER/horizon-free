@@ -31,7 +31,7 @@ impl Launcher {
     pub(super) fn glass_servers_page(&mut self, cx: &mut Context<Self>) -> Div {
         let head = glass_ui::page_head(
             tr("Servers"),
-            tr("Host a world for your friends with buttons and no commands. The same program runs on a VPS."),
+            tr("Host a world for your friends with buttons and no commands. The same program runs on a rented server too."),
         );
         // The mockup always shows a server: the open one, else the first.
         if self.servers.open.is_none() {
@@ -165,6 +165,7 @@ impl Launcher {
         let folder = dir.to_path_buf();
         corner = corner.child(
             ui::icon_button("server-folder", "folder-01", 32., 17., 10., false, &t)
+                .tooltip(ui::tip(tr("Open the server's folder")))
                 .on_click(move |_, _, cx| crate::glass_toast::open(cx, &folder)),
         );
         // Start, or Restart and Stop.
@@ -510,30 +511,47 @@ impl Launcher {
     /// No server yet: the glass says so, with Create (not in the mockup, which always has one).
     fn glass_no_server(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let mut d = glass::plate(radius::PANEL)
+        // An intentional empty state: a bordered card with an icon, like Home's screenshots.
+        let mut card = div()
+            .relative()
             .flex()
             .flex_col()
-            .items_start()
-            .gap(px(16.))
-            .p(px(24.))
+            .items_center()
+            .justify_center()
+            .gap(px(14.))
+            .min_h(px(220.))
+            .px(px(24.))
+            .py(px(28.))
+            .rounded(px(radius::ROW))
+            .border_1()
+            .border_color(white(0.08))
+            .bg(white(0.03))
+            .child(ui::icon("computer", 32., white(ink::DIM)))
             .child(
                 ui::text(14., FontWeight::NORMAL, ink::NOTE)
-                    .relative()
+                    .max_w(px(460.))
+                    .text_center()
                     .line_height(px(21.))
-                    .child(tr("No server yet. Create one: it takes a few seconds, and with the defaults (tick the EULA, press Create) you get a friends-only survival world.")),
+                    .child(tr("No server yet. Create one: it takes a few seconds, and with the defaults (accept Minecraft's terms, press Create) you get a friends-only survival world.")),
             );
         if let Some(p) = self.servers.problem.clone() {
-            d = d.child(glass_home_lists::danger_line(p.message).relative());
+            card = card.child(glass_home_lists::danger_line(p.message).relative());
         }
-        d.child(
-            button("server-create-empty", "Create a server", Kind::Primary, &t)
-                .h(px(44.))
-                .px(px(24.))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.open_create(cx);
-                    cx.notify();
-                })),
-        )
+        glass::plate(radius::PANEL)
+            .flex()
+            .flex_col()
+            .p(px(16.))
+            .child(
+                card.child(
+                    button("server-create-empty", "Create a server", Kind::Primary, &t)
+                        .h(px(44.))
+                        .px(px(24.))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.open_create(cx);
+                            cx.notify();
+                        })),
+                ),
+            )
     }
 
     /// The servers, the open one lit, then Create a server and (not in the mockup) adding a
@@ -738,23 +756,38 @@ impl Launcher {
         if self.servers.tab == Tab::Overview {
             self.servers.tab = Tab::Players;
         }
-        let strip = div()
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .children(LOWER_TABS.iter().map(|&(tab, label)| {
-                ui::tab(
+        let active = LOWER_TABS
+            .iter()
+            .position(|&(tab, _)| tab == self.servers.tab)
+            .unwrap_or(0);
+        let items: Vec<_> = LOWER_TABS
+            .iter()
+            .map(|&(tab, label)| {
+                ui::pill_tab(
                     SharedString::from(format!("server-tab-{label}")),
-                    tr(label),
                     self.servers.tab == tab,
+                    36.,
                     &t,
                 )
+                .flex_none()
+                .px(px(14.))
+                .text_size(px(15.))
+                .child(div().relative().child(tr(label)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.servers.tab = tab;
                     this.servers.confirm_restore = None;
                     cx.notify();
                 }))
-            }));
+            })
+            .collect();
+        let strip = ui::pill_strip(
+            "server-tabs",
+            active,
+            36.,
+            0.,
+            div().flex().items_center().gap(px(4.)),
+            items,
+        );
         let players = !matches!(self.servers.tab, Tab::Settings | Tab::Backups);
         let body = match self.servers.tab {
             Tab::Settings => self.settings_tab(status, cx),

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Hareket",
+  "Reduced": "Azaltılmış",
+  "Full": "Tam",
+  "Aa Text": "Aa Metin",
+  "Prepare & play": "Hazırla ve oyna",
+  "Name it, pick what it plays, then an icon.": "Bir ad ver, ne oynattığını seç, sonra bir simge.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Herkese ücretsiz. Her temanın açık ve koyu bir görünümü vardır ve altında seçtiğin vurgu rengini hatırlar.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Azaltılmış gökyüzünü, geçişleri ve kaydırmaları durdurur; düğmeler yine de anında yanıt verir. Sistem, bilgisayarınızın ayarını izler.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Açık ya da koyu, tema, vurgu rengi, cam, bulanıklık ve Ana Sayfa arka planı Horizon'un varsayılanlarına döner.",
+  "The launcher's look is back to how Horizon ships": "Başlatıcının görünümü Horizon'un varsayılanlarına döndü",
+  "The launcher's look is reset for now, but it could not be saved": "Başlatıcının görünümü şimdilik sıfırlandı, ancak kaydedilemedi",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Cam ve Bulanıklık, koyu görünümün buzlu panellerini şekillendirir; açık görünüm düz beyaz paneller çizer.",
+  "Performance mode draws solid panels, without glass or blur.": "Performans modu cam veya bulanıklık olmadan düz paneller çizer.",
+  "This theme's night draws solid panels, without glass or blur.": "Bu temanın gecesi cam veya bulanıklık olmadan düz paneller çizer."
 }
