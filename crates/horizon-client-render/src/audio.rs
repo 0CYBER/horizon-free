@@ -120,12 +120,86 @@ struct Mixer {
     /// The output device the stream was opened on (`Library.currentDeviceName`).
     #[cfg(feature = "audio")]
     device_name: String,
-    /// The stream reported its device gone (`Library.isCurrentDeviceDisconnected`).
-    #[cfg(feature = "audio")]
-    device_lost: bool,
+    /// How the stream reported the output lost, if it did (`Lost`).
+    #[cfg(any(feature = "audio", test))]
+    lost: Option<Lost>,
     /// The stream's recent backend errors, which tell a dead stream from a hiccup.
-    #[cfg(feature = "audio")]
+    #[cfg(any(feature = "audio", test))]
     stream_errors: StreamErrors,
+    /// How many times the output's buffer has been doubled this session (`buffer_frames`).
+    #[cfg(any(feature = "audio", test))]
+    buffer_steps: u32,
+}
+
+/// How the output was lost, as the stream's error callback saw it. The worse one wins.
+#[cfg(any(feature = "audio", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Lost {
+    /// The stream stopped on a device that is still there (`StreamErrors::dead`): on ALSA an
+    /// underrun the stream doesn't come back from, as cpal reports POLLERR again and again
+    /// without preparing the PCM. Any stall longer than the buffer does it. Only the stream is
+    /// opened again, with a longer buffer (`buffer_frames`), and the mixer keeps its channels,
+    /// so the sounds playing go on. OpenAL Soft rides out an underrun under vanilla the same way:
+    /// a hitch never stops a sound there.
+    Stream,
+    /// The device is gone (`Library.isCurrentDeviceDisconnected`): `SoundEngine.reload`, every
+    /// sound stopped and the output opened again.
+    Device,
+}
+#[cfg(any(feature = "audio", test))]
+impl Mixer {
+    /// An error from the stream at `now`; `gone` when it said its device is
+    /// (`DeviceNotAvailable`), otherwise a backend error such as ALSA's POLLERR.
+    fn stream_error(&mut self, gone: bool, now: std::time::Instant) {
+        let lost = if gone {
+            Some(Lost::Device)
+        } else {
+            self.stream_errors.dead(now).then_some(Lost::Stream)
+        };
+        if lost > self.lost {
+            if lost == Some(Lost::Stream) {
+                log::warn!("Horizon: the audio stream stopped; opening it again");
+            }
+            self.lost = lost;
+        }
+    }
+    /// Takes a stopped stream (`Lost::Stream`), doubling the next stream's buffer up to
+    /// `LONGEST_BUFFER`. A lost device is left to `should_change_device`.
+    fn take_stopped_stream(&mut self) -> bool {
+        if self.lost != Some(Lost::Stream) {
+            return false;
+        }
+        self.lost = None;
+        if buffer_frames(self.buffer_steps) < LONGEST_BUFFER {
+            self.buffer_steps += 1;
+        }
+        true
+    }
+    /// Takes a lost device (`Lost::Device`).
+    fn take_lost_device(&mut self) -> bool {
+        let lost = self.lost == Some(Lost::Device);
+        if lost {
+            self.lost = None;
+        }
+        lost
+    }
+}
+/// The buffer asked for on Linux first, in frames: about 23 ms at 44.1 kHz, so sound effects
+/// come out without the ~100 ms delay of the ALSA backend's default buffer.
+#[cfg(any(feature = "audio", test))]
+const SHORT_BUFFER: u32 = 1024;
+/// The longest buffer the doubling reaches: about 93 ms at 44.1 kHz, near the backend's default.
+#[cfg(any(feature = "audio", test))]
+const LONGEST_BUFFER: u32 = 4096;
+/// The frames asked for after the stream stopped on underruns `steps` times (`Lost::Stream`):
+/// `SHORT_BUFFER` doubled each time, up to `LONGEST_BUFFER`. A machine that can't keep the
+/// short buffer fed gets a longer one instead of a stream that stops every few seconds.
+#[cfg(any(feature = "audio", test))]
+fn buffer_frames(steps: u32) -> u32 {
+    SHORT_BUFFER
+        .checked_shl(steps)
+        .unwrap_or(u32::MAX)
+        .min(LONGEST_BUFFER)
 }
 
 /// A stream's backend errors close together (`StreamErrors::dead`).
@@ -1201,7 +1275,14 @@ fn open_device(
         F::U8 => build_stream::<u8>(device, &config, stream_config, mixer.clone()),
         other => Err(format!("unsupported sample format {other}").into()),
     };
-    let short = audio_stream_config(&config);
+    let steps = mixer.lock().map_or(0, |m| m.buffer_steps);
+    let short = audio_stream_config(&config, steps);
+    if steps > 0 {
+        log::info!(
+            "Horizon: audio buffer {:?} (the stream stopped on underruns)",
+            short.buffer_size
+        );
+    }
     let stream = match build(&short) {
         Ok(stream) => stream,
         // A device that refuses the short fixed buffer still plays with cpal's default one.
@@ -1214,7 +1295,7 @@ fn open_device(
     stream.play()?;
     if let Ok(mut m) = mixer.lock() {
         m.device_name = device.name().unwrap_or_default();
-        m.device_lost = false;
+        m.lost = None;
         m.stream_errors = StreamErrors::default();
     }
     Ok((stream, config))
@@ -1295,13 +1376,15 @@ fn cards_changed(seen: Option<&str>, cards: Option<&str>) -> bool {
 
 /// The buffer size to request for `open_device`. On Linux the ALSA backend's
 /// `BufferSize::Default` means a ~100 ms buffer, so sound effects come out
-/// about 100 ms late: request a short fixed buffer (1024 frames) by default.
-/// An environment override `HORIZON_AUDIO_BUFFER` can specify `default` or a
-/// custom frame count (e.g. 2048) when the default short buffer underruns
-/// (e.g. PipeWire min-quantum >= 1024).
+/// about 100 ms late: request a short fixed buffer (1024 frames) by default,
+/// doubled for each of the `steps` times it stopped on underruns this session
+/// (`buffer_frames`). An environment override `HORIZON_AUDIO_BUFFER` can
+/// specify `default` or a custom frame count (e.g. 2048) when the default short
+/// buffer underruns (e.g. PipeWire min-quantum >= 1024); it is kept as given.
 #[cfg(feature = "audio")]
 fn target_buffer_size(
     range: (u32, u32),
+    steps: u32,
     var: impl Fn(&str) -> Option<std::ffi::OsString>,
 ) -> Option<cpal::BufferSize> {
     if let Some(val) = var("HORIZON_AUDIO_BUFFER").and_then(|v| v.into_string().ok()) {
@@ -1314,10 +1397,13 @@ fn target_buffer_size(
     }
     #[cfg(target_os = "linux")]
     {
-        Some(cpal::BufferSize::Fixed(1024u32.clamp(range.0, range.1)))
+        Some(cpal::BufferSize::Fixed(
+            buffer_frames(steps).clamp(range.0, range.1),
+        ))
     }
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = steps;
         None
     }
 }
@@ -1325,15 +1411,15 @@ fn target_buffer_size(
 /// The cpal `StreamConfig` to open an output stream with. On Linux the ALSA
 /// backend's `BufferSize::Default` means a ~100 ms buffer, so sound effects
 /// come out about 100 ms late: request a short fixed buffer there. Other
-/// platforms keep cpal's default behaviour.
+/// platforms keep cpal's default behaviour. `steps`: `target_buffer_size`.
 #[cfg(feature = "audio")]
-fn audio_stream_config(config: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+fn audio_stream_config(config: &cpal::SupportedStreamConfig, steps: u32) -> cpal::StreamConfig {
     let mut sc = config.config();
     let range = match config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => (*min, *max),
         cpal::SupportedBufferSize::Unknown => (256, 4096),
     };
-    if let Some(bs) = target_buffer_size(range, |name| std::env::var_os(name)) {
+    if let Some(bs) = target_buffer_size(range, steps, |name| std::env::var_os(name)) {
         sc.buffer_size = bs;
     }
     sc
@@ -1366,18 +1452,8 @@ fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
         move |e| {
             log::warn!("Horizon: audio stream error: {e}");
             if let Ok(mut m) = on_error.lock() {
-                let dead = match e {
-                    cpal::StreamError::DeviceNotAvailable => true,
-                    cpal::StreamError::BackendSpecific { .. } => {
-                        m.stream_errors.dead(std::time::Instant::now())
-                    }
-                };
-                if dead && !m.device_lost {
-                    if !matches!(e, cpal::StreamError::DeviceNotAvailable) {
-                        log::warn!("Horizon: the audio stream stopped; opening the output again");
-                    }
-                    m.device_lost = true;
-                }
+                let gone = matches!(e, cpal::StreamError::DeviceNotAvailable);
+                m.stream_error(gone, std::time::Instant::now());
             }
         },
         None,
@@ -1706,7 +1782,7 @@ impl Audio {
             return false;
         }
         let (current, lost) = match self.backend.mixer.lock() {
-            Ok(mut m) => (m.device_name.clone(), std::mem::take(&mut m.device_lost)),
+            Ok(mut m) => (m.device_name.clone(), m.take_lost_device()),
             Err(_) => return false,
         };
         if lost {
@@ -1782,8 +1858,9 @@ impl Audio {
         changed
     }
     /// Opens the output on the chosen device again; `retrying` after an earlier try failed.
+    /// Whether it opened.
     #[cfg(feature = "audio")]
-    fn reopen_output(&mut self, retrying: bool) {
+    fn reopen_output(&mut self, retrying: bool) -> bool {
         // The old stream lets go of the device first: a dead one may still hold it.
         self._stream = None;
         let device = self.device_name.clone();
@@ -1793,12 +1870,15 @@ impl Audio {
                     log::info!("Horizon: the audio output is back");
                 }
                 self.reopen = Reopen::default();
+                true
             }
             Err(e) if self.reopen.failed(retrying) => {
                 log::warn!("Horizon: could not reopen the audio output ({e}); trying again soon");
+                false
             }
             Err(e) => {
                 log::warn!("Horizon: could not reopen the audio output ({e}); it stays off");
+                false
             }
         }
     }
@@ -1806,10 +1886,24 @@ impl Audio {
     pub fn tick(&mut self, paused: bool, ctx: &TickContext) {
         #[cfg(feature = "audio")]
         {
+            // A splitscreen share leaves the output to the first player's, as in `should_change_device`.
+            let stopped = self.backend.owner == 0
+                && self
+                    .backend
+                    .mixer
+                    .lock()
+                    .is_ok_and(|mut m| m.take_stopped_stream());
             if self.should_change_device() {
                 // SoundEngine.reload: stop every sound, open the output again.
                 self.stop_all();
                 self.reopen_output(false);
+            } else if stopped {
+                // The device is still there (`Lost::Stream`): only the stream is opened again.
+                // The mixer keeps its channels, so the sounds playing go on where they were.
+                // If it doesn't open, they stop as on a reload.
+                if !self.reopen_output(false) {
+                    self.stop_all();
+                }
             } else if self.backend.owner == 0 && self.reopen.due() {
                 self.reopen_output(true);
             }
@@ -2249,6 +2343,84 @@ mod tests {
         }
     }
 
+    /// A stream that stops on a run of backend errors (ALSA's POLLERR after an underrun) is opened
+    /// again with the mixer's channels left playing where they were; a device that is gone reloads
+    /// the output, and wins over a stopped stream whichever came first.
+    #[test]
+    fn a_stopped_stream_keeps_its_sounds_and_a_lost_device_does_not() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut m = Mixer::default();
+        m.channels
+            .insert(1, channel(sine(440.0), None, [0.0; 3], true));
+        let mut data = [0.0f32; 512];
+        mix(&mut m, &mut data, 2, 48_000);
+        let played = m.channels[&1].position;
+        assert!(played > 0.0);
+        // One hiccup is nothing; a run of them stops the stream.
+        m.stream_error(false, at(0));
+        assert_eq!(m.lost, None);
+        m.stream_error(false, at(10));
+        m.stream_error(false, at(20));
+        assert_eq!(m.lost, Some(Lost::Stream));
+        assert!(
+            !m.take_lost_device(),
+            "a stopped stream is not a lost device"
+        );
+        assert!(m.take_stopped_stream());
+        assert_eq!(m.lost, None);
+        assert!(!m.take_stopped_stream(), "taken once");
+        // The next stream mixes the same channel on from where it was.
+        assert_eq!(m.channels[&1].state, State::Playing);
+        assert_eq!(m.channels[&1].position, played);
+        mix(&mut m, &mut data, 2, 48_000);
+        assert!(m.channels[&1].position > played);
+        // The device going away after (or before) the stream stopped: the output is reloaded.
+        for device_first in [false, true] {
+            let mut m = Mixer::default();
+            if device_first {
+                m.stream_error(true, at(0));
+            }
+            for k in 1..=5 {
+                m.stream_error(false, at(k * 10));
+            }
+            m.stream_error(true, at(100));
+            assert_eq!(m.lost, Some(Lost::Device));
+            assert!(!m.take_stopped_stream());
+            assert!(m.take_lost_device());
+            assert_eq!(m.lost, None);
+        }
+    }
+
+    /// Each stream stopped on underruns doubles the next one's buffer, from the short 1024
+    /// frames to 4096; a lost device doesn't.
+    #[test]
+    fn a_stream_stopped_on_underruns_reopens_with_a_longer_buffer() {
+        use std::time::Instant;
+        assert_eq!(buffer_frames(0), SHORT_BUFFER);
+        assert_eq!(buffer_frames(1), 2048);
+        assert_eq!(buffer_frames(2), LONGEST_BUFFER);
+        assert_eq!(buffer_frames(40), LONGEST_BUFFER);
+        let mut m = Mixer::default();
+        let mut frames = Vec::new();
+        for _ in 0..4 {
+            // A reopened stream starts with no errors (`open_device`).
+            m.stream_errors = StreamErrors::default();
+            for _ in 0..StreamErrors::DEAD_AFTER {
+                m.stream_error(false, Instant::now());
+            }
+            assert!(m.take_stopped_stream());
+            frames.push(buffer_frames(m.buffer_steps));
+        }
+        assert_eq!(frames, [2048, 4096, 4096, 4096]);
+        assert_eq!(m.buffer_steps, 2, "the steps stop at the longest buffer");
+        let mut lost = Mixer::default();
+        lost.stream_error(true, Instant::now());
+        assert!(lost.take_lost_device());
+        assert_eq!(lost.buffer_steps, 0);
+    }
+
     /// A failed reopening is tried again every two seconds, five more times, then given up.
     #[test]
     fn a_failed_reopening_retries_a_few_times_then_stops() {
@@ -2462,28 +2634,49 @@ mod tests {
         };
         let range = (256, 4096);
         assert_eq!(
-            target_buffer_size(range, env(&[("HORIZON_AUDIO_BUFFER", "default")])),
+            target_buffer_size(range, 0, env(&[("HORIZON_AUDIO_BUFFER", "default")])),
             Some(cpal::BufferSize::Default)
         );
         assert_eq!(
-            target_buffer_size(range, env(&[("HORIZON_AUDIO_BUFFER", "2048")])),
+            target_buffer_size(range, 0, env(&[("HORIZON_AUDIO_BUFFER", "2048")])),
             Some(cpal::BufferSize::Fixed(2048))
         );
         assert_eq!(
-            target_buffer_size(range, env(&[("HORIZON_AUDIO_BUFFER", "100")])),
+            target_buffer_size(range, 0, env(&[("HORIZON_AUDIO_BUFFER", "100")])),
             Some(cpal::BufferSize::Fixed(256))
         );
         assert_eq!(
-            target_buffer_size(range, env(&[("HORIZON_AUDIO_BUFFER", "10000")])),
+            target_buffer_size(range, 0, env(&[("HORIZON_AUDIO_BUFFER", "10000")])),
             Some(cpal::BufferSize::Fixed(4096))
         );
         #[cfg(target_os = "linux")]
         assert_eq!(
-            target_buffer_size(range, env(&[])),
+            target_buffer_size(range, 0, env(&[])),
             Some(cpal::BufferSize::Fixed(1024))
         );
         #[cfg(not(target_os = "linux"))]
-        assert_eq!(target_buffer_size(range, env(&[])), None);
+        assert_eq!(target_buffer_size(range, 0, env(&[])), None);
+        // After the stream stopped on underruns: twice as long each time, within the device's
+        // range; an override stays as given.
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(
+                target_buffer_size(range, 1, env(&[])),
+                Some(cpal::BufferSize::Fixed(2048))
+            );
+            assert_eq!(
+                target_buffer_size(range, 9, env(&[])),
+                Some(cpal::BufferSize::Fixed(4096))
+            );
+            assert_eq!(
+                target_buffer_size((256, 3000), 2, env(&[])),
+                Some(cpal::BufferSize::Fixed(3000))
+            );
+        }
+        assert_eq!(
+            target_buffer_size(range, 2, env(&[("HORIZON_AUDIO_BUFFER", "512")])),
+            Some(cpal::BufferSize::Fixed(512))
+        );
     }
     #[test]
     fn linear_attenuation_reaches_zero_at_the_max_distance() {
