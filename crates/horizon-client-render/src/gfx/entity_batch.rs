@@ -84,7 +84,7 @@ pub const WORLD_TEXT_POLYGON_OFFSET_OVERLAY: u32 = 40;
 
 /// The material of a quad by its overlay (`MATERIALS` order): the overlay is the layer's low 16
 /// bits, as entity.wgsl reads it; HDR output's tier rides in the high ones.
-fn material(layer: u32, oit: bool) -> usize {
+pub(in crate::gfx) fn material(layer: u32, oit: bool) -> usize {
     match layer & 0xffff {
         TERRAIN_MODEL_SOLID_OVERLAY => return 13,
         TERRAIN_MODEL_CUTOUT_OVERLAY => return 14,

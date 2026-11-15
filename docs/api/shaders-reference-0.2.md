@@ -334,10 +334,12 @@ asks for ray queries and keeps the scene with any pack or none; any other value 
   glass, ice, slime and honey blocks, any block whose texture has partly see-through texels.
 - `const RAY_ENTITY: u32`: a third layer, only in a pack whose files name it, anywhere outside a comment (dead
   code too): the entities within the scene's reach, in view or not (behind the camera, hidden), which are mobs,
-  players, armour stands, item frames, vehicles, projectiles, falling blocks, block displays, and the block entities
-  the camera draws with them (a chest while it opens). Such a pack's `RayHit` also has `entity`. Not in it:
-  particles, text, the hand, the camera's own body in first person, translucent items, additive glows, beams and
-  portals, block entities at rest (a closed chest) and out of view. `trace` and `trace_any` never read it.
+  players, armour stands, item frames, vehicles, projectiles, falling blocks, block displays, the block entities
+  at rest that the block entity cache keeps (on in every graphics preset: closed chests, shulker boxes, bells,
+  decorated pots, banners, within vanilla's 64 blocks) in view or not, and the other block entities the camera
+  draws (a chest while it opens). Such a pack's `RayHit` also has `entity`. Not in it: particles, text, the hand,
+  the camera's own body in first person, translucent items, additive glows, beams and portals, and other block
+  entities out of view. `trace` and `trace_any` never read it.
 - `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and
   `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`
   and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no
@@ -391,7 +393,7 @@ The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `
 | `horizon_sprite` | `u32` | Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer. |
 
 Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
-62 the entity layer, for a pack that names it), and in a post pass bindings 12 and 13 the LabPBR maps (the
+63 the entity layer, for a pack that names it), and in a post pass bindings 12 and 13 the LabPBR maps (the
 material stage has them there already). They are Horizon's, as their `horizon_` names say, and change with the
 renderer.
 

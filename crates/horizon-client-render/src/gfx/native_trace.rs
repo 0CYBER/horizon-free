@@ -7,12 +7,13 @@
 //! `trace` reads. Those draw in frames that have a scene; in the others, and on a device that
 //! can't hold the bindings, the ones whose `trace` misses draw, as on a device without ray
 //! queries. A pack whose files name `RAY_ENTITY` also has the entity layer's vertices, atlas
-//! and sampler there.
+//! and sampler there, and the retained block entities' vertices.
 
 use horizon_shader_api::stages::{
     GROUP, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_ENTITY_ATLAS_BINDING,
-    RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING, RAY_LAYERS_BINDING, RAY_SCENE_BINDING,
-    RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, RAY_STORE_BINDING,
+    RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING,
+    RAY_LAYERS_BINDING, RAY_SCENE_BINDING, RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS,
+    RAY_SPRITES_BINDING, RAY_STORE_BINDING,
 };
 
 use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
@@ -154,6 +155,7 @@ fn scene_entries(entities: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
                 RAY_ENTITY_SAMPLER_BINDING,
                 wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             ),
+            entry(RAY_ENTITY_RETAINED_BINDING, buffer(read)),
         ]);
     }
     entries
@@ -357,11 +359,13 @@ impl Rays {
                 RAY_ENTITY_STORE_BINDING,
                 RAY_ENTITY_ATLAS_BINDING,
                 RAY_ENTITY_SAMPLER_BINDING,
+                RAY_ENTITY_RETAINED_BINDING,
             ];
             let resources = [
                 wgpu::BindingResource::Buffer(e.vertices.clone()),
                 wgpu::BindingResource::TextureView(e.atlas),
                 wgpu::BindingResource::Sampler(e.sampler),
+                e.retained.as_entire_binding(),
             ];
             let entry = |(binding, resource)| wgpu::BindGroupEntry { binding, resource };
             entries.extend(bindings.into_iter().zip(resources).map(entry));
@@ -371,12 +375,27 @@ impl Rays {
 }
 
 /// `horizon_RaySpace`'s twelve words for `scene`, its sprite arrays holding `split` layers each:
-/// the entity layer's bases start at word 8, where WGSL aligns a `vec3<u32>`.
+/// the retained block entities' first instance at word 6, and the entity layer's bases from word
+/// 8, where WGSL aligns a `vec3<u32>`.
 pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
     let [x, y, z] = scene.camera.map(f32::to_bits);
     let [a, b, c] = scene.entities.as_ref().map_or([0; 3], |e| e.bases);
+    let retained = scene.entities.as_ref().map_or(0, |e| e.retained_instances);
     let instances = [scene.solid_instances, scene.translucent_instances];
-    [x, y, z, split, instances[0], instances[1], 0, 0, a, b, c, 0]
+    [
+        x,
+        y,
+        z,
+        split,
+        instances[0],
+        instances[1],
+        retained,
+        0,
+        a,
+        b,
+        c,
+        0,
+    ]
 }
 
 impl NativePost {
@@ -637,26 +656,36 @@ mod tests {
         );
     }
 
-    /// The entity layer's store, atlas and sampler count too: one more storage buffer and
-    /// sampled texture, and the group's bindings up to the sampler's.
+    /// The entity layer's store, atlas, sampler and retained store count too: two more storage
+    /// buffers and a sampled texture, and the group's bindings up to the retained store's.
     #[test]
     fn the_entity_layer_counts_toward_the_limits() {
         let entries = scene_entries(true);
         let fits = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 9,
-            max_storage_buffers_per_shader_stage: 3,
+            max_storage_buffers_per_shader_stage: 4,
             max_uniform_buffers_per_shader_stage: 1,
             max_acceleration_structures_per_shader_stage: 1,
-            max_bindings_per_bind_group: 63,
+            max_bindings_per_bind_group: 64,
             ..Default::default()
         };
         assert_eq!(over_limits(&entries, &[], &fits, FRAGMENT), None);
+        let three = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 3,
+            ..fits.clone()
+        };
+        let why = over_limits(&entries, &[], &three, FRAGMENT).unwrap();
+        assert_eq!(why, "4 storage buffers, the device takes 3");
+        let sixty_three = wgpu::Limits {
+            max_bindings_per_bind_group: 63,
+            ..fits.clone()
+        };
+        let why = over_limits(&entries, &[], &sixty_three, FRAGMENT).unwrap();
+        assert_eq!(why, "64 bindings in a group, the device takes 63");
         let two = wgpu::Limits {
             max_storage_buffers_per_shader_stage: 2,
             ..fits.clone()
         };
-        let why = over_limits(&entries, &[], &two, FRAGMENT).unwrap();
-        assert_eq!(why, "3 storage buffers, the device takes 2");
         let eight = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 8,
             ..fits.clone()

@@ -490,7 +490,8 @@ pub const RAY_STORE_BINDING: u32 = 49;
 /// `horizon_RaySpace`: the camera in the scene's space (three floats), how many layers a sprite
 /// array holds (a `u32`), how many of the scene's instances, its first ones, are solid
 /// terrain's (a `u32`), where the translucent terrain's end (a `u32`: the entity layer's
-/// instance is the next), then at byte 32 the first quad of each of that instance's three
+/// instance is the next), where the retained block entities' instances start (a `u32`, after
+/// the stream's), then at byte 32 the first quad of each of the stream instance's three
 /// geometries (three `u32`), 48 bytes in all.
 pub const RAY_SPACE_BINDING: u32 = 50;
 /// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
@@ -510,6 +511,9 @@ pub const RAY_ENTITY: u32 = 4;
 pub const RAY_ENTITY_STORE_BINDING: u32 = 60;
 pub const RAY_ENTITY_ATLAS_BINDING: u32 = 61;
 pub const RAY_ENTITY_SAMPLER_BINDING: u32 = 62;
+/// And the block entities the renderer keeps on the GPU (a closed chest), the quads of the
+/// layer's, in the stream's layout and atlas: the last of the layer's bindings.
+pub const RAY_ENTITY_RETAINED_BINDING: u32 = 63;
 /// The bit of an entity vertex's layer that puts its quad in the entity layer, above the
 /// renderer's kind bits: a quad without it lets every ray through.
 pub const RAY_ENTITY_QUAD: u32 = 1 << 28;
@@ -536,7 +540,7 @@ const RAY_LAYERS: &str = "\
 const RAY_SOLID: u32 = 1u;
 const RAY_TRANSLUCENT: u32 = 2u;
 +|// The entities within the scene's reach, in view or not: mobs, players, armour stands, item
-+|// frames, vehicles, and the block entities the camera draws (a chest while it opens).
++|// frames, vehicles, and block entities (a chest at rest, and one the camera draws opening).
 +|const RAY_ENTITY: u32 = 4u;
 // The nearest solid surface from the camera-relative `origin` along the unit vector `direction`,
 // within `max_distance` blocks; `distance` is negative where there is none.
@@ -675,6 +679,9 @@ struct horizon_RaySpace {
     solid_instances: u32,
 +|    // Where translucent terrain's instances end: the entity layer's is the next.
 +|    translucent_instances: u32,
++|    // The first instance of the block entities kept on the GPU, after the stream's: their quads
++|    // are in `horizon_ray_retained`.
++|    retained_instances: u32,
 +|    // The first quad of each of the entity layer's three geometries in `horizon_ray_entities`.
 +|    entity_bases: vec3<u32>,
 }
@@ -877,7 +884,15 @@ const RAY_ENTITY_SCENE: &str = "\
 @group(3) @binding(60) var<storage, read> horizon_ray_entities: array<u32>;
 @group(3) @binding(61) var horizon_ray_entity_atlas: texture_2d<f32>;
 @group(3) @binding(62) var horizon_ray_entity_sampler: sampler;
+// The block entities kept on the GPU (a closed chest), the quads of the layer's, in the same
+// layout and atlas: a retained instance's custom data is its section's first quad here.
+@group(3) @binding(63) var<storage, read> horizon_ray_retained: array<u32>;
+// Added to a retained vertex's index: the vertex is in `horizon_ray_retained`.
+const horizon_ray_retained_vertex: u32 = 0x80000000u;
 fn horizon_ray_entity_word(vertex: u32, i: u32) -> u32 {
+    if vertex >= horizon_ray_retained_vertex {
+        return horizon_ray_retained[(vertex - horizon_ray_retained_vertex) * 11u + i];
+    }
     return horizon_ray_entities[vertex * 11u + i];
 }
 fn horizon_ray_entity_corner(vertex: u32) -> vec3<f32> {
@@ -902,8 +917,14 @@ fn horizon_ray_entity_color(t: horizon_RayTriangle) -> vec4<f32> {
 fn horizon_ray_entity_texel(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(horizon_ray_entity_atlas, horizon_ray_entity_sampler, uv, 0.0);
 }
-// The triangle of an entity layer hit: its geometry's first quad, plus two triangles a quad.
+// The triangle of an entity layer hit: its geometry's first quad, plus two triangles a quad;
+// on a retained instance, its custom data's.
 fn horizon_ray_entity_triangle(c: RayIntersection) -> horizon_RayTriangle {
+    if c.instance_index >= horizon_ray_space.retained_instances {
+        var t = horizon_ray_triangle(c.instance_custom_data, c.primitive_index, c.barycentrics);
+        t.corners += vec3<u32>(horizon_ray_retained_vertex);
+        return t;
+    }
     let first = horizon_ray_space.entity_bases[min(c.geometry_index, 2u)];
     return horizon_ray_triangle(first, c.primitive_index, c.barycentrics);
 }

@@ -276,6 +276,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   times the layer's opacity is cut and blends, not the returned alpha, and `horizon-shader check` refuses a `discard`
   that `entity` can reach. An entity stage that cuts or fades entities itself sets `coverage = "pack"`, which keeps
   the old behaviour.
+- 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the block entities at rest that the block entity cache
+  keeps (on in every graphics preset: closed chests, shulker boxes, bells, decorated pots, banners), in view or not,
+  so they cast traced shadows and show in reflections as the mobs do. A hit on one is an entity hit like any other.
 - **2026-11-13: API 0.1 removed (breaking, #15886).** Use shader API 0.2 instead. The game, `horizon-shader` and
   the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
   [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
