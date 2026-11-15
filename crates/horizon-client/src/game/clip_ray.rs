@@ -90,11 +90,15 @@ impl Game<'_> {
                     if miss || t0 > t1 || t0 > reach {
                         continue;
                     }
-                    let mut normal = face;
-                    if let Some(a) = axis_in {
-                        normal = [0; 3];
-                        normal[a] = sign;
-                    }
+                    // `AABB.clipDirection` takes only a plane met strictly after the start
+                    // (0.0 < t): a box the ray starts inside or on the boundary of gives no
+                    // entry here — the nudged inside test of `VoxelShape.clip` above is the
+                    // only hit such a start can make, never a face-less one at t = 0 (#16551).
+                    let Some(a) = axis_in else {
+                        continue;
+                    };
+                    let mut normal = [0; 3];
+                    normal[a] = sign;
                     if best.is_none_or(|(bt, _)| t0 < bt) {
                         best = Some((t0, normal));
                     }
@@ -184,4 +188,39 @@ fn inside_hit(nudged: Vec3, sweep: Vec3, boxes: &[[f64; 6]], pos: [i32; 3]) -> O
         point: nudged.components(),
         inside: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #16551: eyes inside a sapling's outline — `VoxelShape.clip`'s inside
+    /// start. Yaw -180, pitch 40 looks mostly along -Z and down, so
+    /// `Direction.getApproximateNearest` rounds the sweep to NORTH and the
+    /// inside hit faces SOUTH: the click plants on the sapling's south face.
+    #[test]
+    fn an_inside_start_hits_the_outline_facing_the_look() {
+        // Entity.calculateViewVector(-180, 40): (0, -sin40, -cos40).
+        let dir = [0.0, -0.642_787_609_686_539_4, -0.766_044_443_118_978];
+        let reach = 4.5;
+        let sweep = Vec3::new(dir[0] * reach, dir[1] * reach, dir[2] * reach);
+        let eye = Vec3::new(0.5, 200.07625, 0.5);
+        let nudged = eye.add_vector(sweep.scale(0.001));
+        // A sapling's outline at (0, 200, 0), in world space.
+        let boxes = [[0.1, 200.0, 0.1, 0.9, 200.8, 0.9]];
+        let hit = inside_hit(nudged, sweep, &boxes, [0, 200, 0]).expect("inside");
+        assert!(hit.inside);
+        assert_eq!(hit.face, [0, 0, 1], "SOUTH, opposite the look's NORTH");
+        assert_eq!(hit.beside(), [0, 200, 1], "where the click plants");
+    }
+
+    /// A nudged point outside every outline box is no inside hit: the ray goes
+    /// on to the slab entry, as `VoxelShape.clip` falls to `AABB.clip`.
+    #[test]
+    fn a_nudged_point_outside_the_outline_is_not_an_inside_hit() {
+        let sweep = Vec3::new(0.0, -2.892_543_6, -3.447_200_0);
+        let boxes = [[0.1, 200.0, 0.1, 0.9, 200.8, 0.9]];
+        let outside = Vec3::new(2.0, 200.5, 0.5);
+        assert!(inside_hit(outside, sweep, &boxes, [0, 200, 0]).is_none());
+    }
 }
