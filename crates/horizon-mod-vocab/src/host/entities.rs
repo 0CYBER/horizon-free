@@ -439,21 +439,21 @@ pub trait EntitiesBackend {
     /// false for the other kinds.
     #[access(WorldOnly)]
     fn entity_is_sprinting(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// The fluids the entity touched at its last fluid update, each with how deep its box is in
     /// it (NeoForge's `IEntityExtension.getFluidTypeHeight`), highest first; empty in no fluid.
     /// The one read behind `isInFluidType` in all its forms (any fluid, one type, a predicate
     /// over this list) and `getMaxHeightFluidType` (the first entry). Fluids are named
     /// `minecraft:water` and `minecraft:lava`, the ones the entity update tracks. Players and
-    /// mobs; None for other kinds and stale handles. Server only: a client keeps no fluid
-    /// state for the entities it shows, so the client half of #3341 is still to come.
+    /// mobs; None for other kinds and stale handles. On a client, reads its own copy: predicted
+    /// for the local player, the last client fluid update for entities the server showed it.
     #[access(WorldOnly)]
     fn entity_fluid_heights(&self, entity: EntityRef) -> Option<Vec<(String, f64)>>;
-    /// Side: server.
+    /// Side: both.
     /// The fluid at the entity's eyes from its last fluid update (NeoForge's
     /// `IEntityExtension.getFirstEyeInFluidType`; `isEyeInFluidType` compares it):
-    /// `Some(None)` in air. Players and mobs; None for other kinds and stale handles. Server
-    /// only, as `entity_fluid_heights`.
+    /// `Some(None)` in air. Players and mobs; None for other kinds and stale handles. On a
+    /// client, reads its own copy as `entity_fluid_heights` does.
     #[access(WorldOnly)]
     fn entity_eye_fluid(&self, entity: EntityRef) -> Option<Option<String>>;
     /// Side: server.

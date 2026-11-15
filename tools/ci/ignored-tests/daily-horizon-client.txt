@@ -61,6 +61,7 @@ horizon-client game::native_disconnect_tests::a_leave_request_does_not_follow_a_
 horizon-client game::native_entity_commands::tests::player_command_returns_permission_failures_and_success_without_swallowing_chat lib daily resources
 horizon-client game::native_entity_selectors::tests::nearest_teammate_filters_before_limit_and_drops_false_and_panicking_candidates lib daily game-boot
 horizon-client game::native_entity_selectors::tests::synced_selector_tokens_survive_client_registry_refresh lib daily game-boot
+horizon-client game::native_entity_state::tests::client_fluid_reads_use_cached_local_and_tracked_bodies lib daily resources
 horizon-client game::native_explosion_destroy_tests::a_cancelled_start_destroys_nothing lib daily resources
 horizon-client game::native_explosion_destroy_tests::a_detonate_listener_spares_a_position_and_adds_none lib daily resources
 horizon-client game::native_explosion_destroy_tests::a_part_hears_its_block_exploded_once lib daily resources
