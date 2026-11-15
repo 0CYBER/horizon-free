@@ -211,14 +211,14 @@ impl Launcher {
             .children(self.import_error.clone().map(|e| notice(e, &t).mb(px(10.))))
             .children(self.glass_local_builds(
                 "Native mod builds",
-                native_mods::is_native,
+                &native_mods::is_native,
                 None,
                 on_disk,
                 cx,
             ))
             .children(self.glass_local_builds(
                 "Imported builds",
-                build_import::is_imported,
+                &build_import::is_imported,
                 Some(tr(
                     "Unsigned: you picked these programs yourself, and Horizon can't \
                     check where they came from. Updates never replace them.",
@@ -226,6 +226,27 @@ impl Launcher {
                 on_disk,
                 cx,
             ));
+        // Installed versions the release list doesn't hold (it failed, came back empty, or no
+        // longer offers them) stay listed with their own Use and Delete.
+        let listed: Vec<&str> = match &self.releases {
+            Load::Ready(r) => r.iter().map(|r| r.tag.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        if !matches!(self.releases, Load::Loading) {
+            page = page.children(self.glass_local_builds(
+                "Installed here",
+                &|tag| {
+                    !native_mods::is_native(tag)
+                        && !build_import::is_imported(tag)
+                        && !listed.contains(&tag)
+                },
+                Some(tr(
+                    "Not in Horizon's version list right now. You can still play or remove them.",
+                )),
+                on_disk,
+                cx,
+            ));
+        }
         let releases = match &self.releases {
             Load::Loading => return page.child(centered(tr("Loading releases…"), &t)),
             Load::Failed(e) => {
@@ -241,7 +262,16 @@ impl Launcher {
                 )
             }
             Load::Ready(r) if r.is_empty() => {
-                return page.child(centered(tr("No releases yet."), &t));
+                return page.child(
+                    centered(tr("Horizon's version list came back empty."), &t).child(
+                        button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                this.fetch_releases();
+                                cx.notify();
+                            },
+                        )),
+                    ),
+                );
             }
             Load::Ready(r) => r,
         };
@@ -572,7 +602,7 @@ impl Launcher {
     fn glass_local_builds(
         &self,
         title: &str,
-        is: fn(&str) -> bool,
+        is: &dyn Fn(&str) -> bool,
         notice_: Option<&str>,
         on_disk: &dyn Fn(&String) -> Option<u64>,
         cx: &mut Context<Self>,
