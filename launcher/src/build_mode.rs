@@ -422,11 +422,13 @@ impl Launcher {
                 }),
             ));
         }
+        // On the list's 12 px inset, like the count and Find mods above it.
         div()
             .flex()
             .items_center()
             .justify_between()
             .gap(px(12.))
+            .px(px(12.))
             .child(
                 text_in(14., pal.ink)
                     .font_weight(FontWeight::SEMIBOLD)
