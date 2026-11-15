@@ -122,11 +122,11 @@ class DailySummaryTests(unittest.TestCase):
                 summary.main(api, git(merged, tag, ancestors), closers(fixes or {}))
             return Path(folder, "summary").read_text(), Path(folder, "out").read_text()
 
-    def run_after(self, api, result, ref="refs/heads/main", run="77"):
+    def run_after(self, api, result, ref="refs/heads/main", run="77", fixes=None):
         env = {"GITHUB_REPOSITORY": "arismoko/horizon", "GITHUB_RUN_ID": run, "GITHUB_REF": ref,
                "GITHUB_SERVER_URL": "https://github.com", "COMMIT": COMMIT, "DRY_RUN": "false"}
         with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
-            summary.after("sdk-publish", result, api, git((), True))
+            summary.after("sdk-publish", result, api, git((), True), closers(fixes or {}))
 
     def test_a_failed_sdk_publish_files_one_issue_and_its_next_success_closes_it(self):
         failed = [job("sdk-publish / index"), job("sdk-publish / publish", "failure", ["Release sdk-<sha>"])]
@@ -143,6 +143,13 @@ class DailySummaryTests(unittest.TestCase):
         api.writes.clear()
         self.run_after(api, "success", run="79")
         self.assertIn(("PATCH", "issues/1000", {"state": "closed", "state_reason": "completed"}), api.writes)
+        # A failure on a commit that predates the fix which closed the issue comments on it and leaves it closed.
+        api.issues[0]["state"] = "closed"
+        api.runs[80] = {"jobs": failed}
+        api.writes.clear()
+        self.run_after(api, "failure", run="80", fixes={1000: "f" * 40})
+        self.assertEqual([(method, path) for method, path, _ in api.writes], [("POST", "issues/1000/comments")])
+        self.assertIn("which predates the fix `fffffffff`", api.writes[0][2]["body"])
         # Off main nothing is written.
         quiet = Api(failed)
         self.run_after(quiet, "failure", ref="refs/heads/topic")

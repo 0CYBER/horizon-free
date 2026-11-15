@@ -489,7 +489,7 @@ def main(call=api, run_git=git, query=graphql):
     return 0
 
 
-def after(name, result, call=api, run_git=git):
+def after(name, result, call=api, run_git=git, query=graphql):
     """Reports the job `name` that ran after the summary, which concluded `result` (`needs.<name>.result`): one
     issue for it while it fails, closed by its next success. Writes only where the summary would."""
     env = os.environ
@@ -506,8 +506,9 @@ def after(name, result, call=api, run_git=git):
         steps = [f"{job['name']}: {step}" for job in jobs if job["name"].startswith(f"{name} / ")
                  for step in failed_steps(job)]
         unfinished = [(name, result, steps, "nothing was published, so no Nightly follows")]
+        fixes = fixes_after(commit, {leg_title(name)} - open_issues.keys(), call, query, run_git)
         actions = plan(commit, run_url, [], unfinished, set(), set(), False, open_issues,
-                       suspects(commit, run_git))
+                       suspects(commit, run_git), fixes)
     text = render(actions, writes)
     print(text)
     if env.get("GITHUB_STEP_SUMMARY"):

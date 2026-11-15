@@ -205,9 +205,11 @@ jobs:
     permissions:
       issues: write
       actions: read
+      pull-requests: read  # as the summary: whether this commit holds the fix that closed the leg's last issue
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0  # the commit's whole history, for that check
           persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
