@@ -1,6 +1,6 @@
 use super::*;
 use horizon_shader_api::{MANIFEST, Pack, Report, check};
-use wgpu::ShaderStages as S;
+use wgpu::{BufferUsages as B, ShaderStages as S, TextureUsages as T};
 
 const HEAD: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n";
 
@@ -37,6 +37,98 @@ fn every_shape() -> Kept {
         resources: resources.collect(),
         ..Default::default()
     }
+}
+
+fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let instance = crate::gfx::test_gpu::instance();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
+    eprintln!("kept resources on {:?}", adapter.get_info().backend);
+    pollster::block_on(adapter.request_device(&Default::default())).ok()
+}
+
+fn sizes(store: &KeptStore) -> Vec<(u64, Option<[u32; 2]>)> {
+    let size = |t: &wgpu::Texture| [t.width(), t.height()];
+    (store.held.iter())
+        .map(|h| match h {
+            Held::Buffer(b) => {
+                assert_eq!(b.usage(), B::STORAGE | B::COPY_DST);
+                (b.size(), None)
+            }
+            Held::Pair([a, b]) => {
+                let usage = T::STORAGE_BINDING | T::TEXTURE_BINDING | T::RENDER_ATTACHMENT;
+                assert_eq!((a.usage(), b.usage()), (usage, usage));
+                assert_eq!((size(a), a.format()), (size(b), b.format()));
+                (0, Some(size(a)))
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn each_shape_is_made_with_its_size_and_usages_and_fit_remakes_the_scaled_ones() {
+    let Some((device, _)) = device() else { return };
+    let kept = every_shape();
+    let mut store = KeptStore::new(&device, &kept, [101, 60]);
+    let buffers = [(64, None); 5];
+    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(Format::ALL.len());
+    assert_eq!(
+        sizes(&store),
+        [&buffers[..], &textures([51, 30])[..]].concat()
+    );
+    let Held::Pair([r32, _]) = &store.held[7] else {
+        panic!("a texture")
+    };
+    assert_eq!(r32.format(), wgpu::TextureFormat::R32Float);
+    store.fit(&device, [40, 9]);
+    assert_eq!(
+        sizes(&store),
+        [&buffers[..], &textures([20, 5])[..]].concat()
+    );
+}
+
+/// Every format and element, made and bound as each pass would, under an error scope: run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn every_shape_allocates_and_binds_without_a_validation_error() {
+    let Some((device, _)) = device() else { return };
+    let kept = every_shape();
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let store = KeptStore::new(&device, &kept, [64, 32]);
+    for (resource, held) in store.held.iter().enumerate() {
+        let access = [KeptAccess::Read, KeptAccess::Write];
+        for (access, visibility) in access
+            .into_iter()
+            .zip([S::FRAGMENT | S::COMPUTE, S::COMPUTE])
+        {
+            let binding = KeptBinding {
+                binding: 0,
+                resource,
+                access,
+            };
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &layout_entries(&kept, &[binding], visibility),
+            });
+            let view;
+            let resource = match held {
+                Held::Buffer(b) => b.as_entire_binding(),
+                Held::Pair([t, _]) => {
+                    view = t.create_view(&Default::default());
+                    wgpu::BindingResource::TextureView(&view)
+                }
+            };
+            let _group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource,
+                }],
+            });
+        }
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
 }
 
 const BUFFERS: &str = "[[resource]]\nname = \"cells\"\nbuffer = 1024\nelement = \"u32\"\n\

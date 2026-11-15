@@ -1,10 +1,48 @@
-//! A shader pack's kept resources (#16011 item 4): the layout entries a pass binds its
-//! `[[resource]]`s with, and what a device lacks for them. Nothing makes or binds them yet; the
-//! game still refuses such a pack.
+//! A shader pack's kept resources (#16011 item 4): the storage its `[[resource]]`s declare,
+//! made per view, the layout entries a pass binds them with, and what a device lacks for them.
+//! Nothing binds or clears them yet; the game still refuses such a pack.
 use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::kept::{Dispatch, Format, Kept, Shape};
 use horizon_shader_api::stages::{KeptAccess, KeptBinding, kept_bindings};
 use horizon_shader_api::{Manifest, StageKind};
+
+/// One resource: a buffer, or a texture's two versions, which swap each frame.
+#[cfg_attr(not(test), expect(dead_code, reason = "bound from P4a on"))]
+pub(super) enum Held {
+    Buffer(wgpu::Buffer),
+    Pair([wgpu::Texture; 2]),
+}
+
+/// A pack's kept resources for one view, in `[[resource]]` order.
+pub(super) struct KeptStore {
+    kept: Kept,
+    held: Vec<Held>,
+    size: [u32; 2],
+}
+
+impl KeptStore {
+    /// Every resource of `kept`, zeros, the R-relative textures at `scale` of `size` (R).
+    pub(super) fn new(device: &wgpu::Device, kept: &Kept, size: [u32; 2]) -> Self {
+        let held = (kept.resources.iter())
+            .map(|r| make(device, &r.name, r.shape, size))
+            .collect();
+        let kept = kept.clone();
+        Self { kept, held, size }
+    }
+
+    /// Remakes the R-relative textures, as zeros, when R changes.
+    pub(super) fn fit(&mut self, device: &wgpu::Device, size: [u32; 2]) {
+        if size == self.size {
+            return;
+        }
+        self.size = size;
+        for (r, held) in self.kept.resources.iter().zip(&mut self.held) {
+            if matches!(r.shape, Shape::Scaled { .. }) {
+                *held = make(device, &r.name, r.shape, size);
+            }
+        }
+    }
+}
 
 fn format(format: Format) -> wgpu::TextureFormat {
     match format {
@@ -12,6 +50,43 @@ fn format(format: Format) -> wgpu::TextureFormat {
         Format::R32Float => wgpu::TextureFormat::R32Float,
         Format::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
         Format::Rgba32Uint => wgpu::TextureFormat::Rgba32Uint,
+    }
+}
+
+fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held {
+    let pair = |f, [width, height]: [u32; 2]| {
+        [0, 1].map(|_| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(name),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: format(f),
+                // Written by compute passes, read by any pass, cleared by a render pass
+                // (`CLEAR_TEXTURE` is optional).
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+        })
+    };
+    match shape {
+        Shape::Buffer { bytes, .. } => {
+            Held::Buffer(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(name),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }))
+        }
+        Shape::Fixed { format, size } => Held::Pair(pair(format, size)),
+        Shape::Scaled { format, scale } => Held::Pair(pair(format, super::scaled(size, scale))),
     }
 }
 

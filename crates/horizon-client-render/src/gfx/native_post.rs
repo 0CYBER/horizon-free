@@ -328,6 +328,8 @@ pub struct NativePost {
     /// size.
     scales: Vec<f32>,
     named: Option<([u32; 2], Vec<wgpu::TextureView>)>,
+    /// The pack's `[[resource]]`s, sized to the world (none without).
+    kept: Option<kept::KeptStore>,
     /// The screen's colour format, the world target's too.
     format: wgpu::TextureFormat,
     /// Under 0.2: the decode, the picture and the tonemap.
@@ -1219,6 +1221,8 @@ impl NativePost {
             scales: targets.iter().map(|t| t.1).collect(),
             named: None,
             plan,
+            kept: (!resources.is_empty())
+                .then(|| kept::KeptStore::new(device, &manifest.kept, [1, 1])),
             format,
             display,
         })
@@ -1255,6 +1259,9 @@ impl NativePost {
         history_reset: bool,
         scene: Option<&trace::Traced<'_>>,
     ) {
+        if let Some(kept) = &mut self.kept {
+            kept.fit(device, size);
+        }
         if let Some(d) = &mut self.display {
             if d.scene.as_ref().is_none_or(|s| s.0 != size) {
                 d.scene = Some((
