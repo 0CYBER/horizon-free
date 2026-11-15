@@ -36,7 +36,7 @@ use std::collections::HashMap;
 pub(in crate::game) mod decision;
 #[path = "transactions/entities.rs"]
 mod entities;
-pub(in crate::game) use entities::Announcement;
+pub(in crate::game) use entities::{Announcement, ArrivalRollback};
 #[path = "transactions/scratch.rs"]
 mod scratch;
 
@@ -153,6 +153,9 @@ pub(super) struct Level {
     travelled: HashMap<u32, KeptAttachments>,
     /// The index rows of the entities that left this level, kept until the root closes.
     departed: Vec<entities::Departure>,
+    /// The entities taken for a transfer whose arrival is not adopted yet, by source id, each
+    /// with the slot its arrival reads an abort's way back from.
+    in_flight: HashMap<u32, entities::ArrivalRollback>,
 }
 
 /// A slot's stack before a transaction first wrote it, and the generation of the block entity
@@ -511,6 +514,9 @@ impl Game<'_> {
                 }
                 for (id, kept) in level.travelled {
                     outer.travelled.entry(id).or_insert(kept);
+                }
+                for (id, slot) in level.in_flight {
+                    outer.in_flight.entry(id).or_insert(slot);
                 }
                 for (id, kept) in level.scratch_kept {
                     outer.scratch_kept.entry(id).or_insert(kept);
@@ -1067,6 +1073,7 @@ impl Game<'_> {
         }
     }
     fn roll_back(&mut self, mut level: Level) {
+        self.roll_back_in_flight(&mut level);
         self.scratch_roll_back(std::mem::take(&mut level.scratch_kept));
         // Discard deferred effects before undoing tentative action storage.
         level.after.clear();

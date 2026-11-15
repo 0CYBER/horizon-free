@@ -651,6 +651,35 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
             [(moved.id(), 7)],
             "no row for B"
         );
+
+        // Taken inside an action that is rolled back before the arrival is adopted, as a portal
+        // arrival waits for a later pass: the arrival carries what the action first found.
+        game.enter_level(Dim::Overworld).unwrap();
+        let late = mob(game, "minecraft:cow", 53);
+        assert_eq!(Charge::edit_state(game, late, |_, n| *n = 7), Ok(()));
+        let seal = game.transaction_open();
+        assert_eq!(Charge::edit_state(game, late, |_, n| *n = 9), Ok(()));
+        let state = game.take_transferred_entity_state(late.id());
+        game.mobs.retain(|m| m.id != late.id());
+        game.detach_entity(late.id());
+        game.transaction_close(&seal, false);
+        assert!(game.transactions.is_empty());
+        assert_eq!(
+            indexed(game, Dim::Overworld),
+            [(c.id(), 7)],
+            "its row retired"
+        );
+        assert!(!game.entity_attachments.contains_key(&late.id()));
+        game.enter_level(Dim::Nether).unwrap();
+        let arrived = game
+            .load_mob_transferred(mob_tag("minecraft:cow", 53), None, Some(state))
+            .unwrap();
+        let arrived = game.entity(arrived).unwrap();
+        assert_eq!(stored(game, arrived), Some(7), "not the aborted 9");
+        assert_eq!(
+            indexed(game, Dim::Nether),
+            [(moved.id(), 7), (arrived.id(), 7)]
+        );
     });
 }
 

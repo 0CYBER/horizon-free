@@ -154,6 +154,8 @@ pub(super) struct TransferredEntityState {
     /// The source id whose attachment map a transaction open at the take kept: the
     /// arrival moves that keeping to the new id.
     journaled: Option<u32>,
+    /// Filled by an abort that comes before the arrival: the contents the arrival puts back.
+    rollback: Option<super::transactions::ArrivalRollback>,
 }
 
 impl TransferredEntityState {
@@ -180,6 +182,7 @@ impl Game<'_> {
             self.journal_attachments(Holder::Entity(id));
             id
         });
+        let rollback = journaled.map(|id| self.journal_in_flight(id));
         let mut attachments = self.entity_attachments.remove(&id);
         if journaled.is_some() {
             self.defer_departure(id, attachments.as_mut());
@@ -195,6 +198,7 @@ impl Game<'_> {
             accepted_hit,
             died,
             journaled,
+            rollback,
             initialized: self
                 .entity_initialization
                 .initialized
@@ -217,8 +221,17 @@ impl Game<'_> {
             self.died.insert(id);
         }
         // Even an empty map marks this as runtime state for `remember_uuid`.
-        self.entity_attachments
-            .insert(id, state.attachments.unwrap_or_default());
+        let mut map = state.attachments.unwrap_or_default();
+        // 🤖 Agent: an action that took this entity and was rolled back before it arrived left
+        // the contents it first found here: the arrival carries those, not the action's writes.
+        if let Some(kept) = state.rollback.and_then(|slot| {
+            slot.lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+        }) {
+            map.replace_contents(kept);
+        }
+        self.entity_attachments.insert(id, map);
         if state.initialized {
             self.entity_initialization
                 .initialized

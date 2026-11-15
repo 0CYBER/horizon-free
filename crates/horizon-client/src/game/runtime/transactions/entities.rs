@@ -481,6 +481,12 @@ impl Game<'_> {
     }
 }
 
+/// Where an abort leaves the way back for a map whose entity was taken for a transfer and has
+/// not arrived yet: its arrival puts these contents in place of the map it carries. It lives
+/// with the transfer's own state, so it goes with it if the arrival never comes.
+pub(in crate::game) type ArrivalRollback =
+    std::sync::Arc<std::sync::Mutex<Option<horizon_mod_runtime::attachments::Attachments>>>;
+
 /// The index registration of an entity that left this level inside a transaction, with its
 /// lifetime slot: both retire when the root closes, committed or not, since travel is not
 /// undone. Until then the source level's index keeps the rows it had at the take.
@@ -522,10 +528,34 @@ impl Game<'_> {
             });
         }
     }
+    /// Entity `id` is taken for a transfer inside a transaction, its map kept under `id`: the
+    /// slot its arrival reads an abort's way back from, if the abort comes first.
+    pub(in crate::game) fn journal_in_flight(&mut self, id: u32) -> ArrivalRollback {
+        let slot = ArrivalRollback::default();
+        if let Some(level) = self.transactions.last_mut() {
+            level.in_flight.insert(id, slot.clone());
+        }
+        slot
+    }
+    /// An abort of `level` before its in-flight entities arrived: each one's kept map goes to its
+    /// arrival's slot, not under an id that names no entity. An enclosing transaction takes the
+    /// slots on, so its own abort can put back what it kept, which is older.
+    pub(super) fn roll_back_in_flight(&mut self, level: &mut Level) {
+        for (id, slot) in std::mem::take(&mut level.in_flight) {
+            let holder = horizon_mod_runtime::attachments::Holder::Entity(id);
+            if let Some(kept) = level.attachments.remove(&holder) {
+                *slot.lock().unwrap_or_else(|error| error.into_inner()) = Some(kept.contents);
+            }
+            if let Some(outer) = self.transactions.last_mut() {
+                outer.in_flight.entry(id).or_insert(slot);
+            }
+        }
+    }
     /// The map the transactions kept under `source` went with its entity, which arrived as
     /// `arrived`: an abort puts the kept contents back there, never under the old id.
     pub(in crate::game) fn journal_travel(&mut self, source: u32, arrived: u32) {
         for level in self.transactions.iter_mut() {
+            level.in_flight.remove(&source);
             // 🤖 Agent: both are consumed, so nothing stays behind under `source`. A map that
             // travelled to `source` was kept before anything kept it under `source`, so its
             // travelled entry is the older one, and the one an abort restores.
