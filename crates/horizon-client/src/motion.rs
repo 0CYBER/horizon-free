@@ -3707,7 +3707,7 @@ mod tests {
             return;
         };
         let (assets, render, binding, resources) = (&v.assets, &v.render, &v.collision, &v.motion);
-        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
+        let mut scene = World::test_scene(assets, render, 1).unwrap();
         let snow = assets
             .registry
             .default_state("minecraft:powder_snow")
@@ -3720,7 +3720,7 @@ mod tests {
         // The feet end on the stone, inside the column's bottom block.
         let sink = |scene: &mut World, x: f64| {
             let at = Vec3::new(x, 3.0, 20.5);
-            let mut player = PlayerMotion::new(&resources, at).unwrap();
+            let mut player = PlayerMotion::new(resources, at).unwrap();
             player.fall_distance = 10.0;
             let from = Vec3::new(x, 4.5, 20.5);
             let delta = at.subtract(from);
@@ -3739,9 +3739,9 @@ mod tests {
                 entities: &[],
                 player: &mut player,
                 scene,
-                assets: &assets,
-                collision_binding: &binding,
-                resources: &resources,
+                assets,
+                collision_binding: binding,
+                resources,
                 health: &resources.health,
             };
             w.server_stuck_in_blocks(from).unwrap();
@@ -6305,12 +6305,12 @@ mod tests {
             return;
         };
         let (assets, render, binding, resources) = (&v.assets, &v.render, &v.collision, &v.motion);
-        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        let mut scene = World::test_scene(assets, render, 2).unwrap();
         // How much of a 0.1 step east the move leaves in the velocity.
         let mut kept = |floor: &str, y: f64, flying: bool, gliding: bool| {
             let state = assets.registry.default_state(floor).unwrap();
             scene.set(20, -61, 20, state).unwrap();
-            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, y, 20.5)).unwrap();
+            let mut player = PlayerMotion::new(resources, Vec3::new(20.5, y, 20.5)).unwrap();
             (player.may_fly, player.flying) = (flying, flying);
             (player.glider, player.fall_flying) = (gliding, gliding);
             player.velocity = Vec3::new(0.1, 0.0, 0.0);
@@ -6322,9 +6322,9 @@ mod tests {
                 entities: &[],
                 player: &mut player,
                 scene: &mut scene,
-                assets: &assets,
-                collision_binding: &binding,
-                resources: &resources,
+                assets,
+                collision_binding: binding,
+                resources,
                 health: &resources.health,
             };
             w.move_self(&mut MoveGate::new(), Vec3::new(0.1, 0.0, 0.0))
