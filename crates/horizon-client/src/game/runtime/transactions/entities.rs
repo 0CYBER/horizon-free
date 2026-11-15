@@ -526,11 +526,14 @@ impl Game<'_> {
     /// `arrived`: an abort puts the kept contents back there, never under the old id.
     pub(in crate::game) fn journal_travel(&mut self, source: u32, arrived: u32) {
         for level in self.transactions.iter_mut() {
+            // 🤖 Agent: both are consumed, so nothing stays behind under `source`. A map that
+            // travelled to `source` was kept before anything kept it under `source`, so its
+            // travelled entry is the older one, and the one an abort restores.
+            let travelled = level.travelled.remove(&source);
             let kept = level
                 .attachments
-                .remove(&horizon_mod_runtime::attachments::Holder::Entity(source))
-                .or_else(|| level.travelled.remove(&source));
-            if let Some(kept) = kept {
+                .remove(&horizon_mod_runtime::attachments::Holder::Entity(source));
+            if let Some(kept) = travelled.or(kept) {
                 level.travelled.entry(arrived).or_insert(kept);
             }
         }
