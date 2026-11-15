@@ -14,6 +14,7 @@ pub trait Hooks {
         side = "client",
         contract = "cancel",
         out = "cancel",
+        neoforge = "none (vanilla GuiGraphicsExtractor.componentHoverEffect; NeoForge adds no event)",
         cancellable = true
     )]
     fn component_hover(

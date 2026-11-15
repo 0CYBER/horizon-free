@@ -15,6 +15,7 @@ pub trait Hooks {
         side = "client",
         contract = "cancel",
         out = "canceled",
+        neoforge = "none (Horizon-only; NeoForge has no client attack-target event)",
         cancellable = true
     )]
     fn client_attack_target();

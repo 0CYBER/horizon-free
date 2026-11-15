@@ -47,6 +47,43 @@ class Counterparts(unittest.TestCase):
         self.assertNotIn("`decoration`", content)
         self.assertFalse((self.root / "docs/modding/src/reference/neoforge-counterparts.md").exists())
 
+    def test_notes_between_the_hook_and_its_fn_keep_the_row(self):
+        self.hooks.write_text('''
+#[hook(side = "client", contract = "listen", neoforge = "GuiLayer.render")]
+#[notes = r#"A note may hold `)]`, `fn fake()` and a raw string."#]
+fn draw();
+''')
+        content = self.chapter()["content"]
+        self.assertIn("| `draw` | client | `GuiLayer.render` |", content)
+        self.assertIn("1 hooks: 1 name a counterpart, 0 say they have none.", content)
+
+    def test_comments_inside_attributes_are_skipped(self):
+        self.hooks.write_text('''
+#[hook(
+    side = "client", // a comment with ] and neoforge = "FakeEvent"
+    /* a block comment with ] and fn fake() /* nested */ still a comment */
+    contract = "listen",
+    neoforge = "GuiLayer.render"
+)]
+fn draw();
+''')
+        content = self.chapter()["content"]
+        self.assertIn("| `draw` | client | `GuiLayer.render` |", content)
+        self.assertNotIn("FakeEvent", content)
+
+    def test_hooks_inside_comments_and_notes_are_not_rows(self):
+        self.hooks.write_text('''
+// #[hook(side = "server", neoforge = "FakeEvent")] fn fake();
+#[hook(side = "client", neoforge = "GuiLayer.render")]
+#[notes = r#"An example: #[hook(side = "server", neoforge = "FakeEvent")] fn fake();"#]
+fn draw();
+''')
+        content = self.chapter()["content"]
+        self.assertIn("| `draw` | client | `GuiLayer.render` |", content)
+        self.assertNotIn("FakeEvent", content)
+        self.assertNotIn("`fake`", content)
+        self.assertIn("1 hooks: 1 name a counterpart, 0 say they have none.", content)
+
     def test_context_root_is_independent_of_the_callers_working_directory(self):
         self.hooks.write_text('''
 #[hook(side = "both", neoforge = ["FirstEvent", "SecondEvent"])] fn first();

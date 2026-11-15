@@ -6,6 +6,11 @@ pub trait Hooks {
     /// `gui_layer_pre` hid it. `layer` is the layer's id and every mod is asked about every id,
     /// so a mod ignores ids it does not own. Draw with the drawing context; `draw.size()` is
     /// the GUI size. Client-side.
-    #[hook(side = "client", contract = "listen", cancellable = false)]
+    #[hook(
+        side = "client",
+        contract = "listen",
+        neoforge = "GuiLayer.render",
+        cancellable = false
+    )]
     fn gui_layer_draw();
 }

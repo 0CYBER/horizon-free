@@ -11,7 +11,8 @@ pub trait Hooks {
         side = "server",
         contract = "collect",
         out = "conditions",
-        context = "registration"
+        context = "registration",
+        neoforge = "RegisterEvent"
     )]
     fn register_load_conditions();
 }

@@ -17,7 +17,8 @@ pub trait Hooks {
         contract = "collect",
         out = "lines",
         scope = "item",
-        key = "stack"
+        key = "stack",
+        neoforge = "none (vanilla Item.appendHoverText; not NeoForge's global ItemTooltipEvent)"
     )]
     fn tooltip();
 }
