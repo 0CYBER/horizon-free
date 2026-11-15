@@ -1,0 +1,1 @@
+horizon-client game::native_command_completion_tests::a_plain_players_tree_and_completions_leave_out_the_paths_they_may_not_run lib daily resources

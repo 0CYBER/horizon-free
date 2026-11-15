@@ -68,6 +68,18 @@ merge base with the head. It reports, and fails the check only when:
   its own line), is named by a note the pull request adds. Conditional and additive changes need none. The gate is
   `gate = true` in `tools/ci/surface.toml`.
 
+## Command completion layouts
+
+`CommandSuggestion` now carries an optional `replace_start` byte offset into the prefix. `None` replaces the whole
+prefix; `Some(offset)` preserves the text before that offset, which must be on a UTF-8 character boundary and not
+past the prefix. This changes the type's Wire layout: wasm mods using it must rebuild against this SDK. The
+optional tooltip is retained. See [Server commands](../../how-to/entities/server-commands.md) for replacement
+examples and the `id` argument's `tab_complete` completion route.
+
+`CommandArgumentType::suggest` also requires the optional sender before the prefix. Providers own their sender
+policy; their returned suggestions remain unfiltered. Implement the required method explicitly, returning an
+empty list when the argument has no completions.
+
 ## Change notes
 
 A change can carry a note: one file per change in `crates/horizon-mod-vocab/changes/<name>.toml`.
