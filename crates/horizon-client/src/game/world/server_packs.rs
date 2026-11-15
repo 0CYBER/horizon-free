@@ -362,7 +362,7 @@ impl Game<'_> {
             self.server_packs.packs.reject();
             if prompt.required {
                 let reason = Text::translate("multiplayer.requiredTexturePrompt.disconnect", &[]);
-                return self.leave_server(Some(reason.plain()));
+                return self.leave_server(Some(reason));
             }
             Some(false)
         };

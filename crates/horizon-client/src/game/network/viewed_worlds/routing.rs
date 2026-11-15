@@ -164,7 +164,7 @@ impl Game<'_> {
             "disconnect.genericReason",
             &[Text::literal(error.to_string())],
         );
-        self.leave_server(Some(reason.plain()))
+        self.leave_server(Some(reason))
     }
 
     pub(in crate::game) fn route_viewed_levels(&mut self, data: &[u8]) -> Result<(), RouteError> {

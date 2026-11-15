@@ -175,7 +175,7 @@ impl Game<'_> {
             return Ok(());
         }
         let reason = Text::translate("multiplayer.disconnect.code_of_conduct", &[]);
-        self.leave_server(Some(reason.plain()))
+        self.leave_server(Some(reason))
     }
 
     pub(super) fn draw_code_of_conduct(&self, batch: &mut HudBatch) {

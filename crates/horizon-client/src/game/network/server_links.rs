@@ -456,7 +456,7 @@ impl Game<'_> {
                     "menu.custom_screen_info.disconnect",
                     "Custom screen rejected",
                 );
-                self.leave_server(Some(reason))?;
+                self.leave_server(Some(Text::literal(reason)))?;
             } else {
                 self.set_screen(Screen::ServerLinks);
             }
