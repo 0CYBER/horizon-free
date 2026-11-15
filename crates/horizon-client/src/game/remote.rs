@@ -2220,6 +2220,7 @@ impl Game<'_> {
                 Arc::new(ChunkFormat::new(&r.dimension, biomes, bits).in_column(column));
             r.registries = registries;
         }
+        self.invalidate_tagged_shader_ids();
     }
     /// Switch to a (possibly new) dimension: a fresh client level.
     fn enter_remote_dimension(

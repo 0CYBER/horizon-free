@@ -15,7 +15,7 @@ use super::native_shaders::{fingerprint, outcome, refused, remember};
 use super::{Dim, Game};
 use horizon_client::gfx::pack_draw::EntitySpan;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
 fn chosen_shader_options(name: &str) -> BTreeMap<String, String> {
@@ -195,6 +195,83 @@ pub(super) fn picks_material_pack(settings: &horizon_client::settings::Settings)
     };
     path.file_name()
         .is_none_or(|f| !active_pack(&f.to_string_lossy(), &settings.mods).is_empty())
+}
+
+/// Prefer the connection's current block tags, including a local integrated server's.
+/// Only an absent synced registry falls back to the world's/base table: an empty synced
+/// registry deliberately removes all tags.
+fn resolve_block_tags(
+    ids: &BlockIds,
+    fallback: &HashMap<String, HashSet<String>>,
+    synced: Option<(
+        &horizon_protocol::registry::Builtin,
+        &horizon_protocol::registry::Dynamic,
+    )>,
+) -> BlockIds {
+    let tags = synced.and_then(|(builtin, dynamic)| {
+        let names = builtin.get("minecraft:block")?;
+        let tags = dynamic.tags.get("minecraft:block")?;
+        Some(
+            tags.iter()
+                .map(|(tag, members)| {
+                    (
+                        tag.clone(),
+                        members
+                            .iter()
+                            .filter_map(|&id| names.name(id))
+                            .map(str::to_owned)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )
+    });
+    ids.with_block_tags(tags.as_ref().unwrap_or(fallback))
+}
+
+#[cfg(test)]
+mod block_tag_source_tests {
+    use super::*;
+    use horizon_protocol::registry::{Builtin, Dynamic, Ids};
+
+    #[test]
+    fn synced_block_tags_replace_world_fallback_for_every_connection() {
+        let ids = BlockIds::parse(&Properties::parse("block.54=%sample", &Macros::standard()));
+        let fallback = HashMap::from([(
+            "minecraft:sample".into(),
+            HashSet::from(["minecraft:oak_log".into()]),
+        )]);
+        let builtin = Builtin {
+            registries: HashMap::from([(
+                "minecraft:block".into(),
+                Ids::from_names(vec![
+                    "minecraft:oak_log".into(),
+                    "minecraft:spruce_log".into(),
+                ]),
+            )]),
+        };
+        let mut dynamic = Dynamic::default();
+        dynamic.tags.insert(
+            "minecraft:block".into(),
+            HashMap::from([("minecraft:sample".into(), vec![1, -1, 999])]),
+        );
+        let local = resolve_block_tags(&ids, &fallback, None);
+        assert_eq!(local.id("minecraft:oak_log", |_| None), Some(54));
+        // Integrated and external connections use this same synced source; unknown
+        // network IDs are ignored instead of selecting an unrelated fallback member.
+        let synced = resolve_block_tags(&ids, &fallback, Some((&builtin, &dynamic)));
+        assert_eq!(synced.id("minecraft:oak_log", |_| None), None);
+        assert_eq!(synced.id("minecraft:spruce_log", |_| None), Some(54));
+        dynamic
+            .tags
+            .insert("minecraft:block".into(), HashMap::new());
+        let empty = resolve_block_tags(&ids, &fallback, Some((&builtin, &dynamic)));
+        assert_eq!(empty.id("minecraft:oak_log", |_| None), None);
+        assert_eq!(empty.id("minecraft:spruce_log", |_| None), None);
+        dynamic.tags.clear();
+        let absent = resolve_block_tags(&ids, &fallback, Some((&builtin, &dynamic)));
+        assert_eq!(absent.id("minecraft:oak_log", |_| None), Some(54));
+    }
 }
 
 /// The ids a pack gives entities and block entities (4.1, 5.3), for the spans of the entity
@@ -377,7 +454,21 @@ impl Game<'_> {
                             biomes.list.iter().map(|b| b.name.as_str()).collect();
                         post.custom.set_biomes(&names);
                         let text = pack.read_text("block.properties").unwrap_or_default();
-                        let ids = BlockIds::parse(&Properties::parse(&text, &macros));
+                        let items = match &self.world_tables {
+                            Some(t) => &t.items,
+                            None => self
+                                .remote
+                                .as_ref()
+                                .and_then(|r| r.tables.items.as_deref())
+                                .unwrap_or_else(|| self.res.items()),
+                        };
+                        let ids = resolve_block_tags(
+                            &BlockIds::parse(&Properties::parse(&text, &macros)),
+                            &items.block_tags,
+                            self.remote
+                                .as_ref()
+                                .map(|r| (r.builtin.as_ref(), r.registries.as_ref())),
+                        );
                         for note in &ids.notes {
                             log::warn!("shader pack {name}: block.properties: {note}");
                         }
@@ -546,6 +637,21 @@ impl Game<'_> {
             invisible,
             sneaking: p.pose == horizon_client::pose::Pose::Crouching,
             sprinting: p.sprinting,
+        }
+    }
+
+    /// Tag-dependent ID tables and cached block entity IDs must be rebuilt after a
+    /// world's data packs or a remote server replace their tags.
+    pub(super) fn invalidate_tagged_shader_ids(&mut self) {
+        if self
+            .pack_ids
+            .as_ref()
+            .is_some_and(|ids| ids.blocks.has_block_tags())
+        {
+            self.pack_ids = None;
+            if let Some(renderer) = &mut self.renderer {
+                renderer.drop_shader_packs();
+            }
         }
     }
 

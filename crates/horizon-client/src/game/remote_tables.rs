@@ -76,6 +76,7 @@ impl Game<'_> {
             r.registries = Arc::new(registries);
             r.tables = tables;
         }
+        self.invalidate_tagged_shader_ids();
     }
 }
 

@@ -7410,6 +7410,7 @@ impl Game<'_> {
         self.fns = Default::default();
         (self.world_tables, self.health_resources) =
             self.build_world_tables(false, &level.enabled_features)?;
+        self.invalidate_tagged_shader_ids();
         self.damage_tag_generation = self.damage_tag_generation.wrapping_add(1);
         // Native tag reads use the lock to tell that the tag tables are ready.
         self.session_lock = Some(session_lock);

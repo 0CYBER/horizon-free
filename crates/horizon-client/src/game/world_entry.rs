@@ -326,6 +326,7 @@ impl Game<'_> {
                 return;
             }
         }
+        self.invalidate_tagged_shader_ids();
         self.damage_tag_generation = self.damage_tag_generation.wrapping_add(1);
         self.recipe_tables.categories = None;
         horizon_client::structure_blocks::forget_loot_data();
