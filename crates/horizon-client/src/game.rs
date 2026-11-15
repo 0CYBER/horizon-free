@@ -6566,7 +6566,7 @@ impl Game<'_> {
         self.server_loot.set(None);
         self.server_items = None;
         self.session_lock = None;
-        mod_api::__private::clear_game_parts();
+        self.clear_world_parts();
         self.world_adopted = false;
         self.world_icon = None;
         horizon_client::crash::clear_detail("World");

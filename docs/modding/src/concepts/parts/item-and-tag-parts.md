@@ -127,6 +127,28 @@ To change Mending for every item at once,
 change the enchantment's `minecraft:repair_with_xp` effect in a data pack; the ratio a part gets arrives with it. To
 change it for particular items, vanilla's or another mod's included, attach a part to their item keys.
 
+## Enchanting and pick block
+
+Three server-side methods, each with a read-only `Host`, whose `event` field arrives holding vanilla's answer:
+
+- `ItemPart::is_primary_item_for` is `IItemExtension.isPrimaryItemFor`: whether enchantment selection may offer
+  `event.enchantment` to the part's item. `event.primary` arrives as `Enchantment.isPrimaryItem` (in the
+  enchantment's `supported_items`, and in its `primary_items` when that is set). Selection chooses the enchanting
+  table's offers and clues, loot `enchant_with_levels`, trades and spawn gear, all inside a roll. So the part is
+  asked once per registered enchantment when parts install (world open and `/reload`), with the item's default
+  stack, and selection reads the answers stored on that server's enchantment registry until the next install
+  or the world closing: answer from the item and the enchantment alone. A book is
+  offered every enchantment and never asks.
+- `ItemPart::apply_enchantments` is `IItemExtension.applyEnchantments`: the enchanting table's result for the
+  input stack and the list it chose (`event.enchantments`). `event.result` arrives as vanilla's (a book becomes
+  an enchanted book, then each level is added). The input slot holds what the part leaves, and
+  `player_enchant_item`, the `enchanted_item` trigger and `enchant_item` see it; the levels and lapis paid don't
+  change. An invalid stack, or a count other than the input's, is refused, and vanilla's result is kept.
+- `ItemPart::is_not_replaceable_by_pick_action` is `IItemExtension.isNotReplaceableByPickAction`: when a pick
+  moves an item into a full hotbar, whether the stack in `event.slot` must stay. `event.not_replaceable` arrives
+  as vanilla's (the stack is enchanted). The hotbar is asked from the selected slot on until a stack answers
+  `false`, and the pick uses that slot; with every stack kept, it uses the selected one.
+
 ## Hand, break and name on the client
 
 Three client-side methods change how the local player's client shows and handles a held stack. Each `event` field

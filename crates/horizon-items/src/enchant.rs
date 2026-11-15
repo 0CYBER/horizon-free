@@ -196,6 +196,9 @@ pub struct Enchantments {
     pub damage_tags: HashMap<String, HashSet<String>>,
     pub props: HashMap<Arc<str>, ItemProps>,
     lang: HashMap<String, String>,
+    /// The mods' `isPrimaryItemFor` answers resolved for this snapshot
+    /// (`ItemPart::is_primary_item_for`).
+    primary_answers: crate::primary_items::PrimaryAnswerTable,
 }
 
 fn string_list(v: &Value) -> Vec<String> {
@@ -526,7 +529,13 @@ impl Enchantments {
             damage_tags,
             props,
             lang,
+            primary_answers: Default::default(),
         })
+    }
+    /// The `isPrimaryItemFor` answers the server resolved for this snapshot when its parts
+    /// installed ([`crate::primary_items`]); selection reads them.
+    pub fn primary_answers(&self) -> &crate::primary_items::PrimaryAnswerTable {
+        &self.primary_answers
     }
     pub fn get(&self, id: &str) -> Option<&Enchantment> {
         self.index.get(id).map(|&i| &self.list[i])
@@ -766,7 +775,10 @@ impl Enchantments {
             _ => selected.max(bookcases * 2),
         }
     }
-    /// `EnchantmentHelper.getAvailableEnchantmentResults`.
+    /// `EnchantmentHelper.getAvailableEnchantmentResults`. A non-book is offered an
+    /// enchantment that is primary for it: vanilla's `isPrimaryItem`, or the answer a part
+    /// gave when this snapshot's parts installed (`ItemPart::is_primary_item_for`,
+    /// [`Self::primary_answers`]).
     pub fn available_results(
         &self,
         items: &Items,
@@ -778,7 +790,12 @@ impl Enchantments {
         let mut out = Vec::new();
         for id in pool {
             let Some(e) = self.get(id) else { continue };
-            if !(book || self.is_primary(items, e, item)) {
+            if !(book
+                || self
+                    .primary_answers
+                    .answer(item, &e.id)
+                    .unwrap_or_else(|| self.is_primary(items, e, item)))
+            {
                 continue;
             }
             for level in (1..=e.max_level).rev() {
@@ -1842,6 +1859,7 @@ pub mod tests {
             damage_tags,
             props,
             lang: HashMap::new(),
+            primary_answers: Default::default(),
         }
     }
     pub fn sample_items() -> Items {

@@ -606,14 +606,7 @@ impl Game<'_> {
         }) else {
             return;
         };
-        let Some(enchanted) = horizon_client::stations::apply_enchantment(
-            &self.stations().enchantments,
-            self.items(),
-            seed,
-            button,
-            gs.menu.data[button],
-            &item,
-        ) else {
+        let Some(enchanted) = self.table_enchant(seed, button, gs.menu.data[button], &item) else {
             return;
         };
         let enchanted_for_hook = enchanted.clone();
