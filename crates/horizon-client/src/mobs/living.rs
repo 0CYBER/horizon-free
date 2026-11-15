@@ -2160,10 +2160,15 @@ impl horizon_world::water_splash::WaterSplashWorld for Splash<'_> {
     fn velocity(&mut self, _: ()) -> Result<Vec3, Self::Error> {
         Ok(self.mob.velocity)
     }
-    fn splash_sound(&mut self, _high_speed: bool) -> Result<&'static str, Self::Error> {
+    fn splash_sound(&mut self, high_speed: bool) -> Result<&'static str, Self::Error> {
         use super::Species;
-        // Entity.getSwimSplashSound and getSwimHighSpeedSplashSound: the
-        // overrides are Monster's, the hoglin's, the dolphin's and the axolotl's.
+        // Entity.getSwimSplashSound and getSwimHighSpeedSplashSound: the only
+        // high-speed override is Player's, which never reaches here, so every
+        // mob splashes generically when it enters fast. The slow overrides are
+        // Monster's, the hoglin's, the dolphin's and the axolotl's.
+        if high_speed {
+            return Ok("entity.generic.splash");
+        }
         let species = self.mob.species();
         Ok(match species {
             Species::Dolphin => "entity.dolphin.splash",
@@ -2367,6 +2372,9 @@ mod climbable_tests;
 #[cfg(test)]
 #[path = "name_tag_nbt_tests.rs"]
 mod name_tag_nbt_tests;
+#[cfg(test)]
+#[path = "splash_sound_tests.rs"]
+mod splash_sound_tests;
 #[cfg(test)]
 #[path = "living_tests.rs"]
 mod tests;
