@@ -195,8 +195,8 @@ impl ParticleType {
     /// `SingleQuadParticle.Layer.translucent`: types whose vanilla particle class
     /// hardcodes the translucent layer, drawn after translucent terrain.
     /// `TerrainParticle`, `BreakingItemParticle` and `BlockMarker` resolve their
-    /// layer from the sprite instead (`Layer.bySprite`); see the `translucent`
-    /// sprite set on the engine.
+    /// layer from the sprite instead (`SingleQuadParticle.Layer.bySprite`); see
+    /// the `translucent` sprite set on the engine.
     pub fn translucent_layer(self) -> bool {
         match self {
             // CampfireSmokeParticle.
