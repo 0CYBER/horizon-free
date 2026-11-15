@@ -167,10 +167,13 @@ Every Horizon server checks loaded mods in the configuration phase (`horizon_pro
 this channel. Missing mods, extra both-side mods and version differences refuse the join, naming every id and
 version in a translated, wrapped disconnect. Client-only mods stay private and never block a join. A manifest
 with no `side` line is `client`, so a mod meant for both halves must say `side = "both"`. `side = "server"` is a mod
-only the server runs: nothing to compare at join, and no client needs it installed. A server mod is refused by name at
-load when it carries what every client must know: files under `assets/`, registry declarations (`data/<id>/horizon/`,
-or blocks, items, block entity types and fluids its code declares) or a listener on a client-side hook. Where a hook
-runs is still the hook's own side: the manifest says what a client must have, not where a hook runs. A vanilla or other
+only the server needs: it installs and runs like any mod (in single player and on a LAN host it runs in the integrated
+server), but it is never compared at join, so players joining need not have it. A server mod is refused by name at
+load when it carries what every joining client must know: registry declarations (`data/<id>/horizon/`, or blocks,
+items, block entity types and fluids its code declares), a listener on a client-side hook, a part that listens to one,
+or a required payload the server sends to clients. Assets, lang and data vanilla syncs itself (recipes, loot, tags)
+are allowed. Where a hook runs is still the hook's own side: the manifest says what a client must have, not where a
+hook runs. A vanilla or other
 non-Horizon client is refused when the server needs both-side mods, with their names and versions and an English
 fallback for clients without Horizon translations. The content registry identity check remains separate; the
 mod list does not hash package bytes. Native build inventory validation is a separate server-export concern.
