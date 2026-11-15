@@ -28,19 +28,40 @@ class DroppedUpstreamTests(unittest.TestCase):
         self.write("kept.rs", "fn a() {}\n")
         self.write("carried.rs", "fn b() {}\n")
         self.write("removed.rs", "fn c() {}\n")
+        self.write("moved_away.rs", "".join(f"fn moved_{n}() {{}}\n" for n in range(20)))
+        (self.root / "game").mkdir()
+        self.write("game/tick.rs", "fn tick() {}\n")
+        self.write("other.rs", "fn other() {}\nfn shared_helper_with_a_long_enough_name() {}\n")
+        self.write("lone.rs", "fn lone() {}\n")
+        (self.root / "icon.png").write_bytes(b"\x89PNG\0old")
         self.commit("base")
         self.git("checkout", "-q", "-b", "upstream")
         self.write("kept.rs", "fn a() {}\nfn upstream_fix() {}\n")
         self.write("carried.rs", "fn b() {}\nfn upstream_feature() {}\n")
-        self.git("rm", "-q", "removed.rs")
+        self.git("rm", "-q", "removed.rs", "moved_away.rs")
+        # Upstream's added line also exists in an unrelated fork file: that must not count as carried.
+        self.write("game/tick.rs", "fn tick() {}\nfn other() {}\n")
+        self.write("lone.rs", "fn lone() {}\nfn shared_helper_with_a_long_enough_name() {}\n")
+        (self.root / "icon.png").write_bytes(b"\x89PNG\0new")
         self.commit("Upstream fix")
         self.git("checkout", "-q", "fork")
         self.write("kept.rs", "fn a() {}\nfn fork_hook() {}\n")
+        (self.root / "game/area").mkdir()
+        self.git("mv", "game/tick.rs", "game/area/tick.rs")
+        self.write("game/area/tick.rs", "// rewritten by the fork\nfn fork_tick() {}\n")
+        self.git("mv", "moved_away.rs", "kept_here.rs")
+        self.git("rm", "-q", "lone.rs")
         self.commit("Fork hook")
-        # The sync: conflicts resolved to the fork's side for kept.rs, upstream's deletion undone.
+        # The sync: kept.rs and icon.png resolved to the fork's side, both upstream deletions undone (one at the
+        # fork's new path), tick.rs taken as the fork rewrote it.
         subprocess.run(["git", "merge", "-q", "--no-commit", "--no-ff", "upstream"], capture_output=True)
-        self.git("checkout", "fork", "--", "kept.rs")
+        for path in ("kept.rs", "icon.png", "kept_here.rs", "game/area/tick.rs"):
+            self.git("checkout", "fork", "--", path)
+        if (self.root / "lone.rs").exists():
+            self.git("rm", "-q", "lone.rs")
         self.git("checkout", "fork~1", "--", "removed.rs")
+        if (self.root / "game/tick.rs").exists():
+            self.git("rm", "-q", "game/tick.rs")
         self.commit("Sync")
         self.merge = self.git("rev-parse", "HEAD").strip()
 
@@ -54,10 +75,14 @@ class DroppedUpstreamTests(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", message)
 
-    def test_a_file_resolved_to_the_fork_side_and_an_undone_deletion_are_flagged_a_carried_change_is_not(self):
+    def test_every_dropped_change_is_listed_and_a_carried_one_is_not(self):
         found, _ = dropped.rows(self.merge)
-        self.assertEqual({(kind, path, lost, added) for kind, path, _, _, lost, added, _ in found},
-                         {("dropped", "kept.rs", 1, 1), ("deleted-up", "removed.rs", 0, 0)})
+        self.assertEqual({(kind, path, fork_path) for kind, path, fork_path, *_ in found},
+                         {("dropped", "kept.rs", "kept.rs"), ("deleted-up", "removed.rs", "removed.rs"),
+                          ("deleted-up", "moved_away.rs", "kept_here.rs"), ("binary", "icon.png", "icon.png"),
+                          ("guessed", "game/tick.rs", "game/area/tick.rs"),
+                          # Its added line is in an unrelated file: still listed, as a guess.
+                          ("guessed", "lone.rs", "other.rs")})
 
     def test_markdown_names_the_upstream_commit_once(self):
         out = io.StringIO()
