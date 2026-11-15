@@ -453,7 +453,7 @@ pub struct Stage {
     /// 0.2, a `[[post]]` entry only: a compute dispatch in the chain, not a pass that draws.
     #[serde(default)]
     pub compute: bool,
-    /// 0.2, a compute pass only (`compute = true`): its invocations.
+    /// 0.2, a compute pass only (`compute = true`, `[[before_world]]`): its invocations.
     #[serde(default)]
     pub dispatch: Option<crate::kept::Dispatch>,
     /// 0.2, a compute pass only: its workgroup's size.
@@ -582,6 +582,8 @@ struct Raw {
     kept: Option<crate::kept::RawKept>,
     #[serde(default)]
     resource: Vec<crate::kept::RawResource>,
+    #[serde(default)]
+    before_world: Vec<Stage>,
 }
 
 #[derive(Deserialize)]
@@ -757,6 +759,7 @@ impl Manifest {
                 ),
                 (raw.kept.is_some(), "[kept]"),
                 (!raw.resource.is_empty(), "[[resource]]"),
+                (!raw.before_world.is_empty(), "[[before_world]]"),
                 (raw.post.iter().any(|p| p.compute), "[[post]] compute"),
                 (
                     raw.options.iter().any(|o| o.resets.is_some()),
@@ -833,6 +836,7 @@ impl Manifest {
             .chain(&raw.post)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
+            .chain(&raw.before_world)
             .any(|s| s.fog.is_some())
         {
             return Err(err("`fog` is a key of [material] only".into()));
@@ -856,11 +860,12 @@ impl Manifest {
             .chain(&raw.vertex)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
+            .chain(&raw.before_world)
             .any(|s| s.scale.is_some() || s.output.is_some())
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        // Compute keys: `[[post]]` only, which `kept::check` reads.
+        // Compute keys: `[[post]]` and `[[before_world]]` only, which `kept::check` reads.
         let computes = |s: &Stage| {
             s.compute
                 || s.dispatch.is_some()
@@ -879,7 +884,8 @@ impl Manifest {
             .any(computes)
         {
             return Err(err(
-                "`compute`, `dispatch`, `workgroup`, `reads` and `writes` are keys of [[post]]"
+                "`compute`, `dispatch`, `workgroup`, `reads` and `writes` are keys of [[post]] \
+                 and [[before_world]]"
                     .into(),
             ));
         }
@@ -888,8 +894,16 @@ impl Manifest {
             .collect();
         let traced = raw.ray_tracing.is_some();
         let moving = raw.motion.is_some();
-        let kept = crate::kept::check(raw.kept, raw.resource, &raw.post, traced, moving, resets)
-            .map_err(err)?;
+        let kept = crate::kept::check(
+            raw.kept,
+            raw.resource,
+            raw.before_world,
+            &raw.post,
+            traced,
+            moving,
+            resets,
+        )
+        .map_err(err)?;
         check_post_targets(&raw.post, traced, moving, &kept.resources).map_err(err)?;
         if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
@@ -916,7 +930,8 @@ impl Manifest {
             .chain(&raw.weather)
             .chain(&raw.post)
             .chain(&raw.tonemap)
-            .chain(&raw.entity);
+            .chain(&raw.entity)
+            .chain(&kept.before_world);
         for file in raw
             .shared
             .iter()
@@ -933,6 +948,7 @@ impl Manifest {
             .chain(&raw.post)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
+            .chain(&kept.before_world)
             .any(sky_only)
         {
             return Err(err(
@@ -1364,7 +1380,9 @@ impl Manifest {
     /// Whether the pack declares kept resources or compute passes, which the game doesn't run
     /// yet.
     pub fn computes(&self) -> bool {
-        !self.kept.resources.is_empty() || self.post.iter().any(|p| p.compute)
+        !self.kept.resources.is_empty()
+            || !self.kept.before_world.is_empty()
+            || self.post.iter().any(|p| p.compute)
     }
 
     /// Every WGSL file the manifest names, shared files first, each once.
@@ -1378,7 +1396,8 @@ impl Manifest {
             .chain(&self.weather)
             .chain(&self.post)
             .chain(&self.tonemap)
-            .chain(&self.entity);
+            .chain(&self.entity)
+            .chain(&self.kept.before_world);
         for file in self
             .shared
             .iter()

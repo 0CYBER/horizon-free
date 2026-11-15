@@ -378,16 +378,17 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces, and in a post
 ## Kept resources and compute passes
 
 **Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a
-`[[resource]]` or a compute `[[post]]` entry: it needs a later Horizon.
+`[[resource]]`, a `[[before_world]]` entry or a compute `[[post]]` entry: it needs a later Horizon.
 
 - `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
   (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
   (screen history) or `"world"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in
   blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer
   has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.
-- `[[post]]` with `compute = true`: a dispatch in the chain where it stands, with `dispatch` (`[x, y, z]` cells,
-  or `"pixels"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`. It has no
-  `output` or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its
+- `[[before_world]]`: a compute pass once a frame, before the world draws: `file`, `dispatch` (`[x, y, z]`
+  cells, or `"pixels"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`.
+- `[[post]]` with `compute = true` and the same keys: a dispatch in the chain where it stands. It has no `output`
+  or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its
   `output` may name a kept texture, which it draws at that texture's size.
 - An option's `resets = "view"` clears the view's kept resources when the player changes it, `"world"` all
   of them.
@@ -401,10 +402,11 @@ own `output`.
 A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's
 workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`
 reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute
-`[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`.
+`[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has
+the frame, the samplers and the shadow maps (bindings below) with `shadow_position`.
 
-**Not yet, in later steps:** a compute file doesn't get `trace` or the other ray functions under
-`[ray_tracing]`, and `[material]` can't read kept resources.
+**Not yet, in later steps:** a compute or `[[before_world]]` file doesn't get `trace` or the other ray functions
+under `[ray_tracing]`, and `[material]` can't read kept resources.
 
 ### `ComputeInput`
 
@@ -424,10 +426,23 @@ A pass's prelude declares the resources it lists, the pack's resource i at bindi
 `rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read
 with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
 
-Limits: 8 resources, 8 compute `[[post]]` entries; 32 MiB of buffers and 1024 KiB of
-fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to [256, 256, 64] and
+`[[before_world]]` resources (bind group 3):
+
+| Binding | Declaration | Meaning |
+| --- | --- | --- |
+| 0 | `var<uniform> frame: Frame` | The frame (`Frame`). |
+| 4 | `var linear_sampler: sampler` | Bilinear filtering, clamped to the edges. |
+| 5 | `var nearest_sampler: sampler` | Nearest texel, clamped to the edges. |
+| 6 | `var shadow_map: texture_depth_2d` | This frame's shadow map: the depth of the solid terrain and entities the light sees, 0 at the light, 1 away from it (and where nothing is), stored at `shadow_position`'s mapping. Valid while `frame.has_shadow` is 1 (the pack asks for it with `[shadow]`), else a 1×1 map that lights everything. |
+| 7 | `var shadow_sampler: sampler_comparison` | Depth comparison, bilinear (2×2 percentage-closer filtering): `textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy, p.z)` is 1 where the point is lit, 0 in shadow. |
+| 9 | `var shadow_map_translucent: texture_depth_2d` | `shadow_map` with the translucent terrain (water, stained glass, ice) the light passes through drawn in too, read with `shadow_sampler` the same way: a point lit in `shadow_map` but not here lies under such a surface, which `shadow_color` gives the colour of. |
+| 10 | `var shadow_color: texture_2d<f32>` | The texture colour times the vertex colour (rgb: the tint, the face's directional shade and ambient occlusion) of the nearest translucent surface the light passes through at each texel of `shadow_map_translucent`, white where there is none; alpha is 1 on a fluid (water) and the texture's alpha, at most 0.99, on anything else. Read it with `textureLoad` at `shadow_position`'s xy times `textureDimensions(shadow_color)`. |
+
+Limits: 8 resources, 4 `[[before_world]]` entries, 8 compute
+`[[post]]` entries; 32 MiB of buffers and 1024 KiB of fixed-size textures, both versions counted; each R-relative
+kept texture takes two of the post targets `output`s share; a workgroup of up to [256, 256, 64] and
 256 invocations; 33554432 invocations a dispatch and 67108864 a frame over every
-compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load).
+compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load).
 
 ### Motion guide
 

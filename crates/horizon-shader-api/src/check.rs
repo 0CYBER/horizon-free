@@ -180,6 +180,10 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
         .chain(m.material.iter().map(|s| (StageKind::Material, s)))
         .chain(m.weather.iter().map(|s| (StageKind::Weather, s)))
         .map(|(kind, s)| (kind, s, None))
+        .chain(
+            (m.kept.before_world.iter().enumerate())
+                .map(|(i, s)| (StageKind::BeforeWorld, s, Some(i))),
+        )
         .chain(m.post.iter().enumerate().map(|(i, s)| match s.compute {
             true => (StageKind::Compute, s, Some(i)),
             // In a pack without kept resources or compute passes an ordinary pass keeps the first
@@ -454,7 +458,7 @@ fn undeclared(mut problems: Vec<Problem>, m: &crate::Manifest, kind: StageKind) 
         .filter(|n| kept(n));
         if let Some(name) = name {
             p.message = match kind {
-                StageKind::Post | StageKind::Compute => {
+                StageKind::Post | StageKind::Compute | StageKind::BeforeWorld => {
                     format!(
                         "`{name}` is a kept resource this pass doesn't list in `reads`/`writes`"
                     )

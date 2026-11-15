@@ -219,7 +219,7 @@ fn not_drawn(m: &Manifest, switch: bool) -> Option<String> {
     }
     if m.computes() {
         return Some(
-            "[[resource]] and compute [[post]] entries need a later Horizon: \
+            "[[resource]], [[before_world]] and compute [[post]] entries need a later Horizon: \
              this one checks them but doesn't run them"
                 .into(),
         );

@@ -3,9 +3,9 @@
 use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
 use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
 use crate::kept::{
-    Element, Format, MAX_BUFFER_BYTES, MAX_COMPUTE_POST, MAX_DISPATCH_INVOCATIONS,
-    MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES, MAX_WORKGROUP,
-    MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS,
+    Element, Format, MAX_BEFORE_WORLD, MAX_BUFFER_BYTES, MAX_COMPUTE_POST,
+    MAX_DISPATCH_INVOCATIONS, MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES,
+    MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS,
 };
 use crate::manifest::{Api, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
@@ -182,15 +182,16 @@ fn kept() -> String {
     let mut out = format!(
         "## Kept resources and compute passes\n\n\
          **Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a\n\
-         `[[resource]]` or a compute `[[post]]` entry: it needs a later Horizon.\n\n\
+         `[[resource]]`, a `[[before_world]]` entry or a compute `[[post]]` entry: it needs a later Horizon.\n\n\
          - `[[resource]]`: `name`; `buffer` (bytes) with `element` ({elements}), or `format`\n  \
          ({formats}) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `\"view\"`\n  \
          (screen history) or `\"world\"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in\n  \
          blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer\n  \
          has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.\n\
-         - `[[post]]` with `compute = true`: a dispatch in the chain where it stands, with `dispatch` (`[x, y, z]` cells,\n  \
-         or `\"pixels\"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`. It has no\n  \
-         `output` or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its\n  \
+         - `[[before_world]]`: a compute pass once a frame, before the world draws: `file`, `dispatch` (`[x, y, z]`\n  \
+         cells, or `\"pixels\"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`.\n\
+         - `[[post]]` with `compute = true` and the same keys: a dispatch in the chain where it stands. It has no `output`\n  \
+         or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its\n  \
          `output` may name a kept texture, which it draws at that texture's size.\n\
          - An option's `resets = \"view\"` clears the view's kept resources when the player changes it, `\"world\"` all\n  \
          of them.\n\n\
@@ -202,9 +203,10 @@ fn kept() -> String {
          A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's\n\
          workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`\n\
          reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute\n\
-         `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`.\n\n\
-         **Not yet, in later steps:** a compute file doesn't get `trace` or the other ray functions under\n\
-         `[ray_tracing]`, and `[material]` can't read kept resources.\n\n"
+         `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has\n\
+         the frame, the samplers and the shadow maps (bindings below) with `shadow_position`.\n\n\
+         **Not yet, in later steps:** a compute or `[[before_world]]` file doesn't get `trace` or the other ray functions\n\
+         under `[ray_tracing]`, and `[material]` can't read kept resources.\n\n"
     );
     out += &table(&COMPUTE_INPUT, None);
     out += &format!(
@@ -213,14 +215,20 @@ fn kept() -> String {
          `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture\n\
          `texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for\n\
          `rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read\n\
-         with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.\n\n",
+         with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.\n\n\
+         `[[before_world]]` resources (bind group {GROUP}):\n\n\
+         | Binding | Declaration | Meaning |\n| --- | --- | --- |\n",
         KEPT_BINDING + 1
     );
+    for r in StageKind::BeforeWorld.resources() {
+        out += &format!("| {} | `{}` | {} |\n", r.binding, r.ty, r.doc);
+    }
     out + &format!(
-        "Limits: {MAX_RESOURCES} resources, {MAX_COMPUTE_POST} compute `[[post]]` entries; {} MiB of buffers and {} KiB of\n\
-         fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
+        "\nLimits: {MAX_RESOURCES} resources, {MAX_BEFORE_WORLD} `[[before_world]]` entries, {MAX_COMPUTE_POST} compute\n\
+         `[[post]]` entries; {} MiB of buffers and {} KiB of fixed-size textures, both versions counted; each R-relative\n\
+         kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
          {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
-         compute pass, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
+         compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
         MAX_BUFFER_BYTES >> 20,
         MAX_FIXED_TEXTURE_BYTES >> 10,
         PIXELS_COUNTED_AS[0],
@@ -334,6 +342,7 @@ pub fn markdown(api: Api) -> String {
             StageKind::Tonemap => "[tonemap]",
             StageKind::Entity => "[entity]",
             StageKind::Compute => "[[post]] compute = true",
+            StageKind::BeforeWorld => "[[before_world]]",
         };
         out += &format!("| {} | `{key}` | `{}` |\n", kind.name(), kind.signature());
     }

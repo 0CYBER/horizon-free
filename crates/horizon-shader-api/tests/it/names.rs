@@ -209,15 +209,21 @@ fn listed(list: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The compute stage (`[[post]] compute = true`) came after the others and starts a list of its
-/// own.
+/// The compute stages (`[[post]] compute = true`, `[[before_world]]`) came after the others and
+/// start lists of their own.
 #[test]
 fn a_compute_prelude_declares_only_the_names_on_its_list() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
-                    [[post]]\nfile = \"compute.wgsl\"\ncompute = true\n\
+                    [[before_world]]\nfile = \"before_world.wgsl\"\ndispatch = [64, 1, 1]\n\
+                    workgroup = [64, 1, 1]\n[[post]]\nfile = \"compute.wgsl\"\ncompute = true\n\
                     dispatch = \"pixels\"\nworkgroup = [8, 8, 1]\n[[post]]\nfile = \"post.wgsl\"\n";
     let compute = "fn compute(input: ComputeInput) {}\n";
-    let files = [(MANIFEST, manifest), ("compute.wgsl", compute), FILES[4]];
+    let files = [
+        (MANIFEST, manifest),
+        ("before_world.wgsl", compute),
+        ("compute.wgsl", compute),
+        FILES[4],
+    ];
     let pack = Pack::from_files(
         (files.iter())
             .map(|(n, t)| ((*n).to_owned(), t.as_bytes().to_vec()))
@@ -225,9 +231,11 @@ fn a_compute_prelude_declares_only_the_names_on_its_list() {
     )
     .unwrap();
     check(&pack).unwrap();
-    let kind = StageKind::Compute;
-    let have = prelude_names(&compose(&pack, kind, "compute.wgsl"), kind);
-    assert_eq!(have, listed_names(kind).0);
+    for kind in [StageKind::Compute, StageKind::BeforeWorld] {
+        let file = format!("{}.wgsl", kind.name());
+        let have = prelude_names(&compose(&pack, kind, &file), kind);
+        assert_eq!(have, listed_names(kind).0, "{kind:?}");
+    }
 }
 
 /// The rule at work: `[ray_tracing]` brings the names of `post_ray_tracing.txt` to the post

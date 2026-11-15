@@ -1,4 +1,4 @@
-//! Shader API 0.2's compute passes (#16011 item 4): every manifest rule of
+//! Shader API 0.2's compute passes (#16011 item 4): every manifest rule of `[[before_world]]`,
 //! `[[post]] compute = true` and declared access, the WGSL composed around a compute file and
 //! the resources each pass lists, and what the check refuses. The resources' own rules:
 //! `tests/kept.rs`.
@@ -61,9 +61,8 @@ format = "rgba16float"
 scale = 1
 keep = "view"
 
-[[post]]
+[[before_world]]
 file = "cache_update.wgsl"
-compute = true
 dispatch = [1048576, 1, 1]
 workgroup = [64, 1, 1]
 writes = ["cache"]
@@ -240,8 +239,11 @@ fn the_design_s_example_reads_as_declared() {
             ),
         ]
     );
-    assert_eq!(m.post[0].dispatch, Some(Dispatch::Cells([1 << 20, 1, 1])));
-    assert_eq!(m.post[1].dispatch, Some(Dispatch::Pixels));
+    assert_eq!(
+        k.before_world[0].dispatch,
+        Some(Dispatch::Cells([1 << 20, 1, 1]))
+    );
+    assert_eq!(m.post[0].dispatch, Some(Dispatch::Pixels));
     assert_eq!(k.resets, [("bounces".to_owned(), Keep::World)]);
     assert!(m.computes());
     // The kept output is no post target of its own: the two R-relative textures take all four.
@@ -261,7 +263,7 @@ fn the_design_s_example_passes_the_check() {
     assert_eq!(
         kinds,
         [
-            (StageKind::Compute, "cache_update.wgsl"),
+            (StageKind::BeforeWorld, "cache_update.wgsl"),
             (StageKind::Compute, "ray_length.wgsl"),
             (StageKind::Compute, "exposure.wgsl"),
             (StageKind::Post, "denoise.wgsl"),
@@ -282,11 +284,11 @@ fn each_pass_declares_what_it_lists() {
         let c = compose(&p, kind, file);
         c.text[c.parts[0].1.clone()].to_owned()
     };
-    let before = prelude(StageKind::Compute, "cache_update.wgsl");
+    let before = prelude(StageKind::BeforeWorld, "cache_update.wgsl");
     assert!(
         before.contains("@group(3) @binding(64) var<storage, read_write> cache: array<vec4<u32>>;")
     );
-    assert!(!before.contains("ray_length"));
+    assert!(!before.contains("ray_length") && !before.contains("scene_color"));
     let ray = prelude(StageKind::Compute, "ray_length.wgsl");
     assert!(
         ray.contains("@group(3) @binding(68) var ray_length: texture_storage_2d<r32float, write>;")
@@ -340,7 +342,7 @@ fn the_entry_runs_every_invocation_with_in_bounds() {
 #[test]
 fn an_atomic_buffer_is_atomic_only_where_written() {
     let manifest = format!(
-        "{}[[post]]\nfile = \"count.wgsl\"\ncompute = true\ndispatch = [64, 1, 1]\nworkgroup = [64, 1, 1]\n\
+        "{}[[before_world]]\nfile = \"count.wgsl\"\ndispatch = [64, 1, 1]\nworkgroup = [64, 1, 1]\n\
          writes = [\"counts\"]\n[[post]]\nfile = \"show.wgsl\"\nreads = [\"counts\"]\n",
         resource("counts", "buffer = 256\nelement = \"atomic<u32>\"")
     );
@@ -349,7 +351,7 @@ fn an_atomic_buffer_is_atomic_only_where_written() {
     let show = "fn post(input: PostInput) -> vec4<f32> { return input.color * f32(counts[0]); }\n";
     let p = pack(&manifest, &[("count.wgsl", count), ("show.wgsl", show)]);
     check(&p).unwrap();
-    let before = compose(&p, StageKind::Compute, "count.wgsl").text;
+    let before = compose(&p, StageKind::BeforeWorld, "count.wgsl").text;
     assert!(before.contains("var<storage, read_write> counts: array<atomic<u32>>;"));
     let post = compose(&p, StageKind::Post, "show.wgsl").text;
     assert!(post.contains("var<storage, read> counts: array<u32>;"));
@@ -363,6 +365,14 @@ fn a_file_naming_a_resource_it_did_not_list_is_refused() {
     assert!(
         p.iter().any(|p| p.starts_with("light.wgsl:2:")
             && p.contains("`cache` is a kept resource this pass doesn't list in `reads`/`writes`")),
+        "{p:#?}"
+    );
+    let update = "fn compute(input: ComputeInput) {\n    \
+                  if input.in_bounds { cache[0].x = u32(textureLoad(exposure, vec2<i32>(0), 0).x); }\n}\n";
+    let p = problems(&example_with("cache_update.wgsl", update));
+    assert!(
+        p.iter().any(|p| p.starts_with("cache_update.wgsl:2:")
+            && p.contains("`exposure` is a kept resource this pass doesn't list")),
         "{p:#?}"
     );
     // Only what a pass lists is declared: a name of its own, a local or a member by a resource's
@@ -487,6 +497,16 @@ fn a_compute_file_keeps_the_api_s_rules() {
 
 #[test]
 fn pass_counts_are_bounded() {
+    let before = |i: usize| {
+        format!(
+            "[[before_world]]\nfile = \"b{i}.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n"
+        )
+    };
+    parse(&(0..4).map(before).collect::<String>()).unwrap();
+    refused(
+        &(0..5).map(before).collect::<String>(),
+        "5 [[before_world]] entries; a pack may have 4",
+    );
     let computes = |n: usize| (0..n).map(|_| compute("")).collect::<String>();
     parse(&computes(8)).unwrap();
     refused(
@@ -555,6 +575,14 @@ fn a_compute_entry_is_a_dispatch_in_the_chain() {
             "are a compute pass's",
         );
     }
+    refused(
+        "[[before_world]]\nfile = \"b.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n",
+        "no `compute` key",
+    );
+    refused(
+        "[[before_world]]\nfile = \"b.wgsl\"\noutput = \"x\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n",
+        "`scale` and `output` are keys of [[post]] only",
+    );
     for key in [
         "compute = true",
         "reads = [\"tex\"]",
@@ -562,7 +590,7 @@ fn a_compute_entry_is_a_dispatch_in_the_chain() {
     ] {
         refused(
             &format!("{RES}[material]\nfile = \"m.wgsl\"\n{key}\n"),
-            "are keys of [[post]]",
+            "are keys of [[post]] and [[before_world]]",
         );
     }
 }
@@ -630,6 +658,9 @@ fn shader_api_0_1_has_none_of_it() {
         Manifest::parse(&format!("{}{extra}{LAST}", HEAD.replace("0.2", "0.1"))).unwrap_err()
     };
     assert!(old(&compute("")).contains("[[post]] compute is shader API 0.2"));
+    let before =
+        "[[before_world]]\nfile = \"b.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n";
+    assert!(old(before).contains("[[before_world]] is shader API 0.2"));
 }
 
 /// #16011 item 4's caps on compute work: 2^25 invocations a dispatch and 2^26 a frame over
@@ -707,4 +738,37 @@ fn an_rgba32uint_texture_is_written_by_compute_and_loaded_as_u32() {
     let last = prelude(StageKind::Post, "last.wgsl");
     assert!(last.contains("@group(3) @binding(64) var ints: texture_2d<u32>;"));
     assert!(last.contains("@group(3) @binding(65) var ints_previous: texture_2d<u32>;"));
+}
+
+/// `[[before_world]]` dispatches are capped as compute `[[post]]` ones are, and count toward the
+/// same 2^26 invocations a frame.
+#[test]
+fn before_world_work_shares_the_frame_cap() {
+    let entry = |list: &str, dispatch: &str| {
+        let compute = if list == "post" {
+            "compute = true\n"
+        } else {
+            ""
+        };
+        format!(
+            "[[{list}]]\nfile = \"c.wgsl\"\n{compute}dispatch = {dispatch}\nworkgroup = [8, 8, 1]\n"
+        )
+    };
+    // 2^25 a dispatch holds for them too.
+    refused(
+        &entry("before_world", "[8192, 4104, 1]"),
+        "c.wgsl: 33619968 invocations",
+    );
+    // One 2^25 dispatch in each list: exactly 2^26 a frame fits; a workgroup more in either
+    // list alone fits too, but not with the other list.
+    let full = "[8192, 4096, 1]";
+    let before = entry("before_world", full);
+    let post = format!("{}{}", entry("post", full), entry("post", "[8, 8, 1]"));
+    parse(&before).unwrap();
+    parse(&post).unwrap();
+    parse(&format!("{before}{}", entry("post", full))).unwrap();
+    refused(
+        &format!("{before}{post}"),
+        "the compute passes run 67108928 invocations a frame",
+    );
 }

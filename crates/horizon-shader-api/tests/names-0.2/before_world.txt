@@ -1,0 +1,11 @@
+ComputeInput
+Frame
+frame
+linear_sampler
+nearest_sampler
+shadow_color
+shadow_distort
+shadow_map
+shadow_map_translucent
+shadow_position
+shadow_sampler

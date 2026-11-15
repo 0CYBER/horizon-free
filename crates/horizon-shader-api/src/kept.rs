@@ -1,11 +1,13 @@
 //! Shader API 0.2's kept resources and compute passes (#16011 item 4): `[kept]`, `[[resource]]`,
-//! `[[post]] compute = true` and options' `resets`. The check takes them;
+//! `[[before_world]]`, `[[post]] compute = true` and options' `resets`. The check takes them;
 //! the game doesn't run them yet and refuses a pack that declares any (`Manifest::computes`).
 use crate::manifest::{POST_SCALES, Stage};
 use serde::Deserialize;
 
 /// `[[resource]]` entries a pack may declare.
 pub const MAX_RESOURCES: usize = 8;
+/// `[[before_world]]` entries a pack may declare.
+pub const MAX_BEFORE_WORLD: usize = 4;
 /// `[[post]]` entries with `compute = true` a pack may declare.
 pub const MAX_COMPUTE_POST: usize = 8;
 /// The bytes of every buffer of a pack together, per view.
@@ -182,6 +184,9 @@ pub struct Kept {
     /// `[kept] reach`: a teleport further than this, in blocks, clears the world resources.
     pub reach: Option<u32>,
     pub resources: Vec<Resource>,
+    /// `[[before_world]]`: compute passes after the ray scene and shadow inputs are prepared,
+    /// before the world draws, in order.
+    pub before_world: Vec<Stage>,
     /// Options whose change clears kept resources (`resets`), by id.
     pub resets: Vec<(String, Keep)>,
 }
@@ -307,7 +312,8 @@ pub fn invocations(s: &Stage) -> u64 {
         .product()
 }
 
-/// The frame's compute entries `computes`, together within `MAX_FRAME_INVOCATIONS`.
+/// The frame's compute entries `computes` (`[[before_world]]` and compute `[[post]]`), together
+/// within `MAX_FRAME_INVOCATIONS`.
 fn frame_invocations<'a>(computes: impl Iterator<Item = &'a Stage>) -> Result<(), String> {
     let total: u64 = computes.map(invocations).sum();
     if total > MAX_FRAME_INVOCATIONS {
@@ -439,13 +445,14 @@ fn post_entries(post: &[Stage]) -> Result<(), String> {
         }
         compute_shape(p)?;
     }
-    frame_invocations(post.iter().filter(|p| p.compute))
+    Ok(())
 }
 
 /// Every rule of the keys above but the targets `check_post_targets` counts.
 pub(crate) fn check(
     kept: Option<RawKept>,
     raw: Vec<RawResource>,
+    before_world: Vec<Stage>,
     post: &[Stage],
     ray_tracing: bool,
     motion: bool,
@@ -519,8 +526,24 @@ pub(crate) fn check(
         }
         None => None,
     };
+    if before_world.len() > MAX_BEFORE_WORLD {
+        return Err(format!(
+            "{} [[before_world]] entries; a pack may have {MAX_BEFORE_WORLD}",
+            before_world.len()
+        ));
+    }
+    for s in &before_world {
+        if s.compute {
+            return Err(format!(
+                "{}: a [[before_world]] entry computes: no `compute` key",
+                s.file
+            ));
+        }
+        compute_shape(s)?;
+    }
     post_entries(post)?;
-    for s in post {
+    frame_invocations(before_world.iter().chain(post.iter().filter(|p| p.compute)))?;
+    for s in before_world.iter().chain(post) {
         access(s, &resources)?;
     }
     let mut kept_resets = Vec::new();
@@ -538,6 +561,7 @@ pub(crate) fn check(
     Ok(Kept {
         reach,
         resources,
+        before_world,
         resets: kept_resets,
     })
 }

@@ -34,6 +34,8 @@ pub enum StageKind {
     /// 0.2: a dispatch in the post chain (`[[post]] compute = true`), which reads what a post
     /// pass does. Checked, not yet run; not in `ALL`, since each pass's entry is its own.
     Compute,
+    /// 0.2: a dispatch before the world draws (`[[before_world]]`). Checked, not yet run.
+    BeforeWorld,
 }
 
 /// A resource a stage reads, declared by its prelude.
@@ -134,6 +136,17 @@ const TONEMAP_RESOURCES: [Resource; 4] = [
     },
     LINEAR_SAMPLER,
     NEAREST_SAMPLER,
+];
+
+/// The `[[before_world]]` stage's resources: what is ready before the world draws.
+const BEFORE_WORLD_RESOURCES: [Resource; 7] = [
+    FRAME,
+    LINEAR_SAMPLER,
+    NEAREST_SAMPLER,
+    shadow_map(6),
+    shadow_sampler(7),
+    shadow_map_translucent(9),
+    shadow_color(10),
 ];
 
 /// 0.2's colour boundary, in every 0.2 prelude: vanilla's 2.2 power both ways.
@@ -1126,12 +1139,16 @@ impl StageKind {
             StageKind::Tonemap => "tonemap",
             StageKind::Entity => "entity",
             StageKind::Compute => "compute",
+            StageKind::BeforeWorld => "before_world",
         }
     }
 
-    /// The function a pack defines: it has the stage's name.
+    /// The function a pack defines: it has the stage's name, `compute` for both compute stages.
     pub fn function(self) -> &'static str {
-        self.name()
+        match self {
+            StageKind::BeforeWorld => "compute",
+            _ => self.name(),
+        }
     }
 
     pub fn input(self) -> &'static Struct {
@@ -1143,14 +1160,14 @@ impl StageKind {
             StageKind::Post => &POST_INPUT,
             StageKind::Tonemap => &TONEMAP_INPUT,
             StageKind::Entity => &ENTITY_INPUT,
-            StageKind::Compute => &COMPUTE_INPUT,
+            StageKind::Compute | StageKind::BeforeWorld => &COMPUTE_INPUT,
         }
     }
 
     /// The type the function returns (empty: none).
     pub fn output(self) -> &'static str {
         match self {
-            StageKind::Compute => "",
+            StageKind::Compute | StageKind::BeforeWorld => "",
             StageKind::Material | StageKind::Entity => SURFACE.name,
             StageKind::Vertex | StageKind::Tonemap => "vec3<f32>",
             StageKind::Sky | StageKind::Weather | StageKind::Post => "vec4<f32>",
@@ -1173,6 +1190,7 @@ impl StageKind {
     pub fn resources(self) -> &'static [Resource] {
         match self {
             StageKind::Post | StageKind::Compute => &POST_RESOURCES,
+            StageKind::BeforeWorld => &BEFORE_WORLD_RESOURCES,
             StageKind::Sky | StageKind::Vertex | StageKind::Weather => std::slice::from_ref(&FRAME),
             StageKind::Material => &MATERIAL_RESOURCES,
             StageKind::Tonemap => &TONEMAP_RESOURCES,
@@ -1236,7 +1254,7 @@ impl StageKind {
                 };
                 out += SHADOW_HELPERS;
             }
-            StageKind::Vertex => out += SHADOW_HELPERS,
+            StageKind::Vertex | StageKind::BeforeWorld => out += SHADOW_HELPERS,
             StageKind::Entity => {
                 out += ENTITY_HELPERS;
                 out += SHADOW_HELPERS;
@@ -1280,7 +1298,7 @@ impl StageKind {
             (_, StageKind::Tonemap) => TONEMAP_ENTRIES,
             (_, StageKind::Entity) => ENTITY_ENTRIES,
             // Each compute pass has its own (`compute_entries`).
-            (_, StageKind::Compute) => "",
+            (_, StageKind::Compute | StageKind::BeforeWorld) => "",
         }
     }
 }
@@ -1499,6 +1517,7 @@ pub fn entry<'a>(
     let (list, compute) = match kind {
         StageKind::Post => (&m.post, false),
         StageKind::Compute => (&m.post, true),
+        StageKind::BeforeWorld => (&m.kept.before_world, false),
         StageKind::Sky => return m.sky.as_ref(),
         StageKind::Material => return m.material.as_ref(),
         StageKind::Vertex => return m.vertex.as_ref(),
@@ -1641,7 +1660,7 @@ pub(crate) fn compose_traced(
             "<entries>",
             &(kind.entries(api).to_owned() + DISPLACEMENT_ENTRIES),
         );
-    } else if let (StageKind::Compute, Some(stage)) = (kind, stage) {
+    } else if let (StageKind::Compute | StageKind::BeforeWorld, Some(stage)) = (kind, stage) {
         push("<entries>", &compute_entries(stage));
     } else {
         push("<entries>", kind.entries(api));
