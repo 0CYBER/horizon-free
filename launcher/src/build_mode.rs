@@ -404,13 +404,15 @@ impl Launcher {
         // A failure, not the worlds question (which stopped to ask, and failed nothing).
         let failed = error.is_some() && mine && self.worlds_stop(mine).is_none();
         // Its card offers its own way on (Switch off, Try again, Change version, Report).
-        let remedy = failed
-            && (!self.native_failed_mods.is_empty()
-                || error.is_some_and(|e| native_mods::sdk_cache::way_on(e).is_some()));
+        let way_on = error.and_then(|e| native_mods::sdk_cache::way_on(e));
+        let remedy = failed && (!self.native_failed_mods.is_empty() || way_on.is_some());
+        // The card's Try again is this same Build: one button for it.
+        let retry_in_card = failed && way_on == Some(native_mods::sdk_cache::WayOn::Retry);
         let can_build = self.pending_consent.is_none()
             && !(self.native_step.is_some() && mine)
             // While worlds are at stake the choice row below is the only decision.
             && self.worlds_stop(mine).is_none()
+            && !retry_in_card
             && (error.is_some() || needs.is_some());
         let mut right = div().flex().items_center().gap(px(8.));
         if self.native_step.is_none() {
