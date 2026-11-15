@@ -393,7 +393,7 @@ impl Game<'_> {
                 _ => None,
             })
         });
-        // Camera.setup: the living mount's scale and camera distance
+        // Camera.update: the living mount's scale and camera distance
         // attributes (the happy ghast's is 8, the default 4).
         let mount = self
             .riding

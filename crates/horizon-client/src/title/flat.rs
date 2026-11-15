@@ -951,7 +951,7 @@ fn layer_state(renderer: &ItemRenderer, id: &str) -> ItemRenderState {
     )
 }
 /// The 18x18 slot behind a layer's item icon (`container/slot`), then the item
-/// (`GuiGraphics.renderItem`): its GUI model, so a block shows as the isometric
+/// (`GuiGraphicsExtractor.item`): its GUI model, so a block shows as the isometric
 /// block. Without item models, or for an id with none, the flat sprite stands in.
 fn slot(
     atlas: &HudAtlas,

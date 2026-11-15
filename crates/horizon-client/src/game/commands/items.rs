@@ -1220,7 +1220,7 @@ impl Game<'_> {
         }
         self.items().get(&s.item).map_or(64, |i| i.max_stack)
     }
-    /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
+    /// `ResourceOrIdArgument.getLootModifier`: an inline modifier (SNBT) or
     /// a registered one.
     pub(super) fn item_modifier_arg(&mut self, ctx: &Context, name: &str) -> R<serde_json::Value> {
         let raw = match ctx.get(name) {

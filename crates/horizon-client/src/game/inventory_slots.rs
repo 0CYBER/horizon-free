@@ -4,7 +4,7 @@ use super::*;
 
 impl Game<'_> {
     pub(super) fn draw_item(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
-        // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
+        // `GuiGraphicsExtractor.item`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
         self.draw_item_decorations(batch, stack, x, y, None);

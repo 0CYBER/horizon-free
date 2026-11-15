@@ -115,7 +115,7 @@ impl Game<'_> {
         self.native_menu_background(&mut radius);
         radius.filter(|r| r.is_finite() && (1.0..=64.0).contains(r))
     }
-    /// `Screen.renderTransparentBackground`: draws the translucent dark background
+    /// `Screen.extractTransparentBackground`: draws the translucent dark background
     /// behind an in-game screen (inventory, containers, creative, books, signs, editors),
     /// giving native mods a chance to suppress it (`Flow::Cancel`) or apply menu blur / tiled background.
     pub(super) fn render_transparent_background(&self, screen: &str, batch: &mut HudBatch) {

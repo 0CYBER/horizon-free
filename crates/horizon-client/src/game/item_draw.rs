@@ -423,7 +423,7 @@ impl Game<'_> {
         }
         state
     }
-    /// `GuiGraphics.renderItem(player, level, stack, x, y, 0)`.
+    /// `GuiGraphicsExtractor.item(player, level, stack, x, y, 0)`.
     pub(super) fn draw_item_model(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
         let owner = self.player_owner(Some(stack));
         let state = self.resolve_item(stack, DisplayContext::Gui, Some(&owner), 0);

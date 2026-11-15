@@ -489,7 +489,7 @@ fn jukebox_song_name(
 }
 /// Whether a jukebox song keeps playing: until it ends, and, in a level that
 /// plays its own jukeboxes, while that jukebox plays. A server's client
-/// stops it at level event 1011 (`LevelRenderer.playingJukeboxSongs`).
+/// stops it at level event 1011 (`LevelEventHandler.playingJukeboxSongs`).
 fn keeps_song(active: bool, server_client: bool, jukebox_playing: bool) -> bool {
     active && (server_client || jukebox_playing)
 }

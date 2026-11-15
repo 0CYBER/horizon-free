@@ -2627,7 +2627,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         self.draw_with_items(atlas, None, batch, cursor, hide_splash, false);
     }
     /// [`Title::draw`] with the item models, which draw the item icons of the
-    /// Superflat screens the way `GuiGraphics.renderItem` does.
+    /// Superflat screens the way `GuiGraphicsExtractor.item` does.
     pub fn draw_with_items(
         &self,
         atlas: &HudAtlas,
