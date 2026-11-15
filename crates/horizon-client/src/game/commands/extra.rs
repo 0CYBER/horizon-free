@@ -236,7 +236,7 @@ fn civil(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
 
 impl Game<'_> {
     /// CommandSourceStack.getPlayerOrException.
-    pub(super) fn source_player(&self) -> R<Target> {
+    pub(in crate::game) fn source_player(&self) -> R<Target> {
         match self.command_source.map(|s| s.entity) {
             None | Some(Some(Target::Player)) => Ok(Target::Player),
             _ => Err(err("permissions.requires.player", &[])),

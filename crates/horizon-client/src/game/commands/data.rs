@@ -101,6 +101,13 @@ impl Game<'_> {
         self.player.as_ref()?;
         self.sync_level();
         let mut tag = self.level.player_tag();
+        // `ServerPlayer.addAdditionalSaveData` always stores the tracker.
+        self.load_warden_tracker();
+        set_key(
+            &mut tag,
+            "warden_spawn_tracker",
+            self.sculk.tracker.to_nbt(),
+        );
         if let Some(u) = self.saved_player_uuid() {
             set_key(&mut tag, "UUID", Tag::IntArray(u.to_vec()));
         }

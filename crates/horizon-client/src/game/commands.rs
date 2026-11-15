@@ -1199,8 +1199,7 @@ impl Game<'_> {
             "locate.poi" => self.cmd_locate_poi(ctx),
             "warden_spawn_tracker.clear" | "warden_spawn_tracker.set" => {
                 let level = Self::int(ctx, "warning_level");
-                self.cmd_warden_spawn_tracker(level);
-                Ok(1)
+                self.cmd_warden_spawn_tracker(level)
             }
             "say" | "me" | "msg" => self.cmd_say(id, ctx),
             "list" => self.cmd_list(ctx),

@@ -3,7 +3,7 @@
 //! ticker, redstone output, resonance, shrieks and warden summoning
 //! (`SculkShriekerBlockEntity`, `SpawnUtil`), catalysts feeding the sculk
 //! spreader from deaths, and the darkness wardens and shriekers cast.
-use super::{Game, Result};
+use super::{Game, Result, commands::R};
 use horizon_client::actions::Action;
 use horizon_client::join_seq::ListStamp;
 use horizon_client::{
@@ -13,6 +13,7 @@ use horizon_client::{
     mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
+    text::Text,
 };
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3},
@@ -323,10 +324,11 @@ impl Game<'_> {
             "chunks_known": self.sculk.known.len(),
         })
     }
-    /// `WardenSpawnTrackerCommand`: clear the player's tracker or set its
-    /// warning level.
-    pub(super) fn cmd_warden_spawn_tracker(&mut self, level: Option<i32>) {
-        use horizon_client::text::Text;
+    /// `WardenSpawnTrackerCommand`: the source player's tracker, cleared or set
+    /// to a warning level (`getPlayerOrException`: a mob or the server is refused).
+    pub(super) fn cmd_warden_spawn_tracker(&mut self, level: Option<i32>) -> R<i32> {
+        self.source_player()?;
+        self.load_warden_tracker();
         let key = match level {
             Some(level) => {
                 self.sculk.tracker.set_warning_level(level);
@@ -337,25 +339,20 @@ impl Game<'_> {
                 "commands.warden_spawn_tracker.clear.success.single"
             }
         };
-        if self.ui.rules.bool("send_command_feedback") {
-            self.system_message(Text::translate(
-                key,
-                &[Text::literal(super::chat::PLAYER_NAME)],
-            ));
-        }
+        // `sendFeedback` → `sendSuccess(…, broadcast = true)`: a silent source
+        // prints nothing, and the other operators hear it.
+        let name = self.source_display_name();
+        self.feedback(Text::translate(key, &[name]));
+        Ok(1)
     }
     /// `ServerPlayer`'s `warden_spawn_tracker` from the player data.
-    fn load_warden_tracker(&mut self) {
+    pub(super) fn load_warden_tracker(&mut self) {
         if self.sculk.tracker_loaded {
             return;
         }
         self.sculk.tracker_loaded = true;
-        if let Some(tag) = self
-            .level
-            .player_extra
-            .as_ref()
-            .and_then(|p| p.get("warden_spawn_tracker"))
-        {
+        let saved = self.level.player_extra.as_ref();
+        if let Some(tag) = saved.and_then(|p| p.get("warden_spawn_tracker")) {
             self.sculk.tracker = WardenSpawnTracker::from_nbt(tag);
         }
     }
@@ -369,9 +366,9 @@ impl Game<'_> {
     /// `store_owner` rewrites that from the owner's guest, so it puts the
     /// tracker there as well (`playerdata::with_warden`).
     pub(super) fn save_warden_tracker(&mut self) {
-        let Some(tag) = self.warden_tracker_tag() else {
-            return;
-        };
+        // Vanilla always stores it: read the saved one before writing.
+        self.load_warden_tracker();
+        let tag = self.sculk.tracker.to_nbt();
         let extra = self
             .level
             .player_extra
@@ -3003,3 +3000,6 @@ mod shriek_capture_tests {
 #[cfg(test)]
 #[path = "farm_animal_interaction_tests.rs"]
 mod farm_animal_interaction_tests;
+
+#[cfg(test)]
+mod warden_spawn_tracker_tests;
