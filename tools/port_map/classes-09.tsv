@@ -1,5 +1,5 @@
 SetStewEffectFunction.Builder	skip:java		builder for the stew effect list; Horizon keeps the effects in loot.rs Context::run (set_stew_effect)
-SetWritableBookPagesFunction	missing		`horizon-world/src/loot.rs::modify` has no `set_writable_book_pages` arm, and no vanilla loot table asks for one
+SetWritableBookPagesFunction	port	crates/horizon-world/src/loot.rs::Context::run	the set_writable_book_pages arm applies the page operation to the writable_book_content component, capped at WritableBookContent.MAX_PAGES (100)
 SetWrittenBookPagesFunction	home	crates/horizon-world/src/loot.rs,crates/horizon-items/src/item_data.rs	the set_written_book_pages arm applies the page operation to the written_book_content component; written_book_from_tag reads the content into the book's pages
 SmeltItemFunction.run	port	crates/horizon-world/src/loot.rs::Context::run	furnace_smelt arm: smelting recipe, use_input_count and stack cap
 SmeltItemFunction.smelted	skip:java		static builder factory
