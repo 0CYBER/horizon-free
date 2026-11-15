@@ -39,7 +39,7 @@ pub fn mob_from_nbt_with_random(
     types: &HashMap<String, Arc<MobType>>,
     id: u32,
     registry: Option<&BlockRegistry>,
-    random: horizon_core::random::LegacyRandom,
+    random: horizon_core::random::EntityRandom,
 ) -> Option<Mob> {
     let position = loaded_mob_position(tag);
     mob_from_nbt_at(tag, types, id, registry, random, position, true)

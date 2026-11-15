@@ -1657,17 +1657,17 @@ mod tests {
         let id = game.tnts[0].id;
         game.remember_tags(
             id,
-            &horizon_world::nbt::Tag::Compound(
-                [("Silent".into(), horizon_world::nbt::Tag::Byte(1))].into(),
+            &horizon_core::nbt::Tag::Compound(
+                [("Silent".into(), horizon_core::nbt::Tag::Byte(1))].into(),
             ),
         );
         game.audio.heard.clear();
-        game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, false);
+        game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, [false; 3], false);
         assert!(detonate(&mut game), "teleported TNT protects the portal");
         assert!(!game.audio.heard.contains_key(explosion_sound));
         game.add_primed_tnt(at, 0.0, 80, None, None);
         let id = game.tnts[0].id;
-        game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, false);
+        game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, [false; 3], false);
         let saved = game.tnt_nbt(0);
         game.tnts.clear();
         game.load_tnt(saved, None);

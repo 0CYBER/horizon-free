@@ -228,7 +228,7 @@ pub fn set_tame(m: &mut Mob, tame: bool) {
     // `setBaseValue`: it makes the attribute's instance, which the save then
     // writes, and replaces a base kept from the load or `/attribute`.
     if m.species() == Species::Wolf {
-        set_base(m, Attr::MaxHealth, wolf_health_base(tame));
+        set_base(m, Attr::MaxHealth, if tame { 40.0 } else { 8.0 });
     } else {
         m.attrs.max_health = if tame { 40.0 } else { 8.0 };
     }

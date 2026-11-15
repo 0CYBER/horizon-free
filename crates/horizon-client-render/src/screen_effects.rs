@@ -90,7 +90,6 @@ impl CameraQuads {
             }),
             blend: Blend::Alpha,
             sampling,
-            world_tint: false,
         });
         true
     }

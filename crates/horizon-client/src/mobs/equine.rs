@@ -1323,7 +1323,7 @@ mod tests {
                 };
                 let mut m = horse(Species::Horse);
                 m.extra.equine_temper = 100;
-                m.random = LegacyRandom::new(seed);
+                m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
                 let mut test_level = crate::health::TestLevel::new(0);
                 let level = &mut test_level.level();
                 let mut events = Vec::new();

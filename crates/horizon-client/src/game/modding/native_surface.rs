@@ -102,7 +102,7 @@ mod tests {
             no_gravity: false,
             vertical_collision: false,
             horizontal_collision: false,
-            random: horizon_core::random::LegacyRandom::new(0),
+            random: horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0)),
         };
         let step = item.tick_move(
             &game.world,

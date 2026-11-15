@@ -2,7 +2,7 @@
 use super::{Projectile, ProjectileKind};
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, RandomSource},
 };
 
 #[test]
@@ -14,7 +14,7 @@ fn rotation_shot_consumes_six_doubles_in_axis_order_and_inherits_motion() {
     // scaled by .0172275, multiply by 1.5, then add known movement.
     for grounded in [false, true] {
         let mut shot = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None)
-            .with_entity_random(LegacyRandom::new(1234));
+            .with_entity_random(EntityRandom::own(LegacyRandom::new(1234)));
         shot.shoot_from_rotation(0.0, 0.0, 0.0, 1.5, 1.0, Vec3::new(0.2, 0.3, -0.4), grounded);
         let expected_y = if grounded {
             0.0103198363925326
@@ -36,7 +36,7 @@ fn rotation_shot_consumes_six_doubles_in_axis_order_and_inherits_motion() {
 #[test]
 fn rotation_shot_applies_vanilla_near_zero_normalization_without_skipping_draws() {
     let mut shot = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None)
-        .with_entity_random(LegacyRandom::new(1234));
+        .with_entity_random(EntityRandom::own(LegacyRandom::new(1234)));
     // At pitch 90 with a -90 vertical offset all three direction components
     // are below Vec3.normalize's widened 1.0E-5F threshold. Spread is zero,
     // but Projectile.getMovementToShoot still takes all six double draws.

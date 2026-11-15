@@ -840,6 +840,8 @@ mod tests {
                     time: 0,
                     beam: None,
                     invulnerable: false,
+                    motion: Vec3::ZERO,
+                    rotation: [0.0; 2],
                 });
                 game.cushions.push(horizon_client::entities::Cushion {
                     attachment_lifetime: Default::default(),
@@ -876,7 +878,9 @@ mod tests {
                     fixed: false,
                     invisible: false,
                     custom_name: None,
-                    random: horizon_core::random::LegacyRandom::new(0),
+                    random: horizon_core::random::EntityRandom::own(
+                        horizon_core::random::LegacyRandom::new(0),
+                    ),
                     check_interval: 0,
                 });
                 let mut dragon = super::super::dragon::Dragon::new(Vec3::ZERO, 0.0, 0);

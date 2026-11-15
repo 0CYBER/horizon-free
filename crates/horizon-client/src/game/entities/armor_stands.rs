@@ -651,7 +651,7 @@ impl Game<'_> {
     /// `ArmorStand.interact` for the stand under the crosshair, or for the
     /// stand a guest's interact packet named (its client's click point).
     pub(super) fn interact_armor_stand(&mut self, target: Option<InteractTarget>) -> bool {
-        let Some((i, d, point)) = (match target {
+        let Some((mut i, d, point)) = (match target {
             // interactAt gets the packet's location, measured from the stand's
             // position, so getClickedSlot reads the height the client clicked.
             Some(t) => Self::named_entity(&self.armor_stands, t.id, |a| a.id).map(|i| {
@@ -765,6 +765,20 @@ impl Game<'_> {
             let mut cancel = false;
             self.native_armor_stand_manipulate(player, &name, stand, slot_name, &mut cancel);
             if cancel {
+                return true;
+            }
+            // The hook had `&mut self`: find the stand again by id and check
+            // the slot and the held stack are still what the swap was worked
+            // out from.
+            let Some(now) = self.armor_stands.iter().position(|a| a.id as i32 == stand) else {
+                return true;
+            };
+            i = now;
+            let key = |s: &Option<ItemStack>| s.as_ref().map(|s| (s.item.clone(), s.count));
+            if key(&self.armor_stands[i].equipment[slot]) != key(&current)
+                || key(&self.held().cloned()) != key(&held)
+                || self.armor_stands[i].swap_locked(slot)
+            {
                 return true;
             }
         }
@@ -1042,14 +1056,14 @@ impl Game<'_> {
             // (increaseAirSupply), in water too, as armor_stand is in the
             // can_breathe_under_water tag. A stand's air is its loaded tag's.
             let id = self.armor_stands[i].id;
-            if let Some(horizon_world::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id)
+            if let Some(horizon_core::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id)
                 && let Some(air) = map
                     .get(&"Air".into())
                     .and_then(horizon_client::nbt_path::int_value)
                 && air < 300
             {
                 let air = (air + 4).min(300) as i16;
-                map.insert("Air".into(), horizon_world::nbt::Tag::Short(air));
+                map.insert("Air".into(), horizon_core::nbt::Tag::Short(air));
             }
             let a = &mut self.armor_stands[i];
             a.previous = a.position;

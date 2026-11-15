@@ -202,12 +202,12 @@ impl Game<'_> {
                     game.mobs
                         .restore(mobs, horizon_client::join_seq::RestoreOrder::SpawnsFirst);
                     if game.handle_mob_events(events).is_err() {
-                        return Ok(false);
+                        return Err(());
                     }
                 } else {
                     game.mobs
                         .restore(mobs, horizon_client::join_seq::RestoreOrder::SpawnsFirst);
-                    return Ok(false);
+                    return Err(());
                 }
                 for effect in &consumable.effects {
                     if let ConsumeEffect::PlaySound(_) = effect {
@@ -217,7 +217,7 @@ impl Game<'_> {
                             .apply_consume_effect(&decision.stack, effect, Some(consumer))
                             .is_none()
                         {
-                            return Ok(false);
+                            return Err(());
                         }
                     } else if let ConsumeEffect::TeleportRandomly(teleport) = effect {
                         let consumed = consumed.get_or_init(|| consumed_snapshot(&decision.stack));
@@ -229,7 +229,7 @@ impl Game<'_> {
                             consumed: consumed.as_ref(),
                         };
                         if teleport.apply(&mut actor, dim).is_err() {
-                            return Ok(false);
+                            return Err(());
                         }
                     } else if let Some(mob) = game.mobs.iter_mut().find(|m| m.id == decision.mob) {
                         mob.apply_consume_effect(
@@ -250,12 +250,12 @@ impl Game<'_> {
                         state: horizon_world::registry::BlockStateId(0),
                     };
                     if game.handle_mob_events(vec![event]).is_err() {
-                        return Ok(false);
+                        return Err(());
                     }
                 }
             }
             let Some(m) = game.mobs.iter_mut().find(|m| m.id == decision.mob) else {
-                return Ok(false);
+                return Err(());
             };
             let position = m.position;
             Ok(decision.finish(m, position, remainder))

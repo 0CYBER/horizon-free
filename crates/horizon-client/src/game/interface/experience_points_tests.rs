@@ -14,6 +14,7 @@ fn a_point_lost_at_level_zero_zeroes_the_total() {
         level: 0,
         progress: 0.0,
         total: 100,
+        score: 0,
     };
     game.give_experience_points(-1);
     let xp = &game.experience;
@@ -31,6 +32,7 @@ fn a_point_lost_above_level_zero_only_takes_that_point() {
         level: 5,
         progress: 0.0,
         total: 100,
+        score: 0,
     };
     game.give_experience_points(-1);
     let xp = &game.experience;

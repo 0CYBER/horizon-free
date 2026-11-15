@@ -128,7 +128,7 @@ fn with_mob_world(
 
 /// The level random's state, for the draw assertions.
 fn random_of(level: &mut DamageLevel<'_>) -> (u64, Option<f64>) {
-    (&*level.random()).into()
+    (&**level.random()).into()
 }
 
 /// The mods of the `NoBrain` test: a part on a zombie whose one behavior add
@@ -437,9 +437,9 @@ fn random_states(
 ) -> ((u64, Option<f64>), (u64, Option<f64>)) {
     let mobs = game.mobs.lift();
     let mob = mobs.iter().find(|m| m.id == id).unwrap();
-    let mob_state = (&mob.random).into();
+    let mob_state = (&*mob.random).into();
     game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
-    (mob_state, (&*level.random()).into())
+    (mob_state, (&**level.random()).into())
 }
 
 #[test]

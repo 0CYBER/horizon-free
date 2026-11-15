@@ -1,6 +1,6 @@
 # Block pick results
 
-The fork uses `BlockPart::clone_item_stack`, with the owning `ServerHost`, typed level,
+The game uses `BlockPart::clone_item_stack`, with the owning `ServerHost`, typed level,
 position, state, and `include_data`. Return `None` to keep the ordinary game result.
 The active block Part is queried once; the creative pick path then adds block-entity
 components when requested. Local and guest packet paths use that same query.

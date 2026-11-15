@@ -670,7 +670,7 @@ impl Game<'_> {
                         self.move_riders(id, old, new, rotation);
                     } else {
                         // This existing writer also carries this rider's descendants.
-                        self.teleport_to_in_level(target, [at.x, at.y, at.z], turn, true);
+                        self.teleport_to_in_level(target, [at.x, at.y, at.z], turn, [false; 3], true);
                     }
                 }
                 continue;

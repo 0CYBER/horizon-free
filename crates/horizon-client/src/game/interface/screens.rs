@@ -14,7 +14,7 @@ use horizon_core::nbt::Tag;
 use winit::keyboard::KeyCode;
 
 #[cfg(test)]
-#[path = "player_score_tests.rs"]
+#[path = "tests/player_score_tests.rs"]
 mod player_score_tests;
 
 impl Screen {

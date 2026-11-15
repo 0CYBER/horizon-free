@@ -1959,21 +1959,29 @@ impl<R: RandomSource> Context<'_, R> {
                 let mut content = stack
                     .components
                     .iter()
+                    .rev()
                     .find(|(k, _)| k == id)
-                    .map(|(_, v)| v.clone())
-                    .filter(Value::is_object)
-                    .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-                let old = content["pages"].as_array().cloned().unwrap_or_default();
+                    .and_then(|(_, v)| match v {
+                        Some(Tag::Compound(map)) => Some(map.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let old = match content.remove(&"pages".into()) {
+                    Some(Tag::List(values)) => values,
+                    _ => Vec::new(),
+                };
                 let mut spec = f.clone();
                 spec["values"] = f["pages"].clone();
                 // `WritableBookContent.MAX_PAGES`: the page codec limits the
                 // replacement list, and append or insert past 100 is ignored.
-                let pages = list_operation_capped(&spec, old, 100, Value::clone);
-                if let Value::Object(map) = &mut content {
-                    map.insert("pages".to_owned(), Value::Array(pages));
-                }
+                let pages = list_operation_capped(&spec, old, 100, |v| {
+                    horizon_core::json_nbt::json_to_tag(v).unwrap_or(Tag::String("".into()))
+                });
+                content.insert("pages".into(), Tag::List(pages));
                 stack.components.retain(|(k, _)| k != id);
-                stack.components.push((id.to_owned(), content));
+                stack
+                    .components
+                    .push((id.to_owned(), Some(Tag::Compound(content))));
             }
             // SetComponentsFunction: the patch's components, applied when the
             // stack becomes an item (trim on worn armour, see `mobs::finalize`).
@@ -2895,7 +2903,8 @@ mod namespace_tests {
                 table,
             )
             .unwrap();
-            let data = LootData::load(&root, &PackOverlay::NONE).unwrap();
+            let defaults = crate::item_defaults::read(&root).unwrap();
+            let data = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
             let filled = data.fill("minecraft:chests/writable", 5, 27, None);
             let book = filled.iter().flatten().next().expect("a book");
             let content: Vec<_> = book
@@ -2904,7 +2913,12 @@ mod namespace_tests {
                 .filter(|(k, _)| k == "minecraft:writable_book_content")
                 .collect();
             assert_eq!(content.len(), 1, "{:?}", book.components);
-            content[0].1["pages"].clone()
+            match &content[0].1 {
+                Some(horizon_core::nbt::Tag::Compound(map)) => {
+                    map.get(&"pages".into()).map_or(serde_json::Value::Null, crate::worldgen::tag_json)
+                }
+                _ => serde_json::Value::Null,
+            }
         };
         assert_eq!(
             pages(

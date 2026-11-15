@@ -2,7 +2,7 @@
 //! and armadillo) and the Manhattan water search it shares with `PanicGoal`.
 use super::*;
 use crate::mobs::ai;
-use crate::mobs::world::{level_random, with_built_test_world};
+use crate::mobs::world::with_built_test_world;
 use crate::mobs::{Damage, DamageKind, MobEvent, MobTypes};
 use horizon_core::geometry::Vec3;
 use std::sync::Arc;
@@ -48,11 +48,11 @@ fn a_panicking_goat_flees_for_five_to_six_seconds() {
     let ran = with_built_test_world(&[], floor, |w, types| {
         let mut m = hurt_mob(types, "minecraft:goat", [0.5, 64.0, 0.5], 1);
         let mut goals = std::mem::take(&mut m.ai.goals);
-        let mut lr = level_random(0);
+        let mut test_level = crate::health::TestLevel::new(0);
         let mut events: Vec<MobEvent> = Vec::new();
         let mut cx = Cx {
             w,
-            lr: &mut lr,
+            level: &mut test_level.level(),
             events: &mut events,
         };
         let mut panicked = 0;
@@ -116,13 +116,13 @@ fn turtle_water_pick(water: &[[i32; 3]]) -> Option<Option<[i32; 3]>> {
         |w, types| {
             let mut m = hurt_mob(types, "minecraft:turtle", [8.5, 64.0, 8.5], 1);
             let mut goals = std::mem::take(&mut m.ai.goals);
-            let mut lr = level_random(0);
+            let mut test_level = crate::health::TestLevel::new(0);
             let mut events: Vec<MobEvent> = Vec::new();
             goals.tick(
                 &mut m,
                 &mut Cx {
                     w,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 },
             );
@@ -173,13 +173,13 @@ fn burning_camel_pick(water: &[[i32; 3]]) -> Option<Option<[i32; 3]>> {
             let mut m = hurt_mob(types, "minecraft:camel", [0.5, 64.0, 0.5], 1);
             m.fire_ticks = 100;
             let mut goals = std::mem::take(&mut m.ai.goals);
-            let mut lr = level_random(0);
+            let mut test_level = crate::health::TestLevel::new(0);
             let mut events: Vec<MobEvent> = Vec::new();
             goals.tick(
                 &mut m,
                 &mut Cx {
                     w,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 },
             );

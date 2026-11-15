@@ -5,7 +5,7 @@ use super::super::*;
 use crate::game::native_machines::tests::server_game;
 use horizon_client::motion::PlayerMotion;
 use horizon_core::geometry::Vec3;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 fn score(game: &mut Game<'_>) -> Option<i32> {
     match game.player_nbt()?.get("Score") {

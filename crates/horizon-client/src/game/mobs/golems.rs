@@ -10,7 +10,7 @@ use horizon_client::block_pattern::{
 };
 
 #[cfg(test)]
-#[path = "copper_golem_tests.rs"]
+#[path = "tests/copper_golem_tests.rs"]
 mod copper_golem_tests;
 
 impl Game<'_> {

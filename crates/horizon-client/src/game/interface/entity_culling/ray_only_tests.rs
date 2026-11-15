@@ -76,10 +76,9 @@ fn what_the_camera_drops_within_reach_goes_to_the_layer_and_nothing_else_changes
     use super::{EntityCullDecision as D, Sight};
     let mut game = game();
     // The camera's view: everything toward -z. A box in front, one behind, one far behind.
-    game.view_frustum = Some(Frustum::boxed(
-        glam::Vec3::splat(-64.0),
-        glam::Vec3::new(64.0, 64.0, 0.0),
-    ));
+    game.view_frustum = Some(
+        Frustum::boxed(glam::Vec3::splat(-64.0), glam::Vec3::new(64.0, 64.0, 0.0)).into(),
+    );
     let at = |z: f32| {
         (
             glam::Vec3::new(0.0, 0.0, z),

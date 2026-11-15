@@ -233,7 +233,7 @@ mod tests {
             let _ = after.next_int_bound(15);
             // `LivingEntity`'s yaw, drawn after `defineSynchedData`.
             let _ = after.next_float();
-            let m = Mob::with_random(1, kind(), Vec3::ZERO, 0.0, LegacyRandom::new(seed));
+            let m = Mob::with_random(1, kind(), Vec3::ZERO, 0.0, horizon_core::random::EntityRandom::own(LegacyRandom::new(seed)));
             assert_eq!(
                 i32::from(m.extra.profession.index().unwrap()),
                 first,
@@ -255,12 +255,12 @@ mod tests {
             read_nbt(m, &tag);
         };
         // Seed 42: the constructor's draw is 5, its second draw 3.
-        let mut kept = Mob::with_random(1, kind(), Vec3::ZERO, 0.0, LegacyRandom::new(42));
+        let mut kept = Mob::with_random(1, kind(), Vec3::ZERO, 0.0, horizon_core::random::EntityRandom::own(LegacyRandom::new(42)));
         let before = kept.random.state();
         load(&mut kept, "{}");
         assert_eq!(kept.extra.profession.index(), Some(5));
         assert_eq!(kept.random.state(), before);
-        let mut redrawn = Mob::with_random(1, kind(), Vec3::ZERO, 0.0, LegacyRandom::new(42));
+        let mut redrawn = Mob::with_random(1, kind(), Vec3::ZERO, 0.0, horizon_core::random::EntityRandom::own(LegacyRandom::new(42)));
         load(&mut redrawn, "{VillagerDataFinalized:1b}");
         assert_eq!(redrawn.extra.profession.index(), Some(3));
     }

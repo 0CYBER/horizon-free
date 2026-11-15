@@ -228,7 +228,7 @@ mod tests {
                     {
                         *critical = true;
                     }
-                    arrow.random.0 = horizon_core::random::LegacyRandom::new(42);
+                    arrow.random.0 = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(42));
                     assert_eq!(
                         game.shot_damage(
                             &mut arrow,

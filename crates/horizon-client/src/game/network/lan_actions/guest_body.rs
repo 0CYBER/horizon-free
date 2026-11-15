@@ -16,9 +16,7 @@ pub(super) fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool
     let accepted_hit = guest.carried_hit.take();
     if let Some(motion) = guest.motion.as_mut() {
         motion.health.accepted_hit = accepted_hit;
-        motion.random = horizon_core::random::EntityRandom::own(
-            horizon_client::mobs::entity_random(entity_id, p),
-        );
+        motion.random = horizon_client::mobs::entity_random(entity_id, p);
     }
     // The first body after joining burns, breathes and falls on as saved.
     let g = &mut *guest;

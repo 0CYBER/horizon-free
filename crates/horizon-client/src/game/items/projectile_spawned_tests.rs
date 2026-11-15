@@ -10,7 +10,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, RandomSource},
 };
 use mod_api::Identifier;
 use serde_json::{Value, json};
@@ -145,7 +145,7 @@ fn requirements_draw_the_level_random_before_each_effect() {
             let after = own.next_long();
             game.audio.capture = Some(Vec::new());
             let shot = Projectile::new(ProjectileKind::Snowball, Vec3::new(0.5, 70.0, 0.5), None)
-                .with_entity_random(LegacyRandom::new(seed));
+                .with_entity_random(EntityRandom::own(LegacyRandom::new(seed)));
             let id = game.spawn_projectile(shot, &stack);
             assert_eq!(played(game), expected, "seed {seed}");
             let p = game
@@ -210,7 +210,7 @@ fn stack_then_weapon_in_component_order() {
                 Vec3::new(0.5, 70.0, 0.5),
                 Some(Who::Player),
             )
-            .with_entity_random(LegacyRandom::new(7));
+            .with_entity_random(EntityRandom::own(LegacyRandom::new(7)));
             let a = p.arrow.as_mut().unwrap();
             a.set_item(&ammo);
             a.fired_from_weapon = Some(weapon.clone());

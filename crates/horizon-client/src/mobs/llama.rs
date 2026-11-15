@@ -278,7 +278,7 @@ mod tests {
                     Vec3::ZERO,
                     0.0,
                 );
-                parent.random = LegacyRandom::new(0);
+                parent.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(0));
                 assert_eq!(super::super::breeding_experience(&mut parent, false), None);
                 assert_eq!(parent.random.state(), 25_214_903_917);
                 assert_eq!(
@@ -318,7 +318,7 @@ mod tests {
                     ..w.clone()
                 };
                 let mut m = llama(1, 0.5);
-                m.random = LegacyRandom::new(0);
+                m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(0));
                 let mut events = Vec::new();
                 let mut goals = std::mem::take(&mut m.ai.goals);
                 let mut test_level = crate::health::TestLevel::new(0);

@@ -1,6 +1,8 @@
 //! Data packs in the game: functions (`/function`, `/return`, tick and load
 //! tags, `/schedule`), predicates, `/reload` and `/datapack`.
+#[path = "functions/loading.rs"]
 mod loading;
+#[path = "functions/registry_graph.rs"]
 mod registry_graph;
 use super::{
     Game,
@@ -3734,4 +3736,5 @@ mod pack_tag_tests;
 mod schedule_reload_tests;
 
 #[cfg(test)]
+#[path = "functions/loading_tests.rs"]
 mod loading_tests;

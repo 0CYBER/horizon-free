@@ -70,6 +70,19 @@ pub trait WorldEditServerHost {
         range: (u32, u32),
     ) -> Result<ColumnBlocks, String>;
     /// Side: server.
+    /// For a server mod: what the generator makes at each of `columns` of the level `dimension` (the one being
+    /// ticked) before its features are placed, whether or not the chunk is loaded: it reads the generator and
+    /// creates no chunk. Decorated blocks (trees, lava, cacti) are not in it: read the chunk once it is loaded.
+    /// None for a column with no solid block (the End's void) and where the world has no generator of its own.
+    /// `Err` says why nothing was read: another dimension or a client of a server, or more than 4,096 columns
+    /// (`MAX_TERRAIN_COLUMNS`). API @API:terrain_surface@.
+    #[access(WorldOnly)]
+    fn terrain_surface(
+        &self,
+        dimension: &str,
+        columns: &[(i32, i32)],
+    ) -> Result<Vec<Option<TerrainColumn>>, String>;
+    /// Side: server.
     /// For a server mod: structure template `id` (`mymod:hut`, found as
     /// `StructureTemplateManager.get` finds it: the world's saved structures,
     /// then the game's and the mods' own) as `/place template id` would place

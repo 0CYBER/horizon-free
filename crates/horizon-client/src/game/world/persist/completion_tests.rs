@@ -66,7 +66,7 @@ fn valid_nonmob_rider_is_live_and_merge_does_not_adopt_passengers() {
         assert_eq!(game.score.board.score("#r", "h161base").unwrap().value, 1);
         assert_eq!(game.score.board.score("#s", "h161base").unwrap().value, 1);
         let saved = game
-            .entity_nbt(Target::Mob(parents[0]))
+            .command_target_nbt(Target::Mob(parents[0]))
             .expect("real live parent saves");
         let Some(Tag::List(children)) = saved.get("Passengers") else {
             panic!("live rider must save")
@@ -226,13 +226,13 @@ fn admitted_families_load_merge_save_and_reload() {
                 children.iter().map(|id| *id as i32).collect::<Vec<_>>()
             );
 
-            let body = g.entity_nbt(g.level_entity(root as i32).unwrap()).unwrap();
+            let body = g.command_target_nbt(g.level_entity(root as i32).unwrap()).unwrap();
             eprintln!("h161 loaded parent={parent} body={body:?}");
             assert_eq!(child_uuids(&body), saved, "save {parent}");
             assert!(g.run_command(&format!("data merge entity @e[nbt={{UUID:[I;161,26,3,{parent}]}},limit=1] {{CustomName:\"changed{parent}\",Passengers:[{{id:\"minecraft:pig\",UUID:[I;161,26,3,900]}}]}}")));
             assert!(id(g, 900).is_none());
             assert_eq!(g.ordered_live_passengers(root), children);
-            let body = g.entity_nbt(g.level_entity(root as i32).unwrap()).unwrap();
+            let body = g.command_target_nbt(g.level_entity(root as i32).unwrap()).unwrap();
             assert_eq!(child_uuids(&body), saved);
         }
         let keys = HashSet::from([(0, 0)]);
@@ -246,7 +246,7 @@ fn admitted_families_load_merge_save_and_reload() {
         g.spawn_loaded_entities();
         for &(_, parent, _, saved) in cases {
             let root = id(g, parent).expect("reloaded root");
-            let body = g.entity_nbt(g.level_entity(root as i32).unwrap()).unwrap();
+            let body = g.command_target_nbt(g.level_entity(root as i32).unwrap()).unwrap();
             assert_eq!(child_uuids(&body), saved, "reload {parent}");
             for &child in saved {
                 assert_eq!(g.passenger_vehicle(id(g, child).unwrap()), Some(root));
@@ -317,7 +317,7 @@ fn nested_nonmob_tree_dismount_remove_and_root_vehicle() {
 #[ignore = "daily"]
 fn cold_registry_nonmob_uuid_collision_refuses_the_entire_tree() {
     with_game(|g| {
-        let tag = horizon_world::nbt::parse_snbt(
+        let tag = horizon_core::nbt::parse_snbt(
             r#"{id:"minecraft:armor_stand",UUID:[I;161,26,3,800],Pos:[4.5d,200d,4.5d]}"#,
         )
         .unwrap();
@@ -379,11 +379,12 @@ fn nested_tree_transfer_keeps_uuid_order_and_clears_source_level() {
                 crate::game::Dim::Nether,
                 [8.5, 200.0, 8.5],
                 None,
-                false
+                false,
+                crate::game::vehicle_teleport::TeleportMotion::Stop,
             )
             .unwrap()
         );
-        g.enter_level(None, crate::game::Dim::Nether).unwrap();
+        g.enter_level(crate::game::Dim::Nether).unwrap();
         let (root, stand, item) = (
             id(g, 910).unwrap(),
             id(g, 911).unwrap(),
@@ -395,11 +396,11 @@ fn nested_tree_transfer_keeps_uuid_order_and_clears_source_level() {
         for target in [Target::Mob(root), Target::Stand(stand), Target::Item(item)] {
             assert_eq!(g.target_position(target).unwrap(), [8.5, 200.0, 8.5]);
         }
-        g.enter_level(None, crate::game::Dim::Overworld).unwrap();
+        g.enter_level(crate::game::Dim::Overworld).unwrap();
         assert!(id(g, 910).is_none() && id(g, 911).is_none() && id(g, 912).is_none());
-        g.enter_level(None, crate::game::Dim::Nether).unwrap();
+        g.enter_level(crate::game::Dim::Nether).unwrap();
         assert_eq!(g.passenger_vehicle(item), Some(stand));
-        g.enter_level(None, crate::game::Dim::Overworld).unwrap();
+        g.enter_level(crate::game::Dim::Overworld).unwrap();
     });
 }
 
@@ -419,17 +420,18 @@ fn nosave_riders_transfer_live_without_becoming_saved() {
                     crate::game::Dim::Nether,
                     [8.5, 200.0, 8.5],
                     None,
-                    false
+                    false,
+                    crate::game::vehicle_teleport::TeleportMotion::Stop,
                 )
                 .unwrap()
             );
-            g.enter_level(None, crate::game::Dim::Nether).unwrap();
+            g.enter_level(crate::game::Dim::Nether).unwrap();
             let root = id(g, n).unwrap();
             let child = id(g, n + 1)
                 .expect("Java transfers the live noSave rider; a disk-save tree is insufficient");
             assert_eq!(g.passenger_vehicle(child), Some(root));
             assert!(child_uuids(&g.vehicle_tree_nbt(root).unwrap()).is_empty());
-            g.enter_level(None, crate::game::Dim::Overworld).unwrap();
+            g.enter_level(crate::game::Dim::Overworld).unwrap();
             assert!(id(g, n).is_none() && id(g, n + 1).is_none());
             assert!(g.run_command(&format!(
                 "summon {kind} 6.5 200 6.5 {{UUID:[I;161,26,3,{}]}}",
@@ -443,13 +445,14 @@ fn nosave_riders_transfer_live_without_becoming_saved() {
                     crate::game::Dim::Nether,
                     [9.5, 200.0, 9.5],
                     None,
-                    false
+                    false,
+                    crate::game::vehicle_teleport::TeleportMotion::Stop,
                 )
                 .unwrap()
             );
-            g.enter_level(None, crate::game::Dim::Nether).unwrap();
+            g.enter_level(crate::game::Dim::Nether).unwrap();
             assert!(id(g, n + 2).is_some());
-            g.enter_level(None, crate::game::Dim::Overworld).unwrap();
+            g.enter_level(crate::game::Dim::Overworld).unwrap();
             assert!(id(g, n + 2).is_none());
         }
     });

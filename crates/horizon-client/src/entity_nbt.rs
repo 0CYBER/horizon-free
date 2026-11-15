@@ -1757,7 +1757,7 @@ fn mob_from_nbt_at(
     types: &HashMap<String, Arc<MobType>>,
     id: u32,
     registry: Option<&BlockRegistry>,
-    random: horizon_core::random::LegacyRandom,
+    random: horizon_core::random::EntityRandom,
     position: Vec3,
     authoritative: bool,
 ) -> Option<Mob> {
@@ -6752,10 +6752,8 @@ pub fn bucket_data(m: &Mob) -> Tag {
     data
 }
 pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
-    let mut data = crate::item_data::StackData {
-        custom_name: names::bucket_custom_name(m),
-        ..Default::default()
-    };
+    let mut data = crate::item_data::StackData::default();
+    data.custom_name = names::bucket_custom_name(m);
     data.set_other("minecraft:bucket_entity_data", Some(bucket_data(m)));
     // SulfurCube.saveToBucketTag: the body block, when it has one.
     if m.species() == crate::mobs::Species::SulfurCube
@@ -9332,7 +9330,7 @@ mod held_item_name_tests {
             &mut horse,
             &death,
             &mut crate::random_sequences::RandomSequences::default(),
-            &mut horizon_core::random::LegacyRandom::new(7),
+            &mut horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(7)),
         );
         assert!(
             items

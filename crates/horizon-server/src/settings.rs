@@ -149,7 +149,7 @@ pub(crate) fn range(section: &str, field: &str) -> Option<std::ops::RangeInclusi
             "max_viewed_loaded_chunks_per_level" | "max_viewed_ticking_chunks_per_level",
         ) => Some(0..=1_048_576),
         ("server", "max_players") => Some(1..=1000),
-        ("backups", "keep") => Some(1..=1000),
+        ("backups", "keep") => Some(config::BACKUPS_KEEP),
         _ => None,
     }
 }
@@ -315,6 +315,12 @@ mod tests {
         assert!(changeable_remotely("properties.motd"));
         assert!(changeable_remotely("chat_filter.enabled"));
         assert!(changeable_remotely("anticheat.alerts"));
+    }
+
+    #[test]
+    fn backups_keep_zero_is_refused() {
+        let table = toml::Table::try_from(config::Config::default()).unwrap();
+        assert!(parse_change(&table, "backups.keep=0").is_err());
     }
 
     fn table() -> toml::Table {

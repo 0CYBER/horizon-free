@@ -31,7 +31,7 @@ fn extinguish_fire_uses_mob_kind_immunity_and_own_random_unlike_silent_clear() {
             let mob = &mut game.mobs[0];
             Arc::make_mut(&mut mob.kind).flags.fire_immune = immune;
             mob.fire_ticks = ticks;
-            mob.random = LegacyRandom::new(1234);
+            mob.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(1234));
             mob.outbox.clear();
             assert!(entity.extinguish_fire(game));
             let mob = &mut game.mobs[0];
@@ -54,7 +54,7 @@ fn extinguish_fire_uses_mob_kind_immunity_and_own_random_unlike_silent_clear() {
         let mob = &mut game.mobs[0];
         Arc::make_mut(&mut mob.kind).flags.fire_immune = false;
         mob.fire_ticks = 72;
-        mob.random = LegacyRandom::new(1234);
+        mob.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(1234));
         mob.outbox.clear();
         assert!(entity.clear_fire(game));
         assert_eq!(game.mobs[0].fire_ticks, 0);
@@ -93,7 +93,7 @@ fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
                     "entity {id}, ticks {ticks}"
                 );
                 *game.particles.random() = LegacyRandom::new(1234);
-                game.dropped[0].random = LegacyRandom::new(1234);
+                game.dropped[0].random = horizon_core::random::EntityRandom::own(LegacyRandom::new(1234));
                 game.audio.capture = Some(Vec::new());
                 let actor = game.lan_acting;
                 assert!(entity.extinguish_fire(game));
@@ -125,7 +125,7 @@ fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
         let item = &mut game.dropped[0];
         item.stack = ItemStack::new("minecraft:netherite_ingot", 1);
         item.fire_ticks = 72;
-        item.random = LegacyRandom::new(1234);
+        item.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(1234));
         *game.particles.random() = LegacyRandom::new(1234);
         game.audio.capture = Some(Vec::new());
         assert!(entity.extinguish_fire(game));

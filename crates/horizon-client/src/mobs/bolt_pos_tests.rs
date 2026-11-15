@@ -49,7 +49,7 @@ fn horse(seed: i64, types: &crate::mobs::MobTypes) -> Mob {
         kind,
         Vec3::new(0.5, 64.0, 0.5),
         0.0,
-        LegacyRandom::new(seed),
+        horizon_core::random::EntityRandom::own(LegacyRandom::new(seed)),
     );
     m.on_ground = true;
     // `isVehicle`: a mob's back is enough to bolt.

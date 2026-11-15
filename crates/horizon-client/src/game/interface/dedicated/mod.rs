@@ -1152,9 +1152,9 @@ impl Game<'_> {
         self.native_lifecycle_open_started();
         // The registries the server sends are read while the world prepares.
         let sync = super::lan::sync::preload_sync_data(&self.res.core.item_data);
+        // `finish_open_world` loads the data packs, which admits the reloadable registries (WorldLoader)
+        // before the server listens or reports Ready.
         self.finish_open_world(prepared)?;
-        // WorldLoader admits the reloadable registries before the server listens or reports Ready.
-        self.start_datapacks()?;
         if new_world {
             self.level.hardcore = props.hardcore;
         }

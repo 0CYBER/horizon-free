@@ -12638,7 +12638,10 @@ mod tests {
             use crate::widgets::{self, Kind};
 
             let resources = std::path::Path::new("/nonexistent/realms-reset-frame-assets");
-            let mut atlas = HudAtlas::build(resources).unwrap();
+            let mut atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+                resources.to_path_buf(),
+            ))
+            .unwrap();
             atlas.sprites.insert(
                 "gui/sprites/widget/slot_frame".into(),
                 crate::hud::Rect {
@@ -12654,13 +12657,13 @@ mod tests {
             let mut frame = 0;
             let mut draw = |title: &Title, size: [u32; 2]| {
                 // Seed at scale 1, then set logical GUI bounds without changing global GUI_SCALE.
-                let mut batch = HudBatch::new([1, 1]);
+                let mut batch = HudBatch::new([1, 1], crate::hud::GuiScale { requested: 1, unicode: false });
                 let logical = (size[0] as f32, size[1] as f32);
                 (batch.width, batch.height) = logical;
                 assert_eq!(batch.scale, 1.0);
                 assert_eq!((batch.width, batch.height), logical);
                 // Title.draw begins the narration screen and records the real controls.
-                title.draw(&atlas, &mut batch, (-1.0, -1.0), true);
+                title.draw(&atlas, &mut batch, (-1.0, -1.0), true, &mut |_, _| {});
                 frame += 1;
                 widgets::end_frame(frame);
                 batch
@@ -12677,7 +12680,7 @@ mod tests {
                     reset: None,
                     error: None,
                 };
-                let mut title = Title::new(PathBuf::new(), resources);
+                let mut title = Title::new(PathBuf::new(), resources, "");
                 title.mode = Mode::Realms(screen.clone());
                 widgets::set_narration_focus(None);
                 let plain = draw(&title, size);

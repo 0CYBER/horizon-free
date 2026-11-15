@@ -1,7 +1,7 @@
 # Mod registry v2
 
-> **Fork scope:** This is retained upstream design and research, not the fork specification. See the
-> [fork registry reference](../modding/src/reference/registry-index.md). `.hmod` is the only mod package;
+> **Scope:** This is design and research, not the specification. See the
+> [registry reference](../modding/src/reference/registry-index.md). `.hmod` is the only mod package;
 > explicit native pins and update flow, and strict published-kind and owner checks, remain in force. This note
 > authorizes neither a `.hnmod` route nor implicit native repinning or rebuilding.
 

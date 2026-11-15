@@ -46,12 +46,12 @@ fn hit_ticks(kind: &str, baby: bool, ticks: i32) -> Option<Vec<i32>> {
             crate::mobs::finalize::set_baby(&mut m, baby);
             m.persistent = true;
             m.ai.target = Some(Who::Player);
-            let mut lr = crate::mobs::world::level_random(0);
+            let mut test_level = crate::health::TestLevel::new(0);
             let mut events = Vec::new();
             let mut hits = Vec::new();
             for tick in 0..ticks {
                 events.clear();
-                crate::mobs::ai::tick(&mut m, &w, &mut lr, &mut events);
+                crate::mobs::ai::tick(&mut m, &w, &mut test_level.level(), &mut events);
                 if events
                     .iter()
                     .any(|e| matches!(e, MobEvent::AttackPlayer(..)))

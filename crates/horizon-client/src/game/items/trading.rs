@@ -425,7 +425,7 @@ impl Game<'_> {
             m.extra.villager_level = session.level.max(1);
         }
         m.extra.flag2 = false;
-        m.random = session.random.clone();
+        *m.random = session.random.clone();
         m.ambient_timer = session.ambient_sound_time;
         let trade = m.extra.trade.get_or_insert_default();
         trade.xp = session.xp;
@@ -533,7 +533,7 @@ impl Game<'_> {
         let mut traded = Vec::new();
         let (villager, origin) = (session.villager, session.origin);
         if let Some(m) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
-            m.random = session.random.clone();
+            *m.random = session.random.clone();
             m.ambient_timer = session.ambient_sound_time;
             if villager {
                 m.extra.villager_level = session.level.max(1);

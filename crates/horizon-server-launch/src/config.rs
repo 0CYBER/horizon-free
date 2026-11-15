@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
 pub const FILE: &str = "server.toml";
+
+/// The `backups.keep` values `config set` and `server.toml` both accept.
+pub const BACKUPS_KEEP: std::ops::RangeInclusive<i64> = 1..=1000;
 pub const PROPERTIES: &str = "server.properties";
 
 /// What `init` writes: every typed setting, with vanilla 26.3's defaults and what it means.
@@ -761,12 +764,11 @@ impl Config {
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
-        // `config set` refuses a `backups.keep` outside this range (settings::range); a file edited by
+        // `config set` refuses a `backups.keep` outside this range (`BACKUPS_KEEP`); a file edited by
         // hand must not get past it with 0, which deletes every automatic backup right after it is made
         // (`backup::prune`), the new one included. `backups.every = "0"` is how automatic backups go off.
-        if let Some(range) = crate::settings::range("backups", "keep")
-            && !range.contains(&i64::from(self.backups.keep))
-        {
+        let range = BACKUPS_KEEP;
+        if !range.contains(&i64::from(self.backups.keep)) {
             return Err(format!(
                 "backups.keep is {}: use {} to {} (to stop automatic backups, set backups.every = \"0\")",
                 self.backups.keep,
@@ -1104,8 +1106,6 @@ keep = {keep}
         assert!(with(1001).is_err());
         assert!(with(1).is_ok() && with(1000).is_ok());
         assert_eq!(Config::default().backups.keep, 12);
-        let table = toml::Table::try_from(Config::default()).unwrap();
-        assert!(crate::settings::parse_change(&table, "backups.keep=0").is_err());
     }
 
     #[test]

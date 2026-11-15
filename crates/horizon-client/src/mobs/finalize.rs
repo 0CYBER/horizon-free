@@ -25,7 +25,7 @@ use super::{
 };
 use crate::{enchant::Enchantments, items::Items};
 use horizon_core::{geometry::Aabb, random::RandomSource};
-use horizon_world::player_inventory::EquipmentSlot;
+use horizon_core::equipment_slot::EquipmentSlot;
 use serde_json::Value;
 use std::{fs, path::Path, sync::Arc};
 
@@ -633,20 +633,33 @@ pub fn equipment_modifiers(
         if max_damage > 0 && stack.damage >= max_damage {
             continue;
         }
-        let own = items
-            .attribute_modifiers(&stack)
-            .into_iter()
-            .filter(|row| equip::group_matches(&row.4, slot));
+        let own = crate::item_attributes::attribute_modifiers(&stack, items)
+            .iter()
+            .filter(|row| equip::group_matches(&row.slot, slot))
+            .map(|row| {
+                (
+                    row.attribute.clone(),
+                    row.id.clone(),
+                    row.amount,
+                    row.operation.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         // `EnchantmentHelper.forEachModifier`: `matchingSlot`, one modifier
         // per slot, its id suffixed with the slot (`idForSlot`).
         let enchanted = enchantments
             .modifier_rows(&stack)
             .into_iter()
-            .filter(|row| equip::group_matches(&row.4, slot))
-            .map(|(kind, id, amount, op, group)| {
-                (kind, format!("{id}/{}", slot_name(slot)), amount, op, group)
+            .filter(|row| equip::group_matches(&row.slot, slot))
+            .map(|row| {
+                (
+                    row.attribute,
+                    format!("{}/{}", row.id, slot_name(slot)),
+                    row.amount,
+                    row.operation,
+                )
             });
-        for (kind, id, amount, operation, _) in own.chain(enchanted) {
+        for (kind, id, amount, operation) in own.into_iter().chain(enchanted) {
             if kind != attribute {
                 continue;
             }

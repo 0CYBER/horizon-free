@@ -4432,7 +4432,7 @@ mod teleport_pitch_tests {
             let at = Vec3::new(0.5, 64.0, 0.5);
             game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
 
-            game.teleport_to_in_level(Target::Player, [at.x, at.y, at.z], None, false);
+            game.teleport_to_in_level(Target::Player, [at.x, at.y, at.z], None, [false; 3], false);
 
             assert!(game.player.as_ref().is_some_and(|p| p.teleported));
         });
@@ -6051,6 +6051,9 @@ mod global_selector_order_tests {
 #[cfg(test)]
 #[path = "incoming_tests/knot_identity.rs"]
 mod knot_identity_tests;
+#[cfg(test)]
+#[path = "incoming_tests/ride.rs"]
+mod ride_tests;
 
 #[cfg(test)]
 mod mob_display_name_tests;

@@ -1121,7 +1121,7 @@ mod tests {
             |world, _| {
                 let mut m = shulker();
                 m.position = Vec3::new(0.5, 64.0, 0.5);
-                m.random = LegacyRandom::new(0);
+                m.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
                 let mut events = Vec::new();
                 set_peek(&mut m, 100, &mut events, world.attributes);
                 assert!(modifiers(&m, world.attributes).is_empty());

@@ -172,7 +172,7 @@ use crate::{
 pub use data::MobData;
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, RandomSource},
 };
 use horizon_world::block_collision::BlockCollisionRegistry;
 use horizon_world::native_load_context::LoopContext;
@@ -1526,7 +1526,7 @@ pub struct Mob {
     pub invisible: bool,
     /// Effects changed and need a shared flag update on the next tick.
     pub effects_dirty: bool,
-    pub random: LegacyRandom,
+    pub random: EntityRandom,
     pub ai: Box<ai::Ai>,
     pub extra: Extra,
     pub fluids: living::Fluids,
@@ -3506,22 +3506,22 @@ pub fn infested_silverfish(random: &mut impl RandomSource, look: [f64; 3]) -> Ve
 }
 /// `Entity.random` of a client's copy of entity `id` first seen at `position`: vanilla's is its
 /// own (`RandomSource.create()`), drawn on by nothing else; this one is seeded from the two.
-pub fn entity_random(id: u32, position: Vec3) -> LegacyRandom {
+pub fn entity_random(id: u32, position: Vec3) -> EntityRandom {
     let mut random = LegacyRandom::new(
         i64::from(id).wrapping_mul(0x5DEE_CE66D)
             ^ (position.x.to_bits() as i64)
             ^ (position.z.to_bits() as i64).rotate_left(17),
     );
     let _ = random.next_int();
-    random
+    EntityRandom::own(random)
 }
 /// The own random (`Entity.random`) of a living entity the server makes, as
 /// `LivingEntity.<init>` leaves it: its first two draws made the UUID
 /// (`Mth.createInsecureUUID`), returned here, then the kind's constructor draws its synced data and yaw in `constructor_draws`.
-pub fn living_random() -> (LegacyRandom, [i32; 4]) {
+pub fn living_random() -> (EntityRandom, [i32; 4]) {
     let mut random = crate::random_source::entity();
     let uuid = crate::save::insecure_uuid(&mut random);
-    (random, uuid)
+    (EntityRandom::own(random), uuid)
 }
 impl Mob {
     /// A mob as its authoritative side builds it — spawned, or loaded from a
@@ -3536,7 +3536,7 @@ impl Mob {
         kind: Arc<MobType>,
         position: Vec3,
         yaw: f32,
-        random: LegacyRandom,
+        random: EntityRandom,
     ) -> Self {
         let mut mob = Self::remote_with_random(id, kind, position, yaw, random);
         // The parts a mod attached to this entity type add their goals right
@@ -3562,7 +3562,7 @@ impl Mob {
         kind: Arc<MobType>,
         position: Vec3,
         yaw: f32,
-        random: LegacyRandom,
+        random: EntityRandom,
     ) -> Self {
         let mut mob = Self {
             emote: None,

@@ -381,7 +381,7 @@ impl ClientSession {
         let state = self.writing();
         self.clientbound_in(state, body).map_err(|e| {
             let id = Reader::new(body).varint().unwrap_or(-1);
-            crate::Error(format!(
+            crate::Error::new(format!(
                 "{e} (packet {id} in {state:?} for a {} client)",
                 self.version.name()
             ))

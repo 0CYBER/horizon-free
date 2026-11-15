@@ -53,7 +53,7 @@ impl Game<'_> {
         let mut seed = 0;
         self.mobs.for_each_mut(|mob| {
             seed += 1;
-            mob.random = LegacyRandom::new(seed);
+            mob.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
         });
         if self.mobs.len() as u64 != count {
             return Err(format!("{} of {count} mobs were summoned", self.mobs.len()).into());

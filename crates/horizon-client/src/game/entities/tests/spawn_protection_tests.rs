@@ -5,7 +5,6 @@
 //! (`BlockAttachedEntity.skipAttackInteraction`,
 //! `ArmorStand.skipAttackInteraction`: `!level.mayInteract(player, pos)`).
 use super::*;
-use crate::game::lan::LanHost;
 use horizon_client::chunk::Chunk;
 use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
 use horizon_core::position::ChunkPos;
@@ -34,7 +33,7 @@ fn attack(id: i32) -> Serverbound {
 /// guest that `spawn-protection` holds back.
 fn server<'a>(
     resources: &'a mut Option<Arc<crate::game::Resources>>,
-) -> (Game<'a>, LanHost) {
+) -> Game<'a> {
     let mut game = crate::game::game_tests::tests::server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);
@@ -70,6 +69,7 @@ fn server<'a>(
             max_players: 2,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();
@@ -86,7 +86,6 @@ fn server<'a>(
             latency: Arc::new(AtomicI32::new(0)),
             address: "127.0.0.1:25565".parse().unwrap(),
             expected: false,
-            configured: Default::default(),
         },
         GUEST_ENTITY,
         [8.5, 200.0, 10.5],
@@ -97,20 +96,22 @@ fn server<'a>(
     guest.loaded = true;
     // A creative guest: one hit breaks a painting, a frame or a stand.
     guest.game_mode = 1;
-    let mut host = game.lan.take().unwrap();
+    let host = game.lan.as_mut().unwrap();
     host.hub.guests.push(guest);
     // Someone else is an operator, so `PlayerList.getOps()` is not empty and
     // the radius holds; the guest is not one.
     host.hub.ops.insert(900, 4);
     host.hub.spawn_protection = RADIUS;
-    (game, host)
+    game
 }
 
 /// Puts the guest at `at` and has it punch entity `id`.
-fn punch(game: &mut Game<'_>, host: &mut LanHost, at: [f64; 3], id: i32) {
-    host.hub.guests[0].position = at;
-    host.hub.guests[0].previous_position = at;
-    game.lan_guest_packet(host, CONN, attack(id));
+fn punch(game: &mut Game<'_>, at: [f64; 3], id: i32) {
+    game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+        guest.position = at;
+        guest.previous_position = at;
+    });
+    game.lan_guest_packet(CONN, attack(id));
 }
 
 /// `/setworldspawn` stores `RespawnData.of(level.dimension(), pos, yaw, pitch)`
@@ -171,7 +172,7 @@ fn the_protected_area_follows_the_world_spawns_dimension() {
 #[ignore = "daily"]
 fn a_guest_cannot_knock_a_decoration_off_inside_spawn_protection() {
     let mut resources = None;
-    let (mut game, mut host) = server(&mut resources);
+    let mut game = server(&mut resources);
     game.level.world_spawn = Some(SPAWN);
     assert!(
         game.summon_with_nbt(
@@ -206,7 +207,7 @@ fn a_guest_cannot_knock_a_decoration_off_inside_spawn_protection() {
     // Inside the radius: `mayInteract` refuses the hit, so nothing is knocked
     // off and nothing drops.
     for (at, id) in punches {
-        punch(&mut game, &mut host, at, id);
+        punch(&mut game, at, id);
     }
     assert_eq!(game.paintings.len(), 1, "the painting stays on the wall");
     assert_eq!(game.item_frames.len(), 1, "the frame stays on the wall");
@@ -214,9 +215,9 @@ fn a_guest_cannot_knock_a_decoration_off_inside_spawn_protection() {
     assert!(game.dropped.is_empty(), "nothing was knocked off");
 
     // `spawn-protection=0`: the same punches knock all three off.
-    host.hub.spawn_protection = 0;
+    game.lan.as_mut().unwrap().hub.spawn_protection = 0;
     for (at, id) in punches {
-        punch(&mut game, &mut host, at, id);
+        punch(&mut game, at, id);
     }
     assert!(game.paintings.is_empty(), "the painting breaks unprotected");
     assert!(game.item_frames.is_empty(), "the frame breaks unprotected");

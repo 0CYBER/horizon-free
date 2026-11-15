@@ -247,7 +247,7 @@ pub struct Banner {
     pub layers: Vec<BannerLayer>,
     /// `CustomName` as `ComponentSerialization.CODEC` read it (a plain string or
     /// a component object), which `MapBanner.fromWorld` keeps as its name.
-    pub name: Option<horizon_world::nbt::Tag>,
+    pub name: Option<horizon_core::nbt::Tag>,
     /// Components not consumed by BannerBlockEntity's implicit fields.
     pub components: horizon_core::nbt::Compound,
 }

@@ -593,10 +593,10 @@ impl mod_api::LevelRandomHost for super::native_hooks::HitLevel<'_> {
         self
     }
     fn random(&mut self) -> Option<mod_api::LegacyRandom> {
-        Some(self.0.random().clone())
+        Some(mod_api::LegacyRandom::clone(self.0.random()))
     }
     fn set_random(&mut self, random: mod_api::LegacyRandom) -> bool {
-        *self.0.random() = random;
+        **self.0.random() = random;
         true
     }
 }

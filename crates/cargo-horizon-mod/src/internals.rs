@@ -76,7 +76,7 @@ fn add(dir: &Path, paths: &[&str], kind: Option<&str>) -> Result<(), String> {
     for entry in entries {
         println!("Added internal {}", entry.path);
     }
-    fs::write(&path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
+    atomic_write_manifest(&path, doc.to_string())
 }
 
 /// Adds or refreshes `entries` in `internals`.

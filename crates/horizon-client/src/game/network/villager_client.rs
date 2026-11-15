@@ -57,6 +57,8 @@ pub(super) fn receive(
     sound
 }
 
+/// [`server_meta_sync`] from the hub; the game itself goes through `lan/mob_states.rs`.
+#[cfg(test)]
 pub(super) fn server_meta(
     m: &Mob,
     hub: &horizon_client::lan::hub::Hub,
@@ -66,7 +68,30 @@ pub(super) fn server_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
     table: &ResolvedProfessions,
 ) {
-    super::lan::mob_meta(m, hub, player, time, meta, defaults);
+    let effects = super::lan::mob_effect_meta(m, hub);
+    server_meta_sync(
+        m,
+        hub.sync_data(),
+        effects,
+        (player, time),
+        meta,
+        defaults,
+        table,
+    );
+}
+
+/// [`server_meta`] from the synced tables alone, so the tick's helper threads can build it
+/// (`lan/mob_states.rs`).
+pub(super) fn server_meta_sync(
+    m: &Mob,
+    sync: &horizon_client::lan::data::SyncData,
+    effects: Vec<(u8, i32, Value)>,
+    (player, time): (Option<i32>, i64),
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+    table: &ResolvedProfessions,
+) {
+    super::lan::mob_meta_sync(m, sync, effects, player, time, meta, defaults);
     let index = match m.species() {
         Species::Villager => 19,
         Species::ZombieVillager => 20,

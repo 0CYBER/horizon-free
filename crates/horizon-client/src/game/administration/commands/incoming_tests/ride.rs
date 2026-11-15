@@ -230,7 +230,22 @@ fn a_brain_boarding_mob_drops_its_lead() {
         rider: game.mobs[piglin].id,
         vehicle: game.mobs[hoglin].id,
     }];
-    horizon_client::mobs::apply_brain_events(&mut game.mobs, &mut events, 0);
+    let mut mobs = game.mobs.lift();
+    let mut lent = horizon_client::health::LentLevel::take(&mut game.world);
+    {
+        let mut level = horizon_client::health::DamageLevel::lent(
+            &game.world,
+            game.pack.assets.registry,
+            &mut lent,
+            Some(world_items!(game)),
+            Some(&game.pack.block_registries),
+            &game.damage_hooks,
+        );
+        horizon_client::mobs::apply_brain_events(&mut mobs, &mut level, &mut events, 0);
+    }
+    lent.give_back(&mut game.world);
+    game.mobs
+        .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
     game.sync_riders();
     assert_ne!(
         game.mobs[piglin].position, at,

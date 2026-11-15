@@ -12,7 +12,7 @@ complete vanilla-like game. The Horizon layer moves to its own repository, publi
 ships with every official launcher download (see [The Horizon layer in its own repository](#the-horizon-layer-in-its-own-repository)).
 The split comes first, inside this repository, one checked step at a time. The repositories separate after that.
 
-Both checks below run in CI's verify job and in `tools/pr_ready.py`, against the fork's baseline: the explicit
+Both checks below run in CI's verify job and in `tools/pr_ready.py`, against the baseline: the explicit
 rows and reasons in `tools/layers.json` and `tools/addresses.json`, which cover the split mod crates and the separate
 launcher, registry and telemetry-server workspaces. No engine/API refactor is implied by importing these tools.
 

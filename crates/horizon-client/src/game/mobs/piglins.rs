@@ -599,6 +599,10 @@ impl Game<'_> {
             .rules
             .bool_at(horizon_client::gamerules::vanilla::UNIVERSAL_ANGER);
         for i in 0..self.mobs.len() {
+            // A hook below may have shortened the list.
+            if i >= self.mobs.len() {
+                break;
+            }
             let m = &self.mobs[i];
             if m.species() != Species::Piglin
                 || m.is_baby()
@@ -639,6 +643,10 @@ impl Game<'_> {
                     )
             } else {
                 horizon_client::mobs::TargetChange::Set(Some(horizon_client::mobs::Who::Player))
+            };
+            // The hook had `&mut self`: find the piglin again by id.
+            let Some(i) = self.mobs.iter().position(|m| m.id == id && !m.removed) else {
+                continue;
             };
             let m = &mut self.mobs[i];
             let previous = m.ai.target;

@@ -26,7 +26,7 @@ fn resources() -> Option<&'static std::path::Path> {
         let dir = scratch.join("mod");
         let mut files = vec![(
             "horizon-mod.toml".to_owned(),
-            "id = \"fieldtest\"\nname = \"Field test\"\nversion = \"1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n".to_owned(),
+            "id = \"fieldtest\"\nname = \"Field test\"\nversion = \"1.0\"\napi = \"0.2\"\ncapabilities = [\"registries\"]\n".to_owned(),
         )];
         for (id, template) in [
             ("grain", "wheat"),
@@ -44,10 +44,19 @@ fn resources() -> Option<&'static std::path::Path> {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, text).unwrap();
         }
-        let package = horizon_mods::Package::read(&dir).unwrap();
-        let content = horizon_mods::Content::read(&dir, &package.manifest).unwrap();
+        let package = horizon_mod_package::Package::read(&dir).unwrap();
+        let content = horizon_mod_package::content::Content::read(&dir, &package.manifest).unwrap();
         let out = scratch.join("resources");
-        crate::mod_content::build(&base, &[ContentMod { id: "fieldtest".into(), content }], &out)
+        let mods = [ContentMod {
+            id: "fieldtest".into(),
+            content,
+            jars: Vec::new(),
+        }];
+        let inventory = horizon_mod_package::enabled::EnabledMods::new(
+            mods.iter()
+                .map(|package| (package.id.clone(), mod_api::Side::Both)),
+        );
+        crate::mod_content::build(&base, std::path::Path::new(""), &mods, &out, &inventory)
             .unwrap();
         Some(out)
     })
@@ -113,7 +122,7 @@ fn a_ravager_crushes_by_class_and_not_by_name() {
             let mut broken: Vec<[i32; 3]> = events
                 .iter()
                 .filter_map(|e| match e {
-                    MobEvent::BreakBlock { pos, drop } => {
+                    MobEvent::BreakBlock { pos, drop, .. } => {
                         assert!(drop, "the crop and the leaves drop");
                         Some(*pos)
                     }

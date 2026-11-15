@@ -27,20 +27,17 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   first line `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, commits
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, last line
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **Layers** ([docs/layers.md](docs/layers.md)): engine uses engine; platform uses engine and platform; Horizon (its extras,
+  cosmetics, shop, telemetry, launcher) uses platform and Horizon only, never the engine: it moves to its own repository
+  later. `tools/check_layers.py` checks it. New Horizon code goes behind `horizon-extras`; built-in addresses go in
+  `horizon-addresses`.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
-- One concern per PR, at whatever size it needs; no line limit on the fork. Labels: `feature` (players get something new), `skip-release` (they see no
-  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges reach players through the
-  nightly ([docs/release-flow.md](docs/release-flow.md#game-releases)).
-- **CI tiers** ([CONTRIBUTING.md](CONTRIBUTING.md#ci-tiers)): every PR push and main push runs `checks`
-  (`verify`: format, lint and unit tests only; `launcher`); the ignored-test shards, the wasm
-  fixture, `fn-replace-check` and the linkage probe run once a day (`daily.yml`). A new test that needs prepared
-  resources, boots the game, starts a child process, uses the network or a compiled wasm fixture, or takes 2 s or
-  more is `#[ignore]`d with a row in `tools/ci/ignored-tests/`; say in the PR when you could not run it. A daily red
-  becomes an issue listing the suspect PRs, fixed by an ordinary PR. Existing tests still in `verify` that need
-  resources, a child process or the network are being moved by the next change of arismoko/horizon#4022. Builds: nightly (a commit of main with checks and parity-main green,
-  published with its mod SDK), release (cut from a nightly).
+- PRs under ~3000 lines of code (docs, test files, inline test modules and moved lines don't count:
+  [CONTRIBUTING.md](CONTRIBUTING.md#pull-requests)). Labels: `feature` (players get something new), `skip-release`
+  (they see no change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges ship in batches of 5, or after
+  6 hours ([docs/release-flow.md](docs/release-flow.md)).
 - **No hardcoded user-facing strings.** Keep UI translation-ready from the start. In the launcher (`launcher/`), wrap visible text with `tr("...")` or `trf("... {arg} ...", &[("arg", &val)])` from `crate::i18n` instead of raw string literals or `format!`. In the game, use translation keys (`Text::tr`, `lang::get`), never hardcoded English strings.
 - **Claim before you start**: comment `/claim` on the issue (no issue yet: open one, then claim it). An assigned
   issue is taken, and so is one labelled `in progress` (claimed on Discord): pick another. `/unclaim` when you stop;
@@ -51,54 +48,6 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 - **Controllers reach what registers.** Draw controls with a registering helper (`ui::button`, `settings_shell::foot_button`); `graphics_style::button` and `screen_draw::button` only paint, and registering one part of a screen ends its crosshair, so register all of it.
 - **Render passes keep HDR's light.** A pass that reads, filters or redraws the world's picture (upscaling,
   anti-aliasing, sharpening, frame generation, post effects, captures) follows [docs/hdr-passes.md](docs/hdr-passes.md).
-
-## Mod API on this fork: the clean break
-
-This repository is where the native mod API is built: hooks, the `Host`, handles, Parts,
-attachments and mod loading. Tracker: arismoko/horizon#26 (design), arismoko/horizon#44 (milestones). The mod API is taking **one clean
-break**, and every change to it follows these rules. Reviews block a PR that breaks any of them.
-
-- **No compatibility paths.** No aliases, shims, deprecated names, migration or fallback code, version
-  gates, or "kept for old mods" branches. Old mods rebuild; the compiler says what moved. Removing an old
-  path updates every caller, the catalog, docs and tests in the same change.
-- **One hook per moment.** A hook with a NeoForge 26.3 counterpart takes its name, side and full contract.
-  Two hooks at the same vanilla call site (including `_v1`/`_v2` pairs) merge into that one, and the old
-  one is deleted, not kept beside it. A veto before an action and a notice after it are separate moments
-  when vanilla runs code between them. A hook whose vanilla call site is gone is removed from the catalog.
-- **Every hook gets a `Host`.** Hooks that fire inside client-lib split into decide, fire, apply: client-lib
-  decides, the game fires the hook with a `Host`, then applies. The listener's writes and the apply run in
-  one transaction, and the apply re-checks the decision's preconditions and refuses (never recomputes) if
-  they changed.
-- **`Host` shape.** A small shared `Host` (handle constructors, registries, settings, `transaction`), with
-  `ServerHost: Host` and `ClientHost: Host` generated from each catalog entry's `side`, so a wrong-side
-  call doesn't compile; a hook that fires on both sides gets a typed `HostSide`. Per-object methods live on
-  handles (reads take `&dyn Host`, writes `&mut dyn ServerHost`), and the ID-based helper a handle method
-  covers is removed when it lands. Drawing goes through a `DrawContext` given only to render and screen
-  hooks. Items, fluids and energy go through Parts under transactions. Commands, players, messages and
-  scheduling are small service traits reached from `Host`; attachments live on handles. Don't add a
-  method to `Host` that has a natural receiver.
-- **One dependency model, two build targets.** Native and wasm mods share exactly the same dependency
-  model; the only difference is the build target. `[dependencies]` in `horizon-mod.toml` (required and
-  optional, semver on `horizon-mod.toml` versions, dependency-ordered dispatch, a mod publishing functions
-  and statics its dependents call) means the same for both: native links through Cargo, wasm through the
-  runtime's linker, and one copy of a library is shared by its dependents. No wasm-only packaging unit or
-  multi-mod bundle, and no rule that holds for one target only. A change to the dependency model lands
-  for both targets in the same PR.
-- **Versions are the exact build for native mods.** A native mod is built against one game build and the
-  loader checks that build id; a wasm mod links by interface instead. `.hmod` is the one package format.
-- **DRY.** One implementation per behaviour: reuse the existing helper, write path or generator rule, and
-  let the catalog and generator own repetition instead of hand-written match arms.
-- **SOLID.** Each module, trait and handle has one job; traits stay small and split by side and concern;
-  new behaviour comes in through the catalog, handles and parts; mods depend on `mod_api`, never on game
-  internals, and lower crates never reach up into `Game`.
-- **Neat.** Names, layout and docs match the code around them. No dead code, leftover TODO paths, or
-  anything a later PR must tidy up.
-- **Fast.** No allocation, string building or scan over every mod on hot paths (tick, per-entity and
-  per-block hooks). Dispatch only to the mods and parts that subscribe, resolve keys once at load, and a
-  PR that touches a hot path states its tick-time effect.
-- **Differences from upstream are marked.** A change that renames or removes something horizon-rust/horizon
-  also has says "Diverges from upstream" in its PR body. Write upstream refs in full
-  (`horizon-rust/horizon#N`; a bare `#N` is this fork) and never put Fixes, Closes or Resolves before one.
 
 ## Don't lose time
 
@@ -135,8 +84,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-command` | Command parsing (Brigadier): the vanilla tree, argument types, selectors, suggestions, the tree's network form. Re-exported as `horizon_client::command` |
 | `horizon-client-core` | The client lib's bottom layer: `text.rs`, `lang.rs`, `snbt.rs`, `nbt_path.rs`, `component.rs`, `scoreboard.rs`, `bossbar.rs`, `gamerules.rs`, `block_entity_nbt.rs`, registry/particle/sound tables. Re-exported under the old paths (`horizon_client::text`...) |
 | `horizon-client-input` | Key bindings and key names, toggle keys, mouse options, controller settings and glyphs, the clipboard, window options (`keybinds.rs`, `gamepad.rs`, `mouse.rs`, `window.rs`...). Re-exported under the old paths |
-| `horizon-client-render` | The client's world data, rendering and screens (chunks, meshing, light, streaming, `gfx`, HUD, menus, settings): ~80 modules that horizon-client re-exports under the same paths. Nothing in it reaches gameplay |
-| `horizon-mod-runtime` | Engine-independent mod attachment storage, query index and generic registry slot tables; depends only on `horizon-core` |
+| `horizon-client-render` | The client's world data, rendering and screens (chunks, meshing, light, streaming, `gfx`, HUD, menus, settings), modules that horizon-client re-exports under the same paths. Nothing in it reaches gameplay |
 | `horizon-world` | Vanilla world data with no gameplay loop: NBT, regions, chunks, `datafix/`, `worldgen/`, `level/` (server-side block behaviour, ticks, redstone), entity physics, items, effects, food, damage |
 | `horizon-core` | Simulation primitives: Java `Random`s, `jmath` (HotSpot-exact `Math`), positions, noise, density, paletted storage, `version.rs` (the pinned version) |
 | `horizon-protocol` | Network protocol 777: codecs, framing, encryption, `packets/{handshake,status,login,configuration,play}.rs`, `entity_data.rs` |
@@ -144,10 +92,11 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-prepare` | Builds `.local/horizon-client/26.3` from the player's own Minecraft install (runs the Java exporters) |
 | `horizon-server` | `horizon-server`: `server.toml`, CLI, supervisor of the headless game ([docs/hosting.md](docs/hosting.md)) |
 | `horizon-server-files` | `server.properties`, eula, ops/whitelist/bans, usercache |
-| `horizon-java-properties` | `java.util.Properties` load/store and the JDK date text, standard library only: shared by `horizon-server-files` and the wasm runtime |
 | `horizon-anticheat` | The dedicated server's anticheat, off by default: `[anticheat]` settings, violation levels, the checks' rules; the hub runs them (`lan/anticheat.rs`) ([docs/anticheat.md](docs/anticheat.md)) |
+| `horizon-cosmetics` | Cosmetic items Horizon clients draw on players (off by default): the item format, bones and animations ([docs/cosmetics.md](docs/cosmetics.md)) |
+| `horizon-addresses` | Every built-in address of an outside service vanilla doesn't contact (Horizon layer; [docs/layers.md](docs/layers.md#built-in-addresses)) |
 | `horizon-friends`, `horizon-relay` | Play with Friends: invite codes, encrypted tunnel, the relay ([docs/play-with-friends.md](docs/play-with-friends.md)) |
-| `horizon-mod-package`, `cargo-horizon-mod` | Content mods (`.hmod`: manifest, content fence, no code), the registry index and `.hpack`, and `cargo horizon-mod` (`new`, `build`, `run`, `check`, `registry`) ([docs/modding/](docs/modding/src/introduction.md)). Code mods are native, built by the launcher ([docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md)) |
+| `horizon-mods`, `cargo-horizon-mod` | Content mods (`.hmod`: manifest, content fence, no code), the registry index and `.hpack`, and `cargo horizon-mod` (`new`, `build`, `run`, `check`, `registry`) ([docs/mods.md](docs/mods.md)). Code mods are native, built by the launcher ([docs/native-mods.md](docs/native-mods.md)) |
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
 | `horizon-optifine` | OptiFine-format pack files below every feature that reads them: `.properties`, the name/range/block matchers, paths and `optifine/` folders, and custom entity models (`cem/`: `.jem`/`.jpm` parsing and baking) |
 | `horizon-polytone` | Polytone-format pack files (`assets/*/polytone/`), read clean-room from the public wiki: targets, biome and dimension modifiers and their environment attribute layers (#11486) |
@@ -156,8 +105,6 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
 | `horizon-perf-format` | The `.hzperf` capture contract ([docs/perf-platform.md](docs/perf-platform.md) §3): `proto/horizon/perf/v1/capture.proto`, its generated types, the gzip writer and its thread. No Horizon dependencies; nothing in the game reads a capture |
 | `horizon-telemetry`, `horizon-telemetry-server`, `horizon-bench` | Opt-in data collection, its ingest server, the benchmark report format |
-| `horizon-cosmetics` | Cosmetic items Horizon clients draw on players (off by default): the item format, bones and animations ([docs/cosmetics.md](docs/cosmetics.md)) |
-| `horizon-addresses` | Every built-in address of an outside service vanilla doesn't contact (Horizon layer; [docs/layers.md](docs/layers.md#built-in-addresses)) |
 | `horizon-system` | The machine the game runs on (OS, CPU, memory, drive, power, GPU maker and memory), for the crash report, the renderer's GPU info and telemetry |
 | `horizon-platform` | The platform's public API: what the Horizon layer may use of the engine ([docs/layers.md](docs/layers.md)); re-exports `horizon-system` today |
 | `horizon-hooks`, `horizon-game`, `horizon-official`, `horizon-heartbeat` | The layer seam: the engine's hooks for crates above it, the game an executable starts, the official executable (shipped as `horizon-client`) that registers Horizon's in-game parts, the first of them ([docs/layers.md](docs/layers.md#how-a-horizon-crate-plugs-in)) |
@@ -183,11 +130,11 @@ reads `README.md`, `launcher/links.json`, `docs/api/`, `roadmap/roadmap.json` an
 ## Build and test fast
 
 ```sh
-python3 tools/pr_ready.py                  # the self-check: fmt, clippy -D warnings, touched crates' tests, harnesses; paste its block in the PR
-python3 tools/pr_ready.py --quick          # same without harnesses
-cargo test -p horizon-client -p horizon-game -p horizon-client-lib --lib --bins --tests   # skips the examples (pr_ready does this); `--doc` separately
+python3 tools/pr_ready.py                  # the self-check: fmt, clippy -D warnings, touched crates' tests; paste its block in the PR
+python3 tools/pr_ready.py --harnesses      # also the affected harnesses (by default only when you change a harness, oracle, probe or the runner, as in CI)
+cargo test -p horizon-client -p horizon-client-lib --lib --bins --tests   # skips the examples (pr_ready does this); `--doc` separately
 cargo test -p horizon-client-lib --lib mod_content::tests:: -- --ignored   # the slow content-root tests, #[ignore]d; pr_ready runs them when mod content, assets, blocks or items change
-cargo build --profile fast -p horizon-game        # optimized, quick to link: use it to play or run lan_e2e
+cargo build --profile fast -p horizon-client        # optimized, quick to link: use it to play or run lan_e2e
 python3 tools/parity.py --changed origin/main       # the harnesses your branch can affect (CI's parity job)
 python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cover these files, without running them
 python3 tools/parity.py mob_ai sculk       # named harnesses
@@ -197,23 +144,17 @@ python3 tools/lang_coverage.py --summary   # one line per language: how many key
 python3 tools/lang_coverage.py --summary --show-keys   # the same, then the keys behind the counts
 ```
 
-- GPU tests share `gfx::test_gpu::lock()`: bind the guard before creating GPU objects so it outlives
-  every resource, queue, device and instance, including GPU-owning workers (join them before unlocking).
-  Helpers returning GPU objects leave the guard with their caller; helpers returning only CPU data may
-  own it themselves, without another outer guard. CPU-only tests need no guard. Run renderer coverage
-  with `cargo test -p horizon-client-render --lib -- gfx:: --test-threads=12`; no global serial-test flag.
-
-- For a player-facing change, drive the game once with `horizon-ctl` (launch, the action, a `state` or `screenshot`)
-  and report the result in the PR's "Tried in game" line; never claim it when it was not run.
 - Harnesses and the game need the vanilla data in `.local/` (`minecraft/`, `horizon-client/26.3`, `datagen/`,
   `tools/`): see [docs/parity-workflow.md](docs/parity-workflow.md). Without it, pr_ready lists the
   harnesses for CI.
-- A harness = `tools/test_<name>_parity.py` (324 of them) + a Java oracle (`mods/horizon/src/test/java/dev/horizonlab/parity/Vanilla*Oracle.java`)
-  + a Rust probe: `crates/<crate>/examples/<name>_{probe,fixture}.rs` (horizon-world 175, horizon-client 104),
-  or the game binary with a fixture env var (`game/interface/dispense_fixture.rs`, `game/blocks/sculk_fixture.rs`,
-  `game/administration/command_harness.rs`, `game/network/net_harness.rs`). Copy a nearby harness for a new one.
-- Native mods compile against a pinned prebuilt SDK; `[[native.mixin]]` rows compile into a function-replacement patch library.
-  Use `native-build --trust-native-code`; the launcher never rebuilds the game for a mod.
+- A harness = `tools/test_<name>_parity.py` + a Java oracle (`mods/horizon/src/test/java/dev/horizonlab/parity/Vanilla*Oracle.java`)
+  + a Rust probe: `crates/<crate>/examples/<name>_{probe,fixture}.rs` (mostly horizon-world and horizon-client),
+  or the game binary with a fixture env var (`game/dispense_fixture.rs`, `game/sculk_fixture.rs`,
+  `game/command_harness.rs`, `game/net_harness.rs`). Copy a nearby harness for a new one.
+- Developing a native mod? Run `horizon-launcher settings native-profile dev` once. `dev` builds the game crate
+  unoptimized: a mod edit rebuilds about 6× faster than with `performance`, while game logic runs up to about twice as
+  slow. Use it while developing, not for playing; `performance` stays the default for players and releases
+  ([docs/native-mods.md](docs/native-mods.md)).
 - Probes build into `.local/parity-target/`; harnesses find binaries via `lab.cargo_target()`, never `target/`.
 - Harness selection uses Cargo dep-info and reachable-code narrowing (`tools/parity_reach.py`).
   `horizon-client-lib` builds the control tool and client probes without gameplay; their dep-info
@@ -235,7 +176,7 @@ python3 tools/lang_coverage.py --summary --show-keys   # the same, then the keys
 - Decompiled sources: `.local/minecraft/26.3/sources/{client,server}/` (`python3 tools/lab.py decompile`).
 - Bytecode queries (callers through lambdas, every overload):
   `python3 tools/rea_vanilla.py method net.minecraft.world.level.block.DispenserBlock dispenseFrom`
-  ([docs/decompilation-status.md](docs/decompilation-status.md)).
+  ([docs/parity-workflow.md](docs/parity-workflow.md#reading-vanilla)).
 - A harness runs the oracle against the real 26.3 jars and the Rust probe on the same inputs, then compares
   their JSON. Oracle runs are cached by `tools/parity_shim.py`; `--fresh` reruns them.
 - Mirror vanilla's `Math` calls with `horizon_core::jmath`, and vanilla's RNG with `horizon_core::random`:
@@ -253,50 +194,50 @@ state stays separate from the library tests. This compiles gameplay twice for ex
 
 | Subsystem | Files |
 |---|---|
-| Game loop, tick, frame | `game.rs`: `fn run`, `impl ApplicationHandler for Game` (`window_event`, `about_to_wait`), `fn tick`, `fn tick_world`, `fn render`; L: `clock.rs`, `spans.rs`; `horizon-client-input/src/window.rs` |
-| Rendering | L: `gfx.rs` (`Renderer::new`, `Renderer::render`), `gfx/` (cull, occlusion, translucency, upload, timing, lod, weather, stars, end_sky), `*.wgsl`, `particles.rs`, `block_entity_render.rs`, `item_render.rs`, `fog.rs`, `clouds.rs`, `camera.rs`, `first_person.rs`; G: `render_tick.rs`, `item_draw.rs`, `screen_backgrounds.rs` (panorama, menu blur, border wall) |
-| Chunks, streaming, light | L: `streaming.rs` (worker pool: generate, light, mesh), `world.rs`, `chunk.rs`, `chunk_map.rs`, `light.rs`, `mesher.rs` + `mesher/`, `vanillagen.rs` (binds horizon-world's generator), `lod.rs` + `lod/`, `server_terrain.rs` (a server's kept chunks), `bluemap.rs` + `bluemap_detect.rs` (far terrain from its web map), `ticket_levels.rs`; G: `world_loading.rs`, `world_entry.rs`, `postprocess.rs`; game.rs `fn update_world` |
+| Game loop, tick, frame | `game.rs`: `fn run`, `fn tick`, `fn tick_world`, `fn render`; G: `window_handler.rs` (`impl ApplicationHandler for Game`: `window_event`, `about_to_wait`), `launch_options.rs` (the command line); L: `clock.rs`, `spans.rs`; `horizon-client-input/src/window.rs` |
+| Rendering | L: `gfx.rs` (`Renderer::new`, `Renderer::render`), `gfx/` (cull, occlusion, translucency, upload, timing, lod, weather, stars, end_sky), `*.wgsl`, `particles.rs`, `block_entity_render.rs`, `item_render.rs`, `fog.rs`, `clouds.rs`, `camera.rs`, `first_person.rs`; G: `render_tick.rs`, `frame_geometry.rs` (cracks, sun and moon, first-person hand, rain and snow), `item_draw.rs`, `screen_backgrounds.rs` (panorama, menu blur, border wall) |
+| Chunks, streaming, light | L: `streaming.rs` (worker pool: generate, light, mesh), `world.rs`, `chunk.rs`, `chunk_map.rs`, `light.rs`, `mesher.rs` + `mesher/`, `vanillagen.rs` (binds horizon-world's generator), `lod.rs` + `lod/`, `server_terrain.rs` (a server's kept chunks), `bluemap.rs` + `bluemap_detect.rs` (far terrain from its web map), `ticket_levels.rs`; G: `world_loading.rs`, `world_entry.rs`, `postprocess.rs`, `world_update.rs` (`fn update_world`, far terrain) |
 | World generation | `crates/horizon-world/src/worldgen/` (`generator*.rs`, `feature_graph.rs`, `structure/`, `carver/`) |
-| Block behaviour | `crates/horizon-world/src/level/` (`mod.rs`, `tick.rs`, `hooks.rs`, `redstone.rs`, `place.rs`, `interact.rs`); game.rs `fn tick_blocks`, `fn process_level_events` |
+| Block behaviour | `crates/horizon-world/src/level/` (`mod.rs`, `tick.rs`, `hooks.rs`, `redstone.rs`, `place.rs`, `interact.rs`); G: `block_ticks.rs` (`fn tick_blocks`); game.rs `fn process_level_events` |
 | Mobs | L: `mobs.rs` (types), `mobs/` (`ai.rs`, `goals.rs`, `brain.rs`, `*_brain.rs`, `nav.rs`, `path.rs`, `species.rs`, `spawning.rs`, `render.rs`, `anim.rs`); G: `creatures.rs` (ticking, spawning, mob events), one file per mob family (`dragon.rs`, `wither.rs`, `villagers.rs`, `piglins.rs`, `golems.rs`...), `natural_spawning.rs` |
-| Other entities | L: `entities.rs`, `projectiles.rs`, `arrows.rs`; G: `boats.rs`, `minecarts.rs`, `mounts.rs`, `armor_stands.rs`, `paintings.rs`, `frames.rs`, `fireworks.rs`, `tnt.rs`, `explosion.rs` |
-| Player actions | game.rs (`fn use_hand`, `fn use_item`, `fn attack`, `fn tick_mining`, `fn break_block`); G: `hand.rs`, `combat.rs`, `consume.rs`, `using_item.rs` (an item in use, tick by tick), `potions.rs`, `shield.rs`, `crossbow.rs`, `trident.rs`, `fishing.rs`; L: `motion.rs` + `motion/` (movement), `collisions.rs`; crate `horizon-items`: `items.rs`, `item_data.rs`, `enchant.rs`, `blocks.rs` |
-| Inventory and containers | L: `menu.rs` (`AbstractContainerMenu.clicked`), `container_screen.rs`, `containers.rs`, `creative.rs`, `crafting.rs`, `recipe_book*.rs`, `stations.rs`, `merchant.rs`; game.rs `fn menu_ops`, `fn click_inventory`; G: `stations.rs`, `trading.rs`, `recipe_book.rs`, `machines.rs` |
+| Other entities | L: `entities.rs`, `projectiles.rs`, `arrows.rs`; G: `item_entities.rs` (dropped items, experience orbs), `boats.rs`, `minecarts.rs`, `mounts.rs`, `armor_stands.rs`, `paintings.rs`, `frames.rs`, `fireworks.rs`, `tnt.rs`, `explosion.rs` |
+| Player actions | game.rs (`fn tick_mining`, `fn break_block`); G: `use_hand.rs` (`fn use_hand`), `item_actions.rs` (`fn use_item`), `melee.rs` (`fn attack`), `hand.rs`, `combat.rs`, `consume.rs`, `using_item.rs` (an item in use, tick by tick), `potions.rs`, `shield.rs`, `crossbow.rs`, `trident.rs`, `fishing.rs`; L: `motion.rs` + `motion/` (movement), `collisions.rs`; crate `horizon-items`: `items.rs`, `item_data.rs`, `enchant.rs`, `blocks.rs` |
+| Inventory and containers | L: `menu.rs` (`AbstractContainerMenu.clicked`), `container_screen.rs`, `containers.rs`, `creative.rs`, `crafting.rs`, `recipe_book*.rs`, `stations.rs`, `merchant.rs`; G: `menu_clicks.rs` (`fn menu_ops`, `fn click_inventory`), `stations.rs`, `trading.rs`, `recipe_book.rs`, `machines.rs`, `inventory_input.rs` (keys and clicks over a container), `inventory_slots.rs` (slot layout and drawing) |
 | Commands | parse: crate `horizon-command` (`args.rs`, `selector.rs`, `tree_*.rs`, `vanilla.rs`); run: G: `commands.rs` (dispatch) + `commands/*.rs` (`admin`, `execute`, `items`, `players`, `world_cmds`...); L: `scoreboard_cmd.rs`, `data_cmd.rs`; `horizon-client-core`: `nbt_path.rs`, `scoreboard.rs`; G: `functions.rs`, `command_blocks.rs` |
-| UI screens | `Screen` enum in game.rs; L: `title.rs` + `title/`, `options_ui.rs`, `multiplayer.rs`, `pack_screen.rs`, `settings_shell.rs` (Horizon's settings screens on it: `extras_ui.rs`, `graphics_ui.rs`, `controller_ui.rs`), `screen_draw.rs`, `ui.rs` (widgets), `hud.rs`, `hud_layout.rs`, `hud_overlays.rs`, `hud_kit/` (Horizon overlays' `Room` and `Plate`, the collapsed page strip `tabs` that Shaders' screens use, [docs/ui-kit.md](docs/ui-kit.md)), `pad_glyph.rs` (controller glyphs, by what the button does), `chat.rs`, `tab_list.rs`; G: `startup_menu.rs`, `loading_screen.rs` (the loading screen, the pre-game `App`), `screens.rs` (pause, death), `options.rs`, `lan_screen.rs`, `chat.rs`, `sign_edit.rs`, `books.rs`, `creative_screen.rs` |
+| UI screens | `Screen` enum in game.rs; L: `title.rs` + `title/`, `options_ui.rs`, `multiplayer.rs`, `pack_screen.rs`, `settings_shell.rs` (Horizon's settings screens on it: `extras_ui.rs`, `graphics_ui.rs`, `controller_ui.rs`, `shader_ui.rs`; a page list too long for its column collapses into one row), `screen_draw.rs`, `ui.rs` (widgets), `hud.rs`, `hud_layout.rs`, `hud_overlays.rs`, `hud_kit/` (Horizon overlays' `Room` and `Plate`, the collapsed page strip `tabs` the shell's page list uses, [docs/ui-kit.md](docs/ui-kit.md)), `pad_glyph.rs` (controller glyphs, by what the button does), `chat.rs`, `tab_list.rs`; G: `startup_menu.rs`, `loading_screen.rs` (the loading screen, the pre-game `App`), `resource_loader.rs` (what a start loads, `run_loading`), `screens.rs` (pause, death), `options.rs`, `lan_screen.rs`, `chat.rs`, `sign_edit.rs`, `books.rs`, `creative_screen.rs` |
 | Multiplayer client | L: `net.rs` (network thread); G: `remote.rs` (`fn handle_packet`, `fn tick_remote`), `remote_*.rs` (mob data, objects, projectiles, vehicles, stations) |
-| LAN host / server side | L: `lan/` (`conn.rs` handshake + login threads, `hub.rs` + `hub/` play state, `chunks.rs`, `entity.rs`, `tracking.rs`, `guest.rs`, `playerdata.rs`); G: `lan.rs` (`LanHost`), `network/lan_actions/` (`turns.rs`: `fn as_guest`, `tick.rs`: `fn tick_guests`), `lan_*.rs` per feature, `lan_entities.rs` (tracked entities) |
+| LAN host / server side | L: `lan/` (`conn.rs` handshake + login threads, `hub.rs` + `hub/` play state, `chunks.rs`, `entity.rs`, `tracking.rs`, `guest.rs`, `playerdata.rs`); G: `lan.rs` (`LanHost`), `lan_actions.rs` (`fn as_guest`, `fn tick_guests`), `lan_*.rs` per feature, `lan_entities.rs` (tracked entities) |
 | Integrated server | G: `integrated.rs` (the server thread), `levels.rs` (one level per dimension, `fn tick_server`), `server_travel.rs` |
 | Dedicated server | G: `dedicated.rs`, `dedicated/status.rs`; crates `horizon-server-files`, `horizon-server`, `horizon-anticheat` (L: `lan/anticheat.rs`) |
-| Save and load | L: `save.rs` (level.dat, regions, playerdata), `entity_nbt.rs`, `options_file.rs`; `horizon-client-core/src/block_entity_nbt.rs`; G: `saving.rs`, `persist.rs` (entities), `world_session.rs` (opening and closing a world); `crates/horizon-world/src/{region.rs,datafix/}`, `crates/horizon-core/src/nbt.rs` |
+| Save and load | L: `save.rs` (level.dat, regions, playerdata), `entity_nbt.rs`, `options_file.rs`; `horizon-client-core/src/block_entity_nbt.rs`; G: `saving.rs`, `persist.rs` (entities), `world_session.rs` (opening and closing a world); `crates/horizon-world/src/{region.rs,nbt.rs,datafix/}` |
 | Input | game.rs `fn window_event`; G: `play_keys.rs` (`fn key_pressed`), `play_input.rs` (`fn play_mouse`, toggled keys, the hotbar wheel); crate `horizon-client-input` (`keybinds.rs`, `keymapping.rs`, `key_names.rs`, `mouse.rs`, `input.rs`, `interaction_input.rs`, `gamepad.rs`, `clipboard.rs`); L: `osk.rs`; G: `pad.rs`, `pad_menu.rs`, `pad_craft.rs`, `pointer_capture.rs` (mouse look, pointer grab) |
 | Audio | L: `audio.rs` (mixer), `sound_engine.rs`, `sound_events.rs`, `music.rs`, `ambience.rs`; G: `music.rs`, `subtitle_hud.rs` |
 | Resource packs | L: `packs.rs` + `packs/`, `pack_screen.rs`, `atlas_sources.rs`, `sprites.rs`, `mipmap.rs`, `model_library.rs`, `font.rs`, `mobs/cem.rs` + `mobs/cem_anim.rs` (OptiFine/EMF entity models and their animations); `horizon-client-core/src/lang.rs`; crates `horizon-assets`, `horizon-optifine`; G: `packs.rs` |
 | Agent control | L: `control.rs` (socket), `bin/horizon-ctl/`; G: `control.rs`, `agent.rs`, `events.rs`, `ui_control.rs` ([docs/agent-control.md](docs/agent-control.md)) |
-| Mods | crate `horizon-mod-package`; G: `modding/mods/mod.rs` (content and mod load), `modding/mods/standalone.rs` (standalone model registration); L: `mod_content.rs`, `mod_list.rs` |
-| Horizon extras, settings | L: `extras.rs`, `graphics.rs`, `settings.rs`, `minimap.rs`; G: `interface/extras.rs` + `interface/extras/` (each extra's glue: `mouse_tweaks.rs`, `sorting.rs`, `pvp.rs`, `reconnect.rs`), `options.rs` |
+| Mods | crate `horizon-mods`; G: `mods.rs`; L: `mod_content.rs`, `mod_list.rs` |
+| Horizon extras, settings | L: `extras.rs`, `graphics.rs`, `settings.rs`, `minimap.rs`; G: `extras.rs` + `extras/` (each extra's glue: `mouse_tweaks.rs`, `sorting.rs`, `pvp.rs`, `reconnect.rs`), `options.rs` |
 
 ## How `Game` is organised
 
-- `struct Game` (game.rs) keeps the core loop and fields. Each `game/<area>/<feature>.rs` (or
-  `<feature>/mod.rs`) adds an `impl Game<'_>` block and state types. Logical modules remain direct
-  children of `game`; an area's `.game-area` marker enables build-derived declarations.
+- `struct Game` (game.rs) holds everything. Its methods are spread over many files: game.rs keeps
+  the core (tick, render, input, inventory, world open/close) and each `game/<feature>.rs` adds an
+  `impl Game<'_>` block for one feature, with its own state types. Fields stay private to the gameplay module and its descendants. Gameplay tests run in the gameplay library, separate from reusable-library tests.
 - Find a feature's code: `grep -rn "fn tick_<thing>\|fn <verb>_<thing>" crates/horizon-client/src/game*`;
-  the file is under `game/<area>/`. Find its callers in game.rs's `fn tick` / `fn tick_world`.
+  the file is usually `game/<thing>s.rs`. Who calls it: grep the name in game.rs's `fn tick` / `fn tick_world`.
 - Fields that say which mode runs: `remote` (this window is a client of a server: multiplayer, LAN guest, or
   single player on its server thread), `lan` (`LanHost`: this world is open to the network), `integrated`
   (the window's own server thread), `serving` (this `Game` *is* that server thread), `options.dedicated`.
   `fn tick` returns `tick_remote()` when `remote` is set; a server ticks its levels (`fn tick_world`).
 - A server's players run through the shared gameplay code: `as_guest` swaps the guest's
-  state (position, inventory, mode, mining, item use) into `Game` for one call (`game/network/lan_actions/turns.rs`), and
+  state (position, inventory, mode, mining, item use) into `Game` for one call (`game/lan_actions.rs`), and
   `levels.rs` swaps whole dimensions in the same way. Changes reach clients through the block log, level
-  events and the entity tracker (`lan/tracking.rs`, `game/network/lan_entities.rs`).
+  events and the entity tracker (`lan/tracking.rs`, `game/lan_entities.rs`).
 - Shared read-only data: `Resources` (`res`: blocks, items, recipes, mob types, biomes) and `PackResources`
   (`pack`), both in game.rs, their methods in `game/resource_tables.rs`.
 
 ## Single player runs on a server thread
 
-`game/world/integrated.rs` runs a second `Game` (`serving`) on a "Server thread" with one level per dimension;
+`game/integrated.rs` runs a second `Game` (`serving`) on a "Server thread" with one level per dimension;
 the window joins it as a client through memory (`remote`), exactly as a LAN guest or a dedicated server's
 player does (#1514). A window's `Game` never ticks a world itself: the old in-frame path is gone
 (`--in-frame` and `--no-server-thread` only print a notice; `HORIZON_SERVER_THREAD` is ignored).
@@ -307,7 +248,7 @@ When you change how the server and its clients talk (packets, tracking, guests, 
 it there. Other gameplay fixes are covered by their own harness and CI's parity job:
 
 ```sh
-cargo run --profile fast -p horizon-game -- --resources .local/horizon-client/26.3 --world T               # server thread
+cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
 python3 tools/lan_e2e.py --check <name>                  # host on its server thread, guest is a server client
 python3 tools/parity.py dedicated_server server_entities server_player_damage
 ```

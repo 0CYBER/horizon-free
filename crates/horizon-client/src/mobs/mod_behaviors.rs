@@ -6,7 +6,7 @@
 //! list: nothing of this module runs, and the species' random streams stay
 //! exactly as they were.
 use super::{Mob, MobWorld, Species, brain::Timed, part_goals::BehaviorOp};
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::LevelRandom;
 use mod_api::{
     BehaviorRegistrarBackend, RegisteredBehavior,
     content::crash::{ModCall, enter_native_mod},
@@ -95,7 +95,7 @@ impl ModBehavior {
         &mut self,
         m: &mut Mob,
         w: &MobWorld<'_>,
-        lr: &mut LegacyRandom,
+        lr: &mut LevelRandom,
         now: i64,
     ) -> bool {
         if !self.entry_met(m) {

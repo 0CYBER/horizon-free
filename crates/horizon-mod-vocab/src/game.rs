@@ -93,6 +93,23 @@ pub struct ColumnBlocks {
     pub blocks: Vec<u16>,
     pub tints: Vec<u32>,
 }
+/// What `terrain_surface` found at one column of terrain nobody has loaded: the level's generator before its
+/// features (trees, ores, lava pools, cacti) are placed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+// exhaustive: the game builds it with a literal; mods only read it
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct TerrainColumn {
+    /// One above the highest solid block the generator scans down to, fluids skipped (the `OceanFloor`
+    /// heightmap's count). The scan starts at the top of the level, so in the Nether this is the bedrock roof,
+    /// not a floor.
+    pub height: i32,
+    /// The block at `height - 1`, such as `minecraft:grass_block`.
+    pub block: String,
+    /// One above the highest water or other fluid block over the surface, none where the surface is dry.
+    pub water: Option<i32>,
+    /// The biome, such as `minecraft:plains`.
+    pub biome: String,
+}
 /// Why `upgrade_block_entity_nbt` or `upgrade_entity_nbt` gave no upgraded value. Depth is counted as the data is
 /// encoded (the root compound at 0): the compound the NBT writer puts around an element of a mixed list is a level
 /// of its own. There is no size refusal.

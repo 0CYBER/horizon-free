@@ -50,6 +50,13 @@ pub fn apply(root: &Path, patch: &str) -> Result<(), String> {
         let Some(path) = line.strip_prefix("+++ b/") else {
             continue;
         };
+        if path.is_empty()
+            || path.contains('\\')
+            || path.starts_with('/')
+            || path.split('/').any(|part| part == ".." || part.contains(':'))
+        {
+            return Err(format!("{path}: the patch names a path outside its root"));
+        }
         let file = root.join(path);
         let text = fs::read_to_string(&file).map_err(|e| format!("{path}: {e}"))?;
         let old: Vec<&str> = text.lines().collect();

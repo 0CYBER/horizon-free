@@ -889,7 +889,7 @@ fn log_disconnect(
     shared: &Shared,
     thread: &str,
     user: &str,
-    reason: &horizon_world::nbt::Tag,
+    reason: &horizon_core::nbt::Tag,
 ) -> String {
     let text = shared
         .config

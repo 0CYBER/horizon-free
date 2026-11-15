@@ -3,7 +3,7 @@
 use crate::save::number;
 use horizon_client_core::nbt_value::text;
 use horizon_world::heightmap::HeightmapType;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// The block queries the spawn searches make on full (decorated, lit) chunks.
 pub trait SpawnLevel {

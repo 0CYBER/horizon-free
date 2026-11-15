@@ -223,10 +223,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn damage_held(&mut self, amount: u32) {
-        self.damage_held_in_slot(
-            amount,
-            horizon_core::equipment_slot::EquipmentSlot::MainHand,
-        );
+        self.damage_held_in_slot(amount, self.acting_hand_slot());
     }
     /// `InteractionHand.asEquipmentSlot`: the slot of the hand that acts, whose
     /// break (`LivingEntity.onEquippedItemBroken`) the caller reports.

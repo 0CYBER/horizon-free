@@ -71,10 +71,12 @@ fn execute(
     }
     if let Some(holder) = incoming.expired_busy(now) {
         log::warn!("{}", incoming.busy_failure(holder));
-        endpoint.disconnect(failure(&format!(
-            "a mod's network handler failed ({})",
-            mod_of(&incoming.id)
-        )));
+        if !incoming.raw {
+            endpoint.disconnect(failure(&format!(
+                "a mod's network handler failed ({})",
+                mod_of(&incoming.id)
+            )));
+        }
         return None;
     }
     if matches!(incoming.body, Body::Work(_)) || incoming.receiver.thread == HandlerThread::Main {
@@ -116,10 +118,12 @@ fn execute(
                 return Some(incoming);
             }
             log::warn!("{}", incoming.busy_failure(&holder));
-            endpoint.disconnect(failure(&format!(
-                "a mod's network handler failed ({})",
-                mod_of(&incoming.id)
-            )));
+            if !incoming.raw {
+                endpoint.disconnect(failure(&format!(
+                    "a mod's network handler failed ({})",
+                    mod_of(&incoming.id)
+                )));
+            }
         }
         Err(mod_api::PayloadHandleError::Failed(error)) => {
             // Drop reservations and guest work before closing, publishing no partial actions.
@@ -129,10 +133,12 @@ fn execute(
             log::warn!("payload {} failed: {error}", incoming.id.0);
             #[cfg(test)]
             super::staging_probe::failure(&incoming.id.0, &error);
-            endpoint.disconnect(failure(&format!(
-                "a mod's network handler failed ({})",
-                mod_of(&incoming.id)
-            )));
+            if !incoming.raw {
+                endpoint.disconnect(failure(&format!(
+                    "a mod's network handler failed ({})",
+                    mod_of(&incoming.id)
+                )));
+            }
         }
         Ok(()) => {
             let reason = context.disconnect.take();

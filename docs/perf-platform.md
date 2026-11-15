@@ -380,7 +380,7 @@ message Stop {
 
 Notes on fields:
 
-- On this fork, `Start.mods` includes loaded content, native and wasm mods. `ModKind` adds the
+- `Start.mods` includes loaded content, native and wasm mods. `ModKind` adds the
   protobuf value `MOD_KIND_WASM = 3`; existing values keep their numbers. Native membership comes
   from the validated compiled inventory, wasm membership from selected wasm manifests. Unknown
   code provenance remains unspecified, not guessed to be native or wasm. A crate name is recorded

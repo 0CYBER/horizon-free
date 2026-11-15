@@ -180,15 +180,17 @@ mod tests {
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn a_swap_and_a_jab_in_one_tick_charge_on_the_last_item() {
-        let mut game = game();
-        let mut host = game.lan.take().unwrap();
-        host.hub.guests[0].inventory[1] = Some(ItemStack::new("minecraft:iron_spear", 1));
+        let mut resources = None;
+        let mut game = game(&mut resources);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+            guest.inventory[1] = Some(ItemStack::new("minecraft:iron_spear", 1))
+        });
         // It has played a tick with its empty hand.
-        game.tick_guests(&mut host);
+        game.tick_guests();
         let swap = S::SetCarriedItem(play::SetCarriedItem { slot: 1 });
-        game.lan_guest_packet(&mut host, 2, swap);
-        let charge = |game: &mut Game<'_>, host: &mut super::super::lan::LanHost| {
-            game.as_guest(host, 2, |g| {
+        game.lan_guest_packet(2, swap);
+        let charge = |game: &mut Game<'_>| {
+            game.as_guest(2, |g| {
                 (
                     g.main_hand_attack_speed(),
                     !g.cannot_attack_with_item(g.attack_ticks as i32, 5),
@@ -197,13 +199,13 @@ mod tests {
             .unwrap()
         };
         assert_eq!(
-            charge(&mut game, &mut host),
+            charge(&mut game),
             (4.0, true),
             "the hand's charge"
         );
         // Its tick sees the spear (and starts its charge again): the spear's own speed counts.
-        game.tick_guests(&mut host);
-        let (speed, _) = charge(&mut game, &mut host);
+        game.tick_guests();
+        let (speed, _) = charge(&mut game);
         assert!(speed < 4.0, "the spear's attack speed: {speed}");
     }
     /// The other side of #15524: what a guest switches to or puts on applies by its next tick, as
@@ -252,32 +254,37 @@ mod tests {
             ),
             (None, chestplate(), false, "minecraft:armor", None, 8.0),
         ];
-        let read = |game: &mut Game<'_>, host: &mut super::super::lan::LanHost, attribute: &str| {
-            game.as_guest(host, 2, |g| {
+        let read = |game: &mut Game<'_>, attribute: &str| {
+            game.as_guest(2, |g| {
                 g.player.as_mut().unwrap().attribute(attribute).unwrap()
             })
             .unwrap()
         };
         for (held, worn, swaps, attribute, before, after) in cases {
-            let mut game = game();
-            let mut host = game.lan.take().unwrap();
-            host.hub.guests[0].inventory[1] = held;
+            let mut resources = None;
+            let mut game = game(&mut resources);
+            game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                guest.inventory[1] = held
+            });
             // It has played a tick with its empty hand and nothing on.
-            game.tick_guests(&mut host);
-            host.hub.guests[0].armor[1] = worn; // the chest (head, chest, legs, feet)
+            game.tick_guests();
+            // the chest (head, chest, legs, feet)
+            game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                guest.armor[1] = worn
+            });
             if swaps {
                 let swap = S::SetCarriedItem(play::SetCarriedItem { slot: 1 });
-                game.lan_guest_packet(&mut host, 2, swap);
+                game.lan_guest_packet(2, swap);
             }
             if let Some(before) = before {
-                let value = read(&mut game, &mut host, attribute);
+                let value = read(&mut game, attribute);
                 assert!(
                     (value - before).abs() < 1e-9,
                     "{attribute} before its tick: {value}"
                 );
             }
-            game.tick_guests(&mut host);
-            let value = read(&mut game, &mut host, attribute);
+            game.tick_guests();
+            let value = read(&mut game, attribute);
             assert!(
                 (value - after).abs() < 1e-9,
                 "{attribute} after its tick: {value}"

@@ -15,6 +15,7 @@
 //! sits on the focused widget, hidden), so every screen keeps its mouse
 //! behaviour (drags, sliders, scrollbars, hover highlights) with no pad code
 //! of its own.
+#[path = "pad_menu/keys.rs"]
 mod keys;
 
 use super::event_loop::EventLoopCtl;

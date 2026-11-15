@@ -6,10 +6,10 @@ use horizon_client::{
     banner::{self, BannerLayer},
     containers::BlockEntity,
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 #[cfg(test)]
-#[path = "banner_nbt_tests.rs"]
+#[path = "tests/banner_nbt_tests.rs"]
 mod banner_nbt_tests;
 
 impl Game<'_> {

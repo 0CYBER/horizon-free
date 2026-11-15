@@ -282,10 +282,13 @@ fn update(dir: &Path, horizon: Option<&str>, accept: &[&str]) -> Result<(), Stri
     let path = dir.join(MANIFEST);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let manifest = Manifest::parse(&text)?;
-    let native = manifest
-        .native
-        .as_ref()
-        .ok_or("update needs a [native] mod")?;
+    let Some(native) = manifest.native.as_ref() else {
+        // A wasm mod pins `[package.metadata.horizon] sdk`; `repin` moves it and drops the old SDK.
+        let horizon = pin(horizon)?;
+        sdk_fetch::repin(dir, &horizon)?;
+        println!("Pinned to Horizon {horizon}");
+        return Ok(());
+    };
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -311,7 +314,7 @@ fn update(dir: &Path, horizon: Option<&str>, accept: &[&str]) -> Result<(), Stri
         &horizon,
     );
     let candidate = doc.to_string();
-    std::fs::write(&path, candidate).map_err(|e| format!("{}: {e}", path.display()))?;
+    internals::atomic_write_manifest(&path, candidate)?;
     // The old pin's SDK goes; the next command fetches this one.
     sdk_fetch::repin(dir, &horizon)?;
     println!("Pinned to Horizon {horizon}");

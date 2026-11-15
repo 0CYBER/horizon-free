@@ -335,7 +335,8 @@ mod tests {
 #[cfg(test)]
 mod game_tests {
     use super::Target;
-    use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
+    use crate::game::Game;
+    use crate::game::native_entity_refs::tests::with_game;
     use horizon_client::chunk::Chunk;
     use horizon_core::position::ChunkPos;
     use std::sync::Arc;
@@ -359,82 +360,55 @@ mod game_tests {
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
     fn a_command_with_no_target_acts_on_its_source_not_the_player_in_place() {
-        let root = std::path::PathBuf::from(
-            std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
-        );
-        let settings = Settings::default();
-        let loaded = load_resources(
-            root.clone(),
-            None,
-            &root,
-            &settings,
-            std::time::Instant::now(),
-            false,
-            true,
-            &Progress::new(),
-            &mut |_, _| unreachable!(),
-        )
-        .unwrap();
-        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
-        options.resources = root.clone();
-        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
-        let mut game = Game::new(
-            &loaded.resources,
-            loaded.pack,
-            loaded.gui.unwrap(),
-            options,
-            settings,
-            Audio::silent(&root),
-            None,
-        )
-        .unwrap();
-        game.build_registries();
-        game.set_allow_commands(true);
-        game.world
-            .chunks
-            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-        game.block_ticks
-            .add_empty_chunk(ChunkPos::new(0, 0))
-            .unwrap();
-        assert!(game.run_command("forceload add 0 0"));
-        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
-        let server = Some(crate::game::commands::execute::Source {
-            silent: false,
-            ..game.server_source()
+        with_game(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.block_ticks
+                .add_empty_chunk(ChunkPos::new(0, 0))
+                .unwrap();
+            assert!(game.run_command("forceload add 0 0"));
+            assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+            let server = Some(crate::game::commands::execute::Source {
+                silent: false,
+                ..game.server_source()
+            });
+            game.command_source = server;
+            assert!(game.run_command("summon pig 4.5 200 4.5 {NoAI:1b}"));
+            assert!(game.run_command("execute if entity @e[type=minecraft:pig]"));
+            // As the pig, a bare `kill` kills the pig.
+            let (ok, said) = run(game, "execute as @e[type=minecraft:pig] run kill");
+            assert!(ok && said.contains("entity.minecraft.pig"), "{said}");
+            assert!(!game.run_command("execute if entity @e[type=minecraft:pig]"));
+            // The server's own source has no entity.
+            for (command, key) in [
+                ("kill", "permissions.requires.entity"),
+                ("gamemode creative", "permissions.requires.player"),
+                ("clear", "permissions.requires.player"),
+            ] {
+                let (ok, said) = run(game, command);
+                assert!(!ok && said.contains(key), "{command}: {said}");
+            }
+            // A pig is no player: the player forms refuse it (set as the source directly, as a failed command run
+            // through `execute as` prints nothing here).
+            assert!(game.run_command("summon pig 6.5 200 6.5 {NoAI:1b}"));
+            let pig = game
+                .mobs
+                .iter()
+                .map(|m| m.id)
+                .next()
+                .expect("the second pig");
+            game.command_source = server.map(|s| crate::game::commands::execute::Source {
+                entity: Some(Target::Mob(pig)),
+                ..s
+            });
+            let (ok, said) = run(game, "gamemode creative");
+            assert!(
+                !ok && said.contains("permissions.requires.player"),
+                "{said}"
+            );
         });
-        game.command_source = server;
-        assert!(game.run_command("summon pig 4.5 200 4.5 {NoAI:1b}"));
-        assert!(game.run_command("execute if entity @e[type=minecraft:pig]"));
-        // As the pig, a bare `kill` kills the pig.
-        let (ok, said) = run(&mut game, "execute as @e[type=minecraft:pig] run kill");
-        assert!(ok && said.contains("entity.minecraft.pig"), "{said}");
-        assert!(!game.run_command("execute if entity @e[type=minecraft:pig]"));
-        // The server's own source has no entity.
-        for (command, key) in [
-            ("kill", "permissions.requires.entity"),
-            ("gamemode creative", "permissions.requires.player"),
-            ("clear", "permissions.requires.player"),
-        ] {
-            let (ok, said) = run(&mut game, command);
-            assert!(!ok && said.contains(key), "{command}: {said}");
-        }
-        // A pig is no player: the player forms refuse it (set as the source directly, as a failed command run
-        // through `execute as` prints nothing here).
-        assert!(game.run_command("summon pig 6.5 200 6.5 {NoAI:1b}"));
-        let pig = game
-            .mobs
-            .iter()
-            .map(|m| m.id)
-            .next()
-            .expect("the second pig");
-        game.command_source = server.map(|s| crate::game::commands::execute::Source {
-            entity: Some(Target::Mob(pig)),
-            ..s
-        });
-        let (ok, said) = run(&mut game, "gamemode creative");
-        assert!(
-            !ok && said.contains("permissions.requires.player"),
-            "{said}"
-        );
     }
 }

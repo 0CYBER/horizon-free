@@ -61,7 +61,10 @@ fn a_merged_duration_restarts_a_spectral_arrows_glow() {
         game.arrow_post_hurt_effects(&p, Who::Mob(pig));
         let m = game.mobs.iter().find(|m| m.id == pig).unwrap();
         assert!(
-            m.extra.effects.contains(&("minecraft:glowing", 600, 0)),
+            m.extra
+                .effects
+                .iter()
+                .any(|e| e.id == "minecraft:glowing" && e.duration == 600 && e.amplifier == 0),
             "{:?}",
             m.extra.effects
         );

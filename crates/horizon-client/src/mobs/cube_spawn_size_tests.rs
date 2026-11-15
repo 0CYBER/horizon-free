@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 fn cube(types: &MobTypes, id: &str, seed: i64) -> Mob {
     let mut m = Mob::new(1, Arc::new(types.types[id].clone()), Vec3::ZERO, 0.0);
-    m.random = LegacyRandom::new(seed);
+    m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
     m
 }
 /// Hard, a long-played area, full moon: `calculateDifficulty` gives

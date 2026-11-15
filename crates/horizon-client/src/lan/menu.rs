@@ -1592,6 +1592,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
@@ -1624,6 +1625,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
@@ -1827,6 +1829,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
@@ -1931,6 +1934,7 @@ pub(crate) mod tests {
                 shulker: false,
                 container_limits: Vec::new(),
                 hidden: &[],
+                sounds: Vec::new(),
                 slot_snapshot: Default::default(),
                 loop_context: crate::test_resources::server_loop_context(),
             };
@@ -2184,6 +2188,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
@@ -2219,6 +2224,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    sounds: Vec::new(),
                     slot_snapshot: Default::default(),
                     loop_context: crate::test_resources::server_loop_context(),
                 };
@@ -2393,6 +2399,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
@@ -2884,6 +2891,7 @@ pub(crate) mod tests {
                 shulker: false,
                 container_limits: Vec::new(),
                 hidden: &[],
+                sounds: Vec::new(),
                 slot_snapshot: Default::default(),
                 loop_context: &context,
             };
@@ -2900,6 +2908,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: &context,
         };
@@ -3015,6 +3024,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: vec![Some(10); 3],
             hidden: &[],
+            sounds: Vec::new(),
             slot_snapshot: Default::default(),
             loop_context: &context,
         };

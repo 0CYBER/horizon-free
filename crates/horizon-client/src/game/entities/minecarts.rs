@@ -2803,7 +2803,7 @@ impl Game<'_> {
     ) {
         let scene = horizon_client::block_entity_render::Scene {
             camera: glam::DVec3::ZERO,
-            spyglass_outline: self.camera_type.first_person() && self.scoping(),
+            spyglass_outline: self.camera_type.is_first_person() && self.scoping(),
             orientation: glam::Quat::IDENTITY,
             anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
             texts: None,

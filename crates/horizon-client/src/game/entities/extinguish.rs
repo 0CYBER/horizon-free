@@ -89,6 +89,13 @@ impl Game<'_> {
         ) {
             return;
         }
+        // The hook had `&mut self`: the block must still be the one it judged.
+        let unchanged = registry
+            .state(self.world.block(at[0], at[1], at[2]))
+            .is_some_and(|now| now.name == old.name && now.properties == old.properties);
+        if !unchanged {
+            return;
+        }
         if self.level_set(at, new).is_ok() {
             self.post_block_game_event("minecraft:block_change", at, None, Some(new));
         }

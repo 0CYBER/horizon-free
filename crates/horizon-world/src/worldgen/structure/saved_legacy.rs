@@ -214,7 +214,7 @@ mod tests {
         let def = &defs[3];
         let (resources, bindings) = world();
         let chunk = ChunkPos::new(80, 22);
-        let child = crate::nbt::parse_snbt(
+        let child = horizon_core::nbt::parse_snbt(
             r#"{id:"minecraft:tesh",BB:[I;1280,63,352,1286,69,360],O:0,GD:0,Width:7,Height:7,Depth:9,HPos:63,Witch:1b,Cat:1b}"#,
         )
         .unwrap()

@@ -556,6 +556,8 @@ mod tests {
                         beam: None,
                         invulnerable: false,
                         fall: (false, 0.0),
+                        motion: Vec3::ZERO,
+                        rotation: [0.0, 0.0],
                     });
                 }
                 game.explosion_detonate([0.0, 1.0, 0.0], 3.0, &mut Vec::new());
@@ -648,7 +650,7 @@ mod tests {
             invisible: false,
             check_interval: 0,
             custom_name: None,
-            random: LegacyRandom::new(1),
+            random: horizon_core::random::EntityRandom::own(LegacyRandom::new(1)),
         });
         game.paintings.push(Painting {
             attachment_lifetime: Default::default(),
@@ -682,6 +684,8 @@ mod tests {
             beam: None,
             invulnerable: false,
             fall: (false, 0.0),
+            motion: Vec3::ZERO,
+            rotation: [0.0, 0.0],
         });
         zombie(game, 955, -2.0);
         game.boats.push(crate::game::boats::Boat::new(

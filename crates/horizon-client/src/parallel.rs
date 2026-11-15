@@ -11,10 +11,6 @@ use crate::graphics::ParallelTickMode;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-/// Typed gameplay dispatch owns mutable residency and damage contexts, so Horizon Fork keeps
-/// every tick serial whatever the setting or `HORIZON_PARALLEL_TICK` says (Diverges from upstream).
-const FORK_PARALLEL_TICK_ENABLED: bool = false;
-
 /// `HORIZON_PARALLEL_TICK`, whatever the setting says: `0` keeps every tick serial, `1` turns the
 /// server tick's parallel phases on, and `verify` does too, also checking the phases that can be
 /// checked against the serial code. Unset, the setting decides.
@@ -40,15 +36,6 @@ static AUTO: Mutex<Auto> = Mutex::new(Auto::new());
 /// Whether this tick's phases share their work: 0 serial, 1 shared, 2 shared and checked against
 /// the serial code (`HORIZON_PARALLEL_TICK=verify`). Each phase gives the serial result either way.
 pub fn parallel_tick() -> u8 {
-    if !FORK_PARALLEL_TICK_ENABLED {
-        static NOTICE: std::sync::Once = std::sync::Once::new();
-        NOTICE.call_once(|| {
-            if forced().is_some_and(|mode| mode > 0) {
-                eprintln!("warning: parallel tick is disabled in Horizon Fork while typed hook dispatch is integrated; using serial tick");
-            }
-        });
-        return 0;
-    }
     forced().unwrap_or_else(|| SHARED.load(Ordering::Relaxed))
 }
 
@@ -70,10 +57,7 @@ pub fn set_setting(mode: ParallelTickMode) {
 /// system tells): decides whether the next tick shares its phases' work. Only Auto has something
 /// to decide.
 pub fn after_tick(ms: f32, cpu_ms: Option<f32>) {
-    if !FORK_PARALLEL_TICK_ENABLED
-        || forced().is_some()
-        || SETTING.load(Ordering::Relaxed) != ParallelTickMode::Auto as u8
-    {
+    if forced().is_some() || SETTING.load(Ordering::Relaxed) != ParallelTickMode::Auto as u8 {
         return;
     }
     let mut auto = AUTO.lock().unwrap_or_else(PoisonError::into_inner);

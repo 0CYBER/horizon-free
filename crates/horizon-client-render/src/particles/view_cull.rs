@@ -111,11 +111,6 @@ pub(super) fn in_view(view: &crate::gfx::JoinedFrusta, particle: &Particle, came
 }
 
 impl ParticleEngine {
-    /// The live particles, the ones a frame draws (`ParticleEngine.particles`); those added
-    /// since the last tick wait apart until it.
-    pub fn live(&self) -> &[Particle] {
-        &self.particles
-    }
     /// [`Self::render`], keeping only the particles inside `view`, the camera's frustum pulled
     /// back [`PARTICLE_FRUSTUM_OFFSET`] blocks (vanilla's `ParticleEngine.extract` and
     /// `QuadParticleGroup`): the test runs whatever the Particle Culling setting says. With

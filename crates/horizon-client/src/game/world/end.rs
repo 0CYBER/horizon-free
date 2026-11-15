@@ -1959,7 +1959,7 @@ fn eye_quad(
 mod ticking_tests;
 
 #[cfg(test)]
-#[path = "end_gateway_exit_search_tests.rs"]
+#[path = "tests/end_gateway_exit_search_tests.rs"]
 mod exit_search_tests;
 
 #[cfg(test)]

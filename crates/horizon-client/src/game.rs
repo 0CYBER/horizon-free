@@ -5752,7 +5752,7 @@ impl Game<'_> {
             let anim = |p: [i32; 3]| self.block_anim(p, alpha as f32);
             let scene = BlockEntityScene {
                 camera,
-                spyglass_outline: self.camera_type.first_person() && self.scoping(),
+                spyglass_outline: self.camera_type.is_first_person() && self.scoping(),
                 orientation: self.camera_orientation(),
                 anim: &anim,
                 texts: None,

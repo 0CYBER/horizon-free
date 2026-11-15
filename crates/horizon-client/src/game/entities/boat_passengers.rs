@@ -368,7 +368,7 @@ impl Game<'_> {
     /// player touching it pushes the two apart once more. Only the window's
     /// own player is moved here: a server's players are pushed by their
     /// clients, which tick the boats near them (`remote_pushes`).
-    pub(super) fn boat_contacts(&mut self, i: usize) {
+    pub(super) fn boat_contacts(&mut self, mut i: usize) {
         let (id, bb, max) = {
             let b = &self.boats[i];
             (b.id, b.bounds(), b.max_passengers())
@@ -455,11 +455,25 @@ impl Game<'_> {
                     // is under water, or when a mod cancels it
                     // (EntityMountEvent).
                     let ready = m.extra.boarding_cooldown <= 0 && species_can_ride(m.species());
-                    if room
-                        && ready
-                        && self.native_mob_may_ride(mob, id, true)
-                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob)
-                    {
+                    if room && ready && self.native_mob_may_ride(mob, id, true) {
+                        // The hook had `&mut self`: find the boat and the mob
+                        // again by id and check the boarding still holds.
+                        let Some(bi) = self.boats.iter().position(|b| b.id == id) else {
+                            return;
+                        };
+                        i = bi;
+                        let fresh = self.boat_passengers(id);
+                        if fresh >= max {
+                            continue;
+                        }
+                        count = fresh;
+                        let Some(m) = self
+                            .mobs
+                            .iter_mut()
+                            .find(|m| m.id == mob && !m.removed && m.extra.mount.is_none())
+                        else {
+                            continue;
+                        };
                         horizon_client::mobs::shulker::on_start_riding(m);
                         m.extra.mount = Some(id);
                         m.extra.passenger = true;

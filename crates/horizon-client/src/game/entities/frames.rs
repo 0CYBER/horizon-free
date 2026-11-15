@@ -456,12 +456,20 @@ impl Game<'_> {
     /// (`BlockAttachedEntity.hurtServer`). `by_player`: the damage source's
     /// entity is the acting player, `creative` when they have infinite
     /// materials (no drops).
-    fn hit_frame(&mut self, i: usize, by_player: bool, creative: bool) {
+    fn hit_frame(&mut self, mut i: usize, by_player: bool, creative: bool) {
         let with_frame = self.item_frames[i].item.is_none();
         let entity_id = self.item_frames[i].id;
         if with_frame {
             let (kind, pos) = (self.item_frames[i].kind(), self.item_frames[i].pos);
             if self.hanging_break_cancelled(kind, pos, by_player) {
+                return;
+            }
+            // The hook had `&mut self`: find the frame again by id.
+            let Some(now) = self.item_frames.iter().position(|f| f.id == entity_id) else {
+                return;
+            };
+            i = now;
+            if self.item_frames[i].item.is_some() {
                 return;
             }
         }
@@ -489,8 +497,10 @@ impl Game<'_> {
             self.frame_output_changed(f.pos);
         }
         self.drop_frame_items(&mut f, with_frame, by_player, creative);
-        if !with_frame {
-            self.item_frames[i].random = f.random.clone();
+        if !with_frame
+            && let Some(now) = self.item_frames.iter().position(|g| g.id == entity_id)
+        {
+            self.item_frames[now].random = f.random.clone();
         }
         // BLOCK_CHANGE by the attacker after the drops: ItemFrame.hurtServer
         // for the item, ItemFrame.dropItem(level, causedBy) for the frame.
@@ -631,10 +641,15 @@ impl Game<'_> {
         index: usize,
         source: Option<super::commands::Target>,
     ) -> bool {
+        let frame_id = self.item_frames[index].id;
         let (kind, pos) = (self.item_frames[index].kind(), self.item_frames[index].pos);
         if self.hanging_break_cancelled(kind, pos, false) {
             return false;
         }
+        // The hook had `&mut self`: find the frame again by id.
+        let Some(index) = self.item_frames.iter().position(|g| g.id == frame_id) else {
+            return false;
+        };
         let mut f = self.item_frames.remove(index);
         self.entity_killed_event_by(center(&f), source);
         self.audio

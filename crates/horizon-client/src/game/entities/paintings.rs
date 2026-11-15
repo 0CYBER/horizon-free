@@ -386,10 +386,12 @@ impl Game<'_> {
     /// The removal `kill` and `discard` share: the mod hook, the entity, its
     /// chunk's save mark and the centre of its box.
     fn remove_painting(&mut self, index: usize, by_player: bool) -> Option<(Painting, [f64; 3])> {
-        let pos = self.paintings[index].pos;
+        let (id, pos) = (self.paintings[index].id, self.paintings[index].pos);
         if self.hanging_break_cancelled("minecraft:painting", pos, by_player) {
             return None;
         }
+        // The hook had `&mut self`: find the painting again by id.
+        let index = self.paintings.iter().position(|p| p.id == id)?;
         let p = self.paintings.remove(index);
         let (lo, hi) = p.bounds();
         let at = [

@@ -1116,15 +1116,10 @@ mod look_at_tests {
                     ..w.clone()
                 };
                 m.ai.goals.add(9, PandaLook::default());
-                let (mut lr, mut events) = (
-                    horizon_core::random::LevelRandom::for_level(
-                        horizon_core::random::LegacyRandom::new(0),
-                    ),
-                    Vec::new(),
-                );
+                let (mut test_level, mut events) = (crate::health::TestLevel::new(0), Vec::new());
                 let mut cx = Cx {
                     w: &world,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 };
                 let mut goals = std::mem::take(&mut m.ai.goals);

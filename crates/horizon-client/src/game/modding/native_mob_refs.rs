@@ -1372,7 +1372,7 @@ mod tests {
             let mut expected = LegacyRandom::new(2026);
             let sound_delay = expected.next_int_bound(21).unwrap();
             let alert_delay = 80 + expected.next_int_bound(41).unwrap();
-            game.mobs.iter_mut().find(|m| m.id == 14).unwrap().random = LegacyRandom::new(2026);
+            game.mobs.iter_mut().find(|m| m.id == 14).unwrap().random = horizon_core::random::EntityRandom::own(LegacyRandom::new(2026));
             assert!(piglin.set_target(game, Some(other)));
             assert_eq!(piglin.target(game), Some(other));
             let first = state(game, 14);
@@ -1414,7 +1414,7 @@ mod tests {
             let seed = (0..10_000)
                 .find(|&seed| LegacyRandom::new(seed).next_int_bound(21) == Ok(1))
                 .unwrap();
-            game.mobs[0].random = LegacyRandom::new(seed);
+            game.mobs[0].random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
             let actor = game.mob(game.entity(12).unwrap()).unwrap();
             let other = game.mob(game.entity(13).unwrap()).unwrap();
             let target = game.living(game.entity(14).unwrap()).unwrap();

@@ -492,9 +492,9 @@ fn ominous_layers(layers: &[crate::banner_layer::BannerLayer]) -> bool {
             .all(|(layer, (pattern, color))| {
                 layer
                     .pattern
-                    .strip_prefix("minecraft:")
-                    .unwrap_or(&layer.pattern)
-                    == pattern
+                    .id()
+                    .map(|id| id.strip_prefix("minecraft:").unwrap_or(id))
+                    == Some(pattern)
                     && layer.color.as_ref() == color
             })
 }

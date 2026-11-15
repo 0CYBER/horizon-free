@@ -333,8 +333,8 @@ pub fn start_riding(mobs: &mut JoinList<Mob>, rider: u32, vehicle: u32) -> bool 
 /// (`positionRider`) before it handles events, so the event keeps where the
 /// mob stood when it boarded. Returns the index after the event: one past it
 /// when kept, the same when removed.
-pub fn start_riding_event<M: super::MobSlot>(
-    mobs: &mut [M],
+pub fn start_riding_event(
+    mobs: &mut JoinList<Mob>,
     events: &mut Vec<super::MobEvent>,
     i: usize,
     rider: u32,
@@ -342,7 +342,6 @@ pub fn start_riding_event<M: super::MobSlot>(
 ) -> usize {
     let leashed_at = mobs
         .iter()
-        .map(super::MobSlot::mob)
         .find(|m| m.id == rider && m.extra.leash.is_some())
         .map(|m| [m.position.x, m.position.y, m.position.z]);
     let boarded = start_riding(mobs, rider, vehicle);

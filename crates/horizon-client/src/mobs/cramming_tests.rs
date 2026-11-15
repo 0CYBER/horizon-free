@@ -59,7 +59,7 @@ fn a_ridden_horse_is_not_counted_for_cramming() {
                 ..base.clone()
             };
             let mut m = pig(99, 0.5);
-            m.random = LegacyRandom::new(1234567);
+            m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(1234567));
             let full = m.health;
             let mut events = Vec::new();
             push_entities(

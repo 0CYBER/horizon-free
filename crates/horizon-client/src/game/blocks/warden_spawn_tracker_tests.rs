@@ -10,7 +10,7 @@ use horizon_client::{
     command::vanilla, motion::PlayerMotion, sculk::WardenSpawnTracker,
 };
 use horizon_core::geometry::Vec3;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 /// A server's game with the window's own player standing at the world spawn,

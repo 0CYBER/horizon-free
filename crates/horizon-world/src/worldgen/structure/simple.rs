@@ -545,7 +545,7 @@ impl SwampHutPiece {
     /// constructor never re-derives the box from the dimensions), and the
     /// witch's and the cat's flags collapse onto this piece's one spawned
     /// flag (vanilla sets both in the same post-process call).
-    pub(crate) fn from_saved(tag: &crate::nbt::Tag, frame: PieceFrame) -> Self {
+    pub(crate) fn from_saved(tag: &horizon_core::nbt::Tag, frame: PieceFrame) -> Self {
         let int = |key| super::saved_legacy::int(tag, key);
         let flag = |key| super::saved_legacy::flag(tag, key);
         Self {

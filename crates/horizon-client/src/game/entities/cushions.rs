@@ -349,6 +349,10 @@ impl Game<'_> {
         if self.riding.is_some() {
             return true;
         }
+        // The hooks above had `&mut self`: find the cushion again by id.
+        let Some(i) = self.cushions.iter().position(|c| c.id == id) else {
+            return true;
+        };
         self.start_riding(id);
         let p = self.cushions[i].position;
         self.audio.play(

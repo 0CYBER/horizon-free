@@ -5297,6 +5297,52 @@ mod tests {
         assert_eq!(machine.nbt, Compound::from([progress]));
     }
 
+    /// A glide `updateFallFlying` ends reaches the player's client with the next tick's data, its flag and its pose
+    /// together, as vanilla's ServerEntity.sendChanges runs before ServerPlayer.doTick: the landing glide lasts one more
+    /// tick on the ground, and a jump then keeps its speed (the elytra hop).
+    #[test]
+    fn a_glide_ended_this_tick_reaches_its_client_a_tick_later() {
+        use crate::pose::Pose;
+        fn data(rx: &std::sync::mpsc::Receiver<crate::lan::Out>) -> Vec<(u8, Value)> {
+            let mut sent = Vec::new();
+            while let Ok(out) = rx.try_recv() {
+                let crate::lan::Out::Packet(body) = out else {
+                    continue;
+                };
+                let mut r = horizon_protocol::buf::Reader::new(&body);
+                let id = r.varint().unwrap();
+                if let C::SetEntityData(p) = C::decode(id, r.rest()).unwrap() {
+                    sent.extend(
+                        p.values
+                            .into_iter()
+                            .filter(|(i, _, _)| *i == 0 || *i == 6)
+                            .map(|(i, _, v)| (i, v)),
+                    );
+                }
+            }
+            sent
+        }
+        let (mut hub, rx) = hub_with_a_guest();
+        hub.guests.update(0, |g| g.fall_flying = true);
+        hub.sync_player_state(0);
+        assert_eq!(
+            data(&rx),
+            [
+                (0, Value::Byte(-128)),
+                (6, Value::Id(Pose::FallFlying.id()))
+            ]
+        );
+        // The landing tick: the guest's glide tick ends the glide after the data was looked at.
+        hub.guests.update(0, |g| g.end_glide());
+        hub.sync_player_state(0);
+        assert_eq!(data(&rx), [], "the end waits for the next tick");
+        hub.sync_player_state(0);
+        assert_eq!(
+            data(&rx),
+            [(0, Value::Byte(0)), (6, Value::Id(Pose::Standing.id()))]
+        );
+    }
+
     #[test]
     fn self_pose_wire_lifecycle_preserves_existing_publishers() {
         use crate::pose::Pose;
@@ -5381,15 +5427,10 @@ mod tests {
                 (14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(None)),
             ]]
         );
+        // A glide's pose reaches the player too, as vanilla's server sends it.
         hub.guests.update(0, |g| g.fall_flying = true);
         hub.sync_player_state(0);
-        assert!(
-            drain(&rx)
-                .0
-                .iter()
-                .all(|v| !v.iter().any(|(i, _, _)| *i == 6)),
-            "other normal poses stay outside this sender"
-        );
+        assert_eq!(drain(&rx).0, [flags(-128), pose(Pose::FallFlying)]);
         hub.guests.update(0, |g| g.fall_flying = false);
         hub.guests.update(0, |g| g.sneaking = true);
         hub.sync_player_state(0);
@@ -6954,6 +6995,187 @@ mod tests {
             Vec::<(String, i32)>::new(),
             "an unknown connection is not a player of this server"
         );
+    }
+
+    /// `ServerPlayer.acceptsSystemMessages`: a guest whose chat is hidden (2) is sent no system message, only an overlay
+    /// one; a guest who shows chat (0) or only commands (1) is sent both.
+    #[test]
+    fn a_system_message_skips_a_guest_whose_chat_is_hidden() {
+        let (mut hub, rx) = hub_with_a_guest();
+        let count = |rx: &std::sync::mpsc::Receiver<crate::lan::Out>| {
+            let (mut plain, mut bar) = (0, 0);
+            while let Ok(out) = rx.try_recv() {
+                let crate::lan::Out::Packet(body) = out else {
+                    continue;
+                };
+                let mut r = horizon_protocol::buf::Reader::new(&body);
+                let id = r.varint().unwrap();
+                if let C::SystemChat(p) = C::decode(id, r.rest()).unwrap() {
+                    if p.overlay {
+                        bar += 1;
+                    } else {
+                        plain += 1;
+                    }
+                }
+            }
+            (plain, bar)
+        };
+        for (visibility, expected) in [(0, (3, 1)), (1, (3, 1)), (2, (0, 1))] {
+            hub.guests.update(0, |g| g.info.chat_visibility = visibility);
+            hub.system_message(literal("all"));
+            hub.system_message_to(literal("by name"), |name| name == "Bob");
+            hub.system_message_to_player(1, literal("to one"));
+            hub.overlay_message(literal("bar"));
+            assert_eq!(count(&rx), expected, "chat visibility {visibility}");
+        }
+    }
+
+    /// The packet `id` with nothing in it: the shortest all-zero body it decodes from.
+    fn blank_packet(id: i32) -> S {
+        (0..=64)
+            .find_map(|n| S::decode(id, &vec![0u8; n]).ok())
+            .unwrap_or_else(|| panic!("no all-zero body decodes as packet {id}"))
+    }
+
+    /// Whether `packet` sets the idle timer (`ServerPlayer.resetLastActionTime`) of a guest who has
+    /// or has not loaded and whose vehicle was last accepted at `vehicle_good`.
+    fn resets_the_idle_timer(packet: S, loaded: bool, vehicle_good: Option<[f64; 3]>) -> bool {
+        let (mut hub, _rx) = hub_with_a_guest();
+        let mut world = floor_at(0);
+        hub.guests.update(0, |g| {
+            g.load_timeout = if loaded { 0 } else { 60 };
+            g.vehicle_good = vehicle_good;
+            g.last_action_tick = 5;
+        });
+        hub.ticks = 100;
+        tick_packet(&mut hub, &mut world, packet);
+        hub.guests[0].last_action_tick == hub.ticks
+    }
+
+    /// The handlers of `ServerGamePacketListenerImpl` that do not call `resetLastActionTime` leave the
+    /// idle timer alone: the answers to what the server asked, the client's settings and the
+    /// requests that are not the player acting (checked one by one with `javap -c -p`).
+    #[test]
+    fn packets_that_vanilla_does_not_count_as_activity_leave_the_idle_timer_alone() {
+        use horizon_protocol::ids::play::serverbound as id;
+        for (name, packet) in [
+            ("ChatAck", id::CHAT_ACK),
+            ("ContainerClose", id::CONTAINER_CLOSE),
+            ("CustomPayload", id::CUSTOM_PAYLOAD),
+            ("SeenAdvancements", id::SEEN_ADVANCEMENTS),
+            ("ChatSessionUpdate", id::CHAT_SESSION_UPDATE),
+            ("CookieResponse", id::COOKIE_RESPONSE),
+            ("SetCreativeModeSlot", id::SET_CREATIVE_MODE_SLOT),
+            ("PaddleBoat", id::PADDLE_BOAT),
+            ("PickItemFromBlock", id::PICK_ITEM_FROM_BLOCK),
+            ("KeepAlive", id::KEEP_ALIVE),
+            ("ClientTickEnd", id::CLIENT_TICK_END),
+            ("AcceptTeleportation", id::ACCEPT_TELEPORTATION),
+        ] {
+            assert!(
+                !resets_the_idle_timer(blank_packet(packet), true, None),
+                "{name} reset the idle timer"
+            );
+        }
+    }
+
+    /// The 17 handlers that call `resetLastActionTime`, for a client that has loaded.
+    #[test]
+    fn the_packets_that_vanilla_counts_as_activity_reset_the_idle_timer() {
+        use horizon_protocol::ids::play::serverbound as id;
+        for (name, packet) in [
+            ("Attack", id::ATTACK),
+            ("Interact", id::INTERACT),
+            ("UseItemOn", id::USE_ITEM_ON),
+            ("UseItem", id::USE_ITEM),
+            ("PlayerAction", id::PLAYER_ACTION),
+            ("PlayerCommand", id::PLAYER_COMMAND),
+            ("SpectatorAction", id::SPECTATOR_ACTION),
+            ("Chat", id::CHAT),
+            ("ChatCommand", id::CHAT_COMMAND),
+            ("ChatCommandSigned", id::CHAT_COMMAND_SIGNED),
+            ("SignUpdate", id::SIGN_UPDATE),
+            ("SetCarriedItem", id::SET_CARRIED_ITEM),
+            ("Punch", id::PUNCH),
+            ("PlaceRecipe", id::PLACE_RECIPE),
+            ("ContainerClick", id::CONTAINER_CLICK),
+            ("ContainerButtonClick", id::CONTAINER_BUTTON_CLICK),
+            ("ClientCommand", id::CLIENT_COMMAND),
+        ] {
+            assert!(
+                resets_the_idle_timer(blank_packet(packet), true, None),
+                "{name} did not reset the idle timer"
+            );
+        }
+        // A packet Horizon does not model counts, as it always did.
+        assert!(resets_the_idle_timer(S::Unknown(250, vec![]), true, None));
+    }
+
+    /// `hasClientLoaded` comes before the reset in seven of them and in `handlePlayerInput`, and
+    /// `handleSetCarriedItem` resets only for a slot of the hotbar.
+    #[test]
+    fn the_idle_timer_waits_for_a_loaded_client_and_a_slot_of_the_hotbar() {
+        use horizon_protocol::ids::play::serverbound as id;
+        for (name, packet) in [
+            ("Attack", id::ATTACK),
+            ("Interact", id::INTERACT),
+            ("UseItemOn", id::USE_ITEM_ON),
+            ("UseItem", id::USE_ITEM),
+            ("PlayerAction", id::PLAYER_ACTION),
+            ("PlayerCommand", id::PLAYER_COMMAND),
+            ("SpectatorAction", id::SPECTATOR_ACTION),
+            ("PlayerInput", id::PLAYER_INPUT),
+        ] {
+            assert!(
+                !resets_the_idle_timer(blank_packet(packet), false, None),
+                "{name} reset the idle timer of a client that has not loaded"
+            );
+            assert!(
+                resets_the_idle_timer(blank_packet(packet), true, None),
+                "{name} did not reset the idle timer of a client that has loaded"
+            );
+        }
+        let slot = |slot| {
+            resets_the_idle_timer(S::SetCarriedItem(play::SetCarriedItem { slot }), true, None)
+        };
+        assert!(slot(0) && slot(8));
+        assert!(!slot(9) && !slot(12) && !slot(-1));
+    }
+
+    /// A vehicle's move that repeats the position the game last accepted is the client standing
+    /// still (it sends one every tick for a vehicle it drives): no activity. A move away counts, and
+    /// so does any move when no position was kept for the vehicle.
+    #[test]
+    fn a_vehicle_that_stands_still_does_not_reset_the_idle_timer() {
+        let at = [0.5, 64.0, 0.5];
+        let moves = |to: [f64; 3]| {
+            S::MoveVehicle(play::MoveVehicleRequest {
+                position: to,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            })
+        };
+        // The same place, and a shift of 0.002 (squared 4.0E-6, under 1.0E-5).
+        assert!(!resets_the_idle_timer(moves(at), true, Some(at)));
+        assert!(!resets_the_idle_timer(
+            moves([0.502, 64.0, 0.5]),
+            true,
+            Some(at)
+        ));
+        // A shift of 0.004 (squared 1.6E-5) and a block away.
+        assert!(resets_the_idle_timer(
+            moves([0.504, 64.0, 0.5]),
+            true,
+            Some(at)
+        ));
+        assert!(resets_the_idle_timer(
+            moves([1.5, 64.0, 0.5]),
+            true,
+            Some(at)
+        ));
+        // No position kept for this vehicle: the move counts.
+        assert!(resets_the_idle_timer(moves(at), true, None));
     }
 
     /// `/effect give Bob minecraft:speed 30 1` from a dedicated server's

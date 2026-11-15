@@ -41,15 +41,10 @@ fn own_attribute(m: &Mob, name: &str) -> Option<Attr> {
     finalize::command_attr(short).filter(|a| finalize::default_value(m, *a).is_some())
 }
 
-/// `write` on one of the mob's own attributes; a lower max health cuts its
-/// health (`LivingEntity.onAttributeUpdated`).
+/// `write` on one of the mob's own attributes. A lower max health marks the attribute dirty;
+/// the mob's next tick cuts its health (`LivingEntity.refreshDirtyAttributes`, `finalize::refresh`).
 fn write_own_attribute(m: &mut Mob, a: Attr, write: AttributeWrite) -> bool {
-    let done = write.apply_to_mob(m, a);
-    if a == Attr::MaxHealth && m.health > m.attrs.max_health {
-        m.health = m.attrs.max_health;
-        m.needs_sync = true;
-    }
-    done
+    write.apply_to_mob(m, a)
 }
 
 /// An attribute write on a mob that is in no level yet (`finalize_spawn`'s

@@ -546,7 +546,7 @@ mod tests {
                     invisible: false,
                     check_interval: 0,
                     custom_name: None,
-                    random: horizon_core::random::LegacyRandom::new(0),
+                    random: horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0)),
                 });
             }
             game.paintings.push(Painting {

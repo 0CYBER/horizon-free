@@ -1450,6 +1450,7 @@ mod tests {
                     mob: 160,
                     drop: true,
                     sound: false,
+                    at: None,
                 };
                 game.handle_mob_events(vec![event]).unwrap();
                 assert_eq!(game.mobs[0].extra.leash, None);

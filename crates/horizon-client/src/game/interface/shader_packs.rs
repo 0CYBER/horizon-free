@@ -455,14 +455,7 @@ impl Game<'_> {
                             biomes.list.iter().map(|b| b.name.as_str()).collect();
                         post.custom.set_biomes(&names);
                         let text = pack.read_text("block.properties").unwrap_or_default();
-                        let items = match &self.world_tables {
-                            Some(t) => &t.items,
-                            None => self
-                                .remote
-                                .as_ref()
-                                .and_then(|r| r.tables.items.as_deref())
-                                .unwrap_or_else(|| self.res.items()),
-                        };
+                        let items = world_items!(self);
                         let ids = resolve_block_tags(
                             &BlockIds::parse(&Properties::parse(&text, &macros)),
                             &items.block_tags,

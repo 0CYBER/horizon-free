@@ -31,7 +31,7 @@ fn with_hanging_in(game: &mut super::Game<'_>) {
         fixed: false,
         invisible: false,
         custom_name: None,
-        random: horizon_core::random::LegacyRandom::new(0),
+        random: horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0)),
         check_interval: 0,
     });
     game.paintings.push(Painting {

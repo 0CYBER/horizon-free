@@ -44,6 +44,20 @@ pub(super) fn goal_id(name: &str) -> &str {
 }
 
 /// The supported `Mob` classes that do not inherit `PathfinderMob`.
+/// A one-species `LookAtPlayer::only` list, made once per species (the goal wants a
+/// `'static` slice).
+fn only_species(species: Species) -> &'static [Species] {
+    use std::sync::{Mutex, OnceLock};
+    static LISTS: OnceLock<Mutex<Vec<&'static [Species]>>> = OnceLock::new();
+    let mut lists = LISTS.get_or_init(Default::default).lock().unwrap();
+    if let Some(list) = lists.iter().find(|list| list[0] == species) {
+        return list;
+    }
+    let list: &'static [Species] = Box::leak(Box::new([species]));
+    lists.push(list);
+    list
+}
+
 fn pathfinder(species: Species) -> bool {
     !matches!(species, Species::Bat | Species::Ghast | Species::Phantom)
 }
@@ -313,9 +327,9 @@ impl Game<'_> {
                 {
                     return None;
                 }
-                let only = match only {
-                    None => None,
-                    Some(id) => Some(self.species_of(id)?),
+                let only: &'static [Species] = match only {
+                    None => &[],
+                    Some(id) => only_species(self.species_of(id)?),
                 };
                 let mut g = if *mobs {
                     LookAtPlayer::mobs(*range)

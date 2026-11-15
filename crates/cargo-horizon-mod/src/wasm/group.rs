@@ -545,8 +545,10 @@ pub(super) fn build(
             wasm["linked"][&dep] = toml_edit::value(hash);
         }
         member.manifest["wasm"] = toml_edit::Item::Table(wasm);
-        std::fs::write(member.root.join(MANIFEST), member.manifest.to_string())
-            .map_err(|e| e.to_string())?;
+        crate::internals::atomic_write_manifest(
+            &member.root.join(MANIFEST),
+            member.manifest.to_string(),
+        )?;
     }
     for member in &members {
         // A group member packs no uses table yet, so it counts as made for its build only.

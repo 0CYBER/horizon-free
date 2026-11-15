@@ -272,8 +272,8 @@ impl Game<'_> {
         }
         match target {
             Target::Other(id) => {
-                if let Some(e) = self.others.iter_mut().find(|e| e.id == id) {
-                    e.position = at;
+                if let Some(i) = self.others.iter().position(|e| e.id == id) {
+                    self.others.update(i, |e| e.position = at);
                 }
             }
             // BlockAttachedEntity.setPos floors the anchor then recalculates
@@ -297,8 +297,8 @@ impl Game<'_> {
                 }
             }
             Target::Fangs(id) => {
-                if let Some(e) = self.fangs.list.iter_mut().find(|e| e.id == id) {
-                    e.pos = [at.x, at.y, at.z];
+                if let Some(i) = self.fangs.list.iter().position(|e| e.id == id) {
+                    self.fangs.list.update(i, |e| e.pos = [at.x, at.y, at.z]);
                 }
             }
             Target::Crystal(id) => {
@@ -317,13 +317,14 @@ impl Game<'_> {
                 }
             }
             Target::Spawner(id) => {
-                if let Some(e) = self.ominous_spawners.iter_mut().find(|e| e.id == id) {
-                    e.position = [at.x, at.y, at.z];
+                if let Some(i) = self.ominous_spawners.iter().position(|e| e.id == id) {
+                    self.ominous_spawners
+                        .update(i, |e| e.position = [at.x, at.y, at.z]);
                 }
             }
             Target::Cloud(id) => {
-                if let Some(e) = self.breath_clouds.iter_mut().find(|e| e.id == id) {
-                    e.at = [at.x, at.y, at.z];
+                if let Some(i) = self.breath_clouds.iter().position(|e| e.id == id) {
+                    self.breath_clouds.update(i, |e| e.at = [at.x, at.y, at.z]);
                 }
             }
             _ => {}
@@ -417,7 +418,7 @@ impl Game<'_> {
         self.breath_clouds.retain(|e| !gone.contains(&e.id));
         self.ominous_spawners.retain(|e| !gone.contains(&e.id));
         if self.dragon.as_ref().is_some_and(|e| gone.contains(&e.id)) {
-            self.dragon = None;
+            self.dragon.discard();
         }
         for &id in gone {
             self.release_vehicle_container(id);

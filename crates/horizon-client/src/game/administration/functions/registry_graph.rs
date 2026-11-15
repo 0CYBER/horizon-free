@@ -3,6 +3,7 @@
 //! This follows the holder positions in the 26.3 codecs, rather than treating arbitrary strings
 //! in JSON as references. Binding precedes cycle validation (`RegistryDataLoader` and
 //! `ReloadableServerRegistries`); tags obey pack order, `replace`, and optional entries.
+#[path = "registry_graph/fields.rs"]
 mod fields;
 
 use horizon_client::datapack::DataPack;
@@ -484,4 +485,5 @@ fn walk(
 }
 
 #[cfg(test)]
+#[path = "registry_graph/tests.rs"]
 mod tests;

@@ -1294,6 +1294,17 @@ pieces.
   read as air (its tints as 0). `below + above` must be 1 to the level's height, and the read at most 1,048,576 blocks.
   The tints are the biome's own at the column's top, not blended over the biome blend radius as the game draws them, so
   near a biome border they can differ from what players see by a few blocks.
+- `native_terrain_surface(dimension, columns)` answers what the level's generator makes at each column *before its
+  features are placed*, loaded or not, and creates no chunk: `TerrainColumn` holds the `height` (one above the
+  highest solid block, fluids skipped: the count of the `OceanFloor` heightmap), the top `block`, the `water` surface
+  (one above the highest fluid block over the surface, `None` where the surface is dry) and the `biome`, named in the
+  world's own biome table. The scan starts at the top of the level, so in the Nether `height` is the roof, not a
+  floor. It is the question a random teleport asks of many candidate columns before it holds a chunk for the one it
+  picks: trees, lava pools and cacti are decorated later, so read the chunk once it is loaded to check them, and the
+  top block skips the generated chunk's slope rules, so it can differ from the chunk's before any feature is placed.
+  At most 4,096 columns a call. A column is `None` where the generator finds no solid block (the End's void: a real
+  answer, do not land there) and in a world with no generator of its own; `Err` is for a client or another
+  dimension. API @API:terrain_surface@.
 
 ### Chat and commands a client mod sends
 
@@ -2248,7 +2259,7 @@ registration path.
 
 - `native_edit_blocks(dimension, edit)` for server mods: runs up columns, from a height or a heightmap's, of block states and filters written as commands write them, made at once straight into the chunks of the level being ticked with what `fill ... strict` does for block entities; the chunks changed go to the players whole.
 
-- Column reads for server mods, in the level being ticked: `native_surface_heights(dimension, columns, heightmap)` and `native_read_columns(dimension, columns, heightmap, (below, above))`, the blocks round each column's height as a palette and indexes with the biome's grass, foliage and water tints.
+- Column reads for server mods, in the level being ticked: `native_surface_heights(dimension, columns, heightmap)` and `native_read_columns(dimension, columns, heightmap, (below, above))`, the blocks round each column's height as a palette and indexes with the biome's grass, foliage and water tints; and `native_terrain_surface(dimension, columns)`, the generator's surface (height, top block, water, biome) at columns nobody has loaded, without creating a chunk.
 
 - `experience_orb_can_merge(dimension, into, from, into_value, from_value, can_merge)` is asked for each pair of orbs whose boxes meet, when an orb spawns (`ExperienceOrb.tryMergeToExisting`; `from` is 0, the new orb is no entity yet) and every 20 ticks as an orb scans (`scanForMerges`); `can_merge` holds vanilla's `canMerge` answer, which a mod may flip either way. `experience_orb_merge` follows a yes and may cancel it (its own notes). A merged orb counts as `count` orbs of the keeper's value. `native_set_experience_orb(dimension, id, value, count, age)` writes an orb's `value`, `count` and `age` (each optional; false for a `count` of 0 or an orb that isn't there; signed `value` is preserved, including zero and negative values).
 

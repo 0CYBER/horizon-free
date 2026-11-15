@@ -119,6 +119,19 @@ pub fn expand(attribute: TokenStream, mut function: ImplItemFn) -> TokenStream {
         )
         .to_compile_error();
     }
+    if let Some(param) = function
+        .sig
+        .generics
+        .params
+        .iter()
+        .find(|param| !matches!(param, syn::GenericParam::Lifetime(_)))
+    {
+        return syn::Error::new_spanned(
+            param,
+            "a point cannot be generic: its replacement cell holds one function pointer, not one per instantiation",
+        )
+        .to_compile_error();
+    }
     let shape = match point_shape::shape(attribute, &function.sig) {
         Ok(shape) => shape,
         Err(e) => return e.to_compile_error(),

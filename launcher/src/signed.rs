@@ -114,7 +114,7 @@ mod tests {
         )
         .is_some());
         assert!(horizon_release_sign::legacy_digest_for(
-            "horizon-rust/horizon",
+            "someone/horizon-fork",
             "v2026.10.12",
             "horizon-linux-x86_64.tar.gz"
         )
@@ -125,7 +125,13 @@ mod tests {
             "horizon-linux-x86_64.tar.gz"
         )
         .is_none());
-        assert!(digest("v2026.10.12", "horizon-linux-x86_64.tar.gz", &[], tampered).is_err());
+        // The launcher's own repository is upstream, so its pinned digest wins over anything fetched.
+        assert_eq!(
+            digest("v2026.10.12", "horizon-linux-x86_64.tar.gz", &[], tampered),
+            Ok(
+                "81fba8b54900ddc1c56f7cb5d235b67f4f762647d68be02d26068e98bd7ad4e0".to_owned()
+            )
+        );
     }
 
     #[test]

@@ -1216,7 +1216,6 @@ impl Game<'_> {
         }
     }
 
-    pub(super) fn put_mob_passengers(&mut self, tag: &mut Tag, id: u32) {
     /// `Entity.shouldBeSaved`: the riders of entity `id` under `tag`'s
     /// `Passengers`, after the passengers it kept from loading. Discarded
     /// passengers cannot save even before their list entry is swept.
@@ -1225,7 +1224,7 @@ impl Game<'_> {
     // MERGE-CHECK: main's slot list (any rider kind live) and the fork's mob object memory
     // (`mob_passenger_objects`, off-level riders) are two models of one relation; this walks
     // both and lists a mob rider once.
-    pub(super) fn put_mob_passengers(&mut self, tag: &mut Tag, id: u32) {
+    pub(in crate::game) fn put_mob_passengers(&mut self, tag: &mut Tag, id: u32) {
         let mut riders: Vec<Tag> = Vec::new();
         let mut seen = HashSet::new();
         if let Some(slots) = self.persist.passenger_slots.get(&id).cloned() {

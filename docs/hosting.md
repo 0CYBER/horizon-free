@@ -185,7 +185,7 @@ path = ""                    # the game program; empty: the one beside horizon-s
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true
 low_memory = false           # true: less memory, slightly slower ticks (see below)
-parallel_tick = false        # reserved: parallel phases are disabled in this fork (see below)
+parallel_tick = false        # true: the tick shares its work among helper threads (see below)
 
 [backups]
 every = "6h"                 # 30m, 6h, 1d...; "0" turns automatic backups off
@@ -818,11 +818,6 @@ A game started without `horizon-server` (`horizon-client --dedicated`, a contain
 effect from the environment variable `MIMALLOC_ALLOW_THP=0`. On macOS and Windows it changes nothing.
 
 ### Parallel tick: `parallel_tick`
-
-**Fork limitation:** all opt-in parallel server phases are currently disabled, including when this
-setting is true or `HORIZON_PARALLEL_TICK` is set. A request logs a warning and uses serial execution.
-The upstream behavior described below is retained for reference, not currently available on the fork.
-Typed hook-aware parallel execution is tracked in [arismoko/horizon#3491](https://github.com/arismoko/horizon/issues/3491).
 
 Off by default. Under `[engine]`, `parallel_tick = true` starts the game with its parallel tick on: the
 phases of the server tick that give the same result in any order share their work among helper threads (at

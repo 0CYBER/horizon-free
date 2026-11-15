@@ -72,7 +72,7 @@ curl -s -H "Authorization: Bearer $token" -o world.zip "http://$address/api/v1/b
 ## Stability
 
 Stable ([stability.md](stability.md)): the commands, `server.toml`'s keys and `/api/v1`. A new key or endpoint is an
-addition; a change to one starts `/api/v2`, served beside `/api/v1`. The fork's clean-break runtime mod
+addition; a change to one starts `/api/v2`, served beside `/api/v1`. The clean-break runtime mod
 inventory contract below is an explicit exception: the old build-only reply is replaced, not kept as a second path.
 
 ## Runtime mod inventory
@@ -100,7 +100,7 @@ engine (including one that cannot answer the inventory query) returns HTTP 409 w
 empty successful inventory or a build-record fallback.
 
 Diverges from upstream: runtime inventory replaces the old top-level build-only `engine` and `native`
-answer on this fork; those fields now live only under `provenance`.
+answer; those fields now live only under `provenance`.
 
 ## Not there yet
 

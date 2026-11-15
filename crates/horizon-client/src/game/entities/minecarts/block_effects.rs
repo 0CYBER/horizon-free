@@ -6,7 +6,7 @@ use super::*;
 impl Game<'_> {
     /// `applyEffectsFromBlocks` for a cart: a bubble column lifts or drags it
     /// and resets the fall distance.
-    pub(super) fn cart_block_effects(&self, c: &mut Minecart) {
+    pub(in crate::game) fn cart_block_effects(&self, c: &mut Minecart) {
         if c.push_by_bubble_column(
             &self.world,
             self.pack.assets.registry,
@@ -53,7 +53,7 @@ impl Game<'_> {
         let Some(i) = cart_at(&self.carts, id, slot) else {
             return;
         };
-        let hits = std::mem::take(&mut self.carts[i].cactus_hits);
+        let hits = self.carts.update(i, |c| std::mem::take(&mut c.cactus_hits));
         let invulnerable = self
             .persist
             .raw

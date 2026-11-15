@@ -24,7 +24,7 @@ fn jigsaw_item(joint: Option<&str>) -> ItemStack {
     };
     let text =
         format!(r#"{{"minecraft:block_entity_data":{{id:"minecraft:jigsaw",joint:"{joint}"}}}}"#);
-    let components = horizon_world::nbt::parse_snbt(&text).expect("snbt").0;
+    let components = horizon_core::nbt::parse_snbt(&text).expect("snbt").0;
     let (damage, extra) = horizon_client::item_data::decode_components(Some(&components));
     stack.damage = damage;
     stack.extra = extra;

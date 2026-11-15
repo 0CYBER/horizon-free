@@ -113,7 +113,7 @@ pub struct DamageLevel<'a> {
     registry: &'a horizon_world::registry::BlockRegistry,
     tags: Option<&'a crate::items::Items>,
     block_registries: Option<&'a crate::command::args::Registries>,
-    random: &'a mut horizon_core::random::LegacyRandom,
+    random: &'a mut horizon_core::random::LevelRandom,
     attachments: &'a mut horizon_mod_runtime::attachments::Attachments,
     attachment_syncs: &'a mut crate::fast_hash::FxHashSet<horizon_mod_runtime::attachments::Holder>,
     /// The game's hooks; on a client predicting its own mount, only the both-side ones
@@ -207,7 +207,7 @@ impl<'a> DamageLevel<'a> {
     /// The same level with a task-local random, retaining its typed hook and attachment context.
     pub fn reborrow_with_random<'b>(
         &'b mut self,
-        random: &'b mut horizon_core::random::LegacyRandom,
+        random: &'b mut horizon_core::random::LevelRandom,
     ) -> DamageLevel<'b> {
         DamageLevel {
             shape: self.shape,
@@ -272,7 +272,7 @@ impl<'a> DamageLevel<'a> {
         self.shape
     }
     /// The level's random (`level.getRandom()`).
-    pub fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
+    pub fn random(&mut self) -> &mut horizon_core::random::LevelRandom {
         self.random
     }
     /// The block state at `pos`: air where no chunk is loaded, as `World::block`.
@@ -336,7 +336,7 @@ impl<'a> DamageLevel<'a> {
 /// A level's random and attachments, taken out of its world while the world is read
 /// elsewhere (the mob tick), and put back after.
 pub struct LentLevel {
-    random: horizon_core::random::LegacyRandom,
+    random: horizon_core::random::LevelRandom,
     attachments: horizon_mod_runtime::attachments::Attachments,
     attachment_syncs: crate::fast_hash::FxHashSet<horizon_mod_runtime::attachments::Holder>,
 }
@@ -346,8 +346,8 @@ impl LentLevel {
     pub fn take(world: &mut crate::world::World) -> Self {
         Self {
             random: std::mem::replace(
-                &mut *world.random,
-                horizon_core::random::LegacyRandom::new(0),
+                &mut world.random,
+                horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(0)),
             ),
             attachments: std::mem::take(&mut world.attachments),
             attachment_syncs: std::mem::take(&mut world.attachment_syncs),
@@ -355,7 +355,7 @@ impl LentLevel {
     }
     /// Put them back into `world`.
     pub fn give_back(self, world: &mut crate::world::World) {
-        *world.random = self.random;
+        world.random = self.random;
         world.attachments = self.attachments;
         world.attachment_syncs = self.attachment_syncs;
     }
@@ -376,7 +376,7 @@ pub fn query_invulnerability(
         return vanilla;
     };
     let mut unread = LentLevel {
-        random: horizon_core::random::LegacyRandom::new(0),
+        random: horizon_core::random::LevelRandom::for_level(horizon_core::random::LegacyRandom::new(0)),
         attachments: Default::default(),
         attachment_syncs: Default::default(),
     };
@@ -411,7 +411,7 @@ impl TestLevel {
         DamageLevel::of(&mut self.world, &self.registry, None, None, &self.hooks)
     }
     /// The level's random, for a probe that draws from it outside a hit.
-    pub fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
+    pub fn random(&mut self) -> &mut horizon_core::random::LevelRandom {
         &mut self.world.random
     }
 }

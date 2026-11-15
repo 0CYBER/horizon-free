@@ -488,11 +488,8 @@ impl Game<'_> {
         let (world, block_entity) = self.native_block_entity_target(entity)?;
         let [x, y, z] = entity.fields().position;
         match block_entity {
-            BlockEntity::Banner(banner) => banner.name.clone(),
-            _ => world.block_names.get(&(x, y, z)).map(|name| match name {
-                Tag::String(text) => text.to_string_lossy(),
-                component => horizon_client::component::name_text(component).plain(),
-            }),
+            BlockEntity::Banner(banner) => banner.name.as_ref().map(tag_name),
+            _ => world.block_names.get(&(x, y, z)).map(tag_name),
         }
     }
 
@@ -570,7 +567,7 @@ impl Game<'_> {
         }
         self.journal_block_entity(key);
         match self.world.block_entities.get_mut(&key) {
-            Some(BlockEntity::Banner(banner)) => banner.name = name.map(str::to_owned),
+            Some(BlockEntity::Banner(banner)) => banner.name = name.map(|name| Tag::String(name.into())),
             _ => {
                 match name {
                     Some(name) => self.world.block_names.insert(key, Tag::String(name.into())),
@@ -600,6 +597,13 @@ fn save_with_metadata(
         data.insert("CustomName".into(), name.clone());
     }
     Some(data)
+}
+
+fn tag_name(name: &Tag) -> String {
+    match name {
+        Tag::String(text) => text.to_string_lossy(),
+        component => horizon_client::component::name_text(component).plain(),
+    }
 }
 
 pub(super) fn save_without_metadata(

@@ -53,6 +53,6 @@ detachment, seat updates or the complete lifecycle of live riders when their
 vehicle is discarded. The new save guard prevents a discarded passenger from
 being serialized regardless of that transient mount state.
 
-Original upstream validation (not a claim about the fork sync): the actual Game regression, all eight compared fields on
+Original upstream validation (not a claim about the mod API merge): the actual Game regression, all eight compared fields on
 both real26.3 JARs, full `horizon-client` library/test Clippy with warnings
 denied and no exceptions, workspace formatting, public-tree and diff checks.

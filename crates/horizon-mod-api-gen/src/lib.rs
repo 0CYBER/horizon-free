@@ -674,7 +674,7 @@ pub use build::{
 };
 pub use notes::generate as generate_hook_notes;
 mod staged;
-pub use staged::{MODS_STAGE, staged_mods};
+pub use staged::{MODS_STAGE, mob_turn, staged_mods};
 
 /// Generate the dispatch test fixture without preventing xtask from filling new placeholders.
 #[doc(hidden)]
@@ -1079,14 +1079,10 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(decoy).unwrap(), decoy_source);
         assert_eq!(lf(&std::fs::read_to_string(&hooks).unwrap()), lf(&shipped));
-        assert_eq!(
-            super::sources(&root, super::FillMode::Require)
-                .unwrap()
-                .hooks,
-            super::sources(&real, super::FillMode::Require)
-                .unwrap()
-                .hooks,
-        );
+        // Parsing the sources is the slow part, so each tree is parsed once.
+        let filled = super::sources(&root, super::FillMode::Require).unwrap();
+        let shipped_sources = super::sources(&real, super::FillMode::Require).unwrap();
+        assert_eq!(filled.hooks, shipped_sources.hooks);
         std::fs::remove_dir_all(root).unwrap();
     }
 

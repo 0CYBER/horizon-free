@@ -184,12 +184,12 @@ pub(super) fn baby_index(species: Species) -> Option<u8> {
 /// own: `mob_meta`'s arms hold these mobs' other entries.
 fn mob_variant_meta(
     m: &Mob,
-    hub: &Hub,
+    sync: &SyncData,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let (kind, e) = (m.kind.id.as_str(), &m.extra);
-    let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
+    let id = |registry: &str, name: &str| sync.id(registry, &format!("minecraft:{name}"));
     match kind {
         // Axolotl.DATA_VARIANT (after AgeableMob's two).
         "minecraft:axolotl" => {
@@ -328,6 +328,32 @@ pub(super) fn mob_meta(
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
+    let effects = mob_effect_meta(m, hub);
+    let sync = hub.sync_data();
+    mob_meta_sync(m, sync, effects, player_entity, game_time, meta, defaults);
+}
+
+/// DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID of a mob's effects as the hub makes them:
+/// nothing while a native mod's answer stands in for them (`mob_meta_sync` takes it from the mob).
+pub(super) fn mob_effect_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
+    match m.extra.modified_effect_particles {
+        Some(_) => Vec::new(),
+        None => hub.effect_meta(mob_effects(m)),
+    }
+}
+
+/// [`mob_meta`] from the synced tables alone, so the tick's helper threads can build it
+/// (`mob_states.rs`). `effects` is [`mob_effect_meta`]: the hub's particles need the hub, so the
+/// server thread makes them.
+pub(super) fn mob_meta_sync(
+    m: &Mob,
+    sync: &SyncData,
+    effects: Vec<(u8, i32, Value)>,
+    player_entity: Option<i32>,
+    game_time: i64,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
     // The entries are the class's: a content mod's living type has its
     // template's.
     let kind = m.kind.class_id();
@@ -385,7 +411,7 @@ pub(super) fn mob_meta(
     // installed once per process).
     match &m.extra.modified_effect_particles {
         Some(modified) => meta.extend_from_slice(&modified.meta),
-        None => meta.extend(hub.effect_meta(mob_effects(m))),
+        None => meta.extend(effects),
     }
     defaults.push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
     defaults.push((11, serializer::BOOLEAN, Value::Bool(false)));
@@ -419,7 +445,7 @@ pub(super) fn mob_meta(
         }
     }
     let e = &m.extra;
-    let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
+    let id = |registry: &str, name: &str| sync.id(registry, &format!("minecraft:{name}"));
     // Pig.DATA_BOOST_TIME and Strider.DATA_BOOST_TIME (18, the first entry
     // after AgeableMob's two). The total `boost()` stored in `counter2`.
     // The default 0 is not registered: vanilla never writes it back, and the
@@ -427,7 +453,7 @@ pub(super) fn mob_meta(
     if matches!(kind, "minecraft:pig" | "minecraft:strider") && e.counter2 > 0 {
         meta.push((18, serializer::INT, Value::Int(e.counter2)));
     }
-    mob_variant_meta(m, hub, meta, defaults);
+    mob_variant_meta(m, sync, meta, defaults);
     mob_raider_meta(m, meta, defaults);
     match kind {
         "minecraft:guardian" | "minecraft:elder_guardian" => {
@@ -1816,7 +1842,7 @@ impl Game<'_> {
         mut kept: Option<&mut super::lan_idle::IdlePass<'_>>,
     ) {
         out.clear();
-        let mut speeds = super::lan_attributes::SpeedByType::default();
+        let mut states = mob_states::Later::new(self.world.game_time);
         if mod_api::__private::listened(mod_api::HookId::EffectParticleModification) {
             self.lan_effect_particles();
         }
@@ -1826,7 +1852,8 @@ impl Game<'_> {
         let idle_at = |p: horizon_core::geometry::Vec3| {
             !levels.in_entity_ticking_range((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
         };
-        for m in self.mobs.iter().filter(|m| !m.removed && m.id > after) {
+        for (index, m) in (self.mobs.iter().enumerate()).filter(|(_, m)| !m.removed && m.id > after)
+        {
             let Some(host) = self.lan.as_ref() else {
                 return;
             };
@@ -1861,6 +1888,7 @@ impl Game<'_> {
             let bare = idle
                 && (kept.as_deref_mut()).is_some_and(|k| k.bare(hub, m.id as i32, kind, &place))
                 && !m.needs_sync;
+            let slot = out.as_slice().len();
             let e = out.add(m.id as i32, entity_uuid(m.id), kind);
             e.position = place.position;
             (e.yaw, e.pitch, e.head_yaw) = place.rotation;
@@ -1874,11 +1902,14 @@ impl Game<'_> {
             if bare {
                 continue;
             }
-            self.fill_mob_state(m, hub, player_entity(), &mut speeds, e);
+            states.state(self, (slot, index), m, player_entity(), hub, e);
             let Some(host) = self.lan.as_mut() else {
                 return;
             };
             mob_equipment(m, &mut host.hub, &mut e.equipment);
+        }
+        if let Some(host) = self.lan.as_ref() {
+            states.fill(self, &self.mobs, host.hub.sync_data(), out);
         }
         for d in self.dropped.iter().filter(|d| d.id > after) {
             let Some(host) = self.lan.as_ref() else {

@@ -100,7 +100,8 @@ impl Game<'_> {
     /// `Bogged`), and a shearable mob fires `player_shear_entity`. `Some(consumed)` ends the
     /// interaction: a part's refusal (false), the hook's cancel or a part's shearing (true);
     /// none leaves the shearing to the species' own interaction.
-    pub(super) fn player_shear(&mut self, index: usize) -> Option<bool> {
+    pub(super) fn player_shear(&mut self, index_slot: &mut usize) -> Option<bool> {
+        let mut index = *index_slot;
         let shears = self.held().cloned()?;
         let player = self.native_acting_player();
         let part = self.part_shearable(index, player, &shears);
@@ -123,6 +124,19 @@ impl Game<'_> {
             let off_hand = self.hand == Hand::Off;
             self.native_player_shear_entity(uuid, &name, id as i32, off_hand, &mut cancel);
             if cancel {
+                return Some(true);
+            }
+            // The hook had `&mut self`: find the mob again by id; a mob a mod
+            // removed, or shears it swapped, ends the interaction.
+            let Some(now) = self.mobs.iter().position(|m| m.id == id && !m.removed) else {
+                return Some(true);
+            };
+            index = now;
+            *index_slot = now;
+            let same = self
+                .held()
+                .is_some_and(|h| h.item == shears.item && h.count == shears.count);
+            if !same {
                 return Some(true);
             }
         }

@@ -157,7 +157,8 @@ fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn an_explicit_cause_of_none_credits_no_one() {
     use crate::game::commands::Target;
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.combat.blast_owner = Some((7, Text::literal("Steve")));
     game.combat.blast_owner_player = true;
     assert_eq!(

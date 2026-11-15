@@ -18,7 +18,7 @@ use horizon_client::{
         BobState, CameraFluid, FovPlayer, HurtBob, UseItem, bob_matrix, field_of_view_modifier,
         spinning_effect_matrix,
     },
-    fog::FogType,
+    fog::{FogType, fog_type},
     hud::HudBatch,
     hud_layout, hud_overlays,
 };

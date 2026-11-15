@@ -13,3 +13,5 @@ horizon-client game::creatures::mob_islands::tests::startup_and_turn_failures_re
 horizon-client game::creatures::mob_islands::tests::verification_detects_snapshot_and_gaussian_only_differences by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
 horizon-client game::creatures::mob_islands::tests::villagers_on_their_own_random_tick_in_groups_as_serial by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
 horizon-client game::creatures::prep::tests::preparation_refreshes_climbing_and_nearest_after_a_move by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::natural_spawning::parallel::tests::the_second_of_two_proposals_over_a_players_cap_is_dropped by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::natural_spawning::parallel::tests::the_spawns_are_the_same_in_any_number_of_lanes by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources

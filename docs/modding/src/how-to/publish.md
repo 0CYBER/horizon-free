@@ -1,7 +1,5 @@
 # Publishing your mod
 
-> **This book documents the fork's mod API.** A code mod (native or wasm) that uses it runs on the fork's builds, not on upstream Horizon, so do not submit it to the registry at playhorizon.dev: the registry serves upstream's players, who could not load it. A content-only mod loads there only if it uses nothing the fork added. Until the mod API ships in a joint release, share the `.hmod` file ([installing by hand](../start/installing.md)) or your mod's GitHub repository: the fork's launcher installs a native mod from it with **Add from GitHub** and marks it "Not reviewed by the Horizon registry" ([Install from GitHub](native-mods/08-install-from-github.md)).
-
 Horizon's registry lists mods, modpacks, resource packs and shader packs made for Horizon. Players find them at
 [playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher. Each file is checked before installation.
 

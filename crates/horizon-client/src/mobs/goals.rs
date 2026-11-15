@@ -3192,7 +3192,7 @@ mod breeding_variant_tests {
                 true
             }
             fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-                m.random = horizon_core::random::LegacyRandom::new(1);
+                m.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(1));
                 self.0.tick(m, cx);
             }
         }
@@ -3272,7 +3272,7 @@ mod breeding_variant_tests {
                         ..world.clone()
                     };
                     let mut parent = Mob::new(1, kind.clone(), Vec3::new(0.0, 64.0, 0.0), 0.0);
-                    parent.random = horizon_core::random::LegacyRandom::new(0);
+                    parent.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
                     let mut goal = Breed {
                         speed: 1.0,
                         partner: Some(2),

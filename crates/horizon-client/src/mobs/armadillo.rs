@@ -1035,7 +1035,7 @@ mod armadillo_scute_time_tests {
     fn check(armadillo: Arc<MobType>) {
         let types: HashMap<String, Arc<MobType>> =
             [("minecraft:armadillo".to_string(), armadillo.clone())].into();
-        let random = || LegacyRandom::new(15_784);
+        let random = || horizon_core::random::EntityRandom::own(LegacyRandom::new(15_784));
         let built = Mob::with_random(1, armadillo, Vec3::ZERO, 0.0, random());
         assert!(
             (6000..12000).contains(&built.extra.egg_time),

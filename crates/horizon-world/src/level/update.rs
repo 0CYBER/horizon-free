@@ -116,6 +116,7 @@ impl Default for NeighborUpdater {
         Self {
             stack: Vec::new(),
             added: Vec::new(),
+            notices: std::collections::VecDeque::new(),
             count: 0,
             max: MAX_CHAINED_NEIGHBOR_UPDATES,
         }

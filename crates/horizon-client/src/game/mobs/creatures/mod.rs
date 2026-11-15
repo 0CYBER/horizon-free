@@ -6363,7 +6363,7 @@ impl Game<'_> {
     /// crosshair or on the one a guest's interact packet named: returns true
     /// when consumed.
     pub(super) fn interact_mob(&mut self, target: Option<InteractTarget>) -> Result<bool> {
-        let Some(index) = self.mob_interaction_target(target) else {
+        let Some(mut index) = self.mob_interaction_target(target) else {
             return Ok(false);
         };
         // CamelHusk.interact: any click on it keeps it (`setPersistenceRequired`).
@@ -6379,7 +6379,7 @@ impl Game<'_> {
         }
         // Shears ask the mob's entity parts first, then fire `player_shear_entity`.
         if self.held_shears()
-            && let Some(consumed) = self.player_shear(index)
+            && let Some(consumed) = self.player_shear(&mut index)
         {
             return Ok(consumed);
         }
@@ -9787,7 +9787,7 @@ mod shulker_arrow_tests {
             Vec3::new(0.0, 1.0, 0.0),
             Some(Who::Player),
         )
-        .with_arrow_random(EntityRandom::own(LegacyRandom::new(7)));
+        .with_entity_random(EntityRandom::own(LegacyRandom::new(7)));
         arrow.velocity = Vec3::new(3.0, -1.0, 2.0);
         arrow.yaw = 15.0;
         let mut oracle = LegacyRandom::new(7);
@@ -9848,7 +9848,7 @@ mod breeding_tests {
             self.goal.can_continue(m, cx)
         }
         fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-            m.random = LegacyRandom::new(self.seed);
+            m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(self.seed));
             self.goal.tick(m, cx);
         }
     }
@@ -10133,7 +10133,7 @@ mod breeding_tests {
                     .push(Mob::new(base + 2, cow, Vec3::new(1.0, 64.0, 0.0), 0.0));
                 game.native_joins_skip();
                 let parent = game.mobs.iter_mut().find(|mob| mob.id == base + 1).unwrap();
-                parent.random = horizon_core::random::LegacyRandom::new(0);
+                parent.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
                 parent.extra.variant = 1;
                 parent.extra.age = 6000;
                 let child = game.breed(
@@ -10291,7 +10291,7 @@ mod breeding_tests {
                 };
                 assert!(!world.asks_baby_spawn);
                 let mut parent = Mob::new(1, kind.clone(), Vec3::new(0.0, 64.0, 0.0), 0.0);
-                parent.random = LegacyRandom::new(123);
+                parent.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(123));
                 parent.persistent = true;
                 parent.extra.in_love = 600;
                 parent.extra.egg_time = 10_000;
@@ -13725,7 +13725,7 @@ mod mob_islands;
 
 #[cfg(feature = "upstream-parallel-mobs")]
 #[path = "../../creatures/prep.rs"]
-mod prep;
+pub(in crate::game) mod prep;
 
 #[cfg(test)]
 #[path = "frame_projectile_tests.rs"]

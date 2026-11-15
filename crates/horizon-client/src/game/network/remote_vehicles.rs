@@ -837,7 +837,7 @@ mod tests {
                 let mut server_mount = game.mobs[0].clone();
                 let before = server_mount.position;
                 let mut test_level = horizon_client::health::TestLevel::new(0);
-                *test_level.random() = (*game.world.random).clone();
+                *test_level.random() = game.world.random.clone();
                 let mut events = Vec::new();
                 server_mount.tick(
                     &game.mob_world_base(&[]),

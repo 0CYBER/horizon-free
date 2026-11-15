@@ -811,7 +811,7 @@ mod birth_tests {
                 kind.clone(),
                 Vec3::new(1.5, 64.0, 1.5),
                 0.0,
-                horizon_core::random::LegacyRandom::new(i64::from(id)),
+                horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(i64::from(id))),
             ));
         }
         // The brain has already eaten, selected BED and aged the initiating

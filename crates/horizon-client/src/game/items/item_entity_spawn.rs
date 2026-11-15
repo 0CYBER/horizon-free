@@ -26,7 +26,7 @@ impl Game<'_> {
             fall_distance: 0.0,
             rotation: [yaw, 0.0],
             pickup_delay: i64::from(pickup_delay),
-            random: random.own.into(),
+            random: horizon_core::random::EntityRandom::own(random.own.into()),
             ..ItemEntity::new(
                 self.next_entity,
                 stack,

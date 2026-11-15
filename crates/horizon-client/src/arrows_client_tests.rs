@@ -444,7 +444,7 @@ fn air_and_stuck_arrows_leave_no_water_bubbles() {
 fn remote_arrow_preserves_previous_rotation_as_it_turns_and_falls() {
     let steps = run_with(&[], 30, false, |p| {
         p.shoot(
-            &mut EntityRandom::own(horizon_core::random::LegacyRandom::new(7)),
+            &mut horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(7)),
             [0.0, 1.0, 0.0],
             0.3,
             0.0,

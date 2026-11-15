@@ -63,7 +63,7 @@ pub(super) struct Rocket {
     /// `DATA_ID_FIREWORKS_ITEM`: the stack it was launched from.
     pub(super) item: ItemStack,
     /// `Entity.random`: what a mod's `Projectile.deflect` draws from.
-    pub(super) random: horizon_core::random::LegacyRandom,
+    pub(super) random: horizon_core::random::EntityRandom,
     /// `Entity.onGround`: whether its last move was stopped going down (or
     /// the one it was loaded with, until it moves).
     pub(super) on_ground: bool,
@@ -486,7 +486,7 @@ impl Game<'_> {
             attached_to: None,
             angled: false,
             item: stack.clone(),
-            random: own.clone(),
+            random: horizon_core::random::EntityRandom::own(own.clone()),
             on_ground: false,
             has_been_shot: false,
             silent: false,
@@ -1114,7 +1114,7 @@ fn use_on_passes(fall_flying: bool) -> bool {
 mod events_tests;
 
 #[cfg(test)]
-#[path = "own_rocket_spark_tests.rs"]
+#[path = "tests/own_rocket_spark_tests.rs"]
 mod own_spark_tests;
 
 #[cfg(test)]

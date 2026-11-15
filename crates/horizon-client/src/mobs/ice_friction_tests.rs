@@ -53,7 +53,8 @@ fn a_cow_slides_on_the_supporting_blocks_friction() {
         // One tick's slide with no input: 0.5 times the ice's 0.989 and the
         // 0.91 air drag.
         cow.velocity = Vec3::new(0.5, 0.0, 0.0);
-        cow.travel_in_air(w, Vec3::ZERO, &mut Vec::new());
+        let mut test_level = crate::health::TestLevel::new(0);
+        cow.travel_in_air(w, &mut test_level.level(), Vec3::ZERO, &mut Vec::new());
         assert!(
             (cow.velocity.x - 0.449995).abs() < 1.0e-6,
             "{}",

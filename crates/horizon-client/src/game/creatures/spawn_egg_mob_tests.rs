@@ -136,7 +136,7 @@ fn a_mooshroom_egg_child_rolls_the_colour_flip() {
     for (seed, parent) in [(flip, 0), (flip, 1), (keep, 0), (keep, 1)] {
         spawn(&mut game, "minecraft:mooshroom", 9, [2.5, 64.0, 2.5]);
         game.mobs[0].extra.variant = parent;
-        game.mobs[0].random = LegacyRandom::new(seed);
+        game.mobs[0].random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
         game.inventory[0] = Some(ItemStack::new("minecraft:mooshroom_spawn_egg", 1));
         assert!(game.interact_mob(target(9)).unwrap());
         let child = game

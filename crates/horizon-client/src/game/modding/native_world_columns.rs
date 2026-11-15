@@ -2,8 +2,57 @@
 //! them, in one call.
 use super::Game;
 use super::block_edits::MAX_COLUMNS;
+use horizon_client::streaming::ChunkGenerator;
+use mod_api::TerrainColumn;
+
+/// The most columns one `terrain_surface` call asks about: each is a noise sample on the server tick.
+pub(super) const MAX_TERRAIN_COLUMNS: usize = 4096;
 
 impl Game<'_> {
+    /// For a server mod: what the generator makes at each of `columns` of the level `dimension` (the one being
+    /// ticked) before its features are placed, whether or not the chunk is loaded: it reads the generator and
+    /// creates no chunk. Decorated blocks (trees, lava, cacti) are not in it: read the chunk once it is loaded. None
+    /// for a column with no solid block (the End's void) and where the world has no generator of its own. `Err` says
+    /// why nothing was read: another dimension or a client of a server, or more than 4,096 columns
+    /// (`MAX_TERRAIN_COLUMNS`). API @API:terrain_surface@.
+    pub(super) fn terrain_surface(
+        &self,
+        dimension: &str,
+        columns: &[(i32, i32)],
+    ) -> Result<Vec<Option<TerrainColumn>>, String> {
+        if !self.native_level_open(dimension) {
+            return Err(format!("{dimension} is not the level being ticked"));
+        }
+        if columns.len() > MAX_TERRAIN_COLUMNS {
+            return Err(format!(
+                "{} columns, more than {MAX_TERRAIN_COLUMNS} a call",
+                columns.len()
+            ));
+        }
+        let started = std::time::Instant::now();
+        let out = match self.end.locator() {
+            Some(terrain) => {
+                // The generator's biome ids are the world's table (data packs may add biomes).
+                let (facts, biomes) = (self.res.facts(), world_biomes!(self));
+                let mut worker = terrain.worker();
+                columns
+                    .iter()
+                    .map(|&(x, z)| {
+                        let s = terrain.lod_surface(&mut worker, x, z)?;
+                        Some(TerrainColumn {
+                            height: s.height,
+                            block: facts.get(s.state).name.to_string(),
+                            water: s.water.map(|(top, _)| top),
+                            biome: biomes.name(s.biome).to_owned(),
+                        })
+                    })
+                    .collect()
+            }
+            None => vec![None; columns.len()],
+        };
+        self.native_read_logged(started, "terrain query", columns.len());
+        Ok(out)
+    }
     /// For a client mod: each column's height by `heightmap` in the world this window shows,
     /// none for a column whose chunk this client does not hold. `Err` says why nothing was read:
     /// no client world, or more than 65,536 columns (`MAX_COLUMNS`).
@@ -76,3 +125,7 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "native_world_columns/tests.rs"]
+mod tests;

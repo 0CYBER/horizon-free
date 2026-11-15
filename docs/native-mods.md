@@ -117,7 +117,7 @@ same compiler as `launcher/src/rust_toolchain.rs`.
 The upstream additions below describe behavior to preserve in the typed `Host` and
 handle API, not additional `native_*` entry points or a bundle API counter. Use the
 book and generated API reference for the available signatures; pending hook fragments
-must be converted to the fork's hook catalog before being advertised as available.
+must be converted to the hook catalog before being advertised as available.
 
 - Tamed-mob death messages are offered after construction and only when an online
   owner would receive them with `show_death_messages` enabled. Listeners may replace

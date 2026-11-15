@@ -11,7 +11,7 @@ fn pig(types: &crate::mobs::MobTypes, no_ai: bool, immune: bool, fire: i32) -> M
     mob.ai.goals = GoalSelector::default();
     mob.ai.targets = GoalSelector::default();
     mob.fire_ticks = fire;
-    mob.random = horizon_core::random::LegacyRandom::new(1);
+    mob.random = horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(1));
     mob
 }
 

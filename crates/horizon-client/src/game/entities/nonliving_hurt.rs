@@ -98,5 +98,5 @@ impl Game<'_> {
 }
 
 #[cfg(test)]
-#[path = "nonliving_hurt_tests.rs"]
+#[path = "tests/nonliving_hurt_tests.rs"]
 mod tests;

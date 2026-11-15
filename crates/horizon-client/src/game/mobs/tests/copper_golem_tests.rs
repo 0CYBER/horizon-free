@@ -105,7 +105,7 @@ fn carving_with_off_hand_shears_breaks_the_off_hand() {
     // Entity event 48 is OFFHAND's break (47 is the main hand's): the shears
     // that carved wear out, and the main hand keeps its stack.
     assert_eq!(
-        game.guest_equipment_breaks.last().map(|broke| broke.0),
+        game.guest_equipment_breaks.last().copied(),
         Some(48)
     );
     assert!(game.offhand.is_none(), "the shears broke");

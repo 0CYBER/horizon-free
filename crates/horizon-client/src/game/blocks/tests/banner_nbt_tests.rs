@@ -4,7 +4,7 @@
 use super::super::spill::Pending;
 use super::map_banner;
 use horizon_client::{banner, containers::BlockEntity, items::ItemStack, save};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 fn banner_tag(extra: Vec<(&str, Tag)>) -> Tag {
     let mut entries = vec![
@@ -29,7 +29,7 @@ fn a_banner_keeps_a_component_name() {
     let tag = banner_tag(vec![("CustomName", name.clone())]);
     let (pos, entity) = save::decode_block_entity(&tag).expect("banner");
     // `BannerBlockEntity.saveAdditional` -> `BlockEntity.saveWithFullMetadata`.
-    let saved = save::encode_block_entity(pos, &entity, "minecraft:white_banner");
+    let saved = save::block_entity_data(pos, &entity, "minecraft:white_banner", None);
     assert_eq!(
         saved.get("CustomName"),
         Some(&name),
@@ -73,7 +73,7 @@ fn a_banner_keeps_an_inline_pattern() {
     };
     assert_eq!(banner.layers.len(), 1, "the inline pattern is a layer");
     // `Holder`'s encode: a direct holder writes its definition back.
-    let saved = save::encode_block_entity(pos, &entity, "minecraft:white_banner");
+    let saved = save::block_entity_data(pos, &entity, "minecraft:white_banner", None);
     assert_eq!(saved.get("patterns"), Some(&patterns));
     // `Sheets.getBannerSprite` / `Layer.description` read the definition.
     let banners = banner::Banners::default();

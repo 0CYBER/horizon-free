@@ -52,6 +52,8 @@ impl Crystal {
             (finite(pitch) % 360.0).clamp(-90.0, 90.0),
         ];
         Some(Self {
+            attachment_lifetime: Default::default(),
+            join: Default::default(),
             id: 0,
             position,
             show_bottom: horizon_client::entity_nbt::flag_or(tag, "ShowBottom", true),

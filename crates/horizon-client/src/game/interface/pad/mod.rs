@@ -831,7 +831,7 @@ impl Game<'_> {
             self.pad.state.right,
             settings,
             seconds,
-            self.camera_type.first_person() && self.scoping(),
+            self.camera_type.is_first_person() && self.scoping(),
         );
         // The cinematic camera eases the stick's turn in and out, as it does the mouse's.
         let (yaw, pitch) = self.pad.look.turn(turn, seconds, self.smooth_camera);

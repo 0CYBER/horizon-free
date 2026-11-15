@@ -32,7 +32,7 @@ fn tick_at(
             pick(m, [r.next_double(), r.next_double(), r.next_double()]) == cube
         })
         .expect("a seed picks the cube");
-    m.random = LegacyRandom::new(seed);
+    m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
     let mut events = Vec::new();
     let mut lr = crate::health::TestLevel::new(0);
     goal.tick(

@@ -48,7 +48,7 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
         game.next_entity = 10_000 + 4 * i;
         for (id, variant) in [(part, 0u8), (mate_id, 1)] {
             let mut m = Mob::new(id, kind.clone(), Vec3::new(8.5, 64.0, 8.5), 0.0);
-            m.random = LegacyRandom::new(parent_seed + i64::from(id));
+            m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(parent_seed + i64::from(id)));
             m.extra.variant = variant;
             m.extra.in_love = 600;
             game.mobs.push(m);

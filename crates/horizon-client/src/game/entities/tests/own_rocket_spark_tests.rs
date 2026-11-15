@@ -23,13 +23,14 @@ fn an_own_rockets_spark_is_live_the_tick_it_spawns_at_the_moved_hand() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
     let loaded = load_resources(
-        root.clone(),
+        horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+        Vec::new(),
         None,
         &root,
         &settings,
         std::time::Instant::now(),
         false,
-        true,
+        ExecutionRole::Client,
         &Progress::new(),
         &mut |_, _| unreachable!(),
     )
@@ -43,7 +44,7 @@ fn an_own_rockets_spark_is_live_the_tick_it_spawns_at_the_moved_hand() {
         loaded.gui.unwrap(),
         options,
         settings,
-        Audio::silent(&root),
+        Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(root.clone())),
         None,
     )
     .unwrap();
@@ -78,7 +79,6 @@ fn an_own_rockets_spark_is_live_the_tick_it_spawns_at_the_moved_hand() {
     let sparks: Vec<_> = game
         .particles
         .live()
-        .iter()
         .filter(|p| p.ty == ParticleType::Firework)
         .collect();
     assert_eq!(

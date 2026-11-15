@@ -991,6 +991,7 @@ impl Game<'_> {
 }
 
 #[cfg(test)]
+#[path = "render_tick/end_light_tests.rs"]
 mod end_light_tests;
 
 #[cfg(test)]

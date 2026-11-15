@@ -1376,7 +1376,7 @@ fn rewrite(
                 #[inline(always)]
                 #[allow(unsafe_code, dead_code, clippy::all)]
                 pub fn #reader() -> ::std::option::Option<#ty> {
-                    let installed = crate::__REPLACE[#cell].load(::std::sync::atomic::Ordering::Relaxed);
+                    let installed = crate::__REPLACE[#cell].load(::std::sync::atomic::Ordering::Acquire);
                     if installed.is_null() {
                         ::std::option::Option::None
                     } else {

@@ -2,7 +2,7 @@
 //! divides the sensitivity by 8 while `getCameraType().isFirstPerson() &&
 //! player.isScoping()`, so a third-person camera keeps the full speed.
 use super::*;
-use crate::game::perspective::CameraType;
+use horizon_client::camera::CameraType;
 use horizon_client::items::ItemStack;
 use horizon_client::mouse::degrees_per_count;
 
@@ -14,7 +14,8 @@ fn scoping_game() -> Option<Game<'static>> {
     game.build_registries();
     game.set_allow_commands(true);
     assert!(
-        game.give(ItemStack::new("minecraft:spyglass", 1)).is_none(),
+        game.add_stack_to_inventory(ItemStack::new("minecraft:spyglass", 1))
+            .is_none(),
         "the spyglass fits in the empty inventory"
     );
     game.using = Some((game.selected, 0));

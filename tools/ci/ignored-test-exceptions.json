@@ -338,6 +338,22 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::natural_spawning::parallel::tests::the_second_of_two_proposals_over_a_players_cap_is_dropped",
+    "path": "crates/horizon-client/src/game/mobs/natural_spawning/parallel.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::natural_spawning::parallel::tests::the_spawns_are_the_same_in_any_number_of_lanes",
+    "path": "crates/horizon-client/src/game/mobs/natural_spawning/parallel.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::nether_portal::cooldown_tests::portal_contact_and_waiting_handoff_match_vanilla_counters",
     "path": "crates/horizon-client/src/game/blocks/tests/portal_cooldown_tests.rs",
     "reason": "needs explicit HORIZON_TEST_RESOURCES and HORIZON_PORTAL_REFERENCE",

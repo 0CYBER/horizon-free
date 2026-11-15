@@ -17,7 +17,7 @@ pub struct UpdateRecipes {
 impl Codec<UpdateRecipes> for UpdateRecipes {
     fn read(r: &mut Reader) -> Result<Self> {
         let count = r.count(r.remaining())?;
-        let mut properties = Vec::with_capacity(count);
+        let mut properties = Vec::with_capacity(count.min(4096));
         for _ in 0..count {
             let key = r.string(32767)?;
             let count = r.count(r.remaining())?;

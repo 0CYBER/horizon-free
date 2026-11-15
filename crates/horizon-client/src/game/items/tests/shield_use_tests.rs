@@ -9,7 +9,7 @@ use horizon_client::{
     items::ItemStack,
     motion::MotionEvent,
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// A server's game with the player standing at (0.5, 64, 0.5), or `None`
 /// without prepared resources.
@@ -41,6 +41,7 @@ fn a_breaking_hit_plays_no_block_sound_and_broadcasts_the_damage() {
         damage_type: "minecraft:mob_attack",
         causing: 1,
         direct: 1,
+        position: None,
     };
     // One point short of the shield's 336: the hit's 6 points of wear break it.
     // `sound` is `onBlocked` having run (`blocked` with the component there, on

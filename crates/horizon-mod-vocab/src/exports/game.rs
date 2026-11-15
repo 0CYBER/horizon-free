@@ -6,7 +6,7 @@ pub use crate::game::{
     BlockEdit, BlockRun, Clock, ColumnBlocks, Config, ConfigFile, ConfigKind, CubeFace,
     DataMapType, ExperienceOrb, Falling, Heightmap, HeldItemSlot, Hit, MapDecoration, MapInfo,
     MobRender, ModEvent, ModMismatch, ModMismatchResolution, PhantomSpawnResult, PlayerRender,
-    Shake, SleepProblem,
+    Shake, SleepProblem, TerrainColumn,
 };
 mod __private {
     mod built {
