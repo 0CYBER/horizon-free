@@ -423,12 +423,15 @@ fn component(message: &Value) -> Option<Value> {
         let mut c = json!({ "translate": key });
         // Vanilla's Message takes its parameters as strings: plain text here too, never a
         // selector, score or nbt component that tellraw would resolve with the console's rights.
-        if let Some(with) = message["translatableParams"].as_array() {
-            c["with"] = Value::Array(
-                with.iter()
-                    .map(|p| json!({ "text": p.as_str().unwrap_or_default() }))
-                    .collect(),
-            );
+        // Its codec reads them leniently (`lenientOptionalFieldOf`): one entry that is not a string
+        // and the message has no parameters at all.
+        let params = message["translatableParams"].as_array().and_then(|with| {
+            with.iter()
+                .map(|p| p.as_str().map(|text| json!({ "text": text })))
+                .collect::<Option<Vec<_>>>()
+        });
+        if let Some(with) = params {
+            c["with"] = Value::Array(with);
         }
         return Some(c);
     }
@@ -1236,17 +1239,37 @@ mod tests {
 
     use super::*;
 
+    /// `Message.CODEC` reads `translatableParams` with `Codec.STRING.listOf().lenientOptionalFieldOf`: a
+    /// list of strings is the parameters, as plain text; anything else (an entry that is a component or a
+    /// number, or no list) is as if no parameters were sent. Never a selector, score or nbt component that
+    /// tellraw would resolve with the console's rights.
     #[test]
     fn translatable_parameters_are_plain_text() {
-        let message = json!({
-            "translatable": "chat.type.announcement",
-            "translatableParams": ["Server", {"selector": "@e"}, 3],
-        });
+        let component_of = |params: Value| {
+            component(&json!({
+                "translatable": "chat.type.announcement",
+                "translatableParams": params,
+            }))
+            .unwrap()
+        };
         assert_eq!(
-            component(&message).unwrap(),
+            component_of(json!(["Server", "@e"])),
             json!({"translate": "chat.type.announcement",
-                "with": [{"text": "Server"}, {"text": ""}, {"text": ""}]})
+                "with": [{"text": "Server"}, {"text": "@e"}]})
         );
+        // Vanilla's codec gives `translation{key='chat.type.announcement', args=[]}` for each of these.
+        for params in [
+            json!(["Server", {"selector": "@e"}, 3]),
+            json!(["Server", 3]),
+            json!([{"score": {"name": "@s", "objective": "x"}}]),
+            json!("Server"),
+        ] {
+            assert_eq!(
+                component_of(params.clone()),
+                json!({"translate": "chat.type.announcement"}),
+                "{params}"
+            );
+        }
     }
 
     fn shared() -> std::sync::Arc<Shared> {
