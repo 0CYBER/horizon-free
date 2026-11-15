@@ -442,9 +442,15 @@ impl Launcher {
                 .child(tr("No build for this platform"))
                 .into_any_element();
         }
+        // After a failed attempt the card says to try again: the button says so too.
+        let failed = self.install_error.as_ref().is_some_and(|(t, _)| *t == tag);
         let b = ui::quiet(
             SharedString::from(format!("install-{tag}")),
-            tr("Install"),
+            if failed {
+                tr("Try again")
+            } else {
+                tr("Install")
+            },
             36.,
             &t,
         );
