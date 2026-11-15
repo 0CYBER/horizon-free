@@ -146,3 +146,26 @@ fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
     assert_eq!(game.tnts[0].owner, None, "a gone owner primes no one");
     game.combat.explosion_owner = None;
 }
+
+/// A blast given an explicit cause of none (a crystal or cart source with no
+/// entity) credits no one with what it breaks, even while a primed TNT's owner
+/// is known: the explicit source wins, `DamageSource.getEntity` is null.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn an_explicit_cause_of_none_credits_no_one() {
+    use crate::game::commands::Target;
+    let mut game = server_game();
+    game.combat.blast_owner = Some((7, Text::literal("Steve")));
+    game.combat.blast_owner_player = true;
+    assert_eq!(
+        game.explosion_kill_credit(),
+        Some(Target::Player),
+        "the TNT owner"
+    );
+    game.combat.explicit_explosion_cause = Some(None);
+    assert_eq!(
+        game.explosion_kill_credit(),
+        None,
+        "an explicit cause of none"
+    );
+}
