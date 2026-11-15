@@ -24,7 +24,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, trig},
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, RandomSource},
 };
 use horizon_world::registry::BlockStateId;
 use std::{collections::HashMap, sync::Arc};
@@ -191,7 +191,7 @@ pub(super) struct Minecart {
     pub custom_display: Option<horizon_world::nbt::Tag>,
     /// `AbstractMinecart.customDisplayOffset` (`DisplayOffset`), in sixteenths.
     pub custom_offset: Option<i32>,
-    pub random: LegacyRandom,
+    pub random: EntityRandom,
 }
 /// `EntityType.MINECART`'s `sized(0.98F, 0.7F)`: float dimensions, widened.
 pub(super) const WIDTH: f64 = 0.98_f32 as f64;
@@ -398,7 +398,7 @@ impl Minecart {
             synced_output: String::new(),
             custom_display: None,
             custom_offset: None,
-            random: random_source::entity(),
+            random: EntityRandom::own(random_source::entity()),
         }
     }
     pub fn bounds(&self) -> Aabb {

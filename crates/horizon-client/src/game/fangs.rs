@@ -4,7 +4,7 @@ use super::Game;
 use horizon_client::mobs::{Part, Species, anim::Poses};
 use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_core::geometry::Vec3;
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::random::{EntityRandom, RandomSource};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -17,7 +17,7 @@ pub(super) struct Fangs {
     pub owner: u32,
     pub started: bool,
     /// `Entity.random`. The attack sound's pitch is its first draw.
-    random: LegacyRandom,
+    random: EntityRandom,
 }
 /// `EvokerFangs.handleEntityEvent`: `nextFloat() * 0.2 + 0.85`.
 pub(super) fn fang_attack_pitch(random: &mut impl RandomSource) -> f32 {
@@ -58,8 +58,7 @@ impl Game<'_> {
             life: 22,
             owner,
             started: false,
-            random: (*horizon_client::mobs::entity_random(id, Vec3::new(at[0], at[1], at[2])))
-                .clone(),
+            random: horizon_client::mobs::entity_random(id, Vec3::new(at[0], at[1], at[2])),
         });
     }
     pub(super) fn fangs_to_nbt(&self, f: &Fangs, uuid: [i32; 4]) -> horizon_world::nbt::Tag {

@@ -554,7 +554,9 @@ mod render_bounds_tests {
             invisible: false,
             check_interval: 0,
             custom_name: None,
-            random: horizon_core::random::LegacyRandom::new(0),
+            random: horizon_core::random::EntityRandom::own(
+                horizon_core::random::LegacyRandom::new(0),
+            ),
         };
         let bounds = frame.render_bounds(1.0);
         assert!(bounds.min_position().x <= -0.71875);

@@ -751,7 +751,7 @@ impl Game<'_> {
         let p = Vec3::new(position[0], position[1], position[2]);
         // The item's own random, in vanilla's order: Entity's UUID, ItemEntity's
         // bobOffs and yaw, then (the five-argument constructor) its default motion.
-        let mut own = random_source::entity();
+        let mut own = horizon_core::random::EntityRandom::own(random_source::entity());
         let uuid = horizon_client::save::insecure_uuid(&mut own);
         self.persist.uuids.insert(self.next_entity, uuid);
         let bob = own.next_float() * std::f32::consts::PI * 2.0;

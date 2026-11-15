@@ -5,7 +5,7 @@
 use crate::game::native_machines::tests::server_game;
 use crate::game::{Audio, Game, Options, Progress, Settings, execution_role, load_resources};
 use horizon_client::{entities::ItemFrame, items::ItemStack};
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::{EntityRandom, LegacyRandom};
 use horizon_world::nbt::Tag;
 
 /// The lodestone at `pos` (the `target` of a `LodestoneTracker`).
@@ -37,7 +37,7 @@ fn framed_compass(id: u32, pos: [i32; 3], facing: u8, rotation: i8) -> ItemFrame
         invisible: false,
         check_interval: 0,
         custom_name: None,
-        random: LegacyRandom::new(0),
+        random: EntityRandom::own(LegacyRandom::new(0)),
     }
 }
 

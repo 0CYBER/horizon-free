@@ -164,7 +164,7 @@ pub fn item_frame_from_nbt(tag: &Tag, id: u32) -> Option<ItemFrame> {
         invisible: flag(tag, "Invisible"),
         check_interval: 0,
         custom_name: tag.get("CustomName").cloned(),
-        random: crate::random_source::entity(),
+        random: horizon_core::random::EntityRandom::own(crate::random_source::entity()),
     })
 }
 

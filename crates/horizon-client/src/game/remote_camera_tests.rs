@@ -24,7 +24,7 @@ fn frame(id: u32, pos: [i32; 3], facing: u8) -> ItemFrame {
         invisible: false,
         check_interval: 0,
         custom_name: None,
-        random: horizon_core::random::LegacyRandom::new(0),
+        random: horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0)),
     }
 }
 

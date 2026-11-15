@@ -669,7 +669,7 @@ impl Game<'_> {
     pub(super) fn load_item(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
         self.next_entity += 1;
         // `ItemEntity(EntityType, Level)` first: its own random draws UUID, bobOffs and yaw.
-        let mut own = random_source::entity();
+        let mut own = horizon_core::random::EntityRandom::own(random_source::entity());
         let fresh = horizon_client::save::insecure_uuid(&mut own);
         let bob = own.next_float() * std::f32::consts::PI * 2.0;
         own.next_float();

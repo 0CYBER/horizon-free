@@ -221,7 +221,7 @@ impl Game<'_> {
             check_interval: 0,
             // `applyComponentsFromItemStack` sets `CUSTOM_NAME`.
             custom_name: stack.data().and_then(|d| d.custom_name.clone()),
-            random: horizon_client::random_source::entity(),
+            random: horizon_core::random::EntityRandom::own(horizon_client::random_source::entity()),
         };
         // `EntityType.createDefaultStackConfig`: the item's `custom_data`, then its
         // `entity_data` merged over the frame (`TypedEntityData.loadInto`), before
@@ -877,7 +877,9 @@ mod map_limit_tests {
             invisible: false,
             check_interval: 0,
             custom_name: None,
-            random: horizon_core::random::LegacyRandom::new(0),
+            random: horizon_core::random::EntityRandom::own(
+                horizon_core::random::LegacyRandom::new(0),
+            ),
         }
     }
     /// A map whose `count` frame markers all count toward the limit.
@@ -951,7 +953,9 @@ mod game_event_tests {
             invisible: false,
             check_interval: 0,
             custom_name: None,
-            random: horizon_core::random::LegacyRandom::new(0),
+            random: horizon_core::random::EntityRandom::own(
+                horizon_core::random::LegacyRandom::new(0),
+            ),
         }
     }
     fn at(id: u32) -> Option<InteractTarget> {

@@ -15,7 +15,7 @@ use crate::{
         uuid_from_tag, uuid_tag,
     },
 };
-use horizon_core::geometry::Vec3;
+use horizon_core::{geometry::Vec3, random::LegacyRandom};
 use horizon_world::{
     chunk::BlockState,
     nbt::{Compound, Tag},
@@ -2935,7 +2935,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         stuck: Vec3::ZERO,
         was_touching_water: false,
         // The caller gives it the own random that drew its UUID and bobOffs.
-        random: horizon_core::random::LegacyRandom::new(0),
+        random: horizon_core::random::EntityRandom::own(LegacyRandom::new(0)),
     })
 }
 
