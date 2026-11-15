@@ -270,14 +270,14 @@ def listed(name: str, data: bytes, sums: str) -> bool:
 
 def signature_check(sha: str, folder: Path, names: list[str]) -> list[str]:
     """The command that checks sdk-<sha>'s SHA256SUMS signature in `folder` as the launcher does (horizon-release-sign,
-    with the fork's keys and the tag the signature must name), and the bytes of `names` against it."""
+    with this repository's keys and the tag the signature must name), and the bytes of `names` against it."""
     return ["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign", "--", "verify",
             "--repository", "horizon-rust/horizon", "--tag", f"sdk-{sha}",
             *(argument for name in names for argument in ("--only", name)), str(folder)]
 
 
 def released(sha: str, name: str) -> bytes:
-    """The asset `name` of sdk-<sha>, once its SHA256SUMS signature is the fork's for `sdk-<sha>` and its bytes match
+    """The asset `name` of sdk-<sha>, once its SHA256SUMS signature is this repository's for `sdk-<sha>` and its bytes match
     them ([`signature_check`])."""
     with tempfile.TemporaryDirectory() as folder:
         gh("release", "download", f"sdk-{sha}", "--repo", "horizon-rust/horizon", "--dir", folder,
@@ -361,7 +361,7 @@ def pick(force: bool) -> None:
     dry_run = os.environ.get("DRY_RUN") == "true"
     if repo == "horizon-rust/horizon":
         if os.environ.get("NIGHTLY_PRS", "").strip():
-            stop(repo, os.environ.get("NIGHTLY_ISSUE", ""), "fork Nightlies build main's commit, which their SDK is built for, not PR picks")
+            stop(repo, os.environ.get("NIGHTLY_ISSUE", ""), "a Nightly builds main's commit, the one its SDK is built for, not PR picks")
         return build_set(main, [], [], today, force, dry_run)
     if spec := os.environ.get("NIGHTLY_PRS", "").strip():  # a dry run's own set; the saved one stays
         return build_set(main, requested(spec, ns.lookup(repo)), [], today, force, dry_run)

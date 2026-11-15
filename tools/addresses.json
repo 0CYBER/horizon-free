@@ -135,7 +135,6 @@
     "crates/horizon-port-pack/src/fetch.rs maven.neoforged.net": "Existing fork source URL; recorded baseline, no endpoint added by this sync.",
     "crates/horizon-port-pack/src/fetch.rs objects.githubusercontent.com": "Existing fork source URL; recorded baseline, no endpoint added by this sync.",
     "crates/horizon-port-pack/src/fetch.rs release-assets.githubusercontent.com": "Existing fork source URL; recorded baseline, no endpoint added by this sync.",
-    "launcher/src/backend.rs arismoko.github.io": "Existing fork source URL; recorded baseline, no endpoint added by this sync.",
     "launcher/src/open_card.rs github.com": "Existing fork source URL; recorded baseline, no endpoint added by this sync."
   }
 }

@@ -31,7 +31,7 @@ def metadata_page(nodes):
 
 class ReleaseTrainTests(unittest.TestCase):
     def test_repository_merge_identity_before_metadata(self):
-        for repository in ("horizon-rust/horizon", "horizon-rust/horizon"):
+        for repository in ("horizon-rust/horizon", "someone/horizon"):
             with self.subTest(repository=repository), mock.patch.object(train, "REPO", repository), \
                     mock.patch.object(train, "run", return_value="root"), \
                     mock.patch.object(train, "merged_pull_requests", return_value=[
@@ -276,7 +276,7 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(train.decision("game", [], NOW, new_line="0.3", blockers=[7])[0])
         self.assertTrue(train.decision("game", [pr(1)], NOW, blockers=[])[0])
 
-    @mock.patch.object(train, "REPO", "horizon-rust/horizon")
+    @mock.patch.object(train, "REPO", "someone/horizon")
     def test_game_releases_ship_only_what_parity_main_passed(self):
         def runs(parity, checks):
             def gh_json(*arguments):

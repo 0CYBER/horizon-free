@@ -31,7 +31,7 @@ class LauncherVerification(unittest.TestCase):
             cargo.chmod(0o755)
             (root / "dist").mkdir()
             (root / "dist/ephemeral.pub").write_text("dry-run-public-key\n")
-            for repository in ("horizon-rust/horizon", "horizon-rust/horizon", "another/fork"):
+            for repository in ("horizon-rust/horizon", "another/fork"):
                 for ephemeral in ("", "yes"):
                     with self.subTest(repository=repository, ephemeral=ephemeral):
                         result = subprocess.run(

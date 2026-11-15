@@ -288,7 +288,7 @@ class SdkPairTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "publication refused"):
                 nightly.require_sdk("a" * 40)
             self.assertEqual(inventory.call_count, 2)
-        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}), \
+        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "someone/horizon"}), \
                 mock.patch.object(nightly, "sdk_ready") as sdk:
             nightly.require_sdk("a" * 40)
             sdk.assert_not_called()
@@ -334,7 +334,7 @@ class SdkPairTests(unittest.TestCase):
         main = nightly.Ref("main", "a" * 40, T)
         saved = [{"number": 17, "head": "b" * 40}]
         explicit = [{"number": 19, "head": "c" * 40}]
-        for repo in ("horizon-rust/horizon", "horizon-rust/horizon"):
+        for repo in ("horizon-rust/horizon", "another/fork"):
             for spec in ("", "19"):
                 with self.subTest(repo=repo, spec=spec), \
                         mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": repo, "NIGHTLY_PRS": spec,

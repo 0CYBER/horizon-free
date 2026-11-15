@@ -11,7 +11,7 @@ An SDK release is never deleted whole. Pruning deletes only the assets whose `ki
 The set kept whole is every build a current or dated Nightly ships, and the ten newest other SDKs. Automatic pruning
 is not switched on yet: until it is, every published SDK stays whole. The policy, with how the kept set is computed,
 is in the release flow's
-[retention design](https://github.com/horizon-rust/horizon/blob/main/docs/release-flow.md#prebuilt-sdk-retention-design-arismokohorizon-3011).
+[retention design](https://github.com/horizon-rust/horizon/blob/main/docs/release-flow.md#prebuilt-sdk-retention-design-horizon-rusthorizon-3011).
 Releases of the older `prebuilt-<sha>` form are outside it and removed by hand.
 
 The launcher keeps its own copies under its own rules ([Cache and disk](../../how-to/native-mods/10-cache-and-disk.md)):
