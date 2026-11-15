@@ -1,0 +1,3 @@
+ids = ["trait:IPayloadHandler"]
+why = "A wasm payload handler whose receiving group is busy now reports that, not a failure: IPayloadHandler::handle returns Result<(), PayloadHandleError> instead of Result<(), String>. Failed carries the old error text, and Busy hands back the unconsumed payload with its holder, which the transport keeps at the head of that connection's queue for an ordered retry."
+migrate = "An implementation of IPayloadHandler::handle changes its return type to Result<(), PayloadHandleError> and reports its own errors as PayloadHandleError::Failed(text), as with .map_err(PayloadHandleError::Failed). A handler never builds Busy itself."
