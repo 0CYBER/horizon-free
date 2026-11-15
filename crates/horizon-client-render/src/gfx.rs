@@ -10053,13 +10053,12 @@ impl Renderer {
             }
         }
         laps.lap("r_mirror");
-        // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
-        // which read the pack's frame at group 3.
+        // One of Horizon's own packs with a material stage: terrain draws with its layers.
         let material = self
             .native
             .as_ref()
             .filter(|_| !frame.title && !warp_on)
-            .and_then(|n| n.terrain());
+            .and_then(native_pack::NativePack::terrain_layers);
         // Without HDR output, the solid shaders without its lighting (`SolidPipeline`).
         let hdr = self.hdr.is_some();
         // A world warp's pipelines in place of the terrain's and the entities' (`warp_on`).
@@ -10067,7 +10066,7 @@ impl Renderer {
         let warp_group = self.world_warps.group().filter(|_| warp_on);
         let solid_pipeline = match warped {
             Some(w) => w.solid.get(hdr),
-            None => material.map_or(self.solid.get(hdr), |(m, _)| &m.solid),
+            None => material.map_or(self.solid.get(hdr), |m| m.solid),
         };
         // Two solid passes only where a discard costs the GPU its hidden surface
         // removal: Apple's tiled GPUs, behind Metal. Elsewhere the second pass
@@ -10075,31 +10074,24 @@ impl Renderer {
         let split_solid = self.info.backend == wgpu::Backend::Metal && !warp_on;
         let translucent_pipeline = match warped {
             Some(w) => &w.translucent,
-            None => material.map_or(&self.translucent, |(m, _)| &m.translucent),
+            None => material.map_or(&self.translucent, |m| m.translucent),
         };
-        let pack_flat = material.and_then(|(m, _)| m.flat.as_ref());
+        let pack_flat = material.and_then(|m| m.flat);
         // A material stage's translucent pass reads a copy of the depth the solid terrain
         // left: it is stored across the pass that ends before the copy.
         let keep_depth = keep_depth || material.is_some();
         // GPU culling's occlusion test splits the world pass as cull.rs's does.
         let gpu_occluding = gpu_frame && self.gpu_culling.as_ref().is_some_and(|g| g.occluding());
         let pack_frame = |pass: &mut wgpu::RenderPass<'_>| {
-            if let Some((_, group)) = material {
-                pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]);
+            if let Some(m) = material {
+                m.bind(pass);
             }
         };
         // A pack's solid terrain that calls `set_surface` also writes the surface target, in
         // passes of its own between the sky and everything else.
-        let surface = self
-            .native
-            .as_ref()
-            .filter(|n| {
-                !frame.title
-                    && !pack_draws_terrain
-                    && !warp_on
-                    && n.material.as_ref().is_some_and(|m| m.writes_surface)
-            })
-            .map(|n| n.frame.surface_view.clone());
+        let surface = material
+            .and_then(|m| m.surface)
+            .filter(|_| !pack_draws_terrain);
         // Solid terrain through the visibility buffer (`visbuffer`): flat frames without a
         // pack drawing terrain, a material stage, a surface target or a shadow pass.
         let vis_frame = flat_frame
@@ -10568,7 +10560,7 @@ impl Renderer {
                 .as_ref()
                 .filter(|_| !frame.title && !pack_draws_terrain && !warp_on)
                 && let Some(d) = &n.displacement
-                && let Some(pipeline) = material.and_then(|(m, _)| m.displaced.as_ref())
+                && let Some(pipeline) = material.and_then(|m| m.displaced)
             {
                 pass.stage(self.own_timing.as_mut(), "displacement");
                 pass.set_bind_group(0, &self.group, &[]);
@@ -10827,19 +10819,16 @@ impl Renderer {
             // One of Horizon's own packs reads the world before translucent terrain
             // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
             // pass that loads both carries on.
-            if material.is_some()
-                && let Some(native) = self.native.as_ref().filter(|n| n.frame.reads_opaque)
+            if material.is_some_and(|m| m.reads_opaque)
+                && let Some(native) = &self.native
             {
                 drop(pass);
-                let depth = world_depth.texture();
-                encoder.copy_texture_to_texture(
-                    depth.as_image_copy(),
-                    native.frame.opaque_depth.as_image_copy(),
-                    depth.size(),
-                );
-                if let Some((color, _)) = &scaled {
-                    native.frame.copy_opaque(&self.device, &mut encoder, color);
-                }
+                native.copy_opaque(native_material::OpaqueCopy {
+                    device: &self.device,
+                    encoder: &mut encoder,
+                    depth: world_depth.texture(),
+                    color: scaled.as_ref().map(|(c, _)| c),
+                });
                 pass = world_pass_after_culling(
                     &mut encoder,
                     world_view,

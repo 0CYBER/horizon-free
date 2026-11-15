@@ -717,6 +717,81 @@ impl NativeMaterial {
     }
 }
 
+/// The pack's terrain layers, which the renderer's terrain passes draw in place of its own
+/// (`NativePack::terrain_layers`).
+#[derive(Clone, Copy)]
+pub struct TerrainLayers<'a> {
+    /// The solid layer (with the cutout test) and the translucent one, for the instanced draws.
+    pub solid: &'a wgpu::RenderPipeline,
+    pub translucent: &'a wgpu::RenderPipeline,
+    /// The solid and translucent layers for the flat draws, where those run.
+    pub flat: Option<&'a (wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    /// `[displacement]`'s grid of the solid terrain near the camera (gfx/displace.rs).
+    pub displaced: Option<&'a wgpu::RenderPipeline>,
+    /// The solid layers' second target, which they write beside the world's colour.
+    pub surface: Option<&'a wgpu::TextureView>,
+    /// The layers read the world before translucent terrain: the renderer stops there for
+    /// `NativePack::copy_opaque`.
+    pub reads_opaque: bool,
+    /// What the layers read beside the terrain's groups (`bind`).
+    frame: &'a wgpu::BindGroup,
+}
+
+impl TerrainLayers<'_> {
+    /// Binds what the layers read beside the terrain's groups, in each pass that draws them.
+    pub fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_bind_group(GROUP, self.frame, &[]);
+    }
+}
+
+/// What the renderer hands the pack where its world pass stops before translucent terrain
+/// (`NativePack::copy_opaque`).
+pub struct OpaqueCopy<'a> {
+    pub device: &'a wgpu::Device,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The world's depth, and its colour where it can be copied (the scaled target, not the
+    /// window's own).
+    pub depth: &'a wgpu::Texture,
+    pub color: Option<&'a wgpu::TextureView>,
+}
+
+impl super::native_pack::NativePack {
+    /// The material stage's terrain layers; none without one.
+    pub fn terrain_layers(&self) -> Option<TerrainLayers<'_>> {
+        let m = self.material.as_ref()?;
+        // Against the ray scene where the material traces, else the frame's own group 3.
+        let (pipelines, frame) = self.terrain()?;
+        Some(TerrainLayers {
+            solid: &pipelines.solid,
+            translucent: &pipelines.translucent,
+            flat: pipelines.flat.as_ref(),
+            displaced: pipelines.displaced.as_ref(),
+            surface: m.writes_surface.then_some(&self.frame.surface_view),
+            reads_opaque: self.frame.reads_opaque,
+            frame,
+        })
+    }
+
+    /// Copies the world before translucent terrain into what the material reads
+    /// (`opaque_depth`, `opaque_color`).
+    pub fn copy_opaque(&self, copy: OpaqueCopy<'_>) {
+        let OpaqueCopy {
+            device,
+            encoder,
+            depth,
+            color,
+        } = copy;
+        encoder.copy_texture_to_texture(
+            depth.as_image_copy(),
+            self.frame.opaque_depth.as_image_copy(),
+            depth.size(),
+        );
+        if let Some(color) = color {
+            self.frame.copy_opaque(device, encoder, color);
+        }
+    }
+}
+
 #[cfg(test)]
 /// A material pack's terrain shader on shader API line `api`, its frame holding linear light
 /// where `linear`, with a full-screen `test_vertex`. Its material returns alpha `test_alpha`
