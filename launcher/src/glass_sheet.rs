@@ -58,7 +58,7 @@ impl SheetTab {
                 "How the game starts and how much it may use.",
             ),
             SheetTab::Hooks => (
-                "Before and after launch",
+                "Launch commands",
                 "computer-terminal-01",
                 "Commands that run before and after the game. Most people never need these.",
             ),
@@ -124,43 +124,57 @@ struct Draft {
 }
 
 impl Draft {
-    /// Whether Save would change `saved`.
-    fn differs(&self, saved: &Instance) -> bool {
+    /// The sections whose fields Save would change in `saved`.
+    fn changed(&self, saved: &Instance) -> Vec<SheetTab> {
         let hooks = [
             saved.launch.pre_launch.clone(),
             saved.launch.wrapper.clone(),
             saved.launch.post_exit.clone(),
             horizon_launcher::launch::env_line(&saved.launch.env),
         ];
-        self.name != saved.name
+        let general = self.name != saved.name
             || self.group != saved.group.clone().unwrap_or_default()
             || self.icon != saved.icon
-            || self.picture
-            || self.plays != Plays::of(saved)
+            || self.picture;
+        let installation = self.plays != Plays::of(saved)
             || self
                 .horizon
                 .as_ref()
-                .is_some_and(|(pin, channel)| *pin != saved.version || *channel != saved.channel)
-            || saved
-                .java
-                .as_ref()
-                .is_some_and(|j| self.java != (j.jvm_args.trim().to_string(), j.window))
-            || self.hooks.as_ref().is_some_and(|typed| *typed != hooks)
+                .is_some_and(|(pin, channel)| *pin != saved.version || *channel != saved.channel);
+        let launch = saved
+            .java
+            .as_ref()
+            .is_some_and(|j| self.java != (j.jvm_args.trim().to_string(), j.window));
+        let hooks = self.hooks.as_ref().is_some_and(|typed| *typed != hooks);
+        [
+            (general, SheetTab::General),
+            (installation, SheetTab::Installation),
+            (launch, SheetTab::Launch),
+            (hooks, SheetTab::Hooks),
+        ]
+        .into_iter()
+        .filter_map(|(changed, tab)| changed.then_some(tab))
+        .collect()
     }
 }
 
 impl Launcher {
     /// Whether the sheet holds edits its Save has not kept.
     pub(super) fn sheet_changed(&self) -> bool {
+        !self.sheet_changes().is_empty()
+    }
+
+    /// The sections holding edits Save has not kept.
+    pub(super) fn sheet_changes(&self) -> Vec<SheetTab> {
         let Some(d) = self.instances.dialog.as_ref() else {
-            return false;
+            return Vec::new();
         };
         let Some(saved) = d
             .editing
             .as_ref()
             .and_then(|id| self.instances.list.iter().find(|i| &i.id == id))
         else {
-            return false;
+            return Vec::new();
         };
         let draft = Draft {
             name: self.servers.value(Field::InstanceName).trim().to_string(),
@@ -179,7 +193,7 @@ impl Launcher {
             ),
             hooks: self.hooks_typed(&saved.id),
         };
-        draft.differs(saved)
+        draft.changed(saved)
     }
 
     /// What `instance` plays, as its rows and the sheet's head name it: "Nightly · 514ecf9", or
@@ -302,6 +316,7 @@ impl Launcher {
             );
 
         // The settings list's entries, on a plate of their own as Settings draws them.
+        let changes = self.sheet_changes();
         let cats = crate::glass::plate(radius::PANEL)
             .flex()
             .flex_col()
@@ -311,6 +326,8 @@ impl Launcher {
             .p(px(6.))
             .children(SheetTab::shown(&editing).map(|each| {
                 let (label, icon, _) = each.about();
+                // A section with edits Save has not kept carries a dot in the accent.
+                let unsaved = changes.contains(&each);
                 crate::glass_settings::nav_item(
                     format!("sheet-cat-{label}"),
                     icon,
@@ -320,6 +337,17 @@ impl Launcher {
                     true,
                     &t,
                 )
+                .when(unsaved, |d| {
+                    d.child(
+                        div()
+                            .ml_auto()
+                            .flex_none()
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(ui::color(ui::look().accent)),
+                    )
+                    .tooltip(ui::tip(tr("Not saved yet")))
+                })
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.sheet_tab = each;
                     cx.notify();
@@ -425,10 +453,12 @@ impl Launcher {
 
         // One foot for every section: the folder on the left, Cancel and Save on the right. Save
         // keeps everything the dialog holds, whichever section shows, and waits for a change.
-        let changed = self.sheet_changed();
+        let changed = !changes.is_empty();
         let home = editing.home.clone();
         let cancel = ui::quiet("instance-cancel", tr("Cancel"), 44., &t);
-        let save = ui::solid("instance-save", tr("Save"), 44., 14., &t).px(px(24.));
+        let save = button("instance-save", "Save", Kind::Primary, &t)
+            .h(px(44.))
+            .px(px(24.));
         let buttons = if busy {
             div()
                 .flex()
@@ -450,7 +480,7 @@ impl Launcher {
                         cx.notify();
                     }))
                 } else {
-                    save.opacity(0.4).cursor_default()
+                    save.opacity(0.35).cursor_default()
                 })
         };
         let foot = div()
@@ -556,6 +586,13 @@ impl Launcher {
 
     /// Over the sheet closed with edits not saved: keep editing, or drop them.
     fn discard_prompt(&mut self, cx: &mut Context<Self>) -> Div {
+        // Where the edits are, so the player knows what Discard drops.
+        let unsaved = self
+            .sheet_changes()
+            .into_iter()
+            .map(|tab| tr(tab.about().0).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         let t = self.theme;
         let answer = |this: &mut Self, discard: bool, cx: &mut Context<Self>| {
             if discard {
@@ -597,28 +634,27 @@ impl Launcher {
                                     .text_color(white(ink::FULL))
                                     .child(tr("Discard your changes?")),
                             )
-                            .child(
-                                ui::text(13., FontWeight::NORMAL, ink::NOTE)
-                                    .child(tr("What you changed here has not been saved.")),
-                            ),
+                            .child(ui::text(13., FontWeight::NORMAL, ink::NOTE).child(trf(
+                                "Not saved yet: {sections}.",
+                                &[("sections", &unsaved)],
+                            ))),
                     )
                     .child(
                         div()
                             .flex()
                             .justify_end()
                             .gap(px(8.))
+                            .child(ui::quiet("discard-yes", tr("Discard"), 44., &t).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    answer(this, true, cx)
+                                }),
+                            ))
                             .child(
-                                ui::quiet("discard-keep", tr("Keep editing"), 44., &t).on_click(
-                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        answer(this, false, cx)
-                                    }),
-                                ),
-                            )
-                            .child(
-                                ui::solid("discard-yes", tr("Discard"), 44., 14., &t)
+                                button("discard-keep", "Keep editing", Kind::Primary, &t)
+                                    .h(px(44.))
                                     .px(px(24.))
                                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        answer(this, true, cx)
+                                        answer(this, false, cx)
                                     })),
                             ),
                     ),
@@ -897,32 +933,42 @@ mod tests {
     #[test]
     fn save_waits_for_a_change_in_any_section() {
         let saved = saved();
-        assert!(!untouched(&saved).differs(&saved));
-        let edits: [fn(&mut Draft); 7] = [
-            |d| d.name = "Renamed".into(),
-            |d| d.group = "Friends".into(),
-            |d| d.icon = Some(Icon::Colour("#6b4bff".into())),
-            |d| d.picture = true,
-            |d| d.horizon = Some((Some("nightly-2026-11-13-aaaaaaa".into()), Channel::Stable)),
-            |d| d.horizon = Some((None, Channel::Nightly)),
+        assert!(untouched(&saved).changed(&saved).is_empty());
+        let general = SheetTab::General;
+        let installation = SheetTab::Installation;
+        type Edit = (fn(&mut Draft), SheetTab);
+        let edits: [Edit; 7] = [
+            (|d| d.name = "Renamed".into(), general),
+            (|d| d.group = "Friends".into(), general),
+            (|d| d.icon = Some(Icon::Colour("#6b4bff".into())), general),
+            (|d| d.picture = true, general),
+            (
+                |d| d.horizon = Some((Some("nightly-2026-11-13-aaaaaaa".into()), Channel::Stable)),
+                installation,
+            ),
+            (|d| d.horizon = Some((None, Channel::Nightly)), installation),
             // The Hooks section was opened and a command typed.
-            |d| {
-                d.hooks = Some([
-                    "./backup.sh".into(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ])
-            },
+            (
+                |d| {
+                    d.hooks = Some([
+                        "./backup.sh".into(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    ])
+                },
+                SheetTab::Hooks,
+            ),
         ];
-        for edit in edits {
+        // Each edit marks its own section, and only that one.
+        for (edit, section) in edits {
             let mut draft = untouched(&saved);
             edit(&mut draft);
-            assert!(draft.differs(&saved));
+            assert_eq!(draft.changed(&saved), [section]);
         }
         // Hooks opened and left as they were is no edit.
         let mut draft = untouched(&saved);
         draft.hooks = Some(Default::default());
-        assert!(!draft.differs(&saved));
+        assert!(draft.changed(&saved).is_empty());
     }
 }
