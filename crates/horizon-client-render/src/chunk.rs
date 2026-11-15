@@ -4,8 +4,9 @@
 use horizon_core::nbt::{Compound, Tag};
 use horizon_core::paletted::{PalettedContainer, Strategy};
 use horizon_world::registry::BlockStateId;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI16, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 pub mod block_entity;
 
@@ -119,9 +120,12 @@ pub struct ExtraLevel {
     /// The dimension type its level stem names.
     pub dimension_type: &'static str,
     pub shape: LevelShape,
-    /// The level's own seed, for a level a mod opened with one; else the world's.
-    pub seed: Option<i64>,
 }
+
+/// The own seeds of the levels a mod opened with one, by id (`LevelShapes::seed_of`). Not part of
+/// [`ExtraLevel`]: a table of those is leaked once per distinct set, and a seed in it would make
+/// each open with a new seed leak another.
+static LEVEL_SEEDS: RwLock<BTreeMap<String, i64>> = RwLock::new(BTreeMap::new());
 impl LevelShapes {
     pub const VANILLA: Self = Self {
         overworld: LevelShape::OVERWORLD,
@@ -150,9 +154,27 @@ impl LevelShapes {
             "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
         ) || self.extra.iter().any(|level| level.id == id)
     }
-    /// The seed of the level `id`, if it has one of its own.
-    pub fn seed_of(&self, id: &str) -> Option<i64> {
-        self.extra.iter().find(|level| level.id == id)?.seed
+    /// The seed of the level `id`, if a mod opened it with one of its own.
+    pub fn seed_of(id: &str) -> Option<i64> {
+        let seeds = LEVEL_SEEDS.read().unwrap_or_else(|e| e.into_inner());
+        seeds.get(id).copied()
+    }
+    /// Gives the level `id` its own seed until [`Self::forget_seed`].
+    pub fn set_seed(id: &str, seed: i64) {
+        let mut seeds = LEVEL_SEEDS.write().unwrap_or_else(|e| e.into_inner());
+        seeds.insert(id.to_owned(), seed);
+    }
+    /// Takes every level's own seed away, as a world loads: no runtime level is open in it yet.
+    pub fn forget_seeds() {
+        LEVEL_SEEDS
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+    /// Takes the level `id`'s own seed away, as it closes.
+    pub fn forget_seed(id: &str) {
+        let mut seeds = LEVEL_SEEDS.write().unwrap_or_else(|e| e.into_inner());
+        seeds.remove(id);
     }
     /// The dimension type of the level `id`: a vanilla level's is its own name.
     pub fn dimension_type<'a>(&self, id: &'a str) -> &'a str {
@@ -1101,15 +1123,17 @@ mod tests {
                 id: "test:pocket",
                 dimension_type: "test:small",
                 shape,
-                seed: Some(7),
             }]
             .leak(),
             ..super::LevelShapes::VANILLA
         };
         assert_eq!(levels.get("test:pocket"), shape);
         assert_eq!(levels.dimension_type("test:pocket"), "test:small");
-        assert_eq!(levels.seed_of("test:pocket"), Some(7));
-        assert_eq!(levels.seed_of("minecraft:overworld"), None);
+        LevelShapes::set_seed("test:pocket", 7);
+        assert_eq!(LevelShapes::seed_of("test:pocket"), Some(7));
+        assert_eq!(LevelShapes::seed_of("minecraft:overworld"), None);
+        LevelShapes::forget_seed("test:pocket");
+        assert_eq!(LevelShapes::seed_of("test:pocket"), None);
         assert_eq!(
             levels.dimension_type("minecraft:the_end"),
             "minecraft:the_end"

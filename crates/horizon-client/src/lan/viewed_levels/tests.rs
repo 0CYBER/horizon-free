@@ -971,7 +971,6 @@ fn open_levels(hub: &mut Hub, ids: &[&'static str]) {
             id,
             dimension_type: "minecraft:overworld",
             shape: crate::chunk::LevelShape::OVERWORLD,
-            seed: None,
         })
         .collect();
     hub.config.levels.extra = extra.leak();

@@ -297,6 +297,7 @@ impl WorldRequest {
             &pack.additional_data,
         );
         Dim::set_extra(shapes.extra.iter().map(|level| level.id));
+        horizon_client::chunk::LevelShapes::forget_seeds();
         // The bounded registry-loader leaf slice: fail world preparation before streaming,
         // rather than letting the flat-generator fallback swallow a selected pack's codec error.
         let (overrides, _) = worldgen_overrides_of(
@@ -869,7 +870,6 @@ fn shapes_of(
                 id: level.to_owned().leak(),
                 dimension_type: dimension_type.to_owned().leak(),
                 shape: shape?,
-                seed: None,
             })
         })
         .collect();

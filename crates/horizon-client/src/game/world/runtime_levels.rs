@@ -8,7 +8,7 @@
 //! later open of the same id. A delete is an unload and then the removal of the level's files, on
 //! the server thread in the same pass, so a reopen is applied only after the files are gone.
 use super::{Dim, Game};
-use horizon_client::chunk::{ExtraLevel, LevelShape};
+use horizon_client::chunk::{ExtraLevel, LevelShape, LevelShapes};
 use horizon_core::LevelKey;
 use horizon_world::{
     dimension_type::DimensionFacts,
@@ -804,9 +804,9 @@ impl Game<'_> {
             id: id_name,
             dimension_type,
             shape,
-            seed: Some(level.seed),
         });
         self.level_shapes.extra = leaked_table(extras);
+        LevelShapes::set_seed(id, level.seed);
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
         }
@@ -914,6 +914,7 @@ impl Game<'_> {
             .filter(|level| level.id != id)
             .collect();
         self.level_shapes.extra = leaked_table(extras);
+        LevelShapes::forget_seed(id);
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
             host.hub.close_views_of(id);
