@@ -52,6 +52,7 @@ mod mods_project;
 mod motion;
 mod multiplayer_page;
 mod native_log_page;
+mod nav_strip;
 mod new_instance;
 mod owner_page;
 mod packs_page;
@@ -221,6 +222,8 @@ struct Launcher {
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
+    /// The top bar's page tabs, including their horizontal overflow controls.
+    nav_strip: nav_strip::NavStrip,
     /// The glass Settings page's own scroll: its sections beside their list.
     settings_pane: gpui::ScrollHandle,
     /// The glass Home's patch log scroll, for its wheel to chain to the page.
@@ -579,6 +582,7 @@ impl Launcher {
             page: Page::from_env(),
             switches: 0,
             content_scroll: Scrollbar::default(),
+            nav_strip: nav_strip::NavStrip::default(),
             settings_pane: gpui::ScrollHandle::new(),
             patch_scroll: Scrollbar::default(),
             settings_marked: 0,
@@ -5336,7 +5340,7 @@ impl Render for Launcher {
         // Dark: the glass frame over the scene; Light keeps the night one over the dawn.
         let (topbar, sidebar) = if t.glass {
             (
-                self.glass_topbar(cx),
+                self.glass_topbar(window, cx),
                 self.glass_sidebar(window, cx).into_any_element(),
             )
         } else {

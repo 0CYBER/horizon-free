@@ -606,9 +606,8 @@ impl Launcher {
 
     /// The glass top bar: the pages in a glass strip, then the player, Microsoft sign-in and
     /// Settings (`px-8 pt-3.5`).
-    pub(super) fn glass_topbar(&mut self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn glass_topbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let wide = self.window_width >= crate::glass_home::TOP_BAR_WIDE;
         let compact = self.window_width < crate::glass_home::COMPACT;
         let mut tabs = div()
             .flex()
@@ -627,15 +626,8 @@ impl Launcher {
                 })),
             );
         }
-        let strip = crate::glass::plate(radius::LARGE)
-            .p(px(4.))
-            .min_w_0()
-            .when(wide, |d| d.flex_none())
-            .when(!wide, |d| d.flex_shrink(1.).overflow_hidden())
-            .child(tabs.id("nav-pages").relative().when(!wide, |d| {
-                d.overflow_x_scroll()
-                    .on_scroll(|_, _, cx| cx.stop_propagation())
-            }));
+        let performance = self.settings.performance();
+        let strip = self.nav_strip.render(tabs, &t, performance, window);
 
         let (name, how) = self.who_plays();
         let face = self.accounts.selected().map(|a| a.uuid.clone());

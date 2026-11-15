@@ -86,6 +86,11 @@ pub fn set_plain(plain: bool) {
     });
 }
 
+/// In Performance mode, the plates' solid fill; `None` while they show the blurred scene.
+pub fn plain_fill() -> Option<gpui::Hsla> {
+    PIECES.with_borrow(|p| p.plain.then(|| rgb(p.look.plate).into()))
+}
+
 /// The scene was built again (a new window size or tint), or the blur changed: plates take
 /// their pieces from this backdrop.
 /// How far below the top bar the pages' scroll area starts, so what scrolls up stops short of the

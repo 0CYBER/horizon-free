@@ -275,6 +275,10 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 
 Long pages, dialogs, the server console and data previews have a visible scrollbar when
 their content overflows. Drag the thumb or click the track to navigate without a mouse wheel.
+When the top bar's page tabs overflow, an arrow on a fading edge shows each side with more tabs
+(`src/nav_strip.rs`); the arrows go at the ends and when all tabs fit. They fade in and out over
+150 ms, and a click scrolls three quarters of the strip over 240 ms; another click goes on from where
+that one is headed, and the wheel stops it. Performance mode and reduced motion make both instant.
 
 Pages and Home's landscape fill the window as it resizes. The title bar is transparent over the
 launcher on every platform: Windows keeps native dragging, resizing, Snap, minimize,

@@ -13,8 +13,6 @@ const TALL: f32 = 56.;
 /// Play and the version are narrower and the invite code takes what is left of their row. The
 /// account page and the theme editor also put their two columns side by side from it.
 pub(super) const WIDE: f32 = 1280.;
-/// The window width from which the top bar's pages show at full size.
-pub(super) const TOP_BAR_WIDE: f32 = 1380.;
 /// The window width from which pages put their head and cards side by side (Overview, Mods,
 /// Versions, Settings' About); under it they stack, and Home's tabs drop their icons.
 pub(super) const SIDE_BY_SIDE: f32 = 1200.;
