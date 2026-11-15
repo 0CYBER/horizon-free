@@ -149,11 +149,17 @@ pub struct Project {
     /// The Minecraft versions its files list, and the loaders (`fabric`, `neoforge`, `minecraft`...).
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
+    /// Why no version of it can be installed here, when its source says so (a registry project
+    /// whose versions for this game were taken down or made for the earlier mod system).
+    pub blocked: Option<String>,
 }
 
 impl Project {
     pub fn support(&self) -> Support {
-        support(self.kind, &self.game_versions, &self.loaders)
+        match &self.blocked {
+            Some(why) => Support::No(why.clone()),
+            None => support(self.kind, &self.game_versions, &self.loaders),
+        }
     }
 
     /// The project as a data pack, for a search of data packs or an install into a world;

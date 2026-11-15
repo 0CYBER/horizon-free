@@ -7,7 +7,7 @@ use super::{
     details::{Details, GitHub, Link},
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
-use crate::i18n::trf;
+use crate::i18n::{tr, trf};
 use horizon_mod_package::index::{self, Index, Trust};
 use std::collections::HashMap;
 use std::fs;
@@ -380,9 +380,24 @@ pub fn trust_and_capabilities(
     lines
 }
 
-fn project_of(p: &index::Project) -> Option<Project> {
+fn project_of(index: &Index, p: &index::Project) -> Option<Project> {
     let mut game_versions: Vec<String> = p.versions.iter().map(|v| v.game.clone()).collect();
     game_versions.dedup();
+    // Versions for this game, none of which this Horizon may install: say why, once, here.
+    let for_game: Vec<&index::Version> = p.versions.iter().filter(|v| v.game == GAME).collect();
+    let blocked = (!for_game.is_empty() && index.installable(p, GAME).is_none()).then(|| {
+        match for_game
+            .iter()
+            .find_map(|v| index.revoked(&p.id, &v.file.sha256))
+        {
+            Some(r) if for_game.iter().all(|v| v.capabilities.unknown().is_empty()) => {
+                trf("Taken down: {reason}", &[("reason", &r.reason)]).to_string()
+            }
+            _ => {
+                tr("Made for Horizon's earlier mod system: it can't be installed yet.").to_string()
+            }
+        }
+    });
     Some(Project {
         source: SourceId::Horizon,
         id: p.id.clone(),
@@ -397,6 +412,7 @@ fn project_of(p: &index::Project) -> Option<Project> {
         kind: kind_of(&p.kind)?,
         game_versions,
         loaders: vec![LOADER.into()],
+        blocked,
     })
 }
 
@@ -429,7 +445,7 @@ fn unsupported_capabilities(capabilities: &index::Capabilities) -> Option<String
     let unknown = capabilities.unknown();
     (!unknown.is_empty()).then(|| {
         trf(
-            "Can't install: it asks for {names}, which this Horizon doesn't have",
+            "Can't install: it was made for Horizon's earlier mod system ({names})",
             &[("names", &unknown.join(", "))],
         )
     })
@@ -529,7 +545,7 @@ fn search(index: &Index, query: &Query) -> Vec<Project> {
     }
     found
         .into_iter()
-        .filter_map(project_of)
+        .filter_map(|p| project_of(index, p))
         .skip(query.offset)
         .take(query.limit)
         .collect()
@@ -569,7 +585,7 @@ impl Source for Registry {
         let p = index
             .project(id)
             .ok_or_else(|| format!("{id} isn't in Horizon's registry."))?;
-        project_of(p).ok_or_else(|| {
+        project_of(&index, p).ok_or_else(|| {
             format!(
                 "{} is a {} in Horizon's registry: this launcher can't install those yet.",
                 p.name,
@@ -850,7 +866,8 @@ fn install_version_guarded(
     progress: &dyn Fn(&str, f32),
 ) -> Result<installed::Entry, String> {
     let _lock = crate::browser::lock_home(home).map_err(|e| e.to_string())?;
-    let project = project_of(p).ok_or_else(|| format!("{} can't be installed here.", p.name))?;
+    let project =
+        project_of(index, p).ok_or_else(|| format!("{} can't be installed here.", p.name))?;
     if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
         return Err(format!("{} was taken down: {}", p.name, r.reason));
     }

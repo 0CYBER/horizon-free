@@ -30,7 +30,7 @@ pub(super) fn scratch(name: &str) -> PathBuf {
 }
 
 fn hud(index: &Index) -> Project {
-    project_of(index.project("coords_hud").unwrap()).unwrap()
+    project_of(index, index.project("coords_hud").unwrap()).unwrap()
 }
 
 /// Installs the sample's checked content mod, as a modpack does.
@@ -360,7 +360,7 @@ fn data_pack(index: &mut Index, dir: &Path) -> Project {
         versions: vec![version],
         ..base
     });
-    project_of(index.project("lanterns").unwrap()).unwrap()
+    project_of(index, index.project("lanterns").unwrap()).unwrap()
 }
 
 #[test]
@@ -543,7 +543,7 @@ fn executable_content_is_refused_without_installing_or_skipping_code() {
 fn installs_a_shader_pack_into_shaderpacks() {
     let index = sample();
     let home = scratch("shader");
-    let p = project_of(index.project("glow").unwrap()).unwrap();
+    let p = project_of(&index, index.project("glow").unwrap()).unwrap();
     assert_eq!(p.support(), super::super::Support::Works);
     let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
     assert_eq!(done[0].file, "shaderpacks/glow-1.0.0.hshader");
@@ -629,6 +629,31 @@ fn registry_versions_run_when_made_for_this_game() {
     let hud = versions("coords_hud");
     assert!(hud[0].blocked.is_none());
     assert_eq!(pick(Kind::Mod, &hud, false).unwrap().number, "0.1.0");
+}
+
+#[test]
+fn a_project_made_for_the_earlier_mod_system_says_it_cant_be_installed() {
+    let mut index = sample();
+    let hud = index
+        .projects
+        .iter_mut()
+        .find(|p| p.id == "coords_hud")
+        .unwrap();
+    hud.versions[0].game = GAME.into();
+    hud.versions[0].capabilities = vec!["game-read".to_string()].into();
+    let p = project_of(&index, index.project("coords_hud").unwrap()).unwrap();
+    assert!(!p.support().installable());
+    assert!(p.support().reason().unwrap().contains("earlier mod system"));
+    // The same project with a version this Horizon can use installs as before.
+    let mut fine = sample();
+    fine.projects
+        .iter_mut()
+        .find(|p| p.id == "coords_hud")
+        .unwrap()
+        .versions[0]
+        .game = GAME.into();
+    let p = project_of(&fine, fine.project("coords_hud").unwrap()).unwrap();
+    assert!(p.blocked.is_none());
 }
 
 #[test]
