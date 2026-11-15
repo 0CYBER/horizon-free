@@ -40,7 +40,8 @@ def clients(build):
     return ['java','-Xmx2g','-Duser.timezone=UTC','-cp',cp,'net.minecraft.server.Main','nogui'],['java','-Xmx1g','-cp',str(classes)+os.pathsep+cp,'dev.horizonlab.parity.LocatorBarClient']
 
 def generate(java,build):
-    directory=build/'generate';net.server_dir(directory);server=net.Server(java,directory,'generate')
+    # No clients connect during generation: let the server bind an OS-assigned port without a probe/bind race.
+    directory=build/'generate';net.server_dir(directory,port=0);server=net.Server(java,directory,'generate')
     try:
         server.wait_for(r'Done \(');c=Commands(server,build/'generate-commands.json')
         for text in ['tick freeze','gamerule spawn_mobs false','gamerule advance_time false','gamerule respawn_radius 0','forceload add 0 0 15 15','fill 0 199 0 15 199 15 stone','fill 0 200 0 15 203 15 air','setworldspawn 4 200 4','save-all flush']:c.reply(text)
