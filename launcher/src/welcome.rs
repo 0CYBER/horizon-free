@@ -13,6 +13,16 @@ impl Launcher {
         self.opening.is_none() && !self.settings.welcomed && self.collection.consent.needs_asking()
     }
 
+    /// Escape answers the welcome as Continue does: the look as it is now stays.
+    pub(crate) fn welcome_escape(&mut self) -> bool {
+        if self.welcoming() {
+            self.settings.welcomed = true;
+            self.save_settings();
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn welcome_screen(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         let (rows, ping) = ui::flat_rows(|| {
@@ -156,13 +166,25 @@ impl Launcher {
             .p(px(24.))
             .occlude()
             .on_scroll(|_, _, cx| cx.stop_propagation())
+            // The same frosted dimming as the Settings dialog's.
+            .when(!self.settings.performance(), |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .opacity(0.62)
+                        .child(ui::scrim_backdrop()),
+                )
+            })
             .child(
                 div()
                     .absolute()
                     .top_0()
                     .left_0()
                     .size_full()
-                    .bg(ui::scrim().opacity(0.4)),
+                    .bg(ui::scrim().opacity(if ui::light() { 0.2 } else { 0.4 })),
             )
             .child(card)
     }

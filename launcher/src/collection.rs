@@ -145,6 +145,15 @@ impl Launcher {
         self.collection.view = None;
     }
 
+    /// Escape on the data question is "Send nothing": the answer that shares nothing.
+    pub(crate) fn consent_escape(&mut self) -> bool {
+        if self.asking_consent() {
+            self.answer_consent(Choices::NONE);
+            return true;
+        }
+        false
+    }
+
     fn toggle_view(&mut self) {
         self.collection.view = match self.collection.view {
             Some(_) => None,
