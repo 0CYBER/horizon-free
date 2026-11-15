@@ -133,13 +133,14 @@ class ProcessTreeTests(unittest.TestCase):
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         directory = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, directory, True)
-        # A stand-in sccache: --start-server leaves a server running, as the real one does, and exits.
-        (directory / "server.py").write_text(textwrap.dedent("""
-            import os, pathlib, time
-            pathlib.Path(__file__).with_name("server.txt").write_text(f"{os.getpid()} {os.environ['SCCACHE_IDLE_TIMEOUT']}")
-            time.sleep(60)
-        """))
-        (directory / "sccache.cmd").write_text(f'@start "" /b "{sys.executable}" "%~dp0server.py"\n')
+        # A stand-in sccache: --start-server leaves a server running, as the real one does, and exits. The server is
+        # Windows PowerShell, not this Python: started by cmd, the Microsoft Store's Python (an app execution alias)
+        # runs outside cmd's job, where sccache's server, a plain program, doesn't (#16861).
+        (directory / "sccache.cmd").write_text(
+            '@set "SERVER_TXT=%~dp0server.txt"\n'
+            '@start "" /b "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive'
+            ' -Command "Set-Content -LiteralPath $env:SERVER_TXT'
+            ' -Value (\'{0} {1}\' -f $PID, $env:SCCACHE_IDLE_TIMEOUT); Start-Sleep 60"\n')
         with mock.patch.dict(os.environ, {"RUSTC_WRAPPER": str(directory / "sccache.cmd")}):
             process_tree.start_build_server()
         starter = process_tree.BUILD_SERVERS.pop()
