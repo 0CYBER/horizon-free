@@ -259,6 +259,11 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         v(Opt::MenuBlur, Low, "Blurs the world behind menus."),
                         v(Opt::AttackIndicator, None, "Shows attack cooldown."),
                         v(Opt::Autosave, None, "Shows when the world saves."),
+                        v(
+                            Opt::FovEffects,
+                            None,
+                            "How much speed, sprinting and status effects change the field of view.",
+                        ),
                     ],
                 ),
             ],
@@ -1336,6 +1341,7 @@ impl Item {
                         | Opt::Vignette
                         | Opt::Autosave
                         | Opt::AttackIndicator
+                        | Opt::FovEffects
                 )
         );
         if !presetless {
@@ -1401,10 +1407,11 @@ fn row(setting: Setting, s: &Settings, out: &EffectiveOutput) -> Row<Item> {
 }
 
 /// The vanilla rows `options.txt` keeps as it read them, not in `Settings`' own fields.
-const FILE_KEYS: [&str; 3] = [
+const FILE_KEYS: [&str; 4] = [
     "exclusiveFullscreen",
     "textureFiltering",
     "maxAnisotropyBit",
+    "fovEffectScale",
 ];
 
 /// What the screen's rows read from the settings: what Undo puts back (`GraphicsScreen::undo`),
@@ -1785,6 +1792,11 @@ mod tests {
         assert!(found.contains(&general(Item::Vanilla(Opt::Preset))));
         ui.set_search("horizon preset");
         assert_eq!(ui.listed(&s, SIZE), [general(Item::Horizon(H::Preset))]);
+        ui.set_search("fov");
+        assert_eq!(
+            ui.listed(&s, SIZE),
+            [general(Item::Vanilla(Opt::FovEffects))]
+        );
         ui.set_search("hdr");
         let [x, y, w, h] = cols.page(Page::ALL.len() - 1);
         press(&mut ui, &mut s, (x + w / 2.0, y + h / 2.0));

@@ -7385,6 +7385,7 @@ mod tests {
         // Vanilla's own: the same option on two of its screens.
         let vanilla_repeats: BTreeMap<&str, &[&str]> = [
             ("MenuBlur", &["Accessibility", "Graphics"][..]),
+            ("FovEffects", &["Accessibility", "Graphics"][..]),
             ("ShowSubtitles", &["Accessibility", "Sound"][..]),
             ("Narrator", &["Accessibility", "Chat"][..]),
             ("ChatOpacity", &["Accessibility", "Chat"][..]),

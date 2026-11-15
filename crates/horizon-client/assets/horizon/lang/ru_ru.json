@@ -489,6 +489,7 @@
   "Fullscreen takes the display over, at the mode below.": "Полный экран забирает дисплей в режиме ниже.",
   "The display mode exclusive fullscreen uses. Applies when you leave.": "Режим дисплея, который использует эксклюзивный полный экран. Применяется при выходе.",
   "Blurs the world behind menus.": "Размывает мир за меню.",
+  "How much speed, sprinting and status effects change the field of view.": "Насколько скорость, бег и эффекты состояния изменяют поле зрения.",
   "How textures are sampled: sharper at a slant with Anisotropic.": "Как сэмплируются текстуры: с анизотропной фильтрацией резче под углом.",
   "How far Anisotropic filtering goes. Higher is sharper at a slant.": "Как далеко работает анизотропная фильтрация. Больше — резче под углом.",
   "Only with Anisotropic texture filtering.": "Только с анизотропной фильтрацией текстур.",

@@ -738,6 +738,7 @@
   "Fullscreen takes the display over, at the mode below.": "Fullscreen takes the display over, at the mode below.",
   "The display mode exclusive fullscreen uses. Applies when you leave.": "The display mode exclusive fullscreen uses. Applies when you leave.",
   "Blurs the world behind menus.": "Blurs the world behind menus.",
+  "How much speed, sprinting and status effects change the field of view.": "How much speed, sprinting and status effects change the field of view.",
   "How textures are sampled: sharper at a slant with Anisotropic.": "How textures are sampled: sharper at a slant with Anisotropic.",
   "How far Anisotropic filtering goes. Higher is sharper at a slant.": "How far Anisotropic filtering goes. Higher is sharper at a slant.",
   "Only with Anisotropic texture filtering.": "Only with Anisotropic texture filtering.",
