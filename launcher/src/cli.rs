@@ -2391,6 +2391,9 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                         for line in horizon::trust_and_capabilities(&p.id, instance.as_ref()) {
                             println!("  {line}");
                         }
+                        if let Some(why) = support.reason() {
+                            println!("  {} · {why}", support.label());
+                        }
                         continue;
                     }
                     let unchecked = p.kind == Kind::Mod && support.installable();

@@ -298,6 +298,13 @@ impl Launcher {
             false if pack.title == pack.file => pack.description.clone(),
             false => format!("{} · {}", pack.description, pack.file),
         };
+        let facts = match &pack.unsupported {
+            Some(why) => {
+                let label = horizon_launcher::browser::Support::No(String::new()).label();
+                format!("{label} · {why} · {facts}")
+            }
+            None => facts,
+        };
         plate(&t)
             .flex()
             .items_center()

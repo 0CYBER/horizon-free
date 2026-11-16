@@ -574,6 +574,106 @@ fn installs_a_shader_pack_into_shaderpacks() {
     fs::remove_dir_all(&home).unwrap();
 }
 
+/// The browser's versions of `id`, as `Registry::versions` gives them.
+fn versions_of(index: &Index, id: &str) -> Vec<Version> {
+    let p = index.project(id).unwrap();
+    p.versions.iter().map(|v| version_of(index, p, v)).collect()
+}
+
+/// A shader pack whose every version is for a retired shader API is marked, and neither picked
+/// nor downloaded (#17245).
+#[test]
+fn shader_packs_for_another_shader_api_are_marked_and_not_installed() {
+    let mut index = sample();
+    let glow = index.projects.iter_mut().find(|p| p.id == "glow").unwrap();
+    glow.versions[0].api = "0.1".into();
+    let versions = versions_of(&index, "glow");
+    assert_eq!(
+        versions[0].blocked.as_deref(),
+        Some("needs shader API 0.1; this Horizon serves 0.2")
+    );
+    assert!(super::super::pick(Kind::Shader, &versions, true).is_none());
+    let p = index.project("glow").unwrap();
+    assert_eq!(
+        newest(&index, p).unwrap_err(),
+        "Soft Glow needs shader API 0.1; this Horizon serves 0.2."
+    );
+    assert!(index.installable(p, GAME).is_none());
+    let home = scratch("shader-api");
+    let project = project_of(&index, p).unwrap();
+    // The card, the CLI and MCP give this answer. As everything that can't be installed here,
+    // it is left out of the list, and listed last with `everything`.
+    let marked =
+        super::super::Support::No("Made for shader API 0.1: this Horizon serves 0.2.".into());
+    assert_eq!(project.support(), marked);
+    assert!(search(&index, &Query::new("", Kind::Shader)).is_empty());
+    let everything = Query {
+        everything: true,
+        ..Query::new("", Kind::Shader)
+    };
+    let listed = search(&index, &everything);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].support(), marked);
+    // Not counted as a mod for the earlier mod system by the note above the list.
+    assert!(matches!(
+        blocked(&index, p),
+        Some(Blocked::OtherShaderApi(_))
+    ));
+    let e = install_from(&index, true, &project, &home, &|_, _| {}).unwrap_err();
+    assert_eq!(
+        e,
+        "Soft Glow needs shader API 0.1; this Horizon serves 0.2."
+    );
+    assert!(!home.join("mod-browser").exists(), "nothing was downloaded");
+    assert!(!home.join("shaderpacks").exists());
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// A newer version for a retired shader API above one for this build's: the one that runs is
+/// picked, installed and updated to.
+#[test]
+fn a_shader_pack_offers_its_newest_version_for_this_shader_api() {
+    let mut index = sample();
+    let glow = index.projects.iter_mut().find(|p| p.id == "glow").unwrap();
+    let mut old_api = glow.versions[0].clone();
+    old_api.version = "1.1.0".into();
+    old_api.api = "0.1".into();
+    old_api.file.sha256 = "1".repeat(64);
+    glow.versions.insert(0, old_api);
+    let versions = versions_of(&index, "glow");
+    let picked = super::super::pick(Kind::Shader, &versions, true).unwrap();
+    assert_eq!(picked.number, "1.0.0");
+    let p = index.project("glow").unwrap();
+    assert_eq!(newest(&index, p).unwrap().version, "1.0.0");
+    assert_eq!(index.installable(p, GAME).unwrap().version, "1.0.0");
+    let home = scratch("shader-api-mixed");
+    let project = project_of(&index, p).unwrap();
+    assert_eq!(project.support(), super::super::Support::Works);
+    let done = install_from(&index, true, &project, &home, &|_, _| {}).unwrap();
+    assert_eq!(done[0].version, "1.0.0");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// A shader pack for this build's shader API, and a shaders/-folder pack (which names none), are
+/// left as they were.
+#[test]
+fn shader_packs_for_this_shader_api_are_offered_as_before() {
+    let mut index = sample();
+    let versions = versions_of(&index, "glow");
+    assert_eq!(versions[0].blocked, None);
+    let support = |index: &Index| {
+        project_of(index, index.project("glow").unwrap())
+            .unwrap()
+            .support()
+    };
+    assert_eq!(support(&index), super::super::Support::Works);
+    let glow = index.projects.iter_mut().find(|p| p.id == "glow").unwrap();
+    glow.kind = index::Kind::ShaderPack;
+    glow.versions[0].api = String::new();
+    assert_eq!(versions_of(&index, "glow")[0].blocked, None);
+    assert_eq!(support(&index), super::super::Support::Works);
+}
+
 #[test]
 fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
     let index = sample();

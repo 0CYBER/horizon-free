@@ -414,12 +414,17 @@ enum Blocked {
     EarlierSystem,
     /// They were taken down, for this reason.
     TakenDown(String),
+    /// Shader packs made for this shader API, not this build's.
+    OtherShaderApi(String),
 }
 
 fn blocked(index: &Index, p: &index::Project) -> Option<Blocked> {
     let for_game: Vec<&index::Version> = p.versions.iter().filter(|v| v.game == GAME).collect();
     if for_game.is_empty() || index.installable(p, GAME).is_some() {
         return None;
+    }
+    if for_game.iter().all(|v| index::needs_other_shader_api(p, v)) {
+        return Some(Blocked::OtherShaderApi(for_game[0].api.clone()));
     }
     let revoked = for_game
         .iter()
@@ -443,6 +448,7 @@ fn project_of(index: &Index, p: &index::Project) -> Option<Project> {
         Blocked::EarlierSystem => {
             tr("Made for Horizon's earlier mod system: it can't be installed yet.").to_string()
         }
+        Blocked::OtherShaderApi(api) => made_for_other_shader_api(&api),
     });
     Some(Project {
         source: SourceId::Horizon,
@@ -483,7 +489,8 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
         blocked: index
             .revoked(&p.id, &v.file.sha256)
             .map(|r| format!("taken down: {}", r.reason))
-            .or_else(|| unsupported_capabilities(&v.capabilities)),
+            .or_else(|| unsupported_capabilities(&v.capabilities))
+            .or_else(|| index::needs_other_shader_api(p, v).then(|| other_shader_api(&v.api))),
     }
 }
 
@@ -872,20 +879,41 @@ fn fetch_datapack_from(
     Ok((path, v.version.clone()))
 }
 
-/// A project's newest version for this game that wasn't taken down.
+/// A project's newest version for this game that wasn't taken down and, for a shader pack, is
+/// for this build's shader API.
 fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version, String> {
-    let mut taken_down = None;
+    let (mut taken_down, mut other_api) = (None, None);
     for v in p.versions.iter().filter(|v| v.game == GAME) {
         if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
             taken_down.get_or_insert(r);
+        } else if index::needs_other_shader_api(p, v) {
+            other_api.get_or_insert(v.api.as_str());
         } else {
             return Ok(v);
         }
     }
-    Err(match taken_down {
-        Some(r) => format!("{} was taken down: {}", p.name, r.reason),
-        None => format!("{} has no version for {GAME} to install.", p.name),
+    Err(match (taken_down, other_api) {
+        (_, Some(api)) => format!("{} {}.", p.name, other_shader_api(api)),
+        (Some(r), None) => format!("{} was taken down: {}", p.name, r.reason),
+        (None, None) => format!("{} has no version for {GAME} to install.", p.name),
     })
+}
+
+/// What the browser and the installed packs say of a shader pack made for shader API `api`.
+pub fn made_for_other_shader_api(api: &str) -> String {
+    format!(
+        "Made for shader API {api}: this Horizon serves {}.",
+        horizon_shader_api::API
+    )
+}
+
+/// Why a shader pack made for shader API `api` doesn't run: the game's own words for it
+/// (`horizon_shader_api::Manifest::parse`).
+fn other_shader_api(api: &str) -> String {
+    format!(
+        "needs shader API {api}; this Horizon serves {}",
+        horizon_shader_api::API
+    )
 }
 
 /// Installs version `v` of the registry's mod, resource pack or shader pack `p` into the game
@@ -924,6 +952,10 @@ fn install_version_guarded(
         project_of(index, p).ok_or_else(|| format!("{} can't be installed here.", p.name))?;
     if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
         return Err(format!("{} was taken down: {}", p.name, r.reason));
+    }
+    // Every install comes here, a modpack's pinned ones too: refused before the download.
+    if index::needs_other_shader_api(p, v) {
+        return Err(format!("{} {}.", p.name, other_shader_api(&v.api)));
     }
     let native = p.kind == index::Kind::NativeMod;
     let relative = match native {

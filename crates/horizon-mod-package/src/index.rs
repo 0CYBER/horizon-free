@@ -511,11 +511,13 @@ impl Index {
     }
 
     /// A project's newest version for Minecraft `game` that wasn't taken down and asks for no
-    /// capability this build doesn't know.
+    /// capability this build doesn't know; a shader pack's, for this build's shader API
+    /// ([`needs_other_shader_api`]).
     pub fn installable<'a>(&self, project: &'a Project, game: &str) -> Option<&'a Version> {
         project.versions.iter().find(|v| {
             v.game == game
                 && v.capabilities.unknown().is_empty()
+                && !needs_other_shader_api(project, v)
                 && self.revoked(&project.id, &v.file.sha256).is_none()
         })
     }
@@ -774,6 +776,12 @@ pub fn check_file(
     }
     inspect(&project.kind, path)?.matches(project, version)?;
     Ok(trust)
+}
+
+/// Whether version `v` of `project` is a Horizon shader pack made for a shader API other than
+/// the one this build serves ([`horizon_shader_api::API`]): the game refuses its manifest.
+pub fn needs_other_shader_api(project: &Project, v: &Version) -> bool {
+    project.kind == Kind::Shader && v.api != horizon_shader_api::API
 }
 
 /// What a file says about itself, read by its kind's own check

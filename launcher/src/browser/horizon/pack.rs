@@ -347,4 +347,39 @@ mod tests {
         assert!(!packs.join("cozy").exists(), "nothing left behind");
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// A pack that pins a shader pack made for another shader API fails as a whole, and the
+    /// pinned pack isn't downloaded (#17245).
+    #[test]
+    fn a_pack_pinning_a_shader_pack_for_another_shader_api_installs_nothing() {
+        let dir = scratch("shader-api");
+        let mut index = registry(&dir, true, "");
+        let pinned = index
+            .projects
+            .iter_mut()
+            .find(|p| p.id == "coords_hud")
+            .unwrap();
+        pinned.kind = idx::Kind::Shader;
+        pinned.versions[0].api = "0.1".into();
+        let packs = dir.join("horizon-packs");
+        let fetched = std::sync::Mutex::new(Vec::new());
+        let e = install_in(&index, true, "cozy", &packs, &|line, _| {
+            fetched.lock().unwrap().push(line.to_owned())
+        })
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "Coordinates HUD needs shader API 0.1; this Horizon serves 0.2."
+        );
+        assert!(
+            fetched
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|l| l.starts_with("Cozy ")),
+            "only the pack's own file was downloaded"
+        );
+        assert!(!packs.join("cozy").exists(), "nothing left behind");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
