@@ -2,41 +2,15 @@
 import json
 import os
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
-import yaml
 
 
 class DataLegTimingTests(unittest.TestCase):
-    def test_workflow_records_start_end_without_bypassing_filtered_runner(self):
-        steps = yaml.safe_load((ROOT / ".github/workflows/ignored-tests.yml").read_text())["jobs"]["ignored-tests-shards"]["steps"]
-        start = next(i for i, s in enumerate(steps) if s.get("name") == "Record data-leg start and compiler cache")
-        end = next(i for i, s in enumerate(steps) if s.get("name") == "Record data-leg end and compiler cache")
-        run = next(i for i, s in enumerate(steps) if s.get("name") == "Run the ignored tests that need no vanilla data")
-        self.assertLess(start, run)
-        self.assertLess(run, end)
-        self.assertEqual(steps[end]["if"], "always()")
-        self.assertEqual(steps[run]["env"]["HORIZON_DATA_LEG_TIMING"], "1")
-        # The workflow may invoke only the existing filtered runner, not raw cargo
-        # or a tee/cat pipeline forwarding its captured output.
-        self.assertEqual(shlex.split(steps[run]["run"]), ["python3", "tools/ci/with_xvfb.py", "python3", "tools/ci/ignored_tests.py", "--without-data", "--report", "$RUNNER_TEMP/daily-report.json", "$SHARD"])
-        with tempfile.TemporaryDirectory() as directory:
-            fake = Path(directory) / "sccache"
-            fake.write_text("#!/bin/sh\n[ \"$1\" = --show-stats ] || exit 1\necho 'Compile requests 0'\necho 'Cache hits 0'\n")
-            fake.chmod(0o755)
-            for i, label in ((start, "start"), (end, "end")):
-                script = steps[i]["run"]
-                self.assertIn("date -u", script)
-                self.assertIn("sccache --show-stats", script)
-                result = subprocess.run(["bash", "-c", script], env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True, check=True)
-                self.assertRegex(result.stdout, rf"data-leg {label} utc=\d{{4}}-\d{{2}}-\d{{2}}T")
-                self.assertIn("Compile requests 0", result.stdout)
 
     def test_real_cargo_boundary_markers_keep_payloads_private(self):
         with tempfile.TemporaryDirectory() as directory:

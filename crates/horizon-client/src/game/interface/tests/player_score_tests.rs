@@ -33,7 +33,7 @@ fn saved_score(game: &mut Game<'_>) -> i32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn experience_points_raise_the_score_that_set_points_and_a_normal_respawn_drop() {
     let mut game = server_game();
     game.options.dedicated = None;

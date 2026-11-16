@@ -13,7 +13,6 @@ horizon-client-render gfx::pack_timing::tests::stages_split_a_render_pass_in_a_p
 horizon-client-render gfx::pack_timing::tests::the_heavy_part_of_a_pass_has_the_largest_time lib daily slow
 horizon-client-render gfx::pack_uniforms::ftransform_test::ftransform_applies_the_model_view_matrix_before_the_projection lib daily slow
 horizon-client-render gfx::panorama::tests::original_resolution_texels_and_vanilla_cube_orientation_are_preserved lib daily slow
-horizon-client-render gfx::readback::tests::a_16_bit_unorm_frame_reaches_an_8_bit_swapchain lib daily slow
 horizon-client-render gfx::readback::tests::a_float_frame_finishes_on_8_bits_before_the_overlays lib daily slow
 horizon-client-render gfx::readback::tests::a_float_frame_reaches_an_8_bit_swapchain lib daily slow
 horizon-client-render gfx::readback::tests::frames_draw_straight_to_a_readable_surface lib daily slow

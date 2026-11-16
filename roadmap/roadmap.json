@@ -399,6 +399,20 @@
    "shipped_in": "v0.2.70"
   },
   {
+   "id": "discord-presence",
+   "title": "Discord Rich Presence",
+   "status": "shipped",
+   "area": "extras",
+   "plain": "Your Discord profile can show that you are playing Horizon, with a switch to turn it off.",
+   "dev": "A Discord IPC client on its own thread (#1787) and the presence with its setting (#1788). Merged: it ships with the next release.",
+   "links": [
+    "#1787",
+    "#1788"
+   ],
+   "shipped_in": "v0.2.58",
+   "announce": true
+  },
+  {
    "id": "server-dialogs",
    "title": "Server dialogs and login screens",
    "status": "shipped",
@@ -432,7 +446,7 @@
    "status": "next",
    "area": "performance",
    "plain": "New public numbers comparing Horizon with vanilla on many kinds of computers, measured the same way every time, with a history that shows what each release changed.",
-   "dev": "Redo the comparison after the current performance work (#1073); reliability, coverage and presentation (#1346); a scene must count as loaded only once its first chunk arrives (#1749). Next: a performance history across releases (an automatic comparison of each release with the last, on a timeline), more report fields (server TPS and MSPT, power, battery drain, temperature, throttling) and more hardware (a MacBook on battery, low-end laptops, community reports). Players run `--benchmark` and can share the local report by hand (docs/benchmark.md); neither the game nor the launcher uploads reports.",
+   "dev": "Redo the comparison after the current performance work (#1073); reliability, coverage and presentation (#1346); a scene must count as loaded only once its first chunk arrives (#1749). Next: a performance history across releases (an automatic comparison of each release with the last, on a timeline), more report fields (server TPS and MSPT, power, battery drain, temperature, throttling) and more hardware (a MacBook on battery, low-end laptops, community reports). Players' reports come in through `--benchmark` and `horizon-launcher data benchmark` (docs/benchmark.md).",
    "links": [
     "#1073",
     "#1346",
@@ -1229,7 +1243,7 @@
    "status": "help-wanted",
    "area": "performance",
    "plain": "Run Horizon's built-in benchmark and share the report: every new computer makes the performance work more accurate. No coding needed.",
-   "dev": "`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report in the game's benchmarks/ folder. Read it and share it by hand if you choose; the launcher never uploads it (docs/telemetry.md).",
+   "dev": "`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data benchmark <report>` shows what would be sent and uploads it (playhorizon.dev/docs/performance). Results from three installs with the same hardware appear on the Benchmarks page. Example: #1711.",
    "links": [
     "https://playhorizon.dev/docs/performance"
    ]

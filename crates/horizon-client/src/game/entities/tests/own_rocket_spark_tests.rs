@@ -18,7 +18,7 @@ use horizon_core::geometry::Vec3;
 const ME: i32 = 7;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_own_rockets_spark_is_live_the_tick_it_spawns_at_the_moved_hand() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();

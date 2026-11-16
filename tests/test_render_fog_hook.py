@@ -61,8 +61,7 @@ fn changed_unchanged_and_invalid() {
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_camera_submersion_override(self):
-        source = (ROOT / "crates/horizon-client/src/game/render_tick.rs").read_text(encoding="utf-8")
-        actual = method(source, "camera_submersion")
+        actual = rust_fn("camera_submersion", owner="Game")
         fixture = r"""
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FogType { Atmospheric, Water, Lava, PowderSnow }
@@ -83,6 +82,9 @@ struct Game {
 }
 impl Game {
     fn near_plane(&self) -> NearPlane { NearPlane }
+    fn camera_fog_type(&self, camera: [f64; 3]) -> FogType {
+        fog_type(&self.world, self.res.facts(), camera, &self.near_plane())
+    }
     fn native_camera_submersion(&self, camera: [f64; 3], fog_type: &mut FogType) {
         assert_eq!(camera, [10.0, 60.0, 10.0]);
         if let Some(over) = self.override_fog {

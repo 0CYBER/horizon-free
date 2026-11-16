@@ -76,9 +76,9 @@ Owner: [levzzz5154](https://github.com/levzzz5154) · Tracking: [#3911](https://
 
 <details><summary>Technical</summary>
 
-One item for all modding work ([#3911](https://github.com/horizon-rust/horizon/issues/3911)), led by levzzz5154; the order between the parts is theirs. Native mods on stable hook points (game/native_hooks.rs, [#3345](https://github.com/horizon-rust/horizon/issues/3345), [#3346](https://github.com/horizon-rust/horizon/issues/3346), [#3434](https://github.com/horizon-rust/horizon/issues/3434), [#3435](https://github.com/horizon-rust/horizon/issues/3435)) built by the launcher ([#3388](https://github.com/horizon-rust/horizon/issues/3388), [#3855](https://github.com/horizon-rust/horizon/issues/3855)); server-side hooks ([#3878](https://github.com/horizon-rust/horizon/issues/3878), [#3706](https://github.com/horizon-rust/horizon/issues/3706)); mod-owned screens, input and drawing; tools for mod makers (templates, `native.py check`); the registry ([#1634](https://github.com/horizon-rust/horizon/issues/1634), [#1642](https://github.com/horizon-rust/horizon/issues/1642), [#1659](https://github.com/horizon-rust/horizon/issues/1659)); machines with inventories and menus ([#1189](https://github.com/horizon-rust/horizon/issues/1189)); mods that read and change the world through the server. [docs/native-mods.md](docs/native-mods.md).
+One item for all modding work ([#3911](https://github.com/horizon-rust/horizon/issues/3911)), led by levzzz5154; the order between the parts is theirs. Native mods on stable hook points (game/native_hooks.rs, [#3345](https://github.com/horizon-rust/horizon/issues/3345), [#3346](https://github.com/horizon-rust/horizon/issues/3346), [#3434](https://github.com/horizon-rust/horizon/issues/3434), [#3435](https://github.com/horizon-rust/horizon/issues/3435)) built by the launcher ([#3388](https://github.com/horizon-rust/horizon/issues/3388), [#3855](https://github.com/horizon-rust/horizon/issues/3855)); server-side hooks ([#3878](https://github.com/horizon-rust/horizon/issues/3878), [#3706](https://github.com/horizon-rust/horizon/issues/3706)); mod-owned screens, input and drawing; tools for mod makers (templates, `native.py check`); the registry ([#1634](https://github.com/horizon-rust/horizon/issues/1634), [#1642](https://github.com/horizon-rust/horizon/issues/1642), [#1659](https://github.com/horizon-rust/horizon/issues/1659)); machines with inventories and menus ([#1189](https://github.com/horizon-rust/horizon/issues/1189)); mods that read and change the world through the server. [docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md).
 
-More: [#3351](https://github.com/horizon-rust/horizon/issues/3351) · [#3353](https://github.com/horizon-rust/horizon/issues/3353) · [#3360](https://github.com/horizon-rust/horizon/issues/3360) · [#1596](https://github.com/horizon-rust/horizon/issues/1596) · [#1635](https://github.com/horizon-rust/horizon/issues/1635)
+More: [https://github.com/arismoko/horizon/issues/3855](https://github.com/arismoko/horizon/issues/3855) · [https://github.com/arismoko/horizon/issues/3351](https://github.com/arismoko/horizon/issues/3351) · [https://github.com/arismoko/horizon/issues/3353](https://github.com/arismoko/horizon/issues/3353) · [https://github.com/arismoko/horizon/issues/3360](https://github.com/arismoko/horizon/issues/3360) · [https://github.com/arismoko/horizon/issues/3706](https://github.com/arismoko/horizon/issues/3706) · [https://github.com/arismoko/horizon/issues/3878](https://github.com/arismoko/horizon/issues/3878) · [https://github.com/arismoko/horizon/issues/3345](https://github.com/arismoko/horizon/issues/3345) · [https://github.com/arismoko/horizon/issues/3346](https://github.com/arismoko/horizon/issues/3346) · [https://github.com/arismoko/horizon/issues/3388](https://github.com/arismoko/horizon/issues/3388) · [https://github.com/arismoko/horizon/issues/3434](https://github.com/arismoko/horizon/issues/3434) · [https://github.com/arismoko/horizon/issues/3435](https://github.com/arismoko/horizon/issues/3435) · [https://github.com/arismoko/horizon/issues/1634](https://github.com/arismoko/horizon/issues/1634) · [https://github.com/arismoko/horizon/issues/1642](https://github.com/arismoko/horizon/issues/1642) · [https://github.com/arismoko/horizon/issues/1659](https://github.com/arismoko/horizon/issues/1659) · [https://github.com/arismoko/horizon/issues/1596](https://github.com/arismoko/horizon/issues/1596) · [https://github.com/arismoko/horizon/issues/1635](https://github.com/arismoko/horizon/issues/1635)
 
 </details>
 
@@ -384,7 +384,9 @@ Making mods that add machines, magic and mobs work in Horizon, in steps, startin
 
 <details><summary>Technical</summary>
 
-333 of the 496 mods in a big pack (ATM10) contain code. Issue [#1854](https://github.com/horizon-rust/horizon/issues/1854) ranks the gaps (ticking block entities, networking, rendering, menus, inventories) that unlock them in tiers, with machines first as the recommended path. Code mods are native mods now ([docs/native-mods.md](docs/native-mods.md)): each port is a horizon-mixins bundle. The path isn't started yet ([docs/modpacks.md](docs/modpacks.md)).
+333 of the 496 mods in a big pack (ATM10) contain code. Issue [#1854](https://github.com/horizon-rust/horizon/issues/1854) ranks the gaps (ticking block entities, networking, rendering, menus, inventories) that unlock them in tiers, with machines first as the recommended path. Code mods are native mods now ([docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md)): each port is a horizon-mixins bundle. The path isn't started yet ([docs/modpacks.md](docs/modpacks.md)).
+
+More: [https://github.com/arismoko/horizon/issues/1854](https://github.com/arismoko/horizon/issues/1854)
 
 </details>
 
@@ -496,7 +498,7 @@ Small mods written as scripts, in the style of KubeJS, with no compiler.
 
 Waits for native mods to settle: a script layer over the native hook points is to be designed.
 
-More: [docs/native-mods.md](docs/native-mods.md)
+More: [docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md)
 
 </details>
 
@@ -506,7 +508,7 @@ The community mod Orbital Laser, made for a fork of Horizon, running on the norm
 
 <details><summary>Technical</summary>
 
-A native port (a horizon-mixins bundle, docs/native-mods.md) of [https://github.com/Stink-O/orbital-laser](https://github.com/Stink-O/orbital-laser) (MIT), which today runs through its author's fork. Tested in the game, and listed in the registry.
+A native port (a horizon-mixins bundle, docs/modding/src/how-to/native-mods.md) of [https://github.com/Stink-O/orbital-laser](https://github.com/Stink-O/orbital-laser) (MIT), which today runs through its author's fork. Tested in the game, and listed in the registry.
 
 </details>
 
@@ -518,7 +520,7 @@ Built-in versions of the client mods players ask for: block info on hover, a wor
 
 Done: a mod list and menu, minimap, zoom, keystrokes, an FPS counter and a recipe viewer, as native mods (horizon-mods/native/). Asked for: an angled world map that shows hills, overhangs and caves, inventory tweaks (drag and scroll to move items), block info tooltips and schematic overlays.
 
-More: [docs/extras.md](docs/extras.md) · [docs/native-mods.md](docs/native-mods.md)
+More: [docs/extras.md](docs/extras.md) · [docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md)
 
 </details>
 
@@ -540,7 +542,7 @@ Hear nearby players talk, as with the voice chat mods of other Minecraft version
 
 <details><summary>Technical</summary>
 
-A native mod ([docs/native-mods.md](docs/native-mods.md)). It needs a way to carry voice between players and an audio path in the game before anything can be built.
+A native mod ([docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md)). It needs a way to carry voice between players and an audio path in the game before anything can be built.
 
 </details>
 

@@ -184,6 +184,20 @@ pub mod built {
         env!("OUT_DIR"),
         "/mod_api_exports_private_built.rs"
     ));
+    /// The generator's surface snapshot, constructed by the game and only read by mods.
+    pub fn terrain_column(
+        height: i32,
+        block: String,
+        water: Option<i32>,
+        biome: String,
+    ) -> crate::TerrainColumn {
+        crate::TerrainColumn {
+            height,
+            block,
+            water,
+            biome,
+        }
+    }
     /// Wrap a slot in the persistent instance group store.
     pub fn instance_group_ref(generation: u64, slot: u32) -> crate::InstanceGroupRef {
         crate::InstanceGroupRef::from_parts(generation, slot).expect("published group generation")

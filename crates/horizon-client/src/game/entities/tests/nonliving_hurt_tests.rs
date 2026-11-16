@@ -53,7 +53,7 @@ fn scene(cacti: &[(i32, i32)]) -> Game<'static> {
 /// damage each, after the tick's wear of 1): 20, then 39, and the first hit
 /// of the third tick passes 40 and breaks it. Each hit is heard at the boat.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_boat_in_a_cactus_takes_two_hits_a_tick_and_each_is_heard() {
     let mut game = scene(&[(4, 4)]);
     assert!(game.run_command("summon minecraft:oak_boat 4.5 100 4.5"));
@@ -78,7 +78,7 @@ fn a_boat_in_a_cactus_takes_two_hits_a_tick_and_each_is_heard() {
 /// wears it down and breaks it, and an orb's `ExperienceOrb.tick` loses a
 /// point of its 5 health a tick to one.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cactus_hurts_a_minecart_and_an_experience_orb() {
     let mut game = scene(&[(10, 4), (4, 10)]);
     assert!(game.run_command("summon minecraft:minecart 10.5 100 4.5"));

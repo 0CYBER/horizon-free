@@ -2,16 +2,28 @@
 import contextlib
 import io
 import unittest
+from unittest.mock import patch
 
 from tools.ci import ignored_tests as ci
 
 
 class ErrorShape(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(ci, '_active_budget', None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def render(self, value):
-        with contextlib.redirect_stdout(io.StringIO()) as log:
+        path = "crates/fixture/src/lib.rs"
+        with patch.object(ci, 'tracked_rust_paths', return_value={path}), \
+                patch.object(ci, 'source_lines', return_value=['// synthetic tracked source']), \
+                contextlib.redirect_stdout(io.StringIO()) as log:
             ci.failure_diagnostics("test load ... FAILED\n"
-                                   "thread 'load' panicked at private.rs:1:1:\n"
+                                   f"thread 'load' panicked at {path}:1:1:\n"
                                    f"called `Result::unwrap()` on an `Err` value: {value}\n")
+        self.assertIn(f"panicked at {path}:1:1", log.getvalue())
+        self.assertIn("1 classified panic reasons; 0 identities withheld; 0 locations withheld; "
+                      "1 payloads withheld", log.getvalue())
         return log.getvalue()
 
     def test_io_error_names_kind_and_os_error_but_no_path(self):

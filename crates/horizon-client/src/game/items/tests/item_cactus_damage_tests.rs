@@ -20,7 +20,7 @@ fn take_events() -> Vec<Posted> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cactus_hurts_an_item_a_point_a_tick_and_posts_entity_damage_for_each_hit() {
     let mut game = server_game();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap());
@@ -79,7 +79,7 @@ fn a_cactus_hurts_an_item_a_point_a_tick_and_posts_entity_damage_for_each_hit() 
 /// `!Entity.isAlive()`, `InsideBlockEffectApplier.applyAndClear` skips what is
 /// queued), so a burning item dying in a cactus is heard once.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_burning_item_that_dies_in_a_cactus_is_heard_once_where_its_tick_started() {
     let mut game = server_game();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap());
@@ -120,7 +120,7 @@ fn a_burning_item_that_dies_in_a_cactus_is_heard_once_where_its_tick_started() {
 /// the merge and the lifetime check discard it: an item in its last tick of
 /// life still takes the cactus's hit, and the hit is heard.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_item_expiring_in_a_cactus_is_hurt_before_it_despawns() {
     let mut game = server_game();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap());

@@ -45,7 +45,7 @@
     "test": "game::block_entity_tick_reply_tests::native_and_compiled_wasm_tick_reply_matrix",
     "path": "crates/horizon-client/src/game/modding/block_entity_tick_reply_tests.rs",
     "reason": "needs prepared resources and compiled HORIZON_WASM_FIXTURE/HORIZON_WASM_STD",
-    "rationale": "Existing separately supplied input HORIZON_WASM_FIXTURE in tools/ci/ignored-tests/wasm-fixture.txt; its dedicated workflow/harness must supply this input, which ordinary prepared resources do not contain. HORIZON_WASM_STD is supplied alongside the fixture by wasm-mods.yml."
+    "rationale": "Separately supplied input HORIZON_WASM_FIXTURE in tools/ci/ignored-tests/wasm-fixture.txt; ordinary prepared resources do not contain it. Build the fixture and matching HORIZON_WASM_STD locally, then invoke the one-process runner explicitly. No adopted workflow supplies them."
   },
   {
     "package": "horizon-client",
@@ -602,6 +602,14 @@
   {
     "package": "horizon-client-render",
     "target": "lib",
+    "test": "gfx::pack_post::indirect_tests::an_unsupported_indirect_device_keeps_the_direct_and_render_passes",
+    "path": "crates/horizon-client-render/src/gfx/pack_post/indirect_tests.rs",
+    "reason": "requires an explicit capability mask",
+    "rationale": "Exact opt-in adapter capability control, not an ordinary daily selection: requires a real GPU and HORIZON_SHADER_PACK_WITHOUT=indirect. Its by-hand row in tools/ci/ignored-tests/manual-horizon-client-render.txt gives the exact cargo test command. Preserve the explicit environment assertion, unsupported-indirect diagnostic and direct/render pixel assertions."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
     "test": "gfx::pack_uniforms::initial_history_tests::core_matrix_inputs_render_provider_values",
     "path": "crates/horizon-client-render/src/gfx/pack_uniforms.rs",
     "reason": "requires a host GPU; run with --ignored --nocapture",
@@ -893,7 +901,7 @@
     "test": "cli_settings_work_with_one_mib_process_stack",
     "path": "launcher/tests/startup.rs",
     "reason": "the Windows launcher-processes job runs it by name",
-    "rationale": "Existing explicit Windows runner launcher-processes in launcher-windows-check.yml selects this test by name; its manual row in tools/ci/ignored-tests/manual-horizon-launcher.txt preserves that routing. Not selected by daily shards."
+    "rationale": "Explicit by-hand Windows runner in tools/ci/ignored-tests/manual-horizon-launcher.txt: from launcher/, select cli_settings_work_with_one_mib_process_stack in test:startup with --ignored --exact. The fork's launcher-windows-check workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-launcher",
@@ -981,7 +989,7 @@
     "test": "runtime::runtime_tests::guest_input_pool_stays_flat_for_100k_no_import_calls",
     "path": "crates/horizon-mod-wasm/src/runtime_tests.rs",
     "reason": "requires shared std and the real noop fixture",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: requires shared std and the real noop fixture. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: requires locally built shared std and the real noop fixture. No adopted workflow supplies these inputs. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -989,7 +997,7 @@
     "test": "block_entity_ticks",
     "path": "crates/horizon-mod-wasm/tests/bench.rs",
     "reason": "measurement; requires a built fixture and shared std",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: measurement; requires a built fixture and shared std. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: measurement requiring a locally built fixture and shared std. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1005,7 +1013,7 @@
     "test": "compiled_guest_capability_registration_order_and_proxy_metadata",
     "path": "crates/horizon-mod-wasm/tests/capability_registration.rs",
     "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built by wasm-mods",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built by wasm-mods. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1013,7 +1021,7 @@
     "test": "compiled_guest_proxy_false_then_true_refuses_registration",
     "path": "crates/horizon-mod-wasm/tests/capability_registration.rs",
     "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built by wasm-mods",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built by wasm-mods. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1021,7 +1029,7 @@
     "test": "compiled_guest_proxy_true_then_false_refuses_registration",
     "path": "crates/horizon-mod-wasm/tests/capability_registration.rs",
     "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built by wasm-mods",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built by wasm-mods. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1037,7 +1045,7 @@
     "test": "generated_mixed_outputs_cross_real_guest_boundary",
     "path": "crates/horizon-mod-wasm/tests/listener_outputs.rs",
     "reason": "needs HORIZON_WASM_MIXED_OUTPUT_FIXTURE and HORIZON_WASM_STD built by wasm-mods",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_MIXED_OUTPUT_FIXTURE and HORIZON_WASM_STD built by wasm-mods. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_MIXED_OUTPUT_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1045,7 +1053,7 @@
     "test": "dump_members",
     "path": "crates/horizon-mod-wasm/tests/real_member.rs",
     "reason": "needs HORIZON_WASM_STD or HORIZON_WASM_FIXTURE_RAW; prints a member's sections",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_STD or HORIZON_WASM_FIXTURE_RAW; prints a member's sections. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_STD or HORIZON_WASM_FIXTURE_RAW to inspect a member's sections. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1053,7 +1061,7 @@
     "test": "real_member",
     "path": "crates/horizon-mod-wasm/tests/real_member.rs",
     "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, which the wasm-mods workflow builds",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, which the wasm-mods workflow builds. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1069,7 +1077,7 @@
     "test": "real_member_self_refusal",
     "path": "crates/horizon-mod-wasm/tests/self_refusal.rs",
     "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1077,7 +1085,7 @@
     "test": "compiled_guest_strict_math_matches_literal_jdk_vectors",
     "path": "crates/horizon-mod-wasm/tests/strict_math.rs",
     "reason": "requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built locally from this tree. Not selected by daily shards."
   },
   {
     "package": "horizon-mod-wasm",
@@ -1085,7 +1093,7 @@
     "test": "real_guest_point_is_refused_without_staging",
     "path": "crates/horizon-mod-wasm/tests/unstaged.rs",
     "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods",
-    "rationale": "Existing explicit manual runner wasm-mods.yml in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods. Not selected by daily shards."
+    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
   },
   {
     "package": "horizon-perf",

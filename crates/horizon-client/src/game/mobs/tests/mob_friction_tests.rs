@@ -92,7 +92,7 @@ fn slide(setup: &[&str]) -> f64 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_friction_modifier_attribute_slides_a_cow_less() {
     // Stone's 0.6 untouched: 0.5 times 0.6 and the 0.91 air drag.
     let plain = slide(&[]);

@@ -7,6 +7,7 @@ horizon-prepare artifacts::tests::a_rewritten_version_file_falls_back_to_mojangs
 horizon-prepare artifacts::tests::an_atlauncher_install_prepares lib daily child-process
 horizon-prepare artifacts::tests::imported_files_are_reused_without_the_official_install lib daily child-process
 horizon-prepare artifacts::tests::named_inputs_prepare_without_a_minecraft_folder lib daily child-process
+horizon-prepare artifacts::tests::natives_follow_the_architecture lib daily child-process
 horizon-prepare artifacts::tests::reuse_checks_the_target_pins lib daily child-process
 horizon-prepare artifacts::tests::reuse_rejects_corrupt_imports lib daily child-process
 horizon-prepare artifacts::tests::reuse_skips_a_bad_sibling_and_repairs_bad_current_imports lib daily child-process

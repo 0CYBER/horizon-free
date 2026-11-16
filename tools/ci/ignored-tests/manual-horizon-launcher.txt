@@ -3,7 +3,7 @@ horizon-launcher account::tests::secrets_file_writer subprocess manual # a child
 horizon-launcher account::tests::system_keychain_keeps_long_secrets by-hand manual # writes to the OS keychain
 horizon-launcher backend::release_loading_tests::benchmark_shared_startup_response by-hand manual # local release-loading benchmark; run explicitly with --ignored --nocapture
 horizon-launcher browser::tests::live_modrinth_search_pick_and_download by-hand manual # needs the network
-horizon-launcher cli_settings_work_with_one_mib_process_stack launcher-windows-check.yml manual # Windows only (tests/startup.rs is cfg(windows)): the launcher-processes job runs it
+horizon-launcher cli_settings_work_with_one_mib_process_stack by-hand manual # Windows only; from launcher/ run cargo test --test startup cli_settings_work_with_one_mib_process_stack -- --ignored --exact
 horizon-launcher cull::desktop_tests::desktop_list_renders_the_viewport_after_scrollbar_jumps by-hand manual # requires an interactive Windows desktop and graphics adapter
 horizon-launcher hardware_probes_run_hidden_after_the_first_frame by-hand manual # requires an interactive Windows desktop and graphics adapter
 horizon-launcher loaders::forge_install::tests::a_real_installer_installs by-hand manual # real Forge and NeoForge installers over the network; needs HORIZON_FORGE_TEST_DIR, HORIZON_FORGE_TEST_JAVA and HORIZON_FORGE_TEST

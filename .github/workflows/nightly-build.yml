@@ -218,9 +218,9 @@ jobs:
           SHORT: ${{ needs.pick.outputs.short }}
         run: |
           key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
-          cargo run --locked --quiet -p horizon-release-sign -- verify --tag nightly --publishing "${key[@]}" dist
+          cargo run --locked --quiet -p horizon-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag nightly --publishing "${key[@]}" dist
           # The version's own signature, which current launchers require: the title below names the same version.
-          cargo run --locked --quiet -p horizon-release-sign -- verify --tag "nightly-${DATE}-${SHORT}" \
+          cargo run --locked --quiet -p horizon-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "nightly-${DATE}-${SHORT}" \
             --signature SHA256SUMS.v2.sig --publishing "${key[@]}" dist
       - name: Ready to publish (the smoke test drew a world, no release-blocker is open)
         # Right before publishing, as for a release: an issue labelled while the builds ran still holds it. A dry run

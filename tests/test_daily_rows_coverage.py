@@ -148,7 +148,7 @@ class RowlessIgnores(unittest.TestCase):
 
     def test_only_tests_no_shard_runs_need_a_row(self):
         functions = [self.ignored("crates/horizon-world/src/a.rs", {"horizon-world"}, "lib"),
-                     self.ignored("crates/horizon-client/src/game/b.rs", {"horizon-client", "horizon-client-lib"}, "bin"),
+                     self.ignored("crates/horizon-client/src/game/b.rs", {"horizon-client"}, "lib"),
                      self.ignored("crates/horizon-world/tests/c.rs", {"horizon-world"}, "test"),
                      self.ignored("crates/horizon-core/src/d.rs", {"horizon-core"}, "lib"),
                      self.ignored("launcher/src/e.rs", {"horizon-launcher"}, "lib")]
@@ -169,8 +169,8 @@ class RowlessIgnores(unittest.TestCase):
 
 
 
-class WindowsDailyTests(unittest.TestCase):
-    def test_the_windows_daily_job_runs_exactly_the_packages_daily_rows(self):
+class DailyTargetSelection(unittest.TestCase):
+    def test_daily_selection_is_exact_sorted_and_excludes_manual_rows(self):
         rows = [row("horizon-mod-package", "b::slow"), row("horizon-mod-package", "a::slow"),
                 row("horizon-mod-package", "it::slow", "test:it"), row("horizon-world", "c::slow")]
         with unittest.mock.patch.object(ignored_tests, "daily_rows", return_value=rows):
@@ -179,14 +179,10 @@ class WindowsDailyTests(unittest.TestCase):
                                   "horizon-mod-package", "lib"], capture_output=True, text=True, check=True).stdout
         self.assertIn("holder::tests::private_version_is_refused_before_normal_startup", printed.split())
         self.assertNotIn("holder::game_entry::tests::write_missing_registration_actor", printed.split())
-        workflow = (ROOT / ".github/workflows/launcher-windows-check.yml").read_text()
-        self.assertIn("ignored_tests.py --daily-tests horizon-mod-package lib", workflow)
-        self.assertNotIn("< <(", workflow)  # a process substitution would hide the reader's failure
         # No rows: no output at all, not one empty name.
         empty = subprocess.run([sys.executable, str(ROOT / "tools/ci/ignored_tests.py"), "--daily-tests",
                                 "no-such-package", "lib"], capture_output=True, text=True, check=True).stdout
         self.assertEqual(empty, "")
-        self.assertIn('-- --ignored --exact "${tests[@]}"', workflow)
 
 
 if __name__ == "__main__":

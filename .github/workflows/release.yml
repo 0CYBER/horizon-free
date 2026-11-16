@@ -54,6 +54,7 @@ jobs:
         # A dry run never publishes; a hand-started run off main is always one.
         run: echo "dry_run=${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main') }}" >> "$GITHUB_OUTPUT"
       - id: decide
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
@@ -62,6 +63,8 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || (steps.mode.outputs.dry_run == 'true' && github.sha) || '' }}
           FORCE: ${{ inputs.force && 'yes' || '' }}
         run: |
+          # Never turn a failed release decision into a successful tee/summary step.
+          set -euo pipefail
           python3 tools/release_train.py decide --kind game ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
           echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
 

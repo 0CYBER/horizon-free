@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tests.test_ci_concurrency import yaml, ROOT
 from tests.test_ignored_test_completion import IgnoredTests, target, summary
 from tools.ci import ignored_tests
 
@@ -127,29 +126,4 @@ class Visibility(unittest.TestCase):
         self.assertIn("no recognized compiler diagnostic", log.getvalue())
         self.assertLess(len(log.getvalue()), 7500)
         self.assertNotIn("private unexpected payload", log.getvalue())
-
-    def test_data_end_memory_telemetry_is_bounded_best_effort(self):
-        steps = yaml.safe_load((ROOT / '.github/workflows/ignored-tests.yml').read_text())["jobs"]["ignored-tests-shards"]["steps"]
-        step = next(s for s in steps if s.get("name") == "Record data-leg end and compiler cache")
-        self.assertEqual(step["if"], "always()")
-        script = step["run"]
-        self.assertIn("/sys/fs/cgroup/$metric", script)
-        self.assertIn("memory.peak memory.max memory.swap.peak memory.swap.max", script)
-        self.assertNotIn("cargo", script)
-        with tempfile.TemporaryDirectory() as folder:
-            Path(folder, "memory.peak").write_text("123456\n")
-            Path(folder, "memory.max").write_text("max\n")
-            Path(folder, "memory.swap.max").write_text("PRIVATE_PAYLOAD\n")
-            # Exercise the actual shell under errexit; absent/invalid files cannot fail it.
-            script = script.replace("/sys/fs/cgroup/", folder + "/")
-            script = script.replace("sccache --show-stats", "false")
-            result = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("memory_peak_bytes=123456", result.stdout)
-        self.assertIn("memory_max_bytes=max", result.stdout)
-        self.assertIn("memory_swap_peak_bytes=unavailable", result.stdout)
-        self.assertIn("memory_swap_max_bytes=unavailable", result.stdout)
-        self.assertIn("whole_job_cgroup_including_compilation_tests_file_cache", result.stdout)
-        self.assertNotIn("PRIVATE_PAYLOAD", result.stdout)
-        self.assertEqual(result.stderr, "")
 

@@ -189,7 +189,7 @@ fn discarded_mob_leaves_selectors_and_saves_while_frozen() {
 /// (`EntitySelectorParser`'s `Entity::isAlive`), frozen or not (#15158,
 /// kill_die_vibration).
 #[test]
-#[ignore = "requires private prepared resources and fresh Horizon homes"]
+#[ignore = "daily"]
 fn a_killed_mob_leaves_at_e_at_once_with_death_time_zero() {
     let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();

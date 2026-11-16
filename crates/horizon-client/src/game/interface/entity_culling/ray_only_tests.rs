@@ -71,7 +71,7 @@ fn bytes(v: &[Vertex]) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn what_the_camera_drops_within_reach_goes_to_the_layer_and_nothing_else_changes() {
     use super::{EntityCullDecision as D, Sight};
     let mut game = game();

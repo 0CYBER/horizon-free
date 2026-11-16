@@ -154,7 +154,7 @@ fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
 /// entity) credits no one with what it breaks, even while a primed TNT's owner
 /// is known: the explicit source wins, `DamageSource.getEntity` is null.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_explicit_cause_of_none_credits_no_one() {
     use crate::game::commands::Target;
     let mut resources = None;

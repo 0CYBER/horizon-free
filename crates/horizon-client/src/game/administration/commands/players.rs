@@ -358,7 +358,7 @@ mod game_tests {
     /// `getPlayerOrException` do: `execute as <pig> run kill` kills the pig, not the player in place; a source
     /// without an entity (the server's) or a pig for a player form is refused.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn a_command_with_no_target_acts_on_its_source_not_the_player_in_place() {
         with_game(|game| {
             game.build_registries();

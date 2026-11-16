@@ -885,7 +885,7 @@ mod tests {
     /// and moves every level's tickets (`ServerChunkCache.setSimulationDistance`, `setViewDistance`). The
     /// players are the hub; the server's own tickets read `settings` (`update_chunk_tickets`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_management_distance_change_moves_the_servers_tickets_too() {
         use crate::game::lan::LanSettings;
         use horizon_client::lan::{NetConfig, hub::HubConfig};

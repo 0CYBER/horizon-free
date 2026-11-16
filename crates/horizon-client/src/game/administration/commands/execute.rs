@@ -1810,7 +1810,7 @@ mod stopwatch_condition_tests {
     /// condition is recognised by its `stopwatch` literal, not by the argument
     /// names `id` and `range`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_existing_stopwatch_matches_its_range_and_a_missing_one_errors() {
         let mut game = game();
         assert!(game.run_command("stopwatch create foo"));

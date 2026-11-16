@@ -2322,6 +2322,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn natives_follow_the_architecture() {
         let names = ["a:b:1:natives-macos", "a:b:1:natives-macos-arm64"];
         let lib = |name: &str| pyjson::loads(&format!("{{\"name\":\"{name}\"}}")).unwrap();

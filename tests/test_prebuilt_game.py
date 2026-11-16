@@ -444,7 +444,8 @@ class ExecutableLinkPolicyTests(unittest.TestCase):
                     'pub fn folder_modules(_: &std::path::Path)->Result<String,String>{Ok(String::new())}',
                 "horizon_mod_api_gen": 'pub enum Target { Client } '
                     'pub fn generate(_: &std::path::Path, _: &std::path::Path, _: Target) '
-                    '-> std::io::Result<()> { Ok(()) }',
+                    '-> std::io::Result<()> { Ok(()) } '
+                    'pub fn mob_turn(_: &std::path::Path) -> Option<&\'static str> { None }',
                 "winresource": 'pub struct WindowsResource; impl WindowsResource { '
                     'pub fn new() -> Self { Self } pub fn set_icon(&mut self, _: &str) {} '
                     'pub fn set_manifest_file(&mut self, _: &str) {} '

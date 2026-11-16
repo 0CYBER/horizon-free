@@ -18,7 +18,7 @@ fn block_name(game: &Game<'_>, p: [i32; 3]) -> String {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn copper_above_below_or_beside_the_pumpkin_builds_the_golem() {
     let mut game = server_game();
     let air = game.world.air;
@@ -77,7 +77,7 @@ fn copper_above_below_or_beside_the_pumpkin_builds_the_golem() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn carving_with_off_hand_shears_breaks_the_off_hand() {
     let mut game = server_game();
     game.options.dedicated = None;

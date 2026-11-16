@@ -7,7 +7,6 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from tests.test_ci_concurrency import expression_value, yaml
 from tools.ci import ignored_shards, ignored_tests
 
 ROOT = Path(__file__).resolve().parents[1]

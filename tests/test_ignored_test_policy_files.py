@@ -18,7 +18,10 @@ class PolicyFiles(unittest.TestCase):
         self.folder = Path(scratch.name) / "ignored-tests"
         self.folder.mkdir()
         self.retired = Path(scratch.name) / "ignored-tests-known-failures.txt"
-        for name, value in (("POLICY", self.folder), ("RETIRED", self.retired)):
+        workflows = Path(scratch.name) / "workflows"
+        workflows.mkdir()
+        (workflows / "fixture.yml").write_text("name: synthetic workflow\n")
+        for name, value in (("POLICY", self.folder), ("RETIRED", self.retired), ("WORKFLOWS", workflows)):
             patcher = patch.object(ignored_tests, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -44,15 +47,21 @@ class PolicyFiles(unittest.TestCase):
     def test_a_manual_row_says_who_runs_it_and_why(self):
         self.write("manual-pkg.txt", "pkg a::bench by-hand manual # a microbenchmark\n"
                                       "pkg b::child subprocess manual # a child of b::parent\n"
-                                      "pkg c::fixture wasm-mods.yml manual # built by the workflow\n")
+                                      "pkg c::fixture fixture.yml manual # built by the workflow\n")
         self.assertEqual([(row.test, row.reference, row.mark) for row in ignored_tests.listed_entries()],
                          [("a::bench", "by-hand", "manual"), ("b::child", "subprocess", "manual"),
-                          ("c::fixture", "wasm-mods.yml", "manual")])
+                          ("c::fixture", "fixture.yml", "manual")])
         self.assertEqual(ignored_tests.known_failures()[("pkg", "a::bench")], "manual")
         for row, refusal in (("pkg a::bench by-hand manual\n", "WHY"), ("pkg a::bench somebody manual # x\n", "WHO"),
                              ("pkg a::bench nothing.yml manual # x\n", "no workflow")):
             self.write("manual-pkg.txt", row)
             self.assertIn(refusal, self.exit_message(ignored_tests.listed_entries))
+
+    def test_a_rejected_catalogue_does_not_install_a_shared_diagnostic_budget(self):
+        self.write("manual-pkg.txt", "pkg a::test excluded.yml manual # requires an external fixture\n")
+        with patch.object(ignored_tests, "_active_budget", None):
+            self.assertIn("no workflow", self.exit_message(lambda: ignored_tests.main(["pkg"])))
+            self.assertIsNone(ignored_tests._active_budget)
 
     def test_a_test_in_two_files_names_both(self):
         self.write("flaky.txt", "pkg a::test #1 flaky\n")

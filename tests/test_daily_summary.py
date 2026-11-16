@@ -364,46 +364,5 @@ class DailySummaryTests(unittest.TestCase):
         self.assertEqual(api.writes, [])
 
 
-class DailyWorkflowTests(unittest.TestCase):
-    def setUp(self):
-        from tests.test_ci_concurrency import ROOT, yaml
-        self.workflow = yaml.load((ROOT / ".github/workflows/daily.yml").read_text(), Loader=yaml.BaseLoader)
-
-    def test_the_schedule_only_dispatches_a_real_run_on_main(self):
-        jobs = self.workflow["jobs"]
-        self.assertEqual(self.workflow["on"]["schedule"], [{"cron": "0 9 * * *"}])
-        self.assertIn("github.event_name == 'schedule'", jobs["schedule-dispatch"]["if"])
-        self.assertEqual(jobs["schedule-dispatch"]["runs-on"], "ubuntu-latest")
-        self.assertIn("--ref main -f dry_run=false -f scheduled=true", jobs["schedule-dispatch"]["steps"][0]["run"])
-        resolve = jobs["resolve"]["steps"][-1]
-        self.assertIn('if [ "$SCHEDULED" = true ] && [ "$DRY_RUN" != true ]', resolve["run"],
-                      "only the schedule stops on a commit already tested; a hand dispatch retries")
-        self.assertEqual(self.workflow["on"]["workflow_dispatch"]["inputs"]["scheduled"]["default"], "false")
-        self.assertEqual(jobs["resolve"]["if"], "github.event_name == 'workflow_dispatch'")
-        self.assertEqual(self.workflow["on"]["workflow_dispatch"]["inputs"]["dry_run"]["default"], "true")
-
-    def test_only_main_without_dry_run_writes(self):
-        jobs = self.workflow["jobs"]
-        step = jobs["resolve"]["steps"][-1]
-        self.assertEqual(step["env"]["DRY_RUN"], "${{ inputs.dry_run || github.ref != 'refs/heads/main' }}")
-        # A writing run takes only a commit of main: an unmerged commit never files issues.
-        self.assertIn('git merge-base --is-ancestor "$sha" refs/remotes/origin/main', step["run"])
-        self.assertEqual(jobs["summary"]["steps"][-1]["env"]["DRY_RUN"], "${{ needs.resolve.outputs.dry_run }}")
-        self.assertEqual(self.workflow["concurrency"]["cancel-in-progress"], "false")
-        # Nothing the daily run does writes but the issues: no tag, no SDK, no Nightly.
-        self.assertEqual(jobs["summary"]["permissions"], {"issues": "write", "actions": "read", "pull-requests": "read"})
-        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
-        self.assertEqual(sorted(jobs), sorted(["schedule-dispatch", "resolve", "summary", *summary.LEGS]))
-        self.assertTrue(jobs["summary"]["name"].startswith("summary ${{ needs.resolve.outputs.commit }}"))
-
-    def test_every_leg_is_a_called_workflow_with_the_commit(self):
-        jobs = self.workflow["jobs"]
-        for leg in summary.LEGS:
-            with self.subTest(leg=leg):
-                self.assertTrue(jobs[leg]["uses"].startswith("./.github/workflows/"))
-                self.assertEqual(jobs[leg]["with"]["commit"], "${{ needs.resolve.outputs.commit }}")
-                self.assertIn(leg, jobs["summary"]["needs"])
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -920,8 +920,6 @@ def run(package, skip, number=None, count=None, only=None):
 
 def main(shards, report=None, without_data=False):
     global _active_budget
-    _active_budget = [FAILURE_TOTAL_BYTES]
-    _panic_locations.clear()
     verdict = {"shards": list(shards), "problems": [], "passed": [], "incomplete": []}
 
     def problem(package, test, kind, policy=None):
@@ -939,6 +937,10 @@ def main(shards, report=None, without_data=False):
     # Resource-backed client-lib families retain registries across tests; releasing
     # the process between halves bounds that retention without another CI leg.
     daily = daily_rows()
+    # Validate the catalogue before installing a shared budget: a rejected policy
+    # must not leave diagnostic state behind for another invocation.
+    _active_budget = [FAILURE_TOTAL_BYTES]
+    _panic_locations.clear()
     # With --without-data: every test that needs the vanilla data, as (package, test); none otherwise.
     left_out, left_out_count = set(), 0
     if without_data:

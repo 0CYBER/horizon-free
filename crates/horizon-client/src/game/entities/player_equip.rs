@@ -178,7 +178,7 @@ mod tests {
     /// speed, as on vanilla's server, where `detectEquipmentUpdates` gives it the spear's modifiers
     /// only in its next tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_swap_and_a_jab_in_one_tick_charge_on_the_last_item() {
         let mut resources = None;
         let mut game = game(&mut resources);
@@ -213,7 +213,7 @@ mod tests {
     /// `float` modifiers `-3.4F` and `-3.1F`), Efficiency V's mining efficiency (5² + 1) and a diamond
     /// chestplate's 8 armour, worn in the tick it switched hands or on its own (vanilla 26.3's data).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn what_a_guest_switches_to_applies_by_its_next_tick() {
         let mut pickaxe = ItemStack::new("minecraft:diamond_pickaxe", 1);
         pickaxe.data_mut().enchantments = vec![("minecraft:efficiency".into(), 5)];

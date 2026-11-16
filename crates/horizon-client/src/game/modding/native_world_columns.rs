@@ -39,12 +39,12 @@ impl Game<'_> {
                     .iter()
                     .map(|&(x, z)| {
                         let s = terrain.lod_surface(&mut worker, x, z)?;
-                        Some(TerrainColumn {
-                            height: s.height,
-                            block: facts.get(s.state).name.to_string(),
-                            water: s.water.map(|(top, _)| top),
-                            biome: biomes.name(s.biome).to_owned(),
-                        })
+                        Some(mod_api::__private::built::terrain_column(
+                            s.height,
+                            facts.get(s.state).name.to_string(),
+                            s.water.map(|(top, _)| top),
+                            biomes.name(s.biome).to_owned(),
+                        ))
                     })
                     .collect()
             }

@@ -135,7 +135,7 @@ mod tests {
     /// entity data and attributes vary: effects, armor, a villager's profession, variants, a baby,
     /// a happy ghast, and what `/attribute` changed.
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn deferred_states_match_those_built_in_place() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             // The fixture stops before world-open command registry initialization.

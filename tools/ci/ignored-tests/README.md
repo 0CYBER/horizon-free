@@ -5,6 +5,11 @@ policy (`parity-harness.txt`, `wasm-fixture.txt`, `gpu.txt`, `flaky.txt`, ...) o
 its issue (`issue-2177.txt`). A lane that adds a known failure writes its own file; fixing it deletes that file.
 A test may be listed in one file only: a second listing fails naming both files.
 
+Horizon keeps its own CI workflows; the fork-only daily, wasm-mods and launcher-windows-check workflows are not
+adopted here. This catalogue describes the standalone runners' selections, not automatic CI coverage. Run the
+full matrix explicitly with prepared data where available; `by-hand` rows require an explicit local invocation
+and their stated inputs. A workflow owner is valid only when that workflow exists in `.github/workflows/`.
+
 One row per line, `#` starts a comment line:
 
     PACKAGE TEST REFERENCE [flaky|harness|gpu|needs|needs-plain] [# note]
@@ -17,7 +22,7 @@ harness's own step: its harness runs it with the environment it needs, and the j
 that needs a graphics adapter: it runs, and must pass, only where the runner has a Vulkan driver. `needs` marks a
 test that reads an input only its harness provides: refused by name when the variable is unset, run and required
 to pass when it is set. `ignored_tests.py --needs VARIABLE --one-process-each` runs one variable's tests, each
-alone in its own process (`wasm-mods.yml` does this for `HORIZON_WASM_FIXTURE`).
+alone in its own process; supply the built fixtures and `HORIZON_WASM_STD` explicitly for `HORIZON_WASM_FIXTURE`.
 
 `needs-plain` has the same variable and refusal policy as `needs`, but is not an ignored test or a known
 failure. The one-process runner selects it with `--exact` without `--ignored`; ordinary data shards skip it
@@ -27,15 +32,14 @@ when the variable is absent and require it to pass when present.
 `#[ignore = "daily"]` in its source, and its row, in a new `daily-PACKAGE-TOPIC.txt` with the rows sorted,
 names its cargo target
 (`lib`, `bin:NAME` or `test:NAME`) and why it is a daily test (`slow`, `game-boot`, `resources`, `child-process`,
-`network`, `wasm-fixture`). It is not a known failure: it runs every day and must pass, and a row whose test no
-longer runs fails. Its package's shard runs it when that shard builds its target, and the `daily-rows` leg runs
-every other one; verify-static fails a row no leg runs. `python3 tools/ci/move_to_daily.py apply LIST` writes the
+`network`, `wasm-fixture`). It is not a known failure: it must pass when the catalogue runner is invoked, and a row
+whose test no longer runs fails. Its package's shard runs it when that shard builds its target, and the `daily-rows`
+leg runs every other one; the static guard fails a row no full-matrix leg selects. `python3 tools/ci/move_to_daily.py apply LIST` writes the
 attribute and the row (its docstring has the list format). The attribute is the source's mark and the row is the
 daily run's list of what must run: an attribute without a row in a package no shard covers would run nowhere.
-A launcher test is moved the same way (a new `daily-horizon-launcher-TOPIC.txt`): its own leg, `daily-rows-launcher`, runs it
-from `launcher/`, its own workspace, against its own lockfile. A launcher test that starts the launcher binary also belongs to
-the Windows release job `launcher-processes` (`launcher-windows-check.yml`), which runs those `tests/` targets by
-`--test` name: add its target there too.
+A launcher test is moved the same way (a new `daily-horizon-launcher-TOPIC.txt`): its own leg, `daily-rows-launcher`,
+runs it from `launcher/`, its own workspace, against its own lockfile. Windows-only process tests must be invoked
+on Windows; a manual row documents the command when no adopted workflow runs it.
 verify-static also checks both directions statically: a `#[ignore = "daily"]` function with no row, or a row with no
 such function, fails (`check_ignored_test_rows.py`). Daily selection matches the package, Cargo target and complete
 logical libtest path, including inline modules. Game area folders do not add path segments: the source-only
@@ -70,9 +74,9 @@ uncompiled; no prefix exemption is granted. If a target declares it later, its d
 until it is explicitly scheduled. No tests or assertions are removed from this source copy or the migrated tests.
 
 `manual` marks an ignored test that never runs in the daily shards, in `manual-<package>.txt`: WHO runs it
-(`by-hand`, `subprocess` for a child process its parent test starts, or the workflow file that runs it, such as
-`wasm-mods.yml`) and the note says why (a benchmark, a fixture writer, a real GPU, the OS keychain, ...). The shards
-skip it.
+(`by-hand`, `subprocess` for a child process its parent test starts, or an existing workflow file that runs it,
+such as `ci.yml`) and the note says why (a benchmark, a fixture writer, a real GPU, the OS keychain, ...). The shards
+skip it. Do not name an excluded fork workflow as an owner or substitute a workflow that does not run the test.
 
 A rowless `#[ignore]` in a target a package's shard builds (`horizon-client`'s targets, the other shard packages'
 libraries) still runs every day with `--include-ignored` and must pass, so it needs no row. Anywhere else it would run

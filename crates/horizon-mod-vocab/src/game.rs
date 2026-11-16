@@ -95,8 +95,9 @@ pub struct ColumnBlocks {
 }
 /// What `terrain_surface` found at one column of terrain nobody has loaded: the level's generator before its
 /// features (trees, ores, lava pools, cacti) are placed.
+/// Mods receive this snapshot from the game; they do not construct it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-// exhaustive: the game builds it with a literal; mods only read it
+#[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub struct TerrainColumn {
     /// One above the highest solid block the generator scans down to, fluids skipped (the `OceanFloor`

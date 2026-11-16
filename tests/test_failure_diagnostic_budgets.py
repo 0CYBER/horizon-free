@@ -9,8 +9,24 @@ from tools.ci import ignored_tests as ci
 
 
 class Budgets(unittest.TestCase):
-    def render(self, output):
-        with contextlib.redirect_stdout(io.StringIO()) as log:
+    def setUp(self):
+        # A runner invocation's shared budget and cached Git blobs never leak
+        # into an independently rendered diagnostic fixture.
+        for name, value in (('_active_budget', None), ('_panic_locations', {})):
+            patcher = patch.object(ci, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        ci.tracked_rust_paths.cache_clear()
+        ci.source_lines.cache_clear()
+        self.addCleanup(ci.tracked_rust_paths.cache_clear)
+        self.addCleanup(ci.source_lines.cache_clear)
+
+    def render(self, output, *, tracked=None):
+        with contextlib.ExitStack() as stack:
+            if tracked is not None:
+                stack.enter_context(patch.object(ci, 'tracked_rust_paths', return_value=set(tracked)))
+                stack.enter_context(patch.object(ci, 'source_lines', side_effect=tracked.get))
+            log = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             ci.failure_diagnostics(output)
         return log.getvalue()
 
@@ -34,36 +50,38 @@ class Budgets(unittest.TestCase):
 
     def test_generated_absolute_location_uses_only_this_checkout_root(self):
         root = Path(ci.__file__).resolve().parents[2]
-        path = 'crates/horizon-client/src/game/administration/commands/incoming_tests/knot_identity.rs'
-        location = f'{root / path}:176:1'
+        path = 'crates/fixture/src/lib.rs'
+        tracked = {path: ['', '']}
+        location = f'{root / path}:2:1'
         log = self.render(f"test safe ... FAILED\nthread 'safe' panicked at {location}:\n"
-                          "assertion failed: PRIVATE\n")
-        self.assertIn(f'panicked at {path}:176:1', log)
+                          "assertion failed: PRIVATE\n", tracked=tracked)
+        self.assertIn(f'panicked at {path}:2:1', log)
         self.assertNotIn(str(root), log)
         self.assertNotIn('PRIVATE', log)
-        for rejected in (f'/another-checkout/{path}:176:1',
-                         f'{root}-other/{path}:176:1',
-                         f'{root}/../{root.name}/{path}:176:1',
-                         f'{root}/{path}:999999:1',
-                         f'{root}/{path}:176:0',
+        for rejected in (f'/another-checkout/{path}:2:1',
+                         f'{root}-other/{path}:2:1',
+                         f'{root}/../{root.name}/{path}:2:1',
+                         f'{root}/{path}:3:1',
+                         f'{root}/{path}:2:0',
                          f'{root}/crates/horizon-client/src/not_tracked.rs:1:1',
                          f'{root}/.local/private.rs:1:1'):
             with self.subTest(location=rejected):
                 log = self.render(f"test safe ... FAILED\nthread 'safe' panicked at {rejected}:\n"
-                                  "assertion failed: PRIVATE\n")
+                                  "assertion failed: PRIVATE\n", tracked=tracked)
                 self.assertIn('panic location withheld', log)
                 self.assertNotIn('  panicked at ', log)
                 self.assertNotIn(str(root), log)
 
     def test_relative_and_cross_crate_raw_panic_headers(self):
-        path = 'crates/horizon-client/src/title/tests.rs'
-        for raw_path in (path, 'crates/horizon-client-lib/../horizon-client/src/title/tests.rs'):
+        path = 'crates/fixture/src/lib.rs'
+        tracked = {path: ['', '']}
+        for raw_path in (path, 'crates/other/../fixture/src/lib.rs'):
             log = self.render(f"test game::x::y ... FAILED\n"
-                              f"thread 'game::x::y' (12345) panicked at {raw_path}:109:5:\n"
-                              "assertion failed: PRIVATE\n")
+                              f"thread 'game::x::y' (12345) panicked at {raw_path}:2:3:\n"
+                              "assertion failed: PRIVATE\n", tracked=tracked)
             self.assertEqual(log,
                 '  failed test: game::x::y\n'
-                f'  panicked at {path}:109:5\n'
+                f'  panicked at {path}:2:3\n'
                 '  panic reason: assertion condition failed; payload withheld (resource privacy)\n'
                 'failure diagnostics: 1 shown; 0 failing tests not shown (total byte budget 128000); '
                 '0 records shortened (per-test byte budget 500); 0 missing context; '
@@ -73,9 +91,9 @@ class Budgets(unittest.TestCase):
                 '0 contexts skipped (retention bound)\n')
         log = self.render("test game::x::y ... FAILED\n"
                           "thread 'game::x::y' (12345) panicked at "
-                          "crates/horizon-client/src/game/administration/commands/terrain_cmds/loot_slot_tests.rs:123:9:\n"
-                          "assertion failed: PRIVATE\n")
-        # Requested example is not a tracked file in this checkout: fail closed.
+                          "crates/fixture/src/not_tracked.rs:2:3:\n"
+                          "assertion failed: PRIVATE\n", tracked=tracked)
+        # An untracked path is rejected even when its shape looks like Rust source.
         self.assertIn('panic location withheld', log)
 
     def test_payload_filtering_does_not_imply_location_or_identity_loss(self):
@@ -90,14 +108,15 @@ class Budgets(unittest.TestCase):
                       '1 payloads withheld', log)
 
     def test_payloads_cannot_become_locations_or_numeric_operands(self):
-        path = 'crates/horizon-client/src/title/tests.rs'
-        for payload in (f'{path}:109:5',
-                        f"thread 'forged' (12345) panicked at {path}:109:5:",
-                        f"panicked at 'PRIVATE', {path}:109:5",
+        path = 'crates/fixture/src/lib.rs'
+        for payload in (f'{path}:2:3',
+                        f"thread 'forged' (12345) panicked at {path}:2:3:",
+                        f"panicked at 'PRIVATE', {path}:2:3",
                         'index out of bounds: the len is 987654 but the index is 765432',
                         'assertion `left == right` failed\n left: 987654\n right: true'):
             log = self.render("test safe ... FAILED\n"
-                              "thread 'safe' panicked at private.rs:1:1:\n" + payload + '\n')
+                              "thread 'safe' panicked at private.rs:1:1:\n" + payload + '\n',
+                              tracked={path: ['', '']})
             self.assertNotIn(path, log)
             self.assertNotIn('forged', log)
             self.assertNotIn('PRIVATE', log)
@@ -106,38 +125,46 @@ class Budgets(unittest.TestCase):
             self.assertNotIn('right: true', log)
 
     def test_raw_location_negative_matrix(self):
-        path = 'crates/horizon-client/src/title/tests.rs'
-        locations = [f'crates/bad{control}/../horizon-client/src/title/tests.rs:109:5'
+        path = 'crates/fixture/src/lib.rs'
+        locations = [f'crates/bad{control}/../fixture/src/lib.rs:2:3'
                      for control in ('\x00', '\x01', '\x1b', '\x7f', '\x85')]
-        locations += [path + ':abc:5', path + ':109:abc',
+        locations += [path + ':abc:3', path + ':2:abc',
                       'crates/private.txt:1:1', 'crates/symlink.rs:1:1',
-                      'crates/horizon-client/src/not_tracked.rs:1:1']
+                      'crates/fixture/src/not_tracked.rs:1:1']
         for location in locations:
             with self.subTest(location=location):
-                log = self.render(f"test safe ... FAILED\nthread 'safe' panicked at {location}:\nPRIVATE\n")
+                log = self.render(f"test safe ... FAILED\nthread 'safe' panicked at {location}:\nPRIVATE\n",
+                                  tracked={path: ['', '']})
                 self.assertNotIn('  panicked at ', log)
                 self.assertNotIn('PRIVATE', log)
 
     def test_a_location_in_a_large_tracked_source_of_any_package_is_reported(self):
-        # horizon-client-lib's sources live under crates/horizon-client/ through its manifest, and motion.rs is
-        # over 256 KB: its failure's location was withheld (arismoko/horizon#4028) while smaller horizon-client files were shown.
-        ci.tracked_rust_paths.cache_clear()
-        ci.source_lines.cache_clear()
-        for location in ('crates/horizon-client/src/motion.rs:6115:9',
-                         'crates/horizon-client-lib/../horizon-client/src/motion.rs:6115:9'):
-            log = self.render("test motion::tests::resident_fluid_heights_are_measured_from_the_feet ... FAILED\n"
-                              "thread 'motion::tests::resident_fluid_heights_are_measured_from_the_feet' panicked at "
-                              f"{location}:\nassertion `left == right` failed\n left: 1\n right: 2\n")
-            self.assertIn('  panicked at crates/horizon-client/src/motion.rs:6115:9', log)
-            self.assertIn('0 locations withheld', log)
-        # Past the read bound a tracked source still stays withheld.
-        ci.tracked_rust_paths.cache_clear()
-        with patch.object(ci, 'SOURCE_BYTES', 1000):
-            log = self.render("test t ... FAILED\nthread 't' panicked at crates/horizon-client/src/motion.rs:1:1:\n"
-                              "assertion failed: x\n")
+        import subprocess
+        path = 'crates/fixture/src/large.rs'
+        source = '// synthetic tracked source\n' * 20_000
+        self.assertGreater(len(source.encode()), 256_000)
+        entry = f'100644 blob abc {len(source.encode())}\t{path}\n'
+
+        def execute(command, **_):
+            return subprocess.CompletedProcess(command, 0, source if command[1] == 'show' else entry)
+
+        with patch.object(ci.subprocess, 'run', side_effect=execute) as git:
+            for raw_path in (path, 'crates/other/../fixture/src/large.rs'):
+                log = self.render("test suite::large ... FAILED\n"
+                                  f"thread 'suite::large' panicked at {raw_path}:19999:9:\n"
+                                  "assertion `left == right` failed\n left: PRIVATE\n right: PRIVATE\n")
+                self.assertIn(f'  panicked at {path}:19999:9', log)
+                self.assertIn('0 locations withheld', log)
+                self.assertNotIn('PRIVATE', log)
+            self.assertEqual(git.call_count, 3)  # one tree, one bounded entry, one immutable blob
+            ci.tracked_rust_paths.cache_clear()
+            ci.source_lines.cache_clear()
+            with patch.object(ci, 'SOURCE_BYTES', 1000):
+                log = self.render(f"test t ... FAILED\nthread 't' panicked at {path}:1:1:\n"
+                                  "assertion failed: PRIVATE\n")
+            self.assertEqual(git.call_count, 4)  # an oversized entry is never read
         self.assertIn('panic location withheld', log)
-        ci.tracked_rust_paths.cache_clear()
-        ci.source_lines.cache_clear()
+        self.assertNotIn('PRIVATE', log)
 
     def test_non_regular_git_entry_never_read_as_source(self):
         import subprocess
