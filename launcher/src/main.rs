@@ -787,11 +787,11 @@ mod tests {
         );
     }
 
-    /// An owner's Play works on a version not prepared yet: it prepares it (downloading
-    /// Minecraft from Mojang when this computer has no install), then plays. Without an owner
-    /// it stays off: signing in comes first.
+    /// Play works on a version not prepared yet, with or without an account that owns the
+    /// game: Horizon-free prepares it from the player's own Minecraft install (an owner can
+    /// have it downloaded from Mojang), then plays. Busy preparing or playing, it waits.
     #[test]
-    fn play_prepares_first_for_an_owner() {
+    fn play_prepares_first_with_or_without_an_owner() {
         use super::{play_press, PlayPress};
         assert_eq!(play_press(true, Some(true), false), PlayPress::Play);
         assert_eq!(play_press(true, None, false), PlayPress::Play);
@@ -799,21 +799,26 @@ mod tests {
             play_press(false, Some(true), false),
             PlayPress::PrepareThenPlay
         );
-        assert_eq!(play_press(false, Some(false), false), PlayPress::Nothing);
-        assert_eq!(play_press(false, None, false), PlayPress::Nothing);
+        // Horizon-free: no owner is no reason to stop at a sign-in that does not exist.
+        assert_eq!(
+            play_press(false, Some(false), false),
+            PlayPress::PrepareThenPlay
+        );
+        assert_eq!(play_press(false, None, false), PlayPress::PrepareThenPlay);
         assert_eq!(play_press(false, Some(true), true), PlayPress::Nothing);
         assert_eq!(play_press(true, Some(true), true), PlayPress::Nothing);
     }
 
-    /// Home's one button never says Play over a click that prepares, or that cannot play.
+    /// Home's one button never says Play over a click that prepares, or cannot play.
     #[test]
     fn play_says_what_it_will_do() {
         use super::{play_label, play_press};
         let say = |prepared, owner| play_label(play_press(prepared, owner, false), owner);
         assert_eq!(say(true, Some(true)), "Play");
         assert_eq!(say(false, Some(true)), "Prepare & play");
-        assert_eq!(say(false, Some(false)), "Sign in to play");
-        assert_eq!(say(false, None), "Play");
+        // Horizon-free: the button prepares and plays, so it says neither "Play" nor "Sign in".
+        assert_eq!(say(false, Some(false)), "Prepare & play");
+        assert_eq!(say(false, None), "Prepare & play");
     }
 
     /// A server's Join (and every other shortcut) waits like Play: not while the version's

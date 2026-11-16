@@ -53,7 +53,10 @@ again.
 - `backend::OFFLINE_PLAY = true`: offline play in the window and the CLI, no Microsoft account
   that owns the game. `Settings::load()` forces `dev_offline`, the window's owner gate asks
   `owner_shown()` (no gate), and `backend/developer_play.rs`'s `client_as(tag, Option<&account::Player>)`
-  asks `session_for_game(&game_home(), OFFLINE_PLAY)`: no owner is no refusal. Upstream's
+  asks `session_for_game(&game_home(), OFFLINE_PLAY)`: no owner is no refusal. `play_press` counts
+  the offline build as an owner's, so Play's first press is "Prepare & play" (from the player's own
+  Minecraft install) instead of a "Sign in to play" that goes nowhere (`widgets.rs`, its callers
+  `glass_home.rs`, `home.rs`, and `blocks_play.rs`'s prepare section). Upstream's
   `developer_offline` opt-in (`HORIZON_LAUNCHER_DEVELOPER_OFFLINE`) stays as upstream wrote it; the
   fork does not need it. Two of upstream's tests pin the gate the fork removes: `client_as` must
   return [`SIGN_IN_HINT`](launcher/src/backend.rs) without an owner (`developer_offline.rs`), and

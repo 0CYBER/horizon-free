@@ -117,14 +117,22 @@ impl Launcher {
         let steps = self.preparing.then(|| self.steps(&version, left));
 
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
-        // owner there is nothing to play, so signing in comes first.
-        let first = (!prepared && !self.preparing)
-            .then_some(self.owner)
-            .flatten();
+        // owner there is nothing to play, so signing in comes first. Horizon-free prepares from
+        // the player's own Minecraft install, no account needed.
+        let first = if backend::OFFLINE_PLAY {
+            (!prepared && !self.preparing).then_some(true)
+        } else {
+            (!prepared && !self.preparing)
+                .then_some(self.owner)
+                .flatten()
+        };
         // No launcher folder with Minecraft on this computer: an owner needs none.
         let no_install = self.settings.minecraft_dir.is_none();
         let resources_value = match first {
             _ if self.preparing => tr("Preparing…").to_string(),
+            Some(true) if backend::OFFLINE_PLAY => {
+                backend::resources_summary(false, false, &version)
+            }
             Some(true) if no_install => trf(
                 "Not prepared. Play downloads Minecraft {version} from Mojang for your account and prepares it.",
                 &[("version", &version)],
@@ -158,6 +166,9 @@ impl Launcher {
             }));
         }
         let prepare = match first {
+            // Horizon-free: no account is needed, and nothing is downloaded from Mojang for one:
+            // Prepare takes Minecraft from the player's own install.
+            Some(true) if backend::OFFLINE_PLAY => div().child(prepare),
             Some(true) if no_install => div().child(
                 button(
                     "prepare-download",
@@ -271,7 +282,8 @@ impl Launcher {
         // account that owns the game (Play needs one), or offline. The glass look's top bar has
         // Sign in with Microsoft and says Offline itself.
         if !t.glass {
-            if self.owner == Some(false) {
+            // Horizon-free has no Microsoft sign-in: there is no account to add here.
+            if self.owner == Some(false) && !backend::OFFLINE_PLAY {
                 rows = rows.child(index_row(
                     5,
                     tr("Microsoft account"),
