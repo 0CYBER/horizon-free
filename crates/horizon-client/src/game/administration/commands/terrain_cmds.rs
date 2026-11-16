@@ -863,15 +863,11 @@ impl Game<'_> {
                 for &t in &self.entities(ctx, "players", true)? {
                     // LootCommand.playerGive gives to every target player: a
                     // guest gets it with their state in place, as with /give.
+                    // `Inventory.add` keeps what fits and throws nothing out. It is true
+                    // only when all of it went in, or always for a player with infinite
+                    // materials (creative).
                     let added = self.for_player(t, |g| {
-                        let complete = g.creative;
-                        if let Some(rest) = g.add_stack_to_inventory(d.clone()) {
-                            let p = g.source_position();
-                            g.spawn_item(rest, [p[0], p[1] + 1.32, p[2]], [0.0; 3], 0);
-                            complete
-                        } else {
-                            true
-                        }
+                        g.add_stack_to_inventory(d.clone()).is_none() || g.creative
                     });
                     if added == Some(true) {
                         used.push(d.clone());
