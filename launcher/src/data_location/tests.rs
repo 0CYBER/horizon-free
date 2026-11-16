@@ -484,21 +484,32 @@ fn a_link_above_the_root_is_followed() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// No unit test reaches the player's real folders: with no home of its own, a test's launcher
-/// data, build folders and native build log are all under the temporary folder.
+/// No unit test reaches the player's real folders: a test's launcher data, build folders and
+/// native build log are all under the temporary folder ([`test_home`]), or under the home a run
+/// names in `HORIZON_LAUNCHER_HOME`, which takes its place (`backend::data_dir`;
+/// `tools/pr_ready.py` names one for the launcher's tests, #16877).
 #[test]
 fn unit_tests_never_resolve_the_real_profile() {
-    let home = test_home();
-    for path in [
+    let paths = [
         crate::backend::data_dir(),
         crate::backend::build_dir(),
         crate::native_mods::log_path(),
-    ] {
+    ];
+    // The named home as given (the data folder) and as the build folder resolves it.
+    let homes = match std::env::var_os("HORIZON_LAUNCHER_HOME").filter(|h| !h.is_empty()) {
+        Some(home) => {
+            let home = PathBuf::from(home);
+            let real = home.canonicalize().map(crate::backend::plain);
+            vec![real.unwrap_or_else(|_| home.clone()), home]
+        }
+        None => vec![test_home()],
+    };
+    for path in paths {
         assert!(
-            path.starts_with(&home),
+            homes.iter().any(|home| path.starts_with(home)),
             "{} is outside {}",
             path.display(),
-            home.display()
+            homes[0].display()
         );
     }
 }
