@@ -8,7 +8,7 @@ use super::hub::{HostEvent, Hub, TickCtx};
 use crate::collisions::SceneCollisions;
 use horizon_anticheat::{Check, Config, Strikes};
 use horizon_core::geometry::{Aabb, Vec3};
-use horizon_world::nbt::{JavaString, Tag};
+use horizon_core::nbt::{JavaString, Tag};
 use std::{io::Write, time::Instant};
 
 pub struct Anticheat {
@@ -175,12 +175,12 @@ impl Hub {
         let restart = ac.tick_rate != tick_rate;
         ac.tick_rate = tick_rate;
         let ms = elapsed.map_or(0.0, |e| e.as_secs_f64() * 1000.0);
-        for g in &mut self.guests {
+        self.guests.update_all(|g| {
             if restart {
                 g.anticheat.timer.reset();
             }
             g.anticheat.timer.elapse(ms, &ac.config.timer);
-        }
+        });
     }
 
     /// ServerboundClientTickEndPacket: one client tick spent.
@@ -189,7 +189,7 @@ impl Hub {
             return;
         };
         if ac.config.runs(Check::Combat)
-            && let Some(foul) = self.guests[i].anticheat.attacks.tick_end()
+            && let Some(foul) = self.guests.update(i, |g| g.anticheat.attacks.tick_end())
         {
             self.combat_foul(i, foul, events);
         }
@@ -197,15 +197,19 @@ impl Hub {
             return;
         };
         if ac.config.runs(Check::Prediction) {
-            let g = &mut self.guests[i];
-            let (input, sprinting) = (g.input, g.client_sprinting);
-            g.record.get_or_insert_default().tick_end(input, sprinting);
+            self.guests.update(i, |g| {
+                let (input, sprinting) = (g.input, g.client_sprinting);
+                g.record.get_or_insert_default().tick_end(input, sprinting);
+            });
         }
         if !ac.config.runs(Check::Timer) {
             return;
         }
         let (rate, config) = (ac.tick_rate, &ac.config.timer);
-        if let Some(ahead) = self.guests[i].anticheat.timer.tick_end(rate, config) {
+        if let Some(ahead) = self
+            .guests
+            .update(i, |g| g.anticheat.timer.tick_end(rate, config))
+        {
             self.flag(
                 i,
                 Check::Timer,
@@ -230,7 +234,9 @@ impl Hub {
         if !ac.config.runs(Check::Combat) {
             return false;
         }
-        if let Some(foul) = self.guests[i].anticheat.attacks.attack(target)
+        if let Some(foul) = self
+            .guests
+            .update(i, |g| g.anticheat.attacks.attack(target))
             && self.combat_foul(i, foul, events)
         {
             return true;
@@ -240,16 +246,16 @@ impl Hub {
         };
         let setback = ac.config.combat.setback;
         setback > 0.0
-            && self.guests[i]
-                .anticheat
-                .vl(&ac.config, Check::Combat, self.ticks)
+            && self
+                .guests
+                .update(i, |g| g.anticheat.vl(&ac.config, Check::Combat, self.ticks))
                 >= setback
     }
 
     /// ServerboundPunchPacket: the arm swung, for `combat`.
     pub(super) fn anticheat_swing(&mut self, i: usize) {
         if self.anticheat.is_some() {
-            self.guests[i].anticheat.attacks.swing();
+            self.guests.update(i, |g| g.anticheat.attacks.swing());
         }
     }
 
@@ -287,8 +293,9 @@ impl Hub {
         flags: u8,
     ) {
         if self.recording() {
-            let record = self.guests[i].record.get_or_insert_default();
-            record.moved(pos, rot, flags);
+            self.guests.update(i, |g| {
+                g.record.get_or_insert_default().moved(pos, rot, flags);
+            });
         }
     }
 
@@ -297,9 +304,12 @@ impl Hub {
     pub(super) fn anticheat_pong(&mut self, i: usize, id: i32) {
         let ticks = self.ticks;
         if self.recording() {
-            let record = self.guests[i].record.get_or_insert_default();
-            // Ids are server ticks, cut to 32 bits.
-            record.pong(u64::from(id as u32), ticks);
+            self.guests.update(i, |g| {
+                // Ids are server ticks, cut to 32 bits.
+                g.record
+                    .get_or_insert_default()
+                    .pong(u64::from(id as u32), ticks);
+            });
         }
     }
 
@@ -312,7 +322,7 @@ impl Hub {
         }
         // What the tick sent the players that changes their movement went out before this ping.
         let ticks = self.ticks;
-        for g in &mut self.guests {
+        self.guests.update_all(|g| {
             let changes = std::mem::take(
                 g.changes
                     .get_mut()
@@ -323,7 +333,7 @@ impl Hub {
                     record.changed(ticks, change);
                 }
             }
-        }
+        });
         let ping = horizon_protocol::packets::play::Clientbound::Ping(
             horizon_protocol::packets::configuration::Ping {
                 id: self.ticks as u32 as i32,
@@ -364,7 +374,8 @@ impl Hub {
         let from = self.guests[i].position;
         let held_at_start = || self.ground_holds(i, [from[0], to[1], from[2]], ctx) != Some(false);
         if stands || self.ground_holds(i, to, ctx)? || held_at_start() {
-            self.guests[i].anticheat.ground = Some((ticks, to[1]));
+            self.guests
+                .update(i, |g| g.anticheat.ground = Some((ticks, to[1])));
             return None;
         }
         if self.guests[i].anticheat.ground.is_some_and(|(t, y)| {
@@ -442,11 +453,13 @@ impl Hub {
             subject: None,
         };
         let down = Vec3::new(0.0, -0.1, 0.0);
-        Some(
-            scene
-                .resolve(feet, down, 0.0, false)
-                .is_ok_and(|done| done.y > down.y),
-        )
+        // A support probe — is the feet's 0.1 down blocked? — not an
+        // `Entity.move` (arismoko/horizon#2414): the gate is for moves, this asks the blocks.
+        #[allow(clippy::disallowed_methods)]
+        let held = scene
+            .resolve(feet, down, 0.0, false)
+            .is_ok_and(|done| done.y > down.y);
+        Some(held)
     }
 
     /// `check` failed for guest `i`: raise its level, log it, and act on it. Returns whether the move or
@@ -513,9 +526,13 @@ impl Hub {
         if !self.guests[i].left_reason.is_empty() {
             return true;
         }
-        let g = &mut self.guests[i];
-        let v = g.anticheat.flag(&ac.config, check, weight, ticks);
-        let (uuid, name) = (g.uuid, g.name.clone());
+        let (v, uuid, name) = self.guests.update(i, |g| {
+            (
+                g.anticheat.flag(&ac.config, check, weight, ticks),
+                g.uuid,
+                g.name.clone(),
+            )
+        });
         let ban_after = ac.config.actions(check).ban_after;
         let (kicks, ban) = if v.kick {
             ac.strike(uuid, check)

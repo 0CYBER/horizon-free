@@ -330,6 +330,7 @@ mod tests {
     fn report() -> crate::crash::Report {
         crate::crash::Report {
             time: chrono::Local::now(),
+            headers: Vec::new(),
             description: "Unexpected error".into(),
             error:
                 "panicked at src/save.rs:10:5:\nno level.dat in /Users/ana/horizon/saves/Ana's Base"
@@ -398,6 +399,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn benchmark_reports_need_their_own_consent_and_go_dated_to_the_day() {
         let home = home("benchmark");
         let mut report = horizon_bench::Report::new(horizon_bench::Kind::Game, Default::default());

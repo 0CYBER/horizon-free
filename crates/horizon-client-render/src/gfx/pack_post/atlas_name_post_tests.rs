@@ -59,6 +59,7 @@ fn pack() -> Post {
 
 #[test]
 fn atlas_names_read_colortex0_in_deferred_composite_and_final() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     let pixels = gpu.render(&mut post, [8, 8]);

@@ -4,16 +4,22 @@
 )]
 mod integration {
     include!("live_attributes_fixture.rs");
-    use horizon_world::{
-        active_effects::{ActiveEffects, EffectHooks},
-        attribute_updates::{self, UpdateWorld, UpdatedAttribute},
-        attributes::live::Key,
-        effect_notifications::{self as notify, EffectPacket, NotificationWorld},
-        java_hash_map::JavaKey,
-        live_attribute_updates::{self as live_updates, LiveAttributeWorld},
-        living_health::{self, HealthWorld, SyncedFloat},
-        object_open_set::{CursorError, ObjectOpenSet},
-        status_effect::{Details, EffectInstance},
+    use {
+        horizon_core::java_hash_map::JavaKey,
+        horizon_world::{
+            active_effects::{ActiveEffects, EffectHooks},
+            attribute_updates,
+            attribute_updates::{UpdateWorld, UpdatedAttribute},
+            attributes::live::Key,
+            effect_notifications as notify,
+            effect_notifications::{EffectPacket, NotificationWorld},
+            live_attribute_updates as live_updates,
+            live_attribute_updates::LiveAttributeWorld,
+            living_health,
+            living_health::{HealthWorld, SyncedFloat},
+            object_open_set::{CursorError, ObjectOpenSet},
+            status_effect::{Details, EffectInstance},
+        },
     };
     type Live = LiveAttributes<Box<dyn FnMut() -> i32>>;
     type Result<T, E = &'static str> = std::result::Result<T, E>;

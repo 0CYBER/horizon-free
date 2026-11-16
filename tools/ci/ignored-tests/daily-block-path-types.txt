@@ -1,0 +1,6 @@
+# Positional block path queries, their Land baseline and trapdoor climbing.
+horizon-client game::native_living_flags::tests::a_block_part_decides_whether_an_open_trapdoor_above_it_climbs lib daily resources
+horizon-client game::native_path_types_tests::a_block_part_gives_its_block_a_path_type lib daily resources
+horizon-client game::native_path_types_tests::a_block_part_gives_the_nodes_beside_its_block_a_path_type lib daily resources
+horizon-client game::native_path_types_tests::cache_follows_update_flags_and_direct_block_entity_notifications lib daily resources
+horizon-client-lib mobs::data::path_type_tests::a_states_path_type_follows_the_land_answer_its_parts_gave lib daily resources

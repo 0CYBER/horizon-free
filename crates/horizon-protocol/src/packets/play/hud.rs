@@ -5,7 +5,7 @@ use crate::{
     buf::{Codec, List, Nbt, Opt, Reader, Str, VarInt, Writer},
     packet,
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `ClientboundBossEventPacket` (`boss_event`).
 #[derive(Clone, Debug, PartialEq)]

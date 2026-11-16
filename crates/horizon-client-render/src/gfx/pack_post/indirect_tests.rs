@@ -172,7 +172,7 @@ fn changing_indirect_shadow_arguments_bypasses_only_the_indirect_shadow_cache() 
         let mut post = gpu.build(post);
         gpu.render(&mut post, [8, 8]);
         assert!(post.shadow_targets.is_some());
-        let hud = HudBatch::new([8, 8]);
+        let hud = HudBatch::scratch([8, 8]);
         let mut frame = super::depth_test::fixture_frame(&hud);
         frame.shadow_cache = true;
         let mut passes = std::mem::take(&mut post.passes);

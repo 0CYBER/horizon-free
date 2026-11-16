@@ -699,7 +699,7 @@ fn keys(input: u8) -> Keys {
         jump: key(16),
         shift: key(32),
         sprint: key(64),
-        analog: None,
+        ..Keys::default()
     }
 }
 
@@ -896,6 +896,10 @@ mod tests {
                 collision_binding: binding,
                 resources,
                 health: &resources.health,
+                tag_items: None,
+                block_registries: None,
+                loop_context: crate::test_resources::server_loop_context(),
+                damage_hooks: &crate::health::DamageHooks::NONE,
             })
         };
         // Settle on the floor first (or fall for a while).
@@ -1021,6 +1025,7 @@ mod tests {
     /// falls from where it joined: those ticks are over, but none with a move, which is what lets
     /// the server excuse them. Its first move after them counts as any other.
     #[test]
+    #[ignore = "daily"]
     fn a_client_on_its_loading_screen_is_over_without_a_move() {
         let run = Run {
             start: Vec3::new(20.5, 12.0, 20.5),
@@ -1045,6 +1050,7 @@ mod tests {
     /// Food eaten one after another with the key held, walking (#5860): the client finishes each a
     /// few ticks after the server does. Nothing counts.
     #[test]
+    #[ignore = "daily"]
     fn item_uses_a_few_ticks_apart_from_the_servers_are_played() {
         let run = Run {
             script: forward(),
@@ -1067,6 +1073,7 @@ mod tests {
     /// A client that keeps walking at full speed through a use the server started (a no-slow) is
     /// caught once the window has passed.
     #[test]
+    #[ignore = "daily"]
     fn a_use_without_its_slowdown_is_caught() {
         let run = Run {
             script: forward(),
@@ -1102,6 +1109,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_cheats_worst_tick_is_kept_with_its_offset() {
         let Some(steps) = steps(
             |i, _, honest| honest.add_vector(Vec3::new(if i == 10 { 1.0 } else { 0.0 }, 0.0, 0.0)),
@@ -1164,6 +1172,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn an_honest_client_is_played_again_exactly() {
         let Some(played) = offsets(|_, honest| honest, None) else {
             return;
@@ -1177,6 +1186,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_faster_or_flying_client_is_not() {
         let Some(speed) = offsets(
             |before, honest| {
@@ -1201,6 +1211,7 @@ mod tests {
     /// modifier alone (the server's body, which never sprinted here, has none to copy); one with the
     /// movement speed but no sprint modifier takes it away while the client sprints on.
     #[test]
+    #[ignore = "daily"]
     fn attributes_sent_mid_sprint_are_played_as_the_client_takes_them() {
         for sprint in [None, Some(false), Some(true)] {
             let run = Run {
@@ -1223,6 +1234,7 @@ mod tests {
     /// A knockback (ClientboundSetEntityMotionPacket) mid-walk: the replay applies it on the first
     /// client tick that had seen the server tick that sent it.
     #[test]
+    #[ignore = "daily"]
     fn a_push_is_played_on_the_tick_the_client_took_it() {
         let push = |taken| Push {
             tick: 25,
@@ -1246,6 +1258,7 @@ mod tests {
     /// A client that starts flying mid-walk: each tick it flies counts, weighed by how far it is off,
     /// and the setback point stays where it last walked honestly.
     #[test]
+    #[ignore = "daily"]
     fn a_cheat_counts_from_where_it_started() {
         let Some(steps) = steps(
             |i, _, honest| honest.add_vector(Vec3::new(0.0, if i >= 20 { 0.06 } else { 0.0 }, 0.0)),
@@ -1269,6 +1282,7 @@ mod tests {
     /// catch-up: a lie on the first makes the replay stand at the client's spot, and the honest
     /// tick after it must not become the setback point (#5132).
     #[test]
+    #[ignore = "daily"]
     fn a_burst_keeps_the_setback_before_its_lie() {
         let Some(steps) = steps_in(
             Run {
@@ -1306,6 +1320,7 @@ mod tests {
     /// A push the server never sent (another entity's): excused, the replay takes the client's
     /// velocity, is back within the tolerance in a few ticks, and nothing counts.
     #[test]
+    #[ignore = "daily"]
     fn an_excused_push_is_caught_up_with() {
         let push = Push {
             tick: 25,
@@ -1334,6 +1349,7 @@ mod tests {
     /// tries the velocity it left on the next tick, so it counts once, not on each tick it takes to
     /// die out.
     #[test]
+    #[ignore = "daily"]
     fn a_missed_push_counts_once() {
         for velocity in [[0.3, 0.0, -0.2], [-0.25, 0.0, 0.1], [0.0, 0.0, 0.4]] {
             // The client's alone: the record never has it, and nothing excuses it.
@@ -1397,6 +1413,7 @@ mod tests {
     /// tick of a sprint-jump (a twentieth of a block a tick) goes uncounted only while the velocity
     /// the replay took from its first tick still hides it; then it counts on every tick.
     #[test]
+    #[ignore = "daily"]
     fn a_small_speed_lie_kept_up_still_counts() {
         let run = Run {
             script: vec![(1 | 16 | 64, 0.0); 60],
@@ -1438,6 +1455,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_sprint_the_server_cleared_is_started_again() {
         for (late, gap) in [(1, 1), (2, 1), (3, 2)] {
             let Some(steps) = steps_in(sprint_restarted(late, gap), |_, _, honest| honest, None)
@@ -1457,6 +1475,7 @@ mod tests {
     /// The same with a speed lie (a twentieth of a block a tick) from the tick the STOP's packets
     /// reach the client: it counts from that tick on.
     #[test]
+    #[ignore = "daily"]
     fn a_speed_lie_through_a_sprint_restart_still_counts() {
         let Some(steps) = steps_in(
             sprint_restarted(2, 1),
@@ -1506,6 +1525,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_sprint_the_server_stopped_after_a_hit_is_the_clients() {
         for (key, water) in [(true, false), (false, false), (true, true), (false, true)] {
             let Some(steps) = steps_in(sprint_hit(key, water), |_, _, honest| honest, None) else {
@@ -1532,6 +1552,7 @@ mod tests {
     /// starts again only with it, is played walking from the tick the stop reaches it; one that
     /// holds the key and moves a twentieth of a block a tick too far counts from there too.
     #[test]
+    #[ignore = "daily"]
     fn a_sprint_kept_without_the_key_or_sped_up_after_a_hit_counts() {
         for water in [false, true] {
             let kept = Run {
@@ -1569,6 +1590,7 @@ mod tests {
 
     /// An elytra: a jump while falling starts a glide, played again exactly.
     #[test]
+    #[ignore = "daily"]
     fn a_glide_is_played_again_exactly() {
         let mut script = vec![(0, 0.0); 4];
         script.push((16, 0.0));
@@ -1593,6 +1615,7 @@ mod tests {
     /// A teleport accepted after a burst of ticks the server hadn't played yet: the replay plays
     /// them first, so the jump delay they started goes on through the teleport as the client's does.
     #[test]
+    #[ignore = "daily"]
     fn a_burst_before_a_teleport_is_played_first() {
         let mut run = Run::walk();
         // The burst holds the first sprint-jump (tick 20). Back on the floor at tick 23, the client
@@ -1632,6 +1655,7 @@ mod tests {
     /// Ticks the replay lost (a gap) are not accused of anything: the client is played again from
     /// where the server has it, and nothing counts.
     #[test]
+    #[ignore = "daily"]
     fn an_honest_client_after_a_history_gap_is_never_over() {
         let Some(steps) = after_a_gap(None) else {
             return;
@@ -1644,6 +1668,7 @@ mod tests {
     /// excuse has run out (at most [`DRIFT`] ticks after the rebase) is counted on its first
     /// lying tick, and none before it is.
     #[test]
+    #[ignore = "daily"]
     fn a_cheat_after_a_history_gap_is_counted_again() {
         // Tick 44 is the rebase: the 40 ticks after it spend the excuse, the cheat starts at tick 85.
         let Some(steps) = after_a_gap(Some(85)) else {
@@ -1694,6 +1719,7 @@ mod tests {
 
     /// Step: up onto a full block without a jump (the most a walk steps up is 0.6).
     #[test]
+    #[ignore = "daily"]
     fn a_step_is_caught() {
         caught(wall(1), |before, honest| {
             (honest.z > 24.6 && before.y < 6.0).then(|| Vec3::new(honest.x, 6.0, 25.1))
@@ -1702,6 +1728,7 @@ mod tests {
 
     /// Spider: up a wall, 0.2 a tick, with no ladder or vine.
     #[test]
+    #[ignore = "daily"]
     fn a_spider_is_caught() {
         caught(wall(4), |before, honest| {
             (honest.z > 24.6).then(|| Vec3::new(honest.x, before.y + 0.2, honest.z))
@@ -1710,6 +1737,7 @@ mod tests {
 
     /// Jesus: walking on water as on the ground.
     #[test]
+    #[ignore = "daily"]
     fn a_jesus_is_caught() {
         let water = (19..=21)
             .flat_map(|x| (25..=40).map(move |z| ([x, 4, z], "minecraft:water")))

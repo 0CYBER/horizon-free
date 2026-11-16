@@ -1,0 +1,7 @@
+id = "wasm_test_library"
+name = "Wasm test library"
+version = "0.1.0"
+description = "Shared library fixture."
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

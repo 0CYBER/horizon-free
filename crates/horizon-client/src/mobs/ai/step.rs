@@ -1,17 +1,18 @@
 //! `Mob.playStepSound` and its overrides: the species' own footstep, or the block
 //! sound at 15%, and the block sound ids the facts carry.
 use super::{Mob, MobWorld, Species};
+use std::borrow::Cow;
 
 /// `playStepSound`: the species' footstep, or the block's step sound at 15%.
-pub fn step_sound(
+pub fn inherited_step_sound(
     m: &Mob,
     w: &MobWorld,
     pos: [i32; 3],
     state: horizon_world::registry::BlockStateId,
-) -> Option<(&'static str, f32, f32)> {
+) -> Option<(Cow<'static, str>, f32, f32)> {
     use Species as S;
     let baby = m.is_baby();
-    let quiet = |s: &'static str| Some((s, 0.15, 1.0));
+    let quiet = |s: &'static str| Some((Cow::Borrowed(s), 0.15, 1.0));
     match m.species() {
         // `playStepSound` overridden with an empty body: a fish, an allay, a bee,
         // a happy ghast and a nautilus have no footfall of their own, so the
@@ -72,43 +73,34 @@ pub fn step_sound(
                 "minecraft:camel_sand_step_sound_blocks",
                 &w.facts.get(state).name,
             );
-            Some(match (m.species(), sand) {
+            let (name, volume, pitch) = match (m.species(), sand) {
                 (S::Camel, true) => ("entity.camel.step_sand", 1.0, 1.0),
                 (S::Camel, false) => ("entity.camel.step", 1.0, 1.0),
                 (_, true) => ("entity.camel_husk.step_sand", 0.4, 1.0),
                 (_, false) => ("entity.camel_husk.step", 0.4, 1.0),
-            })
+            };
+            Some((Cow::Borrowed(name), volume, pitch))
         }
-        S::IronGolem => Some(("entity.iron_golem.step", 1.0, 1.0)),
+        S::IronGolem => Some((Cow::Borrowed("entity.iron_golem.step"), 1.0, 1.0)),
         // CopperGolem.playStepSound: its oxidation level's step.
-        S::CopperGolem => Some((crate::mobs::copper_golem::sound(m, "step"), 1.0, 1.0)),
-        S::Strider if m.fluids.in_lava => Some(("entity.strider.step_lava", 1.0, 1.0)),
-        S::Strider => Some(("entity.strider.step", 1.0, 1.0)),
-        S::Warden => Some(("entity.warden.step", 10.0, 1.0)),
+        S::CopperGolem => Some((
+            Cow::Borrowed(crate::mobs::copper_golem::sound(m, "step")),
+            1.0,
+            1.0,
+        )),
+        S::Strider if m.fluids.in_lava => {
+            Some((Cow::Borrowed("entity.strider.step_lava"), 1.0, 1.0))
+        }
+        S::Strider => Some((Cow::Borrowed("entity.strider.step"), 1.0, 1.0)),
+        S::Warden => Some((Cow::Borrowed("entity.warden.step"), 10.0, 1.0)),
         _ => {
-            // Entity.playStepSound: the block's sound type.
-            let _ = pos;
-            let sounds = &w.facts.get(state).sounds;
-            let step: &'static str = intern_sound(&sounds.step);
+            // Entity.playStepSound: the block's sound type, as its parts answer.
+            let sounds = w.block_sound_type(m, pos, state, mod_api::BlockSoundCause::Step);
+            let step = Cow::Owned(sounds.step.to_string());
             Some((step, sounds.volume * 0.15, sounds.pitch))
         }
     }
 }
-/// A block sound id as a static string (the block facts intern them).
-pub(crate) fn intern_sound(s: &std::sync::Arc<str>) -> &'static str {
-    use std::{collections::HashSet, sync::Mutex};
-    static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
-    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
-    let set = names.get_or_insert_with(HashSet::new);
-    let key = s.strip_prefix("minecraft:").unwrap_or(s);
-    if let Some(found) = set.get(key) {
-        return found;
-    }
-    let leaked: &'static str = Box::leak(key.to_owned().into_boxed_str());
-    set.insert(leaked);
-    leaked
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +111,7 @@ mod tests {
     /// before the block's sound, so it walks silently, while an empty cube takes
     /// the block's step at 15% like any other mob.
     #[test]
+    #[ignore = "daily"]
     fn a_loaded_sulfur_cube_walks_silently() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -137,9 +130,9 @@ mod tests {
                 let stepped = |body: Option<&str>| {
                     let kind = Arc::new(types.types["minecraft:sulfur_cube"].clone());
                     let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-                    m.extra.body = body.map(Into::into);
+                    m.extra.set_body(body.map(Into::into));
                     let state = w.world.block(0, 63, 0);
-                    step_sound(&m, w, [0, 63, 0], state)
+                    inherited_step_sound(&m, w, [0, 63, 0], state)
                 };
                 assert_eq!(stepped(Some("minecraft:stone")), None, "loaded");
                 let empty = stepped(None);
@@ -147,6 +140,6 @@ mod tests {
                 assert_eq!(empty.unwrap().1, 0.15, "the block's 15%");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

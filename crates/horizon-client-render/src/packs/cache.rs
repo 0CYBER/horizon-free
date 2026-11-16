@@ -263,6 +263,12 @@ fn pack_signature(packs: &[Pack]) -> io::Result<String> {
         field(&mut hash, format!("{:?}", pack.overlays).as_bytes());
         field(&mut hash, format!("{:?}", pack.filter).as_bytes());
         match &pack.source {
+            Source::Opened(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "open resource layers do not have a persistent filesystem cache key",
+                ));
+            }
             Source::Dir(path) => {
                 field(&mut hash, absolute(path)?.as_os_str().as_encoded_bytes());
                 tree(&mut hash, path, Some(pack))?;

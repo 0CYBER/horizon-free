@@ -48,12 +48,14 @@ pub fn main() -> Result<()> {
                 let chunks = [(0, 0), (-1, -1), (0, -1), (-1, 0)].into_iter().collect();
                 let mut viewers = [Viewer {
                     entity_id: 1,
+                    horizon: true,
                     spectator: false,
                     permission: 0,
                     moved: false,
                     position: [0.5, 64.0, 0.5],
                     view_distance: 10,
                     chunks: &chunks,
+                    sources: None,
                     tracker: &mut tracker,
                     out: &mut packets,
                     gone: None,

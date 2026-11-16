@@ -1,0 +1,20 @@
+id = "fnr_registry"
+name = "Function replacement check: a mod with a crates.io dependency"
+version = "0.1.0"
+description = "fn-replace: [[native.mixin]] in a mod built through the registry route"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.mixin]]
+id = "head"
+target = "horizon_client::game::autosave::Game<'_>::on_tick_rate_changed"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+bindings = [{ name = "game", ty = "&mut Game<'_>", value = "&mut *self" }]

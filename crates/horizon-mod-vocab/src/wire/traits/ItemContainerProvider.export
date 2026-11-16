@@ -1,0 +1,1 @@
+A registered item's dynamic container callback: its declared item type supplies registration coverage; the game invokes slots through the shared native/wasm handler resource at runtime.

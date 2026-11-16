@@ -2,28 +2,53 @@
 //! VarLong, ByteBufCodecs) and the `Codec` building blocks packets are
 //! composed from, mirroring `StreamCodec.composite`.
 use crate::{Error, Result};
-use horizon_world::nbt::{self, Tag};
+use horizon_core::{nbt, nbt::Tag};
 use std::marker::PhantomData;
 
 /// Vanilla's default NBT quota for network tags (NbtAccounter.defaultQuota).
-pub const NBT_QUOTA: usize = 2_097_152;
-/// The least `NbtAccounter` charges for one tag: `EndTag`'s `SELF_SIZE_IN_BYTES`, the smallest
-/// tag's (every other tag costs more: `ByteTag` 9 bytes, a compound 48 plus its entries).
-const MIN_TAG_COST: usize = 8;
-/// The most tags one network NBT value can hold within [`NBT_QUOTA`]: vanilla charges each at least
-/// [`MIN_TAG_COST`] of its estimated heap, so a value with more tags is one vanilla refuses too. A
-/// byte count alone let a crafted server send ~1 M byte tags in 1 MB that vanilla refuses and that
-/// take ~32 bytes each here; capped, one value's tags take at most ~8 MiB.
-pub const NBT_MAX_TAGS: usize = NBT_QUOTA / MIN_TAG_COST;
+pub const NBT_QUOTA: usize = nbt::Limits::network().max_bytes;
+/// The most tags one network NBT value can hold within [`NBT_QUOTA`], using
+/// vanilla's minimum eight-byte per-tag heap charge.
+pub const NBT_MAX_TAGS: usize = nbt::Limits::network().max_nodes;
+
+/// Whether a peer can read `tag` as network NBT: written within [`NBT_QUOTA`], then read back by
+/// [`Reader::nbt`] under the receiver's own limits (`NbtAccounter.defaultQuota` and its tag count).
+pub fn check_network_nbt(tag: &Tag) -> Result<()> {
+    let limits = nbt::Limits {
+        max_bytes: NBT_QUOTA,
+        ..nbt::Limits::default()
+    };
+    let bytes = nbt::write_network(tag, limits).map_err(|e| Error::new(format!("NBT: {e}")))?;
+    Reader::new(&bytes).nbt().map(drop)
+}
 
 /// A cursor over a received packet body.
 pub struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
+    payload_codecs: Option<&'a crate::packets::custom_payload::PayloadCodecs>,
 }
 impl<'a> Reader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
+        Self {
+            data,
+            pos: 0,
+            payload_codecs: None,
+        }
+    }
+    /// Read using this connection's frozen custom-payload codecs.
+    pub fn with_payload_codecs(
+        data: &'a [u8],
+        codecs: &'a crate::packets::custom_payload::PayloadCodecs,
+    ) -> Self {
+        Self {
+            data,
+            pos: 0,
+            payload_codecs: Some(codecs),
+        }
+    }
+    pub(crate) fn payload_codecs(&self) -> Option<&crate::packets::custom_payload::PayloadCodecs> {
+        self.payload_codecs
     }
     pub fn remaining(&self) -> usize {
         self.data.len() - self.pos
@@ -166,11 +191,10 @@ impl<'a> Reader<'a> {
     }
     /// A network NBT tag (NbtIo.readAnyTag without a root name); `End` means none.
     pub fn nbt(&mut self) -> Result<Tag> {
-        let limits = nbt::Limits {
-            max_bytes: NBT_QUOTA,
-            max_nodes: NBT_MAX_TAGS,
-            ..nbt::Limits::default()
-        };
+        self.nbt_within(nbt::Limits::network())
+    }
+    /// [`Self::nbt`] within `limits`, for a codec whose writer uses the same ones.
+    pub fn nbt_within(&mut self, limits: nbt::Limits) -> Result<Tag> {
         let (tag, used) = nbt::read_network(&self.data[self.pos..], limits)
             .map_err(|e| Error::new(format!("NBT: {e}")))?;
         self.pos += used;
@@ -325,6 +349,17 @@ pub fn varint_size(v: i32) -> usize {
 pub trait Codec<T> {
     fn read(r: &mut Reader) -> Result<T>;
     fn write(v: &T, w: &mut Writer);
+    /// Validate a value before allocating its encoded body.
+    fn validate(_v: &T) -> Result<()> {
+        Ok(())
+    }
+    /// Validate using this connection's frozen custom-payload codecs.
+    fn validate_with_payload_codecs(
+        v: &T,
+        _codecs: &crate::packets::custom_payload::PayloadCodecs,
+    ) -> Result<()> {
+        Self::validate(v)
+    }
 }
 macro_rules! primitive {
     ($name:ident, $ty:ty, $read:ident, $write:ident) => {
@@ -704,6 +739,9 @@ macro_rules! packet {
         #[derive(Clone, Debug, PartialEq)]
         pub struct $name {
             $(pub $field: $ty),*
+        }
+        impl $crate::retained::OwnedHeap for $name {
+            fn owned_heap_bytes(&self) -> usize { 0usize $(.saturating_add($crate::retained::OwnedHeap::owned_heap_bytes(&self.$field)))* }
         }
         impl $crate::buf::Codec<$name> for $name {
             #[allow(unused_variables)]

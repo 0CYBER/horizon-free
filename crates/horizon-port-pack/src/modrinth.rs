@@ -32,8 +32,7 @@ impl Cache {
             .filter(|h| !self.versions.contains_key(*h))
             .collect();
         for chunk in missing.chunks(500) {
-            let body = serde_json::json!({"hashes": chunk, "algorithm": "sha1"});
-            let found = post(&format!("{API}/version_files"), &body)?;
+            let found = version_files(chunk, "sha1")?;
             for (hash, version) in found.as_object().into_iter().flatten() {
                 self.versions.insert(hash.clone(), version.clone());
             }
@@ -78,6 +77,49 @@ impl Cache {
     }
 }
 
+/// Resolve the missing manifest jars in one exact-SHA-512 request, after download consent.
+pub fn jar_urls(
+    jars: &[&horizon_mod_package::manifest::JarRef],
+) -> Result<BTreeMap<String, String>, String> {
+    let hashes: Vec<_> = jars.iter().map(|jar| jar.sha512()).collect();
+    jar_file_urls(version_files(hashes, "sha512")?)
+}
+
+fn version_files(hashes: impl Serialize, algorithm: &str) -> Result<Value, String> {
+    post(
+        &format!("{API}/version_files"),
+        &serde_json::json!({"hashes": hashes, "algorithm": algorithm}),
+    )
+}
+
+fn jar_file_urls(found: Value) -> Result<BTreeMap<String, String>, String> {
+    #[derive(Deserialize)]
+    struct Version {
+        files: Vec<File>,
+    }
+    #[derive(Deserialize)]
+    struct File {
+        hashes: BTreeMap<String, String>,
+        url: String,
+    }
+    let versions: BTreeMap<String, Version> =
+        serde_json::from_value(found).map_err(|e| format!("Modrinth version files: {e}"))?;
+    Ok(versions
+        .into_iter()
+        .filter_map(|(hash, version)| {
+            version
+                .files
+                .into_iter()
+                .find(|file| {
+                    file.hashes
+                        .get("sha512")
+                        .is_some_and(|actual| actual.eq_ignore_ascii_case(&hash))
+                })
+                .map(|file| (hash, file.url))
+        })
+        .collect())
+}
+
 fn post(url: &str, body: &Value) -> Result<Value, String> {
     let response = crate::net::agent(url)
         .post(url)
@@ -112,4 +154,39 @@ fn encode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_hash_selects_the_file_not_the_versions_primary_jar() {
+        let hash = "a".repeat(128);
+        let other = "b".repeat(128);
+        let found = serde_json::json!({
+            hash.clone(): {"files": [
+                {"primary": true, "url": "wrong.jar", "hashes": {"sha512": other}},
+                {"url": "exact.jar", "hashes": {"sha512": hash}}
+            ]},
+            other.clone(): {"files": [
+                {"url": "other.jar", "hashes": {"sha512": other.to_uppercase()}}
+            ]}
+        });
+        assert_eq!(
+            jar_file_urls(found).unwrap(),
+            BTreeMap::from([
+                (hash.clone(), "exact.jar".into()),
+                (other, "other.jar".into()),
+            ])
+        );
+        assert!(jar_file_urls(serde_json::json!({})).unwrap().is_empty());
+        assert!(
+            jar_file_urls(serde_json::json!({hash.clone(): {"files": []}}))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(jar_file_urls(serde_json::json!({hash.clone(): {"files": "broken"}})).is_err());
+        assert!(jar_file_urls(serde_json::json!([])).is_err());
+    }
 }

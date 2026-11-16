@@ -1,7 +1,7 @@
 //! Item stacks in NBT (`ItemStack.CODEC`): id, count and components, alone or in
 //! slot lists.
 use horizon_client_core::nbt_value::{number, string, text};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 /// The two measured saved forms of `BlockPredicate.CODEC`, and the `Identifier`s
@@ -12,7 +12,7 @@ fn canonical_saved_adventure_predicates(components: &mut Tag) {
         let named = match value.get("blocks") {
             Some(Tag::List(names)) => match names.as_slice() {
                 [Tag::String(name)]
-                    if horizon_world::identifier::Identifier::parse(&name.to_string_lossy())
+                    if horizon_core::identifier::Identifier::parse(&name.to_string_lossy())
                         .is_ok_and(|id| !id.path().is_empty()) =>
                 {
                     Some(name.clone())
@@ -133,6 +133,40 @@ pub fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::
     slots
 }
 
+/// A stack as its saved NBT (`item_to_nbt`).
+impl From<&crate::items::ItemStack> for Tag {
+    fn from(stack: &crate::items::ItemStack) -> Self {
+        item_to_nbt(stack)
+    }
+}
+
+/// A stack read from its saved NBT (`item_from_nbt`); a tag that is no stack is refused as
+/// itself.
+impl TryFrom<Tag> for crate::items::ItemStack {
+    type Error = Tag;
+    fn try_from(tag: Tag) -> Result<Self, Tag> {
+        item_from_nbt(&tag).ok_or(tag)
+    }
+}
+
+/// Components as a stack's `components` compound (`components_tag`), undamaged.
+impl From<&crate::item_data::StackData> for Tag {
+    fn from(data: &crate::item_data::StackData) -> Self {
+        crate::item_data::components_tag(0, Some(data))
+            .unwrap_or_else(|| Tag::Compound(Default::default()))
+    }
+}
+
+/// Components read from a stack's `components` compound (`decode_components`); a damage in it
+/// is not a component of these.
+impl TryFrom<Tag> for crate::item_data::StackData {
+    type Error = Tag;
+    fn try_from(tag: Tag) -> Result<Self, Tag> {
+        let (_, extra) = crate::item_data::decode_components(Some(&tag));
+        Ok(extra.map(|data| *data).unwrap_or_default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +235,7 @@ mod h285_saved_adventure_tests {
     use super::*;
     use crate::{item_data::components_tag, items::ItemStack};
     fn parse(s: &str) -> Tag {
-        horizon_world::nbt::parse_snbt(s).unwrap().0
+        horizon_core::nbt::parse_snbt(s).unwrap().0
     }
     fn item(key: &str, value: Tag) -> Tag {
         Tag::compound([

@@ -282,24 +282,39 @@ fn entity_action(m: &Mob, events: &mut Vec<MobEvent>) {
     });
 }
 /// `Creaking.activate`.
-fn activate(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    monster_brain::set_attack_target(m, Some(Who::Player));
-    entity_action(m, events);
-    m.voice("entity.creaking.activate", events);
-    m.extra.flag = true;
+fn activate(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if let super::TargetChange::Set(target) = w.change_target(m, true, Some(Who::Player)) {
+        monster_brain::set_attack_target(m, target);
+    }
+    activation_effects(m, true, events);
 }
 /// `Creaking.deactivate`.
-fn deactivate(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    monster_brain::set_attack_target(m, None);
+fn deactivate(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if let super::TargetChange::Set(target) = w.change_target(m, true, None) {
+        monster_brain::set_attack_target(m, target);
+    }
+    activation_effects(m, false, events);
+}
+/// The independent game event, sound and active flag of either transition.
+fn activation_effects(m: &mut Mob, active: bool, events: &mut Vec<MobEvent>) {
     entity_action(m, events);
-    m.voice("entity.creaking.deactivate", events);
-    m.extra.flag = false;
+    m.voice(
+        if active {
+            "entity.creaking.activate"
+        } else {
+            "entity.creaking.deactivate"
+        },
+        events,
+    );
+    m.extra.flag = active;
 }
 /// `LivingEntity.isLookingAtMe(player, 0.5, false, true, eyeY, y + 0.5,
 /// (eyeY + y) / 2)`: within the player's view cone and seen through
 /// transparent blocks.
 fn looked_at_by(m: &Mob, w: &MobWorld) -> bool {
-    let Some(p) = &w.player else { return false };
+    let Some(p) = w.selected_player() else {
+        return false;
+    };
     let look = normalize(p.look);
     let eye = m.eye_y();
     [eye, m.position.y + 0.5, (eye + m.position.y) / 2.0]
@@ -335,30 +350,33 @@ fn check_can_move(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool
     let active = is_active(m);
     if players.is_empty() {
         if active {
-            deactivate(m, events);
+            deactivate(m, w, events);
         }
         return true;
     }
     let mut potential = false;
-    if let Some(p) = w.player.as_ref().filter(|_| players.contains(&Who::Player)) {
+    if let Some(p) = w
+        .selected_player()
+        .filter(|_| players.contains(&Who::Player))
+    {
         // canAttack (not creative, spectator or dead) and not allied.
         if p.alive && !p.creative && !p.spectator {
             potential = true;
             // GAZE_DISGUISE_EQUIPMENT hides the player once the creaking is awake.
-            let disguised = super::enderman::wears_gaze_disguise(w, p);
+            let disguised = super::ai::wears_gaze_disguise(p.head.as_deref(), w);
             if (!active || !disguised) && looked_at_by(m, w) {
                 if active {
                     return false;
                 }
                 if m.distance_sqr(p.position) < ACTIVATION_RANGE_SQ {
-                    activate(m, events);
+                    activate(m, w, events);
                     return false;
                 }
             }
         }
     }
     if !potential && active {
-        deactivate(m, events);
+        deactivate(m, w, events);
     }
     true
 }
@@ -409,13 +427,6 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
 pub fn is_creaking(m: &Mob) -> bool {
     m.species() == Species::Creaking
 }
-/// The part of `Entity.canUsePortal` a mob's own state decides: it is alive,
-/// it is not a boss that never travels, and — over `Monster.canUsePortal` —
-/// it is not a creaking bound to a heart (`Creaking.canUsePortal`). The
-/// rides and the players a side carries are the caller's half.
-pub fn mob_can_use_portal(m: &Mob) -> bool {
-    m.alive() && m.species() != Species::Wither && can_use_portal(m)
-}
 /// `Creaking.canUsePortal`: a creaking bound to a heart never travels through
 /// a portal, since its heart stays behind; one without a heart goes through
 /// like any other monster.
@@ -464,8 +475,26 @@ mod tests {
     use crate::mobs::sensor_scan_tests::kind;
     use std::sync::Arc;
 
+    fn with_world(
+        others: &[super::super::Seen],
+        f: impl FnOnce(&MobWorld<'_>, &super::super::MobTypes),
+    ) -> bool {
+        if let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") {
+            crate::mobs::world::with_resource_test_world(
+                std::path::Path::new(&root),
+                others,
+                true,
+                true,
+                |_, _| {},
+                f,
+            )
+        } else {
+            crate::mobs::world::with_test_world(others, f)
+        }
+    }
+
     /// Creaking.activate and deactivate post ENTITY_ACTION, for the sculk sensors and
-    /// wardens nearby.
+    /// wardens nearby, independently of whether their target change is accepted.
     #[test]
     fn activating_and_deactivating_post_entity_action() {
         let mut m = creaking();
@@ -477,11 +506,110 @@ mod tests {
             })
         };
         let mut events = Vec::new();
-        activate(&mut m, &mut events);
+        activation_effects(&mut m, true, &mut events);
         assert!(action(&events), "activating posts entity_action");
         let mut events = Vec::new();
-        deactivate(&mut m, &mut events);
+        activation_effects(&mut m, false, &mut events);
         assert!(action(&events), "deactivating posts entity_action");
+    }
+
+    struct TargetHook {
+        outcome: super::super::TargetChange,
+        calls: std::sync::Mutex<Vec<(bool, Option<Who>)>>,
+    }
+    impl super::super::MobHooks for TargetHook {
+        fn enderman_anger_suppressed(&self, _: u32, _: &super::super::PlayerView) -> bool {
+            false
+        }
+        fn can_grief(&self, _: u32, rule: bool) -> bool {
+            rule
+        }
+        fn grief_hooked(&self) -> bool {
+            false
+        }
+        fn living_visibility(&self, _: &super::super::PlayerView, _: u32, visibility: f64) -> f64 {
+            visibility
+        }
+        fn living_change_target(
+            &self,
+            _: &mut Mob,
+            _: &MobWorld<'_>,
+            brain: bool,
+            proposed: Option<Who>,
+        ) -> super::super::TargetChange {
+            self.calls.lock().unwrap().push((brain, proposed));
+            self.outcome
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn activation_target_hook_cancels_and_redirects_without_suppressing_side_effects() {
+        use super::super::TargetChange;
+        let others = [creaking().seen(None, &crate::items::Items::empty())];
+        assert!(with_world(&others, |world, _| {
+            for outcome in [
+                TargetChange::Keep,
+                TargetChange::Set(Some(Who::Mob(1))),
+                TargetChange::Set(Some(Who::Mob(999))),
+                TargetChange::Set(None),
+            ] {
+                for activating in [true, false] {
+                    let hook = TargetHook {
+                        outcome,
+                        calls: Default::default(),
+                    };
+                    let mut world = world.clone();
+                    world.mob_hooks = Some(&hook);
+                    let mut m = creaking();
+                    m.id = 2;
+                    let previous = (!activating).then_some(Who::Player);
+                    monster_brain::set_attack_target(&mut m, previous);
+                    let expected = match outcome {
+                        TargetChange::Keep | TargetChange::Set(Some(Who::Mob(999))) => previous,
+                        TargetChange::Set(target) => target,
+                    };
+                    let mut events = Vec::new();
+                    if activating {
+                        activate(&mut m, &world, &mut events);
+                    } else {
+                        deactivate(&mut m, &world, &mut events);
+                    }
+                    assert_eq!(monster_brain::attack_target(&m), expected);
+                    assert_eq!(m.ai.target, expected);
+                    assert_eq!(is_active(&m), activating);
+                    assert!(events.iter().any(|event| matches!(
+                        event,
+                        MobEvent::GameEvent {
+                            event: "minecraft:entity_action",
+                            source: 2,
+                            ..
+                        }
+                    )));
+                    let sound = if activating {
+                        "entity.creaking.activate"
+                    } else {
+                        "entity.creaking.deactivate"
+                    };
+                    assert!(
+                        events.iter().any(
+                            |event| matches!(event, MobEvent::Sound(name, ..) if *name == sound)
+                        )
+                    );
+                    assert_eq!(
+                        *hook.calls.lock().unwrap(),
+                        [(true, activating.then_some(Who::Player))]
+                    );
+                    hook.calls.lock().unwrap().clear();
+                    m.extra.flag = false;
+                    assert!(check_can_move(&mut m, &world, &mut events));
+                    assert!(
+                        hook.calls.lock().unwrap().is_empty(),
+                        "an inactive creaking with no players changes no target"
+                    );
+                }
+            }
+        }));
     }
 
     /// A creaking with no heart bound to it, at the origin.
@@ -512,11 +640,13 @@ mod tests {
 
     #[test]
     fn a_creaking_with_no_heart_hurts_like_a_monster() {
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
         // Creaking.hurtServer: without a home the blow goes to
         // Monster.hurtServer, whose getHurtSound is the hostile hurt — not
         // the generic one.
         let mut m = creaking();
-        assert!(m.damage(1.0, Damage::player([0.0, 0.0, 1.0])));
+        assert!(m.damage(level, 1.0, Damage::player([0.0, 0.0, 1.0])));
         assert_eq!(
             hurt_sounds(&m),
             ["entity.hostile.hurt"],
@@ -526,12 +656,14 @@ mod tests {
 
     #[test]
     fn a_heart_bound_creaking_sways_when_a_blow_gets_through() {
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
         // Only #bypasses_invulnerability reaches a bound creaking
         // (Creaking.hurtServer hands those straight to Monster), and that is
         // the blow whose hurt sound Creaking.getHurtSound answers with the sway.
         let mut m = creaking();
         m.extra.home = Some([0, 64, 0]);
-        assert!(m.damage(1.0, Damage::of(DamageKind::OutOfWorld)));
+        assert!(m.damage(level, 1.0, Damage::of(DamageKind::OutOfWorld)));
         assert_eq!(
             hurt_sounds(&m),
             ["entity.creaking.sway"],
@@ -541,6 +673,8 @@ mod tests {
 
     #[test]
     fn a_giant_hurts_and_dies_like_a_monster() {
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
         // Giant overrides none of Monster's sounds, so its hurt and death are
         // the hostile pair.
         let mut m = creaking();
@@ -549,13 +683,17 @@ mod tests {
         k.species = Species::Giant;
         k.sounds = ["", "entity.generic.hurt", "entity.generic.death"];
         m.health = 100.0;
-        assert!(m.damage(1.0, Damage::player([0.0, 0.0, 1.0])));
+        assert!(m.damage(level, 1.0, Damage::player([0.0, 0.0, 1.0])));
         assert_eq!(hurt_sounds(&m), ["entity.hostile.hurt"], "a giant's hurt");
         m.outbox.clear();
         // The invulnerability frames are over: the next blow is a full one.
         m.invulnerable = 0;
-        assert!(m.damage(200.0, Damage::player([0.0, 0.0, 1.0])));
+        assert!(m.damage(level, 200.0, Damage::player([0.0, 0.0, 1.0])));
         assert!(!m.alive());
         assert_eq!(hurt_sounds(&m), ["entity.hostile.death"], "a giant's death");
     }
 }
+
+#[cfg(test)]
+#[path = "gaze_disguise_tests.rs"]
+mod gaze_disguise_tests;

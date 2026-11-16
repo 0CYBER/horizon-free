@@ -146,7 +146,7 @@ fn strips_of(
             usage: wgpu::BufferUsages::VERTEX,
         });
     let undrawn = (!post.has_terrain()).then(|| post.notes.clone());
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let frame = fixture_frame(&hud);
     let pixels = gpu.render(&mut post, &color, &depth, &frame, &mut |rp, list, _, _| {
         if list == TerrainList::Solid {
@@ -173,6 +173,7 @@ fn strips_of(
 
 #[test]
 fn solid_and_cutout_programs_draw_their_own_terrain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let programs = [
         ("gbuffers_terrain", RED, 1.0),
         ("gbuffers_terrain_solid", GREEN, 1.0),
@@ -184,6 +185,7 @@ fn solid_and_cutout_programs_draw_their_own_terrain() {
 
 #[test]
 fn without_a_cutout_program_cutout_terrain_falls_back_to_gbuffers_terrain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let programs = [
         ("gbuffers_terrain", RED, 1.0),
         ("gbuffers_terrain_solid", GREEN, 1.0),
@@ -194,6 +196,7 @@ fn without_a_cutout_program_cutout_terrain_falls_back_to_gbuffers_terrain() {
 
 #[test]
 fn without_a_solid_program_solid_terrain_falls_back_to_gbuffers_terrain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let programs = [
         ("gbuffers_terrain", RED, 1.0),
         ("gbuffers_terrain_cutout", BLUE, 1.0),
@@ -204,6 +207,7 @@ fn without_a_solid_program_solid_terrain_falls_back_to_gbuffers_terrain() {
 
 #[test]
 fn solid_terrain_keeps_alpha_0_05_and_cutout_loses_it() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let programs = [
         ("gbuffers_terrain", RED, 1.0),
         ("gbuffers_terrain_solid", GREEN, 0.05),
@@ -224,6 +228,7 @@ fn solid_terrain_keeps_alpha_0_05_and_cutout_loses_it() {
 /// differ; the quad still draws whole, with its part's program.
 #[test]
 fn a_quad_draws_whole_whatever_its_vertex_alphas() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let programs = [
         ("gbuffers_terrain", RED, 1.0),
         ("gbuffers_terrain_solid", GREEN, 1.0),
@@ -239,6 +244,7 @@ fn a_quad_draws_whole_whatever_its_vertex_alphas() {
 
 #[test]
 fn a_pack_with_neither_draws_all_terrain_with_gbuffers_terrain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(got) = strips(&[("gbuffers_terrain", RED, 1.0)]) else {
         return;
     };
@@ -250,6 +256,7 @@ fn a_pack_with_neither_draws_all_terrain_with_gbuffers_terrain() {
 /// `tsc-cutoutonly`.
 #[test]
 fn a_lone_split_program_draws_only_its_own_terrain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let solid = strips(&[("gbuffers_terrain_solid", GREEN, 1.0)]);
     let Some(solid) = solid else { return };
     assert_eq!(solid, [Some(GREEN), None, Some(GREEN)]);
@@ -261,6 +268,7 @@ fn a_lone_split_program_draws_only_its_own_terrain() {
 /// Horizon skips), the other part doesn't draw alone either: the game draws all terrain.
 #[test]
 fn a_part_that_fails_to_build_takes_the_other_with_it() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let mut files: Vec<(String, String)> = [
         program("gbuffers_terrain", RED, 1.0),
         program("gbuffers_terrain_solid", GREEN, 1.0),
@@ -293,6 +301,7 @@ fn a_part_that_fails_to_build_takes_the_other_with_it() {
 /// kept those above 0.5 (0.51 kept; 0.5, 0.49 and lower discarded), whichever program drew it.
 #[test]
 fn cutout_terrain_keeps_alphas_above_0_5_and_solid_terrain_keeps_all() {
+    let _gpu = crate::gfx::test_gpu::lock();
     for (alpha, cutout) in [(0.0, false), (0.49, false), (0.5, false), (0.51, true)] {
         let Some(got) = strips(&[("gbuffers_terrain", RED, alpha)]) else {
             return;
@@ -313,6 +322,7 @@ fn cutout_terrain_keeps_alphas_above_0_5_and_solid_terrain_keeps_all() {
 /// `gbuffers_terrain` alone or through the split programs.
 #[test]
 fn alpha_test_ref_is_0_for_solid_terrain_and_0_5_for_cutout() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let program = |name: &str| {
         [
             (
@@ -345,6 +355,7 @@ fn alpha_test_ref_is_0_for_solid_terrain_and_0_5_for_cutout() {
 /// and 0.2 loses solid terrain too, and `alphaTestRef` reads 0.25 in both.
 #[test]
 fn a_packs_terrain_alpha_test_applies_to_both_parts() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let properties = || {
         (
             "shaders.properties".to_owned(),
@@ -381,6 +392,7 @@ fn a_packs_terrain_alpha_test_applies_to_both_parts() {
 /// The vertex stage reads its own quad's `alphaTestRef` too: 0 for solid, 0.5 for cutout.
 #[test]
 fn the_vertex_stage_reads_its_parts_alpha_test_ref() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let files = vec![
         (
             "gbuffers_terrain.vsh".to_owned(),

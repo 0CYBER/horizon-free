@@ -55,7 +55,7 @@ def main():
                lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
                lab.ROOT / 'crates/horizon-client/src/arrows.rs',
                lab.ROOT / 'crates/horizon-client/src/arrows_client_tests.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/remote_projectiles.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/remote_projectiles.rs',
                lab.ROOT / 'crates/horizon-client/src/motion/fluids.rs',
                lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaClientArrowOracle.java',
                lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaArrowOracle.java',

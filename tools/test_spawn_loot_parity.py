@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""A vanilla loot chest at spawn has its loot when Horizon opens the world.
+"""A saved spawn chest unpacks its loot on the first inventory access.
 
-Vanilla rolls a container's loot table when a player first opens it
-(`RandomizableContainer.unpackLootTable`). Horizon rolls a loaded container with a loot table
-and no items as its chunk is read from disk (`save::roll_loaded_loot`), so a container nobody
-opens still saves as vanilla wrote it. The loot tables have to be loaded before the first chunks
-are read: the spawn chunks are read while the world opens, and a chest read before the tables
-came out empty, its loot table lost on the next save.
+Containers keep their loot table and seed until the first inventory access.
+Loading the world preserves an unopened chest without generating its items.
 
 The vanilla 26.3 server writes a flat world with a seeded loot chest beside the world spawn, then
 rolls the chest itself in a copy of that world (`execute if items` unpacks it). Horizon opens the
-untouched world in a new process, so nothing was loaded before the world, and must hold the same
+untouched world in a new process, performs the same inventory query, and must then hold the same
 items in the same slots.
 
   test_spawn_loot_parity.py [--bin-dir DIR] [--keep]
@@ -75,7 +71,7 @@ def main():
     args = parser.parse_args()
     bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else None
     if bin_dir is None:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '-p', 'horizon-client-lib', '--bins'], cwd=ROOT, check=True)
+        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bins'], cwd=ROOT, check=True)
         bin_dir = ROOT / os.environ.get('CARGO_TARGET_DIR', 'target') / 'fast'
     shutil.rmtree(RUN, ignore_errors=True)
     RUN.mkdir(parents=True)
@@ -100,6 +96,7 @@ def main():
         ctl('launch', '--resources', RESOURCES, '--world', 'world', '--render-distance', '4', *flags, *extra)
         try:
             ctl('wait-ready', '300')
+            ctl('command', 'execute if items block {} {} {} container.* *'.format(*CHEST))
             slots = ctl('container', *CHEST)['slots']
         finally:
             ctl('quit', check=False)

@@ -266,6 +266,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn tracked_states_are_reported() {
         let mut w = world();
         let out = w.edit_runs(&[run(1, 1, 60, 65, 3, None)], |_, _| true, |s| s == 3);

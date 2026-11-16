@@ -1,0 +1,6 @@
+# The daily tests of horizon-shader-api: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-shader-api package_limits::a_package_over_the_total_is_refused_while_it_is_read test:it daily slow
+horizon-shader-api sdk::every_template_makes_a_pack_that_passes test:it daily child-process
+horizon-shader-api sdk::packs_and_checks_the_package test:it daily child-process
+horizon-shader-api sdk::the_tool_checks_a_pack_with_a_tonemap_stage test:it daily child-process

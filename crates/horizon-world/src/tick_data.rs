@@ -1,11 +1,11 @@
 //! Save-format bridge for scheduled block/fluid ticks. Registry identity is
 //! supplied by the caller; this module does not implement either type's behavior.
-use crate::{compression::invalid, nbt::Tag};
 use horizon_core::{
     position::BlockPos,
     ticks::{SavedTick, TickPriority, TickTypeId},
 };
 use std::io;
+use {crate::compression::invalid, horizon_core::nbt::Tag};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TickKind {

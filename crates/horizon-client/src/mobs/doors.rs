@@ -153,7 +153,11 @@ impl BreakDoor {
     /// `BreakDoorGoal.canUse` after `DoorInteractGoal.canUse`.
     fn can_break(&mut self, m: &Mob, w: &MobWorld) -> bool {
         self.interact.can_use(m, w)
-            && w.mob_griefing
+            // NeoForge: `EventHooks.canEntityGrief` for the zombie, then the
+            // door's `canEntityDestroy`; `LivingDestroyBlockEvent` comes at
+            // the break.
+            && w.can_grief(m.id)
+            && w.can_entity_destroy(m.id, self.interact.door, true)
             && self.valid_difficulty(w)
             && !self.interact.is_open(w)
     }
@@ -344,5 +348,133 @@ impl Goal for InteractWithDoor {
             }
         }
         self.close_doors(m, cx, from, to);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::path::{Path, PathNode, PathType};
+    use std::sync::Arc;
+
+    /// A mod's `EntityMobGriefingEvent` answer for every mob.
+    struct Answer(bool);
+    impl crate::mobs::MobHooks for Answer {
+        fn enderman_anger_suppressed(&self, _: u32, _: &crate::mobs::PlayerView) -> bool {
+            false
+        }
+        fn can_grief(&self, _: u32, _: bool) -> bool {
+            self.0
+        }
+        fn grief_hooked(&self) -> bool {
+            true
+        }
+        fn living_visibility(&self, _: &crate::mobs::PlayerView, _: u32, v: f64) -> f64 {
+            v
+        }
+    }
+
+    /// `BreakDoorGoal.canUse` asks `canEntityGrief` for the zombie: on Hard,
+    /// with the rule on, a zombie walking into a wooden door may break it,
+    /// and a mod that denies it griefing keeps the door.
+    #[test]
+    #[ignore = "daily"]
+    fn a_hard_zombie_breaks_a_wooden_door_unless_a_mod_denies_it() {
+        let build = |world: &mut crate::world::World,
+                     registry: &horizon_world::registry::BlockRegistry| {
+            world
+                .chunks
+                .insert((0, 0), Arc::new(crate::chunk::Chunk::empty(0, 0)));
+            let door = registry.default_state("minecraft:oak_door").unwrap();
+            world.set(0, 65, 0, door).unwrap();
+        };
+        assert!(crate::mobs::world::with_built_test_world(
+            &[],
+            build,
+            |world, types| {
+                let deny = Answer(false);
+                let mut world = world.clone();
+                world.mob_griefing = true;
+                world.difficulty.hard = true;
+                let mut mob = Mob::new(
+                    1,
+                    Arc::new(types.types.get("minecraft:zombie").unwrap().clone()),
+                    Vec3::new(0.5, 64.0, 0.5),
+                    0.0,
+                );
+                mob.horizontal_collision = true;
+                let node = |z| PathNode {
+                    x: 0,
+                    y: 64,
+                    z,
+                    kind: PathType::Walkable,
+                };
+                mob.ai.nav.path = Some(Path {
+                    nodes: vec![node(0), node(1)],
+                    next: 0,
+                    target: [0, 64, 1],
+                    dist_to_target: 0.0,
+                    reached: true,
+                });
+                let mut goal = BreakDoor::zombie();
+                assert!(goal.can_break(&mob, &world), "the rule lets it break");
+                world.mob_hooks = Some(&deny);
+                assert!(!goal.can_break(&mob, &world), "the mod keeps the door");
+                // The door's own answer comes after griefing: no keeps it, yes
+                // breaks it, and with griefing off a yes breaks nothing.
+                for (door, breaks) in [
+                    (
+                        &Door {
+                            griefing: true,
+                            may: false,
+                        },
+                        false,
+                    ),
+                    (
+                        &Door {
+                            griefing: true,
+                            may: true,
+                        },
+                        true,
+                    ),
+                    (
+                        &Door {
+                            griefing: false,
+                            may: true,
+                        },
+                        false,
+                    ),
+                ] {
+                    world.mob_hooks = Some(door);
+                    assert_eq!(goal.can_break(&mob, &world), breaks, "{}", door.may);
+                }
+            }
+        ));
+    }
+
+    /// Griefing as `griefing`, and `may` for whether the zombie may destroy
+    /// the door at (0, 65, 0).
+    struct Door {
+        griefing: bool,
+        may: bool,
+    }
+    impl crate::mobs::MobHooks for Door {
+        fn enderman_anger_suppressed(&self, _: u32, _: &crate::mobs::PlayerView) -> bool {
+            false
+        }
+        fn can_grief(&self, _: u32, _: bool) -> bool {
+            self.griefing
+        }
+        fn grief_hooked(&self) -> bool {
+            true
+        }
+        fn living_visibility(&self, _: &crate::mobs::PlayerView, _: u32, v: f64) -> f64 {
+            v
+        }
+        fn can_entity_destroy(&self, _: u32, pos: [i32; 3], vanilla: bool) -> bool {
+            assert_eq!(pos, [0, 65, 0]);
+            assert!(vanilla);
+            self.may
+        }
     }
 }

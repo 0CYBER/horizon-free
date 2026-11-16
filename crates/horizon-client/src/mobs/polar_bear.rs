@@ -182,12 +182,15 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
     } else if m.extra.anger > 0 {
         m.extra.anger -= 1;
         if m.extra.anger == 0 {
-            stop_being_angry(m);
+            stop_being_angry_with_world(m, Some(w));
         }
     }
     // A player in creative or spectator mode is forgiven at once.
-    if m.extra.flag2 && w.player.as_ref().is_some_and(|p| p.creative || p.spectator) {
-        stop_being_angry(m);
+    if m.extra.flag2
+        && w.selected_player()
+            .is_some_and(|p| p.creative || p.spectator)
+    {
+        stop_being_angry_with_world(m, Some(w));
     }
 }
 /// `NeutralMob.playerDied`: a bear angry at the player (its target, kept in
@@ -199,9 +202,17 @@ pub fn forgive_dead_player(m: &mut Mob) {
 }
 /// `NeutralMob.stopBeingAngry`.
 fn stop_being_angry(m: &mut Mob) {
+    stop_being_angry_with_world(m, None);
+}
+
+fn stop_being_angry_with_world(m: &mut Mob, world: Option<&MobWorld>) {
     m.ai.last_hurt_by = None;
     m.ai.last_hurt_by_ref = None;
-    m.ai.target = None;
+    if let Some(world) = world {
+        m.set_ai_target(world, None);
+    } else {
+        m.ai.target = None;
+    }
     super::neutral_anger::stop(m);
     m.extra.flag2 = false;
 }

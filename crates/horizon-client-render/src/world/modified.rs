@@ -9,6 +9,14 @@ use std::{
 type Key = (i32, i32);
 const COOLDOWN: Duration = Duration::from_millis(10_000);
 
+/// A chunk's place in `ModifiedChunks` before a tentative write marked it: what a transaction
+/// keeps to put the mark back if it aborts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChunkMark {
+    dirty: bool,
+    queued: Option<u64>,
+}
+
 #[derive(Default)]
 pub struct ModifiedChunks {
     dirty: FxHashSet<Key>,
@@ -45,6 +53,26 @@ impl ModifiedChunks {
     pub fn extend(&mut self, keys: impl IntoIterator<Item = Key>) {
         for key in keys {
             self.insert(key);
+        }
+    }
+    /// Where `key` stands now, dirty and queued or not, for `restore`.
+    pub fn mark(&self, key: Key) -> ChunkMark {
+        ChunkMark {
+            dirty: self.dirty.contains(&key),
+            queued: self.queued.get(&key).copied(),
+        }
+    }
+    /// Puts back what `mark` kept of `key`: a chunk that was clean is clean again, and a queue
+    /// entry made since goes. A chunk that was dirty stays as it is now, since only a save
+    /// clears a mark, and a save then saw what it saved.
+    pub fn restore(&mut self, key: Key, mark: ChunkMark) {
+        if !mark.dirty {
+            self.dirty.remove(&key);
+        }
+        if mark.queued.is_none()
+            && let Some(sequence) = self.queued.remove(&key)
+        {
+            self.order.remove(&sequence);
         }
     }
     pub fn remove(&mut self, key: &Key) -> bool {
@@ -97,5 +125,37 @@ impl ModifiedChunks {
             self.order.remove(&sequence);
             self.queued.remove(&key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_restored_mark_takes_back_the_dirty_flag_and_queue_entry_a_write_made() {
+        let mut modified = ModifiedChunks::default();
+        modified.insert((1, 1));
+        let clean = modified.mark((0, 0));
+        let dirty = modified.mark((1, 1));
+        modified.insert((0, 0));
+        modified.insert((1, 1));
+        modified.restore((0, 0), clean);
+        modified.restore((1, 1), dirty);
+        assert!(!modified.contains(&(0, 0)));
+        assert!(modified.contains(&(1, 1)));
+        assert_eq!(modified.mark((0, 0)), clean);
+        assert_eq!(modified.mark((1, 1)), dirty);
+        let mut saved = Vec::new();
+        modified.save_eagerly(
+            Instant::now(),
+            || true,
+            |_| true,
+            |key| {
+                saved.push(key);
+                true
+            },
+        );
+        assert_eq!(saved, [(1, 1)]);
     }
 }

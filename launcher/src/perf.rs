@@ -2,7 +2,7 @@
 //! start to the first frame, the release list fetch, installs and preparing, Play to the game's
 //! first frame, its memory, UI frame times and size. Each session rewrites one report in
 //! `benchmarks/` of the launcher's data folder, a local log the player can attach to an issue;
-//! nothing leaves the machine (an upload needs the telemetry consent).
+//! nothing leaves the machine.
 //!
 //! `horizon-launcher benchmark` measures the same things on purpose: several starts (the first is
 //! the cold one), page switching, repeated release list fetches, idle CPU.
@@ -405,15 +405,6 @@ pub fn benchmark(repeats: usize) -> Result<PathBuf, String> {
     report.metric("launcher.release_list_ms", &fetches);
     if let Some(bytes) = binary_bytes() {
         report.metric("launcher.binary_bytes", &[bytes]);
-    }
-    // Kept for upload only if the player allows benchmark uploads (the outbox checks).
-    if let Ok(data) = serde_json::to_value(report.for_upload()) {
-        let item = horizon_telemetry::Item::new(
-            horizon_telemetry::Source::Launcher,
-            crate::backend::VERSION,
-            horizon_telemetry::Payload::Benchmark(data),
-        );
-        let _ = horizon_telemetry::outbox::push(&crate::backend::game_home(), &item);
     }
     report
         .write_to(&crate::backend::data_dir().join("benchmarks"))

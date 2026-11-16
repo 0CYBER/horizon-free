@@ -97,13 +97,17 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn saved_portal_blocks_follow_each_save_of_their_chunk() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
             return;
         };
         let root = PathBuf::from(root);
         let assets = crate::assets::Assets::load(&root).expect("assets");
-        let biomes = Biomes::load(&root).expect("biomes");
+        let biomes = Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+            root.clone(),
+        ))
+        .expect("biomes");
         let state = |name: &str| assets.registry.default_state(name).unwrap();
         let (portal, obsidian) = (
             state("minecraft:nether_portal"),

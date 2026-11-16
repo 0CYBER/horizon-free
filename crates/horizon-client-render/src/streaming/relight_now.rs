@@ -1,11 +1,8 @@
-//! Light worked out at once on the calling thread, for a caller that wrote
-//! sections without a block edit, and the light of a `Job::Light` taken into
-//! its chunk.
+//! The light of a `Job::Light` taken into its chunk.
 use super::Streaming;
 use crate::{
     chunk::Light,
-    light::{LightChanges, apply_lighting, apply_relighting, light_chunk},
-    mesher::borrow,
+    light::{LightChanges, apply_lighting, apply_relighting},
     world::World,
 };
 use std::sync::Arc;
@@ -53,29 +50,5 @@ impl Streaming {
             }
             self.replay_light_edits(world, x, z, snapshot);
         }
-    }
-    /// Lights `columns` again now, whole, from the blocks of each one's 3x3 as
-    /// the light jobs `World::edit_runs` queues through `dirty_light` do, but
-    /// at once and on this thread: for a caller that wrote sections without
-    /// going through an edit and needs the light before it sends them. Columns
-    /// not loaded, or without all eight neighbours loaded, are left out (a
-    /// light job needs the region). A job already out for a column is
-    /// dropped, so its older result is not taken after this one. The light
-    /// that changed is logged for the players as any relight's is
-    /// (`light_log`), and the sections remeshed. How many columns were lit.
-    pub fn relight_now(&mut self, world: &mut World, columns: &[(i32, i32)]) -> usize {
-        let mut lit = 0;
-        for &(x, z) in columns {
-            let Some(region) = Self::region(world, x, z) else {
-                continue;
-            };
-            let sections = light_chunk(&borrow(&region), &self.light_tables, self.sky_light);
-            self.lighting.remove(&(x, z));
-            self.light_snapshots.remove(&(x, z));
-            world.dirty_light.remove(&(x, z));
-            self.apply_lit(world, x, z, sections, u64::MAX);
-            lit += 1;
-        }
-        lit
     }
 }

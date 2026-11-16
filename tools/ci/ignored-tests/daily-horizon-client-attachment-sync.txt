@@ -1,0 +1,3 @@
+# Attachment sync on the negotiated payload route (arismoko/horizon#813 step 4a): a real integrated server, LAN TCP peers.
+horizon-client game::attachment_sync::route_cases_tests::a_dedicated_server_sends_only_trackers_in_packet_order lib daily network
+horizon-client game::attachment_sync::transport_tests::attachment_sync_follows_the_negotiated_route lib daily network

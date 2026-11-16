@@ -1,0 +1,4 @@
+# The daily tests of horizon-port-pack: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-port-pack fetch::tests::jar_hashing_accepts_512_mib_and_refuses_one_extra_byte lib daily slow
+horizon-port-pack net::tests::a_request_goes_through_a_socks_proxy lib daily network

@@ -1,0 +1,3 @@
+ids = ["handle:RegistrationContext::progress", "handle:RegistrationContext::message", "trait:StartupScreen", "type:StartupProgress", "type:StartupProgressError"]
+why = "RegistrationContext now retains StartupScreen: the manual Wire layout changes from runtime.v2 to runtime.startup.v3."
+migrate = "Rebuild against this SDK. StartupScreen::open and RegistrationContext::progress now return Result with StartupProgressError; handle TooManyBars. Screen installation reports AlreadyInstalled through the same error type."

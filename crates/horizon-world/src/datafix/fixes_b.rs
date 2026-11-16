@@ -8,7 +8,7 @@ use super::fixes_a::{component_fix, dye_color, fix_inline_block_pos, translation
 use super::items::java_hash_order;
 use super::schema::{Key, Ty, key};
 use super::{Cx, FixFn, id_is, reread};
-use crate::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     // ProjectileStoredWeaponFix only writes and reads arrows with the new schema.
@@ -536,7 +536,7 @@ fn ominous_banner_rarity(cx: &mut Cx) {
             set(
                 c,
                 "minecraft:item_name",
-                Tag::String(crate::nbt::JavaString(
+                Tag::String(horizon_core::nbt::JavaString(
                     super::json::translatable_component_json("block.minecraft.ominous_banner"),
                 )),
             );
@@ -723,7 +723,7 @@ const TRIAL_CONFIGS: &[(&str, &str, &str)] = &[
 ];
 
 fn snbt(s: &str) -> Tag {
-    crate::nbt::parse_snbt(s)
+    horizon_core::nbt::parse_snbt(s)
         .map(|(t, _)| t)
         .unwrap_or_else(|_| empty_map())
 }

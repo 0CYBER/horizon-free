@@ -371,7 +371,7 @@ fn scared_by_someone(m: &Mob, w: &MobWorld) -> bool {
     let attacker =
         m.ai.last_hurt_by
             .filter(|_| m.age as i32 - m.ai.last_hurt_by_time <= 100);
-    if let Some(p) = &w.player
+    if let Some(p) = w.selected_player()
         && p.alive
         && !p.spectator
         && p.bounds.intersects(area)
@@ -725,10 +725,11 @@ mod tests {
     fn run_goals(m: &mut Mob, w: &MobWorld, ticks: u32) -> Vec<MobEvent> {
         let mut events = Vec::new();
         let mut goals = std::mem::take(&mut m.ai.goals);
-        let mut lr = crate::mobs::world::level_random(0);
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
         let mut cx = Cx {
             w,
-            lr: &mut lr,
+            level,
             events: &mut events,
         };
         for _ in 0..ticks {
@@ -755,6 +756,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn two_armadillos_in_love_make_a_baby() {
         // ArmadilloAi.initIdleActivity: AnimalMakeLove(ARMADILLO, 1.0), so two
         // armadillos fed spider eyes breed (#3512).
@@ -766,7 +768,7 @@ mod tests {
         for m in [&mut a, &mut b, &mut c] {
             m.extra.in_love = 600;
         }
-        let partner = [b.seen(None)];
+        let partner = [b.seen(None, &crate::items::Items::empty())];
         crate::mobs::world::with_test_world(&partner, |w, _| {
             let events = run_goals(&mut a, w, 80);
             assert!(
@@ -801,25 +803,30 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_baby_armadillo_follows_an_adult() {
         // BabyFollowAdult(5..16, 1.25) in the idle activity.
         let Some([mut baby, adult]) = real([[0.5, 64.0, 0.5], [8.5, 64.0, 0.5]]) else {
             return;
         };
         baby.extra.age = -24000;
-        crate::mobs::world::with_test_world(&[adult.seen(None)], |w, _| {
-            run_goals(&mut baby, w, 1);
-            assert!(baby.ai.goals.is_running("BabyFollowAdult"));
-            set_state(&mut baby, SCARED);
-            run_goals(&mut baby, w, 1);
-            assert!(
-                !baby.ai.goals.is_running("BabyFollowAdult"),
-                "not as a ball"
-            );
-        });
+        crate::mobs::world::with_test_world(
+            &[adult.seen(None, &crate::items::Items::empty())],
+            |w, _| {
+                run_goals(&mut baby, w, 1);
+                assert!(baby.ai.goals.is_running("BabyFollowAdult"));
+                set_state(&mut baby, SCARED);
+                run_goals(&mut baby, w, 1);
+                assert!(
+                    !baby.ai.goals.is_running("BabyFollowAdult"),
+                    "not as a ball"
+                );
+            },
+        );
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_baby_follows_only_adults_its_sensor_box_meets() {
         // NearestLivingEntitySensor.doTick: the entities whose boxes meet the baby's box inflated
         // by FOLLOW_RANGE (16). Both adults are within BabyFollowAdult's 17 blocks. The baby's box
@@ -831,31 +838,39 @@ mod tests {
                 return;
             };
             baby.extra.age = -24000;
-            crate::mobs::world::with_test_world(&[adult.seen(None)], |w, _| {
-                run_goals(&mut baby, w, 1);
-                assert_eq!(
-                    baby.ai.goals.is_running("BabyFollowAdult"),
-                    follows,
-                    "x = {x}"
-                );
-            });
+            crate::mobs::world::with_test_world(
+                &[adult.seen(None, &crate::items::Items::empty())],
+                |w, _| {
+                    run_goals(&mut baby, w, 1);
+                    assert_eq!(
+                        baby.ai.goals.is_running("BabyFollowAdult"),
+                        follows,
+                        "x = {x}"
+                    );
+                },
+            );
         }
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_baby_stays_when_the_adult_is_within_five_blocks() {
         // BabyFollowAdult: `!closerThan(adult, 5)`.
         let Some([mut baby, adult]) = real([[0.5, 64.0, 0.5], [4.5, 64.0, 0.5]]) else {
             return;
         };
         baby.extra.age = -24000;
-        crate::mobs::world::with_test_world(&[adult.seen(None)], |w, _| {
-            run_goals(&mut baby, w, 1);
-            assert!(!baby.ai.goals.is_running("BabyFollowAdult"));
-        });
+        crate::mobs::world::with_test_world(
+            &[adult.seen(None, &crate::items::Items::empty())],
+            |w, _| {
+                run_goals(&mut baby, w, 1);
+                assert!(!baby.ai.goals.is_running("BabyFollowAdult"));
+            },
+        );
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_tempted_baby_comes_closer_than_an_adult() {
         // ArmadilloAi.initIdleActivity: FollowTemptation is close enough at
         // 1 block for a baby and 2 for an adult.
@@ -865,10 +880,11 @@ mod tests {
         baby.extra.age = -24000;
         crate::mobs::world::with_test_world(&[], |w, _| {
             let mut events = Vec::new();
-            let mut lr = crate::mobs::world::level_random(0);
+            let mut test_level = crate::health::TestLevel::new(0);
+            let level = &mut test_level.level();
             let mut cx = Cx {
                 w,
-                lr: &mut lr,
+                level,
                 events: &mut events,
             };
             let mut tempt = ArmadilloTempt(Tempt::new(1.25, baby.kind.food.clone(), false));
@@ -898,7 +914,7 @@ mod tests {
     #[test]
     fn a_rolled_up_armadillo_keeps_its_state_through_the_chunk_save() {
         use crate::entity_nbt::{mob_from_nbt, mob_to_nbt};
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         fn armadillo_tag(state: Option<&str>) -> Tag {
             let mut fields = vec![
                 ("id", Tag::String("minecraft:armadillo".into())),
@@ -995,17 +1011,18 @@ mod panic_environmental_tests {
 mod armadillo_scute_time_tests {
     use crate::entity_nbt::mob_from_nbt_with_random;
     use crate::mobs::{Mob, MobType};
+    use horizon_core::nbt::Tag;
     use horizon_core::{
         geometry::Vec3,
-        random::{EntityRandom, LegacyRandom, RandomSource},
+        random::{LegacyRandom, RandomSource},
     };
-    use horizon_world::nbt::Tag;
     use std::{collections::HashMap, sync::Arc};
 
     /// #15784: `Armadillo`'s constructor draws `scuteTime` from its own random, and
     /// `readAdditionalSaveData` replaces it only with a saved `scute_time`. A load without the
     /// key keeps the constructor's draw (never 0, #12559) and draws nothing more.
     #[test]
+    #[ignore = "daily"]
     fn an_armadillo_loaded_without_scute_time_keeps_the_constructors_draw() {
         let ran = crate::mobs::world::with_test_world(&[], |_, all| {
             check(Arc::new(all.types["minecraft:armadillo"].clone()));
@@ -1018,7 +1035,7 @@ mod armadillo_scute_time_tests {
     fn check(armadillo: Arc<MobType>) {
         let types: HashMap<String, Arc<MobType>> =
             [("minecraft:armadillo".to_string(), armadillo.clone())].into();
-        let random = || EntityRandom::own(LegacyRandom::new(15_784));
+        let random = || horizon_core::random::EntityRandom::own(LegacyRandom::new(15_784));
         let built = Mob::with_random(1, armadillo, Vec3::ZERO, 0.0, random());
         assert!(
             (6000..12000).contains(&built.extra.egg_time),

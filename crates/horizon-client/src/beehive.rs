@@ -5,8 +5,8 @@
 //! or the mob AI probe) loads and adds the bees through [`HiveHost`].
 pub use crate::chunk::block_entity::{Beehive, Occupant};
 use crate::mobs::{Mob, Species, bee};
+use horizon_core::nbt::{Compound, Tag};
 use horizon_core::random::{LegacyRandom, RandomSource};
-use horizon_world::nbt::{Compound, Tag};
 
 pub const MAX_OCCUPANTS: usize = 3;
 /// `BeehiveBlockEntity.IGNORED_BEE_TAGS`: dropped from a bee going in, and

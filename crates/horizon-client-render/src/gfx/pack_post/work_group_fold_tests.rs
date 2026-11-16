@@ -46,6 +46,7 @@ fn pack() -> Post {
 
 #[test]
 fn a_dispatch_over_the_limit_reads_its_declared_work_groups() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let post = pack();
     assert!(post.notes.is_empty(), "{:?}", post.notes);

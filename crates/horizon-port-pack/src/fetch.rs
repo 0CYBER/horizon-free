@@ -14,10 +14,12 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha1::Sha1;
+use sha2::{Digest, digest::Output};
 use std::{
     collections::HashMap,
     fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -29,7 +31,7 @@ const HOSTS: [&str; 4] = [
     "https://gitlab.com/",
 ];
 /// No mod jar is this large; a bigger answer is not one.
-const MAX_JAR: u64 = 512 << 20;
+pub(crate) const MAX_JAR: u64 = 512 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -95,6 +97,7 @@ pub fn fetch(
     records: &[Record],
     from: Option<&Path>,
     want: &dyn Fn(&Record) -> bool,
+    hosts: &[&str],
     log: Log,
 ) -> Result<Fetched, String> {
     let pack: Pack = read_json(&work.join("pack.json"))?;
@@ -134,7 +137,7 @@ pub fn fetch(
             }
         } else if let Some(url) = url_of(file, &cache) {
             log(format!("{}/{} {name}", i + 1, wanted.len()));
-            match download(&url, sha1, &dest, true) {
+            match download(&url, sha1, &dest, true, hosts) {
                 Ok(()) => outcome(How::Downloaded, url),
                 Err(e) => outcome(How::Failed, e),
             }
@@ -174,7 +177,7 @@ pub fn fetch(
                     .as_deref()
                     .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
                     .ok_or_else(|| format!("{checksum}: no SHA-1"))?;
-                download(&url, Some(sha1), &dest, true)
+                download(&url, Some(sha1), &dest, true, hosts)
             }) {
             Ok(()) => log(format!("loader: {}", dest.display())),
             Err(e) => log(format!(
@@ -226,34 +229,79 @@ pub(crate) fn download(
     sha1: Option<&str>,
     dest: &Path,
     overwrite: bool,
+    hosts: &[&str],
 ) -> Result<(), String> {
-    let response = crate::net::agent(url)
-        .get(url)
-        .set("User-Agent", modrinth::AGENT)
-        .call()
-        .map_err(|e| format!("{url}: {e}"))?;
+    let response =
+        crate::net::get_from_hosts(url, hosts)?.ok_or_else(|| format!("{url}: not found"))?;
     store_download(response.into_reader(), sha1, dest, overwrite).map_err(|e| format!("{url}: {e}"))
 }
 
-/// Read and verify the whole bounded response before publishing it; a failed read leaves no file.
+/// Download exactly the manifest jar through the Modrinth CDN.
+pub fn download_jar(
+    url: &str,
+    jar: &horizon_mod_package::manifest::JarRef,
+    dest: &Path,
+) -> Result<(), String> {
+    let response =
+        crate::net::get_from_hosts(url, &["cdn.modrinth.com"])?.ok_or("Modrinth jar not found")?;
+    store::<sha2::Sha512>(
+        response.into_reader(),
+        Some(jar.sha512()),
+        dest,
+        true,
+        "SHA-512",
+    )
+}
+
+/// Hash and copy a jar stream, refusing inputs larger than 512 MiB.
+/// Pass [`io::sink()`] as the writer when only the digest is needed.
+pub fn hash_reader<D: Digest>(
+    mut reader: impl Read,
+    mut writer: impl Write,
+) -> io::Result<Output<D>> {
+    let mut hash = D::new();
+    let mut size = 0u64;
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        size += n as u64;
+        if size > MAX_JAR {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "jar exceeds 512 MiB",
+            ));
+        }
+        hash.update(&buf[..n]);
+        writer.write_all(&buf[..n])?;
+    }
+    Ok(hash.finalize())
+}
+
+/// Stream into a private temporary file, publishing only after verification.
 pub(crate) fn store_download(
     reader: impl Read,
     sha1: Option<&str>,
     dest: &Path,
     overwrite: bool,
 ) -> Result<(), String> {
-    let mut bytes = Vec::new();
-    reader
-        .take(MAX_JAR + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_JAR {
-        return Err("download exceeds 512 MiB".into());
-    }
-    let got = sha1_hex(&bytes);
-    if let Some(want) = sha1.filter(|w| !w.eq_ignore_ascii_case(&got)) {
-        return Err(format!("SHA-1 {got}, the pack says {want}"));
-    }
+    store::<Sha1>(reader, sha1, dest, overwrite, "SHA-1")
+}
+
+fn store<D: Digest>(
+    reader: impl Read,
+    expected: Option<&str>,
+    dest: &Path,
+    overwrite: bool,
+    algorithm: &str,
+) -> Result<(), String>
+where
+    Output<D>: std::fmt::LowerHex,
+{
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let suffix = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let part = dest.with_file_name(format!(
@@ -265,39 +313,41 @@ pub(crate) fn store_download(
         .create_new(true)
         .open(&part)
         .map_err(|e| e.to_string())?;
-    let result = file
-        .write_all(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|()| {
-            drop(file);
-            if overwrite {
-                fs::rename(&part, dest).map_err(|e| e.to_string())
-            } else {
-                // Publish without replacing a file that appeared while the request was in flight.
-                match fs::hard_link(&part, dest) {
-                    Ok(()) => fs::remove_file(&part).map_err(|e| e.to_string()),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e.to_string()),
-                    Err(_) => {
-                        // No hard links here (FAT, some network mounts): copy into a new file.
-                        let mut out = fs::OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .open(dest)
-                            .map_err(|e| e.to_string())?;
-                        let written = out.write_all(&bytes).map_err(|e| e.to_string());
-                        drop(out);
-                        if written.is_err() {
-                            let _ = fs::remove_file(dest);
-                        }
-                        let _ = fs::remove_file(&part);
-                        written
+    let result = (|| {
+        let hash = hash_reader::<D>(reader, &mut file).map_err(|e| e.to_string())?;
+        let got = format!("{hash:x}");
+        if let Some(want) = expected.filter(|want| !want.eq_ignore_ascii_case(&got)) {
+            return Err(format!("{algorithm} {got}, the pack says {want}"));
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        if overwrite {
+            fs::rename(&part, dest).map_err(|e| e.to_string())
+        } else {
+            match fs::hard_link(&part, dest) {
+                Ok(()) => fs::remove_file(&part).map_err(|e| e.to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e.to_string()),
+                Err(_) => {
+                    let mut out = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(dest)
+                        .map_err(|e| e.to_string())?;
+                    let copied = std::io::copy(
+                        &mut fs::File::open(&part).map_err(|e| e.to_string())?,
+                        &mut out,
+                    )
+                    .map_err(|e| e.to_string());
+                    drop(out);
+                    if copied.is_err() {
+                        let _ = fs::remove_file(dest);
                     }
+                    copied.map(|_| ())
                 }
             }
-        });
-    if result.is_err() {
-        let _ = fs::remove_file(&part);
-    }
+        }
+    })();
+    let _ = fs::remove_file(&part);
     result
 }
 
@@ -376,6 +426,104 @@ pub fn curseforge_names(instance: &Value) -> HashMap<(u64, u64), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    #[ignore = "daily"]
+    fn jar_hashing_accepts_512_mib_and_refuses_one_extra_byte() {
+        let limit = 512 * 1024 * 1024;
+        assert!(hash_reader::<sha2::Sha512>(io::repeat(0).take(limit), io::sink()).is_ok());
+        let error =
+            hash_reader::<sha2::Sha512>(io::repeat(0).take(limit + 1), io::sink()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn hashing_and_copying_share_the_digest_for_each_algorithm() {
+        let mut copied = Vec::new();
+        let hash = hash_reader::<Sha1>(&b"abc"[..], &mut copied).unwrap();
+        assert_eq!(
+            format!("{hash:x}"),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
+        assert_eq!(copied, b"abc");
+        let hash = hash_reader::<sha2::Sha512>(&b"abc"[..], io::sink()).unwrap();
+        assert_eq!(
+            format!("{hash:x}"),
+            concat!(
+                "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a",
+                "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+            )
+        );
+    }
+
+    #[test]
+    fn sha1_stream_is_verified_before_atomic_publication() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("port-pack-stream-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let dest = root.join("file.jar");
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for name in [
+            "assets/a/test",
+            "data/a/test",
+            "META-INF/neoforge.mods.toml",
+            "Dummy.class",
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"test").unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let hash = sha1_hex(&bytes);
+        fs::write(&dest, b"existing").unwrap();
+        assert!(store_download(&b"wrong"[..], Some(&hash), &dest, true).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), b"existing");
+        struct Interrupted;
+        impl Read for Interrupted {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("interrupted"))
+            }
+        }
+        assert!(store_download(Interrupted, Some(&hash), &dest, true).is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_file(&dest).unwrap();
+        store_download(&bytes[..], Some(&hash), &dest, true).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), bytes);
+        let sha1 = sha1_hex(b"legacy");
+        fs::remove_file(&dest).unwrap();
+        store_download(&b"legacy"[..], Some(&sha1), &dest, true).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"legacy");
+        assert!(store_download(&b"bad"[..], Some(&sha1), &dest, true).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), b"legacy");
+        assert!(store_download(&b"new"[..], None, &dest, false).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), b"legacy");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sha512_publication_is_verified_and_atomic_between_downloads() {
+        let root = std::env::temp_dir().join(format!("sha512-store-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let dest = root.join("source.jar");
+        let bytes = b"a synthetic jar download";
+        let hash = format!("{:x}", sha2::Sha512::digest(bytes));
+        assert!(store::<sha2::Sha512>(&b"wrong"[..], Some(&hash), &dest, true, "SHA-512").is_err());
+        assert!(!dest.exists());
+        std::thread::scope(|scope| {
+            let save = || store::<sha2::Sha512>(&bytes[..], Some(&hash), &dest, true, "SHA-512");
+            let first = scope.spawn(save);
+            let second = scope.spawn(save);
+            first.join().unwrap().unwrap();
+            second.join().unwrap().unwrap();
+        });
+        assert_eq!(fs::read(&dest).unwrap(), bytes);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_pack_index_name_must_stay_inside_jars() {
@@ -481,6 +629,7 @@ mod tests {
             &records,
             Some(&root.join("instance")),
             &|_| true,
+            &[],
             &|_| {},
         )
         .unwrap();
@@ -492,7 +641,7 @@ mod tests {
             b"jar b"
         );
         // A second run finds them in place.
-        let again = fetch(&work, &records, None, &|_| true, &|_| {}).unwrap();
+        let again = fetch(&work, &records, None, &|_| true, &[], &|_| {}).unwrap();
         assert_eq!(again.count(How::Present), 2);
         assert_eq!(Fetched::load(&work).count(How::Present), 2);
         fs::remove_dir_all(&root).unwrap();

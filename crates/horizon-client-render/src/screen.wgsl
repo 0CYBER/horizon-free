@@ -1,4 +1,5 @@
-// Full-screen camera effects (screen_effects.rs): clip-space quads reading
+// Full-screen camera effects (screen_effects.rs): clip-space quads (a mod's keep
+// their perspective in `w`) reading
 // one sprite rectangle of the shared 2D atlas as if it were its own texture,
 // with the sampler vanilla gives it (ReloadableTexture.setSampler: linear
 // when `blur`, clamp-to-edge when `clamp`, else nearest and repeat).
@@ -23,10 +24,10 @@ struct Out {
     // With clamp-to-edge, the sprite's first and last texel centres.
     @location(3) @interpolate(flat) edges: vec4<f32>,
 }
-@vertex fn vs_screen(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>,
+@vertex fn vs_screen(@location(0) pos: vec4<f32>, @location(1) uv: vec2<f32>,
     @location(2) rect: vec4<f32>, @location(3) color: vec4<f32>) -> Out {
     var out: Out;
-    out.clip = vec4(pos, 0.0, 1.0);
+    out.clip = pos;
     out.uv = uv;
     out.rect = rect;
     out.color = color;

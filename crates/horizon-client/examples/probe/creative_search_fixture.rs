@@ -19,12 +19,19 @@ pub fn main() -> horizon_client::Result<()> {
     let usage =
         "usage: creative_search_fixture RESOURCES CREATIVE_JSON VANILLA_JSON OUTPUT [permissions]";
     let resources = PathBuf::from(args.get(1).ok_or(usage)?);
-    let names = Names::load(&resources);
+    let source = horizon_assets::resource_source::ResourceSource::directory(resources.clone());
+    let names = Names::load(&source);
     let mut creative = Creative::from_json(&serde_json::from_slice(&fs::read(
         args.get(2).ok_or(usage)?,
     )?)?)?;
-    creative.set_enchantments(Arc::new(Enchantments::load(&resources)));
-    creative.set_permissions(args.get(5).is_some_and(|a| a == "permissions"), &names);
+    creative.set_enchantments(Arc::new(Enchantments::load(
+        &resources,
+        &horizon_world::item_defaults::read(&resources)?,
+    )?));
+    let permissions = args.get(5).is_some_and(|a| a == "permissions");
+    if creative.tabs_to_build(permissions).is_some() {
+        creative.build(permissions, Vec::new(), &names);
+    }
     let vanilla: Value = serde_json::from_slice(&fs::read(args.get(3).ok_or(usage)?)?)?;
     let tabs: Vec<Value> = creative
         .tabs
@@ -41,7 +48,7 @@ pub fn main() -> horizon_client::Result<()> {
         })
         .collect();
     let searches = query_results(&creative, &names, &vanilla["searches"])?;
-    let french = Language::load(&[&resources], "fr_fr");
+    let french = Language::load(&[&source], "fr_fr");
     let (french_searches, _) = lang::scoped(french, || {
         query_results(&creative, &names, &vanilla["frenchSearches"])
     });

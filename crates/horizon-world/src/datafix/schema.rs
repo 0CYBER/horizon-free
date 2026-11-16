@@ -6,7 +6,7 @@
 //! Keys are `version * 10 + sub-version` as in `DataFixUtils.makeKey`, and a
 //! fix with key K reads its input with the schema just below K.
 use super::dynamic::{as_str, namespaced};
-use crate::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 #[path = "schema_flat.rs"]
 pub(super) mod flat;

@@ -13,12 +13,14 @@ use horizon_client::{
     save::{self, ChunkExtras},
 };
 use horizon_core::paletted::PalettedContainer;
-use horizon_world::{
-    DATA_VERSION,
-    nbt::{self, Limits, Tag},
-    registry::BlockRegistry,
-};
 use std::{collections::HashMap, hint::black_box, sync::Arc, time::Instant};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{Limits, Tag},
+    },
+    horizon_world::{DATA_VERSION, registry::BlockRegistry},
+};
 
 type Entities = HashMap<(i32, i32, i32), BlockEntity>;
 type Names = HashMap<(i32, i32, i32), Tag>;
@@ -105,7 +107,7 @@ fn fixture(per_chunk: usize) -> (Vec<Arc<Chunk>>, Entities, Names) {
             }
             // Exercise the existing NBT overlay and saved list order as well.
             if j % 8 == 2 {
-                let mut raw = save::encode_block_entity(p, &e, BLOCKS[block as usize]);
+                let mut raw = save::block_entity_encode::encode(p, &e, BLOCKS[block as usize]);
                 if let Tag::Compound(map) = &mut raw {
                     map.insert(
                         "LootTable".into(),
@@ -164,7 +166,9 @@ fn encoding_fixture() -> horizon_client::Result<(BlockRegistry, Biomes)> {
             encoder.write_header()?.write_image_data(&[0, 128, 0])?;
         }
         std::fs::write(biomes.join("plains.json"), b"{}")?;
-        Biomes::load(&temp)
+        Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+            temp.to_path_buf(),
+        ))
     })();
     std::fs::remove_dir_all(&temp)?;
     Ok((registry, result?))

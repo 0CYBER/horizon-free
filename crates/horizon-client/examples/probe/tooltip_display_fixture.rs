@@ -1,6 +1,6 @@
 //! Tooltip display visibility oracle companion for tools/test_tooltip_display_parity.py.
-use horizon_client::{item_tooltip::TooltipDisplay, items::ItemStack};
-use horizon_world::nbt::Tag;
+use horizon_client::{item_tooltip::tooltip_display, items::ItemStack};
+use horizon_core::nbt::Tag;
 use std::{error::Error, fmt::Write};
 
 pub fn main() -> Result<(), Box<dyn Error>> {
@@ -18,7 +18,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
             };
             let text = horizon_client::item_tooltip::styled_name(&stack, || "unused".into());
             output.push_str("name\t");
-            for span in text.spans {
+            for span in &text.spans {
                 for c in span.text.chars() {
                     let style = &span.style;
                     write!(
@@ -57,7 +57,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
                 .data_mut()
                 .set_other("minecraft:tooltip_display", Some(Tag::compound(component)));
         }
-        let display = TooltipDisplay::for_stack(&stack);
+        let display = tooltip_display(&stack);
         writeln!(
             output,
             "{}\t{}",

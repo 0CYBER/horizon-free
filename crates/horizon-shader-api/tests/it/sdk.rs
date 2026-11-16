@@ -45,6 +45,7 @@ fn the_traced_examples_pass_without_the_scene_and_with_it() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_tool_checks_a_pack_with_a_tonemap_stage() {
     let dir = scratch("api-0-2");
     let files = [
@@ -75,6 +76,7 @@ fn the_tool_checks_a_pack_with_a_tonemap_stage() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn every_template_makes_a_pack_that_passes() {
     let root = scratch("templates");
     for template in ["post", "sky", "material"] {
@@ -99,6 +101,7 @@ fn every_template_makes_a_pack_that_passes() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn packs_and_checks_the_package() {
     let root = scratch("pack");
     let dir = root.join("glow");

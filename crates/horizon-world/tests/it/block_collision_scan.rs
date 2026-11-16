@@ -439,6 +439,7 @@ fn sparse_scan(
 /// Passing the cells of missing chunks and empty sections gives the same hits in the same order,
 /// and ends at the budget where a walk cell by cell does.
 #[test]
+#[ignore = "daily"]
 fn passing_missing_chunks_and_empty_sections_changes_nothing() {
     let boxes = [
         // Across loaded and missing columns, sections 3 and 4.

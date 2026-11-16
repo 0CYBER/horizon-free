@@ -81,7 +81,8 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 pub fn check(jar_path: &Path, out: &Path) -> Result<Check, String> {
     let info = jar::read(jar_path)?;
     let file = fs::File::open(jar_path).map_err(|e| format!("{}: {e}", jar_path.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar_path.display()))?;
+    let mut zip =
+        crate::zip_intake::open(file).map_err(|e| format!("{}: {e}", jar_path.display()))?;
     let names: Vec<String> = zip
         .file_names()
         .map(|name| name.map(|name| name.into_owned()))

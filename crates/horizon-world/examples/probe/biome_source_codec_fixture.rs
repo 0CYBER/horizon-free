@@ -56,7 +56,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let encoded = catalog.encode(&definition)?;
         writeln!(out, "codec {}", normalized(serde_json::from_str(&encoded)?))?;
-        let source = definition.resolve(&presets)?;
+        let source = definition.resolve(&presets, 0)?;
         writeln!(
             out,
             "possible {}",

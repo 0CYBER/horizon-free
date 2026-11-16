@@ -67,7 +67,7 @@ fn effects(c: &Value, w: i32) -> Vec<GuiDraw> {
             EffectIcon {
                 id: id.to_owned(),
                 beneficial: def.category == brewing::Category::Beneficial,
-                color: def.color as i32,
+                sort_order: def.sort_order,
                 ambient: e["ambient"].as_bool().unwrap_or(false),
                 duration: e["duration"].as_i64().unwrap_or(0) as i32,
                 show_icon: e["icon"].as_bool().unwrap_or(true),
@@ -144,7 +144,7 @@ fn boss(c: &Value, w: i32, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
             overlay: b["overlay"].as_u64().unwrap_or(0) as usize,
         })
         .collect();
-    hud_overlays::boss_overlay(w, h, &bars, &atlas.font)
+    hud_overlays::boss_overlay(w, h, &bars, &atlas.font, |_, _| true)
 }
 
 /// A `NumberFormat` from the case: null, `{type: blank}`, `{type: fixed,

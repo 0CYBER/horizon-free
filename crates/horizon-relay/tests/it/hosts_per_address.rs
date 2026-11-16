@@ -25,6 +25,7 @@ fn register(relay: SocketAddr) -> Result<TcpStream, ErrorCode> {
 }
 
 #[test]
+#[ignore = "daily"]
 fn an_address_holds_only_so_many_hosts() {
     let per_address = Rates::default().hosts_per_address;
     let (relay, address, _) = Relay::spawn_local(Config {

@@ -16,8 +16,9 @@
 //! use horizon_client_render::hud_kit::shapes::{self, Stop};
 //! use std::f32::consts::{FRAC_PI_8, TAU};
 //!
-//! let atlas = HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
-//! let mut batch = HudBatch::new([854, 480]);
+//! let source = horizon_client_render::resource_source::ResourceSource::directory("/nonexistent".into());
+//! let atlas = HudAtlas::build(&source).unwrap();
+//! let mut batch = HudBatch::scratch([854, 480]);
 //! let centre = [213.0, 120.0];
 //! // A dark disc fading out, a faint ring, then the top 45 degree sector lit.
 //! let dark = rgba(13, 14, 19, 180);
@@ -249,11 +250,14 @@ mod tests {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+        HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap()
     }
 
     fn batch() -> HudBatch {
-        HudBatch::new([854, 480])
+        HudBatch::scratch([854, 480])
     }
 
     /// The area the batch's vertices since `start` cover, adding each triangle's.
@@ -438,6 +442,45 @@ mod tests {
                 v.pos
             );
         }
+    }
+
+    #[test]
+    fn a_clipped_rectangle_gradient_keeps_its_colour_ramp() {
+        let atlas = atlas();
+        let top = rgba(255, 0, 0, 255);
+        let bottom = rgba(0, 0, 255, 255);
+        let mut contained = batch();
+        contained.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
+        let original: Vec<_> = contained.vertices.iter().map(|v| v.color).collect();
+        contained.clip_since(0, 0.0, 0.0, 100.0, 100.0);
+        assert_eq!(
+            contained
+                .vertices
+                .iter()
+                .map(|v| v.color)
+                .collect::<Vec<_>>(),
+            original
+        );
+
+        let mut cut = batch();
+        cut.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
+        cut.clip_since(0, 0.0, 12.0, 100.0, 16.0);
+        let top_cut = rgba(191, 0, 64, 255);
+        let bottom_cut = rgba(64, 0, 191, 255);
+        assert!(
+            cut.vertices
+                .iter()
+                .all(|v| v.pos[1] == 12.0 || v.pos[1] == 16.0)
+        );
+        let top_vertices: Vec<_> = cut.vertices.iter().filter(|v| v.pos[1] == 12.0).collect();
+        let bottom_vertices: Vec<_> = cut.vertices.iter().filter(|v| v.pos[1] == 16.0).collect();
+        assert!(!top_vertices.is_empty(), "clip has no top edge vertices");
+        assert!(
+            !bottom_vertices.is_empty(),
+            "clip has no bottom edge vertices"
+        );
+        assert!(top_vertices.iter().all(|v| v.color == top_cut));
+        assert!(bottom_vertices.iter().all(|v| v.color == bottom_cut));
     }
 
     #[test]

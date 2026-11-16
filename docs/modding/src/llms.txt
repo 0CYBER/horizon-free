@@ -1,0 +1,34 @@
+# Modding Horizon
+
+> Horizon is Minecraft: Java Edition 26.3 in Rust. A mod is one `.hmod`: content (`assets/`, `data/`) and, for a code mod, a Rust crate built natively by the launcher or to `mod.wasm`, against the `mod_api` crate (`horizon-mod-api`).
+
+Rules for code: implement `mod_api::Hooks` at the crate root with `#[mod_api::horizon_mod]`; prefer a hook or Part method; otherwise an `[[inject]]` listener at a published point (native and wasm); change the game's own code only through the native route (`[[native.mixin]]`, `[[native.loop]]`, `[[native.bridge]]`, `[[native.module]]`, native only). Hook names follow NeoForge 26.3; events are `&mut`; writes take a `ServerHost`. The id and version come only from `horizon-mod.toml`; ids are `[a-z0-9_]`. A mod is `[native]` or `[wasm]`, never both; unknown manifest fields are refused.
+
+## Getting started
+
+- [Installing and using mods](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/start/installing.md)
+- [Your first content mod](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/start/first-content-mod.md)
+- [Your first native mod](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/start/first-mod.md)
+- [Your first WebAssembly mod](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/start/first-wasm-mod.md)
+- [Writing hooks](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/start/writing-hooks.md): the crate root, events, hosts and listener order.
+
+## Concepts
+
+- [Hooks and the Host](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/hooks-and-the-host.md)
+- [Load phases and access](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/load-phases.md)
+- [Parts](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/parts.md), [Capabilities](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/capabilities.md), [Attachments](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/attachments.md), [Transactions](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/transactions.md)
+- [Registry keys](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/registry-keys.md), [Wire types](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/wire-types.md), [Dependencies between mods](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/dependencies.md)
+- [Injections](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/injections.md) and [the native route](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/native-route.md)
+
+## How-to
+
+- [Content mods](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/content-mods.md), [Native mods: building and shipping](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/native-mods.md), [WebAssembly mods](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/wasm-mods.md), [Publishing](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/publish.md)
+- [Levels, dimensions and blocks](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/world.md), [Items, recipes and loot](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/items.md), [Entities, players and commands](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/entities.md), [Client, rendering and sound](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/how-to/client.md)
+
+## Reference
+
+- [The manifest and the package](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/reference/manifest.md)
+- [The registry index and `.hpack`](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/reference/registry-index.md)
+- [The mod API reference (rustdoc)](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/reference/api.md): every hook, event, Part and `Host` method.
+- [Hook notes](https://github.com/horizon-rust/horizon/tree/main/crates/horizon-mod-vocab/src/hooks)
+- [NeoForge counterparts](https://github.com/horizon-rust/horizon/tree/main/crates/horizon-mod-vocab/src/hooks)

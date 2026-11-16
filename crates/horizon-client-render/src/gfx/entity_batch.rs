@@ -82,6 +82,42 @@ pub const WORLD_TEXT_OVERLAY: u32 = 39;
 /// The front of its eight-offset outlined text, using POLYGON_OFFSET.
 pub const WORLD_TEXT_POLYGON_OFFSET_OVERLAY: u32 = 40;
 
+/// Ordinary vertices before every prepared cut, in one walk of the pre-batch stream.
+///
+/// `EntityBatch::update` packs ordinary material first and draws the rest in later
+/// passes, so a cut recorded in the original stream skips what moved. A cut at or
+/// past the cursor continues that walk. A cut before the cursor restarts: staging
+/// does not promise non-decreasing cuts, and a backwards cut must still match a
+/// walk of that cut alone. Returns how many quads were read.
+pub(super) fn ordinary_vertices_at_cuts(
+    vertices: &[Vertex],
+    cuts: impl IntoIterator<Item = u32>,
+    oit: bool,
+    out: &mut Vec<u32>,
+) -> u64 {
+    out.clear();
+    let quads = vertices.as_chunks::<4>().0;
+    let mut cursor = 0usize;
+    let mut ordinary = 0u32;
+    let mut walked = 0u64;
+    for cut in cuts {
+        let target = (cut as usize).min(vertices.len()) / 4;
+        if target < cursor {
+            cursor = 0;
+            ordinary = 0;
+        }
+        while cursor < target {
+            if material(quads[cursor][0].layer, oit) == 0 {
+                ordinary += 4;
+            }
+            cursor += 1;
+            walked += 1;
+        }
+        out.push(ordinary);
+    }
+    walked
+}
+
 /// The material of a quad by its overlay (`MATERIALS` order): the overlay is the layer's low 16
 /// bits, as entity.wgsl reads it; HDR output's tier rides in the high ones.
 pub(in crate::gfx) fn material(layer: u32, oit: bool) -> usize {
@@ -295,10 +331,158 @@ impl EntityBatch {
     }
 }
 
+/// One cut, walked from the start of the stream. Tests compare the linear pass with this.
+#[cfg(test)]
+fn ordinary_vertices_before(vertices: &[Vertex], cut: u32, oit: bool) -> u32 {
+    let cut = (cut as usize).min(vertices.len()) / 4 * 4;
+    let mut ordinary = 0u32;
+    for quad in vertices[..cut].as_chunks::<4>().0 {
+        if material(quad[0].layer, oit) == 0 {
+            ordinary += 4;
+        }
+    }
+    ordinary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{hint::black_box, time::Instant};
+
+    #[test]
+    fn ordinary_cuts_skip_shadows_and_text() {
+        let mut stream = Vec::new();
+        for (layer, x) in [(14, 1.0), (0, 2.0)] {
+            stream.extend(std::iter::repeat_n(
+                Vertex {
+                    layer,
+                    pos: [x, 0.0, 0.0],
+                    ..geometry(1, false)[0]
+                },
+                4,
+            ));
+        }
+        let cut = stream.len() as u32;
+        stream.extend(std::iter::repeat_n(
+            Vertex {
+                layer: 0,
+                pos: [3.0, 0.0, 0.0],
+                ..geometry(1, false)[0]
+            },
+            4,
+        ));
+        assert_eq!(ordinary_vertices_before(&stream, cut, false), 4);
+        assert_ne!(cut, 4, "the raw cut still counts the shadow");
+        let tagged = vec![
+            Vertex {
+                layer: OIT_ENTITY,
+                ..geometry(1, false)[0]
+            };
+            4
+        ];
+        assert_eq!(ordinary_vertices_before(&tagged, 4, true), 0);
+        assert_eq!(ordinary_vertices_before(&tagged, 4, false), 4);
+    }
+
+    #[test]
+    fn one_walk_matches_the_per_draw_cut_on_mixed_streams() {
+        let layers = [
+            0u32,
+            SHADOW_OVERLAY,
+            TEXT_POLYGON_OFFSET_OVERLAY,
+            11,
+            12,
+            OIT_ENTITY,
+            OIT_ENTITY | 11,
+            WORLD_TEXT_OVERLAY,
+            WORLD_TEXT_POLYGON_OFFSET_OVERLAY,
+            TRANSLUCENT_ITEM_OVERLAY,
+            TRANSLUCENT_GLINT_ITEM_OVERLAY,
+            ENERGY_SWIRL_OVERLAY,
+            WATER_MASK_OVERLAY,
+            TRANSLUCENT_PARTICLE_OVERLAY,
+            7,
+        ];
+        let mut state = 0x1234_5678u32;
+        let mut next = || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            state
+        };
+        for oit in [false, true] {
+            for _trial in 0..24 {
+                let quads = (next() % 180) as usize;
+                let stream: Vec<_> = (0..quads)
+                    .flat_map(|_| {
+                        let layer = layers[(next() as usize) % layers.len()];
+                        std::iter::repeat_n(
+                            Vertex {
+                                layer,
+                                ..geometry(1, false)[0]
+                            },
+                            4,
+                        )
+                    })
+                    .collect();
+                let draws = (next() % 36) as usize;
+                let mut cuts: Vec<u32> = Vec::with_capacity(draws);
+                for index in 0..draws {
+                    let previous = cuts.last().copied().unwrap_or(0);
+                    let cut = if index > 0 && next() % 5 == 0 {
+                        next() % (stream.len() as u32 + 8)
+                    } else {
+                        previous.saturating_add(next() % 24)
+                    };
+                    cuts.push(cut);
+                }
+                let mut out = Vec::new();
+                ordinary_vertices_at_cuts(&stream, cuts.iter().copied(), oit, &mut out);
+                assert_eq!(out.len(), cuts.len());
+                for (index, cut) in cuts.iter().enumerate() {
+                    assert_eq!(
+                        out[index],
+                        ordinary_vertices_before(&stream, *cut, oit),
+                        "oit {oit} cut {cut}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_decreasing_cut_matches_the_per_draw_walk() {
+        let stream = geometry(8, true);
+        let cuts = [24u32, 4, 16, 0, 24, 7];
+        for oit in [false, true] {
+            let mut out = Vec::new();
+            ordinary_vertices_at_cuts(&stream, cuts, oit, &mut out);
+            let expected: Vec<_> = cuts
+                .iter()
+                .map(|cut| ordinary_vertices_before(&stream, *cut, oit))
+                .collect();
+            assert_eq!(out, expected);
+        }
+    }
+
+    #[test]
+    fn a_long_prefix_is_walked_once_for_every_copy() {
+        let stream_len = 10_000u32;
+        let draws = 1_000u32;
+        let stream = geometry(stream_len as usize, true);
+        let end = stream.len() as u32;
+        let cuts = vec![end; draws as usize];
+        let mut out = Vec::new();
+        let walked = ordinary_vertices_at_cuts(&stream, cuts.iter().copied(), true, &mut out);
+        let stream_len = u64::from(stream_len);
+        let draws = u64::from(draws);
+        assert!(
+            walked >= stream_len && walked <= stream_len + draws,
+            "walked {walked} quads, bound {stream_len}..={}",
+            stream_len + draws
+        );
+        let expected = ordinary_vertices_before(&stream, end, true);
+        assert!(out.iter().all(|cut| *cut == expected));
+        assert_eq!(out.len(), draws as usize);
+    }
     #[test]
     fn native_models_keep_opaque_order_and_do_not_move_existing_materials_or_tails() {
         let quad = |layer, x| {

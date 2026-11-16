@@ -354,7 +354,11 @@ fn main() {
             runs,
             || {},
             || {
-                std::hint::black_box(ParsedModels::load(&root));
+                std::hint::black_box(ParsedModels::load(
+                    &horizon_client_render::resource_source::ResourceSource::directory(
+                        root.clone(),
+                    ),
+                ));
             },
         ),
     );
@@ -373,15 +377,17 @@ fn main() {
                 }
             },
             || {
-                let mut sprites = Sprites::with_disk_cache(&root);
+                let mut sprites = Sprites::with_disk_cache(
+                    &horizon_client_render::resource_source::ResourceRoot::directory(root.clone()),
+                );
                 if prefetch {
-                    sprites.prefetch(&root, names.iter().map(String::as_str));
+                    sprites.prefetch(names.iter().map(String::as_str));
                 }
                 for name in names {
                     if files {
-                        sprites.insert_file(&root, name).unwrap();
+                        sprites.insert_file(name).unwrap();
                     } else {
-                        sprites.insert(&root, name).unwrap();
+                        sprites.insert(name).unwrap();
                     }
                 }
                 sprites.save_disk_cache();
@@ -406,9 +412,11 @@ fn main() {
     row("CTM tiles: prefetched", sprites(false, true, &tiles, true));
     // The mip chains the renderer uploads, from the same pack layers: the HD pack's
     // 64 px block sprites fill the array, as they do for a player who has it on.
-    let mut atlas = Sprites::with_disk_cache(&root);
+    let mut atlas = Sprites::with_disk_cache(
+        &horizon_client_render::resource_source::ResourceRoot::directory(root.clone()),
+    );
     for name in &blocks {
-        atlas.insert(&root, name).unwrap();
+        atlas.insert(name).unwrap();
     }
     atlas.finish();
     let border = vec![255u8; (atlas.size * atlas.size * 4) as usize];
@@ -434,7 +442,12 @@ fn main() {
             runs,
             || {},
             || {
-                if let Err(e) = HudAtlas::build_over(&root, &vanilla_root) {
+                if let Err(e) = HudAtlas::build_over(
+                    &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
+                    &horizon_assets::resource_source::ResourceSource::directory(
+                        vanilla_root.to_path_buf(),
+                    ),
+                ) {
                     eprintln!("GUI atlas failed: {e}");
                 }
             },
@@ -446,7 +459,10 @@ fn main() {
             runs,
             || {},
             || {
-                let _ = HudAtlas::build(&vanilla_root);
+                let _ =
+                    HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+                        vanilla_root.to_path_buf(),
+                    ));
             },
         ),
     );

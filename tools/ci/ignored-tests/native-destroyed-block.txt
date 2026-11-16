@@ -1,0 +1,3 @@
+horizon-client game::native_player_destroyed_block_tests::block_drops_holds_nothing_after_a_listener_panics lib daily resources
+horizon-client game::native_player_destroyed_block_tests::block_drops_names_the_mob_that_broke_the_block lib daily resources
+horizon-client game::native_player_destroyed_block_tests::block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale lib daily resources

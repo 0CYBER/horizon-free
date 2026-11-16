@@ -14,7 +14,7 @@ use std::{
     io::{ErrorKind, Read, Write},
     sync::{
         Arc, Mutex, MutexGuard, OnceLock, PoisonError,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -32,44 +32,6 @@ const AHEAD: usize = 256 << 10;
 /// How long a disconnect's last bytes are given before the socket closes.
 const LINGER: Duration = Duration::from_millis(50);
 const WAKER: Token = Token(usize::MAX);
-/// The packets a connection keeps for the game while counting, each way: the game takes them
-/// every tick ([`Outbox::take_packets`]), so only a tick stalled for long reaches it.
-const TALLY_MAX: usize = 1 << 16;
-
-/// Whether the network threads keep each play packet's id and size for the game
-/// (`native_server_packets`): off unless a mod asks, and off a packet costs one relaxed load.
-static COUNTING: AtomicBool = AtomicBool::new(false);
-
-/// Start or stop keeping the play packets' ids and sizes.
-pub(super) fn count_packets(on: bool) {
-    COUNTING.store(on, Ordering::Relaxed);
-}
-/// Whether the play packets' ids and sizes are kept.
-#[inline]
-pub(super) fn counting_packets() -> bool {
-    COUNTING.load(Ordering::Relaxed)
-}
-/// The VarInt packet id a body starts with.
-fn body_id(body: &[u8]) -> Option<i32> {
-    let mut value = 0u32;
-    for (i, &b) in body.iter().take(5).enumerate() {
-        value |= u32::from(b & 0x7f) << (7 * i);
-        if b & 0x80 == 0 {
-            return Some(value as i32);
-        }
-    }
-    None
-}
-/// The bytes of `id` as a VarInt.
-fn id_len(id: i32) -> usize {
-    let mut v = id as u32;
-    let mut len = 1;
-    while v >= 0x80 {
-        v >>= 7;
-        len += 1;
-    }
-    len
-}
 
 /// The play state's side of a connection (conn.rs's `PlayConn`).
 pub(super) trait Session: Send {
@@ -113,15 +75,38 @@ enum At {
 
 #[derive(Default)]
 struct Queue {
-    bodies: Vec<Body>,
+    bodies: Vec<Queued>,
     end: Option<End>,
     at: At,
     /// In its thread's list of outboxes to serve.
     listed: bool,
 }
 
+// Include allocation capacity and geometric queue growth, even for empty bodies.
+pub(super) fn charge(retained: usize) -> usize {
+    retained.saturating_add(std::mem::size_of::<Queued>() * 2)
+}
+
+pub(super) struct Queued {
+    body: Body,
+    prepared: bool,
+    pending: Arc<AtomicUsize>,
+    cost: usize,
+}
+impl Drop for Queued {
+    fn drop(&mut self) {
+        self.pending.fetch_sub(self.cost, Ordering::Relaxed);
+    }
+}
+
 /// One player's packets on their way to its network thread.
 pub(super) struct Outbox {
+    #[cfg(any(test, feature = "test-payload-probe"))]
+    // write attempts, nonzero write successes, bytes written, WouldBlock,
+    // nonempty buffers fully drained, remaining output bytes,
+    // successful body-framing calls since drain, lifetime body-framing calls.
+    // Body-framing calls are frames for raw payloads, not necessarily adapters.
+    probe: [AtomicUsize; 8],
     queue: Mutex<Queue>,
     /// The bytes queued and not framed yet (`PlayerSender::pending`).
     pending: Arc<AtomicUsize>,
@@ -130,11 +115,30 @@ pub(super) struct Outbox {
     /// The reader is this process: if it stopped reading, that would be a bug of its own.
     capped: bool,
     worker: Arc<Worker>,
-    /// While counting: each play packet framed (sent) and read (received) since the game last
-    /// took them, as (id, body bytes).
-    tally: Mutex<[Vec<(i32, usize)>; 2]>,
 }
 impl Outbox {
+    #[cfg(any(test, feature = "test-payload-probe"))]
+    pub(super) fn diagnostics(&self) -> String {
+        match self.queue.try_lock() {
+            Ok(q) => format!(
+                "outbox queued_items={} queued_body_bytes={} closed={} end={:?} listed={} write_attempts={} write_ok_calls={} written_bytes={} would_block={} drained_nonempty_buffers={} output_remaining_bytes={} body_frame_ok_since_drain={} body_frame_ok_total={}",
+                q.bodies.len(),
+                q.bodies.iter().map(|b| b.body.len()).sum::<usize>(),
+                matches!(q.at, At::Closed),
+                q.end,
+                q.listed,
+                self.probe[0].load(Ordering::Relaxed),
+                self.probe[1].load(Ordering::Relaxed),
+                self.probe[2].load(Ordering::Relaxed),
+                self.probe[3].load(Ordering::Relaxed),
+                self.probe[4].load(Ordering::Relaxed),
+                self.probe[5].load(Ordering::Relaxed),
+                self.probe[6].load(Ordering::Relaxed),
+                self.probe[7].load(Ordering::Relaxed)
+            ),
+            Err(_) => "outbox busy/poisoned".into(),
+        }
+    }
     /// An outbox on the least busy network thread, started the first time.
     pub(super) fn new(pending: Arc<AtomicUsize>, capped: bool) -> Result<Arc<Self>, String> {
         let workers = &pool()?.workers;
@@ -143,25 +147,13 @@ impl Outbox {
             .min_by_key(|w| w.load.load(Ordering::Relaxed))
             .expect("a pool has a thread");
         Ok(Arc::new(Self {
+            #[cfg(any(test, feature = "test-payload-probe"))]
+            probe: std::array::from_fn(|_| AtomicUsize::new(0)),
             queue: Mutex::default(),
             pending,
             capped,
             worker: worker.clone(),
-            tally: Mutex::default(),
         }))
-    }
-    /// Keep `packets` going `way` (0 sent, 1 received), up to [`TALLY_MAX`].
-    fn tally(&self, way: usize, packets: impl IntoIterator<Item = (i32, usize)>) {
-        let mut tally = self.tally.lock().unwrap_or_else(PoisonError::into_inner);
-        let list = &mut tally[way];
-        let room = TALLY_MAX.saturating_sub(list.len());
-        list.extend(packets.into_iter().take(room));
-    }
-    /// The play packets kept since the last call, sent then received, as (id, body bytes):
-    /// the id before an older client's renumbering, the bytes before compression and
-    /// encryption.
-    pub(super) fn take_packets(&self) -> [Vec<(i32, usize)>; 2] {
-        std::mem::take(&mut *self.tally.lock().unwrap_or_else(PoisonError::into_inner))
     }
     /// The packets queued and not taken by the thread yet.
     pub(super) fn queued(&self) -> usize {
@@ -175,6 +167,18 @@ impl Outbox {
     /// Past [`MAX_PENDING`] a capped connection closes. The thread to wake, if
     /// this is the first news it has since it last looked.
     pub(super) fn push(&self, bodies: Vec<Body>, end: Option<End>) -> Option<&Arc<Worker>> {
+        let bodies = bodies
+            .into_iter()
+            .map(|body| Queued {
+                cost: charge(body.retained()),
+                body,
+                prepared: false,
+                pending: self.pending.clone(),
+            })
+            .collect();
+        self.push_queued(bodies, end)
+    }
+    fn push_queued(&self, bodies: Vec<Queued>, end: Option<End>) -> Option<&Arc<Worker>> {
         let mut q = self.queue();
         match (q.at, q.end) {
             (At::Closed, _) => return None,
@@ -210,11 +214,47 @@ impl Outbox {
             worker.wake();
         }
     }
+    #[cfg(test)]
+    pub(super) fn queued_contents(&self) -> Vec<Vec<u8>> {
+        self.queue()
+            .bodies
+            .iter()
+            .map(|b| b.body.to_vec())
+            .collect()
+    }
+    pub(super) fn alive(&self) -> bool {
+        let q = self.queue();
+        !matches!(q.at, At::Closed) && q.end.is_none()
+    }
+    pub(super) fn publish(&self, body: Vec<u8>, cost: usize) -> bool {
+        let packet = Queued {
+            body: body.into(),
+            cost,
+            prepared: true,
+            pending: self.pending.clone(),
+        };
+        let mut q = self.queue();
+        if matches!(q.at, At::Closed) || q.end.is_some() {
+            return false;
+        }
+        q.bodies.push(packet);
+        let At::Slot(slot) = q.at else {
+            return true;
+        };
+        if std::mem::replace(&mut q.listed, true) {
+            return true;
+        }
+        drop(q);
+        if self.worker.post(|i| i.serve.push(slot)) {
+            self.worker.wake();
+        }
+        true
+    }
     /// What waits, for the thread.
     /// What waits, for the thread: the bodies and the end after them with
     /// `room` for them, else only a close. An end stays, so that nothing is
     /// queued after it.
-    fn take(&self, room: bool) -> (Vec<Body>, Option<End>) {
+    fn take(&self, room: bool) -> (Vec<Queued>, Option<End>) {
         let mut q = self.queue();
         q.listed = false;
         match room {
@@ -290,9 +330,8 @@ fn start(threads: usize) -> std::io::Result<Pool> {
             load: AtomicUsize::new(0),
         });
         let mine = worker.clone();
-        std::thread::Builder::new()
-            .name(format!("horizon-net-{n}"))
-            .spawn(move || run(poll, &mine))?;
+        // Payload handlers of wasm mods run on these threads (the server's network root).
+        horizon_guest_stack::spawn(format!("horizon-net-{n}"), move || run(poll, &mine))?;
         workers.push(worker);
     }
     Ok(Pool { workers })
@@ -380,7 +419,7 @@ fn run(mut poll: Poll, worker: &Arc<Worker>) {
         }
         for i in inbox.read {
             if let Some(Some(c)) = conns.get_mut(i) {
-                c.read(now);
+                c.memory_ready(now);
                 touched.push(i);
             }
         }
@@ -465,6 +504,12 @@ struct Conn {
     close_at: Option<Instant>,
 }
 impl Conn {
+    /// Pipe readiness covers incoming data and capacity returned by peer reads.
+    fn memory_ready(&mut self, now: Instant) {
+        self.read(now);
+        self.serve(now);
+    }
+
     fn register(
         a: Adopted,
         registry: &Registry,
@@ -540,9 +585,6 @@ impl Conn {
             match self.reader.buffered() {
                 Ok(Some((id, payload))) => {
                     if !self.left {
-                        if counting_packets() {
-                            self.outbox.tally(1, [(id, id_len(id) + payload.len())]);
-                        }
                         match self.session.packet(id, payload) {
                             Verdict::Go => {}
                             Verdict::Close(reason) => return self.end(now, reason),
@@ -569,18 +611,23 @@ impl Conn {
 
     /// Frame `bodies` into `out`, `queued` ones counted off `pending`: false
     /// if one could not be.
-    fn frame(&mut self, now: Instant, bodies: Vec<Body>, queued: bool) -> bool {
-        if counting_packets() {
-            let ids = bodies.iter().filter_map(|b| Some((body_id(b)?, b.len())));
-            self.outbox.tally(0, ids);
-        }
-        for body in bodies {
-            if queued {
-                self.outbox.pending.fetch_sub(body.len(), Ordering::Relaxed);
-            }
-            if let Err(e) = super::conn::frame_body(&mut self.writer, &body, &mut self.out) {
+    fn frame(&mut self, now: Instant, bodies: Vec<Queued>, _queued: bool) -> bool {
+        for body in &bodies {
+            let result = if body.prepared {
+                self.writer.frame_into(&body.body, &mut self.out);
+                Ok(())
+            } else {
+                super::conn::frame_body(&mut self.writer, &body.body, &mut self.out)
+            };
+            if let Err(e) = result {
                 self.end(now, e.to_string());
                 return false;
+            }
+            #[cfg(any(test, feature = "test-payload-probe"))]
+            {
+                self.outbox.probe[6].fetch_add(1, Ordering::Relaxed);
+                self.outbox.probe[7].fetch_add(1, Ordering::Relaxed);
+                self.outbox.probe[5].store(self.out.len() - self.written, Ordering::Relaxed);
             }
         }
         true
@@ -595,8 +642,20 @@ impl Conn {
                 return self.end(now, "Disconnected");
             }
             // The hub's own disconnect, if it was the last queued, does for this one.
-            let ours = (end.is_none()).then(|| disconnect.to_vec().into());
-            if !self.frame(now, bodies, true) || !self.frame(now, ours.into_iter().collect(), false)
+            let ours = (end.is_none()).then(|| Body::from(disconnect.to_vec()));
+            if !self.frame(now, bodies, true)
+                || !self.frame(
+                    now,
+                    ours.into_iter()
+                        .map(|body| Queued {
+                            body,
+                            prepared: false,
+                            pending: self.outbox.pending.clone(),
+                            cost: 0,
+                        })
+                        .collect(),
+                    false,
+                )
             {
                 return;
             }
@@ -637,7 +696,11 @@ impl Conn {
         if self.close_at.is_some_and(|at| at <= now) {
             return false;
         }
+        #[cfg(any(test, feature = "test-payload-probe"))]
+        let had_output = self.written < self.out.len();
         while self.written < self.out.len() {
+            #[cfg(any(test, feature = "test-payload-probe"))]
+            self.outbox.probe[0].fetch_add(1, Ordering::Relaxed);
             match self.io.write(&self.out[self.written..]) {
                 Ok(0) => {
                     self.end(now, "Disconnected");
@@ -645,9 +708,18 @@ impl Conn {
                 }
                 Ok(n) => {
                     self.written += n;
+                    #[cfg(any(test, feature = "test-payload-probe"))]
+                    {
+                        self.outbox.probe[1].fetch_add(1, Ordering::Relaxed);
+                        self.outbox.probe[2].fetch_add(n, Ordering::Relaxed);
+                        self.outbox.probe[5]
+                            .store(self.out.len() - self.written, Ordering::Relaxed);
+                    }
                     self.stalled = None;
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    #[cfg(any(test, feature = "test-payload-probe"))]
+                    self.outbox.probe[3].fetch_add(1, Ordering::Relaxed);
                     self.stalled.get_or_insert(now);
                     return true;
                 }
@@ -657,6 +729,13 @@ impl Conn {
                     return false;
                 }
             }
+        }
+        #[cfg(any(test, feature = "test-payload-probe"))]
+        {
+            if had_output {
+                self.outbox.probe[4].fetch_add(1, Ordering::Relaxed);
+            }
+            self.outbox.probe[6].store(0, Ordering::Relaxed);
         }
         self.out.clear();
         self.written = 0;
@@ -684,7 +763,16 @@ impl Conn {
         }
         if !self.draining
             && let Some(body) = self.session.tick(now)
-            && self.frame(now, vec![body.into()], false)
+            && self.frame(
+                now,
+                vec![Queued {
+                    body: body.into(),
+                    prepared: false,
+                    pending: self.outbox.pending.clone(),
+                    cost: 0,
+                }],
+                false,
+            )
         {
             self.serve(now);
         }
@@ -764,10 +852,10 @@ mod tests {
     }
     impl Served {
         fn send(&self, bodies: Vec<Vec<u8>>, end: Option<End>) {
-            let len: usize = bodies.iter().map(Vec::len).sum();
+            let bodies: Vec<Body> = bodies.into_iter().map(Body::from).collect();
+            let len: usize = bodies.iter().map(|b| charge(b.retained())).sum();
             self.pending.fetch_add(len, Ordering::Relaxed);
-            self.outbox
-                .send(bodies.into_iter().map(Body::from).collect(), end);
+            self.outbox.send(bodies, end);
         }
         fn next(&self) -> Seen {
             self.seen.recv_timeout(Duration::from_secs(10)).unwrap()
@@ -811,45 +899,8 @@ mod tests {
         }
     }
 
-    /// A body's VarInt id reads back, a truncated one doesn't, and the sizes match.
     #[test]
-    fn packet_ids_read_from_bodies() {
-        for id in [0, 1, 0x7f, 0x80, 300, 0x3fff, 0x4000] {
-            let mut body = Vec::new();
-            let mut v = id as u32;
-            loop {
-                let b = (v & 0x7f) as u8;
-                v >>= 7;
-                if v == 0 {
-                    body.push(b);
-                    break;
-                }
-                body.push(b | 0x80);
-            }
-            assert_eq!(id_len(id), body.len(), "{id}");
-            body.push(9);
-            assert_eq!(body_id(&body), Some(id));
-        }
-        assert_eq!(body_id(&[0x80]), None);
-        assert_eq!(body_id(&[]), None);
-    }
-
-    /// The tally keeps each way apart, stops at its cap and empties when taken.
-    #[test]
-    fn the_tally_keeps_both_ways_up_to_its_cap() {
-        let outbox = Outbox::new(Arc::new(AtomicUsize::new(0)), true).unwrap();
-        outbox.tally(0, [(0x27, 10), (0x08, 3)]);
-        outbox.tally(1, [(0x1a, 5)]);
-        assert_eq!(
-            outbox.take_packets(),
-            [vec![(0x27, 10), (0x08, 3)], vec![(0x1a, 5)]]
-        );
-        assert_eq!(outbox.take_packets(), [vec![], vec![]]);
-        outbox.tally(0, (0..TALLY_MAX + 5).map(|_| (1, 1)));
-        assert_eq!(outbox.take_packets()[0].len(), TALLY_MAX);
-    }
-
-    #[test]
+    #[ignore = "daily"]
     fn a_socket_carries_packets_both_ways_in_order_then_disconnects() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -906,13 +957,12 @@ mod tests {
         // timing, not an order the pool promises: take both, then tell them
         // apart. The kick still has to come after the queued one.
         served.send(vec![body(3, 10)], None);
-        let mut first = client.recv().unwrap();
-        let mut second = client.recv().unwrap();
-        if first == packet(&body(0x21, 2)) {
-            std::mem::swap(&mut first, &mut second);
-        }
-        assert_eq!(first, packet(&body(3, 10)));
-        assert_eq!(second, packet(&body(0x21, 2)));
+        // The first worker sweep may send the session's unsolicited packet
+        // before the test queues its packet. Both must arrive before the kick,
+        // but these independent producers have no ordering between them.
+        let mut received = [client.recv().unwrap(), client.recv().unwrap()];
+        received.sort();
+        assert_eq!(received, [packet(&body(3, 10)), packet(&body(0x21, 2))]);
         client.send(&body(9, 1)).unwrap();
         client.send(&body(10, 1)).unwrap();
         assert_eq!(client.recv().unwrap(), packet(&body(0x7f, 3)));
@@ -938,6 +988,7 @@ mod tests {
     /// A client that reads nothing holds its disconnect unwritten; a close
     /// then ends the connection at once.
     #[test]
+    #[ignore = "daily"]
     fn a_close_ends_a_disconnect_the_client_does_not_take() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1021,3 +1072,6 @@ mod tests {
         assert!(served.seen.try_recv().is_err());
     }
 }
+
+#[cfg(test)]
+mod memory_progress_tests;

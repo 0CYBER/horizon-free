@@ -609,7 +609,7 @@ fn rotation_table(registry: &BlockRegistry) -> Result<Rotations, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     /// air, stone, oak_log axis x/y/z, furnace facing the four horizontal
     /// ways, observer facing all six with `powered` false then true, and a

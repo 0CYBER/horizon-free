@@ -188,6 +188,7 @@ impl Stars {
         uploads.buffer(encoder, &self.uniform, 0, bytemuck::bytes_of(&uniform));
     }
 
+    #[horizon_mod_api_macros::replaceable]
     pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.group, &[]);

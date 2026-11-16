@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The Wardrobe's view's size, in points.
-pub(super) const W: f32 = 240.;
-pub(super) const H: f32 = 330.;
+pub(super) const W: f32 = 300.;
+pub(super) const H: f32 = 420.;
 /// Pixels of a trackpad's scroll that make one wheel step.
 const SCROLL_STEP: f32 = 40.;
 
@@ -128,6 +128,11 @@ impl Viewer {
         self.stage.set_camera(camera);
         cx.notify();
         true
+    }
+
+    /// Turns the player as a drag of `dx` px would (the page's turn buttons).
+    pub(super) fn turn(&mut self, dx: f32, cx: &mut Context<Self>) {
+        self.move_camera(self.stage.camera().dragged(dx, 0.), cx);
     }
 
     fn drag_to(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {

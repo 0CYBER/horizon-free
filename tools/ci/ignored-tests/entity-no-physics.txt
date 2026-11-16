@@ -1,0 +1,10 @@
+horizon-client game::native_entity_physics::tests::a_mod_cleared_no_physics_shulker_bullet_is_pushed_by_a_shulker_lid lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_entry_is_cleared_when_a_breath_cloud_expires lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_entry_is_cleared_when_a_command_kills_a_shulker_bullet lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_entry_is_cleared_when_a_players_blow_removes_a_shulker_bullet lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_entry_is_cleared_when_an_ominous_item_spawner_finishes lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_entry_is_cleared_when_the_bullet_leaves_with_its_chunk lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_entry_is_cleared_when_the_dragons_flame_is_removed lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_reads_supported_entities_and_refuses_others lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_write_holds_and_covers_the_four_constant_kinds lib daily resources
+horizon-client game::native_entity_physics::tests::no_physics_write_is_refused_on_a_client lib daily resources

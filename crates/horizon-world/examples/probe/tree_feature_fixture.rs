@@ -3,28 +3,6 @@ use horizon_core::{
     geometry::{Direction, VoxelShape},
     random::{LegacyRandom, RandomSource, XoroshiroRandom},
 };
-use horizon_world::{
-    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
-    block_placement::BlockPlacementBindings,
-    block_properties::BlockPropertiesRegistry,
-    block_support::{BlockSupportRegistry, SupportType},
-    block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
-    collision::CachedCollisionRegistry,
-    dynamic_support::DynamicSupportWorld,
-    fluid::{FluidKind, FluidState, FluidStateTable},
-    heightmap::HeightmapType,
-    nbt::{self, Limits, Tag},
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{
-        anchor::WorldGenerationContext,
-        block_feature::FeatureBlockBindings,
-        feature::{FeatureBlocks, FeatureWorld},
-        feature_catalog::FeatureCatalog,
-        placement::{PlacementContext, PlacementQueryError},
-        state_provider::{StateProviderBindings, StateProviderCatalog},
-        tags::TagDefinitions,
-    },
-};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -32,6 +10,33 @@ use std::{
     io::{self, BufRead, Write},
     path::Path,
     sync::Arc,
+};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{Limits, Tag},
+    },
+    horizon_world::{
+        block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
+        block_placement::BlockPlacementBindings,
+        block_properties::BlockPropertiesRegistry,
+        block_support::{BlockSupportRegistry, SupportType},
+        block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
+        collision::CachedCollisionRegistry,
+        dynamic_support::DynamicSupportWorld,
+        fluid::{FluidKind, FluidState, FluidStateTable},
+        heightmap::HeightmapType,
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            anchor::WorldGenerationContext,
+            block_feature::FeatureBlockBindings,
+            feature::{FeatureBlocks, FeatureWorld},
+            feature_catalog::FeatureCatalog,
+            placement::{PlacementContext, PlacementQueryError},
+            state_provider::{StateProviderBindings, StateProviderCatalog},
+            tags::TagDefinitions,
+        },
+    },
 };
 
 const MIN_Y: i32 = -64;
@@ -125,7 +130,7 @@ struct World<'a, 'r, W> {
     seed: i64,
     chest: BlockStateId,
     world_random: LegacyRandom,
-    water_mask: horizon_world::fluid::FluidMask,
+    water_mask: u8,
     /// A vine without faces and air: the only fixture obstacle that changes
     /// under a shape update (VineBlock.updateShape).
     faceless_vine: Option<BlockStateId>,

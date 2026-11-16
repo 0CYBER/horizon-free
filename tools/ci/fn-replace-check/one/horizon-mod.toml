@@ -1,0 +1,19 @@
+id = "fnr_one"
+name = "Function replacement check: one"
+version = "0.1.0"
+description = "fn-replace: one HEAD mixins on ten functions, for build timing"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.mixin]]
+id = "head0"
+target = "horizon_client::game::native_item_entity_refs::Game<'_>::item_entity_owner"
+kind = "HEAD"
+helper = "src/mixins/head.rs"

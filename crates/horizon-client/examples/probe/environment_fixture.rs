@@ -16,7 +16,9 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: environment_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let biomes = Biomes::load(root)?;
+    let biomes = Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+        root.to_path_buf(),
+    ))?;
     let mut environments: HashMap<String, Environment> = HashMap::new();
     let mut out = String::new();
     for line in input.lines() {
@@ -24,9 +26,10 @@ pub fn main() -> horizon_client::Result<()> {
         let dimension = f[0];
         let environment = match environments.entry(dimension.to_owned()) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(Environment::load_dimension(root, dimension)?)
-            }
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(Environment::load_dimension(
+                &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
+                dimension,
+            )?),
         };
         let info = biomes.get(biomes.id(&format!("minecraft:{}", f[4])));
         // The weather layers only exist where the dimension can have weather.
@@ -64,7 +67,7 @@ pub fn main() -> horizon_client::Result<()> {
         );
         put(
             "gameplay/sky_light_level",
-            format!("{:?}", sky.sky_light_level * 15.0),
+            format!("{:?}", sky.sky_light_level),
         );
         put("visual/fog_start_distance", format!("{:?}", sky.fog_start));
         put("visual/fog_end_distance", format!("{:?}", sky.fog_end));

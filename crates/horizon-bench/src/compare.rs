@@ -411,6 +411,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_report_with_ab_round_trips_and_old_ones_still_parse() {
         let mut r = Report::new(Kind::Game, App::default());
         let old = r.to_json();

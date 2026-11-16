@@ -1,0 +1,10 @@
+# Functions that start a child process, called from tests in another file (tools/ci/check_process_tests.py follows a
+# helper of the test's own file by itself): `function`, `module::function` or `Type::function`, one per line.
+check_starts                # horizon-server: runs the game program to see that it starts
+engine::spawn               # horizon-server: starts the game
+isolated_test               # horizon-mod-package: reruns the test in a child process of its own
+load_with_child             # horizon-mod-wasm: compiles a module in a child process
+load_with_child_command
+Hardware::detect            # horizon-bench: asks the system (uname, sysctl) about the machine
+Report::new                 # horizon-bench: a report describes this machine (Hardware::detect)
+fixture::cached_answer      # horizon-mod-wasm: compiles a module in the given child executable

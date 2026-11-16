@@ -2,11 +2,11 @@
 """Make sample worlds with older vanilla servers, for the DataFixer harness.
 
 For each listed version, the official server jar (cached under
-.local/datafix/servers/VERSION/server.jar, beside the shared vanilla data) generates a default world around spawn,
+.local/datafix/servers/VERSION/server.jar, in the private writable root) generates a default world around spawn,
 gets a scene of block entities, entities and items in that version's own save
 format (tools/datafix_scene.py), and a bot player joins (with its inventory filled)
-so that player data exists. The saved world is kept in datafix/worlds/VERSION beside the shared vanilla data
-(.local/datafix in a plain checkout), where every worktree finds it.
+so that player data exists. The saved world is kept in datafix/worlds/VERSION in the private writable root
+(default .local/datafix; override with HORIZON_DATAFIX_ROOT).
 
   datafix_worlds.py [--force] [VERSION...]      (default: every version below)
 """
@@ -33,17 +33,14 @@ import datafix_scene_12 as scene12  # noqa: E402
 import lab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-LOCAL = ROOT / '.local' / 'datafix'
-# Old server jars and their worlds are inputs, not outputs: keep them beside the
-# vanilla data, which parallel worktrees share (.local/minecraft links there).
-SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
-# Worlds saved before 1.17 are only read by branches that carry the fixes for them: until those are
-# integrated they stay in the worktree's own .local, not in the folder every worktree's harness reads.
+from datafix_paths import writable_root
+
+LOCAL = writable_root()
 LEGACY = {'1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5'}
 
 
 def worlds_dir(name):
-    return LOCAL / 'worlds-pre-1.17' if name.split('-')[0] in LEGACY else SHARED / 'worlds'
+    return LOCAL / 'worlds-pre-1.17' if name.split('-')[0] in LEGACY else LOCAL / 'worlds'
 
 
 VERSIONS = ['1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
@@ -70,7 +67,7 @@ UUID_BASE = 0x6000
 
 
 def version_meta(version):
-    path = SHARED / 'servers' / version / 'version.json'
+    path = LOCAL / 'servers' / version / 'version.json'
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         manifest = json.load(urllib.request.urlopen(MANIFEST))
@@ -84,7 +81,7 @@ def version_meta(version):
 
 def server_jar(version):
     """The server jar, its DataVersion (None before 1.9: no DataVersion) and protocol."""
-    path = SHARED / 'servers' / version / 'server.jar'
+    path = LOCAL / 'servers' / version / 'server.jar'
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         download = version_meta(version)['downloads']['server']
@@ -115,7 +112,7 @@ def platform():
 
 def java(version):
     """The java executable for a server version: Mojang's runtime of the version's
-    component (pinned in research-lock.json), installed beside the shared data."""
+    component (pinned in research-lock.json), installed in the private writable root."""
     meta = version_meta(version)
     component = meta.get('javaVersion', {}).get('component', 'jre-legacy')
     if component in ('java-runtime-delta', 'java-runtime-epsilon'):
@@ -124,7 +121,7 @@ def java(version):
     if component not in runtimes:
         component = 'java-runtime-gamma'
     pin = runtimes[component]
-    home = SHARED / 'java' / f'{component}-{platform()}'
+    home = LOCAL / 'java' / f'{component}-{platform()}'
     stamp = home / '.complete'
     if not stamp.exists() or stamp.read_text() != pin['manifest_sha1']:
         install_runtime(pin, home)

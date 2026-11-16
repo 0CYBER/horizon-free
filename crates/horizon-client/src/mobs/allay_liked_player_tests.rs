@@ -4,8 +4,7 @@
 //! `NoAI` runs no brain tick; a memory without a time to live never expires
 //! (tools/test_allay_liked_player_parity.py measures the same).
 use super::*;
-use crate::mobs::world::level_random;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 const OWNER: [i32; 4] = [95, 0, 0, 99];
@@ -68,7 +67,7 @@ fn value() -> Option<Tag> {
 /// the mob's own memory: with no raw tag at all, and over a raw tag whose
 /// time to live the mob has since counted down.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_loaded_finite_liked_player_saves_its_own_time_to_live() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -86,7 +85,12 @@ fn a_loaded_finite_liked_player_saves_its_own_time_to_live() {
             }
             let tag = saved_tag(Some(Some(2)), false);
             let mut m = load(types, &tag);
-            crate::mobs::ai::tick(&mut m, w, &mut level_random(1), &mut Vec::new());
+            crate::mobs::ai::tick(
+                &mut m,
+                w,
+                &mut crate::health::TestLevel::new(1).level(),
+                &mut Vec::new(),
+            );
             assert_eq!(
                 saved_memory(&m, Some(&tag)),
                 Some((value(), Some(1))),
@@ -101,7 +105,7 @@ fn a_loaded_finite_liked_player_saves_its_own_time_to_live() {
 /// at 0 goes on the first tick; `NoAI` keeps it as it was; a permanent one
 /// stays. A gone memory no longer makes the Allay like its player.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_finite_liked_player_expires_only_under_ai() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -112,7 +116,12 @@ fn a_finite_liked_player_expires_only_under_ai() {
                 let mut m = load(types, &tag);
                 let mut seen = vec![saved_memory(&m, None).map(|(_, t)| t)];
                 for _ in 0..3 {
-                    crate::mobs::ai::tick(&mut m, w, &mut level_random(1), &mut Vec::new());
+                    crate::mobs::ai::tick(
+                        &mut m,
+                        w,
+                        &mut crate::health::TestLevel::new(1).level(),
+                        &mut Vec::new(),
+                    );
                     seen.push(saved_memory(&m, None).map(|(_, t)| t));
                 }
                 let liked = is_liked_player(&m, Some(crate::mobs::Who::Player), OWNER);
@@ -143,7 +152,7 @@ fn a_finite_liked_player_expires_only_under_ai() {
 /// never expires, over a loaded finite memory; taking the item back erases
 /// it.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_given_item_makes_the_liked_player_permanent_again() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -157,7 +166,12 @@ fn a_given_item_makes_the_liked_player_permanent_again() {
             let mine = Some(Tag::IntArray(actor.to_vec()));
             assert_eq!(saved_memory(&m, Some(&tag)), Some((mine.clone(), None)));
             for _ in 0..4 {
-                crate::mobs::ai::tick(&mut m, w, &mut level_random(1), &mut Vec::new());
+                crate::mobs::ai::tick(
+                    &mut m,
+                    w,
+                    &mut crate::health::TestLevel::new(1).level(),
+                    &mut Vec::new(),
+                );
             }
             assert_eq!(
                 saved_memory(&m, Some(&tag)),
@@ -176,14 +190,19 @@ fn a_given_item_makes_the_liked_player_permanent_again() {
 /// one. A memory that expired and is given again is permanent. A new owner
 /// replaces the old one with no time to live carried over.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn never_expiring_readded_and_replaced_liked_players() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
         |_, _| {},
         |w, types| {
             let step = |m: &mut Mob| {
-                crate::mobs::ai::tick(m, w, &mut level_random(1), &mut Vec::new());
+                crate::mobs::ai::tick(
+                    m,
+                    w,
+                    &mut crate::health::TestLevel::new(1).level(),
+                    &mut Vec::new(),
+                );
             };
             // Long.MAX_VALUE: permanent.
             let tag = saved_tag(Some(Some(i64::MAX)), false);

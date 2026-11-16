@@ -1,16 +1,18 @@
 use horizon_core::position::{BlockPos, ChunkPos};
-use horizon_world::{
-    DATA_VERSION,
-    chunk::{BlockState, ChunkData, PalettedContainer},
-    compression::Compression,
-    nbt::{JavaString, Limits, NamedTag, Tag},
-    region::{ChunkRecord, RegionFile, RegionWriter},
-};
 use std::{
     fs,
     io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU32, Ordering},
+};
+use {
+    horizon_core::nbt::{JavaString, Limits, NamedTag, Tag},
+    horizon_world::{
+        DATA_VERSION,
+        chunk::{BlockState, ChunkData, PalettedContainer},
+        compression::Compression,
+        region::{ChunkRecord, RegionFile, RegionWriter},
+    },
 };
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -437,7 +439,7 @@ fn a_chunk_loads_whatever_follows_its_root() {
         name: JavaString::default(),
         tag: Tag::compound([("x", Tag::Int(7))]),
     };
-    let bytes = horizon_world::nbt::write_named(&root, Limits::saved()).unwrap();
+    let bytes = horizon_core::nbt::write_named(&root, Limits::saved()).unwrap();
     let record = |compression: Compression, compressed: Vec<u8>| ChunkRecord {
         compression,
         compressed,

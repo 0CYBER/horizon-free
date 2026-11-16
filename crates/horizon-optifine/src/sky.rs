@@ -12,8 +12,8 @@
 //! Written from OptiFine's public documentation of the format (`OptiFineDoc/doc/sky.properties`
 //! and the Custom Sky page of OptiDocs, with its skybox template); no OptiFine code was read.
 
+use horizon_assets::resource_source::ResourceSource;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use crate::matchers::{IdList, RangeList};
 use crate::paths::{properties_files, resolve};
@@ -358,16 +358,22 @@ impl Transition {
 impl Skies {
     /// Every `sky/world<N>/` of the pack under `root`. Layers draw in the order of their number
     /// (`sky1` before `sky10`); a file that fails to parse is skipped with a warning.
-    pub fn scan(root: &Path) -> Self {
+    pub fn scan(root: &ResourceSource) -> Self {
         let mut out = Self::default();
         for ns in ["minecraft"] {
             for top in ["optifine", "mcpatcher"] {
                 let base = format!("assets/{ns}/{top}/sky");
-                let Ok(dirs) = std::fs::read_dir(root.join(&base)) else {
-                    continue;
-                };
-                for dir in dirs.flatten() {
-                    let name = dir.file_name().to_string_lossy().into_owned();
+                let prefix = format!("{base}/");
+                let dirs: std::collections::BTreeSet<_> = root
+                    .list(&prefix)
+                    .into_iter()
+                    .filter_map(|file| {
+                        file.strip_prefix(&prefix)?
+                            .split_once('/')
+                            .map(|(name, _)| name.to_owned())
+                    })
+                    .collect();
+                for name in dirs {
                     let Some(world) = name.strip_prefix("world").and_then(|n| n.parse().ok())
                     else {
                         continue;
@@ -392,9 +398,9 @@ impl Skies {
 
 impl WorldSky {
     /// The layers and bodies of the folder at resource path `dir`.
-    fn scan(root: &Path, dir: &str) -> Self {
+    fn scan(root: &ResourceSource, dir: &str) -> Self {
         let read = |file: &str| {
-            std::fs::read_to_string(root.join(file))
+            root.read_to_string(file)
                 .ok()
                 .map(|t| Properties::parse(&t))
         };
@@ -414,7 +420,7 @@ impl WorldSky {
             };
             let Some(p) = read(&file) else { continue };
             match SkyLayer::parse(&file, &p) {
-                Some(layer) if root.join(&layer.source).is_file() => layers.push((n, layer)),
+                Some(layer) if root.contains(&layer.source) => layers.push((n, layer)),
                 Some(layer) => log::warn!("{file}: no texture {}", layer.source),
                 None => log::warn!("{file}: unknown blend or bad source; skipped"),
             }
@@ -427,7 +433,7 @@ impl WorldSky {
                 Some(s) => with_png(&resolve(&props, s)?),
                 None => format!("{dir}/{name}.png"),
             };
-            if !root.join(&source).is_file() {
+            if !root.contains(&source) {
                 return None;
             }
             let blend = p
@@ -625,7 +631,22 @@ mod tests {
         }
         std::fs::write(end.join("sky1.properties"), "").unwrap();
         std::fs::write(end.join("sky1.png"), b"png").unwrap();
-        let skies = Skies::scan(&root);
+        let source = ResourceSource::directory(root.clone());
+        let skies = Skies::scan(&source);
+        let indexed = ResourceSource::indexed(
+            source
+                .list("assets/")
+                .into_iter()
+                .map(|name| {
+                    let bytes = source.read(&name).unwrap();
+                    (
+                        name,
+                        horizon_assets::resource_source::Resource::bytes(bytes),
+                    )
+                })
+                .collect(),
+        );
+        assert_eq!(Skies::scan(&indexed), skies);
         let _ = std::fs::remove_dir_all(&root);
         let o = &skies.worlds[&0];
         assert_eq!(

@@ -17,6 +17,13 @@ impl Body {
     pub fn shared(bytes: Vec<u8>) -> Self {
         Self::Shared(bytes.into())
     }
+    /// The bytes this body keeps alive: an owned vector's capacity, a shared copy's length.
+    pub fn retained(&self) -> usize {
+        match self {
+            Self::Owned(bytes) => bytes.capacity(),
+            Self::Shared(bytes) => bytes.len(),
+        }
+    }
     /// The bytes as a vector of their own (copied when shared).
     pub fn into_vec(self) -> Vec<u8> {
         match self {

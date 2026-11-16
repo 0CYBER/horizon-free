@@ -82,6 +82,17 @@ impl FeatureCatalog {
             tags: built.tags,
         })
     }
+    pub(super) fn feature_names(&self) -> impl Iterator<Item = &str> {
+        self.features.keys().map(String::as_str)
+    }
+    pub(super) fn placed_names(&self) -> impl Iterator<Item = &str> {
+        self.placed.keys().map(String::as_str)
+    }
+    pub(super) fn placed_in_tag(&self, name: &str, tag: &str) -> bool {
+        self.tags
+            .get(tag)
+            .is_some_and(|members| members.iter().any(|member| member == name))
+    }
     pub fn feature(&self, json: &str) -> Result<FeatureDefinition, DecodeError> {
         self.feature_with_optional_blocks(json, None)
     }

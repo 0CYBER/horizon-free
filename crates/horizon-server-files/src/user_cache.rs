@@ -3,11 +3,11 @@
 //! without asking the profile service again. Each entry expires a month after
 //! it was added; the file keeps the 1000 most recently used.
 use crate::{
-    java_properties::{civil_from_days, days_from_civil, now_millis},
     json::{self, Json},
     profiles::valid_player_name,
     user_lists::{NameAndId, format_date, parse_date, read_utf8},
 };
+use horizon_java_properties::{civil_from_days, days_from_civil, now_millis};
 use std::{collections::HashMap, path::PathBuf};
 
 const MRU_LIMIT: usize = 1000;

@@ -1,0 +1,75 @@
+[book]
+title = "Modding Horizon"
+description = "Guide and reference for making Horizon mods: content, native and WebAssembly"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../../target/modding-book"
+# A SUMMARY.md link to a page that doesn't exist fails the build instead of creating an empty page.
+create-missing = false
+
+# Resolve from mdBook's context, not the caller's working directory.
+[preprocessor.hook-notes]
+command = """python3 -c '
+import json, pathlib, sys
+if sys.argv[1:2] == ["supports"]:
+    sys.exit(0)
+context, book = json.load(sys.stdin)
+sys.path.insert(0, str(pathlib.Path(context["root"]).resolve().parents[1] / "tools"))
+import modding_hook_notes as notes
+print(json.dumps(notes.preprocess(context, book)))
+'"""
+before = ["concept-pages", "links"]
+
+[preprocessor.neoforge-counterparts]
+command = """python3 -c '
+import json, pathlib, sys
+if sys.argv[1:2] == ["supports"]:
+    sys.exit(0)
+context, book = json.load(sys.stdin)
+sys.path.insert(0, str(pathlib.Path(context["root"]).resolve().parents[1] / "tools"))
+import neoforge_counterparts as counterparts
+print(json.dumps(counterparts.preprocess(context, book)))
+'"""
+before = ["concept-pages", "links"]
+
+[preprocessor.concept-pages]
+command = """python3 -c '
+import json, pathlib, sys
+if sys.argv[1:2] == ["supports"]:
+    sys.exit(0)
+context, book = json.load(sys.stdin)
+root = pathlib.Path(context["root"])
+sys.path.insert(0, str(root.parents[1] / "tools"))
+import modding_concept_pages as pages
+print(json.dumps(pages.expand(book, root / context["config"]["book"]["src"])))
+'"""
+before = ["links"]
+
+# The mod SDK reference's tables, from the published asset list, the input list and this checkout's surface export.
+# After concept-pages, which makes the SDK pages chapters.
+[preprocessor.sdk-tables]
+command = """python3 -c '
+import json, pathlib, sys
+if sys.argv[1:2] == ["supports"]:
+    sys.exit(0)
+context, book = json.load(sys.stdin)
+sys.path.insert(0, str(pathlib.Path(context["root"]).resolve().parents[1] / "tools"))
+import modding_sdk_tables as tables
+print(json.dumps(tables.preprocess(context, book)))
+'"""
+after = ["concept-pages"]
+before = ["links"]
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "coal"
+additional-css = ["theme/horizon.css"]
+git-repository-url = "https://github.com/horizon-rust/horizon"
+edit-url-template = "https://github.com/horizon-rust/horizon/edit/main/docs/modding/{path}"
+
+# The how-to groups are long: show each part's top chapters, open one to see its pages.
+[output.html.fold]
+enable = true
+level = 0

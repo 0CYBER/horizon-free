@@ -13,7 +13,7 @@ except ImportError:
 
 def game_environment(base, root):
     root = Path(root)
-    env = dict(base, HORIZON_TELEMETRY_URL='off')
+    env = dict(base)
     for key, folder in [('HORIZON_HOME', 'home'), ('HORIZON_LAUNCHER_HOME', 'launcher'),
                         ('XDG_DATA_HOME', 'data'), ('XDG_CONFIG_HOME', 'config')]:
         path = root / folder

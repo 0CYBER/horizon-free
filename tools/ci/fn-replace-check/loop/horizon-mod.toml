@@ -1,0 +1,58 @@
+id = "fnr_loop"
+name = "Function replacement check: loop"
+version = "0.1.0"
+description = "fn-replace: two slots in the published loop block_entities.tick, one counting its mod's own ticking block entities, a nested run of the loop, a HEAD mixin on its entry and a call-site mixin inside the loop body and an API listener at its entry"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+# An API listener at the loop's entry: its point's dispatcher and the loop's copy share the entry's
+# one replacement cell.
+[[inject]]
+id = "listen"
+at = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities"
+kind = "head"
+with = "entry_listener"
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+# Asked second: hoppers cooling down lose one tick of their real cooldown and skip their tick.
+[[native.loop]]
+id = "throttle"
+loop = "block_entities.tick"
+helper = "src/loops/throttle.rs"
+with = "Throttle"
+priority = 20
+
+# Asked first: counts what the loop visits and this mod's counters among it, runs the loop again from
+# inside it once, and always answers Continue.
+[[native.loop]]
+id = "count"
+loop = "block_entities.tick"
+helper = "src/loops/count.rs"
+with = "Count"
+priority = 10
+
+# A HEAD mixin on the loop's entry composes around the loop's copy.
+[[native.mixin]]
+id = "entry"
+target = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities"
+kind = "HEAD"
+helper = "src/mixins/entry.rs"
+bindings = [{ name = "game", ty = "&mut Game<'_>", value = "&mut *self" }]
+
+# A call-site row inside the loop body, run for each chunk the loop reaches: the loop's generic
+# function is copied for the slots' type, and this row is applied to that copy.
+[[native.mixin]]
+id = "inside"
+target = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities_with"
+kind = "MODIFY_EXPRESSION_VALUE"
+selector = "ticking(pos.0, pos.2)"
+require = 1
+ordinal = 0
+helper = "src/mixins/inside.rs"
+bindings = [{ name = "value", ty = "bool", value = "$value" }]

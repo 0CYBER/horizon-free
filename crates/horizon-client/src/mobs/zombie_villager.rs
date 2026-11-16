@@ -1,10 +1,10 @@
 //! Zombie villagers (`ZombieVillager`): the cure started by a golden apple on
 //! a weakened one, the conversion clock that iron bars and beds speed up, and
 //! the saved fields. Turning villagers into zombie villagers and back is done
-//! by the game (`game/zombie_villagers.rs`), which owns entity creation.
+//! by the game (`game/mobs/zombie_villagers.rs`), which owns entity creation.
 use super::{Mob, MobEvent, MobWorld, Species, goals::Cx, villager};
+use horizon_core::nbt::{Compound, Tag};
 use horizon_core::random::RandomSource;
-use horizon_world::nbt::{Compound, Tag};
 
 /// `VILLAGER_CONVERSION_WAIT_MIN` and the width of the random range.
 pub const WAIT_MIN: i32 = 3600;
@@ -64,10 +64,7 @@ pub fn start_converting(
     events: &mut Vec<MobEvent>,
 ) {
     villager::ext_mut(m).cure = Some(Cure { time, starter });
-    m.extra.effects.retain(|e| e.0 != "minecraft:weakness");
-    m.extra
-        .effect_fallbacks
-        .retain(|h| h.id != "minecraft:weakness");
+    m.retain_effects(|e| e.id != "minecraft:weakness");
     // Strength amplifier: min(difficulty id - 1, 0), always 0 with monsters.
     m.add_effect("minecraft:strength", time, 0);
     events.push(MobEvent::EntityEvent {
@@ -158,7 +155,8 @@ pub fn constructor_profession(m: &mut Mob) -> u8 {
 /// `living_random` so that the profession lands between the two.
 pub fn constructor_draws(m: &mut Mob) {
     if m.species() == Species::ZombieVillager {
-        m.extra.variant2 = constructor_profession(m);
+        m.extra.profession =
+            super::villager::ProfessionState::from_index(constructor_profession(m));
     }
     let _yaw = m.random.next_float();
 }
@@ -186,7 +184,8 @@ pub fn read_nbt(m: &mut Mob, tag: &Tag) {
     // no `VillagerData` (`orElseGet(initializeZombieVillagerData)`); every
     // other save keeps the profession the constructor drew.
     if finalized && !saved {
-        m.extra.variant2 = constructor_profession(m);
+        m.extra.profession =
+            super::villager::ProfessionState::from_index(constructor_profession(m));
     }
     let cure = parse_cure(tag);
     let e = villager::ext_mut(m);
@@ -206,10 +205,7 @@ pub fn read_nbt(m: &mut Mob, tag: &Tag) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_core::{
-        geometry::Vec3,
-        random::{EntityRandom, LegacyRandom},
-    };
+    use horizon_core::{geometry::Vec3, random::LegacyRandom};
 
     fn kind() -> std::sync::Arc<super::super::MobType> {
         let mut kind = super::super::sensor_scan_tests::kind();
@@ -242,9 +238,13 @@ mod tests {
                 kind(),
                 Vec3::ZERO,
                 0.0,
-                EntityRandom::own(LegacyRandom::new(seed)),
+                horizon_core::random::EntityRandom::own(LegacyRandom::new(seed)),
             );
-            assert_eq!(i32::from(m.extra.variant2), first, "seed {seed}");
+            assert_eq!(
+                i32::from(m.extra.profession.index().unwrap()),
+                first,
+                "seed {seed}"
+            );
             // That one draw and no other: the mob's random sits where
             // vanilla's does after `initializeZombieVillagerData`.
             assert_eq!(m.random.state(), after.state(), "seed {seed}");
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn only_a_finalized_save_without_villager_data_redraws_the_profession() {
         let load = |m: &mut Mob, snbt: &str| {
-            let tag = horizon_world::nbt::parse_snbt(snbt).unwrap().0;
+            let tag = horizon_core::nbt::parse_snbt(snbt).unwrap().0;
             read_nbt(m, &tag);
         };
         // Seed 42: the constructor's draw is 5, its second draw 3.
@@ -266,21 +266,21 @@ mod tests {
             kind(),
             Vec3::ZERO,
             0.0,
-            EntityRandom::own(LegacyRandom::new(42)),
+            horizon_core::random::EntityRandom::own(LegacyRandom::new(42)),
         );
         let before = kept.random.state();
         load(&mut kept, "{}");
-        assert_eq!(kept.extra.variant2, 5);
+        assert_eq!(kept.extra.profession.index(), Some(5));
         assert_eq!(kept.random.state(), before);
         let mut redrawn = Mob::with_random(
             1,
             kind(),
             Vec3::ZERO,
             0.0,
-            EntityRandom::own(LegacyRandom::new(42)),
+            horizon_core::random::EntityRandom::own(LegacyRandom::new(42)),
         );
         load(&mut redrawn, "{VillagerDataFinalized:1b}");
-        assert_eq!(redrawn.extra.variant2, 3);
+        assert_eq!(redrawn.extra.profession.index(), Some(3));
     }
 
     #[test]
@@ -291,12 +291,12 @@ mod tests {
         map.insert("ConversionTime".into(), Tag::Int(7));
         read_nbt(&mut m, &Tag::Compound(map));
         assert!(is_converting(&m));
-        assert!(m.extra.effects.iter().all(|e| e.0 != "minecraft:weakness"));
+        assert!(m.extra.effects.iter().all(|e| e.id != "minecraft:weakness"));
         assert!(
             m.extra
                 .effects
                 .iter()
-                .any(|e| e.0 == "minecraft:strength" && e.1 == 7)
+                .any(|e| e.id == "minecraft:strength" && e.duration == 7)
         );
     }
     #[test]
@@ -325,14 +325,22 @@ mod tests {
         let registry = assets.registry;
         let facts = crate::blocks::BlockFacts::load(&root, registry).unwrap();
         let motion = crate::motion::MotionResources::load(&root, &assets).unwrap();
-        let data = super::super::MobData::load(&root, &facts);
+        let data = super::super::MobData::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            &facts,
+        );
         let types = super::super::MobTypes::load(&root).unwrap();
-        let biomes = crate::biome::Biomes::load(&root).unwrap();
+        let biomes = crate::biome::Biomes::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        )
+        .unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
         let items = crate::items::Items::load(
             &root,
             registry,
             &facts,
             &horizon_world::loot::PackOverlay::NONE,
+            &defaults,
         )
         .unwrap();
         let collision = std::sync::Arc::new(crate::collisions::load(&root, registry).unwrap());
@@ -342,16 +350,24 @@ mod tests {
         let world = crate::world::World::new(air, 0);
         let lid_openers = std::collections::HashMap::new();
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
+            goal_host: None,
+            live_mobs: None,
             teams: Default::default(),
+            professions: crate::mobs::villager::profession_table(),
+            loop_context: crate::test_resources::server_loop_context(),
             world: &world,
             registry,
             facts: &facts,
             fluid_tables: &motion.fluids,
+            attributes: &motion.attributes,
             movement: &motion.blocks,
             collision: &collision,
             suffocation: &suffocation,
             data: &data,
             player: None,
+            player_identity: None,
+            player_selection: None,
             controlling_player_movement: None,
             nearest_player: None,
             others: &[],
@@ -361,6 +377,7 @@ mod tests {
             foreign: None,
             others_grid: None,
             others_index: None,
+            passenger_objects: &[],
             others_villagers: None,
             others_solid: None,
             daylight: true,
@@ -384,7 +401,12 @@ mod tests {
             items: Some(&items),
             lid_openers: &lid_openers,
             mod_effects: None,
+            mob_hooks: None,
+            asks_animal_tame: false,
+            asks_living_destroy_block: false,
+            asks_baby_spawn: false,
             border: None,
+            section_writer: None,
         };
         for no_ai in [false, true] {
             let kind = std::sync::Arc::new(types.types["minecraft:zombie_villager"].clone());
@@ -397,11 +419,12 @@ mod tests {
             m.persistent = true;
             m.no_ai = no_ai;
             start_converting(&mut m, None, 3, &mut Vec::new());
-            let mut level_random = crate::mobs::world::level_random(0);
+            let mut test_level = crate::health::TestLevel::new(0);
+            let level = &mut test_level.level();
             let mut ticks = 0;
             while ticks < 10 {
                 let mut events = Vec::new();
-                m.tick(&w, &mut level_random, &mut events);
+                m.tick(&w, level, &mut events);
                 ticks += 1;
                 if events
                     .iter()
@@ -444,7 +467,11 @@ mod tests {
                 })
             );
             assert!(!m.has_effect("minecraft:weakness"));
-            assert!(m.extra.effects.contains(&("minecraft:strength", 4000, 0)));
+            assert!(m.extra.effects.contains(&crate::mobs::StoredEffect::new(
+                "minecraft:strength",
+                4000,
+                0
+            )));
             assert_eq!(events.len(), 1);
             let MobEvent::EntityEvent { mob, event, at } = events[0] else {
                 panic!("Starting a cure must broadcast an entity event");

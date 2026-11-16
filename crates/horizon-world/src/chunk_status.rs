@@ -1,7 +1,10 @@
 //! Pinned generation-status identities and ordering. A status describes progress;
 //! assigning one does not execute its generation task or implement lighting.
-use crate::{compression::invalid, heightmap::HeightmapType, nbt::Tag};
 use std::io;
+use {
+    crate::{compression::invalid, heightmap::HeightmapType},
+    horizon_core::nbt::Tag,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]

@@ -31,7 +31,7 @@ public final class VanillaBlockPropertiesOracle {
                 var p=properties.get(block);blocks.putByte(BuiltInRegistries.BLOCK.getKey(block).toString(),(byte)((on.getBoolean(p)?1:0)|(off.getBoolean(p)?2:0)|(replace.getBoolean(p)?4:0)|(liquid.getBoolean(p)?8:0)|(occlude.getBoolean(p)?16:0)));
             }
             var root=new CompoundTag();root.putInt("DataVersion",net.minecraft.SharedConstants.getCurrentVersion().dataVersion().version());root.put("states",states);root.put("blocks",blocks);root.put("occlusion",VanillaCollisionOracle.occlusionDefinitions());
-            try(var out=new DataOutputStream(Files.newOutputStream(dir.resolve("block-properties.nbt")))){NbtIo.write(root,out);}return;
+            try(var out=new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(dir.resolve("block-properties.nbt"))))){NbtIo.write(root,out);}return;
         }
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")))) {
             for(var state:Block.BLOCK_STATE_REGISTRY) {

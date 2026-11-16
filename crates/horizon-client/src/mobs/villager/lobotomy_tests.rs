@@ -80,6 +80,7 @@ fn stuck_in(
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_villager_in_a_one_by_one_cell_is_stuck_and_one_in_the_open_is_not() {
     // `None`: the prepared vanilla data is missing here, as in a fresh checkout.
     let Some(cell) = stuck_in(true, None, None, |_| {}) else {
@@ -116,6 +117,7 @@ fn a_villager_in_a_one_by_one_cell_is_stuck_and_one_in_the_open_is_not() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_rider_is_stuck_in_the_open_and_a_sleeper_is_not_in_a_cell() {
     let Some(rider) = stuck_in(false, None, None, |m| m.extra.mount = Some(7)) else {
         return;
@@ -149,6 +151,7 @@ fn used_librarian_offer() -> Trader {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
     // (block at the remembered site, its x, day time, restocked)
     for (block, x, day_time, restocked) in [
@@ -163,54 +166,60 @@ fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
         ("minecraft:lectern", 3, 3_000, false),
         ("minecraft:lectern", -4, 3_000, false),
     ] {
-        with_built_test_world(
-            &[],
-            |world, registry| {
-                build(world, registry, true, None, None);
-                if block != "minecraft:air" {
+        assert!(
+            with_built_test_world(
+                &[],
+                |world, registry| {
+                    build(world, registry, true, None, None);
                     world
                         .set(x, 64, 0, registry.default_state(block).unwrap())
                         .unwrap();
-                }
-            },
-            |w, types| {
-                let mut w = w.clone();
-                // Villager 1's turn to restock: (game_time + 1) is a multiple of 300.
-                w.game_time = 3_299;
-                w.day_time = day_time;
-                let mut m = villager(types, 1);
-                m.extra.variant2 = 9; // librarian
-                m.extra.home = Some([x, 64, 0]);
-                m.extra.trade = Some(Box::new(used_librarian_offer()));
-                assert!(step(&mut m, &w, 100), "stuck, so the brain is skipped");
-                let uses = m.extra.trade.as_ref().unwrap().offers[0].uses;
-                assert_eq!(
-                    uses == 0,
-                    restocked,
-                    "{block} at x {x}, day time {day_time}"
-                );
-            },
+                },
+                |w, types| {
+                    let mut w = w.clone();
+                    // Villager 1's turn to restock: (game_time + 1) is a multiple of 300.
+                    w.game_time = 3_299;
+                    w.day_time = day_time;
+                    let mut m = villager(types, 1);
+                    m.extra.profession =
+                        super::super::ProfessionState::from_id("minecraft:librarian");
+                    m.extra.home = Some([x, 64, 0]);
+                    m.extra.trade = Some(Box::new(used_librarian_offer()));
+                    assert!(step(&mut m, &w, 100), "stuck, so the brain is skipped");
+                    let uses = m.extra.trade.as_ref().unwrap().offers[0].uses;
+                    assert_eq!(
+                        uses == 0,
+                        restocked,
+                        "{block} at x {x}, day time {day_time}"
+                    );
+                },
+            ),
+            "vanilla data is missing"
         );
     }
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_released_villager_gets_its_brain_back_at_its_next_check() {
-    with_built_test_world(
-        &[],
-        |world, registry| build(world, registry, true, None, None),
-        |w, types| {
-            let mut w = w.clone();
-            let mut m = villager(types, 1);
-            w.game_time = 50;
-            assert!(step(&mut m, &w, 100), "walled in");
-            // It leaves the cell; the answer stands until the villager's turn (game time + 1 a multiple of 100).
-            m.position = Vec3::new(3.5, 64.0, 3.5);
-            w.game_time = 60;
-            assert!(step(&mut m, &w, 100), "no recheck before its turn");
-            w.game_time = 99;
-            assert!(!step(&mut m, &w, 100), "free at its recheck");
-        },
+    assert!(
+        with_built_test_world(
+            &[],
+            |world, registry| build(world, registry, true, None, None),
+            |w, types| {
+                let mut w = w.clone();
+                let mut m = villager(types, 1);
+                w.game_time = 50;
+                assert!(step(&mut m, &w, 100), "walled in");
+                // It leaves the cell; the answer stands until the villager's turn (game time + 1 a multiple of 100).
+                m.position = Vec3::new(3.5, 64.0, 3.5);
+                w.game_time = 60;
+                assert!(step(&mut m, &w, 100), "no recheck before its turn");
+                w.game_time = 99;
+                assert!(!step(&mut m, &w, 100), "free at its recheck");
+            },
+        ),
+        "vanilla data is missing"
     );
 }
 
@@ -245,6 +254,7 @@ fn pocket_is_stuck(cells: &[(i32, i32)], furnish: &[(i32, i32, &str)]) -> Option
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_villager_with_a_bed_or_a_second_cell_is_still_stuck_but_a_room_is_not() {
     let Some(two) = pocket_is_stuck(&[(0, 0), (1, 0)], &[]) else {
         return;

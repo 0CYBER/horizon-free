@@ -5,12 +5,12 @@
 //!
 //! usage: recipe_book_fixture RESOURCES CASES OUTPUT
 use horizon_client::recipe_book::{BookType, RecipeIndex, Settings};
+use horizon_core::nbt::Tag;
 use horizon_protocol::{
     buf::{Codec, Reader, Writer},
     packets::recipes::RecipeBookChangeSettings,
 };
 use horizon_world::loot::PackOverlay;
-use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{collections::BTreeSet, fs, path::Path};
 

@@ -125,8 +125,8 @@ pub fn animate(m: &mut Mob) {
 }
 /// The brain memory holding the explored positions
 /// (`SNIFFER_EXPLORED_POSITIONS`).
-pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
-    use horizon_world::nbt::Tag;
+pub fn to_nbt(m: &Mob, map: &mut horizon_core::nbt::Compound) {
+    use horizon_core::nbt::Tag;
     let list: Vec<Tag> = m
         .extra
         .positions
@@ -138,7 +138,7 @@ pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
             ])
         })
         .collect();
-    let mut memories = horizon_world::nbt::Compound::new();
+    let mut memories = horizon_core::nbt::Compound::new();
     if !list.is_empty() {
         memories.insert(
             "minecraft:sniffer_explored_positions".into(),
@@ -150,8 +150,8 @@ pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
         Tag::compound([("memories", Tag::Compound(memories))]),
     );
 }
-pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
-    use horizon_world::nbt::Tag;
+pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
+    use horizon_core::nbt::Tag;
     let Some(Tag::List(list)) = tag
         .get("Brain")
         .and_then(|b| b.get("memories"))

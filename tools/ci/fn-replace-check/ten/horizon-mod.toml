@@ -1,0 +1,73 @@
+id = "fnr_ten"
+name = "Function replacement check: ten"
+version = "0.1.0"
+description = "fn-replace: ten HEAD mixins on ten functions, for build timing"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.mixin]]
+id = "head0"
+target = "horizon_client::game::native_item_entity_refs::Game<'_>::item_entity_owner"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head1"
+target = "horizon_client::game::raids::Game<'_>::load_raid_omen_position"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head2"
+target = "horizon_client::game::lan::Game<'_>::world_spawn_position"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head3"
+target = "horizon_client::game::commands::pregen::Game<'_>::pregen_runs_here"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head4"
+target = "horizon_client::game::test_instances::Game<'_>::clear_test_space"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head5"
+target = "horizon_client::game::boats::Game<'_>::boat_player_dismount_target"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head6"
+target = "horizon_client::game::shield::Game<'_>::player_blocking"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head7"
+target = "horizon_client::game::respawn_anchor::Game<'_>::beds_destroy_on_use"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head8"
+target = "horizon_client::game::leads::Game<'_>::break_leash"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+[[native.mixin]]
+id = "head9"
+target = "horizon_client::game::native_level_refs::Game<'_>::chunk_forced"
+kind = "HEAD"
+helper = "src/mixins/head.rs"

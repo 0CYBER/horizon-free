@@ -7,7 +7,7 @@ use horizon_client_core::{
     scoreboard,
     text::Text,
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `CommandBlockEntity.Mode`, in declaration order (the edit screen's mode
 /// button cycles through it).

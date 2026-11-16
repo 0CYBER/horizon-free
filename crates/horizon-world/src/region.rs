@@ -2,10 +2,6 @@
 //! as vanilla's `RegionFile` makes them (a file opened with `open_writable`).
 //! Exports never overwrite a file: use a separate directory for offline
 //! edits and copied .mcc data.
-use crate::{
-    compression::{Compression, invalid},
-    nbt::{self, Limits, NamedTag},
-};
 use horizon_core::position::ChunkPos;
 use std::{
     cell::RefCell,
@@ -13,6 +9,13 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU32, Ordering},
+};
+use {
+    crate::compression::{Compression, invalid},
+    horizon_core::{
+        nbt,
+        nbt::{Limits, NamedTag},
+    },
 };
 
 const SECTOR: usize = 4096;

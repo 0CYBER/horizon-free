@@ -1,0 +1,24 @@
+# The daily tests of horizon-relay: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-relay bridge_slots::a_bridge_gives_its_slot_back_when_a_peer_stops_reading test:it daily network
+horizon-relay bridge_slots::a_bridge_gives_its_slot_back_when_either_end_closes test:it daily network
+horizon-relay bridge_slots::a_waiting_join_holds_its_slot_and_a_timeout_gives_it_back test:it daily network
+horizon-relay bridge_slots::a_wrong_attach_or_a_refusal_holds_no_slot test:it daily network
+horizon-relay global_unknown::a_spent_global_budget_refuses_unknown_codes_but_not_real_ones test:it daily network
+horizon-relay hosts_per_address::an_address_holds_only_so_many_hosts test:it daily network
+horizon-relay open_per_address::silent_connections_past_an_address_cap_close_at_once test:it daily network
+horizon-relay ping_schedule::guest_joins_do_not_starve_a_hosts_pings test:it daily slow
+horizon-relay proxy_from::a_listed_load_balancer_names_the_client test:it daily network
+horizon-relay proxy_from::anyone_else_is_closed_before_the_first_line test:it daily network
+horizon-relay proxy_from::anyone_else_is_closed_unanswered test:it daily network
+horizon-relay tunnel::a_host_that_never_attaches_is_unreachable test:it daily network
+horizon-relay tunnel::a_short_code_through_a_self_hosted_relay test:it daily network
+horizon-relay tunnel::another_host_answering_first_does_not_end_the_join test:it daily network
+horizon-relay tunnel::bad_codes_unknown_codes_versions_and_ended_invites test:it daily network
+horizon-relay tunnel::health_and_whoami_answer_http test:it daily network
+horizon-relay tunnel::relayed_bandwidth_is_capped test:it daily slow
+horizon-relay tunnel::slow_first_lines_and_too_many_connections_are_closed test:it daily network
+horizon-relay tunnel::the_code_alone_connects_without_any_server test:it daily network
+horizon-relay tunnel::the_loopback_port_takes_only_the_client_with_its_token test:it daily network
+horizon-relay tunnel::unreachable_endpoints_fall_back_to_the_relay_in_the_code test:it daily network
+horizon-relay tunnel::wrong_secrets_fail test:it daily slow

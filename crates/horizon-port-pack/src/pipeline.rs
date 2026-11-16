@@ -23,7 +23,7 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Strin
 
 /// Step 1: the pack at `pack` to `<work>/pack.json`.
 pub fn import(source: &Path, work: &Path, log: Log) -> Result<import::Pack, String> {
-    let pack = import::import(source)?;
+    let pack = import::import_with_jars(source, Some(work))?;
     fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
     // A bad resource-pack entry must not stop the pack's mods from importing.
     match crate::resourcepacks::stage(source, work, &pack).and_then(|r| r.save(work)) {
@@ -254,9 +254,7 @@ pub fn loadable(mods: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, Vec<St
     let mut on: Vec<(std::path::PathBuf, String, Vec<String>)> = Vec::new();
     let mut off = Vec::new();
     for path in mods {
-        let manifest = fs::read_to_string(path.join(horizon_mods::manifest::MANIFEST))
-            .map_err(|e| e.to_string())
-            .and_then(|t| horizon_mods::Manifest::parse(&t));
+        let manifest = horizon_mod_package::Package::read(path).map(|package| package.manifest);
         let m = match manifest {
             Ok(m) => m,
             Err(e) => {
@@ -269,7 +267,7 @@ pub fn loadable(mods: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, Vec<St
             .collect();
         let clash = on
             .iter()
-            .find_map(|(_, id, ns)| horizon_mods::content::clash((id, ns), (&m.id, &owned)));
+            .find_map(|(_, id, ns)| horizon_mod_package::content::clash((id, ns), (&m.id, &owned)));
         match clash {
             Some(why) => off.push(format!("{} not loaded: {why}", m.id)),
             None => on.push((path.clone(), m.id, owned)),
@@ -341,14 +339,15 @@ pub fn port(
     work: &Path,
     resources: Option<&Path>,
     from: Option<&Path>,
+    hosts: &[&str],
     log: Log,
 ) -> Result<(fetch::Fetched, Vec<report::Row>), String> {
     let records = match read_json::<Vec<inventory::Record>>(&work.join("inventory.json")) {
         Ok(r) => r,
         Err(_) => inventory(work, false, log)?,
     };
-    crate::resourcepacks::fetch(work, log)?;
-    let fetched = fetch::fetch(work, &records, from, &portable, log)?;
+    crate::resourcepacks::fetch(work, hosts, log)?;
+    let fetched = fetch::fetch(work, &records, from, &portable, hosts, log)?;
     // The jars tell classes and tiers better than metadata alone.
     let records = inventory(work, true, log)?;
     let minecraft = minecraft(work);
@@ -436,6 +435,14 @@ mod tests {
         assert_eq!(on, [mods[0].clone(), mods[2].clone()]);
         assert_eq!(off.len(), 1);
         assert!(off[0].starts_with("betterfortresses not loaded"), "{off:?}");
+        // An invalid first package must not claim the shared namespace.
+        let asset = mods[0].join("assets/betterdungeons/model.bin");
+        fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        fs::write(asset, b"\0asm").unwrap();
+        let (on, off) = loadable(&mods);
+        assert_eq!(on, [mods[1].clone(), mods[2].clone()]);
+        assert_eq!(off.len(), 1);
+        assert!(off[0].contains("unsupported executable file"), "{off:?}");
         fs::remove_dir_all(&root).unwrap();
     }
 }

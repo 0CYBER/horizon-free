@@ -1,0 +1,11 @@
+# The daily tests of horizon-telemetry: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-telemetry a_failing_server_is_retried_later_and_keeps_the_items test:consent_gating daily network
+horizon-telemetry a_refused_batch_is_dropped test:consent_gating daily network
+horizon-telemetry an_outdated_consent_sends_nothing test:consent_gating daily network
+horizon-telemetry everything_off_sends_nothing_and_deletes_what_waited test:consent_gating daily network
+horizon-telemetry never_asked_sends_nothing test:consent_gating daily network
+horizon-telemetry only_the_allowed_kinds_leave_in_one_compressed_batch test:consent_gating daily network
+horizon-telemetry server_status::tests::a_server_answers_its_player_count lib daily network
+horizon-telemetry server_status::tests::nobody_listening_fails_within_the_timeout lib daily network
+horizon-telemetry the_preview_is_what_would_be_sent_and_deletion_names_the_install test:consent_gating daily network

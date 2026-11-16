@@ -154,7 +154,7 @@ pub fn sheep_color(climate: Climate, random: &mut impl RandomSource) -> u8 {
 /// `Codec.BYTE` (any number tag, `Number.byteValue`), then `ByIdMap.continuous`
 /// with `OutOfBoundsStrategy.ZERO` gives white for a byte outside 0..=15; the
 /// old `& 15` wrapped the id instead.
-pub fn saved_color(value: Option<&horizon_world::nbt::Tag>) -> u8 {
+pub fn saved_color(value: Option<&horizon_core::nbt::Tag>) -> u8 {
     value
         .and_then(horizon_world::datafix::dynamic::as_number)
         .map(|n| n.byte_value())
@@ -238,7 +238,7 @@ mod tests {
 #[cfg(test)]
 mod sheep_colour_save_tests {
     use super::*;
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     /// `Sheep.readAdditionalSaveData` reads `Color` with
     /// `DyeColor.LEGACY_ID_CODEC`, whose out-of-bounds strategy is white;

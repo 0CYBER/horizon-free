@@ -1,5 +1,5 @@
 use horizon_core::position::{BlockPos, ChunkPos};
-use horizon_world::{block_entities::ProtoBlockEntities, nbt::Tag};
+use {horizon_core::nbt::Tag, horizon_world::block_entities::ProtoBlockEntities};
 
 #[test]
 fn invalid_pending_data_is_rejected_without_replacing_active_or_pending_entries() {

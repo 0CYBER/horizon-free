@@ -24,6 +24,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_package_over_the_total_is_refused_while_it_is_read() {
     let dir = scratch("total");
     let path = dir.join("big.hshader");

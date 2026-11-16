@@ -4,11 +4,11 @@
     "builder": "DOCKERFILE",
     "dockerfilePath": "crates/horizon-mod-registry/Dockerfile",
     "watchPatterns": [
-      "/crates/horizon-mods/**",
-      "/crates/horizon-release-sign/**",
-      "/crates/horizon-shader-api/**",
-      "/crates/horizon-mod-registry/**",
-      "/Cargo.toml"
+      "/crates/**",
+      "/tools/layering/mod_vocab_state.json",
+      "/tools/mixins/narrow-reference-rule.patch",
+      "/Cargo.toml",
+      "/.dockerignore"
     ]
   },
   "deploy": {

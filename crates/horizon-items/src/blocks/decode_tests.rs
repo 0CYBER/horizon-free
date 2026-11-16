@@ -81,7 +81,7 @@ fn shape_identity_and_geometry_match_the_value_loader() -> crate::Result<()> {
 fn typed_fields_keep_defaults_duplicates_and_wrong_type_behavior() -> crate::Result<()> {
     let input = r#"{"states":[null,[],{"id":0,"id":2,"emission":4.5,"dampening":"15",
         "hardness":-0.0,"skylight_down":true,"offset":true,"outline_offset":"true",
-        "item":42,"render_shape":false,"sound":{"volume":null,"pitch":2,"break":{"id":"a\u0062"},
+        "item":42,"pick_item":"m:seed","render_shape":false,"sound":{"volume":null,"pitch":2,"break":{"id":"a\u0062"},
         "step":false,"hit":{"id":2}},"outline":[[0,1]],"unknown":{"nested":true}}]}"#;
     let parsed: Gameplay<'_> = serde_json::from_str(input)?;
     let entries = parsed.states.0.unwrap();
@@ -94,6 +94,7 @@ fn typed_fields_keep_defaults_duplicates_and_wrong_type_behavior() -> crate::Res
     assert_eq!(e.hardness.as_f64().unwrap().to_bits(), (-0.0f64).to_bits());
     assert!(e.skylight_down && e.outline_offset.unwrap_or(e.offset));
     assert_eq!(e.item, None);
+    assert_eq!(e.pick_item.as_deref(), Some("m:seed"));
     assert_eq!(e.render_shape, None);
     assert_eq!((e.sound.volume, e.sound.pitch), (1.0, 2.0));
     assert_eq!(e.sound.r#break.id.as_deref(), Some("ab"));

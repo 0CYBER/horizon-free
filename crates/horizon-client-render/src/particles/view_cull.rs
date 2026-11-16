@@ -42,7 +42,7 @@ impl ParticleSectionFrustumCache {
         world: [f64; 3],
         camera: DVec3,
         radius: f64,
-        frustum: &crate::gfx::Frustum,
+        frustum: &crate::gfx::JoinedFrusta,
     ) -> SectionFrustumResult {
         let Some(section) = world_section(world) else {
             return SectionFrustumResult::Intersects;
@@ -105,17 +105,12 @@ fn world_section(position: [f64; 3]) -> Option<[i32; 3]> {
 
 /// Whether `QuadParticleGroup`'s test keeps `particle`: its position this tick (camera-relative, not
 /// interpolated) is on or inside `view`, the camera's frustum pulled back [`PARTICLE_FRUSTUM_OFFSET`] blocks.
-pub(super) fn in_view(view: &crate::gfx::Frustum, particle: &Particle, camera: DVec3) -> bool {
+pub(super) fn in_view(view: &crate::gfx::JoinedFrusta, particle: &Particle, camera: DVec3) -> bool {
     let at = DVec3::from_array(particle.position) - camera;
     view.contains_point(at.as_vec3())
 }
 
 impl ParticleEngine {
-    /// The live particles, the ones a frame draws (`ParticleEngine.particles`); those added
-    /// since the last tick wait apart until it.
-    pub fn live(&self) -> &[Particle] {
-        &self.particles
-    }
     /// [`Self::render`], keeping only the particles inside `view`, the camera's frustum pulled
     /// back [`PARTICLE_FRUSTUM_OFFSET`] blocks (vanilla's `ParticleEngine.extract` and
     /// `QuadParticleGroup`): the test runs whatever the Particle Culling setting says. With
@@ -125,7 +120,7 @@ impl ParticleEngine {
         camera: DVec3,
         base: Quat,
         partial: f32,
-        view: Option<&crate::gfx::Frustum>,
+        view: Option<&crate::gfx::JoinedFrusta>,
         light_at: &dyn Fn([i32; 3]) -> u8,
         out: &mut Vec<Vertex>,
     ) {

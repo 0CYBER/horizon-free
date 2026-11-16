@@ -1,0 +1,202 @@
+{
+  "__private/points.rs::OPEN": {
+    "type": "Mutex<Open>",
+    "category": "dispatch table",
+    "reason": "Temporary points exception pending #2697: open injection-listener routing and seal state remain in the unchanged points module."
+  },
+  "block/part_state.rs::EDITING": {
+    "type": "RefCell<Vec<(AttachmentHolder,&'staticstr,&'staticstr)>>",
+    "category": "reentrancy guard",
+    "reason": "Per-thread stack of the Part-state edits open on this thread, by holder, so an edit of the same holder and key from inside its own edit is refused."
+  },
+  "client/arm_pose.rs::TEST_POSES": {
+    "type": "std::cell::Cell<Option<&'static[PoseInfo]>>",
+    "category": "Parts lookup table",
+    "reason": "Thread-local test lookup of installed Parts metadata by engine-issued slot."
+  },
+  "client/client_reload.rs::first::ID": {
+    "type": "LazyLock<Identifier>",
+    "category": "immutable cache",
+    "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
+  },
+  "client/client_reload.rs::last::ID": {
+    "type": "LazyLock<Identifier>",
+    "category": "immutable cache",
+    "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
+  },
+  "client/client_reload.rs::model_manager::ID": {
+    "type": "LazyLock<Identifier>",
+    "category": "immutable cache",
+    "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
+  },
+  "client/particle_keys.rs::resolved::EMPTY": {
+    "type": "OnceLock<Particles>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "content/crash.rs::CURRENT_CRASH_OWNER": {
+    "type": "Cell<CrashOwner>",
+    "category": "crash owner",
+    "reason": "The one addition to #2587: call and frame ownership stay local to avoid indirect callbacks on every subscribed dispatch."
+  },
+  "content/registry_keys.rs::ENCHANTMENTS": {
+    "type": "std::sync::LazyLock<std::sync::RwLock<Option<horizon_mod_runtime::registry_keys::Names>>,>",
+    "category": "Parts lookup table",
+    "reason": "Resolved engine registry identity lookup, replaced on registry reload; it stores installed slot mappings, not authoring requests."
+  },
+  "content/registry_keys.rs::MENUS": {
+    "type": "std::sync::LazyLock<std::sync::RwLock<Option<horizon_mod_runtime::registry_keys::Names>>,>",
+    "category": "Parts lookup table",
+    "reason": "Resolved engine registry identity lookup, replaced on registry reload; it stores installed slot mappings, not authoring requests."
+  },
+  "content/registry_keys.rs::resolved_block_keys::EMPTY": {
+    "type": "std::sync::OnceLock<horizon_mod_runtime::block_definitions::Blocks>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "content/registry_keys.rs::resolved_entity_types::EMPTY": {
+    "type": "std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "content/registry_keys.rs::resolved_items::EMPTY": {
+    "type": "std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "dispatch_scope.rs::BACKEND": {
+    "type": "OnceLock<Option<Backend>>",
+    "category": "set-once socket",
+    "reason": "Set-once platform callback registration; mutable platform storage lives above the engine."
+  },
+  "parts/block_entities.rs::resolved_block_entity_types::EMPTY": {
+    "type": "OnceLock<horizon_mod_runtime::registry_keys::Names>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "parts/effects.rs::resolved_effects::EMPTY": {
+    "type": "OnceLock<horizon_mod_runtime::registry_keys::Effects>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "parts/fluids.rs::resolved_fluids::EMPTY": {
+    "type": "OnceLock<horizon_mod_runtime::registry_keys::Names>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "parts/shared.rs::GAME_PARTS": {
+    "type": "RefCell<GamePartsLookup>",
+    "category": "Parts lookup table",
+    "reason": "Per-game lookup table and its world/thread validity context, replaced when world tags change."
+  },
+  "parts/shared.rs::INSTALLED": {
+    "type": "OnceLock<Installed>",
+    "category": "Parts lookup table",
+    "reason": "Frozen installed Parts inventory used by engine dispatch and registry lookups."
+  },
+  "parts/shared.rs::NO_PARTS": {
+    "type": "LazyLock<Parts>",
+    "category": "Parts lookup table",
+    "reason": "Immutable empty lookup result before installation."
+  },
+  "parts/shared.rs::TEST_PARTS": {
+    "type": "Cell<Option<&'staticInstalled>>",
+    "category": "Parts lookup table",
+    "reason": "Per-thread installed lookup inventory for isolated engine tests."
+  },
+  "parts/shared.rs::WORLDGEN_PARTS": {
+    "type": "RwLock<(u64,Option<Arc<Parts>>)>",
+    "category": "Parts lookup table",
+    "reason": "Part table the server published for world generation, with its generation, replaced at world open and /reload."
+  },
+  "parts/shared.rs::WORLDGEN_GENERATION": {
+    "type": "AtomicU64",
+    "category": "Parts lookup table",
+    "reason": "Generation of the published worldgen Part table, read without its lock."
+  },
+  "parts/shared.rs::WORLDGEN_TABLE": {
+    "type": "RefCell<Option<(u64,Option<Arc<Parts>>)>>",
+    "category": "Parts lookup table",
+    "reason": "Per-thread handle on the published worldgen Part table and its generation."
+  },
+  "parts/shared.rs::IN_FEATURE": {
+    "type": "Cell<bool>",
+    "category": "Parts lookup table",
+    "reason": "Per-thread flag keeping a running feature's worldgen Part table stable."
+  },
+  "parts/shared.rs::requested_keys::EMPTY": {
+    "type": "LazyLock<horizon_mod_runtime::registry_keys::Requests>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  },
+  "runtime.rs::MODS": {
+    "type": "OnceLock<Installed>",
+    "category": "dispatch table",
+    "reason": "Dependency-ordered hook routing and its per-mod enabled bits remain engine-owned."
+  },
+  "runtime.rs::MODS_SWITCHED": {
+    "type": "std::sync::atomic::AtomicU64",
+    "category": "dispatch table",
+    "reason": "Counts changes to the per-mod enabled bits it sits beside; read through the host's capability provider table, never by a guest's own copy."
+  },
+  "runtime.rs::TEST_MODS": {
+    "type": "std::cell::Cell<Option<&'staticInstalled>>",
+    "category": "dispatch table",
+    "reason": "Thread-local dispatch inventory for isolated engine tests."
+  },
+  "wire/mod.rs::RESOURCE_REACHED": {
+    "type": "std::cell::Cell<bool>",
+    "category": "reentrancy guard",
+    "reason": "Per-thread flag set while a Wire layout walk reaches a resource handle's codec, read by the Part state declaration's capability check."
+  },
+  "wire/wire_resources.rs::ACCESS": {
+    "type": "OnceLock<ResourceAccess>",
+    "category": "set-once socket",
+    "reason": "Set-once platform callback registration; mutable platform storage lives above the engine."
+  },
+  "wire/wire_resources.rs::shared::MARKER": {
+    "type": "std::sync::OnceLock<std::sync::Arc<Unsupported>>",
+    "category": "immutable cache",
+    "reason": "Shared immutable unsupported-resource marker with no writable payload."
+  },
+  "world/server_reload.rs::first::ID": {
+    "type": "LazyLock<Identifier>",
+    "category": "immutable cache",
+    "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
+  },
+  "world/server_reload.rs::functions::ID": {
+    "type": "LazyLock<Identifier>",
+    "category": "immutable cache",
+    "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
+  },
+  "world/server_reload.rs::last::ID": {
+    "type": "LazyLock<Identifier>",
+    "category": "immutable cache",
+    "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
+  },
+  "world/ticket_controller.rs::TEST_CONTROLLERS": {
+    "type": "std::cell::Cell<Option<&'static[ControllerInfo]>>",
+    "category": "Parts lookup table",
+    "reason": "Thread-local test lookup of installed Parts metadata by engine-issued slot."
+  },
+  "block/fluid_capability.rs::BUCKET_IDS": {
+    "type": "std::sync::LazyLock<[crate::Identifier;3]>",
+    "category": "immutable lookup cache",
+    "reason": "Three vanilla bucket identifiers resolved once; no live registration or world state."
+  },
+  "parts/datapack_registries.rs::PROCESS_DECLARATIONS": {
+    "type": "OnceLock<Vec<DatapackRegistryDeclaration>>",
+    "category": "test-support",
+    "reason": "Compiled only under cfg(any(test, feature = \"testing\")), never in a production build. Set once with installed datapack-registry declarations so connection tests on other threads can look them up; holds no live authoring requests."
+  },
+  "@generated/wire_generated.rs::WIRE_LAYOUT": {
+    "type": "::std::sync::LazyLock<u64>",
+    "category": "immutable ABI layout fingerprint",
+    "reason": "Hash of the build-fixed Wire layouts; the generator validates its sole declaration and type before writing output."
+  },
+  "world/startup_progress.rs::SCREEN": {
+    "type": "OnceLock<Arc<dynStartupScreen>>",
+    "category": "dispatch table",
+    "reason": "One engine-installed startup-screen service; registration contexts carry this same resource to native and wasm mods, and retained progress handles use it after registration."
+  }
+}

@@ -383,6 +383,7 @@ mod tests {
 
     #[test]
     fn disabled_coverage_builds_only_the_original_pipeline() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

@@ -44,8 +44,8 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 /// Record this thread's spans even with spans off, their wall time only (no CPU clock read):
-/// what the render thread's slow frames spent their time in, for the opt-in performance
-/// statistics (`telemetry::Session::frame`). The thread takes them every frame ([`take`]).
+/// what the render thread's slow frames spent their time in. The thread takes them every
+/// frame ([`take`]).
 pub fn record_here(on: bool) {
     HERE.with(|h| h.set(on));
 }
@@ -667,45 +667,54 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn samples_inside_a_span_carry_its_id() {
+        use horizon_threads::sampler::test_support::{ensure, first_passing_run};
         use horizon_threads::{sampler, work};
-        use std::time::{Duration, Instant};
-        let worker = std::thread::spawn(|| {
-            assert!(sampler::sampled_thread("spans-id-test"));
-            let config = sampler::Config {
-                hz: 1000,
-                ..Default::default()
-            };
-            let session = sampler::start(config, |n| n == "spans-id-test").unwrap();
-            // The sampler's timer runs on this thread's CPU clock, so a sample needs CPU time, not
-            // wall time: on a loaded machine a wall-clock loop is descheduled and gets far fewer.
-            let busy = |ms| {
-                let start = super::thread_cpu().unwrap();
-                let wall = Instant::now();
-                while super::thread_cpu().unwrap() - start < Duration::from_millis(ms)
-                    && wall.elapsed() < Duration::from_secs(30)
-                {
-                    std::hint::black_box(0);
-                }
-            };
-            super::time("spans_id_test_named", || busy(60));
-            assert_eq!(sampler::span(), 0);
-            busy(60);
-            let mut spans = Vec::new();
-            session.stop(|_, r| spans.push(r.ctx.span));
-            spans
+        let minimum = sampler::test_support::cpu_count(30) as usize;
+        // A loaded runner can starve one run of its samples: judged on the first of five runs
+        // whose checks all hold. A span left on, or samples filed under it outside, fail every run.
+        first_passing_run(|| {
+            let worker = std::thread::spawn(|| {
+                assert!(sampler::sampled_thread("spans-id-test"));
+                let config = sampler::Config {
+                    hz: 1000,
+                    ..Default::default()
+                };
+                let session = sampler::start(config, |n| n == "spans-id-test").unwrap();
+                // Match calibration's CPU-time denominator, not scheduler-dependent wall time.
+                let busy = |ms: u64| {
+                    let until = sampler::thread_cpu_ns() + ms * 1_000_000;
+                    while sampler::thread_cpu_ns() < until {
+                        std::hint::black_box(0);
+                    }
+                };
+                super::time("spans_id_test_named", || busy(60));
+                assert_eq!(sampler::span(), 0);
+                busy(60);
+                let mut spans = Vec::new();
+                session.stop(|_, r| spans.push(r.ctx.span));
+                spans
+            });
+            let spans = worker.join().unwrap();
+            let inside = |s: &u16| work::name(work::Space::Span, *s) == Some("spans_id_test_named");
+            let (named, plain) = (
+                spans.iter().filter(|s| inside(s)).count(),
+                spans.iter().filter(|s| **s == 0).count(),
+            );
+            ensure(named > minimum && plain > minimum, || {
+                format!(
+                    "{named} named, {plain} outside of {} samples (minimum {minimum} each)",
+                    spans.len()
+                )
+            })?;
+            ensure(named + plain == spans.len(), || "another span id".into())?;
+            // Equal CPU work should split attribution in half. At 250 Hz each 60 ms
+            // section has about 15 samples; 0.15 allows a few boundary samples, but
+            // rejects a substantial attribution bias without changing with the rate.
+            let named_share = named as f64 / (named + plain) as f64;
+            ensure((named_share - 0.5).abs() < 0.15, || {
+                format!("{named} named, {plain} outside")
+            })
         });
-        let spans = worker.join().unwrap();
-        let inside = |s: &u16| work::name(work::Space::Span, *s) == Some("spans_id_test_named");
-        let (named, plain) = (
-            spans.iter().filter(|s| inside(s)).count(),
-            spans.iter().filter(|s| **s == 0).count(),
-        );
-        assert!(
-            named > 30 && plain > 30,
-            "{named} named, {plain} outside of {} samples",
-            spans.len()
-        );
-        assert_eq!(named + plain, spans.len(), "no other span id");
     }
 
     /// A slow tick's notes are its slowest steps, slowest first; short steps and steps on a

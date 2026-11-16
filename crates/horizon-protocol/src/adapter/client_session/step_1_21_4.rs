@@ -142,12 +142,12 @@ fn heightmaps_down(r: &mut Reader, w: &mut Writer) -> Result<()> {
             .find(|(k, _)| *k == kind)
         {
             map.insert(
-                horizon_world::nbt::JavaString::from(name),
-                horizon_world::nbt::Tag::LongArray(longs),
+                horizon_core::nbt::JavaString::from(name),
+                horizon_core::nbt::Tag::LongArray(longs),
             );
         }
     }
-    w.nbt(&horizon_world::nbt::Tag::Compound(map));
+    w.nbt(&horizon_core::nbt::Tag::Compound(map));
     Ok(())
 }
 
@@ -453,14 +453,14 @@ mod tests {
         w.i32(0);
         let mut map = std::collections::BTreeMap::new();
         map.insert(
-            horizon_world::nbt::JavaString::from("WORLD_SURFACE"),
-            horizon_world::nbt::Tag::LongArray(vec![5]),
+            horizon_core::nbt::JavaString::from("WORLD_SURFACE"),
+            horizon_core::nbt::Tag::LongArray(vec![5]),
         );
         map.insert(
-            horizon_world::nbt::JavaString::from("WORLD_SURFACE_WG"),
-            horizon_world::nbt::Tag::LongArray(vec![6]),
+            horizon_core::nbt::JavaString::from("WORLD_SURFACE_WG"),
+            horizon_core::nbt::Tag::LongArray(vec![6]),
         );
-        w.nbt(&horizon_world::nbt::Tag::Compound(map));
+        w.nbt(&horizon_core::nbt::Tag::Compound(map));
         w.byte_array(&[]);
         let up = translate::client_layout_v1_21_4::chunk_up(&w.data).unwrap();
         let mut r = Reader::new(&up);

@@ -8,37 +8,6 @@ use horizon_core::{
     position::{BlockPos, ChunkPos},
     random::{LegacyRandom, PositionalRandom, RandomSource, XoroshiroRandom},
 };
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::{HeightmapState, HeightmapType},
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId, BlockStateJsonCodec},
-    worldgen::{
-        DecodeError,
-        anchor::WorldGenerationContext,
-        aquifer::{
-            AquiferConfig, AquiferError, DisabledAquifer, GlobalFluidPicker, NoiseBasedAquifer,
-            RegistryAquiferBlockStates,
-        },
-        biome_chunk::BiomeChunk,
-        biome_source::{BiomeSourceCatalog, BiomeSourceResolver},
-        biome_temperature::{BiomeTemperature, BiomeTemperatureSettings},
-        carver::{CarverCatalog, WorldCarver, generate_carving_mask},
-        carving::{CarvingBlocks, apply_carving_mask},
-        decode_noise,
-        density::DensityRegistry,
-        material_condition::{
-            MaterialConditionRegistry, MaterialNoiseSources, MaterialRuleError,
-            MaterialRuleLibrary, MaterialSurfaceQueries,
-        },
-        material_extensions::{ExtensionBlocks, ExtensionNoises, MaterialExtensions},
-        material_stage::{SurfaceInputs, TopMaterialInputs, build_surface, top_material},
-        material_surface::{ClayBandBlocks, MaterialSurface},
-        router::{NoiseRouter, RouterField},
-        tags::TagDefinitions,
-        terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk, fill_noise},
-    },
-};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -46,6 +15,39 @@ use std::{
     io::{self, Write},
     path::Path,
     sync::{Arc, Mutex},
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::{HeightmapState, HeightmapType},
+        registry::{BlockRegistry, BlockStateId, BlockStateJsonCodec},
+        worldgen::{
+            DecodeError,
+            anchor::WorldGenerationContext,
+            aquifer::{
+                AquiferConfig, AquiferError, DisabledAquifer, GlobalFluidPicker, NoiseBasedAquifer,
+                RegistryAquiferBlockStates,
+            },
+            biome_chunk::BiomeChunk,
+            biome_source::{BiomeSourceCatalog, BiomeSourceResolver},
+            biome_temperature::{BiomeTemperature, BiomeTemperatureSettings},
+            carver::{CarverCatalog, WorldCarver, generate_carving_mask},
+            carving::{CarvingBlocks, apply_carving_mask},
+            decode_noise,
+            density::DensityRegistry,
+            material_condition::{
+                MaterialConditionRegistry, MaterialNoiseSources, MaterialRuleError,
+                MaterialRuleLibrary, MaterialSurfaceQueries,
+            },
+            material_extensions::{ExtensionBlocks, ExtensionNoises, MaterialExtensions},
+            material_stage::{SurfaceInputs, TopMaterialInputs, build_surface, top_material},
+            material_surface::{ClayBandBlocks, MaterialSurface},
+            router::{NoiseRouter, RouterField},
+            tags::TagDefinitions,
+            terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk, fill_noise},
+        },
+    },
 };
 #[derive(Clone, Copy)]
 struct State {
@@ -272,7 +274,7 @@ where
         .map(|json| {
             data.source_catalog
                 .decode(&json.to_string())?
-                .resolve(&data.presets)
+                .resolve(&data.presets, seed)
         })
         .transpose()?;
     let climate = router.as_ref().map(|r| r.climate_sampler());

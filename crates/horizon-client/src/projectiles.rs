@@ -3,6 +3,9 @@
 //! snowballs, eggs, ender pearls, gravity 0.03) and fireballs
 //! (`AbstractHurtingProjectile`: no gravity, 0.1 acceleration, 0.95 inertia).
 //! The game applies the effects of a hit.
+#[cfg(test)]
+#[path = "projectile_rotation_tests.rs"]
+mod projectile_rotation_tests;
 use crate::entity_rules::EntityRules;
 use crate::mobs::Who;
 use horizon_core::{
@@ -12,6 +15,77 @@ use horizon_core::{
 };
 
 mod deflection;
+
+/// A new projectile entity's own random: vanilla seeds every entity's random
+/// unpredictably, and a projectile's spread (and an arrow's base damage) come
+/// from it, never from the shooter's random.
+pub fn own_random(_shooter: &crate::mobs::Mob) -> horizon_core::random::EntityRandom {
+    horizon_core::random::EntityRandom::own(crate::random_source::entity())
+}
+
+/// A projectile's `Entity.random`. Two projectiles are equal whatever their
+/// randoms, as with `ArrowState`: the state is not part of what they are.
+#[derive(Clone, Debug)]
+pub struct OwnRandom(pub horizon_core::random::EntityRandom);
+
+impl PartialEq for OwnRandom {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// `RandomSource.create()` for a new entity's random: `seedUniquifier ^
+/// nanoTime`, shared with the other entity constructors. Draws nothing from
+/// any level random.
+pub fn unique_random(_position: Vec3) -> horizon_core::random::EntityRandom {
+    horizon_core::random::EntityRandom::own(crate::random_source::entity())
+}
+
+/// `ProjectileDeflection`: how a projectile's movement turns.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Turn {
+    /// `REVERSE`: one float from the projectile's random, then backwards at `-power / 2`.
+    Reverse,
+    /// `AIM_DEFLECT` along the deflecting entity's look, or `MOMENTUM_DEFLECT`
+    /// along its normalized known speed. None (no deflecting entity) changes
+    /// nothing.
+    Direction(Option<Vec3>),
+}
+
+impl Turn {
+    /// The new movement, and the degrees `REVERSE` adds to the yaw. None when
+    /// the turn changes nothing. Only `REVERSE` draws from `random`.
+    pub fn apply(
+        self,
+        velocity: Vec3,
+        power: [f64; 3],
+        random: &mut impl RandomSource,
+    ) -> Option<(Vec3, f32)> {
+        match self {
+            Turn::Reverse => {
+                let rotation = 170.0 + random.next_float() * 20.0;
+                let v = velocity;
+                Some((
+                    Vec3::new(
+                        v.x * (-power[0] * 0.5),
+                        v.y * (-power[1] * 0.5),
+                        v.z * (-power[2] * 0.5),
+                    ),
+                    rotation,
+                ))
+            }
+            Turn::Direction(dir) => dir.map(|d| {
+                (
+                    Vec3::new(d.x * power[0], d.y * power[1], d.z * power[2]),
+                    0.0,
+                )
+            }),
+        }
+    }
+}
+
+/// A new owner as a projectile stores it: who, UUID and the guest's connection.
+pub type OwnerFields = (Option<Who>, Option<[i32; 4]>, Option<u32>);
 
 /// `AbstractArrow.startFalling`'s per-axis random velocity damping.
 pub fn start_falling_velocity(
@@ -32,6 +106,8 @@ pub struct ThrownType {
     pub id: &'static str,
     pub item: &'static str,
     pub damage: f32,
+    /// its index in [`thrown_types`]: the slot a per-type table keeps it under.
+    pub slot: usize,
 }
 /// the thrown types content mods declare, in registry order.
 static THROWN_TYPES: std::sync::OnceLock<Vec<ThrownType>> = std::sync::OnceLock::new();
@@ -42,22 +118,34 @@ pub fn register_thrown_types(types: impl IntoIterator<Item = (String, String, f3
         return false;
     }
     let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
-    let types = types.into_iter().map(|(id, item, damage)| ThrownType {
-        id: leak(id),
-        item: leak(item),
-        damage,
-    });
+    let types = types
+        .into_iter()
+        .enumerate()
+        .map(|(slot, (id, item, damage))| ThrownType {
+            id: leak(id),
+            item: leak(item),
+            damage,
+            slot,
+        });
     THROWN_TYPES.set(types.collect()).is_ok()
 }
 /// the content mods' thrown types, in registry order.
 pub fn thrown_types() -> &'static [ThrownType] {
     THROWN_TYPES.get().map_or(&[], Vec::as_slice)
 }
-/// the lib's tests' one mod type, `ruby:bolt` thrown from `ruby:gem`: the
-/// registry is set once per process, so every test registers the same.
+/// the lib's tests' mod types, `ruby:bolt` thrown from `ruby:gem` and the
+/// tameable `ruby:hound`, `ruby:tabby` and `ruby:macaw` (a wolf, a cat and a
+/// parrot): the registries are set once per process, so every test registers
+/// the same.
 #[cfg(test)]
 pub(crate) fn register_test_types() {
     let _ = register_thrown_types([("ruby:bolt".into(), "ruby:gem".into(), 2.0)]);
+    let _ = crate::lan::tracking::register_templates([
+        ("ruby:bolt".into(), "minecraft:snowball".into()),
+        ("ruby:hound".into(), "minecraft:wolf".into()),
+        ("ruby:macaw".into(), "minecraft:parrot".into()),
+        ("ruby:tabby".into(), "minecraft:cat".into()),
+    ]);
 }
 /// the mod type with entity type `id`; out of line, as vanilla's never are.
 #[cold]
@@ -207,12 +295,16 @@ fn potion_sprite(item: &str) -> &'static str {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Projectile {
+    /// Entity-owned registration metadata; content clones are detached.
+    pub attachment_lifetime: horizon_mod_runtime::attachments::AttachmentLifetime,
     /// When it joined its list ([`crate::join_seq`]); set by the list, not by the spawn site.
     pub join: crate::join_seq::JoinSeq,
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
     pub kind: ProjectileKind,
     pub owner: Option<Who>,
+    /// A non-living vehicle owner, for collision exclusion only, never hit credit.
+    pub owner_vehicle: Option<u32>,
     /// `Projectile.owner`'s UUID, kept while the owner is away (a guest who
     /// left, a mob not loaded): what its save writes as `Owner`.
     pub owner_uuid: Option<[i32; 4]>,
@@ -268,9 +360,9 @@ pub struct Projectile {
     /// `Entity.remainingFireTicks`: a thrown projectile that flew through a
     /// fire block burns for 160 ticks, with the flame drawn over it.
     pub fire_ticks: i32,
-    /// `Entity.DATA_AIR_SUPPLY_ID`, saved as a short but tracked as an int.
+    /// `Entity.random` of a projectile.
+    pub random: OwnRandom,
     pub air_supply: i32,
-    /// `Entity.hasVisualFire`: an optional saved flag independent of burning.
     pub has_visual_fire: bool,
     /// `Entity.fallDistance` (`fall_distance` in its save): a projectile sets
     /// its position without `Entity.move`, so it keeps what it was given.
@@ -349,8 +441,6 @@ pub trait ProjectileWorld {
     fn below_world_y(&self) -> f64 {
         -128.0
     }
-    /// Server-only mod-block contacts along the completed movement.
-    fn block_contacts(&self, _entity: i32, _kind: &str, _from: Vec3, _to: Vec3, _bounds: Aabb) {}
     /// `Level.isEmptyBlock`.
     fn empty(&self, _p: [i32; 3]) -> bool {
         true
@@ -469,10 +559,10 @@ pub fn egg_chicken_variant(stack: &crate::items::ItemStack) -> u8 {
         .as_ref()
         .and_then(|d| d.other("minecraft:chicken/variant"))
         .and_then(|t| match t {
-            horizon_world::nbt::Tag::String(s) => s.to_string().ok(),
+            horizon_core::nbt::Tag::String(s) => s.to_string().ok(),
             _ => None,
         });
-    // 🤖 Agent: a removed component resolves to absent, not to the item default.
+    // A removed component resolves to absent, not to the item default.
     let removed = stack
         .extra
         .as_ref()
@@ -505,12 +595,11 @@ impl Projectile {
             Vec3::new(p.x + half, bottom + height, p.z + half),
         )
     }
+    /// The collision target of the owner, independent of living damage credit.
+    pub fn collision_owner(&self) -> Option<Who> {
+        self.owner_vehicle.map(Who::Mob).or(self.owner)
+    }
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
-        let no_deflect_ticks = if kind == ProjectileKind::WindCharge {
-            5
-        } else {
-            0
-        };
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
         // `Fireball.defineSynchedData`: DATA_ITEM_STACK starts as a fire charge.
         let item = kind
@@ -525,15 +614,21 @@ impl Projectile {
         } else {
             0.1
         };
+        let no_deflect_ticks = if matches!(kind, ProjectileKind::WindCharge) {
+            5
+        } else {
+            0
+        };
         // An arrow keeps its own random (`Entity.random`) for its later draws.
-        let own = kind_is_arrow.then(new_own_random);
-        let uuid = own.as_ref().map(|o| o.1);
+        let (random, uuid) = new_own_random();
         Self {
+            attachment_lifetime: Default::default(),
             join: Default::default(),
             id: 0,
             egg_variant: None,
             kind,
             owner,
+            owner_vehicle: None,
             owner_uuid: None,
             guest: None,
             position,
@@ -558,33 +653,67 @@ impl Projectile {
             no_gravity: false,
             on_ground: false,
             fire_ticks: 0,
+            // Entity.random: seeded unpredictably, the position stands in.
+            random: OwnRandom(random),
             air_supply: 300,
             has_visual_fire: false,
             fall_distance: 0.0,
             synced_fire: false,
             item,
-            arrow: own.map(|(random, _)| Box::new(crate::arrows::ArrowState::new(random))),
-            uuid,
+            arrow: kind_is_arrow.then(|| Box::new(crate::arrows::ArrowState::new())),
+            uuid: Some(uuid),
         }
     }
     /// Entity box (`EntityType.sized` cube of `kind.size()`), as `bounds`.
     pub fn aabb(&self) -> Aabb {
         self.bounds()
     }
-    /// The arrow's own random from now on (`Entity.random`).
-    pub fn with_arrow_random(mut self, random: horizon_core::random::EntityRandom) -> Self {
-        if let Some(a) = self.arrow.as_mut() {
-            a.random = random;
+    /// `Entity.random`.
+    pub fn entity_random(&mut self) -> &mut horizon_core::random::EntityRandom {
+        &mut self.random.0
+    }
+    /// `Projectile.deflect(deflection, by, newOwner, byAttack, power)` on the
+    /// server, for every caller: gameplay and a mod's handle. A wind charge
+    /// in its first five ticks refuses with no change and no draw
+    /// (`WindCharge.deflect`). Otherwise the turn (its draw from this
+    /// projectile's random), then the new owner, then `onDeflection`: a
+    /// hurting projectile's acceleration power is 0.1 by an attack, else
+    /// halved. A turn also sets `needsSync`, and the rotation `REVERSE` adds
+    /// goes to `yRotO` too. Returns whether it deflected.
+    pub fn deflect(
+        &mut self,
+        turn: Turn,
+        power: [f64; 3],
+        owner: OwnerFields,
+        by_attack: bool,
+    ) -> bool {
+        if self.no_deflect_ticks > 0 {
+            return false;
         }
+        let velocity = self.velocity;
+        let turned = turn.apply(velocity, power, self.entity_random());
+        if let Some((velocity, rotation)) = turned {
+            self.velocity = velocity;
+            self.yaw += rotation;
+            self.previous_yaw += rotation;
+            self.needs_sync = true;
+        }
+        (self.owner, self.owner_uuid, self.guest) = owner;
+        self.owner_vehicle = None;
+        self.on_deflection(by_attack);
+        true
+    }
+    /// The entity random from now on (`Entity.random`): a probe's fixture
+    /// seeds it.
+    pub fn with_entity_random(mut self, random: horizon_core::random::EntityRandom) -> Self {
+        self.random.0 = random;
         self
     }
-    /// The shooter's bow enchantments; Flame spawns the arrow burning for 100
-    /// seconds (`projectile_spawned` ignite), Piercing sets its pierce level.
+    /// The shooter's bow enchantments; Piercing sets its pierce level. Flame's
+    /// `projectile_spawned` ignite runs once the arrow is in the level
+    /// (`Projectile.applyOnProjectileSpawned`).
     pub fn set_bonus(&mut self, bonus: crate::mobs::gear::ArrowBonus) {
         if let Some(a) = self.arrow.as_mut() {
-            if bonus.flame {
-                a.ignite_for_seconds(100.0);
-            }
             a.pierce = bonus.pierce.min(127) as u8;
         }
         self.bonus = bonus;
@@ -667,6 +796,14 @@ impl Projectile {
     /// `Entity.clearFire`: it counts from below zero, which `on_fire` reads as out.
     pub fn clear_fire(&mut self) {
         self.fire_ticks = self.fire_ticks.min(0);
+    }
+    /// `Entity.igniteForSeconds`: an arrow keeps its fire in its
+    /// `AbstractArrow` state, every other kind in its own.
+    pub fn ignite_for_seconds(&mut self, seconds: f32) {
+        match self.arrow.as_mut() {
+            Some(a) => a.ignite_for_seconds(seconds),
+            None => self.ignite_for_ticks((seconds * 20.0).floor() as i32),
+        }
     }
     /// `Entity.baseTick` counts down active fire after block effects. The two
     /// item fireballs then renew their own flame in `AbstractHurtingProjectile.tick`.
@@ -843,16 +980,15 @@ impl Projectile {
         speed: f32,
         uncertainty: f32,
     ) {
-        let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
-            .sqrt()
-            .max(1.0e-9);
+        let dir = Vec3::new(dir[0], dir[1], dir[2]).normalize();
         let spread = 0.017_227_5 * f64::from(uncertainty);
         let v = [
-            (dir[0] / len + random.triangle(0.0, spread)) * f64::from(speed),
-            (dir[1] / len + random.triangle(0.0, spread)) * f64::from(speed),
-            (dir[2] / len + random.triangle(0.0, spread)) * f64::from(speed),
+            (dir.x + random.triangle(0.0, spread)) * f64::from(speed),
+            (dir.y + random.triangle(0.0, spread)) * f64::from(speed),
+            (dir.z + random.triangle(0.0, spread)) * f64::from(speed),
         ];
         self.velocity = Vec3::new(v[0], v[1], v[2]);
+        self.needs_sync = true;
         self.update_rotation();
     }
     /// The UUID a loaded or summoned projectile keeps (`Entity.load`): the
@@ -865,18 +1001,9 @@ impl Projectile {
     /// `Projectile.shoot` from the projectile's own random, after its UUID's
     /// draws: an arrow's, or for another kind one made now.
     pub fn shoot_own(&mut self, dir: [f64; 3], speed: f32, uncertainty: f32) {
-        let mut random = match self.arrow.as_mut() {
-            Some(a) => a.random.clone(),
-            None => {
-                let (random, uuid) = new_own_random();
-                self.uuid = Some(uuid);
-                random
-            }
-        };
+        let mut random = self.random.0.clone();
         self.shoot(&mut random, dir, speed, uncertainty);
-        if let Some(a) = self.arrow.as_mut() {
-            a.random = random;
-        }
+        self.random.0 = random;
     }
     /// Projectile.shootFromRotation for player throws, from the projectile's
     /// own random (`shoot_own`).
@@ -890,15 +1017,16 @@ impl Projectile {
         source_velocity: Vec3,
         source_on_ground: bool,
     ) {
+        use horizon_core::geometry::trig::{DEG_TO_RAD, cos, sin};
         let (p, y, o) = (
-            pitch.to_radians(),
-            yaw.to_radians(),
-            (pitch + offset).to_radians(),
+            f64::from(pitch * DEG_TO_RAD),
+            f64::from(yaw * DEG_TO_RAD),
+            f64::from((pitch + offset) * DEG_TO_RAD),
         );
         let dir = [
-            f64::from(-y.sin() * p.cos()),
-            f64::from(-o.sin()),
-            f64::from(y.cos() * p.cos()),
+            f64::from(-sin(y) * cos(p)),
+            f64::from(-sin(o)),
+            f64::from(cos(y) * cos(p)),
         ];
         self.shoot_own(dir, speed, uncertainty);
         self.velocity = Vec3::new(
@@ -927,9 +1055,6 @@ impl Projectile {
         p.update_rotation();
         p
     }
-    /// `Fireball.setItem`: the item a fireball is drawn as. An empty stack
-    /// puts the default fire charge back, anything else is kept as a single
-    /// one (`copyWithCount(1)`); a kind that is no `Fireball` has no item.
     /// `ThrownEgg`'s item: what its hatchlings' variant comes from.
     pub fn set_egg_item(&mut self, stack: &crate::items::ItemStack) {
         if self.kind == ProjectileKind::Egg {
@@ -944,6 +1069,9 @@ impl Projectile {
         stack.count = 1;
         self.item = Some(stack);
     }
+    /// `Fireball.setItem`: the item a fireball is drawn as. An empty stack
+    /// puts the default fire charge back, anything else is kept as a single
+    /// one (`copyWithCount(1)`); a kind that is no `Fireball` has no item.
     pub fn set_item(&mut self, stack: crate::items::ItemStack) {
         if !self.kind.is_item_fireball() {
             return;
@@ -959,8 +1087,10 @@ impl Projectile {
     fn update_rotation(&mut self) {
         let v = self.velocity;
         let sd = (v.x * v.x + v.z * v.z).sqrt();
-        self.yaw = v.x.atan2(v.z).to_degrees() as f32;
-        self.pitch = v.y.atan2(sd).to_degrees() as f32;
+        use horizon_core::geometry::trig::atan2;
+        // Projectile.shoot uses Mth.atan2 and widened float degree constants.
+        self.yaw = (atan2(v.x, v.z) * 180.0 / f64::from(std::f32::consts::PI)) as f32;
+        self.pitch = (atan2(v.y, sd) * 180.0 / f64::from(std::f32::consts::PI)) as f32;
         // `Projectile.shoot` ends with `yRotO = getYRot(); xRotO = getXRot()`:
         // a freshly shot projectile interpolates from the rotation it was
         // aimed along, not from where it was created.
@@ -1016,6 +1146,17 @@ impl Projectile {
         self.previous_yaw = self.yaw;
         self.previous_pitch = self.pitch;
     }
+    /// `Entity.noPhysics` on the arrow part, with the synced flag a client
+    /// reads (`AbstractArrow`'s entity-data flags, bit 1): the tracker sends
+    /// them again on the next tick. False for a projectile with no arrow part.
+    pub fn set_no_physics(&mut self, no_physics: bool) -> bool {
+        let Some(arrow) = self.arrow.as_mut() else {
+            return false;
+        };
+        arrow.no_physics = no_physics;
+        self.needs_sync = true;
+        true
+    }
     /// `Entity.move(PISTON)`: the position only; `release_after_piston` follows
     /// (`AbstractArrow.move`).
     pub fn move_by_piston(&mut self, movement: Vec3) {
@@ -1034,7 +1175,7 @@ impl Projectile {
             return;
         };
         if arrow.in_ground && !arrow.no_physics && no_block_collision {
-            self.velocity = start_falling_velocity(self.velocity, &mut arrow.random);
+            self.velocity = start_falling_velocity(self.velocity, &mut self.random.0);
             arrow.in_ground = false;
             arrow.life = 0;
             self.stuck = false;
@@ -1221,7 +1362,7 @@ impl Projectile {
         let margin = self.hit_margin();
         let mut best: Option<(Who, Vec3, f64)> = None;
         for (who, b) in w.targets() {
-            if Some(*who) == self.owner && !self.left_owner {
+            if Some(*who) == self.collision_owner() && !self.left_owner {
                 continue;
             }
             if let Some(at) = b.inflate(Vec3::new(margin, margin, margin)).clip(from, end) {
@@ -1235,7 +1376,7 @@ impl Projectile {
             let owner_box = w
                 .targets()
                 .iter()
-                .find(|(who, _)| Some(*who) == self.owner)
+                .find(|(who, _)| Some(*who) == self.collision_owner())
                 .map(|(_, b)| *b);
             self.left_owner =
                 owner_box.is_none_or(|b| !b.inflate(Vec3::new(1.0, 1.0, 1.0)).contains(from));
@@ -1476,19 +1617,15 @@ impl Projectile {
         if self.applies_block_effects() {
             self.bubble_columns_along(w, from);
         }
-        w.block_contacts(
-            self.id as i32,
-            self.kind.id(),
-            from,
-            self.position,
-            self.bounds(),
-        );
+        // The block sweep runs at the batch that ticks the projectile
+        // (Game::sweep_projectile_inside), where the level host for a part's
+        // contact is: this tick's world view is read-only.
         self.fire_tick(w, client_side);
         self.stuck_tick(w, from);
         if !base_first {
             self.tick_shoot_event();
         }
-        // WindCharge.tick: after AbstractHurtingProjectile.tick.
+        // `WindCharge.tick`: counted down after the tick.
         self.no_deflect_ticks = self.no_deflect_ticks.saturating_sub(1);
         result
     }
@@ -1606,7 +1743,7 @@ impl Projectile {
         let margin = self.hit_margin();
         let mut best: Option<(Who, Vec3, f64)> = None;
         for (who, b) in w.targets() {
-            if Some(*who) == self.owner && !self.left_owner {
+            if Some(*who) == self.collision_owner() && !self.left_owner {
                 continue;
             }
             let inflated = b.inflate(Vec3::new(margin, margin, margin));
@@ -1622,7 +1759,7 @@ impl Projectile {
             let owner_box = w
                 .targets()
                 .iter()
-                .find(|(who, _)| Some(*who) == self.owner)
+                .find(|(who, _)| Some(*who) == self.collision_owner())
                 .map(|(_, b)| *b);
             self.left_owner = owner_box
                 .is_none_or(|b| !b.inflate(Vec3::new(1.0, 1.0, 1.0)).contains(self.position));
@@ -1710,20 +1847,23 @@ impl Projectile {
         (alive, Hit::None)
     }
     /// AbstractArrow.onHitEntity damage: ceil(speed * base) plus crit bonus.
-    pub fn arrow_damage(&self, random: &mut impl RandomSource) -> f32 {
-        let ProjectileKind::Arrow {
-            base_damage,
-            critical,
-            ..
-        } = self.kind
-        else {
+    pub fn arrow_damage(&mut self) -> f32 {
+        let ProjectileKind::Arrow { base_damage, .. } = self.kind else {
+            return 0.0;
+        };
+        self.arrow_damage_with_base(base_damage)
+    }
+    /// Finish an arrow hit after enchantments transform its base damage, before
+    /// speed scaling, rounding and the projectile's critical random draw.
+    pub fn arrow_damage_with_base(&mut self, base_damage: f64) -> f32 {
+        let ProjectileKind::Arrow { critical, .. } = self.kind else {
             return 0.0;
         };
         let v = self.velocity;
         let speed = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
         let mut damage = (speed * base_damage).clamp(0.0, f64::from(i32::MAX)).ceil() as i32;
         if critical {
-            let bonus = random.next_int_bound(damage / 2 + 2).unwrap_or(0);
+            let bonus = self.random.0.next_int_bound(damage / 2 + 2).unwrap_or(0);
             damage = damage.saturating_add(bonus);
         }
         damage as f32
@@ -1780,7 +1920,6 @@ impl Projectile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_core::random::LegacyRandom;
 
     #[test]
     fn egg_variant_honors_explicit_removal() {
@@ -1793,7 +1932,7 @@ mod tests {
         let mut data = horizon_items::item_data::StackData::default();
         data.set_other(
             "!minecraft:chicken/variant",
-            Some(horizon_world::nbt::Tag::Compound(Default::default())),
+            Some(horizon_core::nbt::Tag::Compound(Default::default())),
         );
         blue.extra = Some(Box::new(data));
         assert_eq!(
@@ -1991,7 +2130,7 @@ mod tests {
         p.velocity = Vec3::new(1.0, -2.0, 3.0);
         p.stuck = true;
         p.arrow.as_mut().unwrap().in_ground = true;
-        let mut random = p.arrow.as_ref().unwrap().random.clone();
+        let mut random = p.random.0.clone();
         let expected = start_falling_velocity(p.velocity, &mut random);
 
         p.move_by_piston(Vec3::new(0.5, 0.0, 0.0));
@@ -2472,6 +2611,7 @@ mod tests {
             id: "ruby:bolt",
             item: "ruby:gem",
             damage: 2.0,
+            slot: 0,
         };
         let start = Vec3::new(0.0, 100.0, 0.0);
         let mut snowball = Projectile::new(ProjectileKind::Snowball, start, None);
@@ -2519,9 +2659,19 @@ mod tests {
         assert!(
             thrown_type("ruby:late").is_none() && thrown_by_item("minecraft:snowball").is_none()
         );
-        // its template's tracking settings, not the builder defaults.
+        // its template's tracking settings, not the builder defaults, as a
+        // living type's are (arismoko/horizon#4031): a wolf's range of 10 chunks, a cat's and
+        // a parrot's of 8, not 5; the vanilla types' own stay as they are.
         let settings = crate::lan::tracking::settings;
         assert_eq!(settings("ruby:bolt"), settings("minecraft:snowball"));
+        for (vanilla, range, kind) in [
+            ("minecraft:wolf", 10, "ruby:hound"),
+            ("minecraft:cat", 8, "ruby:tabby"),
+            ("minecraft:parrot", 8, "ruby:macaw"),
+        ] {
+            assert_eq!(settings(vanilla), (range, 3, true), "{vanilla}");
+            assert_eq!(settings(kind), (range, 3, true), "{kind}");
+        }
         assert_eq!(settings("ruby:late"), (5, 3, true));
     }
 
@@ -2621,9 +2771,8 @@ mod tests {
             None,
         );
         p.velocity = Vec3::new(3.0, 0.0, 0.0);
-        let mut r = LegacyRandom::new(1);
         // ceil(3 * 2) = 6 for a non-critical arrow.
-        assert_eq!(p.arrow_damage(&mut r), 6.0);
+        assert_eq!(p.arrow_damage(), 6.0);
     }
     #[test]
     fn a_dragon_fireball_turns_towards_its_flight_a_fifth_per_tick() {
@@ -2859,6 +3008,114 @@ mod trail_tests {
     }
 }
 #[cfg(test)]
+mod deflect_tests {
+    use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+
+    struct Empty(Vec<(Who, Aabb)>);
+    impl ProjectileWorld for Empty {
+        fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            None
+        }
+        fn in_water(&self, _: Aabb) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &self.0
+        }
+    }
+
+    fn none() -> OwnerFields {
+        (None, None, None)
+    }
+
+    /// `WindCharge.deflect` refuses while `noDeflectTicks` > 0, which counts
+    /// down after each of its ticks: five ticks old, it deflects.
+    #[test]
+    fn a_wind_charge_refuses_a_deflection_for_its_first_five_ticks() {
+        let w = Empty(vec![]);
+        let mut p = Projectile::new(
+            ProjectileKind::WindCharge,
+            Vec3::new(0.0, 100.0, 0.0),
+            Some(Who::Mob(3)),
+        );
+        p.velocity = Vec3::new(0.0, 1.0, 0.0);
+        assert_eq!(p.no_deflect_ticks, 5);
+        for left in (1..=5).rev() {
+            let (velocity, random) = (p.velocity, p.random.0.clone());
+            assert!(!p.deflect(Turn::Reverse, [1.0; 3], none(), true));
+            assert_eq!((p.velocity, p.owner), (velocity, Some(Who::Mob(3))));
+            assert_eq!(p.random.0.clone().next_float(), random.clone().next_float());
+            assert_eq!(p.no_deflect_ticks, left);
+            p.tick(&w);
+            p.velocity = velocity;
+        }
+        assert_eq!(p.no_deflect_ticks, 0);
+        assert!(p.deflect(Turn::Reverse, [1.0; 3], none(), true));
+        assert_eq!(p.owner, None);
+        assert_eq!(p.acceleration, 0.1);
+        // A breeze's wind charge, and any other kind, has no such window.
+        let breeze = Projectile::new(ProjectileKind::BreezeWindCharge, Vec3::ZERO, None);
+        assert_eq!(breeze.no_deflect_ticks, 0);
+    }
+
+    /// Two projectiles made at one spot do not share a random stream.
+    #[test]
+    fn projectiles_at_one_spot_get_independent_randoms() {
+        let at = Vec3::new(1.0, 64.0, 2.0);
+        let mut a = Projectile::new(ProjectileKind::Snowball, at, None);
+        let mut b = Projectile::new(ProjectileKind::Snowball, at, None);
+        let (fa, fb): (Vec<f32>, Vec<f32>) = (0..6)
+            .map(|_| (a.random.0.next_float(), b.random.0.next_float()))
+            .unzip();
+        assert_ne!(fa, fb);
+        let arrow = ProjectileKind::Arrow {
+            base_damage: 2.0,
+            critical: false,
+            effect: None,
+        };
+        let mut a = Projectile::new(arrow.clone(), at, None);
+        let mut b = Projectile::new(arrow, at, None);
+        assert_ne!(
+            a.entity_random().next_float(),
+            b.entity_random().next_float()
+        );
+        assert_ne!(
+            unique_random(at).next_float(),
+            unique_random(at).next_float()
+        );
+    }
+
+    /// `REVERSE` takes exactly one float from the projectile's `Entity.random`.
+    #[test]
+    fn reverse_draws_one_float_from_the_projectiles_own_random() {
+        let mut ball = Projectile::fireball(
+            ProjectileKind::LargeFireball { power: 1 },
+            Vec3::ZERO,
+            None,
+            [1.0, 0.0, 0.0],
+        );
+        ball.random = OwnRandom(horizon_core::random::EntityRandom::own(LegacyRandom::new(
+            42,
+        )));
+        let mut expect = LegacyRandom::new(42);
+        let draw = expect.next_float();
+        let yaw = ball.yaw;
+        assert!(ball.deflect(Turn::Reverse, [1.0; 3], none(), false));
+        assert_eq!(ball.yaw, yaw + (170.0 + draw * 20.0));
+        assert_eq!(ball.previous_yaw, yaw + (170.0 + draw * 20.0));
+        assert_eq!(
+            ball.random.0.clone().next_float(),
+            expect.clone().next_float()
+        );
+        let draw = expect.next_float();
+        let yaw = ball.yaw;
+        assert!(ball.deflect(Turn::Reverse, [1.0; 3], none(), false));
+        assert_eq!(ball.yaw, yaw + (170.0 + draw * 20.0));
+        assert_eq!(ball.random.0.clone().next_float(), expect.next_float());
+    }
+}
+#[cfg(test)]
 mod pearl_owner_tests {
     use super::*;
 
@@ -3003,8 +3260,7 @@ mod render_light_tests {
 mod arrow_color_tests {
     use super::*;
     use crate::items::ItemStack;
-    use horizon_core::random::LegacyRandom;
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     /// `Arrow.updateColor`: `ID_EFFECT_COLOR` is -1 only while the pickup
     /// item's contents are `PotionContents.EMPTY`, and otherwise
@@ -3020,9 +3276,7 @@ mod arrow_color_tests {
                 effect: None,
             };
             let mut p = Projectile::new(kind, Vec3::new(0.5, 64.0, 0.5), None);
-            let mut arrow = crate::arrows::ArrowState::new(
-                horizon_core::random::EntityRandom::own(LegacyRandom::new(0)),
-            );
+            let mut arrow = crate::arrows::ArrowState::new();
             arrow.set_item(stack);
             p.arrow = Some(Box::new(arrow));
             p.arrow_effect_color()
@@ -3056,3 +3310,32 @@ mod arrow_color_tests {
     }
 }
 crate::impl_joined!(Projectile);
+horizon_mod_runtime::impl_attachment_lifetime!(Projectile);
+
+#[cfg(test)]
+mod enchanted_arrow_order_tests {
+    use super::*;
+    #[test]
+    fn enchanted_base_is_scaled_before_rounding_and_critical_draw() {
+        let mut arrow = Projectile::new(
+            ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: false,
+                effect: None,
+            },
+            Vec3::ZERO,
+            None,
+        );
+        arrow.velocity = Vec3::new(3.0, 0.0, 0.0);
+        // Power I adds 1 to base damage, not to the scaled hit.
+        assert_eq!(arrow.arrow_damage_with_base(3.0), 9.0);
+        if let ProjectileKind::Arrow { critical, .. } = &mut arrow.kind {
+            *critical = true;
+        }
+        arrow.random.0 =
+            horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(42));
+        // java.util.Random(42): nextInt(6) = 2.
+        assert_eq!(arrow.arrow_damage_with_base(3.0), 11.0);
+        assert_eq!(arrow.random.0.next_int(), 234785527);
+    }
+}

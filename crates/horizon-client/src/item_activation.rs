@@ -19,6 +19,7 @@ pub struct ItemActivation {
 
 impl ItemActivation {
     /// `ItemActivation.tick`: the item goes when the count reaches 0.
+    #[horizon_mod_api_macros::replaceable]
     pub fn tick(&mut self) {
         if self.ticks > 0 {
             self.ticks -= 1;
@@ -58,6 +59,7 @@ impl ItemActivation {
 /// 40 ticks brings the item from 10 blocks out to 1 and back while it turns
 /// 900 degrees about Y and rocks 6 degrees about X and Z, drawn with the
 /// hand's projection and no camera transform.
+#[horizon_mod_api_macros::replaceable]
 pub fn animation_pose(ticks: i32, partial: f32, off_x: f32, off_y: f32, aspect: f32) -> Mat4 {
     let tick = ANIMATION_LENGTH - ticks;
     let t = (tick as f32 + partial) / 40.0;

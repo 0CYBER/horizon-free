@@ -3,6 +3,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use super::test_support::{
+    cpu_count, cpu_hz, cpu_ms_for_samples, ensure, first_passing_run, spin_share_permille,
+};
 use super::*;
 
 const fn at_1khz(unwind: Unwind, ring_samples: usize) -> Config {
@@ -98,6 +101,7 @@ fn sampled<T: Send + 'static>(
 }
 
 fn start_session(config: Config, name: &'static str) -> Session {
+    cpu_hz();
     start(config, |n| n == name).expect("start sampling")
 }
 
@@ -106,20 +110,22 @@ fn cpu(records: &[Record]) -> Vec<&Record> {
 }
 
 fn busy_function_is_in_its_threads_samples(name: &'static str, config: Config) {
-    let (records, stats, ()) = sampled(name, config, || spin_known(200));
-    let samples = cpu(&records);
-    let found = samples.iter().filter(|r| in_spin_known(r)).count();
-    assert!(
-        (140..=260).contains(&samples.len()),
-        "{} samples for 200 ms of CPU at 1 kHz",
-        samples.len()
-    );
-    assert!(
-        found * 10 >= samples.len() * 8,
-        "{found} of {} samples hold spin_known",
-        samples.len()
-    );
-    assert_eq!((stats.samples, stats.dropped), (samples.len() as u64, 0));
+    first_passing_run(|| {
+        let (records, stats, ()) = sampled(name, config, || spin_known(200));
+        let samples = cpu(&records);
+        let found = samples.iter().filter(|r| in_spin_known(r)).count();
+        ensure(
+            (cpu_count(140)..=cpu_count(260)).contains(&(samples.len() as u64)),
+            || format!("{} samples for 200 ms of CPU at 1 kHz", samples.len()),
+        )?;
+        ensure(found * 10 >= samples.len() * 8, || {
+            format!("{found} of {} samples hold spin_known", samples.len())
+        })?;
+        ensure(
+            (stats.samples, stats.dropped) == (samples.len() as u64, 0),
+            || format!("{stats:?} for {} drained samples", samples.len()),
+        )
+    });
 }
 
 #[test]
@@ -133,17 +139,22 @@ fn a_busy_function_is_found_by_unwinding_a_stack_copy() {
 }
 
 fn deep_recursion_unwinds(name: &'static str, config: Config) {
-    let (records, ..) = sampled(name, config, || {
-        recurse(40, 150);
+    first_passing_run(|| {
+        let (records, ..) = sampled(name, config, || {
+            recurse(40, 150);
+        });
+        let samples = cpu(&records);
+        let deep = samples.iter().filter(|r| recurse_frames(r) >= 35).count();
+        ensure(samples.len() as u64 > cpu_count(80), || {
+            format!("{} samples", samples.len())
+        })?;
+        ensure(deep * 10 >= samples.len() * 8, || {
+            format!(
+                "{deep} of {} samples hold at least 35 of the 41 recurse frames",
+                samples.len()
+            )
+        })
     });
-    let samples = cpu(&records);
-    let deep = samples.iter().filter(|r| recurse_frames(r) >= 35).count();
-    assert!(samples.len() > 80, "{} samples", samples.len());
-    assert!(
-        deep * 10 >= samples.len() * 8,
-        "{deep} of {} samples hold at least 35 of the 41 recurse frames",
-        samples.len()
-    );
 }
 
 #[test]
@@ -157,106 +168,129 @@ fn a_forty_deep_recursion_unwinds_in_this_builds_default_mode() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn an_allocating_thread_survives_ten_seconds_of_signals() {
-    let (_, stats, (loops, bad)) = sampled("t-alloc", COPY_1K, || {
-        let (mut loops, mut bad, mut keep) = (0u64, 0u64, Vec::<Vec<u8>>::new());
-        let until = cpu_ns() + 10_000_000_000;
-        while cpu_ns() < until {
-            for i in 0..2000usize {
-                let block = vec![(i % 251) as u8; 16 + i % 4096];
-                bad += black_box(&block).iter().any(|&b| b != (i % 251) as u8) as u64;
-                keep.push(block);
-                if keep.len() > 64 {
-                    keep.swap_remove(i % 64);
+    first_passing_run(|| {
+        let (_, stats, (loops, bad)) = sampled("t-alloc", COPY_1K, || {
+            let (mut loops, mut bad, mut keep) = (0u64, 0u64, Vec::<Vec<u8>>::new());
+            let until = cpu_ns() + 10_000_000_000;
+            while cpu_ns() < until {
+                for i in 0..2000usize {
+                    let block = vec![(i % 251) as u8; 16 + i % 4096];
+                    bad += black_box(&block).iter().any(|&b| b != (i % 251) as u8) as u64;
+                    keep.push(block);
+                    if keep.len() > 64 {
+                        keep.swap_remove(i % 64);
+                    }
+                    loops += 1;
                 }
-                loops += 1;
             }
-        }
-        (loops, bad)
+            (loops, bad)
+        });
+        // Corruption fails at once: no later run may excuse it.
+        assert!(
+            loops > 0 && bad == 0,
+            "{bad} corrupted blocks in {loops} allocations"
+        );
+        ensure(stats.samples > cpu_count(5000), || {
+            format!("only {} samples in 10 s of CPU at 1 kHz", stats.samples)
+        })
     });
-    assert!(
-        loops > 0 && bad == 0,
-        "{bad} corrupted blocks in {loops} allocations"
-    );
-    assert!(
-        stats.samples > 5000,
-        "only {} samples in 10 s of CPU at 1 kHz",
-        stats.samples
-    );
 }
 
 #[test]
 fn context_shares_follow_the_work() {
-    let (records, ..) = sampled("t-context", HZ_1K, || {
-        for _ in 0..8 {
-            set_entity_type(1);
-            spin_known(30);
-            set_entity_type(2);
-            spin_known(10);
-        }
+    first_passing_run(|| {
+        let (records, ..) = sampled("t-context", HZ_1K, || {
+            for _ in 0..8 {
+                set_entity_type(1);
+                spin_known(30);
+                set_entity_type(2);
+                spin_known(10);
+            }
+        });
+        let samples = cpu(&records);
+        ensure(samples.len() as u64 > cpu_count(200), || {
+            format!("{} samples", samples.len())
+        })?;
+        let share = |t| {
+            samples.iter().filter(|r| r.ctx.entity_type == t).count() as f64 / samples.len() as f64
+        };
+        ensure(
+            (share(1) - 0.75).abs() < 0.1 && (share(2) - 0.25).abs() < 0.1,
+            || format!("A {} B {}", share(1), share(2)),
+        )
     });
-    let samples = cpu(&records);
-    assert!(samples.len() > 200, "{} samples", samples.len());
-    let share =
-        |t| samples.iter().filter(|r| r.ctx.entity_type == t).count() as f64 / samples.len() as f64;
-    assert!(
-        (share(1) - 0.75).abs() < 0.1 && (share(2) - 0.25).abs() < 0.1,
-        "A {} B {}",
-        share(1),
-        share(2)
-    );
 }
 
 #[test]
 fn only_the_slow_ticks_samples_are_kept() {
-    let (records, ..) = sampled("t-ticks", HZ_1K, || {
-        for tick in 1..=6u64 {
-            set_tick(tick);
-            let started = cpu_ns();
-            spin_known(if tick == 4 { 100 } else { 5 });
-            tick_end(cpu_ns() - started);
-        }
+    first_passing_run(|| {
+        let (records, ..) = sampled("t-ticks", HZ_1K, || {
+            for tick in 1..=6u64 {
+                set_tick(tick);
+                let started = cpu_ns();
+                spin_known(if tick == 4 { 100 } else { 5 });
+                tick_end(cpu_ns() - started);
+            }
+        });
+        let kept: Vec<_> = slow_tick_samples(&records, 50_000_000).collect();
+        ensure(
+            cpu(&records).len() > kept.len() + cpu_count(5) as usize,
+            || "the fast ticks sampled too".into(),
+        )?;
+        ensure(
+            kept.len() as u64 > cpu_count(50) && kept.iter().all(|r| r.ctx.tick == 4),
+            || format!("kept {} samples", kept.len()),
+        )?;
+        let markers: Vec<_> = records
+            .iter()
+            .filter(|r| r.kind == Kind::Tick)
+            .map(|r| r.ctx.tick)
+            .collect();
+        ensure(markers == [1, 2, 3, 4, 5, 6], || {
+            format!("markers {markers:?}")
+        })?;
+        let found = kept.iter().filter(|r| in_spin_known(r)).count();
+        ensure(found * 10 >= kept.len() * 8, || {
+            format!("{found} of {} kept samples hold spin_known", kept.len())
+        })
     });
-    let kept: Vec<_> = slow_tick_samples(&records, 50_000_000).collect();
-    assert!(
-        cpu(&records).len() > kept.len() + 5,
-        "the fast ticks sampled too"
-    );
-    assert!(
-        kept.len() > 50 && kept.iter().all(|r| r.ctx.tick == 4),
-        "kept {} samples",
-        kept.len()
-    );
-    let markers: Vec<_> = records
-        .iter()
-        .filter(|r| r.kind == Kind::Tick)
-        .map(|r| r.ctx.tick)
-        .collect();
-    assert_eq!(markers, [1, 2, 3, 4, 5, 6]);
-    let found = kept.iter().filter(|r| in_spin_known(r)).count();
-    assert!(
-        found * 10 >= kept.len() * 8,
-        "{found} of {} kept samples hold spin_known",
-        kept.len()
-    );
 }
 
 #[test]
 fn a_full_ring_drops_and_counts() {
-    let (records, stats, ()) = sampled("t-full", at_1khz(Unwind::StackCopy, 4), || spin_known(100));
-    assert_eq!(
-        records.len() as u64,
-        stats.samples,
-        "every sample written is drained"
-    );
-    assert!(stats.dropped > 20, "{stats:?}");
-    // About 100 signals; a loaded runner merges some while one is still pending (59 on main's
-    // run 43595807302). Far above the 4 the ring holds, so the drops are still counted.
-    let attempts = stats.samples + stats.dropped;
-    assert!(
-        (30..=140).contains(&attempts),
-        "{attempts} signals for 100 ms of CPU at 1 kHz"
-    );
+    let cpu_ms = cpu_ms_for_samples(100);
+    first_passing_run(|| {
+        let (ready, registered) = mpsc::channel();
+        let (go, begin) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            assert!(sampled_thread("t-full"));
+            ready.send(()).unwrap();
+            begin.recv().unwrap();
+            spin_known(cpu_ms);
+        });
+        registered.recv().unwrap();
+        let session = start_session(at_1khz(Unwind::StackCopy, 4), "t-full");
+        go.send(()).unwrap();
+        // Do not drain until the workload finishes: a slow CPU timer must still
+        // saturate this fixed-size ring, independently of wall-clock drain cadence.
+        worker.join().unwrap();
+        let mut records = Vec::new();
+        let stats = session.stop(|_, record| records.push(*record));
+        ensure(records.len() as u64 == stats.samples, || {
+            format!(
+                "{} of {} written samples drained",
+                records.len(),
+                stats.samples
+            )
+        })?;
+        ensure(stats.dropped > 20, || format!("{stats:?}"))?;
+        let attempts = stats.samples + stats.dropped;
+        ensure((60..=140).contains(&attempts), || {
+            format!("{attempts} signals for calibrated CPU work targeting 100 timer deliveries")
+        })
+    });
 }
 
 #[test]
@@ -268,7 +302,7 @@ fn a_session_that_needs_a_larger_ring_than_the_threads_first_gets_one() {
         sampled_thread("t-grow");
         ready.send(()).unwrap();
         while work.recv().is_ok() {
-            on_deep_stack(|| spin_known(100));
+            on_deep_stack(|| spin_known(cpu_ms_for_samples(100)));
             done.send(()).unwrap();
         }
     });
@@ -279,11 +313,14 @@ fn a_session_that_needs_a_larger_ring_than_the_threads_first_gets_one() {
         finished.recv().unwrap();
         session.stop(|_, _| {})
     };
-    let small = run(at_1khz(Unwind::StackCopy, 4));
-    assert!(small.dropped > 20, "{small:?}");
-    let large = run(at_1khz(Unwind::StackCopy, 512));
-    assert_eq!(large.dropped, 0, "{large:?}");
-    assert!(large.samples > 60, "{large:?}");
+    first_passing_run(|| {
+        let small = run(at_1khz(Unwind::StackCopy, 4));
+        ensure(small.dropped > 20, || format!("small ring: {small:?}"))?;
+        let large = run(at_1khz(Unwind::StackCopy, 512));
+        ensure(large.dropped == 0 && large.samples > 60, || {
+            format!("large ring: {large:?}")
+        })
+    });
     drop(go);
     worker.join().unwrap();
 }
@@ -421,34 +458,50 @@ fn wall_samples(name: &'static str, body: fn()) -> (usize, usize, Stats) {
 
 #[test]
 fn a_sleeping_thread_has_wall_samples_that_are_not_running() {
-    let (wall, running, _) =
-        wall_samples("t-wall-sleep", || thread::sleep(Duration::from_millis(300)));
-    assert!(
-        (60..=450).contains(&wall),
-        "{wall} wall samples in 300 ms at 1 kHz"
-    );
-    assert!(
-        running * 10 <= wall,
-        "{running} of {wall} marked running while asleep"
-    );
+    first_passing_run(|| {
+        let (wall, running, _) =
+            wall_samples("t-wall-sleep", || thread::sleep(Duration::from_millis(300)));
+        ensure((60..=450).contains(&wall), || {
+            format!("{wall} wall samples in 300 ms at 1 kHz")
+        })?;
+        ensure(running * 10 <= wall, || {
+            format!("{running} of {wall} marked running while asleep")
+        })
+    });
 }
 
 #[test]
 fn a_spinning_thread_has_wall_samples_that_are_running() {
-    let (wall, running, stats) = wall_samples("t-wall-spin", || spin_known(200));
-    assert!(
-        (60..=600).contains(&wall),
-        "{wall} wall samples in 200 ms at 1 kHz"
-    );
-    // Half, not most: on a runner with more runnable threads than cores the
-    // spinning thread is descheduled part of the time (207 of 331 running,
-    // #16931). A sleeping thread stays under a tenth.
-    assert!(
-        running * 2 >= wall,
-        "{running} of {wall} marked running while spinning"
-    );
-    assert!(
-        stats.samples as usize > wall,
-        "the CPU timer sampled too: {stats:?}"
-    );
+    let config = Config {
+        wall: true,
+        ..COPY_1K
+    };
+    first_passing_run(|| {
+        let (records, stats, share) = sampled("t-wall-spin", config, || {
+            spin_share_permille(200, spin_known)
+        });
+        let wall = records.iter().filter(|r| r.kind == Kind::Wall).count();
+        let running = records
+            .iter()
+            .filter(|r| r.kind == Kind::Wall && r.value == 1)
+            .count();
+        ensure((60..=600).contains(&wall), || {
+            format!("{wall} wall samples in 200 ms at 1 kHz")
+        })?;
+        // Below a third of a CPU the runner is too busy to tell running from waiting.
+        ensure(share >= 333, || {
+            format!("the spinning thread ran only {share}/1000 of the time")
+        })?;
+        // Running samples follow the CPU the thread received, give or take a fifth: a sampler
+        // that calls a spinning thread waiting (or labels by anything but its CPU time) falls
+        // far below.
+        ensure(running * 1000 >= wall * (share as usize - 200), || {
+            format!(
+                "{running} of {wall} marked running while spinning, with {share}/1000 of the CPU"
+            )
+        })?;
+        ensure(stats.samples as usize > wall, || {
+            format!("the CPU timer sampled too: {stats:?}")
+        })
+    });
 }

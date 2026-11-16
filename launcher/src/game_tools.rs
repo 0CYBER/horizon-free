@@ -330,14 +330,38 @@ mod tests {
         });
     }
 
-    /// What a crashed game leaves: the file, and nothing on its port.
+    /// The token of a crashed game's file: no live endpoint here accepts it.
+    const STALE_TOKEN: &str = "crashed-game";
+
+    /// What a crashed game leaves: the file, and nothing on its port. The system may hand that
+    /// port to anything, a parallel test's live endpoint included, so the file's token is one no
+    /// live endpoint here accepts.
     fn stale_endpoint(path: &Path) {
         let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        write_endpoint(path, port, "secret");
+        write_endpoint(path, port, STALE_TOKEN);
+    }
+
+    /// The race behind a Windows red: a stale file's port reused by another test's live endpoint.
+    #[test]
+    fn a_stale_endpoint_whose_port_another_game_took_does_not_answer() {
+        let dir = scratch("reused");
+        let (own, default, live) = (
+            dir.join("game-control.json"),
+            dir.join("default.json"),
+            dir.join("live.json"),
+        );
+        live_endpoint(&live);
+        let port = serde_json::from_str::<Value>(&std::fs::read_to_string(&live).unwrap()).unwrap()
+            ["port"]
+            .as_u64()
+            .unwrap() as u16;
+        write_endpoint(&default, port, STALE_TOKEN);
+        assert_eq!(choose_endpoint(own.clone(), default), own);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

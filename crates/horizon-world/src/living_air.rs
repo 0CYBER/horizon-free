@@ -1,4 +1,5 @@
 //! LivingEntity walking, climbing and airborne velocity integration.
+use crate::move_gate::MoveGate;
 use horizon_core::{
     geometry::{Vec3, trig},
     position::BlockPos,
@@ -22,7 +23,9 @@ pub trait LivingAirWorld {
     fn suppressing_ladder_slide(&mut self) -> Result<bool, Self::Error>;
     fn is_player_class(&self) -> bool;
     /// Bind to Entity.move(SELF, movement), including collision and landing.
-    fn move_self(&mut self, movement: Vec3) -> Result<(), Self::Error>;
+    /// The `gate` is the invocation's move gate (arismoko/horizon#2414): the caller received
+    /// it armed with the decision, and the mover applies what it decided.
+    fn move_self(&mut self, gate: &mut MoveGate, movement: Vec3) -> Result<(), Self::Error>;
     fn horizontal_collision(&self) -> bool;
     fn jumping(&self) -> bool;
     fn was_in_powder_snow(&self) -> bool;
@@ -112,6 +115,7 @@ pub fn friction_influenced_speed<W: LivingAirWorld>(
 }
 pub fn relative_friction_movement<W: LivingAirWorld>(
     world: &mut W,
+    gate: &mut MoveGate,
     input: Vec3,
     friction: f32,
 ) -> Result<Vec3, W::Error> {
@@ -119,7 +123,7 @@ pub fn relative_friction_movement<W: LivingAirWorld>(
     move_relative(world, input, speed)?;
     let velocity = handle_on_climbable(world, world.velocity())?;
     world.set_velocity(velocity)?;
-    world.move_self(world.velocity())?;
+    world.move_self(gate, world.velocity())?;
     let mut velocity = world.velocity();
     if (world.horizontal_collision() || world.jumping())
         && (world.on_climbable()?
@@ -131,7 +135,11 @@ pub fn relative_friction_movement<W: LivingAirWorld>(
 }
 /// Ground friction is captured before movement; drag and gravity are queried
 /// afterwards. This distinction preserves movement callbacks' field changes.
-pub fn travel_in_air<W: LivingAirWorld>(world: &mut W, input: Vec3) -> Result<(), W::Error> {
+pub fn travel_in_air<W: LivingAirWorld>(
+    world: &mut W,
+    gate: &mut MoveGate,
+    input: Vec3,
+) -> Result<(), W::Error> {
     let support = world.movement_support_position()?;
     let friction = if world.on_ground()? {
         let friction = world.block_friction(support)?;
@@ -139,7 +147,7 @@ pub fn travel_in_air<W: LivingAirWorld>(world: &mut W, input: Vec3) -> Result<()
     } else {
         1.0
     };
-    let mut velocity = relative_friction_movement(world, input, friction)?;
+    let mut velocity = relative_friction_movement(world, gate, input, friction)?;
     if let Some(amplifier) = world.levitation_amplifier()? {
         velocity.y += (0.05 * f64::from(amplifier.wrapping_add(1)) - velocity.y) * 0.2;
     } else if !world.is_client_side()? || world.has_chunk_at(support)? {

@@ -1,0 +1,8 @@
+{"schema": 1, "build": {"commit": "fixture"}, "internals":
+[
+  {"path":"horizon_client::game::Game","kind":"struct","signature":"struct Game<'a> { world: World }","hash":"1111"},
+  {"path":"horizon_client::game::Game<'_>::reach","kind":"method","signature":"impl Game<'_> { fn reach(&self, hand: Hand) -> f64 }","hash":"abcd"},
+  {"path":"horizon_client::game::conditional","kind":"fn","cfg":"feature = \"controllers\"","signature":"fn conditional()","hash":"8888"},
+  {"path":"horizon_client::game::restored","kind":"const","signature":"const restored: bool = true","hash":"9999"}
+]
+}

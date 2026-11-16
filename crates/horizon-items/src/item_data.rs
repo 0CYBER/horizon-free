@@ -1,8 +1,65 @@
 //! Item stack components beyond count and damage: enchantments, stored
 //! (book) enchantments, `repair_cost`, `custom_name`, `potion_contents` and
 //! `trim`, with their NBT form in vanilla's `components` compound.
-use crate::items::ItemStack;
-use horizon_world::nbt::{JavaString, Tag};
+#[path = "item_data/brewing_fuel.rs"]
+pub mod brewing_fuel;
+#[path = "item_data/component_values.rs"]
+pub mod component_values;
+#[path = "item_data/cooking_fuel.rs"]
+pub mod cooking_fuel;
+#[path = "item_data/custom_model_data.rs"]
+pub mod custom_model_data;
+#[path = "item_data/ingredient_components.rs"]
+pub mod ingredient_components;
+use crate::items::{ItemInfo, ItemStack};
+use horizon_core::nbt::{JavaString, Tag};
+
+/// One item attribute modifier, as `ItemAttributeModifiers.Entry` holds it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModifierRow {
+    /// The attribute's id (`type` in the component): `minecraft:armor`.
+    pub attribute: String,
+    /// The modifier's id.
+    pub id: String,
+    pub amount: f64,
+    /// `add_value`, `add_multiplied_base` or `add_multiplied_total`.
+    pub operation: String,
+    /// The `EquipmentSlotGroup` it applies in: `mainhand`, `armor`, `any`...
+    pub slot: String,
+}
+impl ModifierRow {
+    pub fn new(attribute: &str, id: &str, amount: f64, operation: &str, slot: &str) -> Self {
+        Self {
+            attribute: attribute.to_owned(),
+            id: id.to_owned(),
+            amount,
+            operation: operation.to_owned(),
+            slot: slot.to_owned(),
+        }
+    }
+}
+
+/// `ItemAttributeModifiers.CODEC`: the entries of an `attribute_modifiers`
+/// list (`type`, `id`, `amount`, `operation`, `slot` defaulting to `any`).
+/// An entry missing a field is skipped.
+pub fn modifier_rows(tag: &Tag) -> Vec<ModifierRow> {
+    use horizon_client_core::nbt_value::{float, text};
+    let Tag::List(entries) = tag else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|e| {
+            Some(ModifierRow {
+                attribute: horizon_world::datafix::dynamic::namespaced(&text(e.get("type"))?),
+                id: horizon_world::datafix::dynamic::namespaced(&text(e.get("id"))?),
+                amount: float(e.get("amount"))?,
+                operation: text(e.get("operation"))?,
+                slot: text(e.get("slot")).unwrap_or_else(|| "any".to_owned()),
+            })
+        })
+        .collect()
+}
 use std::sync::Arc;
 
 /// Enchantment id and level, in insertion order.
@@ -10,8 +67,14 @@ pub type Levels = Vec<(Arc<str>, u32)>;
 pub mod trim;
 pub use trim::Trim;
 
+/// A stack's modelled and preserved components. Start with `Default` (or
+/// `ItemStack::data_mut`) and use the fields and setters; component storage may
+/// gain private decoded data alongside its saved form.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct StackData {
+    /// An explicit zero damage component overriding a damaged prototype.
+    damage_set: bool,
     /// `minecraft:enchantments`.
     pub enchantments: Levels,
     /// `minecraft:stored_enchantments` (enchanted books).
@@ -25,6 +88,11 @@ pub struct StackData {
     /// The original `minecraft:custom_name` component; plain text is derived
     /// when gameplay needs it, so styled names have one source of truth.
     pub custom_name: Option<Tag>,
+    /// Full kinetic component with its typed rendering timing, decoded together.
+    kinetic_weapon: Option<crate::kinetic_weapon::KineticComponent>,
+    /// Saved consumable and its typed runtime value, replaced together.
+    consumable: Option<Arc<ConsumableComponent>>,
+    death_protection: Option<Arc<Vec<crate::items::ConsumeEffect>>>,
     /// `minecraft:potion_contents.potion`.
     pub potion: Option<Arc<str>>,
     /// The rest of `minecraft:potion_contents` (`custom_color`, `custom_effects`,
@@ -74,6 +142,28 @@ pub struct StackData {
     /// What the server sent for this stack, for sending it back unchanged.
     pub wire: Wire,
 }
+/// A saved consumable decoded once for use animation, countdown and completion.
+#[derive(Clone, Debug, PartialEq)]
+struct ConsumableComponent {
+    raw: Tag,
+    value: crate::items::ItemConsumable,
+}
+impl ConsumableComponent {
+    fn new(raw: Tag) -> Option<Arc<Self>> {
+        let mut value =
+            crate::items::parse_consumable(&horizon_client_core::scoreboard::tag_to_json(&raw))
+                .ok()?;
+        value.seconds = raw
+            .get("consume_seconds")
+            .and_then(crate::properties::component_float)
+            .unwrap_or(1.6);
+        value.particles = raw
+            .get("has_consume_particles")
+            .and_then(component_bool)
+            .unwrap_or(true);
+        Some(Arc::new(Self { raw, value }))
+    }
+}
 /// The component patch a server sent for a stack, as the creative slot packet
 /// writes it, and the stack Horizon decoded from it, to tell whether anything
 /// changed since. Like vanilla's `BundleContents.selectedItem` it is left out
@@ -115,12 +205,14 @@ const MODELLED: &[&str] = &[
     "minecraft:bundle_contents",
     "minecraft:charged_projectiles",
     "minecraft:container",
+    "minecraft:consumable",
     "minecraft:custom_name",
     "minecraft:damage",
     "minecraft:dyed_color",
     "minecraft:enchantments",
     "minecraft:firework_explosion",
     "minecraft:fireworks",
+    "minecraft:kinetic_weapon",
     "minecraft:map_id",
     "minecraft:map_post_processing",
     "minecraft:ominous_bottle_amplifier",
@@ -138,25 +230,71 @@ impl StackData {
         self.custom_name.as_ref().and_then(read_text)
     }
 
+    /// The saved kinetic component and its decoded rendering timing.
+    pub fn kinetic_weapon(&self) -> Option<&crate::kinetic_weapon::KineticComponent> {
+        self.kinetic_weapon.as_ref()
+    }
     /// A preserved component's saved value.
     pub fn other(&self, id: &str) -> Option<&Tag> {
         if id == "minecraft:custom_name" {
             return self.custom_name.as_ref();
         }
+        if id == "minecraft:kinetic_weapon" {
+            return self.kinetic_weapon.as_ref().map(|k| k.raw());
+        }
+        if id == "minecraft:consumable" {
+            return self.consumable.as_ref().map(|c| &c.raw);
+        }
         self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
+    }
+    /// Whether the stack's own data sets component `id`, read from the live fields: the same
+    /// components `components_tag` saves, plus the transient ones it leaves out
+    /// (`map_post_processing`), without encoding anything.
+    pub fn sets_component(&self, id: &str) -> bool {
+        if self.other.iter().any(|(key, _)| key == id) {
+            return true;
+        }
+        match id {
+            "minecraft:damage" => self.damage_set,
+            "minecraft:enchantments" => !self.enchantments.is_empty(),
+            "minecraft:stored_enchantments" => !self.stored_enchantments.is_empty(),
+            "minecraft:repair_cost" => self.repair_cost > 0,
+            "minecraft:custom_name" => self.custom_name.is_some(),
+            "minecraft:potion_contents" => self.potion.is_some() || !self.potion_extra.is_empty(),
+            "minecraft:trim" => self.trim.is_some(),
+            "minecraft:map_id" => self.map_id.is_some(),
+            "minecraft:banner_patterns" => self.ominous_banner || !self.banner_patterns.is_empty(),
+            "minecraft:base_color" => self.base_color.is_some(),
+            "minecraft:writable_book_content" => !self.writable_pages.is_empty(),
+            "minecraft:written_book_content" => self.written.is_some(),
+            "minecraft:fireworks" => self.fireworks.is_some(),
+            "minecraft:firework_explosion" => self.firework_explosion.is_some(),
+            "minecraft:dyed_color" => self.dyed_color.is_some(),
+            "minecraft:pot_decorations" => self.pot_decorations.is_some(),
+            "minecraft:bundle_contents" => !self.bundle_contents.is_empty(),
+            "minecraft:suspicious_stew_effects" => !self.stew_effects.is_empty(),
+            "minecraft:charged_projectiles" => !self.charged.is_empty(),
+            "minecraft:ominous_bottle_amplifier" => self.ominous_amplifier.is_some(),
+            "minecraft:container" => !self.container.is_empty(),
+            "minecraft:map_post_processing" => self.map_post_processing.is_some(),
+            // An ominous banner's implied components (`components_tag`).
+            "minecraft:item_name" | "minecraft:rarity" | "minecraft:tooltip_display"
+                if self.ominous_banner =>
+            {
+                true
+            }
+            _ => self.other(id).is_some(),
+        }
     }
     /// `SetNameFunction.run`: retain a loot name as its original component.
     pub fn set_loot_name(&mut self, id: &str, text: &serde_json::Value) {
         let tag = horizon_client_core::scoreboard::json_to_tag(text);
         self.set_other(id, Some(tag));
     }
-    /// `SetComponentsFunction`: one component of a loot patch, in its JSON
-    /// form. A component Horizon models is read into its field as a saved
-    /// stack's is, so a rolled potion's contents are the effects it gives;
-    /// the rest keep their saved components. A null value removes the
-    /// component.
-    pub fn set_loot_component(&mut self, id: &str, value: &serde_json::Value) {
-        let tag = (!value.is_null()).then(|| horizon_client_core::scoreboard::json_to_tag(value));
+    /// Apply an ordered loot component patch without changing its NBT type.
+    /// None removes the component. Trim retains its modelled representation.
+    pub fn set_loot_component(&mut self, id: &str, value: &Option<Tag>) {
+        let tag = value.clone();
         match id {
             // `set_banner_pattern` (and `set_components`) write the layers a
             // banner or shield wears; the renderer and the tooltip read them
@@ -173,8 +311,15 @@ impl StackData {
             "minecraft:trim" => {
                 self.trim = tag.as_ref().and_then(trim::from_nbt);
             }
-            // The stack's damage is outside its data; a name keeps its own reading.
-            "minecraft:damage" | "minecraft:custom_name" => self.set_other(id, tag),
+            // The scalar lives on ItemStack; retain explicit zero presence here
+            // so a non-durable prototype can carry its own durability.
+            "minecraft:damage" => {
+                self.explicit_zero_damage = tag.as_ref().is_some_and(|value| {
+                    horizon_world::datafix::dynamic::as_int(Some(value), 0) == 0
+                });
+                self.set_other(id, tag);
+            }
+            "minecraft:custom_name" => self.set_other(id, tag),
             _ if MODELLED.contains(&id) => {
                 let mut saved = match components_tag(0, Some(self)) {
                     Some(Tag::Compound(c)) => c,
@@ -194,8 +339,38 @@ impl StackData {
         }
     }
     /// Set (or with None remove) a preserved component.
+    /// This setter deliberately remains infallible. Invalid opaque effect payloads
+    /// refuse replacement without changing either the previous raw value or cache.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
+        if id == "minecraft:death_protection" {
+            let replacement = match value.as_ref() {
+                Some(raw) => match crate::items::parse_death_effects(
+                    &horizon_client_core::scoreboard::tag_to_json(raw),
+                ) {
+                    Ok(effects) => Some(Arc::new(effects)),
+                    Err(_) => return,
+                },
+                None => None,
+            };
+            self.death_protection = replacement;
+        }
+        if id == "minecraft:consumable" {
+            let replacement = match value {
+                Some(raw) => match ConsumableComponent::new(raw) {
+                    Some(component) => Some(component),
+                    None => return,
+                },
+                None => None,
+            };
+            self.other.retain(|(k, _)| k != id);
+            self.consumable = replacement;
+            return;
+        }
         self.other.retain(|(k, _)| k != id);
+        if id == "minecraft:kinetic_weapon" {
+            self.kinetic_weapon = value.map(crate::kinetic_weapon::KineticComponent::new);
+            return;
+        }
         if id == "minecraft:custom_name" {
             self.custom_name = value
                 .filter(|tag| read_text(tag).is_some())
@@ -274,7 +449,7 @@ impl StackData {
 
 /// `BlockItem.onDestroyed` (`ItemStack.onDestroyed` for a container item): the
 /// stack's `container` is emptied and the stacks it held come back in slot
-/// order â€” `ItemUtils.onContainerDestroyed` drops each where the entity lay.
+/// order — `ItemUtils.onContainerDestroyed` drops each where the entity lay.
 pub fn destroyed_container(stack: &mut ItemStack) -> Vec<ItemStack> {
     let Some(data) = stack.extra.as_deref_mut() else {
         return Vec::new();
@@ -304,6 +479,38 @@ pub fn component_bool(value: &Tag) -> Option<bool> {
     })
 }
 
+/// `FoodProperties.DIRECT_CODEC`: required numeric nutrition/saturation and an
+/// optional NbtOps boolean. Unknown fields are ignored; floats are unrestricted.
+/// Reads borrowed NBT into the existing copyable value without allocating.
+pub fn food_properties(
+    value: &Tag,
+) -> Result<horizon_world::food_properties::FoodProperties, &'static str> {
+    if !matches!(value, Tag::Compound(_)) {
+        return Err("food must be a map");
+    }
+    let nutrition = value
+        .get("nutrition")
+        .and_then(crate::properties::component_int)
+        .ok_or("nutrition must be a number")?;
+    if nutrition < 0 {
+        return Err("nutrition must be non-negative");
+    }
+    let saturation = value
+        .get("saturation")
+        .and_then(crate::properties::component_float)
+        .ok_or("saturation must be a number")?;
+    let can_always_eat = value
+        .get("can_always_eat")
+        .map(component_bool)
+        .unwrap_or(Some(false))
+        .ok_or("can_always_eat must be a number")?;
+    Ok(horizon_world::food_properties::FoodProperties {
+        nutrition,
+        saturation,
+        can_always_eat,
+    })
+}
+
 impl ItemStack {
     pub fn new(item: &str, count: u32) -> Self {
         Self {
@@ -316,12 +523,87 @@ impl ItemStack {
     /// The stack `ItemStack.CODEC` reads from `tag` (`id`, `count`,
     /// `components`), as `item_nbt::item_from_nbt` does; None for air or an
     /// id that is no valid identifier. The id is not looked up in a registry.
-    /// API 527.
-    pub fn from_nbt(tag: &horizon_world::nbt::Compound) -> Option<Self> {
+    pub fn from_nbt(tag: &horizon_core::nbt::Compound) -> Option<Self> {
         crate::item_nbt::item_from_nbt(&Tag::Compound(tag.clone()))
     }
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
+    }
+    /// Whether the stack carries component `id`: its own data sets it, or its item has it by
+    /// default and the stack's changes don't remove it (a `!id` entry). Reads the live
+    /// components, so nothing is encoded.
+    pub fn carries_component(&self, info: Option<&ItemInfo>, id: &str) -> bool {
+        let data = self.data();
+        let own = if id == "minecraft:damage" {
+            self.damage > 0 || data.is_some_and(|d| d.sets_component(id))
+        } else {
+            data.is_some_and(|d| d.sets_component(id))
+        };
+        if own {
+            return true;
+        }
+        if data.is_some_and(|d| d.other.iter().any(|(k, _)| k.strip_prefix('!') == Some(id))) {
+            return false;
+        }
+        info.is_some_and(|info| info.components.iter().any(|c| c == id))
+    }
+    /// Death protection effects retained at patch or prototype load.
+    pub fn death_protection<'a>(
+        &'a self,
+        info: Option<&'a ItemInfo>,
+    ) -> Option<&'a [crate::items::ConsumeEffect]> {
+        if let Some(data) = self.data() {
+            if let Some(value) = &data.death_protection {
+                return Some(value);
+            }
+            if data.other("!minecraft:death_protection").is_some()
+                || data.other("minecraft:death_protection").is_some()
+            {
+                return None;
+            }
+        }
+        info.and_then(|i| i.death_protection.as_deref())
+    }
+    /// Effective consumable, decoded when the patch/prototype is loaded, with no tick allocation.
+    pub fn consumable<'a>(
+        &'a self,
+        info: Option<&'a ItemInfo>,
+    ) -> Option<&'a crate::items::ItemConsumable> {
+        if let Some(data) = self.data() {
+            if data.other("!minecraft:consumable").is_some() {
+                return None;
+            }
+            if let Some(consumable) = &data.consumable {
+                return Some(&consumable.value);
+            }
+        }
+        info.and_then(|item| item.consumable.as_ref())
+    }
+    /// `ItemStack.getMaxDamage`: the stack override, removal, or item default.
+    pub fn max_damage(&self, info: Option<&ItemInfo>) -> i32 {
+        if !self.carries_component(info, "minecraft:max_damage") {
+            return 0;
+        }
+        self.data()
+            .and_then(|data| data.other("minecraft:max_damage"))
+            .map(|value| crate::properties::component_int(value).unwrap_or(0))
+            .unwrap_or_else(|| info.map_or(0, |item| item.max_damage as i32))
+    }
+    /// `ItemStack.getDamageValue`: a live patch, removal, or cached prototype damage.
+    /// Preserve an explicit zero patch when the prototype starts damaged.
+    pub fn effective_damage(&self, info: Option<&ItemInfo>) -> i32 {
+        if self.damage > 0 || self.data().is_some_and(|data| data.damage_set) {
+            return self.damage as i32;
+        }
+        if let Some(data) = self.data() {
+            if let Some(value) = data.other("minecraft:damage") {
+                return crate::properties::component_int(value).unwrap_or(0).max(0);
+            }
+            if data.other("!minecraft:damage").is_some() {
+                return 0;
+            }
+        }
+        info.map_or(0, |item| item.damage)
     }
     /// The patch the server sent for this stack, while the stack is still what
     /// it decoded to (its count aside); None once anything else changed.
@@ -348,12 +630,32 @@ impl ItemStack {
     pub fn stored_enchantments(&self) -> &[(Arc<str>, u32)] {
         self.data().map_or(&[], |d| &d.stored_enchantments)
     }
-    /// `EnchantmentHelper.getItemEnchantmentLevel` (0 when absent).
+    /// `IItemStackExtension.getAllEnchantments`: the enchantments gameplay
+    /// sees on the stack, its `minecraft:enchantments` as the mods'
+    /// `get_enchantment_level` leaves them. Borrowed when no mod changes
+    /// them. Tooltips, the anvil, the grindstone, saves and the network read
+    /// the component itself ([`Self::enchantments`]).
+    pub fn all_enchantments(&self) -> std::borrow::Cow<'_, [(Arc<str>, u32)]> {
+        let own = self.enchantments();
+        match crate::native_enchantment_hooks::get_enchantment_level(self, None, own) {
+            Some(levels) => std::borrow::Cow::Owned(levels),
+            None => std::borrow::Cow::Borrowed(own),
+        }
+    }
+    /// `EnchantmentHelper.getItemEnchantmentLevel` as NeoForge has it
+    /// (`IItemStackExtension.getEnchantmentLevel`): the level gameplay sees,
+    /// after the mods' `get_enchantment_level` (0 when absent).
     pub fn enchantment_level(&self, id: &str) -> u32 {
-        self.enchantments()
-            .iter()
-            .find(|(e, _)| &**e == id)
-            .map_or(0, |(_, l)| *l)
+        let own = self.enchantments();
+        match crate::native_enchantment_hooks::get_enchantment_level(self, Some(id), own) {
+            Some(levels) => level_in(&levels, id),
+            None => level_in(own, id),
+        }
+    }
+    /// `EnchantmentHelper.getTagEnchantmentLevel`: the level in the stack's
+    /// own `minecraft:enchantments`, without the mods (0 when absent).
+    pub fn tag_enchantment_level(&self, id: &str) -> u32 {
+        level_in(self.enchantments(), id)
     }
     /// The component an anvil/grindstone works on: stored for books.
     pub fn crafting_enchantments(&self) -> &[(Arc<str>, u32)] {
@@ -400,17 +702,25 @@ impl ItemStack {
     }
     /// `ItemStack.hasFoil`: an explicit `minecraft:enchantment_glint_override`
     /// component wins, then the item's default override (`item_glint`), then a
-    /// non-empty `minecraft:enchantments` component (`Item.isFoil` is
-    /// `ItemStack.isEnchanted`; stored book enchantments do not count).
-    pub fn has_foil(&self, item_glint: bool) -> bool {
-        if let Some(flag) = self
+    /// `Item.isFoil` (enchantments, or a compass carrying a lodestone tracker).
+    /// Stored book enchantments do not count.
+    pub fn has_foil(&self, item_glint: Option<bool>) -> bool {
+        let own = self
             .data()
-            .and_then(|d| d.other("minecraft:enchantment_glint_override"))
-            .and_then(component_bool)
-        {
-            return flag;
-        }
-        item_glint || !self.enchantments().is_empty()
+            .and_then(|data| data.other("minecraft:enchantment_glint_override"))
+            .and_then(component_bool);
+        let removed = self.data().is_some_and(|data| {
+            data.other("!minecraft:enchantment_glint_override")
+                .is_some()
+        });
+        let override_glint = own.or(if removed { None } else { item_glint });
+        let item_foil = crate::properties::item_foil(
+            &self.item,
+            self.data()
+                .is_some_and(|data| data.other("minecraft:lodestone_tracker").is_some()),
+            !self.enchantments().is_empty(),
+        );
+        crate::properties::foil(override_glint, item_foil)
     }
     pub fn repair_cost(&self) -> u32 {
         self.data().map_or(0, |d| d.repair_cost)
@@ -423,7 +733,7 @@ impl ItemStack {
         self.data().map_or(&[], |d| &d.container)
     }
     /// The `minecraft:custom_data` compound if present.
-    pub fn custom_data(&self) -> Option<&horizon_world::nbt::Compound> {
+    pub fn custom_data(&self) -> Option<&horizon_core::nbt::Compound> {
         match self.data()?.other("minecraft:custom_data")? {
             Tag::Compound(map) => Some(map),
             _ => None,
@@ -489,6 +799,36 @@ impl ItemStack {
     pub fn same_item_same_components(&self, other: &Self) -> bool {
         self.item == other.item && self.damage == other.damage && self.data() == other.data()
     }
+    /// `ItemStack.matches`: the same item, count and components.
+    pub fn matches(&self, other: &Self) -> bool {
+        self.count == other.count && self.same_item_same_components(other)
+    }
+    /// `getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS)`: the stack's own
+    /// `attribute_modifiers` component when it has one (none at all when it
+    /// removed the component), else its item type's. Borrowed unless the stack
+    /// has its own list.
+    pub fn default_attribute_modifiers<'a>(
+        &self,
+        items: &'a crate::items::Items,
+    ) -> std::borrow::Cow<'a, [ModifierRow]> {
+        self.default_attribute_modifiers_or(items.get(&self.item).map_or(&[], |i| &i.modifiers))
+    }
+    /// `default_attribute_modifiers` with the item type's list given: `default`.
+    pub fn default_attribute_modifiers_or<'a>(
+        &self,
+        default: &'a [ModifierRow],
+    ) -> std::borrow::Cow<'a, [ModifierRow]> {
+        use std::borrow::Cow;
+        if let Some(data) = self.data() {
+            if data.other("!minecraft:attribute_modifiers").is_some() {
+                return Cow::Borrowed(&[]);
+            }
+            if let Some(tag) = data.other("minecraft:attribute_modifiers") {
+                return Cow::Owned(modifier_rows(tag));
+            }
+        }
+        Cow::Borrowed(default)
+    }
     /// `ItemStack.transmuteCopy`: another item keeping every component.
     pub fn transmute(&self, item: &str, count: u32) -> Self {
         let mut stack = Self {
@@ -499,6 +839,10 @@ impl ItemStack {
         stack.tidy();
         stack
     }
+}
+/// `ItemEnchantments.getLevel`: `id`'s level in `list` (0 when absent).
+fn level_in(list: &[(Arc<str>, u32)], id: &str) -> u32 {
+    list.iter().find(|(e, _)| &**e == id).map_or(0, |(_, l)| *l)
 }
 /// `ItemEnchantments.Mutable.upgrade`.
 pub fn upgrade(list: &mut Levels, id: &str, level: u32) {
@@ -878,7 +1222,7 @@ pub fn parse_stack(snbt: &str) -> Result<Option<ItemStack>, String> {
     if snbt == "-" {
         return Ok(None);
     }
-    let (tag, _) = horizon_world::nbt::parse_snbt(snbt)?;
+    let (tag, _) = horizon_core::nbt::parse_snbt(snbt)?;
     Ok(crate::item_nbt::item_from_nbt(&tag))
 }
 /// `MapDecorations.Entry.CODEC`: a bare type ID uses the default resource namespace.
@@ -893,7 +1237,7 @@ fn canonical_other_component(id: &str, tag: &Tag) -> Tag {
                 let text = kind.to_string_lossy();
                 if !text.is_empty()
                     && !text.contains(':')
-                    && let Ok(id) = horizon_world::identifier::Identifier::parse(&text)
+                    && let Ok(id) = horizon_core::identifier::Identifier::parse(&text)
                 {
                     *kind = id.to_string().as_str().into();
                 }
@@ -905,7 +1249,17 @@ fn canonical_other_component(id: &str, tag: &Tag) -> Tag {
 /// The saved `DataComponentPatch.CODEC` compound, or None when default.
 /// A filled map's empty decorations equal its prototype (`Items.mapProperties`).
 pub fn encode_components(stack: &ItemStack) -> Option<Tag> {
-    let mut components = components_tag(stack.damage, stack.data())?;
+    encode_stack_components(stack, true)
+}
+
+/// Encode the extra patch for a snapshot whose typed scalar already carries damage.
+/// This uses the same component codec and canonicalization as persistent stacks.
+pub fn encode_extra_components(stack: &ItemStack) -> Option<Tag> {
+    encode_stack_components(stack, false)
+}
+
+fn encode_stack_components(stack: &ItemStack, include_damage: bool) -> Option<Tag> {
+    let mut components = components_tag_inner(stack.damage, stack.data(), include_damage)?;
     // MobEffectInstance.Details' codec always saves the resolved icon flag.
     // An omitted icon follows show_particles, whose default is true.
     if let Some(Tag::List(effects)) = components
@@ -996,16 +1350,24 @@ pub fn encode_components_with_items(stack: &ItemStack, items: &crate::items::Ite
 }
 /// `encode_components` from the damage value and extra components.
 pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
+    components_tag_inner(damage, data, true)
+}
+
+fn components_tag_inner(
+    damage: u32,
+    data: Option<&StackData>,
+    include_damage: bool,
+) -> Option<Tag> {
     let mut entries: Vec<(&str, Tag)> = Vec::new();
-    // A patch keeps an explicit DAMAGE that differs from the prototype. A
-    // durable item's prototype already supplies the component, so an explicit
-    // zero equals it and vanilla's `fromPatch` drops it; a normally
-    // non-durable item declares MAX_DAMAGE on the stack and has no prototype
-    // DAMAGE, so its `damage: 0` is part of the patch (`explicit_zero_damage`)
-    // and must survive saving or the stack comes back non-damageable.
-    let own_capacity =
-        data.is_some_and(|d| d.explicit_zero_damage && d.other("minecraft:max_damage").is_some());
-    if damage > 0 || own_capacity {
+    // Explicit damage patches survive even at zero; a custom max damage can
+    // also make its saved zero meaningful.
+    if include_damage
+        && (damage > 0
+            || data.is_some_and(|data| {
+                data.damage_set
+                    || (data.explicit_zero_damage && data.other("minecraft:max_damage").is_some())
+            }))
+    {
         entries.push(("minecraft:damage", Tag::Int(damage as i32)));
     }
     if let Some(d) = data {
@@ -1023,6 +1385,12 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         }
         if let Some(name) = &d.custom_name {
             entries.push(("minecraft:custom_name", name.clone()));
+        }
+        if let Some(consumable) = &d.consumable {
+            entries.push(("minecraft:consumable", consumable.raw.clone()));
+        }
+        if let Some(kinetic) = &d.kinetic_weapon {
+            entries.push(("minecraft:kinetic_weapon", kinetic.raw().clone()));
         }
         if d.potion.is_some() || !d.potion_extra.is_empty() {
             let potion = d
@@ -1169,7 +1537,7 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             entries.push(("minecraft:container", Tag::List(slots)));
         }
     }
-    let mut out: horizon_world::nbt::Compound = entries
+    let mut out: horizon_core::nbt::Compound = entries
         .into_iter()
         .map(|(k, v)| (JavaString::from(k), v))
         .collect();
@@ -1288,21 +1656,43 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         _ => Vec::new(),
     };
     let mut data = StackData {
-        enchantments: read_levels(seen.enchantments),
-        stored_enchantments: read_levels(seen.stored_enchantments),
-        repair_cost: seen.repair_cost.and_then(int).unwrap_or(0).max(0) as u32,
-        explicit_zero_damage: damage == 0 && seen.damage.is_some(),
-        custom_name: seen
-            .custom_name
+        damage_set: damage == 0 && c.get("minecraft:damage").is_some(),
+        enchantments: read_levels(c.get("minecraft:enchantments")),
+        stored_enchantments: read_levels(c.get("minecraft:stored_enchantments")),
+        repair_cost: c
+            .get("minecraft:repair_cost")
+            .and_then(int)
+            .unwrap_or(0)
+            .max(0) as u32,
+        explicit_zero_damage: damage == 0 && c.get("minecraft:damage").is_some(),
+        custom_name: c
+            .get("minecraft:custom_name")
             .filter(|tag| read_text(tag).is_some())
             .cloned()
             .map(collapsed_text),
         potion,
         potion_extra,
-        map_id: seen.map_id.and_then(int).map(|v| v as i32),
-        banner_patterns: crate::banner_layer::layers_from_nbt(seen.banner_patterns),
-        base_color: seen
-            .base_color
+        death_protection: c
+            .get("minecraft:death_protection")
+            .and_then(|raw| {
+                crate::items::parse_death_effects(&horizon_client_core::scoreboard::tag_to_json(
+                    raw,
+                ))
+                .ok()
+            })
+            .map(Arc::new),
+        consumable: c
+            .get("minecraft:consumable")
+            .cloned()
+            .and_then(ConsumableComponent::new),
+        kinetic_weapon: c
+            .get("minecraft:kinetic_weapon")
+            .cloned()
+            .map(crate::kinetic_weapon::KineticComponent::new),
+        map_id: seen.map_id.and_then(crate::properties::component_int),
+        banner_patterns: crate::banner_layer::layers_from_nbt(c.get("minecraft:banner_patterns")),
+        base_color: c
+            .get("minecraft:base_color")
             .and_then(string)
             .map(|s| Arc::from(s.as_str())),
         writable_pages: match seen.writable_book_content.and_then(|b| b.get("pages")) {
@@ -1326,7 +1716,9 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             })
             .filter(|(flight, explosions)| !(*flight == 1 && explosions.is_empty())),
         firework_explosion: seen.firework_explosion.map(explosion_from),
-        dyed_color: seen.dyed_color.and_then(int).map(|v| v as i32),
+        dyed_color: seen
+            .dyed_color
+            .and_then(horizon_core::color::rgb_color_from_tag),
         pot_decorations: seen
             .pot_decorations
             .map(|p| {
@@ -1383,7 +1775,11 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             && matches!(
                 seen.banner_patterns,
                 Some(Tag::List(layers)) if layers.len() == OMINOUS_LAYERS.len()),
-        ominous_amplifier: seen.amplifier.and_then(int).map(|v| v.clamp(0, 4) as u8),
+        ominous_amplifier: seen
+            .amplifier
+            .and_then(crate::properties::component_int)
+            .filter(|v| (0..=4).contains(v))
+            .map(|v| v as u8),
         trim: seen.trim.and_then(trim::from_nbt),
         bundle_selected: BundleSelected::default(),
         other: Vec::new(),
@@ -1392,6 +1788,13 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
     if let Tag::Compound(map) = c {
         for (k, v) in map {
             let key = k.to_string_lossy();
+            if MODELLED.contains(&key.as_str())
+                && key != "minecraft:damage"
+                && !data.sets_component(&key)
+            {
+                data.other
+                    .push((key.clone(), canonical_other_component(&key, v)));
+            }
             let ominous_part = data.ominous_banner
                 && (matches!(key.as_str(), "minecraft:item_name" | "minecraft:rarity")
                     || (key == "minecraft:tooltip_display" && v == &ominous_tooltip_display()));
@@ -1420,14 +1823,14 @@ pub fn command_components(text: &str) -> Result<Tag, String> {
         .strip_prefix('[')
         .and_then(|t| t.strip_suffix(']'))
         .ok_or("expected '['")?;
-    let mut entries = horizon_world::nbt::Compound::new();
+    let mut entries = horizon_core::nbt::Compound::new();
     let mut rest = inner.trim_start();
     while !rest.is_empty() {
         let end = rest.find(['=', ',']).unwrap_or(rest.len());
         let key = rest[..end].trim();
         rest = &rest[end..];
         if let Some(value) = rest.strip_prefix('=') {
-            let (tag, used) = horizon_world::nbt::parse_snbt(value)?;
+            let (tag, used) = horizon_core::nbt::parse_snbt(value)?;
             let id = if key.contains(':') {
                 key.to_owned()
             } else {
@@ -1466,10 +1869,13 @@ mod tests {
         let mut stack = ItemStack::new("minecraft:white_banner", 1);
         stack.data_mut().set_loot_component(
             "minecraft:banner_patterns",
-            &serde_json::json!([
-                {"pattern": "minecraft:stripe_bottom", "color": "red"},
-                {"pattern": "minecraft:border", "color": "blue"},
-            ]),
+            &Some(
+                horizon_core::json_nbt::json_to_tag(&serde_json::json!([
+                    {"pattern": "minecraft:stripe_bottom", "color": "red"},
+                    {"pattern": "minecraft:border", "color": "blue"},
+                ]))
+                .unwrap(),
+            ),
         );
         let layers = &stack.data().expect("a component box").banner_patterns;
         assert_eq!(
@@ -1482,7 +1888,7 @@ mod tests {
         // A null component takes them off again.
         stack
             .data_mut()
-            .set_loot_component("minecraft:banner_patterns", &serde_json::Value::Null);
+            .set_loot_component("minecraft:banner_patterns", &None);
         assert!(stack.data().is_none_or(|d| d.banner_patterns.is_empty()));
     }
 
@@ -1494,12 +1900,15 @@ mod tests {
         let mut stack = ItemStack::new("minecraft:written_book", 1);
         stack.data_mut().set_loot_component(
             "minecraft:written_book_content",
-            &serde_json::json!({
-                "title": {"raw": "A Guide"},
-                "author": "Cartographer",
-                "generation": 2,
-                "pages": [{"raw": "page one"}, {"raw": "page two"}],
-            }),
+            &Some(
+                horizon_core::json_nbt::json_to_tag(&serde_json::json!({
+                    "title": {"raw": "A Guide"},
+                    "author": "Cartographer",
+                    "generation": 2,
+                    "pages": [{"raw": "page one"}, {"raw": "page two"}],
+                }))
+                .unwrap(),
+            ),
         );
         let book = stack
             .data()
@@ -1512,8 +1921,63 @@ mod tests {
         // A null component is no component.
         stack
             .data_mut()
-            .set_loot_component("minecraft:written_book_content", &serde_json::Value::Null);
+            .set_loot_component("minecraft:written_book_content", &None);
         assert!(stack.data().is_none_or(|d| d.written.is_none()));
+    }
+
+    /// A stack's own `attribute_modifiers` replace its type's whole; a removed
+    /// component leaves none (`getOrDefault`).
+    #[test]
+    fn a_stacks_own_attribute_modifiers_replace_the_types() {
+        let entry = |attribute: &str, id: &str, amount: f64, slot: Option<&str>| {
+            let mut e = vec![
+                ("type", Tag::String(attribute.into())),
+                ("id", Tag::String(id.into())),
+                ("amount", Tag::Double(amount.to_bits())),
+                ("operation", Tag::String("add_value".into())),
+            ];
+            if let Some(slot) = slot {
+                e.push(("slot", Tag::String(slot.into())));
+            }
+            Tag::compound(e)
+        };
+        let types = vec![ModifierRow::new(
+            "minecraft:attack_damage",
+            "minecraft:base_attack_damage",
+            6.0,
+            "add_value",
+            "mainhand",
+        )];
+        let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
+        assert_eq!(&*stack.default_attribute_modifiers_or(&types), &types[..]);
+        stack.data_mut().set_other(
+            "minecraft:attribute_modifiers",
+            Some(Tag::List(vec![
+                entry("minecraft:armor", "test:plate", 2.0, Some("chest")),
+                entry("minecraft:luck", "test:charm", 1.0, None),
+                // No amount: not an entry.
+                Tag::compound([("type", Tag::String("minecraft:luck".into()))]),
+            ])),
+        );
+        let own = stack.default_attribute_modifiers_or(&types);
+        assert_eq!(
+            &*own,
+            &[
+                ModifierRow::new("minecraft:armor", "test:plate", 2.0, "add_value", "chest"),
+                ModifierRow::new("minecraft:luck", "test:charm", 1.0, "add_value", "any"),
+            ][..]
+        );
+        let mut removed = ItemStack::new("minecraft:diamond_sword", 1);
+        removed.data_mut().set_other(
+            "!minecraft:attribute_modifiers",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert!(removed.default_attribute_modifiers_or(&types).is_empty());
+        // `matches` also compares the count.
+        let one = ItemStack::new("minecraft:diamond_sword", 1);
+        assert!(one.matches(&ItemStack::new("minecraft:diamond_sword", 1)));
+        assert!(!one.matches(&ItemStack::new("minecraft:diamond_sword", 2)));
+        assert!(!one.matches(&stack));
     }
 
     #[test]
@@ -1529,7 +1993,7 @@ mod tests {
         );
         assert_eq!(
             crate::item_nbt::item_to_nbt(&stack),
-            horizon_world::nbt::parse_snbt(r#"{id:"minecraft:enchanted_book",count:1}"#)
+            horizon_core::nbt::parse_snbt(r#"{id:"minecraft:enchanted_book",count:1}"#)
                 .unwrap()
                 .0,
         );
@@ -1554,7 +2018,7 @@ mod tests {
                 r#"{"!minecraft:stored_enchantments":{}}"#,
             ),
         ] {
-            let expected = horizon_world::nbt::parse_snbt(patch).unwrap().0;
+            let expected = horizon_core::nbt::parse_snbt(patch).unwrap().0;
             let stack = parse_stack(&format!("{{id:'{item}',count:1,components:{patch}}}"))
                 .unwrap()
                 .unwrap();
@@ -1565,7 +2029,7 @@ mod tests {
     #[test]
     fn an_empty_book_patch_keeps_unrelated_components() {
         let stack = parse_stack(r#"{id:"minecraft:enchanted_book",count:1,components:{"minecraft:stored_enchantments":{},"minecraft:custom_data":{keep:7}}}"#).unwrap().unwrap();
-        let expected = horizon_world::nbt::parse_snbt(r#"{"minecraft:custom_data":{keep:7}}"#)
+        let expected = horizon_core::nbt::parse_snbt(r#"{"minecraft:custom_data":{keep:7}}"#)
             .unwrap()
             .0;
         assert_eq!(encode_components(&stack), Some(expected));
@@ -1573,7 +2037,7 @@ mod tests {
 
     #[test]
     fn inline_trim_is_modeled_and_saved_without_raw_fallback() {
-        let source = horizon_world::nbt::parse_snbt(r#"{id:"minecraft:diamond_chestplate",count:1,components:{"minecraft:custom_data":{keep:284},"minecraft:trim":{material:{palette_id:"minecraft:gold",description:"Inline material"},pattern:{asset_id:"minecraft:coast",description:"Inline pattern",decal:0b}}}}"#).unwrap().0;
+        let source = horizon_core::nbt::parse_snbt(r#"{id:"minecraft:diamond_chestplate",count:1,components:{"minecraft:custom_data":{keep:284},"minecraft:trim":{material:{palette_id:"minecraft:gold",description:"Inline material"},pattern:{asset_id:"minecraft:coast",description:"Inline pattern",decal:0b}}}}"#).unwrap().0;
         let decoded = crate::item_nbt::item_from_nbt(&source).unwrap();
         let data = decoded.data().unwrap();
         assert!(
@@ -1693,22 +2157,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stack_reads_from_its_compound_as_from_snbt() {
-        let snbt = r#"{id:"diamond_sword",count:2,components:{"minecraft:damage":5}}"#;
-        let Tag::Compound(compound) = horizon_world::nbt::parse_snbt(snbt).unwrap().0 else {
-            panic!("a compound");
-        };
-        let stack = ItemStack::from_nbt(&compound).unwrap();
-        assert_eq!(&*stack.item, "minecraft:diamond_sword");
-        assert_eq!((stack.count, stack.damage), (2, 5));
-        assert_eq!(parse_stack(snbt).unwrap(), Some(stack));
-        let Tag::Compound(air) = horizon_world::nbt::parse_snbt(r#"{id:"air"}"#).unwrap().0 else {
-            panic!("a compound");
-        };
-        assert_eq!(ItemStack::from_nbt(&air), None);
-    }
-
-    #[test]
     fn numeric_damage_decodes_and_saves_as_a_modelled_int() {
         let keep = Tag::compound([("keep", Tag::Int(87))]);
         for (raw, expected) in [
@@ -1744,7 +2192,7 @@ mod tests {
                 saved
                     .get("components")
                     .and_then(|c| c.get("minecraft:damage")),
-                (expected > 0).then_some(&Tag::Int(expected as i32)),
+                raw.is_some().then_some(&Tag::Int(expected as i32)),
                 "{raw:?}"
             );
             assert_eq!(
@@ -1760,13 +2208,14 @@ mod tests {
             fresh
                 .data_mut()
                 .set_other("minecraft:custom_data", Some(keep.clone()));
+            fresh.data_mut().damage_set = expected == 0 && raw.is_some();
             assert_eq!(crate::item_nbt::item_to_nbt(&fresh), saved);
         }
     }
 
     #[test]
     fn potion_custom_effect_icons_save_the_codec_default() {
-        let parse = |text: &str| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let parse = |text: &str| horizon_core::nbt::parse_snbt(text).unwrap().0;
         for (flags, icon) in [
             ("", 1),
             (",show_icon:0b", 0),
@@ -1828,7 +2277,7 @@ mod tests {
 
     #[test]
     fn map_decoration_types_round_trip_with_default_namespaces() {
-        let parse = |text| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let parse = |text| horizon_core::nbt::parse_snbt(text).unwrap().0;
         let source = parse(
             r#"{"minecraft:map_decorations":{a:{type:"minecraft:mansion",x:10.5d,z:-20.0d,rotation:90.0f},"a+b":{type:"red_x",x:-1.25d,z:2.75d,rotation:-45.5f}},"minecraft:custom_data":{keep:7}}"#,
         );
@@ -1861,7 +2310,7 @@ mod tests {
 
     #[test]
     fn empty_map_decoration_patch_uses_filled_map_prototype() {
-        let parse = |text| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let parse = |text| horizon_core::nbt::parse_snbt(text).unwrap().0;
         let empty = parse(r#"{"minecraft:map_decorations":{}}"#);
         assert!(decode_components(None).1.is_none());
         assert!(encode_components(&ItemStack::new("minecraft:filled_map", 1)).is_none());
@@ -1898,7 +2347,7 @@ mod tests {
 
     #[test]
     fn nondefault_map_decoration_patches_round_trip() {
-        let parse = |text| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let parse = |text| horizon_core::nbt::parse_snbt(text).unwrap().0;
         let nonempty = parse(
             r#"{"minecraft:map_decorations":{"a+b":{type:"minecraft:red_x",x:-1.25d,z:2.75d,rotation:-45.5f}},"minecraft:custom_data":{keep:7}}"#,
         );
@@ -1930,7 +2379,7 @@ mod tests {
     }
 
     fn check_hive_saved_patch(decoded: bool) {
-        let parse = |text| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let parse = |text| horizon_core::nbt::parse_snbt(text).unwrap().0;
         let zero = parse(r#"{"minecraft:block_state":{honey_level:"0"}}"#);
         let keep = parse(
             r#"{"minecraft:block_state":{honey_level:"0"},"minecraft:custom_data":{keep:34}}"#,
@@ -1993,8 +2442,13 @@ mod tests {
             std::env::temp_dir().join(format!("h088-prototypes-{}-{decoded}", std::process::id()));
         std::fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
         std::fs::write(root.join("items.json"), r#"{"minecraft:iron_helmet":{"minecraft:max_stack_size":1},"minecraft:stone":{"minecraft:max_stack_size":64},"minecraft:ender_pearl":{"minecraft:max_stack_size":16},"audit:changed":{"minecraft:max_stack_size":7},"audit:missing":{}}"#).unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
-        let parse = |text| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let items = Items::catalog(
+            &root,
+            &PackOverlay::NONE,
+            &horizon_world::item_defaults::read(&root).unwrap(),
+        )
+        .unwrap();
+        let parse = |text| horizon_core::nbt::parse_snbt(text).unwrap().0;
         for (id, prototype, has_default) in [
             ("minecraft:iron_helmet", 1, true),
             ("minecraft:stone", 64, true),
@@ -2068,7 +2522,12 @@ mod tests {
             r#"{"minecraft:stone":{"minecraft:max_stack_size":7}}"#,
         )
         .unwrap();
-        let changed = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let changed = Items::catalog(
+            &root,
+            &PackOverlay::NONE,
+            &horizon_world::item_defaults::read(&root).unwrap(),
+        )
+        .unwrap();
         assert_eq!(items.get("minecraft:stone").unwrap().max_stack, 64);
         assert_eq!(changed.get("minecraft:stone").unwrap().max_stack, 7);
         for size in [7, 64] {
@@ -2111,9 +2570,9 @@ mod tests {
         let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
         stack.data_mut().set_other(
             "!minecraft:enchantments",
-            Some(horizon_world::nbt::Tag::compound(Vec::<(
+            Some(horizon_core::nbt::Tag::compound(Vec::<(
                 &str,
-                horizon_world::nbt::Tag,
+                horizon_core::nbt::Tag,
             )>::new())),
         );
         stack.enchant("minecraft:sharpness", 1);
@@ -2121,9 +2580,9 @@ mod tests {
         let mut book = ItemStack::new("minecraft:enchanted_book", 1);
         book.data_mut().set_other(
             "!minecraft:stored_enchantments",
-            Some(horizon_world::nbt::Tag::compound(Vec::<(
+            Some(horizon_core::nbt::Tag::compound(Vec::<(
                 &str,
-                horizon_world::nbt::Tag,
+                horizon_core::nbt::Tag,
             )>::new())),
         );
         book.enchant("minecraft:sharpness", 1);
@@ -2301,9 +2760,10 @@ mod tests {
     fn loot_component_keeps_a_styled_custom_name() {
         let name = serde_json::json!({"text":"Prize","color":"#ff8800"});
         let mut stack = ItemStack::new("minecraft:stick", 1);
-        stack
-            .data_mut()
-            .set_loot_component("minecraft:custom_name", &name);
+        stack.data_mut().set_loot_component(
+            "minecraft:custom_name",
+            &Some(horizon_core::json_nbt::json_to_tag(&name).unwrap()),
+        );
         assert_eq!(stack.custom_name().as_deref(), Some("Prize"));
         let expected = horizon_client_core::scoreboard::json_to_tag(&name);
         assert_eq!(
@@ -2314,7 +2774,7 @@ mod tests {
         );
         stack
             .data_mut()
-            .set_loot_component("minecraft:custom_name", &serde_json::Value::Null);
+            .set_loot_component("minecraft:custom_name", &None);
         assert!(stack.custom_name().is_none());
     }
 
@@ -2327,15 +2787,27 @@ mod tests {
         let mut swift = ItemStack::new("minecraft:splash_potion", 1);
         swift.data_mut().set_loot_component(
             "minecraft:potion_contents",
-            &json!({"potion": "minecraft:swiftness"}),
+            &Some(
+                horizon_core::json_nbt::json_to_tag(&json!({"potion": "minecraft:swiftness"}))
+                    .unwrap(),
+            ),
         );
         assert_eq!(swift.potion(), Some("minecraft:swiftness"));
         let mut custom = ItemStack::new("minecraft:potion", 1);
         let data = custom.data_mut();
-        data.set_loot_component("minecraft:custom_data", &json!({"page": 3}));
-        data.set_loot_component("minecraft:damage", &json!(5));
+        data.set_loot_component(
+            "minecraft:custom_data",
+            &Some(horizon_core::json_nbt::json_to_tag(&json!({"page": 3})).unwrap()),
+        );
+        data.set_loot_component(
+            "minecraft:damage",
+            &Some(horizon_core::json_nbt::json_to_tag(&json!(5)).unwrap()),
+        );
         let effects = json!({"custom_effects": [{"id": "minecraft:resistance", "amplifier": 1, "duration": 1800}]});
-        data.set_loot_component("minecraft:potion_contents", &effects);
+        data.set_loot_component(
+            "minecraft:potion_contents",
+            &Some(horizon_core::json_nbt::json_to_tag(&effects).unwrap()),
+        );
         assert_eq!(
             custom.custom_potion_effects(),
             [("minecraft:resistance".to_owned(), 1800, 1)]
@@ -2349,15 +2821,13 @@ mod tests {
         // Saved as before: the patch's contents, with the codec's icon flag.
         let saved = encode_components(&custom).unwrap();
         assert_eq!(
-            horizon_client_core::scoreboard::tag_to_json(
-                saved.get("minecraft:potion_contents").unwrap()
-            ),
-            json!({"custom_effects": [{"id": "minecraft:resistance", "amplifier": 1, "duration": 1800, "show_icon": true}]})
+            saved.get("minecraft:potion_contents").unwrap(),
+            &horizon_core::json_nbt::json_to_tag(&json!({"custom_effects": [{"id": "minecraft:resistance", "amplifier": 1, "duration": 1800, "show_icon": true}]})).unwrap()
         );
         // A null value takes the potion away again.
         swift
             .data_mut()
-            .set_loot_component("minecraft:potion_contents", &serde_json::Value::Null);
+            .set_loot_component("minecraft:potion_contents", &None);
         assert_eq!(swift.potion(), None);
     }
 
@@ -2540,6 +3010,25 @@ mod tests {
             _ => Vec::new(),
         };
         let mut data = StackData {
+            damage_set: damage == 0 && c.get("minecraft:damage").is_some(),
+            death_protection: c
+                .get("minecraft:death_protection")
+                .and_then(|raw| {
+                    crate::items::parse_death_effects(
+                        &horizon_client_core::scoreboard::tag_to_json(raw),
+                    )
+                    .ok()
+                })
+                .map(Arc::new),
+            consumable: c
+                .get("minecraft:consumable")
+                .cloned()
+                .and_then(ConsumableComponent::new),
+            kinetic_weapon: c
+                .get("minecraft:kinetic_weapon")
+                .cloned()
+                .map(crate::kinetic_weapon::KineticComponent::new),
+
             enchantments: read_levels(c.get("minecraft:enchantments")),
             stored_enchantments: read_levels(c.get("minecraft:stored_enchantments")),
             repair_cost: c
@@ -2591,8 +3080,7 @@ mod tests {
             firework_explosion: c.get("minecraft:firework_explosion").map(explosion_from),
             dyed_color: c
                 .get("minecraft:dyed_color")
-                .and_then(int)
-                .map(|v| v as i32),
+                .and_then(horizon_core::color::rgb_color_from_tag),
             pot_decorations: c
                 .get("minecraft:pot_decorations")
                 .map(|p| {
@@ -2682,7 +3170,7 @@ mod tests {
     /// Components as saved: none, one kept ID, every modelled ID, and IDs the
     /// model keeps in `other`, one of them with a non-ASCII unit.
     fn component_cases() -> Vec<(&'static str, Tag)> {
-        let parse = |text: &str| horizon_world::nbt::parse_snbt(text).unwrap().0;
+        let parse = |text: &str| horizon_core::nbt::parse_snbt(text).unwrap().0;
         vec![
             ("not a compound", Tag::String("minecraft:damage".into())),
             ("empty", Tag::compound(Vec::<(&str, Tag)>::new())),
@@ -2777,6 +3265,207 @@ mod tests {
                 base / new
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod carried_component_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_payload_replacements_leave_existing_component_unchanged() {
+        for (id, field) in [
+            ("minecraft:consumable", "on_consume_effects"),
+            ("minecraft:death_protection", "death_effects"),
+        ] {
+            let good = Tag::compound([(
+                field,
+                Tag::List(vec![Tag::compound([
+                    ("type", Tag::String("example:charge".into())),
+                    ("amount", Tag::Int(42)),
+                ])]),
+            )]);
+            let bad = Tag::compound([(
+                field,
+                Tag::List(vec![Tag::compound([
+                    ("type", Tag::String("example:charge".into())),
+                    ("amount", Tag::End),
+                ])]),
+            )]);
+            let mut data = StackData::default();
+            data.set_other(id, Some(good.clone()));
+            let consumable = data.consumable.clone();
+            let death = data.death_protection.clone();
+            data.set_other(id, Some(bad));
+            assert_eq!(data.other(id), Some(&good));
+            if let Some(before) = consumable {
+                assert!(Arc::ptr_eq(&before, data.consumable.as_ref().unwrap()));
+            }
+            if let Some(before) = death {
+                assert!(Arc::ptr_eq(
+                    &before,
+                    data.death_protection.as_ref().unwrap()
+                ));
+            }
+            data.set_other(id, None);
+            assert!(data.other(id).is_none());
+        }
+    }
+
+    #[test]
+    fn death_payload_is_decoded_once_and_replaced_with_component() {
+        use crate::items::ConsumeEffect;
+        let component = Tag::compound([(
+            "death_effects",
+            Tag::List(vec![Tag::compound([
+                ("type", Tag::String("example:charge".into())),
+                ("amount", Tag::Int(42)),
+            ])]),
+        )]);
+        let patch = Tag::compound([("minecraft:death_protection", component.clone())]);
+        let (_, extra) = decode_components(Some(&patch));
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack.extra = extra;
+        let copied = stack.clone();
+        let (ConsumeEffect::Native { data: a, .. }, ConsumeEffect::Native { data: b, .. }) = (
+            &stack.death_protection(None).unwrap()[0],
+            &copied.death_protection(None).unwrap()[0],
+        ) else {
+            panic!("native effect")
+        };
+        assert!(Arc::ptr_eq(a, b));
+        assert_eq!(a.get("amount"), Some(&Tag::Byte(42)));
+        assert_eq!(components_tag(0, stack.data()), Some(patch));
+        stack
+            .data_mut()
+            .set_other("minecraft:death_protection", Some(component));
+        assert!(matches!(
+            &stack.death_protection(None).unwrap()[0],
+            ConsumeEffect::Native { .. }
+        ));
+        stack
+            .data_mut()
+            .set_other("minecraft:death_protection", None);
+        assert!(stack.death_protection(None).is_none());
+    }
+
+    #[test]
+    fn damage_keeps_a_canonical_int_including_explicit_zero() {
+        for damage in [0, 5] {
+            let original = Tag::compound([("minecraft:damage", Tag::Int(damage))]);
+            let (decoded, extra) = decode_components(Some(&original));
+            assert_eq!(decoded, damage as u32);
+            let encoded = components_tag(decoded, extra.as_deref());
+            assert_eq!(encoded, Some(original));
+        }
+        let removed = Tag::compound([("!minecraft:damage", Tag::Compound(Default::default()))]);
+        let (damage, extra) = decode_components(Some(&removed));
+        assert_eq!(components_tag(damage, extra.as_deref()), Some(removed));
+    }
+
+    #[test]
+    fn extra_snapshot_codec_omits_typed_damage_but_preserves_the_patch() {
+        for damage in [0, 5] {
+            let original = Tag::compound([("minecraft:damage", Tag::Int(damage))]);
+            let (damage, extra) = decode_components(Some(&original));
+            let stack = ItemStack {
+                damage,
+                extra,
+                ..ItemStack::new("minecraft:iron_sword", 1)
+            };
+            assert_eq!(encode_extra_components(&stack), None);
+            assert_eq!(encode_components(&stack), Some(original));
+        }
+        let patch = Tag::compound([
+            ("minecraft:damage", Tag::Int(5)),
+            (
+                "minecraft:custom_name",
+                Tag::String(JavaString::from("Snapshot")),
+            ),
+            ("!minecraft:consumable", Tag::Compound(Default::default())),
+        ]);
+        let (damage, extra) = decode_components(Some(&patch));
+        let stack = ItemStack {
+            damage,
+            extra,
+            ..ItemStack::new("minecraft:iron_sword", 1)
+        };
+        let mut expected = patch;
+        if let Tag::Compound(entries) = &mut expected {
+            entries.remove(&JavaString::from("minecraft:damage"));
+        }
+        assert_eq!(encode_extra_components(&stack), Some(expected));
+    }
+
+    #[test]
+    fn explicit_empty_and_preserved_values_are_carried() {
+        let original = Tag::compound([(
+            "minecraft:potion_contents",
+            Tag::Compound(Default::default()),
+        )]);
+        let (_, extra) = decode_components(Some(&original));
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack.extra = extra;
+        assert!(stack.carries_component(None, "minecraft:potion_contents"));
+        assert_eq!(components_tag(0, stack.data()), Some(original));
+        stack
+            .data_mut()
+            .set_other("minecraft:potion_contents", None);
+        assert!(!stack.carries_component(None, "minecraft:potion_contents"));
+        stack
+            .data_mut()
+            .set_other("minecraft:repair_cost", Some(Tag::Int(5)));
+        assert!(stack.carries_component(None, "minecraft:repair_cost"));
+        assert_eq!(
+            components_tag(0, stack.data())
+                .unwrap()
+                .get("minecraft:repair_cost"),
+            Some(&Tag::Int(5))
+        );
+        stack
+            .data_mut()
+            .set_loot_component("minecraft:repair_cost", &Some(Tag::Int(5)));
+        assert!(stack.carries_component(None, "minecraft:repair_cost"));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn default_component_presence_and_removal() {
+        let items = crate::items::prepared_items().expect("prepared item resources");
+        let info = items.get("minecraft:stick").expect("stick");
+        let component = info.components.first().expect("default component");
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        assert!(stack.carries_component(Some(info), component));
+        stack.data_mut().set_other(
+            &format!("!{component}"),
+            Some(Tag::Compound(Default::default())),
+        );
+        assert!(!stack.carries_component(Some(info), component));
+    }
+
+    /// `map_post_processing` is transient: a stack carries it while `components_tag` saves
+    /// nothing for it, so a presence check reads the live field.
+    #[test]
+    fn a_transient_component_is_carried_but_not_saved() {
+        let mut map = ItemStack::new("minecraft:filled_map", 1);
+        map.data_mut().map_post_processing = Some(1);
+        assert!(map.carries_component(None, "minecraft:map_post_processing"));
+        assert!(!map.carries_component(None, "minecraft:enchantments"));
+        assert!(components_tag(map.damage, map.data()).is_none());
+    }
+
+    /// A removed default is not carried; a stack's own value is.
+    #[test]
+    fn a_removed_component_is_not_carried() {
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack
+            .data_mut()
+            .set_other("!minecraft:lore", Some(Tag::String("removed".into())));
+        assert!(!stack.carries_component(None, "minecraft:lore"));
+        stack
+            .data_mut()
+            .set_other("minecraft:custom_data", Some(Tag::String("kept".into())));
+        assert!(stack.carries_component(None, "minecraft:custom_data"));
     }
 }
 

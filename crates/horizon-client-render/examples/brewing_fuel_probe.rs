@@ -16,7 +16,8 @@ use std::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(&args[1]);
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     let providers = Providers::load(root);
     let brewing = Brewing {
         recipes: vec![],
@@ -39,7 +40,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stand.total_fuel = 0;
         stand.items[4] = Some(stack);
         for _ in 0..2 {
-            stand.tick(&brewing, &items, &providers);
+            stand.tick(&brewing, &items, &providers, &|s| {
+                items
+                    .get(&s.item)?
+                    .crafting_remainder
+                    .as_deref()
+                    .map(|id| ItemStack::new(id, 1))
+            });
             writeln!(
                 out,
                 "{} {} {} {} {}",

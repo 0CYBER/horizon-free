@@ -29,8 +29,9 @@ pub use horizon_core::prepared_files;
 /// Vanilla's world files, as tools outside the game read and write them.
 #[cfg(feature = "world")]
 pub mod world {
+    pub use horizon_core::nbt;
     pub use horizon_core::position::ChunkPos;
-    pub use horizon_world::{compression, nbt, region};
+    pub use horizon_world::{compression, region};
 }
 
 /// What a server list and a profile head need of the network protocol.
@@ -47,6 +48,10 @@ pub use horizon_prepare as prepare;
 /// A server's own files: `server.properties`, the op, white and ban lists, the user cache.
 #[cfg(feature = "server-files")]
 pub use horizon_server_files as server_files;
+
+/// `java.util.Properties` and the JDK's date text, for the files a server keeps in that format.
+#[cfg(feature = "server-files")]
+pub use horizon_java_properties as java_properties;
 
 /// Plugging into the game (`horizon-hooks`): implement [`hooks::Hooks`] and
 /// [`hooks::register`] it before the game starts (docs/layers.md, "How a Horizon crate plugs
@@ -96,3 +101,25 @@ pub mod servers {
         ServerEntry, load, lock, parse_address, prepend, remove_where, save,
     };
 }
+
+/// Build-time mod source generation and point signature inspection.
+#[cfg(feature = "mod-build")]
+pub mod mod_build {
+    /// The shared mod API and source generator.
+    pub use horizon_mod_api_gen as api_gen;
+    /// Parsing and validation of injection point signatures.
+    pub use point_shape;
+}
+
+/// Mod package formats, installation, SDK metadata and registry validation.
+/// Enable `mod-index`, `mod-prebuilt` or `mod-runtime-process` for the corresponding services.
+#[cfg(feature = "mod-package")]
+pub use horizon_mod_package as mod_package;
+
+/// Links supplied by installed products for their built-in mod entries.
+pub mod mod_links {
+    pub use horizon_hooks::mod_links::{Links, register};
+}
+
+/// Establish the executable stack policy before starting the game or supervisor.
+pub use horizon_guest_stack::prepare_main as prepare_main_stack;

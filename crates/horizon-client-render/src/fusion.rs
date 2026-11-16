@@ -23,12 +23,7 @@ use horizon_optifine::fusion::{
 };
 use horizon_world::block_state_properties::BlockProperties;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
-use std::{
-    collections::HashMap,
-    fs,
-    num::NonZeroU16,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, num::NonZeroU16};
 
 /// A connecting texture as drawn: its layout and its tiles, `None` for an empty one.
 struct Sheet {
@@ -56,12 +51,11 @@ fn namespaced(reference: &str) -> String {
     horizon_optifine::matchers::namespaced(reference)
 }
 
-fn read_model(root: &Path, name: &str) -> Option<Json> {
+fn read_model(root: &crate::resource_source::ResourceSource, name: &str) -> Option<Json> {
     let (ns, path) = name.split_once(':')?;
-    let text = horizon_core::prepared_files::read_to_string(
-        &root.join(format!("assets/{ns}/models/{path}.json")),
-    )
-    .ok()?;
+    let text = root
+        .read_to_string(&format!("assets/{ns}/models/{path}.json"))
+        .ok()?;
     Json::parse(&text).ok()
 }
 
@@ -70,7 +64,7 @@ fn read_model(root: &Path, name: &str) -> Option<Json> {
 type ModelFace = (String, Face, Option<Connection>);
 
 /// Of a `fusion:connecting` model: each face's [`ModelFace`]. Empty for any other model.
-fn connecting_model(root: &Path, name: &str) -> Vec<ModelFace> {
+fn connecting_model(root: &crate::resource_source::ResourceSource, name: &str) -> Vec<ModelFace> {
     let Some(model) = read_model(root, name) else {
         return Vec::new();
     };
@@ -169,81 +163,38 @@ fn turned(face: Face, [x, y, _]: [u8; 3]) -> Face {
 }
 
 /// The connecting textures under `root`, by sprite name.
-fn connecting_textures(root: &Path) -> HashMap<String, Meta> {
+fn connecting_textures(root: &crate::resource_source::ResourceSource) -> HashMap<String, Meta> {
     let mut out = HashMap::new();
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return out;
-    };
-    for ns in namespaces.flatten() {
-        let ns_name = ns.file_name().to_string_lossy().into_owned();
-        let textures = ns.path().join("textures");
-        for path in mcmeta_files(&textures) {
-            let Some(png) = path.to_str().and_then(|p| p.strip_suffix(".png.mcmeta")) else {
-                continue;
-            };
-            let Ok(text) = horizon_core::prepared_files::read_to_string(&path) else {
-                continue;
-            };
-            if !text.contains("fusion") {
-                continue;
-            }
-            let Some(rel) = Path::new(png)
-                .strip_prefix(&textures)
-                .ok()
-                .and_then(|p| p.to_str())
-            else {
-                continue;
-            };
-            let name = format!("{ns_name}:{}", rel.replace('\\', "/"));
-            match Meta::from_mcmeta(&text) {
-                Ok(Some(meta)) => {
-                    out.insert(name, meta);
-                }
-                Ok(None) => {}
-                Err(e) => log::warn!("Horizon: Fusion texture {name}: {e}"),
-            }
+    for file in root.list_under("assets", &["textures"]) {
+        let Some(name) = file
+            .strip_prefix("assets/")
+            .and_then(|name| name.strip_suffix(".png.mcmeta"))
+        else {
+            continue;
+        };
+        let Some((namespace, path)) = name.split_once("/textures/") else {
+            continue;
+        };
+        let Ok(text) = root.read_to_string(&file) else {
+            continue;
+        };
+        if !text.contains("fusion") {
+            continue;
         }
-    }
-    out
-}
-
-/// The `.png.mcmeta` files under `textures`: a prepared root's from its data file, others
-/// from the folders (linked folders too: mods' content links into the packs' tree).
-fn mcmeta_files(textures: &Path) -> Vec<PathBuf> {
-    if let Some(files) = horizon_core::prepared_files::files_under(textures) {
-        return files
-            .iter()
-            .filter(|file| file.ends_with(".png.mcmeta"))
-            .map(|file| textures.join(file))
-            .collect();
-    }
-    let mut out = Vec::new();
-    let mut dirs = vec![textures.to_owned()];
-    while let Some(dir) = dirs.pop() {
-        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            let dir = match entry.file_type() {
-                Ok(t) if t.is_symlink() => path.is_dir(),
-                Ok(t) => t.is_dir(),
-                Err(_) => path.is_dir(),
-            };
-            if dir {
-                dirs.push(path);
-            } else if path.to_str().is_some_and(|p| p.ends_with(".png.mcmeta")) {
-                out.push(path);
+        let name = format!("{namespace}:{path}");
+        match Meta::from_mcmeta(&text) {
+            Ok(Some(meta)) => {
+                out.insert(name, meta);
             }
+            Ok(None) => {}
+            Err(error) => log::warn!("Horizon: Fusion texture {name}: {error}"),
         }
     }
     out
 }
 
 /// `sprites`' tiles of the connecting texture `name`, and the predicates it joins by itself.
-fn sheet(
-    root: &Path,
-    sprites: &mut Sprites,
-    name: &str,
-    meta: Meta,
-) -> Option<(Sheet, Connection)> {
+fn sheet(sprites: &mut Sprites, name: &str, meta: Meta) -> Option<(Sheet, Connection)> {
     let Kind::Connecting {
         layout,
         connections,
@@ -254,7 +205,7 @@ fn sheet(
         return None;
     };
     let tiles = sprites
-        .insert_tiles(root, name, layout.grid(), per_tile_animation)
+        .insert_tiles(name, layout.grid(), per_tile_animation)
         .map_err(|e| log::warn!("Horizon: Fusion texture {name}: {e}"))
         .ok()?;
     // A layer past the mesher's `u16` leaves the sheet to vanilla.
@@ -277,7 +228,7 @@ impl FusionTextures {
     /// draw are inserted into `sprites` (before it finishes), and each face in `catalog` that
     /// shows one gets its rule.
     pub fn load(
-        root: &Path,
+        root: &crate::resource_source::ResourceSource,
         registry: &BlockRegistry,
         sprites: &mut Sprites,
         catalog: &mut StateModels,
@@ -317,7 +268,7 @@ impl FusionTextures {
                 // The sheet, cut into tiles on first use.
                 let sheet = *by_name.entry(sprite.clone()).or_insert_with(|| {
                     let meta = textures.remove(sprite)?;
-                    sheets.push(sheet(root, sprites, sprite, meta)?);
+                    sheets.push(sheet(sprites, sprite, meta)?);
                     Some(sheets.len() - 1)
                 });
                 let Some(sheet) = sheet else {
@@ -461,6 +412,7 @@ impl FusionTextures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     /// Tile `i` of a sheet is layer `base + i`; `empty` tiles have none.
     fn sheet(layout: Layout, base: u16, empty: &[u16]) -> Sheet {
@@ -636,8 +588,14 @@ mod tests {
             r#"{"parent": "demo:block/template", "textures": {"pane": "demo:block/glass"}}"#,
         )
         .unwrap();
-        let arm = connecting_model(&root, "demo:block/arm");
-        let plain = connecting_model(&root, "demo:block/plain");
+        let arm = connecting_model(
+            &crate::resource_source::ResourceSource::directory(root.clone()),
+            "demo:block/arm",
+        );
+        let plain = connecting_model(
+            &crate::resource_source::ResourceSource::directory(root.clone()),
+            "demo:block/plain",
+        );
         fs::remove_dir_all(&root).unwrap();
         // `edge` has the model's predicate; `pane` none, so the texture's own.
         assert_eq!(
@@ -672,7 +630,10 @@ mod tests {
                     "north": {"texture": "#dirt"}, "south": {"texture": "#stone"}}}]}"##,
         )
         .unwrap();
-        let faces = connecting_model(&root, "demo:block/tiles");
+        let faces = connecting_model(
+            &crate::resource_source::ResourceSource::directory(root.clone()),
+            "demo:block/tiles",
+        );
         fs::remove_dir_all(&root).unwrap();
         let joins = |side| faces.iter().find(|f| f.1 == side).and_then(|f| f.2.clone());
         assert!(matches!(joins(Face::Up), Some(Connection::Neighbour(_))));

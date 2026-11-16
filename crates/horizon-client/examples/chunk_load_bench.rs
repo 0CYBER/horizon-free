@@ -16,6 +16,8 @@
 //! meshes (vertices and visibility) shows that an A/B pair of builds made the
 //! same ones.
 extern crate horizon_client_lib as horizon_client;
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 use horizon_client::{
     assets::Assets,
     biome::Biomes,
@@ -31,6 +33,7 @@ use horizon_client::{
     world::World,
 };
 use horizon_core::biome::{BiomeZoom, obfuscate_seed};
+use horizon_world::native_load_context::DataLoadOrigin;
 use horizon_world::registry::BlockStateId;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -76,18 +79,34 @@ fn main() -> Result<(), Error> {
         .unwrap_or((-60, 10));
 
     let assets = Arc::new(Assets::load(&root)?);
-    let render = Arc::new(assets.reload(&root)?);
+    let render = Arc::new(assets.reload(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?);
     let facts = BlockFacts::load(&root, assets.registry)?;
     let visibility = models::load_visibility(&root, assets.registry)?;
-    let biomes = Arc::new(Biomes::load(&root)?);
+    let biomes = Arc::new(Biomes::load(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?);
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility)?),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility, None)?),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
         biomes: biomes.clone(),
         assets: assets.clone(),
         render,
+        hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
-    let terrain = VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, seed)?;
+    let item_data = test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad)?;
+    let terrain = VanillaTerrain::new(
+        horizon_client::vanillagen::TerrainResources {
+            data: None,
+            dir: &root.join("worldgen"),
+            registry: assets.registry,
+            biomes: &biomes,
+            item_data: &item_data,
+        },
+        seed,
+    )?;
 
     // Generation and light, on the game's worker pool (`threads` workers).
     // Meshing is left out here and measured on its own below.
@@ -228,6 +247,8 @@ fn mesher<'a>(context: &'a WorkerContext, seed: i64) -> Mesher<'a> {
         opaque_ice: false,
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
+        hidden_states: &[],
+        part_tables: Default::default(),
         assets: &context.assets,
         render: &context.render,
         tables: &context.tables,

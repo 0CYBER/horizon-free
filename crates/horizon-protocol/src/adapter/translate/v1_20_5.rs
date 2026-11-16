@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn vanilla_766_player_and_disguised_chat_decode_through_the_complete_pipeline() {
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         use packet_ids::play::clientbound as cb;
         // Actual full packet STREAM_CODEC outputs from both 766 releases and 1.21.1.
         // Zero-filled signature blocks in the final fixture are abbreviated without changing bytes.

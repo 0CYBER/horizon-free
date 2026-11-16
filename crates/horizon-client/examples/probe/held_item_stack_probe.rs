@@ -22,7 +22,10 @@ pub fn main() -> Result<()> {
         }
         let off = case["off"].as_str().ok_or("off")?;
         if off != "air" {
-            extra.off_hand = Some(format!("minecraft:{off}").into());
+            extra.set_slot_id(
+                horizon_items::equipment::OFFHAND,
+                Some(format!("minecraft:{off}").into()),
+            );
         }
         let left = case["left"].as_bool().ok_or("left")?;
         for physical_left in [false, true] {

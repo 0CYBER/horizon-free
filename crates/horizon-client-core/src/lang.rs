@@ -410,6 +410,17 @@ impl ResourceSource for Bundled {
         vec!["horizon".into()]
     }
 }
+impl ResourceSource for horizon_assets::resource_source::ResourceSource {
+    fn read(&self, path: &str) -> Option<Vec<u8>> {
+        self.read(path).ok()
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.contains(path)
+    }
+    fn namespaces(&self) -> Vec<String> {
+        self.namespaces("assets")
+    }
+}
 impl ResourceSource for std::path::PathBuf {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         std::fs::read(self.join(path)).ok()
@@ -483,6 +494,15 @@ pub fn read_lang_file(bytes: &[u8], map: &mut HashMap<String, String>) {
 }
 
 impl Language {
+    /// A language holding only `entries` (key, template), as `code`: the part of the current
+    /// language a text needs, carried where no language is loaded.
+    pub fn of(code: &str, entries: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self {
+            code: code.to_owned(),
+            bidirectional: false,
+            map: entries.into_iter().collect(),
+        }
+    }
     /// ClientLanguage.loadFrom: en_us first, then the selected language, each
     /// from every namespace and every source in priority order (later sources
     /// override).
@@ -597,13 +617,86 @@ pub fn available(sources: &[&dyn ResourceSource]) -> Vec<LanguageInfo> {
     found.into_values().collect()
 }
 
+#[cfg(feature = "test-language-publication")]
+thread_local! {
+    static PUBLICATION: RefCell<Option<Arc<Language>>> = const { RefCell::new(None) };
+}
+
+/// Isolate language reload publication on this fixture thread, including nested scopes.
+/// Unlike `scoped`, subsequent `set` calls replace the visible language.
+#[cfg(feature = "test-language-publication")]
+pub fn isolate_publication(language: Language) -> impl Drop {
+    struct Restore(
+        Option<Arc<Language>>,
+        std::marker::PhantomData<std::rc::Rc<()>>,
+    );
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PUBLICATION.with(|slot| *slot.borrow_mut() = self.0.take());
+            scope_changed();
+        }
+    }
+    let previous = PUBLICATION.with(|slot| slot.replace(Some(Arc::new(language))));
+    scope_changed();
+    Restore(previous, std::marker::PhantomData)
+}
+
+#[cfg(all(test, feature = "test-language-publication"))]
+#[test]
+fn isolated_reload_publications_are_mutable_nested_and_thread_local() {
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    std::thread::scope(|scope| {
+        for value in ["first", "second"] {
+            let barrier = barrier.clone();
+            scope.spawn(move || {
+                let _outer = isolate_publication(Language::of("en_us", []));
+                set(Language::of(
+                    "en_us",
+                    [("fixture.key".into(), value.into())],
+                ));
+                barrier.wait();
+                assert_eq!(get("fixture.key"), value);
+                {
+                    let _inner = isolate_publication(Language::of("en_us", []));
+                    set(Language::of(
+                        "en_us",
+                        [("fixture.key".into(), "nested".into())],
+                    ));
+                    assert_eq!(get("fixture.key"), "nested");
+                }
+                assert_eq!(get("fixture.key"), value);
+            });
+        }
+    });
+}
+
 pub fn set(language: Language) {
+    #[cfg(feature = "test-language-publication")]
+    let language = match PUBLICATION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            *slot = Some(Arc::new(language));
+            None
+        } else {
+            Some(language)
+        }
+    }) {
+        Some(language) => language,
+        None => {
+            scope_changed();
+            return;
+        }
+    };
     BIDIRECTIONAL.store(language.bidirectional, Ordering::Relaxed);
     *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(language));
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 pub fn current() -> Option<Arc<Language>> {
     if let Some(language) = SCOPE.with(|s| s.borrow().as_ref().map(|s| s.language.clone())) {
+        return Some(language);
+    }
+    #[cfg(feature = "test-language-publication")]
+    if let Some(language) = PUBLICATION.with(|slot| slot.borrow().clone()) {
         return Some(language);
     }
     CURRENT.read().unwrap_or_else(|e| e.into_inner()).clone()
@@ -651,6 +744,10 @@ fn missed(key: &str) {
 }
 /// `ClientLanguage.defaultRightToLeft` of the current language.
 pub fn bidirectional() -> bool {
+    #[cfg(feature = "test-language-publication")]
+    if let Some(language) = PUBLICATION.with(|slot| slot.borrow().clone()) {
+        return language.bidirectional;
+    }
     BIDIRECTIONAL.load(Ordering::Relaxed)
 }
 pub fn code() -> String {
@@ -990,6 +1087,7 @@ mod tests {
     /// source names as a string literal is text the game no longer shows: its
     /// rewording left it behind in every language (#13802).
     #[test]
+    #[ignore = "daily"]
     fn every_sentence_key_in_en_us_is_one_the_code_names() {
         let en: HashMap<String, String> = serde_json::from_str(
             &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
@@ -1280,5 +1378,34 @@ mod tests {
             }
         }
         assert!(failed.is_empty(), "{failed:?}");
+    }
+}
+
+#[cfg(test)]
+mod shared_source_tests {
+    use super::*;
+    #[test]
+    fn selected_language_and_english_fallback_read_resolved_resources() {
+        use horizon_assets::resource_source::{Resource, ResourceSource};
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "assets/reader/lang/en_us.json".into(),
+                Resource::bytes(
+                    br#"{"reader.hello":"Hello","reader.only":"English fallback"}"#.to_vec(),
+                ),
+            ),
+            (
+                "assets/reader/lang/fr_fr.json".into(),
+                Resource::bytes(br#"{"reader.hello":"Bonjour"}"#.to_vec()),
+            ),
+            (
+                "assets/mod_fixture/lang/fr_fr.json".into(),
+                Resource::bytes(br#"{"mod_fixture.menu":"Mod layer"}"#.to_vec()),
+            ),
+        ]));
+        let language = Language::load(&[&source], "fr_fr");
+        assert_eq!(language.map["reader.hello"], "Bonjour");
+        assert_eq!(language.map["reader.only"], "English fallback");
+        assert_eq!(language.map["mod_fixture.menu"], "Mod layer");
     }
 }

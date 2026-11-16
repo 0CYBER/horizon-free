@@ -160,7 +160,11 @@ pub fn main() -> Result<()> {
         world(&assets, &facts, false, true)?,
         world(&assets, &facts, true, true)?,
     ];
-    let mut engine = ParticleEngine::new(root, &HashMap::new(), &Default::default());
+    let mut engine = ParticleEngine::new(
+        &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
+        &HashMap::new(),
+        &Default::default(),
+    );
     for (ty, item) in [
         (ParticleType::ItemSlime, "item_slime_ball"),
         (ParticleType::ItemSnowball, "item_snowball"),

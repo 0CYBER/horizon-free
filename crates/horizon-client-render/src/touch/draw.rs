@@ -279,11 +279,20 @@ mod tests {
     use super::*;
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-touch-draw")).unwrap()
+        HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            std::path::PathBuf::from("/nonexistent/horizon-touch-draw"),
+        ))
+        .unwrap()
     }
 
     fn vertices(t: &TouchControls, a: &HudAtlas) -> usize {
-        let mut b = HudBatch::new([1920, 1080]);
+        let mut b = HudBatch::new(
+            [1920, 1080],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
         t.draw(&mut b, a);
         b.vertices.len()
     }
@@ -373,7 +382,13 @@ mod tests {
 
     /// One button drawn alone, as `button` draws it in `draw`.
     fn one(a: &HudAtlas, bounds: [f32; 4], label: &str, pressed: bool) -> HudBatch {
-        let mut b = HudBatch::new([1920, 1080]);
+        let mut b = HudBatch::new(
+            [1920, 1080],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
         button(&mut b, a, bounds, label, pressed, rgba(255, 255, 255, 128));
         b
     }
@@ -416,7 +431,13 @@ mod tests {
             b.vertices.iter().map(|v| v.color).collect::<Vec<_>>()
         };
         let (idle, held) = (colours(false), colours(true));
-        let mut fill = HudBatch::new([1920, 1080]);
+        let mut fill = HudBatch::new(
+            [1920, 1080],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
         fill.fill(&a, 0.0, 0.0, 1.0, 1.0, 0);
         let quad = fill.vertices.len();
         // The backdrop, then the four one-pixel edges in the button's colour.

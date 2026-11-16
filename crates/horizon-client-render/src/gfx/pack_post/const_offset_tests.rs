@@ -45,6 +45,7 @@ fn pack() -> Post {
 
 #[test]
 fn a_const_local_offset_reads_the_offset_texel() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     let pixels = gpu.render(&mut post, [8, 8]);

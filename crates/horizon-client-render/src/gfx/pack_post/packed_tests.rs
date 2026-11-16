@@ -62,6 +62,7 @@ fn pack() -> Post {
 
 #[test]
 fn small_packed_buffers_keep_their_bits() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     // Twice: the second frame writes the buffers' other sides.

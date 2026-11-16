@@ -36,6 +36,10 @@ impl Default for Names {
     }
 }
 
+/// Test-only control of the writer's elapsed clock, observing the previous drain.
+#[cfg(test)]
+pub type TestClock = dyn Fn(Instant, &Aggregate) -> Duration + Send + Sync;
+
 #[derive(Clone)]
 pub struct Config {
     pub sampler: sampler::Config,
@@ -46,6 +50,8 @@ pub struct Config {
     /// Seconds per time block; a session longer than `MAX_TIME_BLOCKS` of them keeps the rest in the last block.
     pub block_s: f32,
     pub names: Names,
+    #[cfg(test)]
+    pub test_clock: Option<Arc<TestClock>>,
 }
 
 impl Default for Config {
@@ -56,6 +62,8 @@ impl Default for Config {
             ticks_over_ms: 50.0,
             block_s: 1.0,
             names: Names::default(),
+            #[cfg(test)]
+            test_clock: None,
         }
     }
 }
@@ -118,6 +126,8 @@ pub fn start(config: Config) -> io::Result<Session> {
     let begun = Instant::now();
     let (stop, stopped) = mpsc::channel::<()>();
     let publish = shared.clone();
+    #[cfg(test)]
+    let test_clock = config.test_clock.clone();
     let writer = thread::Builder::new()
         .name("horizon-profile".into())
         .spawn(move || {
@@ -125,7 +135,12 @@ pub fn start(config: Config) -> io::Result<Session> {
             let cpu0 = sampler::thread_cpu_ns();
             let mut agg = Aggregate::new(slow_ns);
             let in_block = |agg: &mut Aggregate| {
-                agg.set_time_block((begun.elapsed().as_secs_f64() / block.as_secs_f64()) as usize)
+                let elapsed = begun.elapsed();
+                #[cfg(test)]
+                let elapsed = test_clock
+                    .as_ref()
+                    .map_or(elapsed, |clock| clock(begun, agg));
+                agg.set_time_block((elapsed.as_secs_f64() / block.as_secs_f64()) as usize)
             };
             while stopped.recv_timeout(DRAIN_EVERY) == Err(mpsc::RecvTimeoutError::Timeout) {
                 in_block(&mut agg);

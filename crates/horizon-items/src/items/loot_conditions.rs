@@ -9,12 +9,12 @@ use super::LootContext;
 use horizon_core::random::RandomSource;
 use serde_json::Value;
 
-impl LootContext<'_> {
+impl<R: RandomSource> LootContext<'_, R> {
     /// The condition `id` names in `Registries.PREDICATE`. A root whose
     /// `predicate/` files were never loaded (`Items::for_tests`, a scratch
     /// root) keeps the two ids vanilla's own block tables name readable as
     /// their own kinds, as this engine read every string before the registry.
-    pub(super) fn named_condition<R: RandomSource>(&self, id: &str, random: &mut R) -> bool {
+    pub(super) fn named_condition(&self, id: &str, random: &mut R) -> bool {
         match self.items.predicates.get(id) {
             Some(condition) => self.condition(condition, random),
             None => match id {
@@ -32,7 +32,7 @@ impl LootContext<'_> {
     /// A pool's or an entry's `condition` (`LootPool.CODEC`,
     /// `LootPoolEntryContainer.CODEC`) and the `conditions` list old pack data
     /// writes instead, all of which must hold.
-    pub(super) fn conditions<R: RandomSource>(&self, o: &Value, random: &mut R) -> bool {
+    pub(super) fn conditions(&self, o: &Value, random: &mut R) -> bool {
         if let Some(c) = o.get("condition")
             && !self.condition(c, random)
         {

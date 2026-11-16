@@ -218,10 +218,18 @@ pub fn angry(m: &Mob, w: &MobWorld) -> bool {
 }
 /// `NeutralMob.stopBeingAngry`.
 pub fn stop_being_angry(m: &mut Mob) {
+    stop_being_angry_with_world(m, None);
+}
+
+fn stop_being_angry_with_world(m: &mut Mob, world: Option<&MobWorld>) {
     m.ai.last_hurt_by = None;
     m.ai.last_hurt_by_ref = None;
     m.ai.last_hurt_by_time = m.age as i32;
-    m.ai.target = None;
+    if let Some(world) = world {
+        m.set_ai_target(world, None);
+    } else {
+        m.ai.target = None;
+    }
     let b = st(m);
     b.angry_at = None;
     b.anger_end = -1;
@@ -241,8 +249,7 @@ fn start_anger_timer(m: &mut Mob, w: &MobWorld) {
 /// Peaceful.
 fn valid_player_target(w: &MobWorld) -> bool {
     w.difficulty.id != 0
-        && w.player
-            .as_ref()
+        && w.selected_player()
             .is_some_and(|p| !p.creative && !p.spectator)
 }
 /// `NeutralMob.updatePersistentAnger(level, false)`.
@@ -257,7 +264,7 @@ fn update_persistent_anger(m: &mut Mob, w: &MobWorld) {
         && dead_mob(p)
         && angry_at == Some(p)
     {
-        stop_being_angry(m);
+        stop_being_angry_with_world(m, Some(w));
         return;
     }
     if let Some(target) = m.ai.target
@@ -267,10 +274,10 @@ fn update_persistent_anger(m: &mut Mob, w: &MobWorld) {
         start_anger_timer(m, w);
     }
     if angry_at.is_some() && !angry(m, w) {
-        stop_being_angry(m);
+        stop_being_angry_with_world(m, Some(w));
     }
     if angry_at == Some(Who::Player) && !valid_player_target(w) {
-        stop_being_angry(m);
+        stop_being_angry_with_world(m, Some(w));
     }
 }
 /// `beeCanTarget`: angry and still armed.
@@ -328,7 +335,7 @@ pub fn server_ai_step(m: &mut Mob, cx: &mut Cx) {
     let b = st(m);
     b.under_water = if in_water { b.under_water + 1 } else { 0 };
     if b.under_water > 20 {
-        m.damage(1.0, Damage::of(DamageKind::Drown));
+        m.damage(cx.level, 1.0, Damage::of(DamageKind::Drown));
     }
     if stung {
         let b = st(m);
@@ -341,7 +348,7 @@ pub fn server_ai_step(m: &mut Mob, cx: &mut Cx) {
                 == 0
         {
             let health = m.health;
-            m.damage(health, Damage::of(DamageKind::Generic));
+            m.damage(cx.level, health, Damage::of(DamageKind::Generic));
         }
     }
     if !has_nectar(m) {
@@ -373,12 +380,12 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
         from: Some(from),
         attacker_species: Some(Species::Bee),
     };
-    cx.events.push(MobEvent::Sting {
+    cx.events.push(cx.w.route_player_event(MobEvent::Sting {
         target: who,
         amount,
         poison_ticks: seconds * 20,
         source,
-    });
+    }));
     // `setHasStung(true)` and `stopBeingAngry`, which vanilla runs inside the
     // bee's tick: `Bee.tick`'s roll and the goals after the sting read them
     // before the game can hear whether the victim took the hit.
@@ -392,7 +399,7 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
         target: m.ai.target,
     };
     set_has_stung(m, true);
-    stop_being_angry(m);
+    stop_being_angry_with_world(m, Some(cx.w));
     st(m).undo = Some(undo);
 }
 /// `Bee.doHurtTarget`'s sting landed: the stinger and the calm-down stay.
@@ -1252,14 +1259,13 @@ impl Goal for Wander {
 pub fn stable_destination(w: &MobWorld, p: [i32; 3]) -> bool {
     !w.facts.is_air(w.world.block(p[0], p[1] - 1, p[2]))
 }
-/// `Bee.addAdditionalSaveData` (and NeutralMob's `anger_end_time` and
-/// `angry_at`).
+/// `Bee.addAdditionalSaveData` (and NeutralMob's `anger_end_time`).
 pub fn to_nbt(
     m: &Mob,
-    map: &mut horizon_world::nbt::Compound,
+    map: &mut horizon_core::nbt::Compound,
     uuid_of: &mut impl FnMut(u32) -> Option<[i32; 4]>,
 ) {
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
     let b = get(m).cloned().unwrap_or_default();
     for (key, pos) in [("hive_pos", b.hive), ("flower_pos", b.flower)] {
         match pos {
@@ -1296,8 +1302,8 @@ pub fn to_nbt(
     }
 }
 /// `Bee.readAdditionalSaveData`.
-pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
-    use horizon_world::nbt::Tag;
+pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
+    use horizon_core::nbt::Tag;
     let int = |k: &str| match tag.get(k) {
         Some(Tag::Int(v)) => Some(*v),
         Some(Tag::Byte(v)) => Some(i32::from(*v)),
@@ -1350,27 +1356,32 @@ mod tests {
     /// `NeutralMob.updatePersistentAnger`: anger at the player ends on
     /// Peaceful, as for a creative or spectator player (#11377).
     #[test]
+    #[ignore = "daily"]
     fn peaceful_ends_a_bees_anger_at_the_player() {
-        with_test_world(&[], |w, _| {
-            for (difficulty, still_angry) in [(2, true), (0, false)] {
-                let mut w = w.clone();
-                w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
-                w.difficulty =
-                    crate::mobs::spawning::LocalDifficulty::new(difficulty, 18000, 0, 0.0);
-                let mut m = bee();
-                let b = super::st(&mut m);
-                b.angry_at = Some(Who::Player);
-                b.anger_end = w.game_time + 400;
-                super::update_persistent_anger(&mut m, &w);
-                let angry = super::get(&m).is_some_and(|b| b.angry_at.is_some());
-                assert_eq!(angry, still_angry, "difficulty {difficulty}");
-            }
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                for (difficulty, still_angry) in [(2, true), (0, false)] {
+                    let mut w = w.clone();
+                    w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
+                    w.difficulty =
+                        crate::mobs::spawning::LocalDifficulty::new(difficulty, 18000, 0, 0.0);
+                    let mut m = bee();
+                    let b = super::st(&mut m);
+                    b.angry_at = Some(Who::Player);
+                    b.anger_end = w.game_time + 400;
+                    super::update_persistent_anger(&mut m, &w);
+                    let angry = super::get(&m).is_some_and(|b| b.angry_at.is_some());
+                    assert_eq!(angry, still_angry, "difficulty {difficulty}");
+                }
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `BeeGrowCropGoal.tick`: level event 2011 (data 15) comes before the
     /// crop's new state (#11377).
     #[test]
+    #[ignore = "daily"]
     fn a_bee_sparks_a_crop_before_growing_it() {
         use crate::mobs::goals::Goal;
         crate::mobs::world::with_built_test_world(
@@ -1386,7 +1397,7 @@ mod tests {
             |w, _| {
                 let mut m = bee();
                 m.position = Vec3::new(0.5, 64.0, 0.5);
-                let mut random = crate::mobs::world::level_random(1);
+                let mut test_level = crate::health::TestLevel::new(1);
                 let mut events = Vec::new();
                 // The goal grows on a 1-in-reduced(30) roll.
                 for _ in 0..1000 {
@@ -1395,7 +1406,7 @@ mod tests {
                     }
                     let mut cx = Cx {
                         w,
-                        lr: &mut random,
+                        level: &mut test_level.level(),
                         events: &mut events,
                     };
                     super::GrowCrop.tick(&mut m, &mut cx);
@@ -1423,59 +1434,67 @@ mod tests {
 
     /// `Bee.doHurtTarget` on Normal: a mob is poisoned for 10 seconds (200 ticks).
     #[test]
+    #[ignore = "daily"]
     fn a_bee_sting_asks_for_ten_seconds_of_poison_on_normal() {
-        with_test_world(&[], |w, _| {
-            let mut m = bee();
-            let mut events = Vec::new();
-            let mut random = crate::mobs::world::level_random(1);
-            let mut cx = Cx {
-                w,
-                lr: &mut random,
-                events: &mut events,
-            };
-            sting(&mut m, Who::Mob(9), &mut cx);
-            assert!(events.iter().any(|e| matches!(
-                e,
-                MobEvent::Sting {
-                    target: Who::Mob(9),
-                    poison_ticks: 200,
-                    ..
-                }
-            )));
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                let mut m = bee();
+                let mut events = Vec::new();
+                let mut test_level = crate::health::TestLevel::new(1);
+                let mut cx = Cx {
+                    w,
+                    level: &mut test_level.level(),
+                    events: &mut events,
+                };
+                sting(&mut m, Who::Mob(9), &mut cx);
+                assert!(events.iter().any(|e| matches!(
+                    e,
+                    MobEvent::Sting {
+                        target: Who::Mob(9),
+                        poison_ticks: 200,
+                        ..
+                    }
+                )));
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `NeutralMob.isAngryAtAllPlayers`: with `universal_anger` on and no
     /// persistent anger target left, a bee still angry at the player targets
     /// them; with the rule off it targets no one.
     #[test]
+    #[ignore = "daily"]
     fn universal_anger_lets_an_angry_bee_pick_the_player() {
-        with_test_world(&[], |w, _| {
-            for rule in [false, true] {
-                let mut w = w.clone();
-                w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
-                w.universal_anger = rule;
-                let mut m = bee();
-                let b = super::st(&mut m);
-                b.angry_at = None;
-                b.anger_end = w.game_time + 400;
-                m.ai.goals.add(1, super::BecomeAngryTarget::new());
-                let mut random = crate::mobs::world::level_random(1);
-                let mut events = Vec::new();
-                let mut cx = Cx {
-                    w: &w,
-                    lr: &mut random,
-                    events: &mut events,
-                };
-                let mut goals = std::mem::take(&mut m.ai.goals);
-                for _ in 0..200 {
-                    goals.tick(&mut m, &mut cx);
+        assert!(
+            with_test_world(&[], |w, _| {
+                for rule in [false, true] {
+                    let mut w = w.clone();
+                    w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
+                    w.universal_anger = rule;
+                    let mut m = bee();
+                    let b = super::st(&mut m);
+                    b.angry_at = None;
+                    b.anger_end = w.game_time + 400;
+                    m.ai.goals.add(1, super::BecomeAngryTarget::new());
+                    let mut random = crate::health::TestLevel::new(1);
+                    let mut events = Vec::new();
+                    let mut cx = Cx {
+                        w: &w,
+                        level: &mut random.level(),
+                        events: &mut events,
+                    };
+                    let mut goals = std::mem::take(&mut m.ai.goals);
+                    for _ in 0..200 {
+                        goals.tick(&mut m, &mut cx);
+                    }
+                    let targeted = m.ai.target == Some(Who::Player);
+                    m.ai.goals = goals;
+                    assert_eq!(targeted, rule, "universal_anger {rule}");
                 }
-                let targeted = m.ai.target == Some(Who::Player);
-                m.ai.goals = goals;
-                assert_eq!(targeted, rule, "universal_anger {rule}");
-            }
-        });
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `NeutralMob.addPersistentAngerSaveData` and
@@ -1488,7 +1507,7 @@ mod tests {
     #[test]
     fn a_bees_anger_target_survives_a_save() {
         use crate::entity_nbt::{mob_from_nbt, mob_to_nbt, player_uuid};
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         let mut m = bee();
         {
             let b = super::st(&mut m);

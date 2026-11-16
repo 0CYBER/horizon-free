@@ -4,7 +4,7 @@ use crate::{
     Result,
     buf::{Codec, Reader, Writer},
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `DisplayInfo` of an advancement as sent.
 #[derive(Clone, Debug, PartialEq)]

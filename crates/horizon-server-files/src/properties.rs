@@ -2,14 +2,12 @@
 //! vanilla's default, parser and serializer. Reading a value writes its
 //! normalized form back, so storing afterwards rewrites the file the way the
 //! vanilla server does on start; the legacy keys are dropped.
-use super::{
-    java_properties::{Properties, date_string, now_millis},
-    json::{self, Json},
-};
+use super::json::{self, Json};
 use horizon_core::{
     random::java_string_hash,
     text::{parse_java_integer, parse_java_long},
 };
+use horizon_java_properties::{Properties, date_string, now_millis};
 use horizon_protocol::crypto::md5;
 
 /// MinecraftServer.ServerResourcePackInfo.
@@ -666,7 +664,7 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-    use crate::java_properties::line_separator;
+    use horizon_java_properties::line_separator;
     struct Fixed;
     impl Entropy for Fixed {
         fn next_long(&mut self) -> i64 {

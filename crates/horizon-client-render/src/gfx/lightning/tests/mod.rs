@@ -214,8 +214,9 @@ fn long_flash_sequence_keeps_only_active_seeds() {
 /// explicitly, separately from other headless device tests (some GPU drivers
 /// fail during concurrent device teardown). Machines without an adapter skip it.
 #[test]
-#[ignore = "requires GPU; run separately with --ignored --exact"]
+#[ignore = "daily"]
 fn retained_gpu_draw_matches_transient_additive_draw() {
+    let _gpu = crate::gfx::test_gpu::lock();
     use bytemuck::Zeroable;
     let instance = crate::gfx::test_gpu::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
@@ -528,8 +529,9 @@ fn white_uv_is_inside_the_white_sprite() {
 /// texture that is white everywhere (#3171: the sprite's corner left a few
 /// scattered pixels). Run explicitly, like the test above.
 #[test]
-#[ignore = "requires GPU; run separately with --ignored --exact"]
+#[ignore = "daily"]
 fn bolt_through_the_atlas_white_sprite_is_fully_drawn() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
         eprintln!("no GPU adapter: skipped");

@@ -1,1 +1,1 @@
-Consumable.animation	port	crates/horizon-client/src/item_sync.rs::consumable_animation	animation from the stack's consumable component
+Consumable.animation	port	crates/horizon-items/src/use_animation.rs::consumable_animation	animation from the stack's consumable component

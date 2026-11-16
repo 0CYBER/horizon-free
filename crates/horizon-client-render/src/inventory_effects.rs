@@ -2,6 +2,8 @@
 //! inventories, with compact icons when there is little room on the right.
 use std::borrow::Cow;
 
+use horizon_client_core::text::Text;
+
 use crate::{
     effects::EffectInstance,
     hud::{HudAtlas, HudBatch},
@@ -9,7 +11,9 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq)]
-pub struct EffectPanel {
+pub struct EffectPanel<'a> {
+    /// The effect the panel shows.
+    pub effect: &'a EffectInstance,
     pub icon: EffectIcon,
     pub name: String,
     pub duration: String,
@@ -19,23 +23,64 @@ pub struct EffectPanel {
     pub spacing: i32,
 }
 
-/// Lay out panels using the container's actual origin (including recipe book
-/// shifts). Vanilla hides them when fewer than 32 GUI pixels remain.
-pub fn panels(
-    screen_width: i32,
-    origin: [i32; 2],
-    image_width: i32,
-    effects: &[EffectInstance],
+/// Where the effect panels may go: the window's width, the container's
+/// origin (including recipe book shifts) and its image width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectsSpace {
+    pub screen_width: i32,
+    pub origin: [i32; 2],
+    pub image_width: i32,
+}
+
+impl EffectsSpace {
+    fn left(&self) -> i32 {
+        self.origin[0] + self.image_width + 2
+    }
+
+    /// The width right of the container (`availableSpace`); vanilla draws
+    /// nothing below 32.
+    pub fn available(&self) -> i32 {
+        self.screen_width - self.left()
+    }
+}
+
+/// How the panels are laid out: compact icons or full panels, shifted
+/// `offset` GUI pixels right, or `hidden` (a native mod drew its own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectsLayout {
+    pub compact: bool,
+    pub offset: i32,
+    pub hidden: bool,
+}
+
+impl EffectsLayout {
+    /// Vanilla's: full panels from 120 GUI pixels of room, compact below.
+    pub fn vanilla(available: i32) -> Self {
+        Self {
+            compact: available < 120,
+            offset: 0,
+            hidden: false,
+        }
+    }
+}
+
+/// Lay out panels as `layout` says. Vanilla hides them when fewer than 32 GUI
+/// pixels remain.
+pub fn panels<'a>(
+    space: &EffectsSpace,
+    layout: &EffectsLayout,
+    effects: &'a [EffectInstance],
     tick_rate: f32,
     translate: &dyn Fn(&str) -> Option<String>,
     text_width: &dyn Fn(&str) -> i32,
-) -> Vec<EffectPanel> {
-    let x = origin[0] + image_width + 2;
-    let available = screen_width - x;
-    if effects.is_empty() || available < 32 {
+) -> Vec<EffectPanel<'a>> {
+    let available = space.available();
+    if effects.is_empty() || available < 32 || layout.hidden {
         return Vec::new();
     }
-    let max_width = if available >= 120 { available - 7 } else { 32 };
+    let x = space.left() + layout.offset;
+    let origin = space.origin;
+    let max_width = if layout.compact { 32 } else { available - 7 };
     let spacing = if effects.len() > 5 {
         132 / (effects.len() as i32 - 1)
     } else {
@@ -63,6 +108,7 @@ pub fn panels(
             };
             let width = max_width.min(39 + text_width(&name).max(text_width(&duration)));
             EffectPanel {
+                effect,
                 icon,
                 name,
                 duration,
@@ -110,15 +156,23 @@ fn background(batch: &mut HudBatch, atlas: &HudAtlas, panel: &EffectPanel) {
     strip(panel.width - 4, 28, 4);
 }
 
-/// Paint panels and return the full name/duration tooltip for a hovered compact
-/// or clipped panel. Its hover height follows the spacing of overlapping rows.
-pub fn paint(
+/// A rendered panel under the cursor, whether or not vanilla gives it tooltip lines.
+pub struct HoveredEffectPanel<'p, 'a> {
+    /// The effect widget under the cursor.
+    pub panel: &'p EffectPanel<'a>,
+    /// Compact or clipped widgets show their full name and duration in a tooltip.
+    pub has_default_tooltip: bool,
+}
+
+/// Paint panels and return the hovered panel with its default-tooltip eligibility.
+/// Its hover height follows the spacing of overlapping rows.
+pub fn paint<'p, 'a>(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
-    panels: &[EffectPanel],
+    panels: &'p [EffectPanel<'a>],
     cursor: [i32; 2],
-) -> Option<[(String, u32); 2]> {
-    let mut tooltip = None;
+) -> Option<HoveredEffectPanel<'p, 'a>> {
+    let mut hovered = None;
     let mut icon = String::new();
     for panel in panels {
         background(batch, atlas, panel);
@@ -156,30 +210,46 @@ pub fn paint(
             let (x, y) = ((panel.x + 7) as f32, (panel.y + 7) as f32);
             batch.rect_uv(x, y, 18.0, 18.0, r, u32::MAX);
         }
-        if (text_width <= 0 || clipped)
-            && cursor[0] >= panel.x
+        if cursor[0] >= panel.x
             && cursor[0] <= panel.x + panel.width
             && cursor[1] >= panel.y
             && cursor[1] <= panel.y + panel.spacing
         {
-            tooltip = Some([
-                (panel.name.clone(), u32::MAX),
-                (panel.duration.clone(), u32::MAX),
-            ]);
+            hovered = Some(HoveredEffectPanel {
+                panel,
+                has_default_tooltip: text_width <= 0 || clipped,
+            });
         }
     }
-    tooltip
+    hovered
+}
+
+/// A hovered panel's default tooltip: the full name then duration for compact
+/// or clipped panels, no lines when its information is fully visible.
+pub fn tooltip(hovered: HoveredEffectPanel<'_, '_>) -> Vec<(Text, u32)> {
+    if !hovered.has_default_tooltip {
+        return Vec::new();
+    }
+    let panel = hovered.panel;
+    vec![
+        (Text::literal(&panel.name), u32::MAX),
+        (Text::literal(&panel.duration), u32::MAX),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn layout(width: i32, effects: &[EffectInstance]) -> Vec<EffectPanel> {
+    fn layout(width: i32, effects: &[EffectInstance]) -> Vec<EffectPanel<'_>> {
+        let space = EffectsSpace {
+            screen_width: width,
+            origin: [72, 37],
+            image_width: 176,
+        };
         panels(
-            width,
-            [72, 37],
-            176,
+            &space,
+            &EffectsLayout::vanilla(space.available()),
             effects,
             20.0,
             &|key| match key {
@@ -240,11 +310,36 @@ mod tests {
     #[test]
     fn creative_origin_recipe_book_shift_and_tick_rate() {
         let effects = [EffectInstance::new("speed", 72000, 10)];
-        let p = panels(640, [222, 43], 195, &effects, 10.0, &|_| None, &|_| 60);
+        let space = EffectsSpace {
+            screen_width: 640,
+            origin: [222, 43],
+            image_width: 195,
+        };
+        let vanilla = EffectsLayout::vanilla(space.available());
+        let p = panels(&space, &vanilla, &effects, 10.0, &|_| None, &|_| 60);
         assert_eq!((p[0].x, p[0].y), (419, 43));
         assert_eq!(p[0].name, "speed");
         assert_eq!(p[0].duration, "02:00:00");
-        let p = panels(480, [149, 37], 176, &effects, 20.0, &|_| None, &|_| 150);
+        let space = EffectsSpace {
+            screen_width: 480,
+            origin: [149, 37],
+            image_width: 176,
+        };
+        let vanilla = EffectsLayout::vanilla(space.available());
+        let p = panels(&space, &vanilla, &effects, 20.0, &|_| None, &|_| 150);
         assert_eq!((p[0].x, p[0].width), (327, 146));
+        // A mod's layout: compact icons, nudged right; hidden draws none.
+        let moved = EffectsLayout {
+            compact: true,
+            offset: 5,
+            hidden: false,
+        };
+        let p = panels(&space, &moved, &effects, 20.0, &|_| None, &|_| 150);
+        assert_eq!((p[0].x, p[0].width), (332, 32));
+        let hidden = EffectsLayout {
+            hidden: true,
+            ..moved
+        };
+        assert!(panels(&space, &hidden, &effects, 20.0, &|_| None, &|_| 150).is_empty());
     }
 }

@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Horizon's Minecraft Java Edition 26.3 network protocol (version 777)"
 
 [dependencies]
+horizon-mod-runtime = { path = "../horizon-mod-runtime" }
 horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
@@ -33,6 +34,11 @@ path = "examples/probe.rs"
 [[example]]
 name = "item_wire_probe"
 path = "examples/item_wire_probe.rs"
+
+[dev-dependencies]
+# The isolated retained-allocation integration test installs the census allocator
+# explicitly; no alloc-census feature unification with production consumers.
+horizon-threads = { path = "../horizon-threads" }
 
 [lints]
 workspace = true

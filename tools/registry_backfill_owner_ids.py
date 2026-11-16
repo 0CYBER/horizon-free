@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off: fills in `owner_ids` for the registry's entries that predate them (crates/horizon-mods, `Entry`).
+"""One-off: fills in `owner_ids` for the registry's entries that predate them (crates/horizon-mod-package, `Entry`).
 
     registry_backfill_owner_ids.py <registry checkout>           shows what it would write (changes nothing)
     registry_backfill_owner_ids.py <registry checkout> --write   writes `owner_ids = [...]` into mods/<id>.toml

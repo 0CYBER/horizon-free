@@ -1,0 +1,150 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+thread_local! {
+    static OWNER: Cell<&'static str> = const { Cell::new("outside") };
+    static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static ACTIONS: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static SEEN: RefCell<Vec<(String, Vec<u32>, i32, bool)>> = const { RefCell::new(Vec::new()) };
+}
+#[macro_export]
+macro_rules! warn { ($($arg:tt)*) => { crate::WARNINGS.with_borrow_mut(|warnings| warnings.push(format!($($arg)*))) }; }
+extern crate self as log;
+mod content { pub mod crash { pub fn current_native_mod() -> Option<&'static str> { Some(crate::OWNER.get()) } } }
+#[derive(Clone, Debug, PartialEq)]
+pub struct ItemStack(u32);
+struct Game<'a>(&'a ());
+impl Game<'_> { fn stack_boundary_items(&self) -> Option<Arc<()>> { Some(Arc::new(())) } }
+mod game { pub mod api_values {
+    pub trait TryIntoApi { type Api; fn try_into_api(&self) -> Result<Self::Api, ()>; }
+    pub trait TryIntoEngine { type Engine; fn try_into_engine(&self, _: &()) -> Result<Self::Engine, crate::mod_api::StackWriteError>; }
+    pub trait ItemBoundary { fn boundary_items(&self) -> Option<&()>; }
+    impl ItemBoundary for crate::Game<'_> { fn boundary_items(&self) -> Option<&()> { Some(self.0) } }
+    impl TryIntoApi for Vec<crate::ItemStack> {
+        type Api = Vec<crate::mod_api::ItemStack>;
+        fn try_into_api(&self) -> Result<Self::Api, ()> { Ok(self.iter().map(|stack| crate::mod_api::ItemStack(stack.0)).collect()) }
+    }
+    impl TryIntoEngine for Vec<crate::mod_api::ItemStack> {
+        type Engine = Vec<crate::ItemStack>;
+        fn try_into_engine(&self, _: &()) -> Result<Self::Engine, crate::mod_api::StackWriteError> {
+            if self.iter().any(|stack| stack.0 > 64) { return Err(crate::mod_api::StackWriteError::CountExceeded); }
+            Ok(self.iter().map(|stack| crate::ItemStack(stack.0)).collect())
+        }
+    }
+} }
+struct Listener { id: &'static str, index: usize }
+static LISTENERS: [Listener; 2] = [Listener { id: "first_mod", index: 0 }, Listener { id: "second_mod", index: 1 }];
+impl Listener {
+    fn mixed(&self, _: &mut dyn mod_api::ServerHost, event: &mut mod_api::MixedEvent<'_>) -> mod_api::Flow {
+        SEEN.with_borrow_mut(|seen| seen.push((self.id.into(), event.drops.iter().map(|s| s.0).collect(), event.damage, event.cancelled)));
+        match ACTIONS.with_borrow(|actions| actions[self.index]) {
+            0 => { *event.drops = vec![mod_api::ItemStack(65)]; event.damage = 7; mod_api::Flow::Cancel }
+            1 => { *event.drops = vec![mod_api::ItemStack(3), mod_api::ItemStack(4)]; event.damage = 9; mod_api::Flow::Continue }
+            2 => { assert_eq!(event.drops.iter().map(|s| s.0).collect::<Vec<_>>(), vec![2]); event.drops.push(mod_api::ItemStack(5)); event.damage += 1; event.cancelled = false; mod_api::Flow::Continue }
+            3 => { *event.drops = vec![mod_api::ItemStack(66)]; event.damage += 2; mod_api::Flow::Continue }
+            4 => { event.damage = 13; mod_api::Flow::Cancel }
+            _ => unreachable!(),
+        }
+    }
+    fn scalar(&self, _: &mut dyn mod_api::ServerHost, event: &mut mod_api::ScalarEvent) -> mod_api::Flow {
+        event.damage = 12;
+        mod_api::Flow::Cancel
+    }
+    fn stack(&self, _: &mut dyn mod_api::ServerHost, event: &mut mod_api::StackEvent<'_>) {
+        *event.drops = vec![mod_api::ItemStack(if self.index == 0 { 3 } else { 65 })];
+    }
+}
+fn listened(_: mod_api::HookId) -> bool { true }
+fn receives_cancelled(_: mod_api::HookId) -> bool { true }
+fn listening(_: mod_api::HookId) -> impl Iterator<Item = (bool, &'static Listener)> {
+    LISTENERS[..ACTIONS.with_borrow(Vec::len)].iter().map(|owner| (true, owner))
+}
+struct Entered { next: usize, count: usize }
+impl Iterator for Entered {
+    type Item = &'static Listener;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next == self.count { return None; }
+        let listener = &LISTENERS[self.next];
+        self.next += 1;
+        OWNER.set(listener.id);
+        Some(listener)
+    }
+}
+impl Drop for Entered { fn drop(&mut self) { OWNER.set("outside"); } }
+fn entered(_: mod_api::HookId, _: &str) -> Entered { Entered { next: 0, count: ACTIONS.with_borrow(Vec::len) } }
+mod runtime {
+    pub struct ListenerScope;
+    impl ListenerScope {
+        pub fn new() -> Self { Self }
+        pub fn enter<'a>(&mut self, owner: &'a crate::Listener, _: &str) -> &'a crate::Listener { crate::OWNER.set(owner.id); owner }
+    }
+    impl Drop for ListenerScope { fn drop(&mut self) { crate::OWNER.set("outside"); } }
+}
+mod mod_api {
+    #[derive(Clone, Debug, PartialEq)] pub struct ItemStack(pub u32);
+    #[derive(Debug)] pub enum StackWriteError { Unavailable, CountExceeded }
+    pub enum Flow { Continue, Cancel }
+    pub enum HookId { Mixed, Scalar, Stack }
+    pub trait ServerHost {}
+    impl ServerHost for crate::Game<'_> {}
+    pub mod __private { pub fn listened(_: super::HookId) -> bool { true } }
+    /* DISPATCH */
+}
+mod engine { use super::*; /* FIRE */ }
+fn assert_warning(owner: Option<&str>, hook: &str) {
+    WARNINGS.with_borrow(|warnings| {
+        if let Some(owner) = owner {
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            for required in [owner, hook, "drops", "CountExceeded"] {
+                assert!(warnings[0].contains(required), "{warnings:?}");
+            }
+        } else {
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+    });
+}
+fn case(actions: &[u8], expected: &[u32], damage: i32, cancel: bool, warning: Option<&str>) {
+    ACTIONS.with_borrow_mut(|value| *value = actions.to_vec());
+    WARNINGS.with_borrow_mut(Vec::clear);
+    SEEN.with_borrow_mut(Vec::clear);
+    let mut drops = vec![ItemStack(2)];
+    let mut actual_damage = 0;
+    let mut actual_cancel = false;
+    Game(&()).fire_mixed(&mut drops, &mut actual_damage, &mut actual_cancel);
+    assert_eq!(drops.iter().map(|stack| stack.0).collect::<Vec<_>>(), expected);
+    assert_eq!(actual_damage, damage);
+    assert_eq!(actual_cancel, cancel);
+    assert_warning(warning, "mixed");
+    assert_eq!(OWNER.get(), "outside");
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run() {
+    case(&[0], &[2], 7, true, Some("first_mod"));
+    case(&[1], &[3, 4], 9, false, None);
+    case(&[0, 2], &[2, 5], 8, false, Some("first_mod"));
+    SEEN.with_borrow(|seen| assert_eq!(seen.as_slice(), &[("first_mod".into(), vec![2], 0, false), ("second_mod".into(), vec![2], 7, true)]));
+    case(&[1, 3], &[3, 4], 11, false, Some("second_mod"));
+    ACTIONS.with_borrow_mut(|actions| *actions = vec![1]);
+    WARNINGS.with_borrow_mut(Vec::clear);
+    let mut damage = 0;
+    let mut cancel = false;
+    Game(&()).fire_scalar(&mut damage, &mut cancel);
+    assert_eq!((damage, cancel), (12, true));
+    WARNINGS.with_borrow(|warnings| assert!(warnings.is_empty()));
+    ACTIONS.with_borrow_mut(|actions| *actions = vec![1, 3]);
+    let mut drops = vec![ItemStack(2)];
+    Game(&()).fire_stack(&mut drops);
+    assert_eq!(drops, vec![ItemStack(3)]);
+    assert_warning(Some("second_mod"), "stack");
+    assert_eq!(OWNER.get(), "outside");
+    ACTIONS.with_borrow_mut(|actions| *actions = vec![4]);
+    WARNINGS.with_borrow_mut(Vec::clear);
+    let mut untouched = vec![ItemStack(70)];
+    let mut damage = 0;
+    let mut cancel = false;
+    Game(&()).fire_mixed(&mut untouched, &mut damage, &mut cancel);
+    assert_eq!(untouched, vec![ItemStack(70)]);
+    assert_eq!((damage, cancel), (13, true));
+    WARNINGS.with_borrow(|warnings| assert!(warnings.is_empty()));
+}
+fn main() { run(); }

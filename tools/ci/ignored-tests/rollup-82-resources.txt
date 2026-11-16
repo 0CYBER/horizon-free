@@ -1,0 +1,2 @@
+# Part-state persistence, transactions and compiled guest regressions.
+horizon-client game::block_entity_part_state_tests::native_and_compiled_wasm_part_state_count_ticks HORIZON_WASM_FIXTURE needs

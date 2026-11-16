@@ -1,7 +1,10 @@
 //! `centerDepthSmooth`'s input: `depthtex0` at the centre of the screen. A depth texture can
-//! only be copied whole, so each frame a one-pixel pass loads that texel into a 1x1 `R32Float`
+//! only be copied whole, so each frame a one-pixel pass loads that texel into a 1x1 `R32Uint`
 //! target, copied to one of a few small buffers and read back frames later without waiting for
 //! the GPU (as `timing.rs` reads its timestamps); `FrameUniforms` smooths the latest value.
+//! The target holds the depth's bits, not the float: OpenGL renders to `R32Uint` everywhere
+//! (GLES 3.0 core), while an `R32Float` target needs `EXT_color_buffer_float`, which llvmpipe
+//! and some drivers lack (arismoko/horizon#2386).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -23,9 +26,10 @@ const SHADER: &str = "
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
     return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
 }
-@fragment fn fs() -> @location(0) vec4<f32> {
+// The depth's bits, read back as the f32 they are.
+@fragment fn fs() -> @location(0) vec4<u32> {
     let centre = vec2<i32>(textureDimensions(depth) / 2u);
-    return vec4<f32>(textureLoad(depth, centre, 0).r, 0.0, 0.0, 1.0);
+    return vec4<u32>(bitcast<u32>(textureLoad(depth, centre, 0).r), 0u, 0u, 1u);
 }
 ";
 
@@ -82,7 +86,7 @@ impl CenterDepth {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let format = wgpu::TextureFormat::R32Float;
+        let format = wgpu::TextureFormat::R32Uint;
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Shader pack centre depth"),
             layout: Some(&pipeline_layout),
@@ -280,10 +284,8 @@ mod tests {
     use super::*;
 
     fn test_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        let adapter = crate::gfx::test_gpu::adapter()?;
+        Some(crate::gfx::test_gpu::device(&adapter))
     }
 
     fn clear(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, depth: f32) {
@@ -303,9 +305,12 @@ mod tests {
     /// Inline and on the submit thread: each finished frame's depth, then none left to
     /// take; several outstanding samples are refused.
     #[test]
-    #[ignore = "requires a host GPU"]
+    #[ignore = "daily"]
     fn a_finished_frame_s_depth_is_taken_alone_never_an_older_one() {
-        let (device, raw) = test_device().expect("host GPU required");
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, raw)) = test_device() else {
+            return;
+        };
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -374,6 +379,7 @@ mod tests {
     /// follows the frames instead of keeping the first ones' depth.
     #[test]
     fn the_centre_depth_follows_frames_submitted_on_the_submit_thread() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = test_device() else {
             return;
         };
@@ -424,6 +430,7 @@ mod tests {
     /// later, without the frame waiting for it.
     #[test]
     fn the_centre_depth_comes_back() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = test_device() else {
             return;
         };

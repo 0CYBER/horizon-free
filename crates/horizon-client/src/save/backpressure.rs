@@ -10,6 +10,7 @@ impl SaveDir {
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
     ) -> Result<Arc<Encoding>> {
+        biomes.ensure_saveable()?;
         if !chunks.is_empty() && self.active_chunk_writes() >= MAX_ASYNC_CHUNK_WRITES {
             self.flush()?;
         }
@@ -20,4 +21,15 @@ impl SaveDir {
             shape: self.shape,
         }))
     }
+}
+
+/// Each record encoded and compressed (`None` for a deletion), in the order
+/// given. Chunk compression and NBT encoding are offloaded across a persistent
+/// background worker pool, keeping region file writing and header flushes
+/// ordered, atomic, and thread-safe.
+pub(super) fn compress_records(
+    records: &[((i32, i32), &Record)],
+    timestamp: u32,
+) -> Vec<std::io::Result<Option<ChunkRecord>>> {
+    super::compression_pool::compress_records(records, timestamp)
 }

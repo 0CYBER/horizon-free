@@ -3,7 +3,8 @@
 //! (difficulty, the default game mode, the whitelist) and through its management settings (the message of the
 //! day, the player limit) at once; the rest applies at the next start.
 
-use crate::{api::Client, config, engine};
+use crate::{api::Client, engine};
+use horizon_server_launch::config;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
@@ -142,8 +143,13 @@ pub(crate) fn range(section: &str, field: &str) -> Option<std::ops::RangeInclusi
     match (section, field) {
         ("server", "view_distance" | "simulation_distance") => Some(2..=32),
         ("server", "max_view_distance") => Some(0..=32),
+        ("server", "max_viewed_loaded_chunks" | "max_viewed_ticking_chunks") => Some(0..=65536),
+        (
+            "server",
+            "max_viewed_loaded_chunks_per_level" | "max_viewed_ticking_chunks_per_level",
+        ) => Some(0..=1_048_576),
         ("server", "max_players") => Some(1..=1000),
-        ("backups", "keep") => Some(1..=1000),
+        ("backups", "keep") => Some(config::BACKUPS_KEEP),
         _ => None,
     }
 }
@@ -309,6 +315,12 @@ mod tests {
         assert!(changeable_remotely("properties.motd"));
         assert!(changeable_remotely("chat_filter.enabled"));
         assert!(changeable_remotely("anticheat.alerts"));
+    }
+
+    #[test]
+    fn backups_keep_zero_is_refused() {
+        let table = toml::Table::try_from(config::Config::default()).unwrap();
+        assert!(parse_change(&table, "backups.keep=0").is_err());
     }
 
     fn table() -> toml::Table {

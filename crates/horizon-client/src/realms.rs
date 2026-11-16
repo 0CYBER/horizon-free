@@ -11,6 +11,7 @@
 pub mod availability;
 pub mod client;
 pub mod download;
+mod draw_notice;
 pub mod upload;
 
 use crate::hud::{HudAtlas, HudBatch, rgba};
@@ -989,21 +990,7 @@ pub struct CreateWorldRequest {
     pub creation: Option<(String, String)>,
 }
 
-/// What the Create New World screen decided, for the temporary world
-/// `RealmsCreateWorldFlow.createTemporaryWorldFolder` writes before the upload.
-#[derive(Clone, Debug)]
-pub struct CreatedWorld {
-    /// The world's level data, its name, game type, difficulty, game rules and features.
-    pub level: crate::save::Level,
-    pub world_gen: crate::save::WorldGen,
-    pub flat_settings: Option<horizon_world::nbt::Tag>,
-    pub single_biome: Option<String>,
-    /// level.dat's `DataPacks`: enabled and disabled ids.
-    pub data_packs: (Vec<String>, Vec<String>),
-    /// The Create World screen's temporary pack folder, moved into the world
-    /// (`Files.move(tempDataPackDir, worldFolder.resolve("datapacks"))`).
-    pub pack_dir: Option<PathBuf>,
-}
+include!("realms/preset_world.rs");
 
 impl TemplateGroup {
     const ALL: [Self; 4] = [
@@ -1567,6 +1554,7 @@ fn create_temporary_world(world: &CreatedWorld) -> std::result::Result<PathBuf, 
             world.world_gen,
             world.flat_settings.clone(),
             world.single_biome.as_deref(),
+            world.dimensions.clone(),
         )
         .map_err(|e| e.to_string())?;
         if let Some(pack_dir) = &world.pack_dir {
@@ -7987,12 +7975,26 @@ impl Screen {
         w: f32,
         h: f32,
         list_focused: bool,
+        phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
     ) {
         let (w, h) = (w.ceil(), h.ceil());
         let cx = (w / 2.0).floor();
         let mid = (h / 2.0).floor();
         let t = crate::lang::get;
         crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        // Popup underlays and the configure tab strip are part of the active
+        // screen's background; report only after their final background paint.
+        match &self.subscreen {
+            SubScreen::Configure { .. } => {}
+            SubScreen::Popup(popup)
+                if !matches!(popup, Popup::Uninvite { .. } | Popup::OpenLink { .. }) => {}
+            SubScreen::Backups {
+                restore_job,
+                download_task,
+                ..
+            } if restore_job.is_some() || download_task.is_some() => {}
+            _ => phases(crate::screen_draw::RenderPhase::Background, batch),
+        }
 
         match &self.subscreen {
             SubScreen::JoinCode { code, error, job } => {
@@ -8246,6 +8248,7 @@ impl Screen {
                 // the dots show. Nothing of the list may leak through behind them.
                 if restore_job.is_some() || download_task.is_some() {
                     crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                    phases(crate::screen_draw::RenderPhase::Background, batch);
                     let top = task_stack_top((w, h));
                     realms_logo(batch, atlas, cx, top);
                     let title = if download_task.is_some() {
@@ -8623,6 +8626,7 @@ impl Screen {
                     16.0,
                     u32::MAX,
                 );
+                phases(crate::screen_draw::RenderPhase::Background, batch);
                 let (bar_x, tab_w) = tab_geometry(w);
                 let now = crate::hud_overlays::now_ms();
                 for (i, which) in ConfigureTab::ALL.iter().enumerate() {
@@ -10082,6 +10086,7 @@ impl Screen {
                         rgba(16, 16, 16, 255),
                     );
                 }
+                phases(crate::screen_draw::RenderPhase::Background, batch);
                 let mut y = top;
                 let heading = Text::literal(title.clone()).bold();
                 let tw = HudBatch::text_width(atlas, title);
@@ -10240,7 +10245,17 @@ impl Screen {
                 if let Some(subscreen) = underlay {
                     let mut parent = self.clone();
                     parent.subscreen = subscreen;
-                    parent.draw(batch, atlas, caret, focused_at, cursor, w, h, list_focused);
+                    parent.draw(
+                        batch,
+                        atlas,
+                        caret,
+                        focused_at,
+                        cursor,
+                        w,
+                        h,
+                        list_focused,
+                        &mut |_, _| {},
+                    );
                 }
                 // `PopupScreen`: the dimmed background, the `popup/background` panel — the
                 // 250-wide default minus its 18 border on each side, so 214 of content —
@@ -10319,6 +10334,7 @@ impl Screen {
                         rgba(16, 16, 16, 255),
                     );
                 }
+                phases(crate::screen_draw::RenderPhase::Background, batch);
                 let heading = Text::translate(title, &[]).bold();
                 let tw = HudBatch::text_width(atlas, &t(title));
                 batch.text_styled(atlas, &heading, cx - (tw / 2.0).floor(), top, color, true);
@@ -11043,100 +11059,6 @@ impl Screen {
             }
             SubScreen::Main => self.draw_main(batch, atlas, cursor, w, h, list_focused),
         }
-    }
-
-    /// `RealmsMainScreen.NotificationMessageEntry`: the info sprite, the message centred in
-    /// the 220 the 40-wide margins leave, the dismiss cross and the open-link button.
-    /// Returns the entry's height, which moves the servers below it.
-    fn draw_notice(
-        &self,
-        batch: &mut HudBatch,
-        atlas: &HudAtlas,
-        cursor: (f32, f32),
-        rx: f32,
-        top: f32,
-        bottom: f32,
-    ) -> f32 {
-        let Some(notification) = self.notice() else {
-            self.notice_height.set(0.0);
-            return 0.0;
-        };
-        let lines = self.notice_lines(atlas);
-        // `MultiLineTextWidget`'s line height is 9 (`wordWrapHeight`).
-        let message_height = lines.len() as f32 * 9.0;
-        // `addEntriesForNotification`: HEIGHT_WITHOUT_TEXT 38 plus the wrapped message.
-        let height = 38.0 + message_height;
-        let y = top + 2.0;
-        self.notice_height.set(height);
-        // The list scrolled the entry out of view: nothing draws, nothing clicks.
-        if y + height <= top || y >= bottom {
-            self.notice_rects.set([[0.0; 4]; 2]);
-            return height;
-        }
-        // The grid starts at the entry's content origin: the entry's own +2.
-        let content_x = rx + 2.0;
-        // `ImageWidget.sprite(20, 20, icon/info)`, padded 7.
-        crate::ui::blit_sprite(
-            batch,
-            atlas,
-            "gui/sprites/icon/info",
-            content_x + 7.0,
-            y + 7.0,
-            20.0,
-            20.0,
-            u32::MAX,
-        );
-        // Row 0's height is the icon's 27 or the text frame's 7 + message; the text is
-        // centred in `textWidth` (300 - 80) from the content's 40.
-        let row_height = 27.0_f32.max(7.0 + message_height);
-        for (i, line) in lines.iter().enumerate() {
-            let width = HudBatch::text_width(atlas, line);
-            batch.text(
-                atlas,
-                line,
-                content_x + 40.0 + ((ROW_WIDTH - 80.0 - width) / 2.0).floor(),
-                y + 7.0 + i as f32 * 9.0,
-                u32::MAX,
-                true,
-            );
-        }
-        // `VisitUrl.buildOpenLinkButton`: 150 wide, 4 below row 0, centred in the text
-        // frame's 220.
-        let button = [
-            content_x + 40.0 + ((ROW_WIDTH - 80.0 - 150.0) / 2.0).floor(),
-            y + row_height + 4.0,
-            150.0,
-            20.0,
-        ];
-        let label = Text::literal(notification.visit_button_text());
-        let hovered = crate::ui::hovered(cursor, button[0], button[1], button[2], button[3]);
-        crate::ui::button(
-            batch, atlas, button[0], button[1], button[2], button[3], &label, true, hovered,
-        );
-        // `CrossButton`: 14x14, padded 7 from the content's right and top.
-        let dismiss = [content_x + ROW_WIDTH - 7.0 - 14.0, y + 7.0, 14.0, 14.0];
-        if notification.dismissable {
-            let hovered =
-                crate::ui::hovered(cursor, dismiss[0], dismiss[1], dismiss[2], dismiss[3]);
-            let sprite = if hovered {
-                "gui/sprites/widget/cross_button_highlighted"
-            } else {
-                "gui/sprites/widget/cross_button"
-            };
-            crate::ui::blit_sprite(
-                batch,
-                atlas,
-                sprite,
-                dismiss[0],
-                dismiss[1],
-                dismiss[2],
-                dismiss[3],
-                u32::MAX,
-            );
-        }
-        self.notice_rects.set([button, dismiss]);
-        self.notice_height.set(height);
-        height
     }
 
     fn draw_main(
@@ -12716,7 +12638,11 @@ mod tests {
             use crate::widgets::{self, Kind};
 
             let resources = std::path::Path::new("/nonexistent/realms-reset-frame-assets");
-            let mut atlas = HudAtlas::build(resources).unwrap();
+            let mut atlas =
+                HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+                    resources.to_path_buf(),
+                ))
+                .unwrap();
             atlas.sprites.insert(
                 "gui/sprites/widget/slot_frame".into(),
                 crate::hud::Rect {
@@ -12732,13 +12658,19 @@ mod tests {
             let mut frame = 0;
             let mut draw = |title: &Title, size: [u32; 2]| {
                 // Seed at scale 1, then set logical GUI bounds without changing global GUI_SCALE.
-                let mut batch = HudBatch::new([1, 1]);
+                let mut batch = HudBatch::new(
+                    [1, 1],
+                    crate::hud::GuiScale {
+                        requested: 1,
+                        unicode: false,
+                    },
+                );
                 let logical = (size[0] as f32, size[1] as f32);
                 (batch.width, batch.height) = logical;
                 assert_eq!(batch.scale, 1.0);
                 assert_eq!((batch.width, batch.height), logical);
                 // Title.draw begins the narration screen and records the real controls.
-                title.draw(&atlas, &mut batch, (-1.0, -1.0), true);
+                title.draw(&atlas, &mut batch, (-1.0, -1.0), true, &mut |_, _| {});
                 frame += 1;
                 widgets::end_frame(frame);
                 batch
@@ -12755,7 +12687,7 @@ mod tests {
                     reset: None,
                     error: None,
                 };
-                let mut title = Title::new(PathBuf::new(), resources);
+                let mut title = Title::new(PathBuf::new(), resources, "");
                 title.mode = Mode::Realms(screen.clone());
                 widgets::set_narration_focus(None);
                 let plain = draw(&title, size);
@@ -12887,12 +12819,13 @@ mod tests {
             ..Default::default()
         };
         level.difficulty = "normal".into();
-        level.enabled_features = vec!["minecraft:vanilla".into()];
+        level.enabled_features = vec!["minecraft:vanilla".into()].into();
         level.data_packs = Some((vec!["vanilla".into()], Vec::new()));
         let world = CreatedWorld {
             level,
             world_gen: crate::save::WorldGen::default(),
             flat_settings: None,
+            dimensions: None,
             single_biome: None,
             data_packs: (vec!["vanilla".into()], Vec::new()),
             pack_dir: None,

@@ -9,10 +9,19 @@ license.workspace = true
 rust-version.workspace = true
 description = "Reusable client systems, control tool and parity probes"
 
+[build-dependencies]
+horizon-game-discovery = { path = "../horizon-game-discovery" }
+
 [lib]
 path = "../horizon-client/src/client_lib.rs"
 
 [dependencies]
+horizon-guest-stack = { path = "../horizon-guest-stack" }
+horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
+horizon-engine-slots = { path = "../horizon-engine-slots" }
+horizon-hooks = { path = "../horizon-hooks" }
+horizon-mod-runtime = { path = "../horizon-mod-runtime" }
+mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab" }
 horizon-assets = { path = "../horizon-assets" }
 horizon-client-core = { path = "../horizon-client-core" }
 horizon-client-input = { path = "../horizon-client-input" }
@@ -20,8 +29,6 @@ horizon-client-render = { path = "../horizon-client-render" }
 horizon-command = { path = "../horizon-command" }
 horizon-items = { path = "../horizon-items" }
 horizon-core = { path = "../horizon-core" }
-# Extension points for the crates above the engine (docs/layers.md, "How a Horizon crate plugs in").
-horizon-hooks = { path = "../horizon-hooks" }
 # `horizon-ctl mcp`: the Model Context Protocol, shared with the launcher and the server.
 horizon-mcp = { path = "../horizon-mcp" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
@@ -37,6 +44,8 @@ horizon-world = { path = "../horizon-world" }
 horizon-protocol = { path = "../horizon-protocol" }
 # server.properties, eula.txt and the user lists, shared with horizon-server.
 horizon-server-files = { path = "../horizon-server-files" }
+# The JDK's clock, for the LAN host's random seed (lan/mod.rs).
+horizon-java-properties = { path = "../horizon-java-properties" }
 # The control endpoint's token (control.rs), as horizon-server's and the relay's.
 getrandom = "0.3"
 # The dedicated server's anticheat, off unless server.toml's [anticheat] turns it on (docs/anticheat.md).
@@ -47,9 +56,9 @@ horizon-shaders = { path = "../horizon-shaders" }
 horizon-shader-api = { path = "../horizon-shader-api" }
 # The narrator (GameNarrator): text-to-speech of chat, system messages and screens.
 horizon-narrator = { path = "../horizon-narrator" }
-# Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/mods.md).
+# Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/modding/src/how-to/content-mods.md).
 # Their runtime is the `mods` feature.
-horizon-mods = { path = "../horizon-mods", default-features = false, features = ["index"] }
+horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
 winit = "0.30.13"
 pollster = "0.4"
@@ -101,7 +110,7 @@ dunce = "1.0.5"
 wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Splitscreen: a window filling a monitor goes over its menu bar (game/split/windows.rs
+# Splitscreen: a window filling a monitor goes over its menu bar (game/runtime/split/windows.rs
 # `above_menu_bar`); all already in the tree through winit and wgpu.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSScreen"] }
@@ -113,6 +122,12 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
+# Scoped observations for compiled-guest executor tests only.
+test-payload-probe = []
+# Isolated server-publication slots for resource-backed game fixtures only.
+test-publication-scope = []
+# Non-consuming residency journal observation for game fixtures only.
+test-residency-observer = []
 default = ["audio", "controllers"]
 # Dev-only: the ignored tracker-send benchmark uses the executable's allocator.
 tracker-send-bench = []
@@ -132,6 +147,11 @@ windows-segment-heap = []
 workspace = true
 
 [dev-dependencies]
+horizon-threads = { path = "../horizon-threads", features = ["test-allocation-probe"] }
+horizon-mod-wasm = { path = "../horizon-mod-wasm", features = ["listener-fixture", "test-copy-probe"] }
+tempfile = "3"
+mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", features = ["testing"] }
+mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab", features = ["testing"] }
 # ui_theme's unit tests draw text in the design system's fonts.
 horizon-theme = { path = "../horizon-theme" }
 horizon-client-render = { path = "../horizon-client-render", features = ["test-support"] }
@@ -206,6 +226,10 @@ name = "client_probe"
 path = "../horizon-client/examples/probe/main.rs"
 
 [[test]]
+name = "load_defaults"
+path = "../horizon-client/tests/load_defaults.rs"
+
+[[test]]
 name = "custom_component_api"
 path = "../horizon-client/tests/custom_component_api.rs"
 
@@ -216,6 +240,10 @@ path = "../horizon-client/tests/custom_component_unregistered.rs"
 [[test]]
 name = "custom_component_wire"
 path = "../horizon-client/tests/custom_component_wire.rs"
+
+[[test]]
+name = "datapack_join"
+path = "../horizon-client/tests/datapack_join.rs"
 
 [[test]]
 name = "forced_chunks"

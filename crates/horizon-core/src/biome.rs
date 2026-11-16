@@ -217,6 +217,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn quart_at_block_matches_reference() {
         let seeds = [
             0i64,
@@ -271,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn corner_jitter_matches_quart_at_block() {
         for seed in [0i64, -1, i64::MIN, 0x0123_4567_89ab_cdef] {
             let zoom = BiomeZoom::new(seed);

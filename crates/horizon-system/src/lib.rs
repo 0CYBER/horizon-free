@@ -946,6 +946,7 @@ mod tests {
     /// This process and a child it started have resident memory and CPU time, which grows with
     /// work; a process that doesn't exist has neither.
     #[test]
+    #[ignore = "daily"]
     fn a_process_has_resident_memory_and_cpu_time() {
         let me = std::process::id();
         assert!(super::rss_bytes(me).is_some_and(|b| b > 1 << 20), "own RSS");
@@ -1206,6 +1207,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn this_machine_is_described() {
         let machine = Machine::detect();
         assert_eq!(machine.os, std::env::consts::OS);
@@ -1218,6 +1220,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn this_process_is_measured() {
         if cfg!(any(target_os = "macos", target_os = "linux")) {
             assert!(load_average().is_some());

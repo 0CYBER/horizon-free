@@ -1,0 +1,2 @@
+# horizon-mod-api's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-mod-api subscriber_tick_benchmark by-hand manual # optimized hot-hook microbenchmark

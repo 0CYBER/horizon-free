@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
 class CushionParticlesTests(unittest.TestCase):
     def test_headless_server_records_break_effect_before_sprite_lookup(self):
-        source = (ROOT / "crates/horizon-client/src/game/cushions.rs").read_text()
+        source = (next(ROOT.glob('crates/horizon-client/src/game/*/cushions.rs'))).read_text()
         start = source.index("    fn cushion_break_particles(")
         end = source.index("    /// `BlockAttachedEntity.tick`", start)
         fixture = r'''

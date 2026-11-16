@@ -5,19 +5,19 @@ ChatComponent.extractRenderState	port	crates/horizon-client-render/src/chat.rs::
 ChatComponent.forEachLine	port	crates/horizon-client-render/src/chat.rs::Chat::layout	visible lines bottom-up with the alpha filter, inlined in layout
 ChatComponent.addMessageToDisplayQueue	port	crates/horizon-client-render/src/chat.rs::Chat::add_lines	wrap at width/scale, keep the scroll when chatting, trim to 100 lines
 ChatComponent.addMessageToQueue	port	crates/horizon-client-render/src/chat.rs::Chat::add_message	newest first, trimmed to 100 messages
-ChatComponent.processMessageDeletionQueue	port	crates/horizon-client-render/src/chat.rs::Chat::process_deletions	
-ChatComponent.deleteMessage	port	crates/horizon-client-render/src/chat.rs::Chat::delete_message	
-ChatComponent.deleteMessageOrDelay	port	crates/horizon-client-render/src/chat.rs::Chat::delete_or_delay	
+ChatComponent.processMessageDeletionQueue	port	crates/horizon-client-render/src/chat.rs::Chat::process_deletions
+ChatComponent.deleteMessage	port	crates/horizon-client-render/src/chat.rs::Chat::delete_message
+ChatComponent.deleteMessageOrDelay	port	crates/horizon-client-render/src/chat.rs::Chat::delete_or_delay
 ChatComponent.refreshTrimmedMessages	port	crates/horizon-client-render/src/chat.rs::Chat::rewrap	keeps the scroll; Chat::rescale is rescaleChat's resetChatScroll first, and the search and qol extras reset their own filters
 ChatComponent.scrollChat	port	crates/horizon-client-render/src/chat.rs::Chat::scroll_by	clamp to the page and clear new-message marker at the bottom
 ChatComponent.getHeight	port	crates/horizon-client-render/src/chat.rs::ChatOptions::height_px	focused or unfocused chat height in px
 ChatComponent.defaultUnfocusedPct	inline	crates/horizon-client-render/src/chat.rs::ChatOptions::default	the default 70/160 is stored as a constant, not computed from the height formula
 ChatComponent.getLineHeight	port	crates/horizon-client-render/src/chat.rs::ChatOptions::line_height	9 * (line spacing + 1)
-ChatComponent.saveAsDraft	port	crates/horizon-client/src/game/chat.rs::Game::keep_chat_draft	the text left in the box becomes the draft unless the screen was closed on purpose without Save Chat Drafts or the text was sent
-ChatComponent.createScreen	port	crates/horizon-client/src/game/chat.rs::Game::open_chat_method	T or / opens the chat with the draft kept last time, a command draft only for /, else with its prefix, and records whether the box starts on a draft
-ChatComponent.preserveCurrentChatScreen	missing		minor: unsure: Horizon keeps no chat screen across a dimension change; game/nether_portal.rs:577 only leaves Chat alone during a portal effect, the change path was not checked
-ChatComponent.storeState	inline	crates/horizon-client/src/game/remote_poll.rs::Game::poll_remote	no snapshot: the Reconfigured arm only resets boss bars and registries, so the chat survives a reconfigure without a copy
-ChatComponent.restoreState	inline	crates/horizon-client/src/game/remote_poll.rs::Game::poll_remote	no restore: the chat is never cleared on Reconfigured, so there is nothing to put back
+ChatComponent.saveAsDraft	port	crates/horizon-client/src/game/interface/chat.rs::Game::keep_chat_draft	the text left in the box becomes the draft unless the screen was closed on purpose without Save Chat Drafts or the text was sent
+ChatComponent.createScreen	port	crates/horizon-client/src/game/interface/chat.rs::Game::open_chat_method	T or / opens the chat with the draft kept last time, a command draft only for /, else with its prefix, and records whether the box starts on a draft
+ChatComponent.preserveCurrentChatScreen	missing		minor: unsure: Horizon keeps no chat screen across a dimension change; game/blocks/nether_portal.rs:577 only leaves Chat alone during a portal effect, the change path was not checked
+ChatComponent.storeState	inline	crates/horizon-client/src/game/network/remote/raw_ingress.rs::Game::poll_remote_events	no snapshot: the Reconfigured arm only resets boss bars and registries, so the chat survives a reconfigure without a copy
+ChatComponent.restoreState	inline	crates/horizon-client/src/game/network/remote/raw_ingress.rs::Game::poll_remote_events	no restore: the chat is never cleared on Reconfigured, so there is nothing to put back
 ChatComponent.ClickableTextOnlyGraphicsAccess.updatePose	skip:ui		pose bookkeeping of the text collector; chat draws with its own scale and translate
 ChatComponent.DrawingBackgroundGraphicsAccess.updatePose	skip:ui		pose bookkeeping of the text collector; chat draws with its own scale and translate
 ChatComponent.DrawingBackgroundGraphicsAccess.handleMessage	port	crates/horizon-client-render/src/chat.rs::Chat::layout	line text drawn at its bottom with the text opacity
@@ -27,12 +27,12 @@ ChatComponent.DrawingFocusedGraphicsAccess.updatePose	skip:ui		pose bookkeeping;
 ChatComponent.DrawingFocusedGraphicsAccess.handleMessage	port	crates/horizon-client-render/src/chat.rs::Chat::style_at	gap: player: no pointing-hand cursor over clickable chat text; only widgets set the cursor (widgets.rs:28)
 ChatComponent.DrawingFocusedGraphicsAccess.isMouseOver	inline	crates/horizon-client-render/src/chat.rs::Chat::focused_tags	the cursor test of the tag bar and its icons, folded into the tag lookup
 ChatComponent.DrawingFocusedGraphicsAccess.handleTagIcon	port	crates/horizon-client-render/src/chat.rs::Chat::focused_tags	the modified-message tags under the cursor: the tooltip of the bar or icon, and the icons of the message the cursor is over
-ChatComponent.DrawingFocusedGraphicsAccess.showTooltip	port	crates/horizon-client/src/game/chat.rs::Game::draw_chat_screen	gap: minor: every indicator shows the systemSinglePlayer text as its tooltip
+ChatComponent.DrawingFocusedGraphicsAccess.showTooltip	port	crates/horizon-client/src/game/interface/chat.rs::Game::draw_chat_screen	gap: minor: every indicator shows the systemSinglePlayer text as its tooltip
 Checkbox.adjustWidth	missing		minor: the checkbox width is never capped or its label wrapped; dialog_screen.rs:137 sets the width to the full label
 Checkbox.overflowsRowLimit	missing		minor: no tooltip for a label that wraps past two rows; Horizon dialog labels never wrap
-Checkbox.onPress	port	crates/horizon-client/src/game/dialogs.rs::Game::dialog_click	toggles the boolean input value (dialogs.rs:448)
+Checkbox.onPress	port	crates/horizon-client/src/game/interface/dialogs.rs::Game::dialog_click	toggles the boolean input value (dialogs.rs:448)
 Checkbox.updateWidgetNarration	inline	crates/horizon-client/src/screen_narrator.rs::narrate	narrate's checkbox arm: gui.narrate.button(message), then narration.checkbox.usage.{focused,hovered}.{check,uncheck} while the widget is active
-Checkbox.extractContents	port	crates/horizon-client/src/game/dialogs.rs::Game::draw_dialog	box sprite for checked and focused states, then the label (Part::Check)
+Checkbox.extractContents	port	crates/horizon-client/src/game/interface/dialogs.rs::Game::draw_dialog	box sprite for checked and focused states, then the label (Part::Check)
 Checkbox.Builder.selected	skip:java		builder setter
 Checkbox.Builder.build	skip:java		builder: makes the checkbox and its tooltip
 CommandSuggestions.mouseScrolled	port	crates/horizon-client-render/src/chat.rs::ChatScreen::scroll	wheel over the suggestion list, clamped to the list
@@ -62,7 +62,7 @@ ContainerObjectSelectionList.Entry.setFocused	missing		minor: unsure: focus insi
 ContainerObjectSelectionList.Entry.focusPathAtIndex	missing		minor: unsure: no per-row focus path; see focus_step
 ContainerObjectSelectionList.Entry.nextFocusPath	port	crates/horizon-client-input/src/gamepad.rs::focus_step	gap: minor: moves by nearest target rectangle, not by child index within the row
 ContainerObjectSelectionList.Entry.updateNarration	port	crates/horizon-client/src/screen_narrator.rs::narrate_row	the row widget findNarratableWidget picks (inactive ones too), with narrator.position.object_list when the row has more than one
-CycleButton.extractContents	port	crates/horizon-client-render/src/options_ui.rs::OptionsUi::draw	option button sprite and its label
+CycleButton.extractContents	port	crates/horizon-client-render/src/options_ui/draw.rs::OptionsUi::draw_standard_contents	option button sprite and its label
 CycleButton.onPress	port	crates/horizon-client-render/src/options_ui.rs::Opt::cycle	click cycles forward; the back flag comes from the caller
 CycleButton.getCycledValue	skip:other		only feeds the narration of the next value
 CycleButton.mouseScrolled	port	crates/horizon-client-render/src/options_ui.rs::OptionsUi::wheel	the wheel over a cycle button outside a list takes its step (up goes back); a list keeps the wheel (AbstractScrollArea.mouseScrolled) unless the Horizon extra is on
@@ -77,17 +77,17 @@ CycleButton.Builder.withValues	skip:java		builder
 CycleButton.Builder.create	skip:java		builder: makes the cycle button and its initial value
 CycleButton.ValueListSupplier.create	skip:java		value list copy
 DebugScreenOverlay.<init>	skip:java		constructs the chart objects; Horizon's DebugCharts is plain state
-DebugScreenOverlay.formatChart	port	crates/horizon-client/src/game/debug_keys.rs::Game::debug_chart_lines	the [key] name visible or hidden line
-DebugScreenOverlay.formatKeybind	inline	crates/horizon-client/src/game/debug_keys.rs::Game::debug_chart_lines	the key closure inside debug_chart_lines
-DebugScreenOverlay.getServerLevel	inline	crates/horizon-client/src/game/debug_lines.rs::Game::debug_chunk_source_lines	the server chunk's and its ServerLevel's counts: the Chunks[S] line over the server's chunk map; the module comment names DebugScreenOverlay.getServerChunk and its ServerLevel
-DebugScreenOverlay.getLevel	inline	crates/horizon-client/src/game/debug_lines.rs::Game::debug_entry_lines	the overlay's own lines read the client level there: day count, biome, local difficulty and the chunk render stats
-DebugScreenOverlay.getServerChunk	port	crates/horizon-client/src/game/debug_lines.rs::Game::server_debug_lines	the integrated server's half of the F3 lines for the dimension at the feet: heightmaps, local difficulty, spawn counts and the chunk source's counts
-DebugScreenOverlay.getClientChunk	inline	crates/horizon-client/src/game/debug_lines.rs::Game::debug_heightmap_lines	the client chunk's heightmaps, the CH line, then the server chunk's SH line
-DebugScreenOverlay.showDebugScreen	port	crates/horizon-client/src/game/debug_keys.rs::Game::draw_debug_overlay	debug on and (HUD shown or a screen open)
+DebugScreenOverlay.formatChart	port	crates/horizon-client/src/game/interface/debug_keys.rs::Game::debug_chart_lines	the [key] name visible or hidden line
+DebugScreenOverlay.formatKeybind	inline	crates/horizon-client/src/game/interface/debug_keys.rs::Game::debug_chart_lines	the key closure inside debug_chart_lines
+DebugScreenOverlay.getServerLevel	inline	crates/horizon-client/src/game/interface/debug_lines.rs::Game::debug_chunk_source_lines	the server chunk's and its ServerLevel's counts: the Chunks[S] line over the server's chunk map; the module comment names DebugScreenOverlay.getServerChunk and its ServerLevel
+DebugScreenOverlay.getLevel	inline	crates/horizon-client/src/game/interface/debug_lines.rs::Game::debug_entry_lines	the overlay's own lines read the client level there: day count, biome, local difficulty and the chunk render stats
+DebugScreenOverlay.getServerChunk	port	crates/horizon-client/src/game/interface/debug_lines.rs::Game::server_debug_lines	the integrated server's half of the F3 lines for the dimension at the feet: heightmaps, local difficulty, spawn counts and the chunk source's counts
+DebugScreenOverlay.getClientChunk	inline	crates/horizon-client/src/game/interface/debug_lines.rs::Game::debug_heightmap_lines	the client chunk's heightmaps, the CH line, then the server chunk's SH line
+DebugScreenOverlay.showDebugScreen	port	crates/horizon-client/src/game/interface/debug_keys.rs::Game::draw_debug_overlay	debug on and (HUD shown or a screen open)
 DebugScreenOverlay.showProfilerChart	inline	crates/horizon-client/src/debug_chart.rs::DebugCharts::draw	the charts the corners hold are drawn from the toggles: frame and tick times, bandwidth and ping, the lightmap; the predicate is folded into the draw
 DebugScreenOverlay.showNetworkCharts	port	crates/horizon-client/src/debug_chart.rs::DebugCharts::draw	network chart drawn when its flag is set
 DebugScreenOverlay.showFpsCharts	port	crates/horizon-client/src/debug_chart.rs::DebugCharts::draw	fps chart drawn when its flag is set
-DebugScreenOverlay.showLightmapTexture	port	crates/horizon-client/src/game/debug_keys.rs::Game::draw_debug_overlay	lightmap drawn when its flag is set (debug_keys.rs:473)
+DebugScreenOverlay.showLightmapTexture	port	crates/horizon-client/src/game/interface/debug_keys.rs::Game::draw_debug_overlay	lightmap drawn when its flag is set (debug_keys.rs:473)
 DebugScreenOverlay.toggleNetworkCharts	port	crates/horizon-client/src/debug_chart.rs::DebugCharts::toggle_network	toggles the network chart and clears the others
 DebugScreenOverlay.toggleFpsCharts	port	crates/horizon-client/src/debug_chart.rs::DebugCharts::toggle_fps	toggles the fps chart and clears the others
 DebugScreenOverlay.toggleLightmapTexture	port	crates/horizon-client/src/debug_chart.rs::DebugCharts::toggle_lightmap	toggles the lightmap and clears the others
@@ -113,9 +113,9 @@ EditBox.setCentered	port	crates/horizon-client-render/src/ui.rs::EditBox::text_s
 EditBox.setHint	inline	crates/horizon-client/src/title/create_world.rs::Title::create_field	the hint is passed when the box is made and drawn while it is empty and unfocused
 FittingMultiLineTextWidget.setWidth	skip:ui		layout: wrap width
 FittingMultiLineTextWidget.minimizeHeight	skip:ui		layout: height to content
-FittingMultiLineTextWidget.extractContents	port	crates/horizon-client/src/game/dialogs.rs::Game::draw_dialog	message lines drawn as text parts
+FittingMultiLineTextWidget.extractContents	port	crates/horizon-client/src/game/interface/dialogs.rs::Game::draw_dialog	message lines drawn as text parts
 FocusableTextWidget.updateWidgetNarration	inline	crates/horizon-client/src/screen_narrator.rs::narrate	narrate's text arm reads the widget's message; gap: minor: the focusedUsageNarration and hoveredUsageNarration a FocusableTextWidget can carry are not modelled
-FocusableTextWidget.extractWidgetRenderState	port	crates/horizon-client/src/game/lan_screen.rs::Game::draw_restrictions	gap: minor: text only; no focus outline or background fill
+FocusableTextWidget.extractWidgetRenderState	port	crates/horizon-client/src/game/network/lan_screen.rs::Game::draw_restrictions	gap: minor: text only; no focus outline or background fill
 FocusableTextWidget.updateWidth	skip:ui		layout: width from the message
 FocusableTextWidget.updateHeight	skip:ui		layout: height from the wrapped lines
 FocusableTextWidget.setMessage	skip:ui		layout: size follows the message
@@ -124,16 +124,16 @@ FocusableTextWidget.builder	skip:java		builder
 FriendsButton.refreshIncomingRequestCount	skip:service		Microsoft friend requests; Horizon's friends use its own invite codes (multiplayer.rs:90)
 FriendsButton.extractContents	skip:service		draws the request badge; Horizon has no incoming request count
 IMEPreeditOverlay.extractRenderState	port	crates/horizon-client-render/src/preedit.rs::draw_overlay	the composition text under the caret with the focused block underlined, drawn over everything; without one the caret is the text input area
-ImageButton.extractContents	port	crates/horizon-client/src/game/recipe_book.rs::Game::draw_book_panel	tab buttons drawn with their sprite; the other vanilla ImageButton screens are not in Horizon
+ImageButton.extractContents	port	crates/horizon-client/src/game/items/recipe_book.rs::Game::draw_book_panel	tab buttons drawn with their sprite; the other vanilla ImageButton screens are not in Horizon
 ImageWidget.texture	skip:java		factory
 ImageWidget.Sprite.extractWidgetRenderState	skip:other		picture of a popup or social tab; Horizon's lock popup has no picture
 ImageWidget.Texture.extractWidgetRenderState	skip:other		picture of a popup or social tab; Horizon's lock popup has no picture
-ItemDisplayWidget.extractWidgetRenderState	port	crates/horizon-client/src/game/dialogs.rs::Game::draw_dialog	a dialog's item body draws the item at its corner, then its decorations, and its tooltip under the cursor
-ItemDisplayWidget.updateWidgetNarration	inline	crates/horizon-client/src/game/stats_screen.rs::Game::draw_stats	narration.item(hover name) recorded as the stats screen's item row text, the ItemRowWidget that is an ItemDisplayWidget
+ItemDisplayWidget.extractWidgetRenderState	port	crates/horizon-client/src/game/interface/dialogs.rs::Game::draw_dialog	a dialog's item body draws the item at its corner, then its decorations, and its tooltip under the cursor
+ItemDisplayWidget.updateWidgetNarration	inline	crates/horizon-client/src/game/interface/stats_screen.rs::Game::draw_stats	narration.item(hover name) recorded as the stats screen's item row text, the ItemRowWidget that is an ItemDisplayWidget
 LoadingDotsWidget.extractWidgetRenderState	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	the scanning label and the animated dots under it on the LAN row
-LockIconButton.createNarrationMessage	inline	crates/horizon-client/src/game/lan_screen.rs::WorldOptions::narration	gui.narrate.button(narrator.button.difficulty_lock) joined for narration with narrator.button.difficulty_lock.locked or .unlocked (Button::Lock)
-LockIconButton.extractContents	port	crates/horizon-client/src/game/lan_screen.rs::Game::draw_options_view	lock or unlock sprite by state
-LogoRenderer.extractRenderState	port	crates/horizon-client/src/title.rs::Title::draw	logo top 44 rows and edition banner; gap: minor: no easter-egg logo variant
+LockIconButton.createNarrationMessage	inline	crates/horizon-client/src/game/network/lan_screen.rs::WorldOptions::narration	gui.narrate.button(narrator.button.difficulty_lock) joined for narration with narrator.button.difficulty_lock.locked or .unlocked (Button::Lock)
+LockIconButton.extractContents	port	crates/horizon-client/src/game/network/lan_screen.rs::Game::draw_options_view	lock or unlock sprite by state
+LogoRenderer.extractRenderState	port	crates/horizon-client/src/title.rs::draw_logo	logo top 44 rows and edition banner; gap: minor: no easter-egg logo variant
 MultiLineEditBox.updateWidgetNarration	inline	crates/horizon-client/src/screen_narrator.rs::narrate	narrate's edit-box arm: gui.narrate.editBox(message, value), the two things MultiLineEditBox adds; books and dialogs record their multi-line boxes as Narratable::edit_box
 MultiLineEditBox.onClick	port	crates/horizon-client-render/src/screen_draw.rs::TextField::click	a click places the caret, a double click selects the word (EditBox.onClick's getWordPosition bounds)
 MultiLineEditBox.onDrag	port	crates/horizon-client-render/src/multiline_edit.rs::MultiLineEdit::drag	the selection follows the pointer, or the held scroll bar does

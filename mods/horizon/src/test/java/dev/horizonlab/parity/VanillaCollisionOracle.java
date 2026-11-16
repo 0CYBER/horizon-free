@@ -76,7 +76,7 @@ public final class VanillaCollisionOracle {
         var data=new CompoundTag();data.putInt("DataVersion",SharedConstants.getCurrentVersion().dataVersion().version());data.put("states",states);data.put("shapes",shapes);data.putIntArray("cached_shapes",mapping);return data;
     }
     private static void write(CompoundTag tag, Path path) throws IOException {
-        try (DataOutputStream out = new DataOutputStream(Files.newOutputStream(path))) { NbtIo.write(tag, out); }
+        try (DataOutputStream out = new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(path)))) { NbtIo.write(tag, out); }
     }
     private static void inputValues(PrintWriter out, double... values) { for (double value : values) out.printf(" %016x", Double.doubleToRawLongBits(value)); }
     private static void generate(Path base) throws Exception {

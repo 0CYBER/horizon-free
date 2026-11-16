@@ -1,7 +1,7 @@
 //! Player difficulty/ability gates and server PvP dispatch before living hurt.
 use crate::{
     food::Difficulty,
-    living_hurt::{self, HurtState, HurtWorld},
+    living_hurt::{self, HurtState, HurtWorld, PendingHurt},
 };
 pub trait PlayerHurtWorld: HurtWorld {
     fn ability_invulnerable(&self) -> bool;
@@ -25,11 +25,20 @@ fn min(a: f32, b: f32) -> f32 {
         a.min(b)
     }
 }
-fn player_hurt_start<W: PlayerHurtWorld>(
+pub fn player_hurt_server<W: PlayerHurtWorld>(
+    s: &mut HurtState<W::Source>,
+    w: &mut W,
+    damage: f32,
+) -> Result<bool, W::Error> {
+    let hit = player_hurt_until_helmet(s, w, damage)?;
+    living_hurt::hurt_from_helmet(s, w, hit)
+}
+/// [`player_hurt_server`] up to `hurtHelmet`; none for a hit refused on the way.
+pub fn player_hurt_until_helmet<W: PlayerHurtWorld>(
     s: &mut HurtState<W::Source>,
     w: &mut W,
     mut damage: f32,
-) -> Result<Option<f32>, W::Error> {
+) -> Result<Option<PendingHurt<W::UseItem>>, W::Error> {
     if w.invulnerable(s)? {
         return Ok(None);
     }
@@ -55,27 +64,7 @@ fn player_hurt_start<W: PlayerHurtWorld>(
     if damage == 0.0 {
         return Ok(None);
     }
-    Ok(Some(damage))
-}
-pub fn player_hurt_server<W: PlayerHurtWorld>(
-    s: &mut HurtState<W::Source>,
-    w: &mut W,
-    damage: f32,
-) -> Result<bool, W::Error> {
-    match player_hurt_start(s, w, damage)? {
-        Some(damage) => living_hurt::hurt_server(s, w, damage),
-        None => Ok(false),
-    }
-}
-pub fn prepare_player_hurt_server<W: PlayerHurtWorld>(
-    s: &mut HurtState<W::Source>,
-    w: &mut W,
-    damage: f32,
-) -> Result<Option<living_hurt::PreparedHurt<W::UseItem>>, W::Error> {
-    match player_hurt_start(s, w, damage)? {
-        Some(damage) => living_hurt::prepare_hurt_server(s, w, damage),
-        None => Ok(None),
-    }
+    living_hurt::hurt_until_helmet(s, w, damage)
 }
 #[derive(Clone, Copy, Debug)]
 pub enum CausingEntity<P, A> {
@@ -101,49 +90,37 @@ pub trait ServerPlayerHurtWorld: PlayerHurtWorld {
         player: Self::Player,
     ) -> Result<bool, Self::Error>;
 }
-fn server_player_hurt_start<W: ServerPlayerHurtWorld>(
+pub fn server_player_hurt_server<W: ServerPlayerHurtWorld>(
     s: &mut HurtState<W::Source>,
     w: &mut W,
-    _damage: f32,
+    damage: f32,
 ) -> Result<bool, W::Error> {
+    let hit = server_player_hurt_until_helmet(s, w, damage)?;
+    living_hurt::hurt_from_helmet(s, w, hit)
+}
+/// [`server_player_hurt_server`] up to `hurtHelmet`; none for a hit refused on the way.
+pub fn server_player_hurt_until_helmet<W: ServerPlayerHurtWorld>(
+    s: &mut HurtState<W::Source>,
+    w: &mut W,
+    damage: f32,
+) -> Result<Option<PendingHurt<W::UseItem>>, W::Error> {
     if w.invulnerable(s)? {
-        return Ok(false);
+        return Ok(None);
     }
     match w.causing_entity(s)? {
         CausingEntity::Player(p) => {
             if !w.can_harm_player(s, p)? {
-                return Ok(false);
+                return Ok(None);
             }
         }
         CausingEntity::Arrow(a) => {
             if let Some(p) = w.arrow_player_owner(s, a)?
                 && !w.can_harm_player(s, p)?
             {
-                return Ok(false);
+                return Ok(None);
             }
         }
         CausingEntity::Other => {}
     }
-    Ok(true)
-}
-
-pub fn server_player_hurt_server<W: ServerPlayerHurtWorld>(
-    s: &mut HurtState<W::Source>,
-    w: &mut W,
-    damage: f32,
-) -> Result<bool, W::Error> {
-    if !server_player_hurt_start(s, w, damage)? {
-        return Ok(false);
-    }
-    player_hurt_server(s, w, damage)
-}
-pub fn prepare_server_player_hurt_server<W: ServerPlayerHurtWorld>(
-    s: &mut HurtState<W::Source>,
-    w: &mut W,
-    damage: f32,
-) -> Result<Option<living_hurt::PreparedHurt<W::UseItem>>, W::Error> {
-    if !server_player_hurt_start(s, w, damage)? {
-        return Ok(None);
-    }
-    prepare_player_hurt_server(s, w, damage)
+    player_hurt_until_helmet(s, w, damage)
 }

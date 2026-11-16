@@ -262,6 +262,7 @@ mod tests {
 
     #[test]
     fn the_renderer_s_sky_takes_a_prefix_and_validates_with_a_pack() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let sky = vanilla_sky();
         for name in [
             "Globals",
@@ -316,6 +317,7 @@ mod tests {
     /// test or on `PATH`; a device this machine lacks is skipped.
     #[test]
     fn a_stage_s_name_does_not_stop_it_compiling() {
+        let _gpu = crate::gfx::test_gpu::lock();
         for (backends, compiler, name) in [
             (wgpu::Backends::VULKAN, Default::default(), "Vulkan"),
             (
@@ -366,6 +368,7 @@ mod tests {
     /// that halves their light draws that (and stays opaque).
     #[test]
     fn a_pack_gets_vanilla_s_colour_and_draws_opaque() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

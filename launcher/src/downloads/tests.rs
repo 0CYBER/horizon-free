@@ -162,6 +162,7 @@ fn config() -> Config {
     }
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn thousands_of_assets_are_bounded_and_connections_reused() {
     let body = data(256);
     let server = Server::new(body.clone(), Duration::from_millis(2)).await;
@@ -191,6 +192,7 @@ async fn thousands_of_assets_are_bounded_and_connections_reused() {
     assert_eq!(progress.connections, 0);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn segmented_transfers_validate_and_fallback_without_corrupt_output() {
     let body = data(128 << 10);
     let server = Server::new(body.clone(), Duration::from_millis(2)).await;
@@ -215,6 +217,7 @@ async fn segmented_transfers_validate_and_fallback_without_corrupt_output() {
         .any(|(p, r)| p == "/file" && r.is_some_and(|(a, _)| a > 0)));
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn transient_disconnect_resumes_only_validated_ranges() {
     let body = data(16 << 10);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -236,6 +239,7 @@ async fn transient_disconnect_resumes_only_validated_ranges() {
     assert!(engine.progress().retried > 0);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn corrupt_cache_is_repaired_duplicates_coalesce_and_bad_hashes_never_publish() {
     let body = data(1024);
     let server = Server::new(body.clone(), Duration::from_millis(10)).await;
@@ -263,6 +267,7 @@ async fn corrupt_cache_is_repaired_duplicates_coalesce_and_bad_hashes_never_publ
     assert_eq!(server.state.requests.lock().unwrap().len(), 2);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn cancellation_and_inactivity_release_resources_and_cleanup() {
     let body = data(128 << 10);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -295,6 +300,7 @@ async fn cancellation_and_inactivity_release_resources_and_cleanup() {
     assert!(!stalled.path.exists());
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn rate_limits_wait_and_permanent_failures_do_not_retry() {
     let body = data(64);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -343,6 +349,7 @@ fn retry_after_seconds_and_dates_are_bounded() {
     assert_eq!(retry_after("invalid", now), Duration::ZERO);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn metadata_never_follows_an_insecure_redirect() {
     let server = Server::new(data(64), Duration::ZERO).await;
     let engine = Downloader::new(config()).unwrap();
@@ -369,6 +376,7 @@ async fn metadata_never_follows_an_insecure_redirect() {
     }
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn missing_or_malformed_hashes_never_reuse_cache_or_start_a_request() {
     let body = data(64);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -393,6 +401,7 @@ async fn missing_or_malformed_hashes_never_reuse_cache_or_start_a_request() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn startup_sweep_only_removes_generated_files_from_exited_processes() {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--list")
@@ -500,6 +509,7 @@ async fn benchmark_download_pipeline() {
     println!("DOWNLOAD_BENCH mode={mode} files=2000 bytes={} seconds={elapsed:.4} mib_s={:.4} accepted_connections={} peak_requests={}",2000*body.len(),(2000*body.len()) as f64/(1<<20) as f64/elapsed,server.state.accepted.load(Relaxed),server.state.peak.load(Relaxed));
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn global_budget_covers_two_hosts_metadata_and_segment_streams() {
     let body = data(64 << 10);
     let a = Server::new(body.clone(), Duration::from_millis(5)).await;
@@ -546,6 +556,7 @@ async fn global_budget_covers_two_hosts_metadata_and_segment_streams() {
     assert!(b.state.peak.load(Relaxed) <= 2);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn range_probes_honor_retry_after_before_any_followup_request() {
     let body = data(64 << 10);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -562,6 +573,7 @@ async fn range_probes_honor_retry_after_before_any_followup_request() {
     assert_eq!(server.state.requests.lock().unwrap()[0].1, Some((0, 0)));
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn unknown_size_disconnect_restarts_without_appending_the_whole_response() {
     let body = data(16 << 10);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -591,6 +603,7 @@ fn cancelled_install_does_not_cancel_independent_metadata() {
     assert_eq!(result.unwrap(), b"metadata");
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn socks_proxy_resolves_hostnames_remotely_like_the_previous_transport() {
     for scheme in ["socks", "socks5", "socks5h"] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -642,6 +655,7 @@ async fn socks_proxy_resolves_hostnames_remotely_like_the_previous_transport() {
     }
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn successive_jobs_reset_progress_and_share_budgets() {
     let body = data(64 << 10);
     let server = Server::new(body.clone(), Duration::from_millis(10)).await;
@@ -686,6 +700,7 @@ async fn successive_jobs_reset_progress_and_share_budgets() {
     assert!(server.state.peak.load(Relaxed) <= 2);
 }
 #[tokio::test]
+#[ignore = "daily"]
 async fn required_failures_abort_queued_and_active_siblings() {
     let body = data(128 << 10);
     let server = Server::new(body.clone(), Duration::ZERO).await;
@@ -707,6 +722,7 @@ async fn required_failures_abort_queued_and_active_siblings() {
 }
 
 #[tokio::test]
+#[ignore = "daily"]
 async fn changing_proxy_routes_never_reuses_a_previous_hosts_keepalive_pool() {
     let direct = Server::new(b"direct".to_vec(), Duration::ZERO).await;
     let proxy_a = Server::new(b"proxy-a".to_vec(), Duration::ZERO).await;

@@ -106,7 +106,7 @@ pub fn unkept(instance: &Instance, to: &Plays, horizon: &str) -> Vec<Unkept> {
     out
 }
 
-/// The mods in `home`: a Horizon instance's content mods (`mods/*.hmod`) and native mods, a Java
+/// The mods in `home`: a Horizon instance's content and native `.hmod` packages, a Java
 /// one's jars, on or off.
 fn mod_files(home: &Path, horizon: bool) -> usize {
     let count = |dir: &str, ext: &dyn Fn(&str) -> bool| {
@@ -118,10 +118,8 @@ fn mod_files(home: &Path, horizon: bool) -> usize {
         })
     };
     if horizon {
-        count("mods", &|n| n.ends_with(".hmod"))
-            + count(crate::native_mods::INSTALLED, &|n| {
-                n.ends_with(".hnmod") || n.ends_with(".hmod")
-            })
+        count(crate::browser::java::MODS_DIR, &|n| n.ends_with(".hmod"))
+            + count(crate::native_mods::INSTALLED, &|n| n.ends_with(".hmod"))
     } else {
         count("mods", &|n| {
             n.ends_with(".jar") || n.ends_with(".jar.disabled")

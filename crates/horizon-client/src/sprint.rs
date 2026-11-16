@@ -11,6 +11,9 @@ pub struct Keys {
     pub jump: bool,
     pub shift: bool,
     pub sprint: bool,
+    /// A movement-input listener explicitly holds sprint off this local tick.
+    /// Server prediction instead replays the client's resulting sprint state.
+    pub sprint_suppressed: bool,
     /// A controller stick's move vector (`[left, forward]`, Horizon's own),
     /// used instead of the keys' direction while it is pushed.
     pub analog: Option<[f32; 2]>,
@@ -92,9 +95,9 @@ impl Conditions {
     }
 }
 impl SprintState {
-    /// Runs the sprint phase. The default vanilla sprint window is seven ticks;
-    /// it is supplied so the options binding can also select 0..10. The setter
-    /// is called for every native request, including repeated true requests.
+    /// `LocalPlayer.aiStep`'s sprint phase, with a mod's optional tick suppression.
+    /// The default vanilla window is seven ticks; options can select 0..10.
+    /// The setter runs for every native request, including repeated true requests.
     pub fn tick<E>(
         &mut self,
         keys: Keys,
@@ -112,6 +115,13 @@ impl SprintState {
         self.previous_shift = keys.shift;
         if old_shift || (conditions.slow_item && !conditions.passenger) || keys.backward {
             self.trigger_time = 0;
+        }
+        if keys.sprint_suppressed {
+            self.trigger_time = 0;
+            if conditions.sprinting {
+                set_sprinting(false)?;
+            }
+            return Ok(());
         }
         let mut sprinting = conditions.sprinting;
         if conditions.can_start(forward) {

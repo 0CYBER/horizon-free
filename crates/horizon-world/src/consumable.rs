@@ -1,21 +1,5 @@
 //! Consumable component timing and ordered particle/sound emission.
-use horizon_core::random::RandomSource;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UseAnimation {
-    None,
-    Eat,
-    Drink,
-    Block,
-    Bow,
-    Trident,
-    Crossbow,
-    Spyglass,
-    TootHorn,
-    Brush,
-    Bundle,
-    Spear,
-}
+use horizon_core::{random::RandomSource, use_animation::UseAnimation};
 
 #[derive(Clone, Debug)]
 pub struct Consumable<S, E = ()> {
@@ -56,9 +40,13 @@ pub trait EmissionWorld {
         pitch: f32,
     ) -> Result<(), Self::Error>;
 }
+/// `Consumable.consumeTicks`: multiply in float precision before truncating.
+pub fn consume_ticks(seconds: f32) -> i32 {
+    (seconds * 20.0) as i32
+}
 impl<S, E> Consumable<S, E> {
     pub fn ticks(&self) -> i32 {
-        (self.seconds * 20.0) as i32
+        consume_ticks(self.seconds)
     }
     pub fn should_emit(&self, remaining: i32) -> bool {
         let elapsed = self.ticks().wrapping_sub(remaining);

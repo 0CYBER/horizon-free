@@ -3,6 +3,7 @@
 //! the codec form. See [`super::raw`] for the rest.
 use super::*;
 use crate::buf::Reader;
+use crate::item::{ATTRIBUTE_OPERATIONS, EQUIPMENT_SLOT_GROUPS};
 use horizon_world::snbt_text::to_snbt;
 
 const USE_ANIMATION: [&str; 12] = [
@@ -24,12 +25,6 @@ const SWING: [&str; 3] = ["none", "whack", "stab"];
 const SLOT: [&str; 8] = [
     "mainhand", "feet", "legs", "chest", "head", "offhand", "body", "saddle",
 ];
-/// `EquipmentSlotGroup` by id.
-const SLOT_GROUP: [&str; 11] = [
-    "any", "mainhand", "offhand", "hand", "feet", "legs", "chest", "head", "armor", "body",
-    "saddle",
-];
-const OPERATION: [&str; 3] = ["add_value", "add_multiplied_base", "add_multiplied_total"];
 
 fn int(r: &mut Reader) -> Option<i32> {
     r.varint().ok()
@@ -276,7 +271,7 @@ fn block_predicate(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
     // NbtPredicate: `TagParser.LENIENT_CODEC` encodes with its flattened codec,
     // the tag's SNBT string.
     let nbt = optional(r, |r| match r.nbt().ok()? {
-        tag @ horizon_world::nbt::Tag::Compound(_) => Some(string(&to_snbt(&tag))),
+        tag @ horizon_core::nbt::Tag::Compound(_) => Some(string(&to_snbt(&tag))),
         _ => None,
     })?;
     // DataComponentExactPredicate: the expected components, by type name.
@@ -326,14 +321,14 @@ pub(super) fn code(kind: i32, r: &mut Reader, names: &dyn Names) -> Option<HashC
             let attribute = holder("minecraft:attribute", names, r)?;
             let id = ident(r)?;
             let amount = r.f64().ok()?;
-            let operation = pick(&OPERATION, int(r)?)?;
+            let operation = pick(&ATTRIBUTE_OPERATIONS, int(r)?)?;
             let slot = int(r)?;
             let rec = RecordHash::new()
                 .field("type", attribute)
                 .field("id", id)
                 .field("amount", HashOps::create_double(amount.to_bits()))
                 .field("operation", operation);
-            let rec = or_default(rec, "slot", slot, 0, pick(&SLOT_GROUP, slot)?);
+            let rec = or_default(rec, "slot", slot, 0, pick(&EQUIPMENT_SLOT_GROUPS, slot)?);
             Some(
                 match int(r)? {
                     0 => rec,

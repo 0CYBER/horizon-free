@@ -1,0 +1,10 @@
+# The daily tests of horizon-game: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-game busy_launch::invalid_options_keep_usage_status_even_when_the_managed_install_is_busy test:it daily slow
+horizon-game compile_child::real_executable_refuses_malformed_hidden_requests test:it daily child-process
+horizon-game dedicated_walk::a_dedicated_server_keeps_ticking_while_a_player_walks test:it daily child-process
+horizon-game launch_api::a_control_socket_path_too_long_is_a_refused_command_line test:it daily child-process
+horizon-game launch_api::a_refused_command_line_exits_2_without_a_crash_report test:it daily child-process
+horizon-game launch_api::an_error_exits_1_and_names_the_crash_report_under_home test:it daily child-process
+horizon-game launch_api::documented_switches_do_not_consume_the_following_option test:it daily child-process
+horizon-game launch_api::launch_api_prints_json_and_runs_nothing_else test:it daily child-process

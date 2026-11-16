@@ -3,10 +3,12 @@ use crate::{
     chunk::{Chunk, LevelShape},
     streaming::ChunkGenerator,
 };
-use horizon_world::{
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::feature::{BasicFeature, FeatureBlocks, FeatureWorld},
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::feature::{BasicFeature, FeatureBlocks, FeatureWorld},
+    },
 };
 
 /// The layers of a flat generator, bottom up from the world's minimum Y.
@@ -119,6 +121,23 @@ impl FlatTerrain {
         } else {
             None
         };
+        let surface = Self::surface(&layers, registry, shape, biome)?;
+        Some(Self {
+            shape,
+            layers,
+            biome,
+            surface,
+            void_platform,
+        })
+    }
+    /// The top of the layers as the far view reads it: the first block that is not air, with the
+    /// fluid over it. The outer `None` when a layer's state is not in `registry`.
+    fn surface(
+        layers: &[u32],
+        registry: &BlockRegistry,
+        shape: LevelShape,
+        biome: u16,
+    ) -> Option<Option<crate::lod::Surface>> {
         let mut water = None;
         let mut surface = None;
         for (i, &id) in layers.iter().take(shape.height as usize).enumerate().rev() {
@@ -143,12 +162,43 @@ impl FlatTerrain {
                 break;
             }
         }
+        Some(surface)
+    }
+    /// The generator of a level a mod opens with the default superflat layers (`Some(layers)`:
+    /// bedrock, two dirt, grass block, over plains) or with air alone (`None`: the void).
+    /// `None` when the registry lacks one of the blocks.
+    pub fn of_layers(
+        registry: &BlockRegistry,
+        biomes: &crate::biome::Biomes,
+        shape: LevelShape,
+        flat: bool,
+    ) -> Option<Self> {
+        let names: &[&str] = if flat {
+            &[
+                "minecraft:bedrock",
+                "minecraft:dirt",
+                "minecraft:dirt",
+                "minecraft:grass_block",
+            ]
+        } else {
+            &[]
+        };
+        let layers = names
+            .iter()
+            .map(|name| Some(registry.default_state(name)?.0))
+            .collect::<Option<Vec<_>>>()?;
+        let biome = biomes.id(if flat {
+            "minecraft:plains"
+        } else {
+            "minecraft:the_void"
+        });
+        let surface = Self::surface(&layers, registry, shape, biome)?;
         Some(Self {
             shape,
             layers,
             biome,
             surface,
-            void_platform,
+            void_platform: None,
         })
     }
     /// The settings of a superflat overworld that runs on the structure and feature
@@ -209,6 +259,23 @@ impl FlatTerrain {
 }
 /// DimensionType.Y_SIZE: the most layers FlatLevelGeneratorSettings takes.
 const Y_SIZE: i64 = 4064;
+
+/// Check layer block identifiers and heights before `from_settings` expands them.
+pub(crate) fn valid_layer_heights(settings: &Tag) -> bool {
+    let Some(Tag::List(layers)) = settings.get("layers") else {
+        return false;
+    };
+    layers
+        .iter()
+        .try_fold(0i64, |total, layer| {
+            horizon_core::identifier::Identifier::parse(&crate::save::text(layer.get("block"))?)
+                .ok()?;
+            let height = crate::save::number(layer.get("height"))?;
+            let total = total.checked_add(height)?;
+            (height >= 0 && total <= Y_SIZE).then_some(total)
+        })
+        .is_some()
+}
 
 /// FlatLevelGeneratorSettings.CODEC reading a dedicated server's
 /// `generator-settings` (DedicatedServerProperties.WorldDimensionData for
@@ -377,6 +444,27 @@ mod tests {
     use crate::save::{number, text};
     use crate::server::json::{self, Json};
 
+    #[test]
+    fn preset_editor_flat_layers_allow_void_but_reject_malformed_blocks_and_heights() {
+        let valid = |layers| {
+            valid_layer_heights(&crate::save::json_tag(
+                &serde_json::json!({"layers": layers}),
+            ))
+        };
+        assert!(valid(serde_json::json!([])));
+        assert!(valid(
+            serde_json::json!([{"block":"minecraft:air","height":0}])
+        ));
+        for layers in [
+            serde_json::json!([{"height":1}]),
+            serde_json::json!([{"block":"bad:block:id","height":1}]),
+            serde_json::json!([{"block":"minecraft:stone","height":-1}]),
+            serde_json::json!([{"block":"minecraft:stone","height":4065}]),
+        ] {
+            assert!(!valid(layers));
+        }
+    }
+
     fn read(text: &str) -> (Option<Tag>, Vec<String>) {
         let json: Json = json::parse(text, false).unwrap();
         settings_from_json(
@@ -426,7 +514,10 @@ mod tests {
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
         let registry = assets.registry;
-        let biomes = crate::biome::Biomes::load(&root).unwrap();
+        let biomes = crate::biome::Biomes::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        )
+        .unwrap();
         let terrain = |biome, features, layers: &[(&str, i32)]| {
             FlatTerrain::from_settings(
                 &flat_world(biome, features, layers),

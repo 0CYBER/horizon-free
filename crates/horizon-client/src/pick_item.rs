@@ -6,48 +6,106 @@ use crate::items::ItemStack;
 /// Picks `stack` (the block's clone item): selects a matching stack already
 /// in the hotbar, or swaps one from the main inventory into a suitable
 /// hotbar slot; with infinite materials (creative) it adds the item when
-/// none is there. Returns whether anything changed.
+/// none is there. Returns whether anything changed. Vanilla's rules: a pick
+/// keeps an enchanted hotbar stack where it is.
 pub fn pick(
     items: &mut [Option<ItemStack>],
     selected: &mut usize,
     stack: &ItemStack,
     infinite_materials: bool,
 ) -> bool {
+    let picked = plan(items, *selected, stack, infinite_materials, &mut |s, _| {
+        vanilla_not_replaceable(s)
+    });
+    picked.is_some_and(|picked| {
+        apply(items, selected, stack, picked);
+        true
+    })
+}
+
+/// `ItemStack.isNotReplaceableByPickAction`'s vanilla answer: the stack is enchanted.
+pub fn vanilla_not_replaceable(stack: &ItemStack) -> bool {
+    !stack.enchantments().is_empty()
+}
+
+/// What a pick does to the inventory ([`plan`], then [`apply`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Picked {
+    /// A matching hotbar stack: select its slot.
+    Select(usize),
+    /// `pickSlot`: select hotbar slot `hotbar` and swap main slot `from` into it.
+    Swap { hotbar: usize, from: usize },
+    /// `addAndPickItem`: select hotbar slot `hotbar` and put the item there.
+    Add { hotbar: usize },
+}
+
+/// Decides a pick of `stack` without changing `items`: `None` when it does nothing.
+/// `not_replaceable` is asked, with the hotbar stack and its slot, in
+/// `getSuitableHotbarSlot`'s second pass, from the selected slot on until one answers
+/// `false` (`IItemExtension.isNotReplaceableByPickAction`).
+pub fn plan(
+    items: &[Option<ItemStack>],
+    selected: usize,
+    stack: &ItemStack,
+    infinite_materials: bool,
+    not_replaceable: &mut dyn FnMut(&ItemStack, usize) -> bool,
+) -> Option<Picked> {
     let existing = items.iter().position(|s| {
         s.as_ref()
             .is_some_and(|s| s.same_item_same_components(stack))
     });
     match existing {
-        Some(slot) if slot < 9 => *selected = slot,
-        Some(slot) => {
+        Some(slot) if slot < 9 => Some(Picked::Select(slot)),
+        Some(from) => Some(Picked::Swap {
+            hotbar: suitable_hotbar_slot(items, selected, not_replaceable),
+            from,
+        }),
+        None if infinite_materials => Some(Picked::Add {
+            hotbar: suitable_hotbar_slot(items, selected, not_replaceable),
+        }),
+        None => None,
+    }
+}
+
+/// Carries out a pick [`plan`] decided for `stack`.
+pub fn apply(
+    items: &mut [Option<ItemStack>],
+    selected: &mut usize,
+    stack: &ItemStack,
+    picked: Picked,
+) {
+    match picked {
+        Picked::Select(slot) => *selected = slot,
+        Picked::Swap { hotbar, from } => {
             // pickSlot.
-            *selected = suitable_hotbar_slot(items, *selected);
-            items.swap(*selected, slot);
+            *selected = hotbar;
+            items.swap(hotbar, from);
         }
-        None if infinite_materials => {
+        Picked::Add { hotbar } => {
             // addAndPickItem: what the hotbar slot held moves to a free slot
             // (or is replaced when there is none).
-            *selected = suitable_hotbar_slot(items, *selected);
-            if items[*selected].is_some()
+            *selected = hotbar;
+            if items[hotbar].is_some()
                 && let Some(free) = items.iter().position(Option::is_none)
             {
-                items[free] = items[*selected].take();
+                items[free] = items[hotbar].take();
             }
-            items[*selected] = Some(stack.clone());
+            items[hotbar] = Some(stack.clone());
         }
-        None => return false,
     }
-    true
 }
 
 /// `getSuitableHotbarSlot`: from the selected slot on, the first empty one,
-/// else the first without enchantments, else the selected one.
-fn suitable_hotbar_slot(items: &[Option<ItemStack>], selected: usize) -> usize {
-    let from = |ok: &dyn Fn(&Option<ItemStack>) -> bool| {
-        (0..9).map(|i| (selected + i) % 9).find(|&i| ok(&items[i]))
-    };
-    from(&|s| s.is_none())
-        .or_else(|| from(&|s| s.as_ref().is_some_and(|s| s.enchantments().is_empty())))
+/// else the first `not_replaceable` answers `false` for, else the selected one.
+fn suitable_hotbar_slot(
+    items: &[Option<ItemStack>],
+    selected: usize,
+    not_replaceable: &mut dyn FnMut(&ItemStack, usize) -> bool,
+) -> usize {
+    let order = || (0..9).map(|i| (selected + i) % 9);
+    order()
+        .find(|&i| items[i].is_none())
+        .or_else(|| order().find(|&i| items[i].as_ref().is_some_and(|s| !not_replaceable(s, i))))
         .unwrap_or(selected)
 }
 
@@ -127,6 +185,82 @@ mod tests {
         assert_eq!(
             (selected, items[4].clone(), items[9].clone()),
             (4, stack("stone", 1), stack("dirt", 5))
+        );
+    }
+
+    /// Enchanted diamond sword, stone, then dirt × 7 in the hotbar, oak planks in main slot 20.
+    fn full_hotbar() -> Vec<Option<ItemStack>> {
+        let mut items = inventory(&[(1, "stone"), (20, "oak_planks")]);
+        let mut sword = stack("diamond_sword", 1).unwrap();
+        sword.enchant("minecraft:sharpness", 1);
+        items[0] = Some(sword);
+        for slot in 2..9 {
+            items[slot] = stack("dirt", 5);
+        }
+        items
+    }
+
+    #[test]
+    fn the_rule_picks_the_hotbar_slot_a_full_hotbar_gives_up() {
+        let planks = stack("oak_planks", 1).unwrap();
+        let pick_with = |rule: &mut dyn FnMut(&ItemStack, usize) -> bool| {
+            let mut items = full_hotbar();
+            let mut selected = 0;
+            let picked = plan(&items, selected, &planks, false, rule).unwrap();
+            apply(&mut items, &mut selected, &planks, picked);
+            (selected, items[20].as_ref().map(|s| s.item.to_string()))
+        };
+        // Vanilla: the enchanted sword stays, the stone goes to slot 20.
+        let mut asked = Vec::new();
+        let vanilla = pick_with(&mut |s, slot| {
+            asked.push((s.item.to_string(), slot));
+            vanilla_not_replaceable(s)
+        });
+        assert_eq!(vanilla, (1, Some("minecraft:stone".into())));
+        // Asked from the selected slot on, until one answers false.
+        assert_eq!(
+            asked,
+            [
+                ("minecraft:diamond_sword".into(), 0),
+                ("minecraft:stone".into(), 1)
+            ]
+        );
+        let mut items = full_hotbar();
+        let mut selected = 0;
+        assert!(pick(&mut items, &mut selected, &planks, false));
+        assert_eq!(selected, 1);
+        // Stone kept in place: the dirt in slot 2 goes.
+        let keep_stone = pick_with(&mut |s, slot| {
+            vanilla_not_replaceable(s) || (&*s.item == "minecraft:stone" && slot == 1)
+        });
+        assert_eq!(keep_stone, (2, Some("minecraft:dirt".into())));
+        // The enchanted sword let go: it goes to slot 20.
+        let free_sword = pick_with(&mut |s, _| {
+            &*s.item != "minecraft:diamond_sword" && vanilla_not_replaceable(s)
+        });
+        assert_eq!(free_sword, (0, Some("minecraft:diamond_sword".into())));
+        // Every stack kept: the selected slot is used.
+        assert_eq!(
+            pick_with(&mut |_, _| true),
+            (0, Some("minecraft:diamond_sword".into()))
+        );
+    }
+
+    #[test]
+    fn an_empty_slot_or_a_hotbar_match_never_asks() {
+        let mut never = |_: &ItemStack, _: usize| -> bool { panic!("asked") };
+        let items = inventory(&[(0, "dirt"), (20, "stone")]);
+        assert_eq!(
+            plan(&items, 0, &stone(), false, &mut never),
+            Some(Picked::Swap {
+                hotbar: 1,
+                from: 20
+            })
+        );
+        let items = inventory(&[(0, "dirt"), (4, "stone")]);
+        assert_eq!(
+            plan(&items, 0, &stone(), false, &mut never),
+            Some(Picked::Select(4))
         );
     }
 }

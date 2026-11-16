@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Makes main's branch protection require the code owners' review (docs/security.md): a pull request that
 # changes a file .github/CODEOWNERS lists waits for Ludovic's approval; every other one still merges as soon as
-# `verify` passes (no approvals are required otherwise). Approvals are dismissed by a later push. Everything
-# else in the protection (the required `verify` from GitHub Actions, admins included) is kept as it is.
+# `verify` and `verify-static` pass (no approvals are required otherwise). Approvals are dismissed by a later push.
+# Existing required checks and their providers are preserved, not installed: both checks must already be required.
 #
 # Ludovic is the only code owner, and GitHub never counts an author's approval of their own pull request, so his
 # own pull requests to listed files could never merge. He is therefore the one account allowed to bypass the
 # pull-request rules (bypass_pull_request_allowances). The alternative, not enforcing the protection on admins,
-# would also let an admin merge without `verify`; here `verify` stays required for everyone, admins and Ludovic
+# would also let an admin merge without the checks; here both checks stay required for everyone, admins and Ludovic
 # included (enforce_admins stays on), and only the review requirement has an exception, for him alone.
 #
 # Apply it only once agents open, push and merge pull requests as the horizon-agent GitHub App, not as ludovic111:
@@ -42,13 +42,14 @@ if [[ "${1:-}" == --apply ]]; then
   gh api -X PUT "$api" --input - <<< "$body" > /dev/null
   set_now=$(gh api "$api" --jq '[.required_pull_request_reviews.require_code_owner_reviews,
     .enforce_admins.enabled, ([.required_pull_request_reviews.bypass_pull_request_allowances.users[]?.login]
-    | index("ludovic111") != null), ([.required_status_checks.checks[].context] | index("verify") != null)]
+    | index("ludovic111") != null), ([.required_status_checks.checks[].context] | index("verify") != null),
+    ([.required_status_checks.checks[].context] | index("verify-static") != null)]
     | map(tostring) | join(" ")')
-  if [[ "$set_now" != "true true true true" ]]; then
-    echo "GitHub didn't keep everything (code owners, admins enforced, Ludovic's bypass, verify): $set_now" >&2
+  if [[ "$set_now" != "true true true true true" ]]; then
+    echo "GitHub didn't keep everything (code owners, admins enforced, Ludovic's bypass, verify, verify-static): $set_now" >&2
     exit 1
   fi
-  echo "main now requires code owners' reviews; Ludovic may bypass them; verify is required for everyone."
+  echo "main now requires code owners' reviews; Ludovic may bypass them; verify and verify-static are required for everyone."
 else
   echo "(not applied: run with --apply)"
 fi

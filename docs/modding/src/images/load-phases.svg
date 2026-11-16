@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 300" role="img" aria-labelledby="t d" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif">
+  <title id="t">How a mod loads</title>
+  <desc id="d">Each game thread goes through five phases in order: Packages, Registration, Setup, Config and World. Every data or asset reload enters a Reloading phase and then returns to the phase it came from.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e7681"/></marker>
+  </defs>
+  <g font-size="13" fill="#1f2328">
+    <!-- phase boxes -->
+    <g>
+      <rect x="10" y="30" width="150" height="120" rx="12" fill="#f1f3f5" stroke="#5c6670" stroke-width="1.5"/>
+      <text x="85" y="58" text-anchor="middle" font-size="16" font-weight="700">Packages</text>
+      <text x="85" y="86" text-anchor="middle">Find turned-on mods,</text>
+      <text x="85" y="104" text-anchor="middle">check manifests,</text>
+      <text x="85" y="122" text-anchor="middle">order by dependencies</text>
+    </g>
+    <g>
+      <rect x="180" y="30" width="150" height="120" rx="12" fill="#e7f0ff" stroke="#2b5ea7" stroke-width="1.5"/>
+      <text x="255" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#1d3f73">Registration</text>
+      <text x="255" y="86" text-anchor="middle">register: keys, Parts,</text>
+      <text x="255" y="104" text-anchor="middle">settings; blocks and</text>
+      <text x="255" y="122" text-anchor="middle">items. No Host.</text>
+    </g>
+    <g>
+      <rect x="350" y="30" width="150" height="120" rx="12" fill="#e7f0ff" stroke="#2b5ea7" stroke-width="1.5"/>
+      <text x="425" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#1d3f73">Setup</text>
+      <text x="425" y="86" text-anchor="middle">Assets and data are</text>
+      <text x="425" y="104" text-anchor="middle">loaded; read them.</text>
+      <text x="425" y="122" text-anchor="middle">No world yet.</text>
+    </g>
+    <g>
+      <rect x="520" y="30" width="150" height="120" rx="12" fill="#e7f0ff" stroke="#2b5ea7" stroke-width="1.5"/>
+      <text x="595" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#1d3f73">Config</text>
+      <text x="595" y="86" text-anchor="middle">Config files load;</text>
+      <text x="595" y="104" text-anchor="middle">settings and your</text>
+      <text x="595" y="122" text-anchor="middle">files are readable.</text>
+    </g>
+    <g>
+      <rect x="690" y="30" width="160" height="120" rx="12" fill="#e6f6ec" stroke="#2f8a4f" stroke-width="1.5"/>
+      <text x="770" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#1d5a33">World</text>
+      <text x="770" y="86" text-anchor="middle">Hooks get a</text>
+      <text x="770" y="104" text-anchor="middle">ServerHost or</text>
+      <text x="770" y="122" text-anchor="middle">ClientHost.</text>
+    </g>
+    <!-- arrows between phases -->
+    <g stroke="#6e7681" stroke-width="2" fill="none" marker-end="url(#a)">
+      <path d="M161 90 L178 90"/>
+      <path d="M331 90 L348 90"/>
+      <path d="M501 90 L518 90"/>
+      <path d="M671 90 L688 90"/>
+    </g>
+    <!-- reloading -->
+    <rect x="430" y="210" width="340" height="70" rx="12" fill="#fff6d6" stroke="#a87b00" stroke-width="1.5"/>
+    <text x="600" y="238" text-anchor="middle" font-size="16" font-weight="700" fill="#5c4300">Reloading</text>
+    <text x="600" y="262" text-anchor="middle">A data or asset reload: published data, no world</text>
+    <g stroke="#6e7681" stroke-width="2" fill="none" stroke-dasharray="5 4">
+      <path d="M425 152 L 470 208" marker-end="url(#a)"/>
+      <path d="M770 152 L 730 208" marker-end="url(#a)"/>
+      <path d="M700 208 L 745 154" marker-end="url(#a)"/>
+    </g>
+  </g>
+  <text x="10" y="20" font-size="12" fill="#6e7681">Each game thread, in order</text>
+  <text x="10" y="236" font-size="12" fill="#6e7681">A reload returns to</text>
+  <text x="10" y="252" font-size="12" fill="#6e7681">the phase it came from.</text>
+</svg>

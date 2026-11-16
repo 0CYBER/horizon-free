@@ -1,4 +1,4 @@
-Fox.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	gap: minor: the type and the flags byte are synced; the two trusted-entity slots are not
+Fox.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	gap: minor: the type and the flags byte are synced; the two trusted-entity slots are not
 Fox.canEat	inline	crates/horizon-client/src/mobs/fox.rs::ai_step	held food (eats), no target, on the ground and awake, tested in the eating block of ai_step
 Fox.populateDefaultEquipmentSlots	port	crates/horizon-client/src/mobs/fox.rs::populate_default_equipment	called for a live spawn by spawning.rs::finalize; Ctx::populate has its own copy of the same draws for a structure mob: one fox in five (nextFloat below 0.2) holds, by a second draw, an emerald (below 0.05), egg (0.2), rabbit foot or hide (0.4, by nextBoolean), wheat (0.6), leather (0.8) or feather
 Fox.handleEntityEvent	port	crates/horizon-client/src/mobs/fox.rs::ai_step	ticked in #3512; `Fox.handleEntityEvent` is cited at crates/horizon-client/src/mobs/fox.rs:227 (in a comment, so `where` names the enclosing fn)
@@ -14,9 +14,9 @@ Fox.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_fro
 Fox.clearTrusted	port	crates/horizon-client/src/mobs/fox.rs::clear_trusted	both trusted slots emptied, before a load reads Trusted
 Fox.getFlag	port	crates/horizon-client/src/mobs/fox.rs::flag	flags byte in extra.ints[0]
 Fox.canHoldItem	port	crates/horizon-client/src/mobs/fox.rs::can_hold_item	an empty mouth, or consumable food when the mouth holds something that is not
-Fox.spitOutItem	inline	crates/horizon-client/src/game/foxes.rs::fox_pick_up	the old mouthful is thrown out at eye level plus the look direction, pickup delay 40, entity.fox.spit
-Fox.dropItemStack	inline	crates/horizon-client/src/game/foxes.rs::fox_pick_up	the rest of the stack is dropped at the fox's feet with the default pickup delay
-Fox.pickUpItem	port	crates/horizon-client/src/game/foxes.rs::fox_pick_up	the game's pickup loop takes one item of the stack and marks the mouth as full
+Fox.spitOutItem	inline	crates/horizon-client/src/game/mobs/foxes.rs::fox_pick_up	the old mouthful is thrown out at eye level plus the look direction, pickup delay 40, entity.fox.spit
+Fox.dropItemStack	inline	crates/horizon-client/src/game/mobs/foxes.rs::fox_pick_up	the rest of the stack is dropped at the fox's feet with the default pickup delay
+Fox.pickUpItem	port	crates/horizon-client/src/game/mobs/foxes.rs::fox_pick_up	the game's pickup loop takes one item of the stack and marks the mouth as full
 Fox.getHeadRollAngle	port	crates/horizon-client/src/mobs/fox.rs::pose	head_roll_angle from the interested angle at the partial tick
 Fox.setTarget	missing		minor: only clears the defending flag, which is never set
 Fox.playAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::play_ambient	ticked in #3512; `Fox.playAmbientSound` is cited at crates/horizon-client/src/mobs/ai.rs:1095 (in a comment, so `where` names the enclosing fn)
@@ -32,7 +32,7 @@ Fox.FoxMeleeAttackGoal.checkAndPerformAttack	inline	crates/horizon-client/src/mo
 Fox.FoxPanicGoal.shouldPanic	inline	crates/horizon-client/src/mobs/fox.rs::register	Panic(2.2); the not-defending test is moot because defending is never set
 Fox.FoxPounceGoal.canContinueToUse	inline	crates/horizon-client/src/mobs/fox.rs::Pounce::can_continue	target alive, still in the air or tilted 15 degrees, not faceplanted
 Fox.FoxStrollThroughVillageGoal.canFoxMove	port	crates/horizon-client/src/mobs/fox.rs::can_fox_move	not sleeping, sitting or defending, and no target; fox.rs::can_move is Fox.canMove, a different test
-Frog.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	variant holder and tongue target id
+Frog.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	variant holder and tongue target id
 Frog.getTongueTarget	inline	crates/horizon-client/src/mobs/frog.rs::ShootTongue::tick	gap: minor: the target lives in Frog.State; FrogLookControl.resetXRotOnTick has no frog case, so the head pitch is zeroed while the tongue is out
 Frog.get	port	crates/horizon-client/src/mobs/finalize.rs::species_variant_component	frog/variant component
 Frog.applyImplicitComponent	port	crates/horizon-client/src/entity_nbt.rs::apply_item_components	the `minecraft:frog/variant` name sets the variant (WARM over TEMPERATE)
@@ -73,7 +73,7 @@ TadpoleAi.initIdleActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::
 Goat.createHorn	port	crates/horizon-client/src/mobs/goat.rs::Goal::create_horn	ticked in #3512; `Goat.createHorn` is cited at crates/horizon-client/src/mobs/goat.rs:512
 Goat.createAttributes	skip:data		attributes come from entity-types.json
 Goat.ageBoundaryReached	port	crates/horizon-client/src/mobs/finalize.rs::age_boundary_reached	attack damage 1 for a baby, 2 for an adult
-Goat.getBreedOffspring	port	crates/horizon-client/src/game/creatures.rs::breed	ticked in #3512; `Goat.getBreedOffspring` is cited at crates/horizon-client/src/game/creatures.rs:2605 (in a comment, so `where` names the enclosing fn)
+Goat.getBreedOffspring	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::breed	ticked in arismoko/horizon#3512; `Goat.getBreedOffspring` is cited at crates/horizon-client/src/game/mobs/creatures/mod.rs:2605 (in a comment, so `where` names the enclosing fn)
 Goat.customServerAiStep	inline	crates/horizon-client/src/mobs/ai.rs::generic	goals stand in for the brain: Float, Panic 2.0, Breed, Tempt, FollowParent, stroll and look (ai.rs generic) and the ram goal (goat.rs); the ram cooldown counts down in goat.rs::tick
 Goat.setYHeadRot	port	crates/horizon-client/src/mobs/control.rs::look_control_tick	the head is clamped to `getMaxHeadYRot` (15 degrees) from the body after every look update, walking or standing
 Goat.playEatingSound	port	crates/horizon-client/src/mobs/ai.rs::eating_sound	screaming or normal eat sound at 0.8 to 1.2 pitch
@@ -84,7 +84,7 @@ Goat.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::goat_spawn	c
 Goat.getDefaultDimensions	port	crates/horizon-client/src/mobs/living.rs::Mob::dims	baby box (0.45 x 0.65, eye 0.59375) from the species table; no long jump pose scale since there is no long jump
 Goat.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	IsScreamingGoat, HasLeftHorn, HasRightHorn; the GoatAi LONG_JUMP_COOLDOWN_TICKS brain memory is saved too
 Goat.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	IsScreamingGoat and both horn flags (default true)
-Goat.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	gap: minor: the two horn flags are synced; the screaming flag is not
+Goat.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	gap: minor: the two horn flags are synced; the screaming flag is not
 Goat.checkGoatSpawnRules	port	crates/horizon-client/src/mobs/spawn_rules.rs::check_spawn_rules	goats_spawnable_on below and bright enough
 GoatAi.initMemories	port	crates/horizon-client/src/mobs/finalize.rs::goat_init_memories	the long jump cooldown uniform 600 to 1200 and the ram cooldown uniform 600 to 6000 (TIME_BETWEEN_LONG_JUMPS, TIME_BETWEEN_RAMS); Ctx::finalize and creatures.rs::breed (a baby, as Goat.getBreedOffspring calls initMemories) call it, and goat_spawn draws the same two values for a live spawn
 GoatAi.initCoreActivity	inline	crates/horizon-client/src/mobs/ai.rs::generic	Float (swim), Panic 2.0 and the cooldown count in goat.rs::tick
@@ -92,7 +92,7 @@ GoatAi.initIdleActivity	inline	crates/horizon-client/src/mobs/ai.rs::generic	Bre
 GoatAi.initLongJumpActivity	port	crates/horizon-client/src/mobs/goat.rs::register	ticked in #3512; `GoatAi.initLongJumpActivity` is cited at crates/horizon-client/src/mobs/goat.rs:61 (in a comment, so `where` names the enclosing fn)
 GoatAi.initRamActivity	port	crates/horizon-client/src/mobs/goat.rs::register	the Ram goal: prepare four to seven blocks away, wait 20 ticks head down, charge, knock back or break a horn
 CopperGolem.createAttributes	skip:data		attributes come from entity-types.json
-CopperGolem.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	weather state and golem state
+CopperGolem.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	weather state and golem state
 CopperGolem.canTurnToStatue	inline	crates/horizon-client/src/mobs/copper_golem.rs::update_weathering	oxidized, standing in air, 0.0058 chance per tick on the level random
 CopperGolem.playHeadSpinSound	port	crates/horizon-client/src/mobs/copper_golem.rs::ai_step	gap: minor: local spin sound by oxidation level, but a silent golem still plays it
 CopperGolem.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	0.75 of the eye height on the centre, no forwards shift
@@ -110,12 +110,12 @@ IronGolem.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mo
 IronGolem.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	PlayerCreated (absent is false); persistent anger reads anger_end_time and angry_at
 IronGolem.hurtServer	port	crates/horizon-client/src/mobs.rs::Mob::damage_with	golem::crackiness is read before the hit and compared after; a changed level plays entity.iron_golem.damage at 1.0/1.0
 IronGolem.isPlayerCreated	inline	crates/horizon-client/src/mobs/goals.rs::Mob::spares_players	the flag is extra.player_created; spares_players reads it, and entity_nbt.rs writes and reads it
-IronGolem.setPlayerCreated	inline	crates/horizon-client/src/game/golems.rs::Game::check_golem_spawn	sets extra.player_created on the golem built from blocks; mob_from_nbt sets it on load
+IronGolem.setPlayerCreated	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::check_golem_spawn	sets extra.player_created on the golem built from blocks; mob_from_nbt sets it on load
 IronGolem.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	0.875 of the eye height, the default width/2 forwards
 SnowGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_snow	gap: minor: stroll uses the 0.001 water-avoiding probability, vanilla 1.0000001E-5
-SnowGolem.shear	port	crates/horizon-client/src/game/creatures.rs::Game::interact_shear_mob	shear sound, pumpkin off, shearing loot table at eye height
-SnowGolem.hasPumpkin	inline	crates/horizon-client/src/game/creatures.rs::Game::interact_shear_mob	extra.sheared is the inverse; synced as DATA_PUMPKIN_ID in lan.rs and remote_mob_data.rs
-SnowGolem.setPumpkin	inline	crates/horizon-client/src/game/creatures.rs::Game::interact_shear_mob	sets extra.sheared (shears, dispenser); nothing puts a pumpkin back, as in vanilla
+SnowGolem.shear	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_shear_mob	shear sound, pumpkin off, shearing loot table at eye height
+SnowGolem.hasPumpkin	inline	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_shear_mob	extra.sheared is the inverse; synced as DATA_PUMPKIN_ID in lan.rs and remote_mob_data.rs
+SnowGolem.setPumpkin	inline	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_shear_mob	sets extra.sheared (shears, dispenser); nothing puts a pumpkin back, as in vanilla
 SnowGolem.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	0.75 of the eye height
 HappyGhast.setServerStillTimeout	inline	crates/horizon-client/src/mobs/happy_ghast.rs::still_tick	gap: minor: the timeout is extra.counter (10 when a player stands on top, 10 on dismount, 0 on boarding); the one-off position sync to tracking players is not sent, lan.rs only marks the entity precise
 HappyGhast.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	still_timeout, the serverStillTimeout `still_tick` keeps in `counter`
@@ -126,15 +126,15 @@ HappyGhast.babyGhastSetup	port	crates/horizon-client/src/mobs/happy_ghast.rs::se
 HappyGhast.ageBoundaryReached	port	crates/horizon-client/src/mobs/finalize.rs::age_boundary_reached	reruns the setup (happy_ghast::ensure_setup) when the age sign changes, so a hatched ghastling flies its own goals before its first tick
 HappyGhast.createAttributes	skip:data		attributes come from entity-types.json
 HappyGhast.getAmbientSoundInterval	port	crates/horizon-client/src/mobs.rs::Mob::ambient_interval	six times as long while it carries a rider
-HappyGhast.canUseSlot	inline	crates/horizon-client/src/game/ghasts.rs::Game::interact_happy_ghast	a harness goes only on a living adult without one; shears take it off
-HappyGhast.addPassenger	inline	crates/horizon-client/src/game/ghasts.rs::Game::interact_happy_ghast	gap: minor: goggles-down sound for the first rider and the still timeout reset; only one rider fits (vanilla four) and the timeout is always 0
+HappyGhast.canUseSlot	inline	crates/horizon-client/src/game/mobs/ghasts.rs::Game::interact_happy_ghast	a harness goes only on a living adult without one; shears take it off
+HappyGhast.addPassenger	inline	crates/horizon-client/src/game/mobs/ghasts.rs::Game::interact_happy_ghast	gap: minor: goggles-down sound for the first rider and the still timeout reset; only one rider fits (vanilla four) and the timeout is always 0
 HappyGhast.getControllingPassenger	port	crates/horizon-client/src/mobs/happy_ghast.rs::controlled	gap: minor: harnessed adult with a rider; the not-on-still-timeout test is missing
 HappyGhast.tickRidden	port	crates/horizon-client/src/mobs/happy_ghast.rs::ridden	turns 8 percent toward the rider's yaw, pitch half of theirs, head and body follow
 HappyGhast.getHappyGhastRestrictionRadius	port	crates/horizon-client/src/mobs/happy_ghast.rs::restriction_radius	64 for a bare adult, 32 otherwise
 HappyGhast.checkRestriction	inline	crates/horizon-client/src/mobs/happy_ghast.rs::ai_step	home set to the block when unleashed and unridden and stale or the radius changed
 HappyGhast.continuousHeal	inline	crates/horizon-client/src/mobs/happy_ghast.rs::ai_step	gap: minor: one point every 600 ticks, every 20 in precipitation; the in-clouds fast heal is missing
-HappyGhast.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	gap: minor: STAYS_STILL is synced; IS_LEASH_HOLDER is not tracked (no leashHolderTime), so the harness rope layer is never drawn
-HappyGhast.syncStayStillFlag	port	crates/horizon-client/src/game/lan.rs::mob_meta	STAYS_STILL shown while the timeout is above zero (on_still_timeout)
+HappyGhast.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	gap: minor: STAYS_STILL is synced; IS_LEASH_HOLDER is not tracked (no leashHolderTime), so the harness rope layer is never drawn
+HappyGhast.syncStayStillFlag	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	STAYS_STILL shown while the timeout is above zero (on_still_timeout)
 HappyGhast.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	Vec3.ZERO, the rope at the ghast's feet rather than an eye height up
 HappyGhastAi.initCoreActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::ghastling_package	swim, flying panic 2.0, look sink, move sink and the tempt cooldown countdown
 HappyGhastAi.initIdleActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::ghastling_package	tempt with look in the eyes, follow a player, follow an adult, then fly stroll or walk to the look target

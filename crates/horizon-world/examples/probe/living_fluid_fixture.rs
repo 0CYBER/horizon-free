@@ -2,6 +2,7 @@ use crate::support::common::f64_bits;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::living_air::*;
 use horizon_world::living_fluid::*;
+use horizon_world::move_gate::MoveGate;
 use serde_json::Value;
 use std::{
     fs,
@@ -125,7 +126,7 @@ impl LivingAirWorld for World<'_> {
     fn is_player_class(&self) -> bool {
         self.flag("player")
     }
-    fn move_self(&mut self, v: Vec3) -> io::Result<()> {
+    fn move_self(&mut self, _gate: &mut MoveGate, v: Vec3) -> io::Result<()> {
         self.query(format!("move {}", vector(v)))?;
         self.moved = true;
         self.y = number(&self.f["after_y"]);
@@ -268,9 +269,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let input = vec(&f["input"]);
         let friction = single(&f["friction"]);
         let result: io::Result<()> = match f["mode"].as_str().unwrap() {
-            "fluid" => travel_in_fluid(&mut w, input),
+            "fluid" => travel_in_fluid(&mut w, &mut MoveGate::new(), input),
             "water" => travel_in_water(
                 &mut w,
+                &mut MoveGate::new(),
                 input,
                 number(&f["gravity"]),
                 f["falling"].as_bool().unwrap(),
@@ -278,6 +280,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
             "lava" => travel_in_lava(
                 &mut w,
+                &mut MoveGate::new(),
                 input,
                 number(&f["gravity"]),
                 f["falling"].as_bool().unwrap(),
@@ -292,8 +295,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|v| writeln!(w.out, "vector {}", vector(v))),
             "jump" => jump_out_of_fluid(&mut w, number(&f["old_y"])),
             "float" => float_in_liquid_while_ridden(&mut w, TravelFluidTag::EntityFloatable),
-            "air" => travel_in_air(&mut w, input),
-            "relative" => relative_friction_movement(&mut w, input, friction)
+            "air" => travel_in_air(&mut w, &mut MoveGate::new(), input),
+            "relative" => relative_friction_movement(&mut w, &mut MoveGate::new(), input, friction)
                 .and_then(|v| writeln!(w.out, "vector {}", vector(v))),
             "climb" => handle_on_climbable(&mut w, input)
                 .and_then(|v| writeln!(w.out, "vector {}", vector(v))),

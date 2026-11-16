@@ -116,7 +116,6 @@ controlling,Controlling,19.0.5,client-ui,client,categories,modrinth,MIT,required
 cookingforblockheads,Cooking for Blockheads,21.1.24,content,machines,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
 copycats,Create: Copycats+,3.0.9+mc.1.21.1-neoforge,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
 corgilib,CorgiLib,5.0.0.10,library,none,categories,modrinth,LGPL-3.0-only,required,required
-cosmeticarmorreworked,CosmeticArmorReworked,1.21.1-v1-neoforge,content,machines,name,curseforge,unknown (read mods.toml at import),,
 crafting_on_a_stick,Crafting On A Stick,1.21.0.6,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
 craftingtweaks,Crafting Tweaks,21.1.11,client-ui,client,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,optional
 crash_assistant,Crash Assistant,1.11.12,other,none,categories,modrinth,LicenseRef-LicenseRef-KostromDan-MML-1.1.3,required,unsupported

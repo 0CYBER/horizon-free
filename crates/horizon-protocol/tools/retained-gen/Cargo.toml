@@ -1,0 +1,9 @@
+[package]
+name = "protocol-retained-gen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"

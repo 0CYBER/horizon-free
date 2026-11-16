@@ -8,13 +8,14 @@ use horizon_core::{
     geometry::{Aabb, Direction, Vec3},
     position::BlockPos,
 };
+use horizon_world::native_load_context::LoopContext;
 use horizon_world::{
     entity_fluid::{
         CurrentTarget, EntityFluidInteraction, FluidInteractionWorld, FluidMembership,
         FluidSections, FluidTagId,
     },
     fluid::{FluidHeightWorld, FluidKind, FluidState},
-    fluid_flow::{FluidFlowWorld, flow_at},
+    fluid_flow::FluidFlowWorld,
     registry::BlockStateId,
 };
 type Error = std::convert::Infallible;
@@ -25,25 +26,7 @@ struct EntityFluidWorld<'a> {
     velocity: &'a mut Vec3,
     world: &'a World,
     fluids: &'a FluidResources,
-}
-/// `FluidState.getFlow(level, pos)`: the current of the fluid at `pos`, the
-/// one that pushes an item or a boat in it, normalised (zero where there is no
-/// fluid or it doesn't move: a source with only sources and walls around it).
-/// A falling fluid's current points down.
-pub fn fluid_flow(world: &World, fluids: &FluidResources, pos: [i32; 3]) -> [f64; 3] {
-    let mut velocity = Vec3::ZERO;
-    let mut scene = EntityFluidWorld {
-        bounds: Aabb::new(Vec3::ZERO, Vec3::ZERO),
-        position: Vec3::ZERO,
-        eye_y: 0.0,
-        velocity: &mut velocity,
-        world,
-        fluids,
-    };
-    let at = BlockPos::new(pos[0], pos[1], pos[2]);
-    let state = fluids.fluid(world.block(pos[0], pos[1], pos[2]));
-    let flow = flow_at(&mut scene, state, at).unwrap_or(Vec3::ZERO);
-    [flow.x, flow.y, flow.z]
+    context: &'a LoopContext,
 }
 /// `Entity.move`'s fall-reset ray along a move from `from`, up to 8 blocks:
 /// `ClipContext.Fluid.WATER` (the water's shape) and
@@ -52,6 +35,7 @@ pub fn fluid_flow(world: &World, fluids: &FluidResources, pos: [i32; 3]) -> [f64
 /// block, the water's first (its first query fixes the shared cached shape);
 /// either one hitting ends the ray.
 pub fn fall_reset_hit(
+    context: &LoopContext,
     world: &World,
     fluids: &FluidResources,
     tagged: impl Fn(BlockPos) -> bool,
@@ -60,7 +44,7 @@ pub fn fall_reset_hit(
 ) -> bool {
     let to = from.add_vector(moved.normalize().scale(moved.length().min(8.0)));
     let hit = horizon_core::geometry::traverse_blocks(from, to, 1_000_000, |p| {
-        let water = water_clip(world, fluids, from, to, p);
+        let water = water_clip(context, world, fluids, from, to, p);
         let reset = tagged(p)
             && horizon_core::geometry::VoxelShape::block()
                 .clip(from, to, p)
@@ -73,6 +57,7 @@ pub fn fall_reset_hit(
 /// shape from the shared `FlowingFluid.shapes` cache (the first query of a
 /// fluid state fixes its height), as the player's own ray reads it.
 pub fn water_clip(
+    context: &LoopContext,
     world: &World,
     fluids: &FluidResources,
     from: Vec3,
@@ -91,6 +76,7 @@ pub fn water_clip(
         velocity: &mut velocity,
         world,
         fluids,
+        context,
     };
     let Ok(mut shapes) = fluids.shapes.lock() else {
         return false;
@@ -111,6 +97,7 @@ pub fn update_entity_fluids(
     velocity: &mut Vec3,
     world: &World,
     fluids: &FluidResources,
+    context: &LoopContext,
 ) -> (f64, f64, bool) {
     let mut interaction = EntityFluidInteraction::new([WATER, LAVA]);
     let mut scene = EntityFluidWorld {
@@ -120,6 +107,7 @@ pub fn update_entity_fluids(
         velocity,
         world,
         fluids,
+        context,
     };
     if interaction.update(&mut scene, false, 4096).is_err() {
         return (0.0, 0.0, false);
@@ -139,7 +127,6 @@ pub fn update_entity_fluids(
             0.0023333333333333335
         },
     );
-    let _ = interaction.apply_mod_currents(&mut scene);
     (water_height, lava_height, eye_in_water)
 }
 impl ItemEntity {
@@ -150,10 +137,15 @@ impl ItemEntity {
     }
     /// The fluid push as the game runs it, for the unit tests.
     #[cfg(test)]
-    pub(super) fn update_fluids(&mut self, world: &World, fluids: &FluidResources) -> (f64, f64) {
+    pub(super) fn update_fluids(
+        &mut self,
+        world: &World,
+        fluids: &FluidResources,
+        context: &LoopContext,
+    ) -> (f64, f64) {
         let (bounds, at, eye) = (self.bounds(), self.position, self.fluid_eye_y());
         let (water, lava, _) =
-            update_entity_fluids(bounds, at, eye, &mut self.velocity, world, fluids);
+            update_entity_fluids(bounds, at, eye, &mut self.velocity, world, fluids, context);
         (water, lava)
     }
 }
@@ -165,7 +157,12 @@ impl ExperienceOrb {
     /// `isEyeInFluid(FluidTags.WATER)` for the eye the scan reads, `0.425`
     /// above the orb's feet, `isInWater`, and `isInLava` (before
     /// `Entity.firstTick` is taken into account).
-    pub fn update_fluids(&mut self, world: &World, fluids: &FluidResources) -> (bool, bool, bool) {
+    pub fn update_fluids(
+        &mut self,
+        world: &World,
+        fluids: &FluidResources,
+        context: &LoopContext,
+    ) -> (bool, bool, bool) {
         let (water, lava, eye) = update_entity_fluids(
             self.bounds(),
             self.position,
@@ -173,6 +170,7 @@ impl ExperienceOrb {
             &mut self.velocity,
             world,
             fluids,
+            context,
         );
         if water > 0.0 {
             self.fall_distance = 0.0;
@@ -197,13 +195,18 @@ impl ArmorStand {
     /// The fluid push as the game runs it, for the unit tests: whether the
     /// stand is in water (`isInWater`).
     #[cfg(test)]
-    pub fn update_fluids(&mut self, world: &World, fluids: &FluidResources) -> bool {
+    pub fn update_fluids(
+        &mut self,
+        world: &World,
+        fluids: &FluidResources,
+        context: &LoopContext,
+    ) -> bool {
         use crate::entity_rules::EntityRules;
         if !self.is_pushed_by_fluid() {
             return false;
         }
         let (bounds, at, eye) = (self.bounds(), self.position, self.fluid_eye_y());
-        update_entity_fluids(bounds, at, eye, &mut self.velocity, world, fluids).0 > 0.0
+        update_entity_fluids(bounds, at, eye, &mut self.velocity, world, fluids, context).0 > 0.0
     }
 }
 impl FluidMembership for EntityFluidWorld<'_> {
@@ -266,7 +269,15 @@ impl FluidInteractionWorld for EntityFluidWorld<'_> {
         f.camera_height_at(self, [p.x, p.y, p.z])
     }
     fn flow(&mut self, f: FluidState, p: BlockPos) -> Result<Vec3, Error> {
-        flow_at(self, f, p)
+        crate::motion::pushing_flow(
+            self.context,
+            &mut FlowLevel {
+                world: self.world,
+                fluids: self.fluids,
+            },
+            f,
+            p,
+        )
     }
 }
 impl FluidHeightWorld for EntityFluidWorld<'_> {
@@ -279,7 +290,25 @@ impl FluidHeightWorld for EntityFluidWorld<'_> {
         Ok(self.fluids.sturdy(state, Direction::Down))
     }
 }
-impl FluidFlowWorld for EntityFluidWorld<'_> {
+/// `FluidState.getFlow` at `pos` as it pushes an entity there: vanilla's vector, then the
+/// `fluid_flow` hook. Zero where no fluid flows.
+pub fn fluid_flow(
+    world: &World,
+    fluids: &FluidResources,
+    context: &LoopContext,
+    pos: BlockPos,
+) -> Vec3 {
+    let state = fluids.fluid(world.block(pos.x, pos.y, pos.z));
+    let Ok(flow) =
+        crate::motion::pushing_flow(context, &mut FlowLevel { world, fluids }, state, pos);
+    flow
+}
+/// The blocks a current reads, from a loaded world.
+struct FlowLevel<'a> {
+    world: &'a World,
+    fluids: &'a FluidResources,
+}
+impl FluidFlowWorld for FlowLevel<'_> {
     type Error = Error;
     type Block = BlockStateId;
     fn fluid(&mut self, p: BlockPos) -> Result<FluidState, Error> {
@@ -311,15 +340,21 @@ mod tests {
     /// while the pool itself, its edge on a solid floor and the air beside it
     /// have no current.
     #[test]
+    #[ignore = "daily"]
     fn fluid_flow_runs_away_from_a_pool_and_is_zero_in_still_water() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
         if !root.join("movement-properties.nbt").exists() {
+            crate::test_fixtures::report_missing();
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.to_path_buf(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = FluidResources::new(&assets, &facts).unwrap();
         let mut world = World::test_scene(&assets, &render, 3).unwrap();
@@ -341,21 +376,35 @@ mod tests {
         world.set(20, 4, 18, flowing).unwrap();
         // A level-1 flow beside sources: the source is 1/9 higher to the west,
         // the air to the east on stone gives nothing, so the current is +x.
-        assert_eq!(fluid_flow(&world, &fluids, [20, 4, 18]), [1.0, 0.0, 0.0]);
-        for still in [[18, 4, 18], [17, 4, 17], [21, 4, 18]] {
-            assert_eq!(fluid_flow(&world, &fluids, still), [0.0; 3], "{still:?}");
+        let context = crate::test_resources::server_loop_context();
+        assert_eq!(
+            fluid_flow(&world, &fluids, context, BlockPos::new(20, 4, 18)),
+            Vec3::new(1.0, 0.0, 0.0)
+        );
+        for [x, y, z] in [[18, 4, 18], [17, 4, 17], [21, 4, 18]] {
+            assert_eq!(
+                fluid_flow(&world, &fluids, context, BlockPos::new(x, y, z)),
+                Vec3::ZERO,
+                "{x}, {y}, {z}"
+            );
         }
     }
     #[test]
+    #[ignore = "daily"]
     fn items_follow_flowing_water_but_still_water_has_no_horizontal_push() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
         if !root.join("movement-properties.nbt").exists() {
+            crate::test_fixtures::report_missing();
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.to_path_buf(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = FluidResources::new(&assets, &facts).unwrap();
         let collision = crate::collisions::load(&root, assets.registry).unwrap();
@@ -373,6 +422,8 @@ mod tests {
         }
         let at = Vec3::new(20.5, 4.0, 20.5);
         let item = ItemEntity {
+            attachment_lifetime: Default::default(),
+            fall_distance: 0.0,
             random: horizon_core::random::EntityRandom::own(
                 horizon_core::random::LegacyRandom::new(0),
             ),
@@ -396,7 +447,6 @@ mod tests {
             on_ground: false,
             vertical_collision: false,
             horizontal_collision: false,
-            fall_distance: 0.0,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -457,15 +507,21 @@ mod tests {
     /// orb in flowing water gains velocity along the flow and moves, while an orb
     /// in still source water does not gain horizontal velocity (#7442).
     #[test]
+    #[ignore = "daily"]
     fn experience_orbs_follow_flowing_water_but_still_water_has_no_horizontal_push() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
         if !root.join("movement-properties.nbt").exists() {
+            crate::test_fixtures::report_missing();
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.to_path_buf(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = FluidResources::new(&assets, &facts).unwrap();
         let collision = crate::collisions::load(&root, assets.registry).unwrap();
@@ -483,6 +539,7 @@ mod tests {
         }
         let at = Vec3::new(20.5, 4.0, 20.5);
         let orb = ExperienceOrb {
+            attachment_lifetime: Default::default(),
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
@@ -511,6 +568,7 @@ mod tests {
             &mut || 0.0,
             None,
             &fluids,
+            crate::test_resources::server_loop_context(),
             &mut |_, _| {},
         ));
         assert_eq!(still.position.x, at.x);
@@ -526,6 +584,7 @@ mod tests {
             &mut || 0.0,
             None,
             &fluids,
+            crate::test_resources::server_loop_context(),
             &mut |_, _| {},
         ));
         // Current pushes the orb, then underwater and air drag each widen
@@ -544,6 +603,7 @@ mod tests {
                 &mut || 0.0,
                 None,
                 &fluids,
+                crate::test_resources::server_loop_context(),
                 &mut |_, _| {},
             );
         }
@@ -555,15 +615,21 @@ mod tests {
     /// surface, with its eye in the water, floats (`setUnderwaterMovement`)
     /// instead of falling.
     #[test]
+    #[ignore = "daily"]
     fn an_orb_whose_eye_dips_into_water_floats_with_its_feet_in_air() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
         if !root.join("movement-properties.nbt").exists() {
+            crate::test_fixtures::report_missing();
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.clone(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = FluidResources::new(&assets, &facts).unwrap();
         let collision = crate::collisions::load(&root, assets.registry).unwrap();
@@ -576,6 +642,7 @@ mod tests {
         }
         let at = Vec3::new(20.5, 4.6, 20.5);
         let mut orb = ExperienceOrb {
+            attachment_lifetime: Default::default(),
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
@@ -603,6 +670,7 @@ mod tests {
             &mut || 0.0,
             None,
             &fluids,
+            crate::test_resources::server_loop_context(),
             &mut |_, _| {},
         ));
         assert!(
@@ -617,15 +685,21 @@ mod tests {
     /// still source water does not. Vanilla's boat tick runs this before
     /// `floatBoat` scales the velocity, which is what `game::boats` does.
     #[test]
+    #[ignore = "daily"]
     fn a_boat_box_is_pushed_by_the_current_it_sits_in() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
         if !root.join("movement-properties.nbt").exists() {
+            crate::test_fixtures::report_missing();
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.to_path_buf(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = FluidResources::new(&assets, &facts).unwrap();
         let mut world = World::test_scene(&assets, &render, 3).unwrap();
@@ -648,11 +722,27 @@ mod tests {
             Vec3::new(at.x + half, at.y + 0.5625, at.z + half),
         );
         let mut still = Vec3::ZERO;
-        update_entity_fluids(bounds, at, at.y + 0.5625, &mut still, &world, &fluids);
+        update_entity_fluids(
+            bounds,
+            at,
+            at.y + 0.5625,
+            &mut still,
+            &world,
+            &fluids,
+            crate::test_resources::server_loop_context(),
+        );
         assert_eq!(still.x, 0.0, "source water has no current");
         world.set(21, 4, 20, flowing).unwrap();
         let mut carried = Vec3::ZERO;
-        update_entity_fluids(bounds, at, at.y + 0.5625, &mut carried, &world, &fluids);
+        update_entity_fluids(
+            bounds,
+            at,
+            at.y + 0.5625,
+            &mut carried,
+            &world,
+            &fluids,
+            crate::test_resources::server_loop_context(),
+        );
         assert!(
             carried.x > 0.0,
             "the flow pushes the boat along +x, got {}",
@@ -661,15 +751,21 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn armor_stands_follow_flowing_water_but_markers_and_still_water_stay_in_place() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
         if !root.join("movement-properties.nbt").exists() {
+            crate::test_fixtures::report_missing();
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.to_path_buf(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = FluidResources::new(&assets, &facts).unwrap();
         let collision = crate::collisions::load(&root, assets.registry).unwrap();
@@ -688,7 +784,11 @@ mod tests {
         let at = Vec3::new(20.5, 4.0, 20.5);
         let stand = ArmorStand::new(1, at, 0.0);
         let mut still = stand.clone();
-        let in_water = still.update_fluids(&world, &fluids);
+        let in_water = still.update_fluids(
+            &world,
+            &fluids,
+            crate::test_resources::server_loop_context(),
+        );
         assert!(in_water);
         let mut scene = crate::collisions::SceneCollisions {
             world: &world,
@@ -706,7 +806,11 @@ mod tests {
         world.set(21, 4, 20, flowing).unwrap();
         let mut marker = stand.clone();
         marker.marker = true;
-        let in_water = marker.update_fluids(&world, &fluids);
+        let in_water = marker.update_fluids(
+            &world,
+            &fluids,
+            crate::test_resources::server_loop_context(),
+        );
         assert!(!in_water);
         let mut scene = crate::collisions::SceneCollisions {
             world: &world,
@@ -718,7 +822,11 @@ mod tests {
         assert_eq!(marker.velocity, Vec3::ZERO);
 
         let mut carried = stand;
-        let in_water = carried.update_fluids(&world, &fluids);
+        let in_water = carried.update_fluids(
+            &world,
+            &fluids,
+            crate::test_resources::server_loop_context(),
+        );
         assert!(in_water);
         let mut scene = crate::collisions::SceneCollisions {
             world: &world,
@@ -729,7 +837,11 @@ mod tests {
         assert!((carried.position.x - (at.x + 0.014)).abs() < 1e-12);
         assert!((carried.velocity.x - 0.014 * f64::from(0.8f32)).abs() < 1e-12);
         for _ in 0..20 {
-            let in_water = carried.update_fluids(&world, &fluids);
+            let in_water = carried.update_fluids(
+                &world,
+                &fluids,
+                crate::test_resources::server_loop_context(),
+            );
             let mut scene = crate::collisions::SceneCollisions {
                 world: &world,
                 binding: &collision,

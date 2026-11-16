@@ -3,13 +3,13 @@ use horizon_assets::item_model::{
     ClientItem, Context, DisplayContext, FoilType, ItemModels, LayerContent, NoEnv,
 };
 use horizon_client::{item_data::decode_components, item_render::stack_view, items::ItemStack};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs};
 
 fn model_flags(input: &Value) -> horizon_client::Result<Value> {
     let text = input["nbt"].as_str().ok_or("missing NBT text")?;
-    let (tag, used) = horizon_world::nbt::parse_snbt(text)?;
+    let (tag, used) = horizon_core::nbt::parse_snbt(text)?;
     if used != text.len() {
         return Err("trailing NBT".into());
     }
@@ -18,7 +18,7 @@ fn model_flags(input: &Value) -> horizon_client::Result<Value> {
         decode_components(Some(&Tag::compound([("minecraft:custom_model_data", tag)])));
     let view = stack_view(&stack);
     let mut models = ItemModels::default();
-    models.prototypes.insert(
+    std::sync::Arc::make_mut(&mut models.prototypes).insert(
         "minecraft:diamond".into(),
         BTreeMap::from([("minecraft:item_model".into(), json!("minecraft:diamond"))]),
     );
@@ -66,7 +66,7 @@ pub fn main() -> horizon_client::Result<()> {
             continue;
         }
         let item = input["item"].as_str().ok_or("missing item")?;
-        models.prototypes.insert(
+        std::sync::Arc::make_mut(&mut models.prototypes).insert(
             item.into(),
             BTreeMap::from([
                 ("minecraft:item_model".into(), json!("horizon:fixture")),
@@ -79,7 +79,7 @@ pub fn main() -> horizon_client::Result<()> {
         let mut stack = ItemStack::new(item, 1);
         if let Some(nbt) = input.get("nbt") {
             let text = nbt.as_str().ok_or("missing NBT text")?;
-            let (tag, used) = horizon_world::nbt::parse_snbt(text)?;
+            let (tag, used) = horizon_core::nbt::parse_snbt(text)?;
             if used != text.len() {
                 return Err("trailing NBT".into());
             }

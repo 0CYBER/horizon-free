@@ -204,15 +204,19 @@ def run(label, wet, command, client_command, build, world):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary',type=Path,required=True)
-    parser.add_argument('--work-dir',type=Path,required=True)
+    # tools/parity.py runs every harness with no arguments: build the Horizon binary, capture into a new folder
+    # and run both sides.
+    parser.add_argument('--binary',type=Path,help='A Horizon client binary; built when omitted')
+    parser.add_argument('--work-dir',type=Path,help='A new capture folder; one under .local/ when omitted')
     parser.add_argument('--reference-only',action='store_true')
     parser.add_argument('--reference-dir',type=Path)
-    args=parser.parse_args();build=args.work_dir.resolve();build.mkdir(parents=True,exist_ok=False)
+    args=parser.parse_args()
+    build=(args.work_dir or net.lab.LOCAL/'shrieker-local-capture'/f"{time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())}-{os.getpid()}").resolve()
+    build.mkdir(parents=True,exist_ok=False)
     spec=json.dumps(program(),indent=2)+'\n';(build/'program.json').write_text(spec)
     source=Path(__file__).read_bytes();sha=hashlib.sha256(source).hexdigest()
     (build/'manifest.json').write_text(json.dumps(dict(script_sha256=sha,helpers=helper_hashes(),declared_at=sound.now()),indent=2))
-    lock,_,java,native,client=net.sides(str(build),args.binary.resolve())
+    lock,_,java,native,client=net.sides(str(build),args.binary.resolve() if args.binary else None)
     _,jars,libs=net.base.verify_artifacts();cp=os.pathsep.join(map(str,[jars['server'],*libs]))
     oracle=net.lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaPacketCodecOracle.java'
     subprocess.run(['javac','--release',str(lock['minecraft']['java_major']),'-proc:none','-cp',str(build/'classes')+os.pathsep+cp,'-d',build/'classes',oracle],check=True,capture_output=True)

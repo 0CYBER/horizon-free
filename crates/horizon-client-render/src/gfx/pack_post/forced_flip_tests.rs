@@ -10,6 +10,7 @@ const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiT
 /// and `composite2`, blended `ONE ONE`, adds 0.5 onto colortex4's 0.25 (Iris 1.11.7: 0.749).
 #[test]
 fn a_forced_flip_of_a_written_buffer_leaves_it_unflipped() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let mut add = |name: &str, source: &str| {

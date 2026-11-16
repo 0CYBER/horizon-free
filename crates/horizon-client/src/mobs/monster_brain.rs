@@ -16,11 +16,13 @@ use super::{
     path::Path,
     villager_brain::{NEVER, Slot, Tracker, Visible, WalkTarget, compute_path, reached},
 };
+use crate::health::DamageLevel;
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{
     geometry::{Vec3, trig},
-    random::{LegacyRandom, LevelRandom, RandomSource},
+    random::{LegacyRandom, RandomSource},
 };
+use mod_api::SoundSource;
 
 /// `Activity` (the ones these brains use).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +32,14 @@ pub enum Act {
     Fight,
 }
 impl Act {
+    fn slot(self) -> u8 {
+        match self {
+            Act::Core => 1,
+            Act::Idle => 5,
+            Act::Fight => 14,
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Act::Core => "core",
@@ -117,6 +127,7 @@ pub struct Brain {
 }
 #[derive(Clone, Debug)]
 struct Entry {
+    prio: i32,
     act: Act,
     b: B,
 }
@@ -127,14 +138,14 @@ fn brain(m: &Mob) -> Option<&Brain> {
 fn brain_mut(m: &mut Mob) -> &mut Brain {
     m.extra.brain.as_deref_mut().expect("brain")
 }
-fn mem(m: &mut Mob) -> &mut Memories {
+pub(super) fn mem(m: &mut Mob) -> &mut Memories {
     &mut brain_mut(m).mem
 }
 /// `CANT_REACH_WALK_TARGET_SINCE`, for `compute_path`.
 fn cant_reach(m: &mut Mob) -> &mut Slot<i64> {
     &mut mem(m).cant_reach_walk_target_since
 }
-fn mem_ref(m: &Mob) -> &Memories {
+pub(super) fn mem_ref(m: &Mob) -> &Memories {
     &brain(m).expect("brain").mem
 }
 /// Whether the species thinks with this brain.
@@ -160,11 +171,20 @@ pub fn init(m: &mut Mob, shuffle_seed: i64) {
         .iter()
         .map(|&k| (k, i64::from(m.random.next_int_bound(20).unwrap_or(0))))
         .collect();
-    let (list, default_activity) = if breeze {
+    let (mut list, default_activity) = if breeze {
         (breeze_packages(shuffle_seed), Act::Fight)
     } else {
         (creaking_packages(shuffle_seed), Act::Idle)
     };
+    // The parts' behaviors join before the sort, so each lands after
+    // vanilla's of its priority (arismoko/horizon#824); the stable sort keeps vanilla's own
+    // order. Nothing joins a type no part attached to, and nothing is asked
+    // or built then.
+    let before = list.len();
+    attach_behaviors(&m.kind.id, &mut list);
+    if list.len() > before {
+        list.sort_by_key(|e| (e.prio, e.act.slot()));
+    }
     m.extra.brain = Some(Box::new(Brain {
         mem: Memories::default(),
         sensors,
@@ -175,16 +195,16 @@ pub fn init(m: &mut Mob, shuffle_seed: i64) {
 }
 
 /// What behaviours read and emit during a brain tick.
-struct Bx<'a, 'w> {
+struct Bx<'a, 'w, 'l> {
     w: &'a MobWorld<'w>,
-    lr: &'a mut LevelRandom,
+    level: &'a mut DamageLevel<'l>,
     events: &'a mut Vec<MobEvent>,
     now: i64,
 }
 
 /// `Brain.tick`, then the species' `updateActivity`
 /// (`Breeze.customServerAiStep`, `Creaking.customServerAiStep`).
-pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom, events: &mut Vec<MobEvent>) {
+pub fn tick(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut Vec<MobEvent>) {
     if brain(m).is_none() {
         let seed = i64::from(m.id);
         init(m, seed);
@@ -194,7 +214,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom, events: &mut Vec<Mo
     let mut list = std::mem::take(&mut brain_mut(m).list);
     let mut cx = Bx {
         w,
-        lr,
+        level,
         events,
         now: w.game_time,
     };
@@ -345,8 +365,7 @@ fn targetable(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
 fn can_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     match who {
         Who::Player => w
-            .player
-            .as_ref()
+            .selected_player()
             .is_some_and(|p| p.alive && !p.creative && !p.spectator),
         Who::Mob(id) => {
             let Some(s) = w.seen(id) else { return false };
@@ -408,8 +427,7 @@ fn visible_contains(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
 fn sense_players(m: &mut Mob, w: &MobWorld) {
     let range = m.attrs.follow_range;
     let near = w
-        .player
-        .as_ref()
+        .selected_player()
         .is_some_and(|p| !p.spectator && m.distance_sqr(p.position) < range * range);
     let players: Vec<Who> = if near { vec![Who::Player] } else { vec![] };
     let visible: Vec<Who> = players
@@ -437,8 +455,7 @@ fn sense_breeze_attack(m: &mut Mob, w: &MobWorld) {
     let found = list.into_iter().find(|&who| {
         let shown = match who {
             Who::Player => w
-                .player
-                .as_ref()
+                .selected_player()
                 .is_some_and(|p| !p.creative && !p.spectator),
             Who::Mob(_) => true,
         };
@@ -486,6 +503,8 @@ enum B {
         breeze: bool,
         positives_left: i32,
     },
+    /// A mod's behavior (arismoko/horizon#824), wrapped by `mod_behaviors`.
+    Mod(super::mod_behaviors::ModBehavior),
     RunOne(Box<RunOne>),
     DoNothing(Timed),
     RandomStroll(bool, f32),
@@ -564,6 +583,7 @@ impl B {
             | B::SetWalkTargetFromLookTarget(r)
             | B::SetWalkTargetFromAttackTarget(r)
             | B::MeleeAttack(r) => *r,
+            B::Mod(e) => e.running(),
             B::RunOne(g) => g.running,
         }
     }
@@ -571,18 +591,19 @@ impl B {
     fn try_start(&mut self, m: &mut Mob, cx: &mut Bx) -> bool {
         match self {
             B::RunOne(g) => g.try_start(m, cx),
+            B::Mod(e) => e.try_start(m, cx.w, cx.level.random(), cx.now),
             B::Swim { t, creaking } => {
                 if *creaking && !super::creaking::can_move(m) || !swim_condition(m) {
                     return false;
                 }
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 true
             }
             B::LookAtTargetSink(t) => {
                 if !mem(m).look_target.present() {
                     return false;
                 }
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 true
             }
             B::MoveToTargetSink {
@@ -606,7 +627,7 @@ impl B {
                 let reached = reached(m, cx.w, &walk);
                 if !reached && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                     *last_target = walk.target.block(cx.w);
-                    t.begin(cx.lr, cx.now);
+                    t.begin(cx.level.random(), cx.now);
                     // start
                     mem(m).path.set_opt(path.clone());
                     m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
@@ -644,6 +665,11 @@ impl B {
                 if !can_attack(m, cx.w, target) {
                     return false;
                 }
+                let super::TargetChange::Set(Some(target)) =
+                    cx.w.change_target(m, true, Some(target))
+                else {
+                    return false;
+                };
                 set_attack_target(m, Some(target));
                 mem(m).cant_reach_walk_target_since.clear();
                 *running = true;
@@ -680,14 +706,16 @@ impl B {
                             .is_some_and(|l| l.contains(&Who::Player));
                     !reachable
                 };
-                if !can_attack(m, cx.w, target) || tired || !alive || stop_when {
-                    set_attack_target(m, None);
+                if (!can_attack(m, cx.w, target) || tired || !alive || stop_when)
+                    && let super::TargetChange::Set(target) = cx.w.change_target(m, true, None)
+                {
+                    set_attack_target(m, target);
                 }
                 *running = true;
                 true
             }
             B::DoNothing(t) => {
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 true
             }
             B::RandomStroll(running, speed) => {
@@ -717,7 +745,7 @@ impl B {
                 let Some(t) = found else { return false };
                 // Ticker.tickDownAndCheck with UniformInt.of(30, 60).
                 if *until_next == 0 {
-                    *until_next = 30 + cx.lr.next_int_bound(31).unwrap_or(0) - 1;
+                    *until_next = 30 + cx.level.random().next_int_bound(31).unwrap_or(0) - 1;
                     return false;
                 }
                 *until_next -= 1;
@@ -783,7 +811,7 @@ impl B {
                 m.swing();
                 let mut gcx = Cx {
                     w,
-                    lr: cx.lr,
+                    level: cx.level,
                     events: cx.events,
                 };
                 super::ai::do_hurt_target(m, target, &mut gcx);
@@ -817,7 +845,7 @@ impl B {
                     mem(m).breeze_shoot.clear();
                     return false;
                 }
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 // start
                 super::breeze::set_pose(m, super::breeze::SHOOTING);
                 mem(m).breeze_shoot_charging.set_ttl((), 15);
@@ -836,20 +864,21 @@ impl B {
                 if !long_jump_can_run(m, cx) {
                     return false;
                 }
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 // start
                 if !mem(m).breeze_jump_inhaling.present() {
                     mem(m).breeze_jump_inhaling.set_ttl((), 10);
                 }
                 super::breeze::set_pose(m, super::breeze::INHALING);
                 // level.playSound(null, breeze, BREEZE_CHARGE, HOSTILE, 1, 1)
-                cx.events.push(MobEvent::entity_sound(
+                let charge = MobEvent::bound_sound(
                     m,
                     "entity.breeze.charge",
-                    5,
+                    SoundSource::Hostile,
                     1.0,
                     1.0,
-                ));
+                );
+                cx.events.push(charge);
                 if let Some(p) = mem(m).breeze_jump_target.value() {
                     look_at_eyes(
                         m,
@@ -878,7 +907,7 @@ impl B {
                 if !stuck {
                     return false;
                 }
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 mem(m).breeze_shoot.set_ttl((), 60);
                 true
             }
@@ -897,7 +926,7 @@ impl B {
                 {
                     return false;
                 }
-                t.begin(cx.lr, cx.now);
+                t.begin(cx.level.random(), cx.now);
                 slide_start(m, cx);
                 true
             }
@@ -908,6 +937,7 @@ impl B {
         let now = cx.now;
         match self {
             B::RunOne(g) => g.tick_or_stop(m, cx),
+            B::Mod(e) => e.tick_or_stop(m, cx.w, cx.now),
             // OneShots stop in the tick they started.
             B::StartAttacking(r, _)
             | B::StopAttacking { running: r, .. }
@@ -999,6 +1029,7 @@ impl B {
     fn do_stop(&mut self, m: &mut Mob, cx: &mut Bx) {
         match self {
             B::RunOne(g) => g.do_stop(m, cx),
+            B::Mod(e) => e.do_stop(m, cx.w),
             B::StartAttacking(r, _)
             | B::StopAttacking { running: r, .. }
             | B::RandomStroll(r, _)
@@ -1025,7 +1056,7 @@ impl B {
                     && !reached(m, cx.w, &walk)
                     && m.ai.nav.stuck
                 {
-                    *cooldown = cx.lr.next_int_bound(40).unwrap_or(0);
+                    *cooldown = cx.level.random().next_int_bound(40).unwrap_or(0);
                 }
                 m.nav_stop();
                 let mm = mem(m);
@@ -1150,7 +1181,7 @@ struct Quarry {
 fn quarry(w: &MobWorld, who: Who) -> Option<Quarry> {
     let t = w.target_info(who)?;
     let head_yaw = match who {
-        Who::Player => w.player.as_ref().map_or(0.0, |p| p.yaw),
+        Who::Player => w.selected_player().map_or(0.0, |p| p.yaw),
         Who::Mob(id) => w.seen(id).map_or(0.0, |s| s.yaw),
     };
     Some(Quarry {
@@ -1279,7 +1310,9 @@ fn long_jump_can_run(m: &mut Mob, cx: &mut Bx) -> bool {
     // outOfAggroRange: !target.closerThan(breeze, follow range)
     let follow = m.attrs.follow_range;
     if q.position.distance_squared(m.position) >= follow * follow {
-        set_attack_target(m, None);
+        if let super::TargetChange::Set(target) = cx.w.change_target(m, true, None) {
+            set_attack_target(m, target);
+        }
         return false;
     }
     // tooCloseForJump: (float) distance - 4 <= 0
@@ -1365,13 +1398,61 @@ fn timed(min: i32, max: i32) -> Timed {
 /// `availableBehaviorsByPriority`'s order: priority, then the activity's
 /// hash slot (core 1, idle 5, fight 14), then insertion order.
 fn sorted(mut v: Vec<(i32, Act, B)>) -> Vec<Entry> {
-    let slot = |a: Act| match a {
-        Act::Core => 1,
-        Act::Idle => 5,
-        Act::Fight => 14,
-    };
-    v.sort_by_key(|(p, a, _)| (*p, slot(*a)));
-    v.into_iter().map(|(_, act, b)| Entry { act, b }).collect()
+    v.sort_by_key(|(p, a, _)| (*p, a.slot()));
+    v.into_iter()
+        .map(|(prio, act, b)| Entry { prio, act, b })
+        .collect()
+}
+
+// ---- Mod behaviors ------------------------------------------------------
+
+/// The parts' behaviors for this brain (arismoko/horizon#824): each joins the list with its
+/// activity and priority, refused where this brain has no such activity.
+fn attach_behaviors(mob_id: &str, list: &mut Vec<Entry>) {
+    struct Reg<'a> {
+        list: &'a mut Vec<Entry>,
+        mob_id: &'a str,
+    }
+    impl mod_api::BehaviorRegistrarBackend for Reg<'_> {
+        fn add_behavior(
+            &mut self,
+            r: mod_api::RegisteredBehavior,
+        ) -> Result<(), mod_api::BehaviorRefusal> {
+            let act = act_of(r.activity)?;
+            self.list.push(Entry {
+                prio: r.priority,
+                act,
+                b: B::Mod(super::mod_behaviors::ModBehavior::new(r)),
+            });
+            Ok(())
+        }
+        fn mob_id(&self) -> &str {
+            self.mob_id
+        }
+    }
+    super::mod_behaviors::attach(mob_id, &mut Reg { list, mob_id });
+}
+
+/// This brain's slot for a mod-api activity.
+fn act_of(activity: mod_api::Activity) -> Result<Act, mod_api::BehaviorRefusal> {
+    use mod_api::Activity as A;
+    Ok(match activity {
+        A::Core => Act::Core,
+        A::Idle => Act::Idle,
+        A::Fight => Act::Fight,
+        other => return Err(mod_api::BehaviorRefusal::UnknownActivity(other)),
+    })
+}
+
+/// The list's `(prio, activity, is a mod's)` keys, in `Brain.tick`'s start
+/// order — the inspection the goal selector's `entries` gives goals' tests.
+pub fn entry_keys(m: &Mob) -> Option<Vec<(i32, Act, bool)>> {
+    brain(m).map(|b| {
+        b.list
+            .iter()
+            .map(|e| (e.prio, e.act, matches!(e.b, B::Mod(_))))
+            .collect()
+    })
 }
 fn run_one(seed: i64, kids: Vec<(B, i32)>) -> B {
     B::RunOne(Box::new(RunOne {
@@ -1583,3 +1664,6 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     out.sort();
     Some((acts.join("|"), out.join(" ")))
 }
+#[cfg(test)]
+#[path = "monster_brain/target_hook_tests.rs"]
+mod target_hook_tests;

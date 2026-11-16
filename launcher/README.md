@@ -259,6 +259,17 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
   game starts. `horizon-launcher game-args "<line>"` sets them too, and `play --arg <ARG>` passes
   one for a single run.
+- **Wasm compile budget** (game runtime, not a launcher preference):
+  `wasm.compile_timeout_secs:120` in the client's `options.txt` (the resolved
+  `--player-dir` when supplied, otherwise the selected instance) allows 120 seconds
+  per uncached module on the Unix child-compiler path. Remove the line for the
+  `5 + 300 / available_threads` seconds default. Invalid values publish a refusal
+  and exclude the wasm package's code and content rather than silently defaulting.
+  An unavailable/untrusted Unix cache or failed compiler refuses compilation instead
+  of dropping the deadline. Dedicated servers use
+  `"wasm.compile_timeout_secs" = "120"` under `server.toml`'s `[properties]`.
+  Restart the game/server after editing. Windows currently compiles in process
+  without this child deadline; see the [runtime reference](../docs/modding/src/how-to/wasm-mods.md#compilation-time-setting).
 - **Proxy**: when the internet here needs one (a school's, an office's, a country where a host is
   unreachable), Settings' Proxy takes the `http://host:port` or `socks5://host:port` address your
   proxy app listens on, and
@@ -305,8 +316,8 @@ every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloa
 against the release's signed `SHA256SUMS`, and says "A new version is available" in the sidebar with
 **Update**: the window closes, the launcher's own file runs again as the installer (`apply-update`,
 `src/update_handoff.rs`), which waits for the window's process to exit, puts the new launcher in place (the
-binary, the `.app` bundle or the AppImage) and starts it. Closing the window with an update downloaded installs
-it the same way, so the next start is the new launcher. When the installer can't put it in place, the old
+binary, the `.app` bundle or the AppImage) and starts it. Nothing goes in without **Update**: closing the window
+drops a downloaded update, and the next start checks again. When the installer can't put it in place, the old
 launcher starts again and says why. Each process stages in its own folder, and the installer checks the signed
 SHA-256 again before anything goes in; when the launcher in place is already that version or newer, it changes
 nothing. Servers keep running through **Update**. A copy that can't replace itself says so at once and offers
@@ -543,6 +554,22 @@ On Windows, `cargo test --bin horizon-launcher desktop_list_renders_the_viewport
 ## Building
 
     cargo build --release
+
+A debug build (`cargo build`) also supports Windows' default 1 MiB process-entry stack.
+On Windows, the entry thread starts and joins a launcher thread with a 16 MiB stack before
+any CLI dispatch or GUI initialization. That thread owns OLE initialization, GPUI's windows
+and its message loop together; Linux and macOS still run on the original main thread.
+CLI arguments, terminal pipes and command exit codes are unchanged.
+
+The Windows daily subprocess tests use the debug binary. To exercise real CLI startup with
+a deterministic 1 MiB entry stack, including persisted settings and failure exit codes:
+
+    cargo test --locked --test startup cli_settings_work_with_one_mib_process_stack -- --ignored --exact
+
+That test uses fresh homes and a private copy of the executable with only its PE stack reserve
+changed; it needs no desktop. The ignored
+`hardware_probes_run_hidden_after_the_first_frame` test additionally checks real GUI startup
+on an interactive Windows desktop with a graphics adapter.
 
 On NixOS, `nix-shell` in this folder provides the libraries GPUI links to (Wayland, X11,
 xkbcommon, Vulkan, fontconfig) and the ALSA and libudev files a native mod build looks up, so

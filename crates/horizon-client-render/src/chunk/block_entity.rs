@@ -2,18 +2,18 @@
 //! and its payloads). Plain data, as vanilla's block entities are world data;
 //! their behaviour lives with the features that use them (`containers`,
 //! `brewing`, `signs`, ...), which re-export these types under their old paths.
-use horizon_client_core::{text::Text, who::Who};
-use horizon_items::{banner_layer::BannerLayer, items::ItemStack};
-use horizon_world::{
-    level::sculk::SculkSpreader,
-    nbt::{Compound, Tag},
+use horizon_client_core::{
+    text::Text,
+    who::{EventSource, Who},
 };
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex, OnceLock, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+use horizon_items::{banner_layer::BannerLayer, items::ItemStack};
+mod mod_models;
+pub use mod_api::item::containers::{ModContainer, ModEnergyBuffer, ModFluidTanks};
+pub use mod_models::{ModBlockEntity, ModBlockEntityFields, ModRevision};
+use std::{collections::HashMap, sync::Arc};
+use {
+    horizon_core::nbt::{Compound, Tag},
+    horizon_world::level::sculk::SculkSpreader,
 };
 
 /// An entity's UUID as its four ints (`UUIDUtil.CODEC`).
@@ -101,7 +101,7 @@ pub enum BlockEntity {
     /// A block entity of a mod (`native_block_entity`), kept as its saved
     /// compound for the mod to read and change.
     Mod(Box<ModBlockEntity>),
-    /// `PotentSulfurBlockEntity` (`game/potent_sulfur.rs`).
+    /// `PotentSulfurBlockEntity` (`game/blocks/potent_sulfur.rs`).
     PotentSulfur(PotentSulfur),
     /// `StructureBlockEntity` (`structure_block.rs`).
     StructureBlock(Box<crate::structure_block::StructureBlock>),
@@ -111,191 +111,6 @@ pub enum BlockEntity {
     TestBlock(Box<crate::test_block::TestBlock>),
     /// `TestInstanceBlockEntity` (`test_instance_block.rs`).
     TestInstanceBlock(Box<crate::test_instance_block::TestInstanceBlock>),
-}
-/// A mod's block entity, read and changed through its fields
-/// (`ModBlockEntityFields`) as a struct's: `entity.nbt`. Each change goes
-/// through `DerefMut` and gives it a new `revision`, so a client tells
-/// whether what it kept of it (`BlockEntityDraw::keep`) is still right
-/// without comparing the whole entity, and no write can skip that.
-pub struct ModBlockEntity {
-    fields: ModBlockEntityFields,
-    revision: ModRevision,
-    // A client update can consume transient effects without changing saved
-    // fields. Most entities never use this; do not allocate their queue.
-    client_update_fields: OnceLock<Mutex<Compound>>,
-}
-/// What a `ModBlockEntity` holds: its type id (`mymod:machine`), its saved
-/// compound without `id`, `x`, `y`, `z` and `Items`, its item slots
-/// (`Items`) when its block has a container (`ModContainer`), and the data
-/// slots its menu shows (`ContainerData`: a furnace menu's flame and arrow),
-/// which the mod sets and nothing saves.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ModBlockEntityFields {
-    pub id: String,
-    pub nbt: Compound,
-    pub items: Vec<Option<ItemStack>>,
-    pub data: Vec<i32>,
-}
-/// Which contents a `ModBlockEntity` has had: one per entity made (a clone
-/// is another), counted on by each change. Equal revisions, equal contents.
-/// Neither saved nor compared.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ModRevision {
-    born: u64,
-    changes: u64,
-}
-static MOD_BLOCK_ENTITIES_MADE: AtomicU64 = AtomicU64::new(0);
-impl ModBlockEntity {
-    pub fn new(fields: ModBlockEntityFields) -> Self {
-        Self {
-            fields,
-            revision: ModRevision {
-                born: MOD_BLOCK_ENTITIES_MADE.fetch_add(1, Ordering::Relaxed),
-                changes: 0,
-            },
-            client_update_fields: OnceLock::new(),
-        }
-    }
-    pub fn revision(&self) -> ModRevision {
-        self.revision
-    }
-    /// Replace the owner's pending, one-shot client update fields. These
-    /// fields are not saved, cloned, compared or retained for drawing, and
-    /// changing them does not change this entity's revision. The owner must
-    /// explicitly take and merge them into its update tag. Calling this does
-    /// not schedule a block update.
-    ///
-    /// An empty batch clears a pending batch without allocating an idle queue.
-    pub fn set_client_update_fields(&mut self, fields: Compound) {
-        if fields.is_empty() {
-            self.clear_client_update_fields();
-            return;
-        }
-        *self
-            .client_update_fields
-            .get_or_init(|| Mutex::new(Compound::new()))
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = fields;
-    }
-    /// Discard the owner's pending client update fields, without changing
-    /// saved data, revision or a queue that has never been used.
-    pub fn clear_client_update_fields(&mut self) {
-        if let Some(fields) = self.client_update_fields.get() {
-            fields
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clear();
-        }
-    }
-    /// Atomically take the owner's pending fields at update-tag construction.
-    /// A loaded chunk and a block change use this same boundary. Construct a
-    /// tag once, then send that tag to every recipient; another construction
-    /// sees an empty batch. A save or a clone does not consume this batch.
-    ///
-    /// This is safe for an update-tag hook receiving only a shared reference,
-    /// including a saved chunk encoded by a worker thread. If a previous lock
-    /// holder panicked, preserve its pending data instead of dropping it.
-    pub fn take_client_update_fields(&self) -> Compound {
-        self.client_update_fields
-            .get()
-            .map_or_else(Compound::new, |fields| {
-                std::mem::take(&mut *fields.lock().unwrap_or_else(PoisonError::into_inner))
-            })
-    }
-    /// A client's copy loads the tag the server sent (`loadWithComponents`
-    /// in `ClientPacketListener.handleBlockEntityData`): `tag`'s fields
-    /// replace its own of the same names. One it already has as sent is
-    /// left alone, so a tag sent again unchanged keeps its revision.
-    pub fn merge_update_tag(&mut self, tag: &Compound) {
-        for (k, v) in tag {
-            if self.nbt.get(k) != Some(v) {
-                self.nbt.insert(k.clone(), v.clone());
-            }
-        }
-    }
-}
-impl From<ModBlockEntityFields> for ModBlockEntity {
-    fn from(fields: ModBlockEntityFields) -> Self {
-        Self::new(fields)
-    }
-}
-impl Default for ModBlockEntity {
-    fn default() -> Self {
-        Self::new(ModBlockEntityFields::default())
-    }
-}
-impl Clone for ModBlockEntity {
-    fn clone(&self) -> Self {
-        Self::new(self.fields.clone())
-    }
-}
-impl PartialEq for ModBlockEntity {
-    fn eq(&self, other: &Self) -> bool {
-        self.fields == other.fields
-    }
-}
-impl std::fmt::Debug for ModBlockEntity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.fields.fmt(f)
-    }
-}
-impl std::ops::Deref for ModBlockEntity {
-    type Target = ModBlockEntityFields;
-    fn deref(&self) -> &ModBlockEntityFields {
-        &self.fields
-    }
-}
-impl std::ops::DerefMut for ModBlockEntity {
-    fn deref_mut(&mut self) -> &mut ModBlockEntityFields {
-        self.revision.changes += 1;
-        &mut self.fields
-    }
-}
-/// The container of a mod block's block entity, as a `WorldlyContainer`
-/// says it: its slot count, the slots each face reaches
-/// (`getSlotsForFace`, by `Direction`: down, up, north, south, west, east),
-/// and the slots hoppers may put into (`canPlaceItemThroughFace`) and take
-/// from (`canTakeItemThroughFace`); and the vanilla menu that shows its
-/// slots when the block is used, if any (`MOD_MENUS`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModContainer {
-    pub slots: usize,
-    pub faces: [Vec<usize>; 6],
-    pub inputs: Vec<usize>,
-    pub outputs: Vec<usize>,
-    pub menu: Option<String>,
-}
-/// The fluid tanks of a mod block's block entity, in the container's shape:
-/// each tank's capacity in millibuckets, the tanks each face reaches, and
-/// the tanks a fill may reach and a drain may take. The tanks' contents are
-/// not here: they live in the entity's saved compound, under `fluids`, so
-/// they survive restarts and the block's own tick reads them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModFluidTanks {
-    /// Each tank's capacity in millibuckets, in tank order.
-    pub tanks: Vec<i32>,
-    pub faces: [Vec<usize>; 6],
-    /// The tanks a fill may reach (`canPlaceItemThroughFace`).
-    pub inputs: Vec<usize>,
-    /// The tanks a drain may take from (`canTakeItemThroughFace`).
-    pub outputs: Vec<usize>,
-}
-/// The energy buffer of a mod block's block entity (NeoForge's
-/// `SimpleEnergyHandler`): its capacity, the most one insert and one extract
-/// moves, and the faces a fill may come through and a drain may leave by.
-/// The amount is not here: it lives in the entity's saved compound, under
-/// `energy`, so it survives restarts and the block's own tick reads it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModEnergyBuffer {
-    pub capacity: i32,
-    /// The most one insert moves; 0 takes none.
-    pub max_insert: i32,
-    /// The most one extract moves; 0 gives none.
-    pub max_extract: i32,
-    /// The faces, by `Direction` number, a fill may come through.
-    pub insert_faces: [bool; 6],
-    /// The faces a drain may leave by.
-    pub extract_faces: [bool; 6],
 }
 /// The vanilla menus a mod container can open, with the slot count each
 /// shows: slot grids, and the furnaces' (input, fuel, result), whose four
@@ -333,8 +148,8 @@ impl Default for PotentSulfur {
 /// `BrushableBlockEntity`: the loot table is resolved on the first brush.
 #[derive(Clone, Debug, Default)]
 pub struct Brushable {
-    pub loot_table: Option<horizon_world::nbt::Tag>,
-    pub loot_seed: Option<horizon_world::nbt::Tag>,
+    pub loot_table: Option<horizon_core::nbt::Tag>,
+    pub table_seed_tag: Option<horizon_core::nbt::Tag>,
     pub item: Option<ItemStack>,
     /// Direction's legacy network id; not saved to disk by vanilla.
     pub hit_direction: Option<i32>,
@@ -379,9 +194,9 @@ pub struct Campfire {
 /// sound and `custom_name`.
 #[derive(Clone, Debug, Default)]
 pub struct Skull {
-    pub profile: Option<horizon_world::nbt::Tag>,
+    pub profile: Option<horizon_core::nbt::Tag>,
     pub note_block_sound: Option<String>,
-    pub custom_name: Option<horizon_world::nbt::Tag>,
+    pub custom_name: Option<horizon_core::nbt::Tag>,
     /// What `profile` draws, read from it once rather than every frame.
     pub skin: Option<SkullSkin>,
 }
@@ -432,11 +247,11 @@ pub struct Banner {
     pub layers: Vec<BannerLayer>,
     /// `CustomName` as `ComponentSerialization.CODEC` read it (a plain string or
     /// a component object), which `MapBanner.fromWorld` keeps as its name.
-    pub name: Option<horizon_world::nbt::Tag>,
+    pub name: Option<horizon_core::nbt::Tag>,
     /// Components not consumed by BannerBlockEntity's implicit fields.
-    pub components: horizon_world::nbt::Compound,
+    pub components: horizon_core::nbt::Compound,
 }
-/// `CreakingHeartBlockEntity` (the logic is in `game/creaking.rs`).
+/// `CreakingHeartBlockEntity` (the logic is in `game/mobs/creaking.rs`).
 #[derive(Clone, Debug, Default)]
 pub struct CreakingHeart {
     /// The protector: its entity id once resolved, and its UUID (the saved form).
@@ -537,7 +352,7 @@ pub struct Info {
     pub event: &'static str,
     pub distance: f32,
     pub pos: [f64; 3],
-    pub source: Option<Who>,
+    pub source: Option<EventSource>,
     pub owner: Option<Who>,
     /// `uuid`: the source's saved identity (`source`), taken when the event
     /// was posted. `source` is the live entity and comes back `None` on load.
@@ -785,144 +600,4 @@ pub struct CommandBlock {
     pub powered: bool,
     pub auto: bool,
     pub condition_met: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_client_update_fields_are_lazy_replaceable_and_drained_once() {
-        let mut machine = ModBlockEntity::new(ModBlockEntityFields {
-            id: "test:machine".into(),
-            nbt: Compound::from([("progress".into(), Tag::Int(7))]),
-            ..Default::default()
-        });
-        let revision = machine.revision();
-        let saved = machine.fields.clone();
-        let debug = format!("{machine:?}");
-        machine.clear_client_update_fields();
-        machine.set_client_update_fields(Compound::new());
-        assert!(machine.take_client_update_fields().is_empty());
-        assert!(machine.client_update_fields.get().is_none());
-
-        machine.set_client_update_fields(Compound::from([("discarded".into(), Tag::Int(1))]));
-        let expected = Compound::from([("effects".into(), Tag::List(vec![Tag::Int(2)]))]);
-        machine.set_client_update_fields(expected.clone());
-        assert_eq!(machine.take_client_update_fields(), expected);
-        assert!(machine.take_client_update_fields().is_empty());
-
-        machine.set_client_update_fields(expected.clone());
-        let copy = machine.clone();
-        assert_eq!(machine, copy, "transient fields are not retained contents");
-        assert_ne!(machine.revision(), copy.revision());
-        assert!(copy.client_update_fields.get().is_none());
-        assert!(copy.take_client_update_fields().is_empty());
-        assert_eq!(machine.take_client_update_fields(), expected);
-        machine.set_client_update_fields(expected);
-        machine.clear_client_update_fields();
-        assert!(machine.take_client_update_fields().is_empty());
-        assert_eq!(machine.fields, saved);
-        assert_eq!(machine.revision(), revision);
-        assert_eq!(format!("{machine:?}"), debug);
-    }
-
-    #[test]
-    fn concurrent_client_update_constructions_consume_one_batch() {
-        let mut machine = ModBlockEntity::default();
-        let expected = Compound::from([("effects".into(), Tag::Int(23))]);
-        machine.set_client_update_fields(expected.clone());
-        let received = std::thread::scope(|scope| {
-            let handles = (0..16)
-                .map(|_| scope.spawn(|| machine.take_client_update_fields()))
-                .collect::<Vec<_>>();
-            handles
-                .into_iter()
-                .map(|h| h.join().unwrap())
-                .collect::<Vec<_>>()
-        });
-        let nonempty = received
-            .into_iter()
-            .filter(|c| !c.is_empty())
-            .collect::<Vec<_>>();
-        assert_eq!(nonempty, [expected]);
-    }
-
-    #[test]
-    fn a_poisoned_client_update_lock_preserves_its_pending_batch() {
-        let mut machine = ModBlockEntity::default();
-        let expected = Compound::from([("effects".into(), Tag::Int(23))]);
-        machine.set_client_update_fields(expected.clone());
-        std::thread::scope(|scope| {
-            assert!(
-                scope
-                    .spawn(|| {
-                        let _held = machine.client_update_fields.get().unwrap().lock().unwrap();
-                        panic!("interrupt before consuming the queued batch");
-                    })
-                    .join()
-                    .is_err()
-            );
-        });
-        assert_eq!(machine.take_client_update_fields(), expected);
-        assert!(machine.take_client_update_fields().is_empty());
-        machine.set_client_update_fields(expected.clone());
-        assert_eq!(machine.take_client_update_fields(), expected);
-    }
-
-    #[test]
-    fn a_mod_block_entitys_revision_moves_with_each_change_and_only_then() {
-        let mut machine = ModBlockEntity::new(ModBlockEntityFields {
-            id: "mymod:machine".into(),
-            data: vec![0],
-            ..Default::default()
-        });
-        let made = machine.revision();
-        // Reads leave it.
-        assert_eq!(machine.data[0] + machine.nbt.len() as i32, 0);
-        assert_eq!(machine.revision(), made);
-        // Every way to change a field moves it.
-        let mut seen = vec![made];
-        let changes: [fn(&mut ModBlockEntity); 4] = [
-            |m| m.data[0] = 1,
-            |m| _ = m.nbt.insert("progress".into(), Tag::Int(3)),
-            |m| m.items.push(None),
-            |m| m.id.push('s'),
-        ];
-        for change in changes {
-            change(&mut machine);
-            assert!(!seen.contains(&machine.revision()));
-            seen.push(machine.revision());
-        }
-        // Another entity, or a clone, never shares one, even with equal
-        // contents; equality is the contents' alone.
-        let copy = machine.clone();
-        assert_eq!(copy, machine);
-        assert!(!seen.contains(&copy.revision()));
-        let fresh = ModBlockEntity::default();
-        assert_ne!(fresh.revision(), ModBlockEntity::default().revision());
-    }
-
-    #[test]
-    fn an_update_tag_sent_again_unchanged_keeps_the_revision() {
-        let mut machine = ModBlockEntity::default();
-        let tag = Compound::from([
-            ("progress".into(), Tag::Int(3)),
-            ("fuel".into(), Tag::Int(9)),
-        ]);
-        machine.merge_update_tag(&tag);
-        let merged = machine.revision();
-        machine.merge_update_tag(&tag);
-        assert_eq!(machine.revision(), merged);
-        // One field changed: replaced, the other kept, the revision moved.
-        machine.merge_update_tag(&Compound::from([("progress".into(), Tag::Int(4))]));
-        assert_ne!(machine.revision(), merged);
-        assert_eq!(
-            machine.nbt,
-            Compound::from([
-                ("progress".into(), Tag::Int(4)),
-                ("fuel".into(), Tag::Int(9)),
-            ])
-        );
-    }
 }

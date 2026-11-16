@@ -26,7 +26,7 @@ pub trait TeleportConsumeWorld {
     fn is_passenger(&mut self) -> Result<bool, Self::Error>;
     fn stop_riding(&mut self) -> Result<(), Self::Error>;
     fn position(&mut self) -> Result<Vec3, Self::Error>;
-    /// Horizon's mods (NeoForge's `EntityTeleportEvent.ChorusFruit`): before
+    /// Horizon's mods (NeoForge's `EntityTeleportEvent.ItemConsumption`): before
     /// each attempt, after the user stopped riding. They may move `target`;
     /// false stops the effect without teleporting and without more draws.
     fn teleport_allowed(&mut self, target: &mut Vec3) -> Result<bool, Self::Error> {

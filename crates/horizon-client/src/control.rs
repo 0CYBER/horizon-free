@@ -522,6 +522,7 @@ mod tests {
 
     /// A `.json` endpoint is a file and TCP: the socket limit is not its limit.
     #[test]
+    #[ignore = "daily"]
     fn long_tcp_endpoint_opens() {
         let dir = std::env::temp_dir().join(format!("hz-long-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -533,6 +534,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn tcp_endpoint_round_trip() {
         let path =
             std::env::temp_dir().join(format!("horizon-ctl-test-{}.json", std::process::id()));
@@ -558,6 +560,7 @@ mod tests {
 
     /// A request past the limit is answered with an error and never reaches the game.
     #[test]
+    #[ignore = "daily"]
     fn a_request_longer_than_the_limit_is_refused() {
         let path =
             std::env::temp_dir().join(format!("horizon-ctl-long-{}.json", std::process::id()));
@@ -586,6 +589,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn tcp_refuses_a_wrong_token() {
         let path =
             std::env::temp_dir().join(format!("horizon-ctl-bad-{}.json", std::process::id()));

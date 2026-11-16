@@ -8,11 +8,15 @@ screen (the same screen as vanilla's) or in game, and every loader reloads from 
 
 `packs.rs` finds the packs (`FolderRepositorySource`: folders and zips, plus the built-in Programmer Art and High
 Contrast, which only the asset index holds: preparation copies them, `horizon-prepare packs` repairs older resources),
-reads `pack.mcmeta` (format range, overlays, filters) and builds one overlay directory that layers the
-selected packs over the prepared vanilla resources, later packs winning. Files vanilla reads as a resource *stack*
-(language files, `sounds.json`, font definitions, atlas definitions) are merged layer by layer as vanilla merges them.
-Every loader then reads that one tree; `game/packs.rs` (`reload_packs`) reloads all of them in game, as
-`Minecraft.reloadResourcePacks` does. Unchanged selections reuse the overlay: `packs::build_overlay` keeps a versioned marker beside it and rebuilds when a pack, the order, a filter or a vanilla input changes.
+reads `pack.mcmeta` (format range, overlays, filters) and resolves one shared resource view over the
+prepared vanilla resources, later packs winning. Folders and open zip files use the same lookup and listing
+interface; archive entries stay in their archives. Files vanilla reads as a resource *stack* (language files,
+`sounds.json`, font definitions, atlas definitions) are merged layer by layer as vanilla merges them.
+Every loader reads that view; `game/world/packs/mod.rs` (`reload_packs`) prepares a new generation on a worker and
+publishes it after loading succeeds, as `Minecraft.reloadResourcePacks` does. Readers of the previous
+archive generation retain its open files. Prepared registry tables and disposable decoding caches have
+separate filesystem locations. [The older overlay measurements](reuse-pack-overlays.md) describe the
+previous materializing loader, not the current startup path.
 
 Vanilla 26.3's reload listeners (`Minecraft.<init>`, `Gui`, `Hud`): languages, textures, shaders, sounds, atlases,
 fonts, grass / foliage / dry foliage colour maps, models (block states, block models, item definitions), equipment
@@ -24,7 +28,7 @@ of them.
 
 **Works**: Horizon reads it from the pack and draws or plays it like vanilla. **Partly**: some of it.
 **No**: ignored (the vanilla version stays). Proof: a parity harness in `tools/` (compares with the pinned 26.3
-client), a unit test, or the loader reading the overlay (vanilla's files go through the same loader, and the
+client), a unit test, or the loader reading the resolved resources (vanilla's files go through the same loader, and the
 harness named checks that loader against vanilla).
 
 | Feature | Files | State | Proof |
@@ -63,8 +67,8 @@ harness named checks that loader against vanilla).
 | Grass, foliage and dry foliage colours | `textures/colormap/` | works | `biome.rs` reads the overlay; `test_section_mesh_parity` checks the tints |
 | Entity textures and variants | `textures/entity/` | works | `test_entity_model_parity`, loaded from the overlay |
 | Block entities: chests, signs, beds, banners, shields, shulker boxes, decorated pots | `atlases/`, `textures/entity/` | works | `test_block_entity_render_parity` |
-| Villager hats | `*.png.mcmeta` `villager` | works | `mobs/villager_hats.rs` reads the `villager.hat` metadata from the overlay |
-| Equipment (armour, horse/llama/wolf/nautilus armour, wings, dyeable layers) | `equipment/`, `textures/entity/equipment/` | works | `game/armor_stands.rs`, `mobs/render.rs` read the overlay |
+| Villager hats | `*.png.mcmeta` `villager` | **no** | the type layer's hat is always drawn; vanilla hides it under a profession hat marked `full`/`partial` |
+| Equipment (armour, horse/llama/wolf/nautilus armour, wings, dyeable layers) | `equipment/`, `textures/entity/equipment/` | works | `game/entities/armor_stands.rs`, `mobs/render.rs` read the overlay |
 | Armour trims on items | `atlases/items.json`, `textures/trims/items/` | works | `paletted_permutations` (`atlas_sources.rs` tests) |
 | Armour trims on worn armour | `textures/trims/entity/`, `textures/palettes/`, `palette` metadata | works | `trims.rs` (`PalettedTextureManager`), drawn by `game/armor_stands.rs` and the mob renderer |
 | Particles | `particles/`, `textures/particle/` | works | `test_particle_providers_parity` |

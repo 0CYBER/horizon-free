@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use super::dynamic::{as_str, key, string};
-use crate::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 
 /// A block state: name and properties sorted by key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

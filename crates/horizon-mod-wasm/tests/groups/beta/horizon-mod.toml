@@ -1,0 +1,9 @@
+id = "beta"
+name = "Beta"
+version = "1.0.0"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[dependencies]
+counter_lib = "^1"

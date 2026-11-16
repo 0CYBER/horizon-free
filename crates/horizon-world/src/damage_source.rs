@@ -131,13 +131,14 @@ impl Catalog {
         self.ids.get(name).copied()
     }
     pub fn definition(&self, id: DamageTypeId) -> Option<&Definition> {
-        self.definitions.get(id.0)
+        let definition = self.definitions.get(id.0)?;
+        (self.ids.get(&definition.name) == Some(&id)).then_some(definition)
     }
     pub fn entries(&self) -> impl Iterator<Item = (DamageTypeId, &Definition)> {
-        self.definitions
-            .iter()
-            .enumerate()
-            .map(|(i, d)| (DamageTypeId(i), d))
+        self.definitions.iter().enumerate().filter_map(|(i, d)| {
+            let id = DamageTypeId(i);
+            (self.ids.get(&d.name) == Some(&id)).then_some((id, d))
+        })
     }
     pub fn tags(&self) -> impl Iterator<Item = &str> {
         self.tags.keys().map(String::as_str)

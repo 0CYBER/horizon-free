@@ -185,3 +185,43 @@ fn a_copy_gets_the_next_free_name_in_its_folder_and_level_dat() {
     );
     fs::remove_dir_all(&home).unwrap();
 }
+
+#[test]
+fn the_mods_a_world_was_saved_with_are_read_and_matched() {
+    let home = scratch("saved-mods");
+    let record = |id: &str| Tag::compound([("ModId", name(id)), ("ModVersion", name("1.0.0"))]);
+    let dir = home.join("saves").join("Home");
+    fs::create_dir_all(&dir).unwrap();
+    let root = Tag::compound([
+        ("Data", Tag::compound([("LevelName", name("Home"))])),
+        (
+            "fml",
+            Tag::compound([("LoadingModList", Tag::List(vec![record("greeter")]))]),
+        ),
+        (
+            "horizon",
+            Tag::compound([("ContentModList", Tag::List(vec![record("bricks")]))]),
+        ),
+    ]);
+    let bytes = nbt::write_named(
+        &nbt::NamedTag {
+            name: "".into(),
+            tag: root,
+        },
+        Limits::default(),
+    )
+    .unwrap();
+    fs::write(dir.join("level.dat"), bytes).unwrap();
+    world(&home, "Plain", vec![("LevelName", name("Plain"))]);
+    let all = list(&home);
+    let home_world = all.iter().find(|w| w.folder == "Home").unwrap();
+    assert_eq!(home_world.mods, ["greeter", "bricks"]);
+    let plain = all.iter().find(|w| w.folder == "Plain").unwrap();
+    assert!(plain.mods.is_empty());
+    let at_stake = saved_with(&all, &["greeter".into(), "other".into()]);
+    assert_eq!(at_stake.len(), 1);
+    assert_eq!(at_stake[0].0.name, "Home");
+    assert_eq!(at_stake[0].1, ["greeter"]);
+    assert!(saved_with(&all, &["other".into()]).is_empty());
+    fs::remove_dir_all(home).unwrap();
+}

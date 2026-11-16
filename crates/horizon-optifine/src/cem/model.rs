@@ -1009,6 +1009,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_file_builds_at_most_its_limits() {
         // Faces: the part and its bone, then boxes of six, the last one cut to the faces left.
         let one = r#"{"coordinates": [0, 0, 0, 1, 1, 1], "textureOffset": [0, 0]}"#;

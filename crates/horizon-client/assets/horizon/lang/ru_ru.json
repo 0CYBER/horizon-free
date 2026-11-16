@@ -1047,5 +1047,6 @@
   "horizon.options.impulse_triggers": "Импульсные курки",
   "A tick when you break a block, as in Bedrock.": "Когда вы разрушаете блок, он вибрирует, как в Bedrock.",
   "A short buzz when you split a stack, as in Bedrock.": "Стопка коротко вибрирует при разделении, как в Bedrock.",
-  "An Xbox One controller's triggers buzz with its handles.": "Курки контроллера Xbox One вибрируют вместе с его рукоятками."
+  "An Xbox One controller's triggers buzz with its handles.": "Курки контроллера Xbox One вибрируют вместе с его рукоятками.",
+  "horizon.developer_offline.single_player": "Offline developer session: single-player only."
 }

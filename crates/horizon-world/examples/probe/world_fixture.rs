@@ -1,10 +1,15 @@
 //! Exercises world primitives using local vanilla-generated fixtures.
-use horizon_world::{
-    chunk::{BlockSection, BlockState, PalettedContainer},
-    nbt::{self, JavaString, Limits, NamedTag, Tag},
-    registry::{BlockRegistry, BlockStateId},
-};
 use std::{error::Error, fs, path::PathBuf};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{JavaString, Limits, NamedTag, Tag},
+    },
+    horizon_world::{
+        chunk::{BlockSection, BlockState, PalettedContainer},
+        registry::{BlockRegistry, BlockStateId},
+    },
+};
 
 pub fn main() -> Result<(), Box<dyn Error>> {
     let base = PathBuf::from(crate::args().nth(1).ok_or("expected fixture directory")?);

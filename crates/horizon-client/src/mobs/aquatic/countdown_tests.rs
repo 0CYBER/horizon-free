@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
-#[ignore = "requires prepared vanilla resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn mob_tick_keeps_glow_squid_countdowns_with_no_ai() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -29,10 +29,10 @@ fn mob_tick_keeps_glow_squid_countdowns_with_no_ai() {
                     squid.no_gravity = true;
                     squid.persistent = true;
                     set_dark_ticks(&mut squid, initial);
-                    let mut random = crate::mobs::world::level_random(0);
+                    let mut test_level = crate::health::TestLevel::new(0);
                     let mut events = Vec::new();
                     for elapsed in 1..=10 {
-                        assert!(squid.tick(world, &mut random, &mut events));
+                        assert!(squid.tick(world, &mut test_level.level(), &mut events));
                         assert_eq!(squid.health, 10.0);
                         let expected = if initial > 0 {
                             initial - elapsed

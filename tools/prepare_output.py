@@ -47,8 +47,8 @@ LOCK = '.horizon-prepare.lock'
 # (crates/horizon-prepare/src/sounds.rs) and, at run time, the game's caches (horizon-client-render's sprite_cache.rs,
 # horizon-core's prepared_files.rs). Whether a harness ran the game before the check must not change the digest.
 DATA_FILE = 'horizon-data.bin'
-FROM_ELSEWHERE = ('assets/minecraft/sounds.json', 'assets/pack.mcmeta', 'asset-index.json', 'horizon-sprites.cache',
-                  DATA_FILE, STAMP, LOCK)
+LAUNCHER_FILES = ('assets/minecraft/sounds.json', 'assets/pack.mcmeta', 'asset-index.json')
+FROM_ELSEWHERE = ('horizon-sprites.cache', DATA_FILE, STAMP, LOCK)
 LAMBDA = re.compile(r'\$\$Lambda/0x[0-9a-fA-F]+')
 CONSTANT = re.compile(r'^pub const OUTPUT_VERSION: u32 = (\d+);', re.M)
 
@@ -80,12 +80,16 @@ def canonical(rel: str, data: bytes) -> bytes:
     return data
 
 
-def skipped(rel: str) -> bool:
+def launcher_extra(rel: str) -> bool:
+    """Supplemental launcher assets, not files owned by this checkout's export."""
     parts = rel.split('/')
-    # The languages but the client JAR's own come from the launcher's asset store like the sounds; CI clones them
-    # into a preparation after the fact (tools/ci/vanilla-data.sh).
     languages = parts[:3] == ['assets', 'minecraft', 'lang'] and parts[3:] not in (['en_us.json'], ['deprecated.json'])
-    return rel.endswith(('.log', '.class')) or parts[:3] == ['assets', 'minecraft', 'sounds'] or languages \
+    return rel in LAUNCHER_FILES or parts[:3] == ['assets', 'minecraft', 'sounds'] or languages
+
+
+def skipped(rel: str) -> bool:
+    # CI seeds only launcher_extra files; stale exports and runtime caches must not be imported.
+    return rel.endswith(('.log', '.class')) or launcher_extra(rel) \
         or rel in FROM_ELSEWHERE or rel.startswith(f'{DATA_FILE}.')
 
 

@@ -1,7 +1,7 @@
 //! `DyeItem.interactLivingEntity`: the client hears it, the server changes wool.
 use super::{Mob, Species, render::DYE_NAMES};
 use crate::items::ItemStack;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// The sixteen vanilla DyeItems dispatch this interaction. Their DYE component
 /// can be overridden or removed without changing the underlying Item class.

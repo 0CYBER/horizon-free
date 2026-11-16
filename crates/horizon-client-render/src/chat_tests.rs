@@ -1,6 +1,6 @@
 use super::*;
 use crate::{font::Font, hud::Rect};
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 
 /// The Chat option's default: no restriction.
 fn full() -> ChatAbilities {
@@ -89,7 +89,7 @@ fn clicked_suggestion_reports_the_actual_length_limited_input() {
 fn font() -> Font {
     // The missing-glyph metrics let these tests run without game assets.
     Font::load(
-        Path::new("/nonexistent-horizon-chat-test-resources"),
+        &horizon_assets::resource_source::ResourceSource::default(),
         &HashMap::new(),
         &[],
         (1, 1),
@@ -1210,7 +1210,10 @@ fn a_chat_option_change_keeps_the_readers_place_but_a_rescale_does_not() {
     chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::System));
     assert_eq!(chat.scroll, 3);
     assert!(chat.new_since_scroll);
-    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let atlas = crate::hud::HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+        "/nonexistent/horizon-test-assets".into(),
+    ))
+    .unwrap();
     chat.rescale(&atlas);
     assert_eq!(chat.scroll, 0);
     assert!(!chat.new_since_scroll);

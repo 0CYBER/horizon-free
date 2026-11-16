@@ -2,13 +2,17 @@
 //! add/update with hidden effects, per-tick application of the periodic
 //! effects (regeneration, poison, wither, hunger, saturation, instant
 //! effects), and the derived flags the movement and damage code read.
+use crate::particles::{ParticleOptions, ParticleType};
 use horizon_client_core::potions;
+use horizon_protocol::entity_data::Value;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInstance {
     /// Effect id: vanilla's without namespace (`speed`, `poison`, ...), a
     /// content mod's `<ns>:<path>`.
     pub id: &'static str,
+    /// The registry index, resolved at the instance boundary; unknown internal fixtures have none.
+    pub registry_index: Option<usize>,
     /// Remaining ticks; -1 is infinite.
     pub duration: i32,
     pub amplifier: i32,
@@ -17,17 +21,39 @@ pub struct EffectInstance {
     /// `MobEffectInstance.showIcon`: whether the HUD and inventory list it.
     pub show_icon: bool,
     pub hidden: Option<Box<EffectInstance>>,
+    /// Previous and current client blend factors for effects with no blend
+    /// duration. Darkness and nausea use their existing longer fades instead.
+    pub client_blend: (bool, bool),
 }
 impl EffectInstance {
     pub fn new(id: &'static str, duration: i32, amplifier: i32) -> Self {
+        Self::resolved(
+            id,
+            potions::effect(id).map(|def| def.index),
+            duration,
+            amplifier,
+        )
+    }
+    /// Construct from an already resolved registry entry without another name lookup.
+    pub fn from_def(def: &potions::EffectDef, duration: i32, amplifier: i32) -> Self {
+        Self::resolved(def.id, Some(def.index), duration, amplifier)
+    }
+    fn resolved(
+        id: &'static str,
+        registry_index: Option<usize>,
+        duration: i32,
+        amplifier: i32,
+    ) -> Self {
         Self {
             id,
+            registry_index,
             duration,
             amplifier: amplifier.clamp(0, 255),
             ambient: false,
             visible: true,
             show_icon: true,
             hidden: None,
+            client_blend: (false, false),
         }
     }
     /// `new MobEffectInstance(effect, duration, amplifier, ambient, visible)`:
@@ -40,6 +66,15 @@ impl EffectInstance {
     }
     fn infinite(&self) -> bool {
         self.duration == -1
+    }
+    /// This effect as its entity's swirls are computed from.
+    pub fn shown(&self) -> ShownEffect {
+        ShownEffect {
+            effect: self.id,
+            amplifier: self.amplifier,
+            visible: self.visible,
+            ambient: self.ambient,
+        }
     }
     /// `MobEffectInstance.endsWithin`.
     pub fn ends_within(&self, ticks: i32) -> bool {
@@ -89,14 +124,16 @@ impl EffectInstance {
         changed
     }
     /// `MobEffectInstance.tickClient`: a client counts its effects down
-    /// (the server removes them).
+    /// (the server removes them), then advances the zero-duration blend.
     pub fn tick_client(&mut self) {
         if self.infinite() || self.duration > 0 {
             self.tick_down();
             self.downgrade();
         }
+        self.client_blend = (self.client_blend.1, !self.ends_within(0));
     }
-    fn tick_down(&mut self) {
+    /// Counts down this instance and its hidden chain without promoting it.
+    pub fn tick_down(&mut self) {
         if let Some(h) = self.hidden.as_mut() {
             h.tick_down();
         }
@@ -177,6 +214,93 @@ pub fn scaled_duration(duration: i32, scale: f32) -> i32 {
         ((duration as f32 * scale).floor() as i32).max(1)
     }
 }
+/// `MobEffect.particleFactory`: the omens and the four effects `MobEffects`
+/// registers with a particle of their own (Wind Charged `SMALL_GUST`,
+/// Weaving `ITEM_COBWEB`, Oozing `ITEM_SLIME`, Infested `INFESTED`) show
+/// that one; any other effect an entity effect in its colour, faint when
+/// ambient.
+pub fn effect_particle(effect: &str, ambient: bool) -> Option<ParticleOptions> {
+    Some(match effect.trim_start_matches("minecraft:") {
+        "trial_omen" => ParticleOptions::simple(ParticleType::TrialOmen),
+        "raid_omen" => ParticleOptions::simple(ParticleType::RaidOmen),
+        "wind_charged" => ParticleOptions::simple(ParticleType::SmallGust),
+        "weaving" => ParticleOptions::simple(ParticleType::ItemCobweb),
+        "oozing" => ParticleOptions::simple(ParticleType::ItemSlime),
+        "infested" => ParticleOptions::simple(ParticleType::Infested),
+        other => {
+            let color = potions::effect(other)?.color;
+            let channel = |shift: u32| ((color >> shift) & 255) as f32 / 255.0;
+            // MobEffect.AMBIENT_ALPHA is 38 of 255.
+            let alpha = if ambient { 38.0 / 255.0 } else { 1.0 };
+            ParticleOptions::colored(
+                ParticleType::EntityEffect,
+                [channel(16), channel(8), channel(0), alpha],
+            )
+        }
+    })
+}
+/// An active effect as `LivingEntity.updateSynchronizedMobEffectParticles`
+/// sees it; vanilla recomputes the particles when one of these changes
+/// (`onEffectAdded`, `onEffectUpdated`, `onEffectsRemoved`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShownEffect {
+    pub effect: &'static str,
+    pub amplifier: i32,
+    pub visible: bool,
+    pub ambient: bool,
+}
+/// `LivingEntity.updateSynchronizedMobEffectParticles` for an entity with
+/// `effects`: the particle of each visible one (`effect_particle`) and
+/// `areAllEffectsAmbient` (true when none is visible).
+pub fn effect_particles(
+    effects: impl IntoIterator<Item = ShownEffect>,
+) -> (Vec<ParticleOptions>, bool) {
+    visible_effect_particles(
+        (effects.into_iter())
+            .filter(|e| e.visible)
+            .map(|e| (e.ambient, effect_particle(e.effect, e.ambient))),
+    )
+}
+/// The swirls of an entity's `visible` effects, each as whether it is ambient
+/// and its particle, if it has one: the particles and
+/// `areAllEffectsAmbient` (true when none is visible).
+pub fn visible_effect_particles(
+    visible: impl IntoIterator<Item = (bool, Option<ParticleOptions>)>,
+) -> (Vec<ParticleOptions>, bool) {
+    let mut all_ambient = true;
+    let particles = (visible.into_iter())
+        .filter_map(|(ambient, particle)| {
+            all_ambient &= ambient;
+            particle
+        })
+        .collect();
+    (particles, all_ambient)
+}
+/// A living entity's `DATA_EFFECT_PARTICLES` and `DATA_EFFECT_AMBIENCE_ID`
+/// as the native mods left them (`effect_particle_modification`), with the
+/// effects they were computed for: sent until those effects change and the
+/// mods are asked again, as vanilla recomputes them only then.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModifiedEffectParticles {
+    effects: Vec<ShownEffect>,
+    /// The entries sent, each left out at its default.
+    pub meta: Vec<(u8, i32, Value)>,
+}
+impl ModifiedEffectParticles {
+    pub fn new(
+        effects: impl IntoIterator<Item = ShownEffect>,
+        meta: Vec<(u8, i32, Value)>,
+    ) -> Self {
+        Self {
+            effects: effects.into_iter().collect(),
+            meta,
+        }
+    }
+    /// Whether these were computed for `effects`.
+    pub fn computed_for(&self, effects: impl IntoIterator<Item = ShownEffect>) -> bool {
+        self.effects.iter().copied().eq(effects)
+    }
+}
 /// What an omen's `applyEffectTick` decided.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OmenTick {
@@ -250,6 +374,13 @@ impl PlayerEffects {
     pub fn get(&self, id: &str) -> Option<&EffectInstance> {
         self.list.iter().find(|e| e.id == id)
     }
+    /// Read by the registry identity already resolved at creation, without comparing names.
+    pub fn get_registered(&self, index: usize) -> Option<&EffectInstance> {
+        self.list
+            .iter()
+            .find(|effect| effect.registry_index == Some(index))
+    }
+
     pub fn amplifier(&self, id: &str) -> Option<i32> {
         self.get(id).map(|e| e.amplifier)
     }
@@ -305,8 +436,9 @@ impl PlayerEffects {
     /// ticked; the next tick refreshes Raid Omen and drops Bad Omen.
     pub fn tick_with(
         &mut self,
-        omen: &mut dyn FnMut(&EffectInstance, i32) -> OmenTick,
+        omen: &mut dyn FnMut(&EffectInstance, i32, &mut Vec<EffectAction>, bool) -> OmenTick,
         absorption_empty: bool,
+        keep_expired: &[&'static str],
     ) -> (Vec<EffectAction>, bool) {
         self.tick_count = self.tick_count.wrapping_add(1);
         let mut actions = Vec::new();
@@ -315,7 +447,13 @@ impl PlayerEffects {
         while i < self.list.len() {
             let e = &self.list[i];
             if !(e.infinite() || e.duration > 0) {
-                self.list.remove(i);
+                // `MobEffectEvent.Expired`: a refused expiry keeps the
+                // effect at no ticks, asking again next tick.
+                if keep_expired.contains(&e.id) {
+                    i += 1;
+                } else {
+                    self.list.remove(i);
+                }
                 continue;
             }
             let t = if e.infinite() {
@@ -326,10 +464,11 @@ impl PlayerEffects {
             if let Some(a) = periodic(e.id, t, e.amplifier) {
                 actions.push(a);
             }
+            omen(e, t, &mut actions, false);
             let answer = match e.id {
-                "bad_omen" => omen(e, t),
-                "raid_omen" if t == 1 => omen(e, t),
-                id if potions::is_mod_effect(id) => omen(e, t),
+                "bad_omen" => omen(e, t, &mut actions, true),
+                "raid_omen" if t == 1 => omen(e, t, &mut actions, true),
+                id if potions::is_mod_effect(id) => omen(e, t, &mut actions, true),
                 "absorption" if absorption_empty => OmenTick::Remove,
                 _ => OmenTick::Continue,
             };
@@ -353,7 +492,9 @@ impl PlayerEffects {
             let e = &mut self.list[i];
             e.tick_down();
             e.downgrade();
-            if e.infinite() || e.duration > 0 {
+            // `MobEffectEvent.Expired`: a kept expiry leaves the effect at
+            // no ticks instead of removing it here.
+            if e.infinite() || e.duration > 0 || keep_expired.contains(&e.id) {
                 i += 1;
             } else {
                 self.list.remove(i);
@@ -640,19 +781,22 @@ mod tests {
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new("bad_omen", 100, 1));
         fx.add(EffectInstance::new("speed", 50, 0));
-        let mut convert = |e: &EffectInstance, _: i32| match e.id {
-            "bad_omen" => OmenTick::Add(EffectInstance::new("raid_omen", 600, e.amplifier)),
+        let mut convert = |e: &EffectInstance,
+                           _: i32,
+                           _: &mut Vec<EffectAction>,
+                           dispatch: bool| match (dispatch, e.id) {
+            (true, "bad_omen") => OmenTick::Add(EffectInstance::new("raid_omen", 600, e.amplifier)),
             _ => OmenTick::Continue,
         };
         // The first tick adds Raid Omen and stops there (the iterator's
         // ConcurrentModificationException): Bad Omen and Speed stay as they were.
-        let (_, added) = fx.tick_with(&mut convert, false);
+        let (_, added) = fx.tick_with(&mut convert, false, &[]);
         assert!(added);
         assert_eq!(fx.get("bad_omen").unwrap().duration, 100);
         assert_eq!(fx.get("speed").unwrap().duration, 50);
         assert_eq!(fx.get("raid_omen").unwrap().duration, 600);
         // The second refreshes Raid Omen and drops Bad Omen.
-        let (_, added) = fx.tick_with(&mut convert, false);
+        let (_, added) = fx.tick_with(&mut convert, false, &[]);
         assert!(!added);
         assert!(fx.get("bad_omen").is_none());
         assert_eq!(fx.get("speed").unwrap().duration, 49);
@@ -680,6 +824,7 @@ mod tests {
             "ruby:glow".to_owned(),
             0xFF0000,
             potions::Category::Neutral,
+            None,
         )]);
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new(
@@ -690,6 +835,28 @@ mod tests {
         let saved = fx.saved();
         assert_eq!(saved, [SavedEffect::new("ruby:glow", 600, 1)]);
         assert_eq!(PlayerEffects::from_saved(&saved).list, fx.list);
+        let mut ordered = PlayerEffects::default();
+        ordered.add(EffectInstance::new("regeneration", 50, 0));
+        ordered.add(EffectInstance::new("ruby:glow", 10, 0));
+        ordered.add(EffectInstance::new("wither", 40, 0));
+        let (actions, _) = ordered.tick_with(
+            &mut |_, _, actions, dispatch| {
+                if dispatch {
+                    actions.push(EffectAction::Eat(2, 0.5));
+                }
+                OmenTick::Continue
+            },
+            false,
+            &[],
+        );
+        assert_eq!(
+            actions,
+            [
+                EffectAction::Heal(1.0),
+                EffectAction::Eat(2, 0.5),
+                EffectAction::Hurt("minecraft:wither", 1.0)
+            ]
+        );
         // Without its mod the saved effect is dropped, as an unknown id is.
         assert!(
             PlayerEffects::from_saved(&[SavedEffect::new("gone:glow", 600, 1)])
@@ -705,15 +872,18 @@ mod tests {
         fx.add(EffectInstance::new("ruby:glow", 3, 1));
         fx.add(EffectInstance::new("ruby:bleed", -1, 0));
         let mut seen = Vec::new();
-        let mut answer = |e: &EffectInstance, t: i32| {
+        let mut answer = |e: &EffectInstance, t: i32, _: &mut Vec<EffectAction>, dispatch: bool| {
+            if !dispatch {
+                return OmenTick::Continue;
+            }
             seen.push((e.id, t));
             match (e.id, t) {
                 ("ruby:glow", 2) => OmenTick::Remove,
                 _ => OmenTick::Continue,
             }
         };
-        fx.tick_with(&mut answer, false);
-        fx.tick_with(&mut answer, false);
+        fx.tick_with(&mut answer, false, &[]);
+        fx.tick_with(&mut answer, false, &[]);
         let ticks = [
             ("ruby:glow", 3),
             ("ruby:bleed", 1),
@@ -729,13 +899,16 @@ mod tests {
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new("raid_omen", 2, 0));
         let mut seen = Vec::new();
-        let mut watch = |e: &EffectInstance, _: i32| {
+        let mut watch = |e: &EffectInstance, _: i32, _: &mut Vec<EffectAction>, dispatch: bool| {
+            if !dispatch {
+                return OmenTick::Continue;
+            }
             seen.push(e.duration);
             OmenTick::Remove
         };
-        fx.tick_with(&mut watch, false);
+        fx.tick_with(&mut watch, false, &[]);
         assert!(fx.get("raid_omen").is_some());
-        fx.tick_with(&mut watch, false);
+        fx.tick_with(&mut watch, false, &[]);
         assert!(fx.get("raid_omen").is_none());
         assert_eq!(seen, vec![1]);
     }

@@ -1,0 +1,17 @@
+# Tests compiled only with horizon-client's `upstream-parallel-mobs` feature, which no daily shard builds.
+# Run them by hand: cargo test -p horizon-client --lib --features upstream-parallel-mobs -- --ignored creatures::
+horizon-client game::creatures::mob_islands::tests::a_fast_mob_joins_only_the_herds_its_bound_reaches by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::a_fox_eating_chorus_fruit_joins_the_herd_below by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::a_pet_teleports_to_its_owner_while_a_far_herd_ticks_apart by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::a_raid_shares_one_group_beside_a_herd by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::actual_reaches_cover_links_villages_and_bounded_moves by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::foreign_lookup_observes_serial_visibility_and_unwind by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::islands_tick_their_mobs_as_one_thread_does by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::mobs_on_their_own_random_leave_the_level_stream_alone by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::moved_riders_use_loaded_and_ticking_state_at_their_turn by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::startup_and_turn_failures_release_lanes_and_preserve_payload by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::verification_detects_snapshot_and_gaussian_only_differences by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::mob_islands::tests::villagers_on_their_own_random_tick_in_groups_as_serial by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::creatures::prep::tests::preparation_refreshes_climbing_and_nearest_after_a_move by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::natural_spawning::parallel::tests::the_second_of_two_proposals_over_a_players_cap_is_dropped by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources
+horizon-client game::natural_spawning::parallel::tests::the_spawns_are_the_same_in_any_number_of_lanes by-hand manual # compiled only with --features upstream-parallel-mobs; needs prepared resources

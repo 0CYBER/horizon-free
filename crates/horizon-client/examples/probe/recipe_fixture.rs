@@ -20,10 +20,21 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: recipe_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
-    let stations = StationRecipes::load(root, &items, &PackOverlay::NONE);
-    let enchantments = Enchantments::load(root);
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
+    let stations = StationRecipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    );
+    let enchantments = Enchantments::load(root, &defaults)?;
     let mut out = String::new();
     for line in input.lines() {
         let f: Vec<&str> = line.split('\t').collect();
@@ -35,10 +46,14 @@ pub fn main() -> horizon_client::Result<()> {
                 for i in 0..n * n {
                     grid.push(stack(2 + i)?);
                 }
-                match recipes.find(&grid, n) {
+                match recipes.find(crate::test_resources::server_loop_context(), &grid, n) {
                     None => "none".to_owned(),
                     Some((id, result)) => {
-                        let rest = recipes.remainders(id, &grid, n);
+                        let rest = recipes.remainders(id, &grid, n, &|s| {
+                            horizon_client::crafting::CraftingRemainder::crafting_remainder(
+                                &items, s,
+                            )
+                        });
                         let rest: Vec<String> = rest
                             .iter()
                             .enumerate()
@@ -52,7 +67,11 @@ pub fn main() -> horizon_client::Result<()> {
             }
             "cook" => match stack(2)?.and_then(|s| {
                 recipes
-                    .cook(&format!("minecraft:{}", f[1]), &s)
+                    .cook(
+                        crate::test_resources::server_loop_context(),
+                        &format!("minecraft:{}", f[1]),
+                        &s,
+                    )
                     .map(|c| (c.id.clone(), c.result.clone(), c.experience, c.time))
             }) {
                 None => "none".to_owned(),
@@ -63,7 +82,7 @@ pub fn main() -> horizon_client::Result<()> {
             "stonecut" => match stack(1)? {
                 None => String::new(),
                 Some(s) => stations
-                    .stonecutter(&s)
+                    .stonecutter(crate::test_resources::server_loop_context(), &s)
                     .iter()
                     .map(|r| {
                         format!(
@@ -80,16 +99,33 @@ pub fn main() -> horizon_client::Result<()> {
                     "recipe/test:transform".to_owned(),
                     vec![f[1].as_bytes().to_vec()],
                 )];
-                let stations = StationRecipes::load(root, &items, &PackOverlay { files: &files });
+                let stations = StationRecipes::load(
+                    root,
+                    &items,
+                    &PackOverlay::new(&files),
+                    &crate::test_resources::server_load(),
+                );
                 let (t, b, a) = (stack(2)?, stack(3)?, stack(4)?);
-                match stations.smithing_result(&enchantments, t.as_ref(), b.as_ref(), a.as_ref()) {
+                match stations.smithing_result(
+                    crate::test_resources::server_loop_context(),
+                    &enchantments,
+                    t.as_ref(),
+                    b.as_ref(),
+                    a.as_ref(),
+                ) {
                     None => "none".to_owned(),
                     Some(r) => canon_stack(Some(&r)),
                 }
             }
             "smith" => {
                 let (t, b, a) = (stack(1)?, stack(2)?, stack(3)?);
-                match stations.smithing_result(&enchantments, t.as_ref(), b.as_ref(), a.as_ref()) {
+                match stations.smithing_result(
+                    crate::test_resources::server_loop_context(),
+                    &enchantments,
+                    t.as_ref(),
+                    b.as_ref(),
+                    a.as_ref(),
+                ) {
                     None => "none".to_owned(),
                     Some(r) => canon_stack(Some(&r)),
                 }

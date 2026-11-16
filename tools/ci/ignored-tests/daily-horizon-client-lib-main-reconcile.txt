@@ -1,0 +1,3 @@
+# Prepared-resource tests restored or added while reconciling Horizon main with the mod API fork.
+# Canonical package/target/module identities from the source inventory; all assertions remain in place.
+horizon-client-lib mobs::goals::avoid_entity_targeting_tests::a_mob_does_not_look_at_the_player_riding_it lib daily resources

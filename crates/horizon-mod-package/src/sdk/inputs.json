@@ -1,0 +1,67 @@
+{
+  "routes": {
+    "package": {
+      "program": [
+        "horizon-ctl",
+        "horizon-prepare",
+        "horizon-server",
+        "horizon-wasm-std.wasm"
+      ],
+      "checkout": [
+        "exporters/manifest.json"
+      ]
+    },
+    "package-server": {
+      "program": [
+        "horizon-prepare",
+        "horizon-server",
+        "horizon-wasm-std.wasm"
+      ],
+      "checkout": [
+        "exporters/manifest.json"
+      ]
+    },
+    "api": {
+      "sdk": [
+        "runtime",
+        "api"
+      ]
+    },
+    "engine": {
+      "sdk": [
+        "runtime",
+        "api",
+        "engine"
+      ]
+    }
+  },
+  "how": {
+    "horizon-ctl": "cargo build PROFILE -p horizon-client-lib --bin horizon-ctl",
+    "horizon-prepare": "cargo build PROFILE -p horizon-prepare",
+    "horizon-server": "cargo build PROFILE -p horizon-server",
+    "horizon-wasm-std.wasm": "cargo run --locked -p cargo-horizon-mod -- wasm-std PROGRAM_FOLDER/horizon-wasm-std.wasm",
+    "exporters/manifest.json": "horizon-prepare compile-exporters --root CHECKOUT, then copy its server, client and manifest.json into CHECKOUT/exporters/",
+    "runtime": "the SDK release of the game's exact commit",
+    "api": "the SDK release of the game's exact commit",
+    "engine": "the SDK release of the game's exact commit"
+  },
+  "members": {
+    "runtime": [
+      "horizon-prebuilt.json",
+      "bin/@program:horizon-client",
+      "deps/@dylib:horizon_mod_host",
+      "deps/@dylib:horizon_mod_wasm",
+      "deps/@dylib:mod_api",
+      "deps/@dylib:mod_vocab",
+      "deps/@dylib:mod_points"
+    ],
+    "api": [
+      "native_mod_entry.rs.template",
+      "points.json",
+      "internals.json",
+      "loops.json",
+      "deps/@rmeta:mod_api",
+      "deps/@rmeta:mod_points"
+    ]
+  }
+}

@@ -1,10 +1,8 @@
 //! Dropped-item environmental damage, without a game or a server.
 use horizon_client::{
-    assets::Assets, blocks::BlockFacts, chunk::Chunk, entities::ItemEntity, items::Items,
-    world::World,
+    assets::Assets, blocks::BlockFacts, chunk::Chunk, entities::ItemEntity, world::World,
 };
 use horizon_core::geometry::Vec3;
-use horizon_world::loot::PackOverlay;
 use std::{fs, path::Path, sync::Arc};
 
 pub fn main() -> horizon_client::Result<()> {
@@ -12,7 +10,16 @@ pub fn main() -> horizon_client::Result<()> {
     let root = Path::new(args.get(1).ok_or("missing resources")?);
     let assets = Assets::load(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
-    let items = Items::load(root, assets.registry, &facts, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let damage = horizon_client::health::HealthResources::load(root)?;
+    let can_hurt = |stack: &horizon_client::items::ItemStack, name: &str| {
+        let default = defaults
+            .entries()
+            .get(stack.item.as_ref())
+            .and_then(|components| components.get("minecraft:damage_resistant"));
+        horizon_client::item_damage::stack_can_be_hurt_by(default, &damage.damage, stack, name)
+            .unwrap()
+    };
     let mut world = World::new(facts.air, 1);
     world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
     let mut output = String::new();
@@ -51,6 +58,8 @@ pub fn main() -> horizon_client::Result<()> {
                 .ok_or("missing cauldron")?,
         )?;
         let mut item = ItemEntity {
+            attachment_lifetime: Default::default(),
+            fall_distance: 0.0,
             random: horizon_core::random::EntityRandom::own(
                 horizon_core::random::LegacyRandom::new(0),
             ),
@@ -76,12 +85,11 @@ pub fn main() -> horizon_client::Result<()> {
             no_gravity: true,
             vertical_collision: false,
             horizontal_collision: false,
-            fall_distance: 0.0,
         };
         output.push_str(f[0]);
         for _ in 0..2 {
             if item.health > 0 {
-                item.environment_tick(&world, &facts, assets.registry, &items);
+                item.environment_tick(&world, &facts, assets.registry, &can_hurt);
             }
             output.push_str(&format!(
                 "\t{},{},{}",

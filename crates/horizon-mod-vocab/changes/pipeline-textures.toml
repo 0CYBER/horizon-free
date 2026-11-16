@@ -1,0 +1,8 @@
+ids = [
+    "type:PipelineTexture",
+    "type:PipelineTextureError",
+    "type:RenderPipeline",
+    "handle:RenderPipeline::textured",
+]
+why = "A mod render pipeline can sample one texture (vanilla's Sampler0): a block or item atlas sprite named by RenderPipeline::textured, read in the shader with pipeline_texture(uv) by integer texels inside the sprite's rect; a refused texture is named by PipelineTextureError. RenderPipeline gains the texture field, so its wire layout changes for wasm mods."
+migrate = "Pipelines without a texture are unchanged; RenderPipeline::new leaves texture None. Rebuild wasm mods against this SDK for the changed RenderPipeline wire layout."

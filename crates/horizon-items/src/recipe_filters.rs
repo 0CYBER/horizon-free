@@ -367,7 +367,7 @@ mod tests {
             "recipe_filter/mymod:a".to_owned(),
             vec![json!({"filters": []}).to_string().into_bytes()],
         )];
-        let f = RecipeFilters::load(&root, &PackOverlay { files: &files });
+        let f = RecipeFilters::load(&root, &PackOverlay::new(&files));
         assert!(f.apply("minecraft:stick", &mut json!({})));
         let _ = std::fs::remove_dir_all(&root);
     }

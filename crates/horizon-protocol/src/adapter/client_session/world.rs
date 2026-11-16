@@ -283,7 +283,7 @@ mod tests {
     use super::super::super::{ServerVersion, translate};
     use super::*;
     use crate::State;
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     fn ids() -> &'static Ids {
         ServerVersion::V26_2.ids().unwrap()

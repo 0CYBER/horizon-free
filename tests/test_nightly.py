@@ -1,5 +1,7 @@
 import datetime as dt
+import json
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.ci import nightly
@@ -62,7 +64,14 @@ class NightlyTests(unittest.TestCase):
 
     def test_notes_open_with_the_way_to_the_launcher(self):
         # A raw HTML line that launchers skip, as on a game release.
-        self.assertTrue(notes().startswith(nightly.train.PLAYERS + "\n\nNightly 2026-10-28 · bbbbbbb: "))
+        with mock.patch.object(nightly.train, "REPO", "horizon-rust/horizon"):
+            self.assertTrue(notes().startswith(nightly.train.PLAYERS + "\n\nNightly 2026-10-28 · bbbbbbb: "))
+            self.assertIn(nightly.PLAYERS, notes())
+
+    def test_other_repositories_keep_the_upstream_intro(self):
+        with mock.patch.object(nightly.train, "REPO", "another/horizon"):
+            self.assertTrue(notes().startswith(nightly.train.PLAYERS + "\n\n"))
+            self.assertIn(nightly.PLAYERS, notes())
 
     def test_notes_name_the_commit_and_its_permanent_source_tag(self):
         sha = "0c0206714abc" + "0" * 28
@@ -114,6 +123,27 @@ if __name__ == "__main__":
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
 
+class FirstNightlyTests(unittest.TestCase):
+    def test_fetch_succeeds_with_or_without_an_existing_nightly_tag(self):
+        class ReachedGreenBase(Exception):
+            pass
+
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                calls = []
+                def git(*args):
+                    calls.append(args)
+                    if args[0] == "ls-remote":
+                        return "abc\\trefs/tags/nightly" if existing else ""
+                    return ""
+                with mock.patch.object(nightly, "git", side_effect=git), mock.patch.object(nightly, "green_base", side_effect=ReachedGreenBase):
+                    with self.assertRaises(ReachedGreenBase):
+                        nightly.pick(False)
+                fetched = next(args for args in calls if args[0] == "fetch")
+                self.assertIn("+refs/heads/main:refs/remotes/origin/main", fetched)
+                self.assertEqual("+refs/tags/nightly:refs/tags/nightly" in fetched, existing)
+
+
 class UntrustedBuildTests(unittest.TestCase):
     """A nightly can hold pull requests nobody reviewed: nothing its build leaves may reach a release (game-build.yml)."""
 
@@ -123,7 +153,7 @@ class UntrustedBuildTests(unittest.TestCase):
     def test_no_nightly_build_is_trusted(self):
         # The train only starts `nightly build` (Nightly only since 2026-10-28); it builds nothing itself.
         release = (WORKFLOWS / "release.yml").read_text()
-        self.assertNotIn("game-build.yml", release)
+        self.assertNotIn("/game-build.yml", release)
         self.assertIn("gh workflow run nightly-build.yml", release)
         nightly_build = (WORKFLOWS / "nightly-build.yml").read_text()
         self.assertIn("trusted: false", nightly_build)
@@ -195,3 +225,135 @@ class PruneBuildsTests(unittest.TestCase):
         self.assertIn("prune-builds --days 7", step)
         self.assertIn("GITHUB_STEP_SUMMARY", step)
 
+
+
+class SdkPairTests(unittest.TestCase):
+    def test_only_complete_published_exact_pair_is_eligible(self):
+        # Written out, not taken from the module: the release a Nightly needs, signed index and sums included.
+        assets = [{"name": name} for name in (
+            "sdk.json", "SHA256SUMS", "SHA256SUMS.sig", "api-source.tar.xz", "build-data.tar.xz", "surface.json",
+            *(f"{kind}-{leg}.tar.xz" for kind in ("runtime", "api", "engine") for leg in (
+                "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu-server", "x86_64-pc-windows-gnu",
+                "aarch64-apple-darwin")))]
+        release = {"draft": False, "tag_name": "sdk-" + "a" * 40, "assets": assets}
+        for changes, expected in [({}, True), ({"draft": True}, False),
+                                  ({"tag_name": "sdk-" + "b" * 40}, False),
+                                  # The old prebuilt-<sha> release is not an SDK.
+                                  ({"tag_name": "prebuilt-" + "a" * 40}, False)]:
+            with mock.patch.object(nightly.train, "gh_json", return_value=[[], [{**release, **changes}]]):
+                self.assertEqual(nightly.sdk_ready("a" * 40), expected)
+        for index in range(len(assets)):
+            with mock.patch.object(nightly.train, "gh_json", return_value=[[{
+                    **release, "assets": assets[:index] + assets[index + 1:]}]]):
+                self.assertFalse(nightly.sdk_ready("a" * 40))
+        with mock.patch.object(nightly.train, "gh_json", return_value=[[]]):
+            self.assertFalse(nightly.sdk_ready("a" * 40))
+        with mock.patch.object(nightly.train, "gh_json", side_effect=SystemExit("API failed")):
+            with self.assertRaises(SystemExit):
+                nightly.sdk_ready("a" * 40)
+
+    def test_the_base_is_mains_green_commit_and_needs_no_sdk_yet(self):
+        # The SDK of the Nightly's commit is built after this pick (nightly-build.yml), so none is looked for here.
+        with mock.patch.dict(nightly.os.environ, {"NIGHTLY_BASE": ""}), \
+                mock.patch.object(nightly.train, "green_main_head", return_value="a" * 40) as automatic, \
+                mock.patch.object(nightly, "sdk_ready", side_effect=AssertionError("asked")), \
+                mock.patch.object(nightly, "is_ancestor", return_value=True), \
+                mock.patch.object(nightly, "git", side_effect=["a" * 40, NOW]):
+            self.assertEqual(nightly.green_base("horizon-rust/horizon", "").sha, "a" * 40)
+            automatic.assert_called_once_with(parity=True)
+        with mock.patch.dict(nightly.os.environ, {"NIGHTLY_BASE": "b" * 40}), \
+                mock.patch.object(nightly.train, "green_main_head") as automatic, \
+                mock.patch.object(nightly, "is_ancestor", return_value=False), \
+                mock.patch.object(nightly, "stop", side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                nightly.green_base("horizon-rust/horizon", "")
+            automatic.assert_not_called()
+
+    def test_a_final_source_that_is_not_mains_commit_stops_before_pushing(self):
+        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}), \
+                mock.patch.object(nightly.ns, "fetch_heads", return_value=[]), \
+                mock.patch.object(nightly.ns, "assemble", return_value="b" * 40), \
+                mock.patch.object(nightly.ns, "push") as push:
+            with self.assertRaises(SystemExit):
+                nightly.build_set(nightly.Ref("main", "a" * 40, T), [], [], "2026-11-11", True, False)
+            push.assert_not_called()
+
+    def test_publication_checks_fresh_inventory_and_leaves_upstream_unchanged(self):
+        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}), \
+                mock.patch.object(nightly, "ready_sdk_shas", side_effect=[{"a" * 40}, set()]) as inventory, \
+                mock.patch.object(nightly, "published_index") as index:
+            nightly.require_sdk("a" * 40)
+            index.assert_called_once_with("a" * 40)
+            with self.assertRaisesRegex(SystemExit, "publication refused"):
+                nightly.require_sdk("a" * 40)
+            self.assertEqual(inventory.call_count, 2)
+        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "someone/horizon"}), \
+                mock.patch.object(nightly, "sdk_ready") as sdk:
+            nightly.require_sdk("a" * 40)
+            sdk.assert_not_called()
+
+    def test_the_sdk_index_must_name_this_build_format_and_assets_and_match_its_sums(self):
+        import hashlib
+        sha = "a" * 40
+        good = {"build": {"commit": sha}, "package_format": nightly.package_format(),
+                "assets": {name: {} for name in nightly.SDK_ARCHIVES}}
+        self.assertEqual(nightly.checked_index(sha, json.dumps(good).encode()), good)
+        for why, document in (
+                ("for build", {**good, "build": {"commit": "b" * 40}}),
+                ("package format", {**good, "package_format": 0}),
+                ("does not list surface.json", {**good, "assets": {name: {} for name in nightly.SDK_ARCHIVES[:-1]}}),
+                ("not an SDK index", {"build": {}})):
+            with self.subTest(why), self.assertRaisesRegex(SystemExit, why):
+                nightly.checked_index(sha, json.dumps(document).encode())
+        sums = f"{hashlib.sha256(b'index').hexdigest()}  sdk.json\n{'0' * 64} *surface.json\n"
+        self.assertTrue(nightly.listed("sdk.json", b"index", sums))
+        self.assertFalse(nightly.listed("sdk.json", b"other", sums))
+        self.assertFalse(nightly.listed("surface.json", b"index", sums))
+        self.assertFalse(nightly.listed("SHA256SUMS", b"index", sums))
+
+    def test_an_sdk_asset_is_trusted_only_under_the_forks_signature_for_its_own_tag(self):
+        command = nightly.signature_check("a" * 40, Path("/tmp/x"), ["sdk.json"])
+        self.assertEqual(command[:6], ["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign"])
+        arguments = command[command.index("--") + 1:]
+        self.assertEqual(arguments, ["verify", "--repository", "horizon-rust/horizon", "--tag", "sdk-" + "a" * 40,
+                                     "--only", "sdk.json", "/tmp/x"])
+        self.assertNotIn("--publishing", command, "an unsigned SDK is refused, as the launcher refuses it")
+
+    def test_the_previous_sdk_is_the_nearest_published_one_behind_the_build(self):
+        a, b, c, d = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+        # c is not on d's history; b is nearer than a.
+        with mock.patch.object(nightly, "ready_sdk_shas", return_value={a, b, c, d}), \
+                mock.patch.object(nightly, "is_ancestor", side_effect=lambda x, y: x in (a, b)), \
+                mock.patch.object(nightly, "git", side_effect=lambda *args: {f"{a}..{d}": "9", f"{b}..{d}": "2"}[args[-1]]):
+            self.assertEqual(nightly.previous_sdk(d), b)
+        with mock.patch.object(nightly, "ready_sdk_shas", return_value={d}):
+            self.assertEqual(nightly.previous_sdk(d), "")
+
+    def test_fork_pick_refuses_explicit_prs_ignores_saved_prs_and_upstream_keeps_both(self):
+        main = nightly.Ref("main", "a" * 40, T)
+        saved = [{"number": 17, "head": "b" * 40}]
+        explicit = [{"number": 19, "head": "c" * 40}]
+        for repo in ("horizon-rust/horizon", "another/fork"):
+            for spec in ("", "19"):
+                with self.subTest(repo=repo, spec=spec), \
+                        mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": repo, "NIGHTLY_PRS": spec,
+                                                            "GITHUB_EVENT_NAME": "workflow_dispatch", "DRY_RUN": "true"}), \
+                        mock.patch.object(nightly, "git", return_value=""), \
+                        mock.patch.object(nightly, "green_base", return_value=main), \
+                        mock.patch.object(nightly.ns, "load_state", return_value=({"prs": saved}, "", "")) as state, \
+                        mock.patch.object(nightly.ns, "lookup"), \
+                        mock.patch.object(nightly, "requested", return_value=explicit) as requested, \
+                        mock.patch.object(nightly, "build_set") as build:
+                    if repo == "horizon-rust/horizon" and spec:
+                        with self.assertRaises(SystemExit):
+                            nightly.pick(False)
+                        build.assert_not_called()
+                        requested.assert_not_called()
+                        state.assert_not_called()
+                    else:
+                        nightly.pick(False)
+                        expected = [] if repo == "horizon-rust/horizon" else explicit if spec else saved
+                        self.assertEqual(build.call_args.args[:3], (main, expected, []))
+                        if repo == "horizon-rust/horizon":
+                            state.assert_not_called()
+                            requested.assert_not_called()

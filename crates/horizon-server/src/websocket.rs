@@ -318,6 +318,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn messages_come_whole_and_pings_get_pongs() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -345,6 +346,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn control_frames_must_be_whole_and_short() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         for (sent, ok) in [
@@ -366,6 +368,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn unmasked_and_oversized_frames_are_refused() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();

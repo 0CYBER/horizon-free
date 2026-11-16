@@ -7,7 +7,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = fs::read_to_string(&args[1])?;
     let mut out = fs::File::create(&args[2])?;
     for line in input.lines() {
-        let tag = horizon_world::nbt::parse_snbt(line)?.0;
+        let tag = horizon_core::nbt::parse_snbt(line)?.0;
         let (_, chest) = save::decode_block_entity(&tag).ok_or("not a chest")?;
         let mut result = String::new();
         for (i, stack) in chest.slots().iter().enumerate() {

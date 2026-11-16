@@ -314,6 +314,7 @@ mod sampled {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_sampled_capture_reads_back_with_the_entity_shares_of_the_work() {
         let _turn = crate::server_perf::SAMPLED_TESTS
             .lock()

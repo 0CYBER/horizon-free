@@ -16,7 +16,7 @@ Cases:
 - gameplay_drop: Q in play throws one and Ctrl+Q the rest; the pad's drop button tapped and held must too.
 - screenshot: key.screenshot bound to the pad takes a screenshot as F2 does.
 
-Needs built fast binaries (`cargo build --profile fast -p horizon-client -p horizon-client-lib --bins`)
+Needs built fast binaries (`cargo build --profile fast -p horizon-game -p horizon-client-lib --bins`)
 and prepared resources in .local/horizon-client/26.3. Exit status 0 when every case matches.
 """
 import argparse

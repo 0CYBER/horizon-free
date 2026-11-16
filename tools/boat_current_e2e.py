@@ -96,7 +96,7 @@ def main():
     client, ctl_path = bindir / 'horizon-client', bindir / 'horizon-ctl'
     for binary in (client, ctl_path):
         if not binary.exists():
-            raise Failed(f'{binary} is missing; build it (cargo build --profile fast -p horizon-client '
+            raise Failed(f'{binary} is missing; build it (cargo build --profile fast -p horizon-game '
                          '-p horizon-client-lib --bins) or pass --bin-dir')
     resources = Path(args.resources).resolve()
     if not resources.exists():
@@ -105,7 +105,7 @@ def main():
     (work / '.local/horizon-client').mkdir(parents=True)
     lab.link_dir(resources, work / '.local/horizon-client' / lab.VERSION)
     (work / 'options.txt').write_text('onboardAccessibility:false\n')
-    env = lab.game_env(home=work, HORIZON_TELEMETRY_URL='off')
+    env = lab.game_env(home=work)
     socket = work / 'c.sock'
     launch = subprocess.run([str(ctl_path), '--socket', str(socket), 'launch', '--world', WORLD, '--seed', '7',
                              '--creative', '--headless', '--wait'],

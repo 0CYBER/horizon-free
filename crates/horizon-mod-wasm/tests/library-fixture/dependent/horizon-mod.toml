@@ -1,0 +1,17 @@
+id = "wasm_test_dependent"
+name = "Wasm test dependent"
+version = "0.1.0"
+description = "Shared library consumer fixture."
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[dependencies]
+wasm_test_library = "0.1.0"
+
+[[inject]]
+id = "tick"
+at = "horizon_client::game::Game<'_>::tick"
+kind = "head"
+with = "on_tick"
+hash = "fixture"

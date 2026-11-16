@@ -7,8 +7,11 @@ rust-version.workspace = true
 description = "The client's input layer: key bindings and their names, mouse, controllers, clipboard and window options"
 
 [dependencies]
+horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
+horizon-engine-slots = { path = "../horizon-engine-slots" }
 horizon-client-core = { path = "../horizon-client-core" }
 winit = "0.30.13"
+log = "0.4"
 png = "0.18"
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 

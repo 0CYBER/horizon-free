@@ -1,0 +1,1 @@
+horizon-client game::mod_image_tests::an_api_only_mods_image_draws_with_no_mixin lib daily resources # HORIZON_TEST_RESOURCES and software Vulkan required.

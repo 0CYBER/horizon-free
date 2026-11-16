@@ -164,6 +164,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn detects_this_machine() {
         let hw = Hardware::detect();
         assert_eq!(hw.os, std::env::consts::OS);

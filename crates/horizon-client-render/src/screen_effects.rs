@@ -3,7 +3,8 @@
 //! and the full-screen `Hud` camera overlays laid out by
 //! `hud_overlays::camera_overlays` (vignette, pumpkin blur, powder-snow
 //! outline, nether portal swirl). Positions are clip-space quads; textures
-//! come from the shared 2D atlas and may repeat.
+//! come from the shared 2D atlas and may repeat. A mod's overlay quads arrive in
+//! camera space ([`CameraQuads`]) and leave here in clip space too.
 use crate::{
     effects::EffectInstance,
     hud::{Rect, TextureFlags},
@@ -22,7 +23,9 @@ pub enum Blend {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ScreenVertex {
-    pub pos: [f32; 2],
+    /// Clip-space position: `w` is 1 but for a mod's camera-space quads, which it keeps
+    /// in perspective.
+    pub pos: [f32; 4],
     /// Texture coordinates in sprite units (repeat outside 0..1).
     pub uv: [f32; 2],
     /// Atlas rectangle (u0, v0, u1, v1) of the sprite.
@@ -45,6 +48,61 @@ pub struct ScreenQuad {
     /// How the sprite is sampled: [`SAMPLE_BLUR`] and [`SAMPLE_CLAMP`].
     pub sampling: u32,
 }
+/// What `block_screen_effect_draw` draws with: quads in camera space (`+x` right, `+y` up, the
+/// camera at the origin looking down `-z`), under `GameRenderer.render3dHud`'s projection.
+pub struct CameraQuads {
+    /// `camera::hand_projection`, column-major.
+    projection: [f32; 16],
+    quads: Vec<ScreenQuad>,
+}
+impl CameraQuads {
+    pub fn new(projection: [f32; 16]) -> Self {
+        Self {
+            projection,
+            quads: Vec::new(),
+        }
+    }
+    /// Adds a quad, alpha-blended, of atlas rectangle `rect` at `uv` in sprite units; false,
+    /// with nothing added, for a coordinate that is not finite.
+    pub fn push(
+        &mut self,
+        corners: [[f32; 3]; 4],
+        uv: [[f32; 2]; 4],
+        rect: [f32; 4],
+        argb: u32,
+        sampling: u32,
+    ) -> bool {
+        if !corners.as_flattened().iter().all(|c| c.is_finite())
+            || !uv.as_flattened().iter().all(|c| c.is_finite())
+        {
+            return false;
+        }
+        let m = self.projection;
+        let clip = |[x, y, z]: [f32; 3]| {
+            std::array::from_fn(|i| m[i] * x + m[4 + i] * y + m[8 + i] * z + m[12 + i])
+        };
+        self.quads.push(ScreenQuad {
+            vertices: std::array::from_fn(|i| ScreenVertex {
+                pos: clip(corners[i]),
+                uv: uv[i],
+                rect,
+                color: rgba(argb),
+            }),
+            blend: Blend::Alpha,
+            sampling,
+        });
+        true
+    }
+    /// The quads added since the last call.
+    pub fn take(&mut self) -> Vec<ScreenQuad> {
+        std::mem::take(&mut self.quads)
+    }
+}
+/// `0xAARRGGBB` as a vertex colour.
+fn rgba(argb: u32) -> [f32; 4] {
+    let [a, r, g, b] = argb.to_be_bytes();
+    [r, g, b, a].map(|v| f32::from(v) / 255.0)
+}
 
 /// What the camera sees this frame.
 pub struct ScreenInputs<'a> {
@@ -64,6 +122,9 @@ pub struct ScreenInputs<'a> {
     /// `Hud.extractCameraOverlays` draws: the full-screen blits become
     /// screen quads (the spyglass, its fills and the nausea swirl do not).
     pub gui_overlays: &'a [GuiDraw],
+    /// What mods drew in `block_screen_effect_draw` before the block overlay, the water
+    /// overlay and the fire overlay, in that order, each shown or not.
+    pub custom: [&'a [ScreenQuad]; 3],
 }
 
 /// Effect state advanced every tick.
@@ -141,6 +202,7 @@ impl ScreenEffects {
             self.spinning_speed = 0.0;
         }
     }
+    #[horizon_mod_api_macros::replaceable]
     pub fn build(&self, input: &ScreenInputs) -> Vec<ScreenQuad> {
         let mut out = Vec::new();
         let sprite = |name: &str| input.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
@@ -156,7 +218,7 @@ impl ScreenEffects {
                          color: [f32; 4],
                          sampling: u32| ScreenQuad {
             vertices: std::array::from_fn(|i| ScreenVertex {
-                pos: [corners[i][0] * scale[0], corners[i][1] * scale[1]],
+                pos: [corners[i][0] * scale[0], corners[i][1] * scale[1], 0.0, 1.0],
                 uv: uv[i],
                 rect,
                 color,
@@ -166,6 +228,7 @@ impl ScreenEffects {
         };
         let full = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
         // ScreenEffectRenderer.submitBlockSprite: u1/v1 at (-1, -1), colour 0xFF191919.
+        out.extend_from_slice(input.custom[0]);
         if let Some(name) = &input.block_overlay
             && let Some(rect) = sprite(name)
         {
@@ -178,6 +241,7 @@ impl ScreenEffects {
                 0,
             ));
         }
+        out.extend_from_slice(input.custom[1]);
         if let Some((brightness, yaw, pitch)) = input.water
             && let Some(rect) = sprite("misc/underwater")
         {
@@ -191,6 +255,7 @@ impl ScreenEffects {
                 texture_sampling("misc/underwater"),
             ));
         }
+        out.extend_from_slice(input.custom[2]);
         if input.on_fire
             && let Some(rect) = sprite("block/fire_1")
         {
@@ -219,7 +284,7 @@ impl ScreenEffects {
             vertices: std::array::from_fn(|i| {
                 let p = [[-1.0f32, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]][i];
                 ScreenVertex {
-                    pos: p,
+                    pos: [p[0], p[1], 0.0, 1.0],
                     uv: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]][i],
                     rect,
                     color,
@@ -227,10 +292,6 @@ impl ScreenEffects {
             }),
             blend,
             sampling,
-        };
-        let rgba = |c: u32| {
-            let [a, r, g, b] = c.to_be_bytes();
-            [r, g, b, a].map(|v| f32::from(v) / 255.0)
         };
         for d in input.gui_overlays {
             match d {
@@ -344,6 +405,7 @@ mod tests {
             on_fire: false,
             fire_lower: 0.0,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
+            custom: [&[]; 3],
         };
         let quads = e.build(&input);
         assert_eq!(quads.len(), 1);
@@ -399,9 +461,80 @@ mod tests {
             on_fire: false,
             fire_lower: 0.0,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
+            custom: [&[]; 3],
         });
         let sampling: Vec<_> = quads.iter().map(|q| q.sampling).collect();
         assert_eq!(sampling, [0, SAMPLE_CLAMP, SAMPLE_BLUR]);
+    }
+    /// A camera-space corner under a 90 degree square projection is at `(x, y)` with `w` its
+    /// depth, whatever the depth, so a deeper corner of the same quad draws nearer the centre.
+    #[test]
+    fn camera_quads_keep_their_depth_for_perspective() {
+        let mut quads = CameraQuads::new(crate::camera::hand_projection(90.0, 1.0, 1.0, 100.0));
+        let corners = [
+            [-0.5, -0.5, -0.5],
+            [0.5, -0.5, -1.0],
+            [0.5, 0.5, -1.0],
+            [-0.5, 0.5, -0.5],
+        ];
+        let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+        let rect = [0.25, 0.25, 0.5, 0.5];
+        assert!(quads.push(corners, uv, rect, 0x80FF0000, 0));
+        let drawn = quads.take();
+        assert!(quads.take().is_empty());
+        let [near, far, ..] = drawn[0].vertices;
+        assert!((near.pos[0] + 0.5).abs() < 1e-5 && (near.pos[3] - 0.5).abs() < 1e-6);
+        assert!((far.pos[0] - 0.5).abs() < 1e-5 && (far.pos[3] - 1.0).abs() < 1e-6);
+        assert_eq!(near.rect, rect);
+        assert_eq!(near.color, [1.0, 0.0, 0.0, 128.0 / 255.0]);
+    }
+    #[test]
+    fn camera_quads_refuse_what_is_not_finite() {
+        let mut quads = CameraQuads::new(crate::camera::hand_projection(70.0, 2.0, 1.0, 100.0));
+        let corners = [[0.0, 0.0, -1.0]; 4];
+        assert!(!quads.push([[f32::NAN; 3]; 4], [[0.0; 2]; 4], [0.0; 4], 0, 0));
+        assert!(!quads.push(corners, [[f32::INFINITY; 2]; 4], [0.0; 4], 0, 0));
+        assert!(quads.take().is_empty());
+    }
+    /// What a mod drew goes right before the overlay it belongs to, shown or not.
+    #[test]
+    fn custom_quads_go_before_their_overlays() {
+        let rect = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        };
+        let sprites: HashMap<_, _> = ["block/stone", "block/fire_1"]
+            .map(|name| (name.to_owned(), rect))
+            .into();
+        let mut quads = CameraQuads::new(crate::camera::hand_projection(70.0, 2.0, 1.0, 100.0));
+        let mut custom = |argb: u32| {
+            quads.push([[0.0, 0.0, -1.0]; 4], [[0.0; 2]; 4], [0.0; 4], argb, 0);
+            quads.take()
+        };
+        let (block, water, fire) = (custom(0xFF010000), custom(0xFF020000), custom(0xFF030000));
+        let flags = HashMap::new();
+        let drawn = ScreenEffects::default().build(&ScreenInputs {
+            sprites: &sprites,
+            flags: &flags,
+            aspect: 2.0,
+            partial: 0.0,
+            block_overlay: Some("block/stone".to_owned()),
+            water: None,
+            on_fire: true,
+            fire_lower: 0.0,
+            gui_overlays: &[],
+            custom: [&block, &water, &fire],
+        });
+        let reds: Vec<_> = drawn
+            .iter()
+            .map(|quad| (quad.vertices[0].color[0] * 255.0).round() as u8)
+            .collect();
+        // Block's own overlay is grey 0x19, the fire's two quads white.
+        assert_eq!(reds, [1, 0x19, 2, 3, 255, 255]);
     }
     #[test]
     fn mcmeta_texture_section() {

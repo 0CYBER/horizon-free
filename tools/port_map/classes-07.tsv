@@ -23,7 +23,7 @@ StructurePiecesBuilder.moveBelowSeaLevel	inline	crates/horizon-world/src/worldge
 StructurePiecesBuilder.offsetPiecesVertically	inline	crates/horizon-world/src/worldgen/structure/mineshaft.rs::generate	moves every piece by the same dy
 AbstractSpreadingStructurePlacement.applyAdditionalChunkRestrictions	inline	crates/horizon-world/src/worldgen/structure/start.rs::StructureRegistry::structure_chunk	frequency reduction step of the chunk test
 AbstractSpreadingStructurePlacement.applyInteractionsWithOtherStructures	inline	crates/horizon-world/src/worldgen/structure/start.rs::StructureRegistry::structure_chunk	exclusion zone and avoid checks
-AbstractSpreadingStructurePlacement.isStructureChunk	port	crates/horizon-world/src/worldgen/structure/start.rs::StructureRegistry::is_structure_chunk	
+AbstractSpreadingStructurePlacement.isStructureChunk	port	crates/horizon-world/src/worldgen/structure/start.rs::StructureRegistry::is_structure_chunk
 AbstractSpreadingStructurePlacement.legacyArbitrarySaltProbabilityReducer	port	crates/horizon-world/src/worldgen/structure/start.rs::reduce	Legacy2 arm
 AbstractSpreadingStructurePlacement.legacyPillagerOutpostReducer	port	crates/horizon-world/src/worldgen/structure/start.rs::reduce	Legacy1 arm
 AbstractSpreadingStructurePlacement.legacyProbabilityReducerWithDouble	port	crates/horizon-world/src/worldgen/structure/start.rs::reduce	Legacy3 arm
@@ -45,12 +45,12 @@ ListPoolElement.getSize	port	crates/horizon-world/src/worldgen/structure/jigsaw.
 ListPoolElement.place	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::place_element	List arm
 ListPoolElement.setProjectionOnEachElement	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::PoolElement::decode	children take the list's projection while decoding
 ListPoolElement.toString	skip:debug		debug text
-StructurePoolElement.getProjection	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::PoolElement::projection	
+StructurePoolElement.getProjection	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::PoolElement::projection
 StructurePoolElement.legacy	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::PoolElement::decode	legacy_single_pool_element kind
 StructurePoolElement.single	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::PoolElement::decode	single_pool_element kind
 StructureTemplatePool.<init>	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::Pools::get	builds each Pool from its raw templates
-StructureTemplatePool.getMaxSize	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::Pool::max_size	
-StructureTemplatePool.getRandomTemplate	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::Pool::random_template	
+StructureTemplatePool.getMaxSize	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::Pool::max_size
+StructureTemplatePool.getRandomTemplate	port	crates/horizon-world/src/worldgen/structure/jigsaw.rs::Pool::random_template
 PoolAliasBinding.direct	port	crates/horizon-world/src/worldgen/structure/start.rs::resolve_aliases	minecraft:direct arm
 PoolAliasBinding.random	port	crates/horizon-world/src/worldgen/structure/start.rs::resolve_aliases	minecraft:random arm: weighted pick
 PoolAliasBindings	skip:data		datagen bootstrap that registers alias targets as pools
@@ -89,9 +89,9 @@ OceanMonumentPieces.OceanMonumentSimpleRoom.postProcess	port	crates/horizon-worl
 OceanMonumentPieces.OceanMonumentSimpleTopRoom.postProcess	port	crates/horizon-world/src/worldgen/structure/monument.rs::room	SimpleTop arm
 OceanMonumentPieces.OceanMonumentWingRoom.postProcess	port	crates/horizon-world/src/worldgen/structure/monument.rs::room	Wing arms
 OceanMonumentPieces.RoomDefinition.countOpenings	inline	crates/horizon-world/src/worldgen/structure/monument.rs::room	count of open sides inside the Simple arm
-OceanMonumentPieces.RoomDefinition.findSource	port	crates/horizon-world/src/worldgen/structure/monument.rs::Graph::find_source	
-OceanMonumentPieces.RoomDefinition.setConnection	port	crates/horizon-world/src/worldgen/structure/monument.rs::Graph::connect	
-OceanMonumentPieces.RoomDefinition.updateOpenings	port	crates/horizon-world/src/worldgen/structure/monument.rs::Graph::update_openings	
+OceanMonumentPieces.RoomDefinition.findSource	port	crates/horizon-world/src/worldgen/structure/monument.rs::Graph::find_source
+OceanMonumentPieces.RoomDefinition.setConnection	port	crates/horizon-world/src/worldgen/structure/monument.rs::Graph::connect
+OceanMonumentPieces.RoomDefinition.updateOpenings	port	crates/horizon-world/src/worldgen/structure/monument.rs::Graph::update_openings
 OceanRuinStructure.findGenerationPoint	port	crates/horizon-world/src/worldgen/structure/start.rs::try_generate	OceanRuin arm
 OceanRuinStructure.generatePieces	port	crates/horizon-world/src/worldgen/structure/start.rs::try_generate	OceanRuin arm
 ShipwreckStructure.findGenerationPoint	port	crates/horizon-world/src/worldgen/structure/start.rs::try_generate	Shipwreck arm: world surface when beached
@@ -130,15 +130,15 @@ AppendStatic.apply	port	crates/horizon-world/src/worldgen/structure/processor.rs
 GradientNoise.wrap	port	crates/horizon-core/src/noise/mod.rs::wrap	Far Lands off
 GradientNoise.Gradient.dot	port	crates/horizon-core/src/noise/mod.rs::dot	3D dot of a gradient
 GradientNoise.Gradient.dotXz	inline	crates/horizon-core/src/noise/perlin.rs::SmearedPerlinNoise::get2	2D dot: get2 samples the 3D corner dots at y 0; no separate dotXz
-LegacyFbmInitializer.createForLegacyNetherBiome	port	crates/horizon-core/src/noise/normal.rs::create_legacy_fbm	
+LegacyFbmInitializer.createForLegacyNetherBiome	port	crates/horizon-core/src/noise/normal.rs::create_legacy_fbm
 NoiseUtils.biasTowardsExtreme	skip:other		no caller in the vanilla 26.3 sources
 NoiseUtils.parityNoiseOctaveConfigString	skip:debug		debug text
 BlockLightEngine.checkNode	inline	crates/horizon-client-render/src/light.rs::relight_layer	neighbour checks in both passes
-BlockLightEngine.getEmission	port	crates/horizon-client-render/src/light.rs::LightTables::emission	
+BlockLightEngine.getEmission	port	crates/horizon-client-render/src/light.rs::LightTables::emission
 BlockLightEngine.propagateDecrease	port	crates/horizon-client-render/src/light.rs::relight_layer	decrease pass, sky false
 BlockLightEngine.propagateIncrease	port	crates/horizon-client-render/src/light.rs::relight_layer	increase pass, sky false
 BlockLightEngine.propagateLightSources	inline	crates/horizon-client-render/src/light.rs::relight_layer	emission seeds for cleared cells
-BlockLightSectionStorage.getLightValue	port	crates/horizon-client-render/src/light.rs::level	
+BlockLightSectionStorage.getLightValue	port	crates/horizon-client-render/src/light.rs::level
 DataLayerStorageMap	skip:java		cache of light data layers keyed by section
 DynamicGraphMinFixedPoint.checkEdge	inline	crates/horizon-client-render/src/light.rs::relight_layer	edge test inside the passes
 DynamicGraphMinFixedPoint.checkNeighbor	inline	crates/horizon-client-render/src/light.rs::relight_layer	neighbour test inside the passes
@@ -153,7 +153,7 @@ SkyLightEngine.checkNode	inline	crates/horizon-client-render/src/light.rs::relig
 SkyLightEngine.countEmptySectionsBelowIfAtBorder	skip:java		shortcut over empty sections; Horizon relights a region directly
 SkyLightEngine.crossedSectionEdge	port	crates/horizon-client-render/src/light.rs::LightChanges::class	edge flags of a changed cell
 SkyLightEngine.getChunkSources	skip:java		per-chunk source cache; lowest_sky_source computes each column on demand
-SkyLightEngine.getLowestSourceY	port	crates/horizon-client-render/src/light.rs::lowest_sky_source	
+SkyLightEngine.getLowestSourceY	port	crates/horizon-client-render/src/light.rs::lowest_sky_source
 SkyLightEngine.propagateDecrease	port	crates/horizon-client-render/src/light.rs::relight_layer	decrease pass, sky true
 SkyLightEngine.propagateFromEmptySections	inline	crates/horizon-client-render/src/light.rs::relight_region	sky seeds below the source in each column
 SkyLightEngine.propagateIncrease	port	crates/horizon-client-render/src/light.rs::relight_layer	increase pass, sky true
@@ -163,24 +163,24 @@ SkyLightEngine.setLightEnabled	skip:other		light is computed when a chunk loads 
 SkyLightSectionStorage	skip:other		sky data layer bookkeeping per section; Horizon keeps light in chunk sections
 SkyLightSectionStorage.SkyDataLayerStorageMap	skip:java		copy of sky data layers; collection plumbing
 SpatialLongSet.InternalMap	skip:java		hash set internals for section positions
-NodeEvaluator.getNode	port	crates/horizon-client/src/mobs/path.rs::Finder::node	
-NodeEvaluator.getPathType	port	crates/horizon-client/src/mobs/path.rs::Finder::path_type	
+NodeEvaluator.getNode	port	crates/horizon-client/src/mobs/path.rs::Finder::node
+NodeEvaluator.getPathType	port	crates/horizon-client/src/mobs/path.rs::Finder::path_type
 NodeEvaluator.getTargetNodeAt	port	crates/horizon-client/src/mobs/path.rs::Finder::node	target lookup is the same arena lookup
 NodeEvaluator.prepare	port	crates/horizon-client/src/mobs/path.rs::Finder::new	per-query state
-PathTypeCache.compute	port	crates/horizon-client/src/mobs/path.rs::Finder::compute_path_type	
-PathTypeCache.get	port	crates/horizon-client/src/mobs/path.rs::Finder::cached	
-PathTypeCache.getOrCompute	port	crates/horizon-client/src/mobs/path.rs::Finder::cached	
+PathTypeCache.compute	port	crates/horizon-client/src/mobs/path.rs::Finder::compute_path_type
+PathTypeCache.get	port	crates/horizon-client/src/mobs/path.rs::Finder::cached
+PathTypeCache.getOrCompute	port	crates/horizon-client/src/mobs/path.rs::Finder::cached
 PathTypeCache.invalidate	skip:java		the cache lives for one query, so nothing is invalidated
-SwimNodeEvaluator.findAcceptedNode	port	crates/horizon-client/src/mobs/path.rs::Finder::swim_accepted	
-SwimNodeEvaluator.getCachedBlockType	port	crates/horizon-client/src/mobs/path.rs::Finder::cached	
-SwimNodeEvaluator.getNeighbors	port	crates/horizon-client/src/mobs/path.rs::Finder::swim_neighbors	
-SwimNodeEvaluator.getPathTypeOfMob	port	crates/horizon-client/src/mobs/path.rs::Finder::path_type_of_mob	
+SwimNodeEvaluator.findAcceptedNode	port	crates/horizon-client/src/mobs/path.rs::Finder::swim_accepted
+SwimNodeEvaluator.getCachedBlockType	port	crates/horizon-client/src/mobs/path.rs::Finder::cached
+SwimNodeEvaluator.getNeighbors	port	crates/horizon-client/src/mobs/path.rs::Finder::swim_neighbors
+SwimNodeEvaluator.getPathTypeOfMob	port	crates/horizon-client/src/mobs/path.rs::Finder::path_type_of_mob
 SwimNodeEvaluator.getStart	port	crates/horizon-client/src/mobs/path.rs::Finder::start	Swim arm
 SwimNodeEvaluator.hasMalus	inline	crates/horizon-client/src/mobs/path.rs::Finder::swim_neighbors	diagonal check on both sides
-CollectingNeighborUpdater.addAndRun	port	crates/horizon-world/src/level/update.rs::Sim::add_and_run	
+CollectingNeighborUpdater.addAndRun	port	crates/horizon-world/src/level/update.rs::Sim::add_and_run
 CollectingNeighborUpdater.neighborChanged	port	crates/horizon-world/src/level/update.rs::Sim::neighbor_changed_at	Simple update
-CollectingNeighborUpdater.runUpdates	port	crates/horizon-world/src/level/update.rs::Sim::run_updates	
-CollectingNeighborUpdater.shapeUpdate	port	crates/horizon-world/src/level/update.rs::Sim::neighbor_shape_changed	
+CollectingNeighborUpdater.runUpdates	port	crates/horizon-world/src/level/update.rs::Sim::run_updates
+CollectingNeighborUpdater.shapeUpdate	port	crates/horizon-world/src/level/update.rs::Sim::neighbor_shape_changed
 CollectingNeighborUpdater.updateNeighborsAtExceptFromFacing	port	crates/horizon-world/src/level/update.rs::Sim::update_neighbors_at_except_oriented	the Multi update with one side skipped; the orientation is threaded through here (callers pass the one they have)
 CollectingNeighborUpdater.FullNeighborUpdate.runNext	port	crates/horizon-world/src/level/update.rs::Update::next	Full arm
 CollectingNeighborUpdater.MultiNeighborUpdate.forEachUpdatedPos	inline	crates/horizon-world/src/level/update.rs::Update::next	Multi arm steps the index and skips the facing side

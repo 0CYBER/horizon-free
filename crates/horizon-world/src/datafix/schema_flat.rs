@@ -2,7 +2,7 @@
 //! of those versions look. [`Walker::legacy_children`] answers for the types whose
 //! shape differs from the general code of [`super`]; the other types fall through.
 use super::{Key, Ty, Walker, as_str, key, namespaced};
-use crate::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::OnceLock;

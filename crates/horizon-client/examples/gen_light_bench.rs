@@ -24,6 +24,8 @@
 //! neighbour waits). Sleeping workers don't compete for cores, so this shows
 //! how the pipeline scales to many workers even on a busy machine.
 extern crate horizon_client_lib as horizon_client;
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 use horizon_client::{
     assets::Assets,
     biome::Biomes,
@@ -37,6 +39,7 @@ use horizon_client::{
     vanillagen::VanillaTerrain,
     world::World,
 };
+use horizon_world::native_load_context::DataLoadOrigin;
 use horizon_world::registry::BlockStateId;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -275,18 +278,32 @@ fn main() -> Result<(), Error> {
     horizon_threads::jobs::configure(n);
 
     let assets = Arc::new(Assets::load(&root)?);
-    let render = Arc::new(assets.reload(&root)?);
+    let render = Arc::new(assets.reload(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?);
     let facts = BlockFacts::load(&root, assets.registry)?;
     let visibility = models::load_visibility(&root, assets.registry)?;
-    let biomes = Arc::new(Biomes::load(&root)?);
+    let biomes = Arc::new(Biomes::load(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?);
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility)?),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility, None)?),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
         biomes: biomes.clone(),
         assets: assets.clone(),
         render,
+        hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
-    let terrain = || VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, seed);
+    let item_data = test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad)?;
+    let terrain_resources = horizon_client::vanillagen::TerrainResources {
+        data: None,
+        dir: &root.join("worldgen"),
+        registry: assets.registry,
+        biomes: &biomes,
+        item_data: &item_data,
+    };
+    let terrain = || VanillaTerrain::new(terrain_resources, seed);
     let go = |center, radius, n| -> Result<Run, Error> {
         match &simulate {
             Some(ms) => {

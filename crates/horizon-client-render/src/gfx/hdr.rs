@@ -927,6 +927,7 @@ mod tests {
 
     #[test]
     fn shared_light_matches_the_original_for_every_mark() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use wgpu::util::DeviceExt;
         let Some((device, queue)) = gpu() else {
             eprintln!("HDR equivalence GPU unavailable");
@@ -1028,6 +1029,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn coverage_target_resizes_resets_and_shows_in_the_debug_view() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -1185,6 +1187,7 @@ var<private> params: ReferenceParams;
     /// (hdr_look.wgsl `hdr_sun_peak`), so the renderer says only whether the look is on.
     #[test]
     fn the_writers_light_is_the_same_on_every_display_but_the_suns_disc() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             return;
         };
@@ -1225,6 +1228,7 @@ var<private> params: ReferenceParams;
     /// from the shader, in f64 from SMPTE ST 2084 and BT.2390.
     #[test]
     fn the_tone_curve_maps_the_scene_peak_onto_the_display() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             return;
         };
@@ -1423,6 +1427,7 @@ var<private> params: ReferenceParams;
     /// and the HDR10 picture after the switch back are the ones before it.
     #[test]
     fn a_switched_encoding_keeps_the_tuning_and_shows_the_same_light() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             eprintln!("HDR encoding switch GPU skipped: no adapter");
             return;
@@ -1511,6 +1516,7 @@ var<private> params: ReferenceParams;
     /// BT.2020, is HDR10's.
     #[test]
     fn the_black_level_lift_follows_bt2390_in_pq_and_scrgb() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             return;
         };
@@ -1627,6 +1633,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn a_scaled_screenshot_shoots_at_its_size_and_leaves_the_window_its_own_targets() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             eprintln!("scaled screenshot GPU unavailable");
             return;
@@ -1653,6 +1660,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn sdr_screenshots_keep_the_world_up_to_white_and_the_hud_as_drawn() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             eprintln!("SDR screenshot GPU unavailable");
             return;
@@ -1735,7 +1743,10 @@ var<private> params: ReferenceParams;
         // SDR picture, clipped at white.
         hdr.lighting = false;
         for gamma in [0.5f32, 0.9, 1.0] {
-            let w = [gamma, gamma / 2.0, 0.0];
+            // fs_keep reads the stored half-float world before writing the 8-bit HUD
+            // backdrop. Quantize first here too: 0.9 rounds to a half-float below
+            // the 8-bit rounding boundary; the original f32 can round to a different code.
+            let w = [gamma, gamma / 2.0, 0.0].map(|v| half::f16::from_f32(v).to_f32());
             // Uncovered, the HUD's target holds the world as drawn; the icon ignores the HUD.
             let got = shoot(&mut hdr, w.map(f64::from), w.map(f64::from), 0.0, false);
             assert_eq!(got[..3], w.map(|v| half::f16::from_f32(v).to_f32()));
@@ -1829,6 +1840,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn the_hud_lays_over_the_worlds_light_by_its_coverage() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             return;
         };
@@ -1885,6 +1897,7 @@ var<private> params: ReferenceParams;
     /// paper white, the HUD it drew included, whatever its alpha and UI Brightness.
     #[test]
     fn a_frame_without_the_huds_layer_shows_at_paper_white() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             return;
         };
@@ -1925,6 +1938,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn the_menu_blur_keeps_the_light_it_blurs() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = gpu() else {
             return;
         };
@@ -1952,6 +1966,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn hdr_shaders_validate() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let entity = super::super::entity_shader();
         for source in [
             &super::shader(),
@@ -1985,6 +2000,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn hdr10_first_then_scrgb() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let both = caps(&[
             (F::Bgra8UnormSrgb, S::SRGB),
             (F::Rgb10a2Unorm, S::BT2100_PQ | S::BT2100_HLG),
@@ -2000,6 +2016,7 @@ var<private> params: ReferenceParams;
 
     #[test]
     fn offscreen_offers_only_the_named_output() {
+        let _gpu = crate::gfx::test_gpu::lock();
         assert_eq!(named(Some("pq")), Some(Output::Pq));
         assert_eq!(named(Some("scrgb")), Some(Output::ScRgb));
         assert_eq!(named(Some("hdr10")), None);

@@ -1,0 +1,235 @@
+//! Horizon's extras in the game (`docs/extras.md`); a native mod's minimap
+//! (`native_minimap`: its tiles, image and HUD) and zoom (`native_zoom`) on the camera; clicks
+//! and frame times for mods (`native_clicks`, `native_frame_rate`).
+//! Each hook does nothing while its extra is off and no mod uses it.
+#[path = "extras/mouse_tweaks.rs"]
+pub(in crate::game) mod mouse_tweaks;
+#[path = "extras/reconnect.rs"]
+mod reconnect;
+#[path = "extras/sorting.rs"]
+mod sorting;
+
+use super::{Dim, Game, Screen};
+use horizon_client::{
+    extras::{Corner, Cps, FpsCounter, fov_target},
+    extras_hud::{self, Corners},
+    hud::{HudBatch, MINIMAP_SPRITE},
+    minimap::{self, Layer, Minimap, View},
+    reconnect::Tracker,
+};
+use std::time::Duration;
+use winit::event::MouseButton;
+
+#[derive(Default)]
+pub(super) struct ExtrasState {
+    fps: FpsCounter,
+    /// Left and right mouse buttons: held, and their clicks.
+    mouse: [bool; 2],
+    cps: [Cps; 2],
+    minimap: Minimap,
+    /// The dimension the minimap's tiles belong to.
+    minimap_dim: Option<Dim>,
+    /// Auto-reconnect's attempts at the current server.
+    reconnect: Tracker,
+    /// Captured before pre listeners; shared by the draw and post listeners.
+    pub(super) frame_partial_ticks: Option<(f32, f32)>,
+}
+/// CPU time the minimap's tiles may take per frame.
+const MINIMAP_BUDGET: Duration = Duration::from_micros(300);
+
+impl Game<'_> {
+    fn extras_now(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+    /// Mouse buttons while playing, for mods' clicks.
+    pub(super) fn extras_mouse(&mut self, button: MouseButton, pressed: bool) {
+        let i = match button {
+            MouseButton::Left => 0,
+            MouseButton::Right => 1,
+            _ => return,
+        };
+        self.extras.mouse[i] = pressed;
+        // For mods (`input.clicks-per-second`, `native_clicks`).
+        if pressed {
+            let now = self.extras_now();
+            self.extras.cps[i].click(now);
+        }
+    }
+    /// Once per frame: the frame's time, and keys let go behind screens.
+    pub(super) fn extras_frame(&mut self, elapsed: Duration) {
+        // Under agent control the window may lack focus without pausing.
+        let focused = self.focused || self.control.is_some();
+        let playing = self.screen == Screen::Playing && self.title.is_none() && focused;
+        if !playing {
+            self.extras.mouse = [false; 2];
+        }
+        self.update_minimap();
+        // For mods (`render.frame-stats`, `native_frame_rate`).
+        let now = self.extras_now();
+        self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
+        let (world_partial_tick, partial_tick) = self.frame_partial_ticks();
+        self.extras.frame_partial_ticks = Some((world_partial_tick, partial_tick));
+        self.native_render_frame_pre(elapsed, world_partial_tick, partial_tick);
+        // A clear a mod asked for (in this frame's `RenderFrameEvent.Pre`, or after the last
+        // frame was drawn) lands before this frame's particles are drawn, paused or not.
+        self.apply_mod_particle_clear();
+        self.pvp_frame();
+        self.recipes_received_now();
+    }
+    /// The frame counter for mods: fps, min, 1% low.
+    pub(super) fn frame_reading(&self) -> (u32, u32, u32) {
+        let r = self.extras.fps.reading();
+        (r.fps, r.min, r.low)
+    }
+    /// Attack and use clicks in the last second.
+    pub(super) fn click_reading(&mut self) -> (u32, u32) {
+        let now = self.extras_now();
+        let [l, r] = &mut self.extras.cps;
+        (l.per_second(now) as u32, r.per_second(now) as u32)
+    }
+    /// Whether the attack and use buttons are held.
+    pub(super) fn mouse_held(&self) -> [bool; 2] {
+        self.extras.mouse
+    }
+    /// The minimap a mod shows (`native_minimap`): its corner, its side
+    /// in GUI pixels and its view of the player.
+    fn minimap_shown(&self) -> Option<(Corner, f32, View)> {
+        let p = self.player.as_ref()?;
+        if self.title.is_some() || self.ui.hide_gui {
+            return None;
+        }
+        let m = self.minimap_wanted()?;
+        let view = View {
+            x: p.position.x,
+            z: p.position.z,
+            yaw: self.yaw,
+            rotate: m.rotate,
+            blocks_per_pixel: m.blocks_per_pixel,
+            round: m.round,
+        };
+        Some((m.corner, m.size, view))
+    }
+    /// The minimap shown: a native mod's (`native_minimap`).
+    fn minimap_wanted(&self) -> Option<mod_api::Minimap> {
+        self.native_minimap_now()
+    }
+    /// Refresh the minimap's tiles within the frame budget, recompose its
+    /// image when the view or a tile changed, and queue the upload.
+    fn update_minimap(&mut self) {
+        let Some((_, _, view)) = self.minimap_shown() else {
+            if self.minimap_wanted().is_none() || self.player.is_none() {
+                self.extras.minimap.clear();
+                self.extras.minimap_dim = None;
+            }
+            return;
+        };
+        if self.extras.minimap_dim != Some(self.dim) {
+            self.extras.minimap.clear();
+            self.extras.minimap_dim = Some(self.dim);
+        }
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let head = (p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32;
+        let (bx, bz) = (view.x.floor() as i32, view.z.floor() as i32);
+        // Underground, under a roof or in the Nether: the floor around the player.
+        let covered = self.world.light(bx, head, bz) >> 4 == 0;
+        let layer = if self.world.shape.has_ceiling || covered {
+            Layer::Below(head)
+        } else {
+            Layer::Surface
+        };
+        // The chunks the image can reach (its corners when it turns).
+        let reach = minimap::SIZE as f32 / 2.0 * view.blocks_per_pixel * std::f32::consts::SQRT_2;
+        let radius = ((reach / 16.0).ceil() as i32 + 1).min(self.settings.render_distance.max(2));
+        self.extras.minimap.update(
+            &self.world,
+            self.res.facts(),
+            (bx >> 4, bz >> 4),
+            radius,
+            layer,
+            MINIMAP_BUDGET,
+        );
+        if !self.extras.minimap.compose(view) {
+            return;
+        }
+        let Some(rect) = self.gui.atlas.sprites.get(MINIMAP_SPRITE).copied() else {
+            return;
+        };
+        let (w, h) = (self.gui.atlas.width as f32, self.gui.atlas.height as f32);
+        self.map_patches.push(horizon_client::font::Patch {
+            x: (rect.u0 * w).round() as u32,
+            y: (rect.v0 * h).round() as u32,
+            width: minimap::SIZE as u32,
+            height: minimap::SIZE as u32,
+            rgba: self.extras.minimap.image.clone(),
+        });
+    }
+    /// A mod's zoom in effect (`native_zoom`): (factor, smooth, turning
+    /// scale); none is 1.
+    fn zoom_now(&self) -> (f32, bool, f64) {
+        self.native_zoom_now().map_or((1.0, true, 1.0), |z| {
+            (z.factor, z.smooth, f64::from(z.turn))
+        })
+    }
+    /// The field-of-view modifier target, divided by a smooth zoom.
+    pub(super) fn zoomed_fov_target(&self, vanilla: f32) -> f32 {
+        match self.zoom_now() {
+            (factor, true, _) => fov_target(vanilla, factor),
+            _ => vanilla,
+        }
+    }
+    /// The field of view in degrees, divided by an instant zoom.
+    pub(super) fn zoomed_fov_degrees(&self, fov: f32) -> f32 {
+        match self.zoom_now() {
+            (factor, false, _) => fov / factor,
+            _ => fov,
+        }
+    }
+    /// Mouse turning while zoomed.
+    pub(super) fn zoom_turn_scale(&self) -> f64 {
+        self.zoom_now().2
+    }
+    /// The minimap and mods' corner panels, in the HUD layer (hidden with F1
+    /// by the caller). The top left corner gives way to the debug screen.
+    pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
+        let map = self.minimap_shown();
+        let visible = |corner| !(self.debug && corner == Corner::TopLeft);
+        let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
+        let atlas = &self.gui.atlas;
+        if let Some((map_corner, map_size, view)) = map
+            && visible(map_corner)
+            && !self.extras.minimap.image.is_empty()
+            && let Some(image) = atlas.sprites.get(MINIMAP_SPRITE).copied()
+        {
+            let (arrow, north) = if view.rotate {
+                (0.0, Some(view.north()))
+            } else {
+                (180.0 + view.yaw, None)
+            };
+            let look = extras_hud::MinimapLook {
+                corner: map_corner,
+                size: map_size,
+                image,
+                arrow,
+                north,
+            };
+            extras_hud::draw_minimap(batch, atlas, &mut corners, &look);
+        }
+        self.draw_pvp_hud(batch, &mut corners);
+        self.native_render_gui_post(batch, &mut corners);
+    }
+    /// The height the status effect icons take at the top right
+    /// (`Hud.extractEffects`: beneficial at y 1, harmful at y 26).
+    fn effect_rows_height(&self) -> f32 {
+        let effects = &self.potions.effects.list;
+        if effects.is_empty() || self.screen != Screen::Playing || self.pvp_effects_shown() {
+            return 0.0;
+        }
+        let harmful = effects.iter().any(|e| {
+            horizon_client::brewing::effect(e.id)
+                .is_some_and(|d| d.category != horizon_client::brewing::Category::Beneficial)
+        });
+        if harmful { 50.0 } else { 25.0 }
+    }
+}

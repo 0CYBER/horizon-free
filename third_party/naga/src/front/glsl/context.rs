@@ -650,10 +650,7 @@ impl<'a> Context<'a> {
                         } else {
                             &self.expressions
                         };
-                        self.module
-                            .to_ctx()
-                            .get_const_val_from(index, arena)
-                            .ok()
+                        self.module.to_ctx().get_const_val_from(index, arena).ok()
                     }
                 };
 

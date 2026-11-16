@@ -186,7 +186,7 @@ fn zoom_rows(s: &Settings) -> Vec<Row<ExtraRow>> {
     let on = Value::Switch(s.mods.is_on(i));
     let mut rows = vec![Row::new(ExtraRow::Zoom(i), lang::get(ZOOM), on).about(about)];
     let page = installed[i].native.as_ref();
-    if page.is_some_and(|page| !page.keys.is_empty() || !page.buttons.is_empty()) {
+    if page.is_some_and(|page| !page.mappings.is_empty() || !page.settings.is_empty()) {
         let name = lang::get(MOD_SETTINGS);
         rows.push(Row::new(ExtraRow::ZoomSettings(i), name, Value::Press));
     }
@@ -389,11 +389,22 @@ mod tests {
     fn down_from_the_search_field_lands_on_the_first_row() {
         use crate::{hud::HudBatch, settings_shell::Columns, ui};
         use winit::keyboard::KeyCode as K;
-        let atlas = crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
+        let atlas = crate::hud::HudAtlas::build(
+            &crate::resource_source::ResourceSource::directory("/nonexistent".into()),
+        )
+        .unwrap();
         let mut s = Settings::default();
         let mut shell = Shell::<ExtrasScreen>::default();
-        let mut batch = HudBatch::new([1708, 960]);
-        shell.draw(&s, &mut batch, &atlas, (0.0, 0.0), false, None);
+        let mut batch = HudBatch::scratch([1708, 960]);
+        shell.draw_test_frame(
+            &s,
+            &mut batch,
+            &atlas,
+            (0.0, 0.0),
+            false,
+            None,
+            &mut |_, _| {},
+        );
         crate::widgets::end_frame(1);
         let size = (batch.width, batch.height);
         let cols = Columns::of(size.0, size.1).with_note_lines(NOTE_LINES);

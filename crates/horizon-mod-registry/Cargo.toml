@@ -5,13 +5,13 @@ edition = "2024"
 license = "LGPL-3.0-or-later"
 rust-version = "1.90"
 publish = false
-description = "The registry's submission service: GitHub sign-in, the file's checks, staging, and a pull request (docs/api/mod-index.md)"
+description = "The registry's submission service: GitHub sign-in, the file's checks, staging, and a pull request (docs/modding/src/reference/registry-index.md)"
 
-# Its own workspace, as the telemetry server's: the game's workspace never builds a web server.
+# Its own workspace: the game's workspace never builds a web server.
 [workspace]
 
 [dependencies]
-horizon-mods = { path = "../horizon-mods", default-features = false, features = ["index"] }
+horizon-platform = { path = "../horizon-platform", features = ["mod-index"] }
 horizon-release-sign = { path = "../horizon-release-sign" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
@@ -24,7 +24,7 @@ hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
-# Ratings: one SQLite file on a small volume, as the telemetry server keeps its data.
+# Ratings: one SQLite file on a small volume.
 rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 # Draining a refused upload (already one of axum's).
 http-body-util = "0.1"

@@ -66,4 +66,4 @@ in an entry must be doubled in the text, so Niger and Nigeria pass, and so do "s
 Keep the list to slurs: insults that aren't slurs are the moderators' to handle.
 
 Code: `crates/horizon-chat-filter` (settings, matcher, escalation, mutes), `lan/hub/chat_filter.rs` (the
-check before the server relays a text), `game/chat_filter.rs` (log, events, bans, the mute commands).
+check before the server relays a text), `game/interface/chat_filter.rs` (log, events, bans, the mute commands).

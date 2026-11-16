@@ -3,9 +3,10 @@
 //! constructor and `onHit`), and `addAdditionalSaveData` writes it back.
 use super::super::world::{test_player, with_built_test_world};
 use super::*;
+use crate::health::TestLevel;
 use crate::mobs::MobWorld;
 use crate::projectiles::ProjectileKind;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 fn ghast_tag(power: Option<Tag>) -> Tag {
@@ -29,11 +30,11 @@ fn ghast_tag(power: Option<Tag>) -> Tag {
 /// The power of the one large fireball `goal` shot over 20 ticks, as
 /// `Ghast.GhastShootFireballGoal` counts its charge to 20.
 fn shot_power(m: &mut Mob, goal: &mut GhastShoot, world: &MobWorld<'_>) -> i32 {
-    let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
+    let (mut test_level, mut events) = (TestLevel::new(0), Vec::new());
     for _ in 0..20 {
         let mut cx = Cx {
             w: world,
-            lr: &mut lr,
+            level: &mut test_level.level(),
             events: &mut events,
         };
         goal.tick(m, &mut cx);
@@ -54,6 +55,7 @@ fn shot_power(m: &mut Mob, goal: &mut GhastShoot, world: &MobWorld<'_>) -> i32 {
 /// the goal gives it to the `LargeFireball` it spawns, and
 /// `Ghast.addAdditionalSaveData` saves it back.
 #[test]
+#[ignore = "daily"]
 fn ghast_explosion_power_sizes_the_fireball_it_shoots() {
     let ran = with_built_test_world(
         &[],
@@ -116,5 +118,5 @@ fn ghast_explosion_power_sizes_the_fireball_it_shoots() {
             );
         },
     );
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

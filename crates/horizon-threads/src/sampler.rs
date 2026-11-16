@@ -15,6 +15,8 @@ use crate::unwind::{self, MAX_FRAMES, StackBounds};
 
 mod eh;
 mod linux;
+#[cfg(any(test, feature = "sampling-test-support"))]
+pub mod test_support;
 
 pub(crate) use eh::{Loaded, StackUnwinder, loaded_modules};
 use linux as os;

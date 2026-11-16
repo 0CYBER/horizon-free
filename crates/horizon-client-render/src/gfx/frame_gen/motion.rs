@@ -359,6 +359,7 @@ mod tests {
     /// space; a new one, one whose shape changed and untagged geometry get none.
     #[test]
     fn tracks_each_entity_by_id() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = super::super::optical_flow::tests::device() else {
             return;
         };

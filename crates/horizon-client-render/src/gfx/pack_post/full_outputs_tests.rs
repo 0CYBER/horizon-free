@@ -70,6 +70,7 @@ fn pack(outputs: u32) -> Post {
 
 #[test]
 fn a_shadow_program_with_every_output_drops_the_boats_patches_not_its_water() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     const ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0=>Float32x3];
     let layouts = [Some(wgpu::VertexBufferLayout {

@@ -1,5 +1,5 @@
 //! Pending entity NBT and the runtime context that must not be stored inside it.
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityLoadReason {

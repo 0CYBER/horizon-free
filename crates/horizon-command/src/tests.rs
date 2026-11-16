@@ -94,6 +94,124 @@ fn suggestions(input: &str) -> Vec<String> {
 }
 
 #[test]
+fn execution_requirement_keeps_public_children_reachable() {
+    let mut dispatcher = Dispatcher::new();
+    let root = dispatcher.literal(0, "foo");
+    dispatcher.executes(root, "admin");
+    dispatcher.requires_execution(root, 4);
+    let child = dispatcher.literal(root, "bar");
+    dispatcher.executes(child, "public");
+    let registries = Registries::default();
+    let denied = dispatcher.parse("foo", &registries);
+    assert!(!denied.is_valid());
+    assert!(denied.executable().is_err());
+    assert_eq!(
+        dispatcher
+            .parse("foo bar", &registries)
+            .executable()
+            .unwrap()
+            .1,
+        "public"
+    );
+    let operator = Registries {
+        permission: 4,
+        ..registries
+    };
+    assert_eq!(
+        dispatcher.parse("foo", &operator).executable().unwrap().1,
+        "admin"
+    );
+    dispatcher.requires(root, 4);
+    assert!(
+        dispatcher
+            .parse("foo bar", &Registries::default())
+            .executable()
+            .is_err()
+    );
+}
+
+#[test]
+fn authorized_argument_alternatives_win_only_complete_ties() {
+    for reverse in [false, true] {
+        let mut dispatcher = Dispatcher::new();
+        let root = dispatcher.literal(0, "foo");
+        let first_word = reverse.then(|| dispatcher.argument(root, "b", ArgType::Word));
+        let integer = dispatcher.argument(root, "a", integer(i32::MIN));
+        dispatcher.executes(integer, "admin");
+        dispatcher.requires_execution(integer, 4);
+        let bar = dispatcher.literal(integer, "bar");
+        dispatcher.executes(bar, "child");
+        let word = first_word.unwrap_or_else(|| dispatcher.argument(root, "b", ArgType::Word));
+        dispatcher.executes(word, "public");
+        for permission in 0..=4 {
+            let registries = Registries {
+                permission,
+                ..Registries::default()
+            };
+            let parsed = dispatcher.parse("foo 7", &registries);
+            let (context, command) = parsed.executable().unwrap();
+            let admin = permission == 4 && !reverse;
+            assert_eq!(command, if admin { "admin" } else { "public" });
+            assert_eq!(context.get("a").is_some(), admin);
+            assert_eq!(
+                dispatcher
+                    .parse("foo 7 bar", &registries)
+                    .executable()
+                    .unwrap()
+                    .1,
+                "child"
+            );
+            assert!(dispatcher.parse("foo", &registries).executable().is_err());
+        }
+        let registries = Registries::default();
+        // A nonmatching literal is not tried; use failing argument parsers to
+        // exercise error ordering independently of the complete-tie case.
+        let tail = dispatcher.argument(integer, "tail", ArgType::Bool);
+        dispatcher.executes(tail, "integer_child");
+        let unread = dispatcher.parse("foo 7 nope", &registries);
+        assert!(unread.can_read());
+        assert!(unread.errors.is_empty());
+        assert!(
+            unread.context.get("b").is_some(),
+            "the error-free peer wins"
+        );
+        let tail = dispatcher.argument(word, "tail", ArgType::Bool);
+        dispatcher.executes(tail, "word_child");
+        let failed = dispatcher.parse("foo 7 nope", &registries);
+        assert!(failed.can_read() && !failed.errors.is_empty());
+        assert_eq!(
+            failed.context.get("b").is_some(),
+            reverse,
+            "invalid ties stay stable"
+        );
+        let literal = dispatcher.literal(root, "7");
+        dispatcher.executes(literal, "literal");
+        assert_eq!(
+            dispatcher
+                .parse("foo 7", &registries)
+                .executable()
+                .unwrap()
+                .1,
+            "literal"
+        );
+    }
+    let mut dispatcher = Dispatcher::new();
+    let root = dispatcher.literal(0, "foo");
+    let integer = dispatcher.argument(root, "a", integer(i32::MIN));
+    dispatcher.executes(integer, "admin");
+    dispatcher.requires_execution(integer, 4);
+    let bar = dispatcher.literal(integer, "bar");
+    dispatcher.executes(bar, "public");
+    assert!(
+        dispatcher
+            .parse("foo 7", &Registries::default())
+            .executable()
+            .is_err(),
+        "no authorized alternative must still refuse"
+    );
+}
+
+#[test]
 fn reader_matches_brigadier() {
     let mut r = Reader::new("12 -3.5 abc \"q\\\"x\" true");
     assert_eq!(r.read_int().unwrap(), 12);
@@ -164,6 +282,53 @@ fn resource_selector_scans_normalized_ids() {
 }
 
 #[test]
+fn modprofile_session_command_requires_admin_permission() {
+    let rules = horizon_client_core::gamerules::RuleRegistry::vanilla();
+    let session = vanilla::session_dispatcher(&rules, &[]);
+    assert!(vanilla::dispatcher().find("modprofile").is_none());
+    for permission in 0..=4 {
+        let mut registry = reg();
+        registry.permission = permission;
+        for (action, expected) in [
+            ("start", "modprofile.start"),
+            ("stop", "modprofile.stop"),
+            ("report", "modprofile.report"),
+        ] {
+            let line = format!("modprofile {action}");
+            let parse = session.parse(&line, &registry);
+            if permission < 3 {
+                assert!(parse.executable().is_err());
+            } else {
+                assert_eq!(parse.executable().unwrap().1, expected);
+            }
+        }
+    }
+}
+#[test]
+fn session_dispatchers_respect_feature_flags() {
+    let first = horizon_client_core::gamerules::RuleRegistry::vanilla();
+    let second = horizon_client_core::gamerules::RuleRegistry::vanilla();
+    let plain = vanilla::session_dispatcher(&first, &[]);
+    let enabled = vanilla::session_dispatcher(
+        &second,
+        &[horizon_client_core::gamerules::MINECART_IMPROVEMENTS.to_owned()],
+    );
+    let registries = reg();
+    assert!(
+        plain
+            .parse("gamerule max_minecart_speed 8", &registries)
+            .executable()
+            .is_err()
+    );
+    assert!(
+        enabled
+            .parse("gamerule max_minecart_speed 8", &registries)
+            .executable()
+            .is_ok()
+    );
+}
+
+#[test]
 fn parses_vanilla_commands() {
     assert_eq!(run("gamemode creative").unwrap().0, "gamemode");
     assert_eq!(
@@ -216,6 +381,31 @@ fn parses_vanilla_commands() {
     let (ctx, _) = parse.executable().unwrap();
     assert!(ctx.has("strict") && ctx.has("filtered") && ctx.has("force") && !ctx.has("move"));
 }
+#[test]
+fn gamemode_parses_the_shared_game_type() {
+    use horizon_core::game_mode::GameMode;
+
+    let dispatcher = vanilla::dispatcher();
+    let registry = reg();
+    for (name, expected) in [
+        ("survival", GameMode::Survival),
+        ("creative", GameMode::Creative),
+        ("adventure", GameMode::Adventure),
+        ("spectator", GameMode::Spectator),
+    ] {
+        let parse = dispatcher.parse(&format!("gamemode {name}"), &registry);
+        let (ctx, _) = parse.executable().unwrap();
+        assert_eq!(ctx.get("gamemode"), Some(&Arg::GameMode(expected)));
+    }
+    for name in ["Creative", "1", "unknown"] {
+        let parse = dispatcher.parse(&format!("gamemode {name}"), &registry);
+        assert_eq!(
+            parse.executable().unwrap_err().message.plain(),
+            "argument.gamemode.invalid"
+        );
+    }
+}
+
 #[test]
 fn vanilla_error_messages() {
     let e = run("foo").unwrap_err();
@@ -429,6 +619,27 @@ fn whitespace_is_what_java_character_is_whitespace_says() {
     assert!(parse("@e[ type=minecraft:pig]"));
     assert!(parse("@e[\u{1F}type=minecraft:pig]"));
     assert!(!parse("@e[\u{A0}type=minecraft:pig]"));
+}
+#[test]
+fn a_registered_token_reads_as_a_whole_word_before_the_vanilla_letter() {
+    let mut reg = reg();
+    reg.selector_tokens
+        .push(horizon_client_core::registries::SelectorToken {
+            name: "allies".into(),
+            tooltip: "test.selector.allies".into(),
+            players_only: true,
+            limit: usize::MAX,
+            sort: "nearest",
+        });
+    let mut r = Reader::new("@allies[limit=1]");
+    let s = selector::parse(&mut r, &reg, true).unwrap();
+    assert_eq!(s.token.as_deref(), Some("allies"));
+    assert_eq!((s.limit, s.sort), (1, Sort::Nearest));
+    assert!(!s.include_entities);
+    let s = selector::parse(&mut Reader::new("@a"), &reg, true).unwrap();
+    assert_eq!((s.kind, s.token), ('a', None));
+    let error = selector::parse(&mut Reader::new("@zz"), &reg, true).unwrap_err();
+    assert_eq!(error.key, "argument.entity.selector.unknown");
 }
 #[test]
 fn a_uuid_selects_by_entity_uuid() {
@@ -1263,6 +1474,276 @@ fn h149_oblique_local_offsets_are_grouped_before_the_origin() {
         failures.is_empty(),
         "exact oblique local-coordinate bit mismatches: {failures:#?}"
     );
+}
+
+#[test]
+fn a_custom_argument_parses_completes_and_keeps_its_id() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:machine",
+        CustomArgumentKind::Word,
+        |input| {
+            if input == "press" {
+                Ok(input.to_owned())
+            } else {
+                Err(Text::literal(format!("unknown machine `{input}`")))
+            }
+        },
+        |_, prefix| {
+            ["press", "furnace"]
+                .into_iter()
+                .filter(|machine| machine.starts_with(prefix))
+                .map(|text| CustomSuggestion {
+                    text: text.to_owned(),
+                    tooltip: None,
+                    replace_start: None,
+                })
+                .collect()
+        },
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let command = dispatcher.literal(0, "machine");
+    let use_node = dispatcher.literal(command, "use");
+    let machine = dispatcher.argument(use_node, "machine", argument);
+    dispatcher.executes(machine, "test");
+
+    let registries = reg();
+    let parsed = dispatcher.parse("machine use press", &registries);
+    let (context, _) = parsed.executable().unwrap();
+    assert_eq!(
+        context.get("machine"),
+        Some(&Arg::Custom {
+            kind: "example:machine".into(),
+            value: "press".into(),
+        })
+    );
+    let error = dispatcher
+        .parse("machine use banana", &registries)
+        .executable()
+        .unwrap_err();
+    assert_eq!(error.message, Text::literal("unknown machine `banana`"));
+
+    let typed = "machine use pr";
+    let (_, suggestions) = dispatcher.suggestions(
+        &dispatcher.parse(typed, &registries),
+        typed.len(),
+        &registries,
+    );
+    assert_eq!(
+        suggestions
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["press"]
+    );
+}
+
+#[test]
+fn a_greedy_custom_argument_takes_the_rest_of_the_line() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:note",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.trim().to_owned()),
+        |_, _| Vec::new(),
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let note = dispatcher.literal(0, "note");
+    let set = dispatcher.literal(note, "set");
+    let text = dispatcher.argument(set, "text", argument);
+    dispatcher.executes(text, "test");
+
+    let registries = reg();
+    let parsed = dispatcher.parse("note set hello there", &registries);
+    let (context, _) = parsed.executable().unwrap();
+    assert_eq!(
+        context.get("text"),
+        Some(&Arg::Custom {
+            kind: "example:note".into(),
+            value: "hello there".into(),
+        })
+    );
+}
+
+#[test]
+fn an_ask_server_node_replies_with_the_token_range_when_it_has_no_suggestion_of_its_own() {
+    // The free `id` node: vanilla's identifier parser with `minecraft:ask_server`. It computes
+    // nothing locally, so the range the server sends must still be the token being typed: the
+    // completions a mod adds in `tab_complete` are applied there, not at the start of the line.
+    let mut dispatcher = Dispatcher::new();
+    let probe = dispatcher.literal(0, "probe");
+    let value = dispatcher.argument(probe, "value", ArgType::Identifier);
+    dispatcher.suggests(value, Suggests::AskServer);
+    let registries = reg();
+    let typed = "probe ston";
+    let parse = dispatcher.parse(typed, &registries);
+    let (range, list, ask) = dispatcher.client_suggestions_asking(&parse, typed.len(), &registries);
+    assert!(ask, "the client asks the server for this node");
+    assert!(list.is_empty(), "the identifier itself suggests nothing");
+    assert_eq!(range, (6, typed.len()), "the token, never (0, 0)");
+    // The server answers the same way; its dispatcher has no provider to ask, only its mods.
+    let (range, list) = dispatcher.suggestions(&parse, typed.len(), &registries);
+    assert!(list.is_empty());
+    assert_eq!(range, (6, typed.len()));
+}
+
+#[test]
+fn an_expanded_suggestion_past_the_packet_text_limit_is_left_out() {
+    // Two completions that each fit the packet's 32767 UTF-16 units on their own: one replaces
+    // the whole 32002-character text, the other only its last character. Padding the second with
+    // the prefix it starts after expands to 64768 characters, so the packet cannot carry it; it
+    // is left out and the first one stays.
+    let input = "a".repeat(32002);
+    let whole = || Suggestion {
+        range: (0, input.len()),
+        text: "short".into(),
+        tooltip: None,
+        int_value: None,
+    };
+    let from_last = |len: usize| Suggestion {
+        range: (input.len() - 1, input.len()),
+        text: "b".repeat(len),
+        tooltip: None,
+        int_value: None,
+    };
+    let (range, merged) = merge_suggestions(&input, vec![whole(), from_last(32767)]);
+    assert_eq!(range, (0, input.len()));
+    assert_eq!(
+        merged.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+        ["short"]
+    );
+    // The kept one applies to the whole text, so the chat can still offer it.
+    assert_eq!(merged[0].apply(&input), "short");
+    // The limit counts the expanded text: the 32001 characters in front of the last one plus
+    // its own 766 is exactly 32767 and stays, one character more does not.
+    let (_, merged) = merge_suggestions(&input, vec![whole(), from_last(766)]);
+    assert_eq!(merged.len(), 2);
+    assert!(
+        merged
+            .iter()
+            .any(|s| s.text.encode_utf16().count() == 32767),
+        "a completion expanded to exactly the limit stays"
+    );
+    let (_, merged) = merge_suggestions(&input, vec![whole(), from_last(767)]);
+    assert_eq!(merged.len(), 1, "32768 characters cannot cross the wire");
+}
+
+#[test]
+fn a_custom_suggestion_replaces_only_the_token_it_names() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:pattern",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.to_owned()),
+        |_, prefix| {
+            let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+            let mut out: Vec<CustomSuggestion> = ["stone", "dirt"]
+                .into_iter()
+                .filter(|block| block.starts_with(&prefix[start..]))
+                .map(|block| CustomSuggestion {
+                    text: block.to_owned(),
+                    tooltip: None,
+                    replace_start: Some(start),
+                })
+                .collect();
+            // A suggestion past the typed text is left out, never applied.
+            out.push(CustomSuggestion {
+                text: "nowhere".to_owned(),
+                tooltip: None,
+                replace_start: Some(prefix.len() + 1),
+            });
+            out
+        },
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let replace = dispatcher.literal(0, "replace");
+    let pattern = dispatcher.argument(replace, "pattern", argument);
+    dispatcher.executes(pattern, "test");
+
+    let registries = reg();
+    let typed = "replace stone st";
+    let parse = dispatcher.parse(typed, &registries);
+    let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+    assert_eq!(range, (14, typed.len()), "the range covers the typed token");
+    assert_eq!(
+        suggestions
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["stone"]
+    );
+    assert_eq!(suggestions[0].apply(typed), "replace stone stone");
+}
+
+#[test]
+fn a_split_character_completion_does_not_displace_a_valid_neighbor() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:unicode",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.to_owned()),
+        |_, _| {
+            vec![
+                CustomSuggestion {
+                    text: "emerald".into(),
+                    tooltip: None,
+                    replace_start: Some(0),
+                },
+                CustomSuggestion {
+                    text: "broken".into(),
+                    tooltip: None,
+                    replace_start: Some(1),
+                },
+            ]
+        },
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let probe = dispatcher.literal(0, "probe");
+    let value = dispatcher.argument(probe, "value", argument);
+    dispatcher.executes(value, "test");
+    let registries = reg();
+    let typed = "probe é";
+    let (range, suggestions) = dispatcher.suggestions(
+        &dispatcher.parse(typed, &registries),
+        typed.len(),
+        &registries,
+    );
+    assert_eq!(range, (6, 8));
+    assert_eq!(
+        suggestions
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["emerald"]
+    );
+    assert_eq!(suggestions[0].apply(typed), "probe emerald");
+}
+
+#[test]
+fn a_free_identifier_keeps_vanillas_empty_paths_and_rejects_invalid_namespaces() {
+    let mut dispatcher = Dispatcher::new();
+    let probe = dispatcher.literal(0, "probe");
+    let value = dispatcher.argument(probe, "value", ArgType::Identifier);
+    dispatcher.executes(value, "test");
+    let registries = reg();
+    for (raw, expected) in [
+        ("//path", "minecraft://path"),
+        (":", "minecraft:"),
+        ("namespace:", "namespace:"),
+        ("namespace:lower/path", "namespace:lower/path"),
+    ] {
+        let typed = format!("probe {raw}");
+        let parsed = dispatcher.parse(&typed, &registries);
+        let (context, _) = parsed.executable().unwrap();
+        assert_eq!(
+            context.get("value"),
+            Some(&Arg::Str(expected.into())),
+            "{raw}"
+        );
+    }
+    for raw in ["name/space:path", "namespace:Upper"] {
+        let typed = format!("probe {raw}");
+        assert!(
+            dispatcher.parse(&typed, &registries).executable().is_err(),
+            "{raw}"
+        );
+    }
 }
 
 #[test]

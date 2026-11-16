@@ -147,7 +147,7 @@ def run(args, out):
                      ('XDG_CONFIG_HOME', 'config')):
         (work / 'servers' / sub).mkdir(parents=True)
         os.environ[var] = str(work / 'servers' / sub)
-    os.environ.update(lab.game_env(HORIZON_TELEMETRY_URL='off'))
+    os.environ.update(lab.game_env())
     directory = work / 'server'
     directory.mkdir()
     port = free_port()

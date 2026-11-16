@@ -1,0 +1,23 @@
+[package]
+name = "horizon-mod-source"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "A mod's own source as the mod tools read it: the mod folder, its module files and the Wire types it lets cross"
+
+[lib]
+name = "mod_source"
+
+[dependencies]
+horizon-mod-surface = { path = "../horizon-mod-surface" }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", features = ["full"] }
+toml = "1.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

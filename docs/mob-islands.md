@@ -2,7 +2,10 @@
 
 Design: [#14457](https://github.com/horizon-rust/horizon/issues/14457).
 Implementation: `crates/horizon-client/src/game/creatures/mob_islands.rs`.
-Parallel ticking is off by default. Design approval and normal implementation review are separate gates.
+The parallel mob loop (`mob_group.rs`, `mob_islands.rs`, `prep.rs`) is currently compiled only with the nondefault
+`upstream-parallel-mobs` feature (`game/mobs/creatures/mod.rs`), so `parallel_tick` does not run mob islands in the
+default build; the other parallel phases follow the setting.
+Design approval and normal implementation review are separate gates.
 
 ## Reach is a correctness contract
 
@@ -182,7 +185,7 @@ What a mod can run in a mob's turn: `native_living_change_target`, `native_livin
 `native_living_knockback`, `native_trample` (a mob falling on farmland), `native_block_step_on`,
 `native_block_entity_inside` and `native_block_fall_on` (a content mod's blocks), a content mod
 effect's ticks, `native_living_jump` and `native_living_damage_post`, and mixins into them. The
-build finds which (`horizon_mod_api_gen::mob_turn`, `HORIZON_MOB_TURN`): the loop stays serial
+parallel build finds which using its static trait-package scanner: its loop stays serial
 when a mixin injects into one of those or into anything but a `native_*` hook point, or a trait
 package defines a function named for a hook the turn waits on (all but the last two). A game built
 without that finding, with trait mods, stays serial too. While no mod hooks, grouped turns skip the hooks that
@@ -190,9 +193,17 @@ hand something back (no mod listens) and keep the two notifications, which the s
 at the join, ordered by turn. A mob carrying a content mod's effect keeps the tick serial while mods
 are loaded. The entity tick Pre's cancellations are heard before the loop and passed to every group.
 
-The tick profiler samples on whichever thread runs a mob: each helper samples for whoever samples
-on the server thread, into its own sums, which join the server thread's when it ends. A sampled
-mob's time on a helper includes its waits for earlier mobs' level random.
+The tick profiler samples on whichever thread runs a mob: each helper samples for whoever
+samples on the server thread, into its own sums, which join the server thread's when it ends.
+A sampled mob's time on a helper includes its waits for earlier mobs' level random.
+
+The default build does not include that static scanner, grouped-turn deferral API or helper-thread sampler:
+none has a consumer in its retained implementation. The default borrowed loop dispatches typed
+callbacks directly, without deferral TLS checks. Report sampling keeps its single accumulator,
+CPU attribution, span-owner arbitration and calibration state restoration. This does not establish
+parallel safety for dynamically loaded mods; integration remains behind the gate described above.
+
+Acceptance command (not validation of the default build, which keeps the loop serial):
 
 ```sh
 cargo test -p horizon-client --lib game::creatures::mob_islands:: -- --include-ignored --test-threads=1

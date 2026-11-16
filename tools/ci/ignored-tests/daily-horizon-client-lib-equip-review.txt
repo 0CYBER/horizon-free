@@ -1,0 +1,1 @@
+horizon-client-lib menu::equip_movement::tests::unpreparable_cursor_helmet_enters_inventory_but_not_head lib daily resources

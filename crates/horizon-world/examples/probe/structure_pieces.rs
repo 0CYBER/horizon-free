@@ -7,17 +7,19 @@
 //! location; other pieces: `-` for element, rotation and position).
 use crate::support::common::tag;
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    DATA_VERSION,
-    nbt::Tag,
-    registry::BlockRegistry,
-    worldgen::{
-        generator::{GeneratorData, OverworldGenerator},
-        structure::{Rotation, jigsaw::PoolElement, start::Piece},
-    },
-};
 use serde_json::Value;
 use std::{fs, path::Path};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        registry::BlockRegistry,
+        worldgen::{
+            generator::{GeneratorData, OverworldGenerator},
+            structure::{Rotation, jigsaw::PoolElement, start::Piece},
+        },
+    },
+};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 

@@ -20,7 +20,7 @@ use std::{
 
 /// `PreeditEvent`: the composition, its caret and the blocks of text the
 /// input method set apart (the one being converted is `focused_block`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PreeditEvent {
     pub full_text: String,
     /// Byte offset of the caret in `full_text` (vanilla's UTF-16 offset).

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 340" role="img" aria-labelledby="t d" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif">
+  <title id="t">Hooks, Parts, the Host and attachments</title>
+  <desc id="d">When something happens in the game, every mod subscribed to that hook is called with an event and a host. A Part is called only for the blocks, items, block entities, menus or entities a mod attached it to. Through the host and the handles in the event, a mod reads and writes the game, reaches capabilities, and keeps its own data on objects as attachments.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e7681"/></marker>
+  </defs>
+  <g font-size="13" fill="#1f2328">
+    <!-- game moment -->
+    <rect x="10" y="125" width="170" height="90" rx="12" fill="#f1f3f5" stroke="#5c6670" stroke-width="1.5"/>
+    <text x="95" y="158" text-anchor="middle" font-size="16" font-weight="700">The game</text>
+    <text x="95" y="180" text-anchor="middle">a moment happens:</text>
+    <text x="95" y="198" text-anchor="middle">a tick, a block broken</text>
+    <!-- hook -->
+    <rect x="240" y="30" width="270" height="110" rx="12" fill="#e7f0ff" stroke="#2b5ea7" stroke-width="1.5"/>
+    <text x="260" y="58" font-size="16" font-weight="700" fill="#1d3f73">Hook</text>
+    <text x="260" y="82">Every mod that implements it, in</text>
+    <text x="260" y="100">priority and dependency order.</text>
+    <text x="260" y="124" font-family="'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="12">impl Hooks for Mod</text>
+    <!-- part -->
+    <rect x="240" y="200" width="270" height="110" rx="12" fill="#f0eaff" stroke="#6a4bc4" stroke-width="1.5"/>
+    <text x="260" y="228" font-size="16" font-weight="700" fill="#45288f">Part</text>
+    <text x="260" y="252">Only for the blocks, items, entities,</text>
+    <text x="260" y="270">block entities or menus it is attached to.</text>
+    <text x="260" y="294" font-family="'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="12">impl BlockPart for Machine</text>
+    <!-- host -->
+    <rect x="570" y="70" width="280" height="200" rx="12" fill="#e6f6ec" stroke="#2f8a4f" stroke-width="1.5"/>
+    <text x="590" y="98" font-size="16" font-weight="700" fill="#1d5a33">Host and handles</text>
+    <text x="590" y="124">ServerHost or ClientHost: the game,</text>
+    <text x="590" y="142">typed by side.</text>
+    <text x="590" y="170">Handles in the event: level, entity,</text>
+    <text x="590" y="188">player, block entity.</text>
+    <text x="590" y="216">Capabilities: items, fluids, energy.</text>
+    <text x="590" y="244">Attachments: your data on objects,</text>
+    <text x="590" y="262">saved and synced if you ask.</text>
+  </g>
+  <g stroke="#6e7681" stroke-width="2" fill="none" marker-end="url(#a)">
+    <path d="M182 155 C 210 155, 210 85, 238 85"/>
+    <path d="M182 185 C 210 185, 210 255, 238 255"/>
+    <path d="M512 85 C 540 85, 540 130, 568 130"/>
+    <path d="M512 255 C 540 255, 540 210, 568 210"/>
+  </g>
+  <text x="196" y="118" font-size="12" fill="#6e7681" text-anchor="middle">event</text>
+  <text x="196" y="232" font-size="12" fill="#6e7681" text-anchor="middle">event</text>
+</svg>

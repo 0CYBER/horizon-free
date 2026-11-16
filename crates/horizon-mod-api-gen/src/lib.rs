@@ -1,5 +1,27 @@
 //! Generate the typed mod interface from native hook signatures and catalog contracts.
+mod catalog;
+mod dispatch_fixtures;
+mod exports;
+mod game_modules;
+mod interface_cache;
+#[cfg(test)]
+mod interface_cache_tests;
+#[cfg(test)]
+mod listener_output_fixture;
+#[cfg(feature = "mixed-output-fixture")]
+mod mixed_output_fixture;
+#[doc(hidden)]
+pub use dispatch_fixtures::layout as dispatch_fixture_layout;
+pub use game_modules::materialize_game_modules;
+mod hook_targets;
+mod host;
+mod layout;
+mod named_hooks;
+mod parts;
+pub use catalog::DECLARATIONS;
+use catalog::{Catalog, Contract, DrawContext, Hook, HostAccess, PartKind, PhaseContext, Side};
 use heck::ToSnakeCase;
+pub use layout::native_hook_layout;
 use quote::ToTokens;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -19,45 +41,6 @@ fn impl_functions(item: syn::ItemImpl) -> impl Iterator<Item = syn::ItemFn> {
         }),
         _ => None,
     })
-}
-
-/// The inherent `Game` methods of the files under `path`, each with its module (`native_hooks`,
-/// `lan::guest`…) below `module`.
-fn game_methods(
-    path: &Path,
-    module: &str,
-    methods: &mut Vec<(String, syn::ItemFn)>,
-) -> Result<(), String> {
-    for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let inner = format!("{module}::{stem}");
-        if path.is_dir() {
-            game_methods(&path, &inner, methods)?;
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            // Only a top-level `impl ... Game` is taken below, and that needs both words in the
-            // text: a file without them is not parsed (about 200 of game/'s 708 files).
-            if !source.contains("impl") || !source.contains("Game") {
-                continue;
-            }
-            let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
-            for item in file.items {
-                if let Item::Impl(item) = item
-                    && item.trait_.is_none()
-                    && let Type::Path(ty) = &*item.self_ty
-                    && ty.path.segments.len() == 1
-                    && ty.path.segments[0].ident == "Game"
-                {
-                    methods.extend(impl_functions(item).map(|method| (inner.clone(), method)));
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn doc_comments(
@@ -87,309 +70,34 @@ fn doc_comments(
     Ok(docs)
 }
 
+/// The mod API's public `*Ref`, `*Key` and `*Ticket` handles, by their receiver name.
 struct ApiTypes {
-    exports: HashSet<String>,
     handles: BTreeMap<String, String>,
 }
 
-fn api_types(source: &str, generated: &str) -> Result<ApiTypes, String> {
-    fn use_names(tree: &syn::UseTree, names: &mut HashSet<String>) {
-        match tree {
-            syn::UseTree::Path(path) => use_names(&path.tree, names),
-            syn::UseTree::Name(name) => {
-                names.insert(name.ident.to_string());
-            }
-            syn::UseTree::Rename(rename) => {
-                names.insert(rename.rename.to_string());
-            }
-            syn::UseTree::Group(group) => {
-                for item in &group.items {
-                    use_names(item, names);
-                }
-            }
-            syn::UseTree::Glob(_) => {}
-        }
-    }
-    let mut names = HashSet::new();
+fn api_types(source: &str) -> Result<ApiTypes, String> {
+    let file = syn::parse_file(source).map_err(|e| e.to_string())?;
     let mut handles = BTreeMap::new();
-    for (source, collect_handles) in [(source, true), (generated, false)] {
-        let file = syn::parse_file(source).map_err(|e| e.to_string())?;
-        for item in file.items {
-            let ident = match item {
-                Item::Use(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    use_names(&item.tree, &mut names);
-                    None
-                }
-                Item::Struct(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    if collect_handles
-                        && let Some(base) = item.ident.to_string().strip_suffix("Ref")
-                        && !base.is_empty()
-                    {
-                        let receiver = base.to_snake_case();
-                        if handles
-                            .insert(receiver.clone(), item.ident.to_string())
-                            .is_some()
-                        {
-                            return Err(format!("duplicate handle receiver {receiver}"));
-                        }
-                    }
-                    Some(item.ident)
-                }
-                Item::Enum(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    Some(item.ident)
-                }
-                Item::Union(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    Some(item.ident)
-                }
-                Item::Type(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    Some(item.ident)
-                }
-                Item::Trait(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    Some(item.ident)
-                }
-                Item::Mod(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                    Some(item.ident)
-                }
-                _ => None,
-            };
-            if let Some(ident) = ident {
-                names.insert(ident.to_string());
+    for item in file.items {
+        let Item::Struct(item) = item else {
+            continue;
+        };
+        if !matches!(item.vis, syn::Visibility::Public(_)) {
+            continue;
+        }
+        let name = item.ident.to_string();
+        let base = name
+            .strip_suffix("Ref")
+            .map(str::to_owned)
+            .or_else(|| (name.ends_with("Key") || name.ends_with("Ticket")).then(|| name.clone()));
+        if let Some(base) = base.filter(|base| !base.is_empty()) {
+            let receiver = base.to_snake_case();
+            if handles.insert(receiver.clone(), name).is_some() {
+                return Err(format!("duplicate handle receiver {receiver}"));
             }
         }
     }
-    Ok(ApiTypes {
-        exports: names,
-        handles,
-    })
-}
-
-fn host_method(
-    method: &syn::ItemFn,
-    name: &str,
-    exports: &HashSet<String>,
-) -> Result<(String, String), String> {
-    struct Types<'a> {
-        exports: &'a HashSet<String>,
-        error: Option<String>,
-    }
-    impl Types<'_> {
-        fn check_path(&mut self, path: &syn::Path) {
-            let first = path.segments.first().unwrap().ident.to_string();
-            let unqualified = path.leading_colon.is_none() && path.segments.len() == 1;
-            let prelude = unqualified
-                && matches!(
-                    first.as_str(),
-                    "bool"
-                        | "char"
-                        | "str"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "u128"
-                        | "usize"
-                        | "i8"
-                        | "i16"
-                        | "i32"
-                        | "i64"
-                        | "i128"
-                        | "isize"
-                        | "f32"
-                        | "f64"
-                        | "String"
-                        | "Option"
-                        | "Result"
-                        | "Vec"
-                        | "Box"
-                        | "Arc"
-                        | "PathBuf"
-                        | "AsRef"
-                        | "AsMut"
-                        | "From"
-                        | "Into"
-                        | "TryFrom"
-                        | "TryInto"
-                        | "Iterator"
-                        | "IntoIterator"
-                        | "DoubleEndedIterator"
-                        | "ExactSizeIterator"
-                        | "Extend"
-                        | "Fn"
-                        | "FnMut"
-                        | "FnOnce"
-                        | "Sized"
-                        | "Send"
-                        | "Sync"
-                        | "Unpin"
-                        | "Drop"
-                        | "Default"
-                        | "Clone"
-                        | "Copy"
-                        | "PartialEq"
-                        | "PartialOrd"
-                        | "Eq"
-                        | "Ord"
-                        | "ToOwned"
-                        | "ToString"
-                        | "Future"
-                        | "IntoFuture"
-                );
-            if path.leading_colon.is_some() || !(prelude || self.exports.contains(&first)) {
-                self.error = Some(format!(
-                    "type {} is not available in mod_api",
-                    path.to_token_stream()
-                ));
-            }
-        }
-    }
-    impl<'ast> Visit<'ast> for Types<'_> {
-        fn visit_type_impl_trait(&mut self, _: &'ast syn::TypeImplTrait) {
-            self.error = Some("impl Trait is not object-safe".into());
-        }
-        fn visit_type_path(&mut self, ty: &'ast syn::TypePath) {
-            if ty.qself.is_some() {
-                self.error = Some("qualified associated types are not supported".into());
-            } else {
-                self.check_path(&ty.path);
-            }
-            syn::visit::visit_type_path(self, ty);
-        }
-        fn visit_trait_bound(&mut self, bound: &'ast syn::TraitBound) {
-            self.check_path(&bound.path);
-            syn::visit::visit_trait_bound(self, bound);
-        }
-    }
-    if method.sig.asyncness.is_some() {
-        return Err(format!("{name}: async methods are not object-safe"));
-    }
-    if method
-        .sig
-        .generics
-        .params
-        .iter()
-        .any(|param| !matches!(param, syn::GenericParam::Lifetime(_)))
-    {
-        return Err(format!("{name}: generic methods are not object-safe"));
-    }
-    let mut types = Types {
-        exports,
-        error: None,
-    };
-    for arg in &method.sig.inputs {
-        if let FnArg::Typed(arg) = arg {
-            types.visit_type(&arg.ty);
-        }
-    }
-    if let syn::ReturnType::Type(_, ty) = &method.sig.output {
-        types.visit_type(ty);
-    }
-    if let Some(reason) = types.error {
-        return Err(format!("{name}: {reason}"));
-    }
-    let mut sig = method.sig.clone();
-    let original = sig.ident.clone();
-    sig.ident = syn::parse_str(name).map_err(|e| format!("invalid helper name {name}: {e}"))?;
-    let mut args = Vec::new();
-    let callee = match sig.inputs.first() {
-        Some(FnArg::Receiver(r)) if r.reference.is_some() => "self.",
-        Some(FnArg::Receiver(_)) => {
-            return Err(format!("{name}: expected a borrowed Game receiver"));
-        }
-        _ => {
-            // A receiverless helper stays callable on `&self` in the trait.
-            sig.inputs.insert(0, syn::parse_quote!(&self));
-            "Self::"
-        }
-    };
-    for arg in sig.inputs.iter_mut().skip(1) {
-        let FnArg::Typed(arg) = arg else {
-            return Err(format!("{name}: unexpected receiver"));
-        };
-        let Pat::Ident(pat) = &mut *arg.pat else {
-            return Err(format!("{name}: unsupported argument"));
-        };
-        pat.mutability = None;
-        args.push(pat.ident.to_string());
-    }
-    let docs = doc_comments(&method.attrs, name, true)?;
-    let unused = args
-        .iter()
-        .map(|arg| format!("let _ = {arg};"))
-        .collect::<String>();
-    Ok((
-        format!(
-            "{docs}{} {{ {unused} unimplemented!(\"Host::{name}\") }}\n",
-            sig.to_token_stream()
-        ),
-        format!(
-            "{} {{ {callee}{original}({}) }}\n",
-            sig.to_token_stream(),
-            args.join(", ")
-        ),
-    ))
-}
-
-/// A helper's method on its handle (`receiver`): `entity_position(entity)` on
-/// `Host` is also `EntityRef::position(self, host)`, which calls it. The
-/// helper's first argument is the handle; the host is borrowed as the helper
-/// borrows `Game`.
-fn handle_method<'a>(
-    method: &syn::ItemFn,
-    name: &str,
-    receiver: &str,
-    handles: &'a BTreeMap<String, String>,
-) -> Result<(&'a str, String), String> {
-    let handle = handles
-        .get(receiver)
-        .ok_or_else(|| format!("{name}: unknown receiver {receiver}"))?
-        .as_str();
-    let short = name
-        .strip_prefix(receiver)
-        .and_then(|rest| rest.strip_prefix('_'))
-        .ok_or_else(|| format!("{name}: a {receiver} helper's name starts with {receiver}_"))?;
-    let mut sig = method.sig.clone();
-    sig.ident =
-        syn::parse_str(short).map_err(|_| format!("{name}: {short} is not a method name"))?;
-    let mut inputs = sig.inputs.iter();
-    let host: FnArg = match inputs.next() {
-        Some(FnArg::Receiver(r)) if r.reference.is_some() && r.mutability.is_some() => {
-            syn::parse_quote!(host: &mut dyn Host)
-        }
-        Some(FnArg::Receiver(r)) if r.reference.is_some() => syn::parse_quote!(host: &dyn Host),
-        _ => return Err(format!("{name}: a {receiver} helper borrows Game")),
-    };
-    let takes_handle = matches!(
-        inputs.next(),
-        Some(FnArg::Typed(arg)) if matches!(&*arg.ty, Type::Path(ty) if ty.path.is_ident(handle))
-    );
-    if !takes_handle {
-        return Err(format!(
-            "{name}: a {receiver} helper takes a {handle} first"
-        ));
-    }
-    let mut args = String::new();
-    let mut rest = vec![syn::parse_quote!(self), host];
-    for arg in inputs {
-        let mut arg = arg.clone();
-        let FnArg::Typed(typed) = &mut arg else {
-            return Err(format!("{name}: unexpected receiver"));
-        };
-        let Pat::Ident(pat) = &mut *typed.pat else {
-            return Err(format!("{name}: unsupported argument"));
-        };
-        pat.mutability = None;
-        args.push_str(&format!(", {}", pat.ident));
-        rest.push(arg);
-    }
-    sig.inputs = rest.into_iter().collect();
-    let docs = doc_comments(&method.attrs, name, true)?;
-    Ok((
-        handle,
-        format!(
-            "{docs}pub {} {{ host.{name}(self{args}) }}\n",
-            sig.to_token_stream()
-        ),
-    ))
+    Ok(ApiTypes { handles })
 }
 
 fn has_call(block: &syn::Block, expected: &str) -> bool {
@@ -398,6 +106,12 @@ fn has_call(block: &syn::Block, expected: &str) -> bool {
         found: bool,
     }
     impl<'ast> Visit<'ast> for Calls<'_> {
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            if call.method == self.expected {
+                self.found = true;
+            }
+            syn::visit::visit_expr_method_call(self, call);
+        }
         fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
             if let syn::Expr::Path(path) = &*call.func
                 && path
@@ -445,8 +159,7 @@ fn fresh_name(base: &str, used: &mut HashSet<String>) -> String {
 /// itself, written back after every mod has run; any other `&mut` stays a reference to the caller's
 /// value. Either way one event goes through every mod, so each sees the changes before it. Every
 /// elided reference lifetime becomes the event's `'a`, or `'b` inside a `&mut`, which can't shorten
-/// it. The launcher keeps a copy for trait injections (`launcher/src/native_mods/inject.rs`); both
-/// test the same types.
+/// it.
 #[derive(Default)]
 struct EventLifetimes {
     a: bool,
@@ -454,27 +167,30 @@ struct EventLifetimes {
     in_mut: bool,
 }
 
+/// The primitive types a `&mut` argument crosses as a copied value — every one of them `Copy`.
+pub(crate) const PRIMITIVE_SCALARS: &[&str] = &[
+    "bool", "char", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128",
+    "usize", "f32", "f64",
+];
+
+/// Whether `ty` names one of [`PRIMITIVE_SCALARS`].
+pub(crate) fn is_primitive_scalar(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path)
+        if path.qself.is_none()
+            && path
+                .path
+                .get_ident()
+                .is_some_and(|ident| PRIMITIVE_SCALARS.contains(&ident.to_string().as_str())))
+}
+
 impl EventLifetimes {
     /// The field's type, and whether it is a scalar copied in and written back.
     fn field(&mut self, ty: &Type) -> (Type, bool) {
         let scalar = match ty {
-            Type::Reference(reference) if reference.mutability.is_some() => {
-                match &*reference.elem {
-                    Type::Path(path)
-                        if path.qself.is_none()
-                            && path.path.get_ident().is_some_and(|ident| {
-                                [
-                                    "bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
-                                    "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64",
-                                ]
-                                .iter()
-                                .any(|scalar| ident == scalar)
-                            }) =>
-                    {
-                        Some(&*reference.elem)
-                    }
-                    _ => None,
-                }
+            Type::Reference(reference)
+                if reference.mutability.is_some() && is_primitive_scalar(&reference.elem) =>
+            {
+                Some(&*reference.elem)
             }
             _ => None,
         };
@@ -511,88 +227,136 @@ impl VisitMut for EventLifetimes {
     }
 }
 
-fn host_for(is_level: bool, mutable: Option<bool>, ticks: bool) -> Option<(&'static str, String)> {
-    mutable.map(|mutable| {
-        let (name, kind) = if is_level {
-            (
-                "level",
-                match (mutable, ticks) {
-                    (true, true) => "LevelWriteHost",
-                    (false, true) => "LevelTicksHost",
-                    (true, false) => "LevelRandomHost",
-                    (false, false) => "LevelHost",
-                },
-            )
-        } else {
-            ("host", "Host")
+impl DrawContext {
+    /// The context whose surface `ty` borrows, and whether it borrows it mutably.
+    fn of<'a>(contexts: &'a [DrawContext], ty: &Type) -> Option<(&'a DrawContext, bool)> {
+        let Type::Reference(reference) = ty else {
+            return None;
         };
-        let mutable = if mutable || (is_level && ticks) {
-            "mut "
-        } else {
-            ""
+        let Type::Path(path) = &*reference.elem else {
+            return None;
         };
-        (name, format!("&{mutable}dyn {kind}"))
-    })
+        let ident = path.path.segments.last()?.ident.to_string();
+        contexts
+            .iter()
+            .find(|context| context.surface.rsplit("::").next() == Some(ident.as_str()))
+            .map(|context| (context, reference.mutability.is_some()))
+    }
+    /// The game struct implementing the trait.
+    fn game_struct(&self) -> String {
+        format!("Game{}", self.trait_name)
+    }
 }
 
-fn catalog_hooks(
-    root: &Path,
-    catalog: &serde_json::Value,
-) -> Result<Vec<serde_json::Value>, String> {
-    let mut hooks = catalog["hooks"]
-        .as_array()
-        .ok_or("catalog hooks must be an array")?
-        .clone();
-    let mut paths = fs::read_dir(root.join("tools/native-hook-fragments"))
-        .map_err(|e| e.to_string())?
-        .map(|entry| entry.map(|entry| entry.path()).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    paths.sort();
-    for path in paths
-        .into_iter()
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-    {
-        let fragment: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-        hooks.extend(
-            fragment["hooks"]
-                .as_array()
-                .ok_or("fragment hooks must be an array")?
-                .iter()
-                .cloned(),
-        );
-    }
-    let mut seen = HashSet::new();
-    for hook in &hooks {
-        let name = hook["name"].as_str().ok_or("hook name missing")?;
-        if !seen.insert(name.to_owned()) {
-            return Err(format!("duplicate hook {name}"));
+fn hook_id(name: &str) -> String {
+    name.split('_')
+        .map(|word| word[..1].to_uppercase() + &word[1..])
+        .collect()
+}
+
+fn complete_hook_constants(
+    code: String,
+    trait_name: &str,
+    module: &str,
+    id: &str,
+) -> Result<String, String> {
+    let file = syn::parse_file(&code).map_err(|e| e.to_string())?;
+    let methods = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Trait(item) if item.ident == trait_name => Some(&item.items),
+            _ => None,
+        })
+        .ok_or("generated hook trait missing")?;
+    let existing: HashSet<_> = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Mod(item) if item.ident == module => {
+                item.content.as_ref().map(|(_, items)| items)
+            }
+            _ => None,
+        })
+        .ok_or("generated hook constants missing")?
+        .iter()
+        .filter_map(|item| match item {
+            Item::Const(item) => Some(item.ident.to_string()),
+            _ => None,
+        })
+        .collect();
+    let mut defaults = String::new();
+    for method in methods {
+        if let syn::TraitItem::Fn(method) = method {
+            let name = method.sig.ident.to_string();
+            if !existing.contains(&name) {
+                defaults.push_str(&format!("pub const {name}: Option<super::{id}> = None;\n"));
+            }
         }
     }
-    Ok(hooks)
+    Ok(code.replacen(
+        &format!("pub mod {module} {{"),
+        &format!("pub mod {module} {{\n{defaults}"),
+        1,
+    ))
+}
+
+/// A catalog hook point, as a raw injection's `target` can name it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookPoint {
+    pub name: String,
+    /// The contract version an injection's `hook_version` names.
+    pub version: u64,
+    /// The function the hook is called from: an injection's `target` for it.
+    pub target: String,
+    /// A scoped hook is a Part method alone and has no `Hooks` method.
+    pub scoped: bool,
+}
+
+/// The catalog's hook points, from the declaration files, as the generator reads them.
+pub fn hook_points(root: &Path) -> Result<Vec<HookPoint>, String> {
+    Ok(Catalog::load(root)?
+        .hooks
+        .into_iter()
+        .map(|hook| HookPoint {
+            scoped: hook.scope.is_some(),
+            name: hook.name,
+            version: hook.version,
+            target: hook.target,
+        })
+        .collect())
+}
+
+/// Serialize hook names and NeoForge counterparts for the port-pack event report.
+/// The declaration loader remains the single source of these labels.
+pub fn neoforge_catalog(root: &Path) -> Result<String, String> {
+    let hooks: Vec<_> = Catalog::load(root)?
+        .hooks
+        .into_iter()
+        .map(|hook| {
+            serde_json::json!({
+                "name": hook.name,
+                "neoforge": hook.counterparts.neoforge.join(" / "),
+            })
+        })
+        .collect();
+    serde_json::to_string(&serde_json::json!({ "hooks": hooks })).map_err(|e| e.to_string())
 }
 
 /// The crate folder and module path of a hook target that is a free function
 /// outside `Game`. `horizon-client-lib` builds from `horizon-client/src`
-/// (`client_lib.rs`); `menu` and `breathing` are also accepted under their
-/// older `horizon_client::` names.
+/// (`client_lib.rs`).
 fn free_function_source(target: &str) -> Option<(&'static str, String)> {
     let prefixes = [
         ("horizon_world::", "horizon-world"),
-        ("horizon_client_render::", "horizon-client-render"),
+        ("mod_api::", "horizon-mod-vocab"),
+        ("mod_render::", "horizon-mod-render"),
         ("horizon_client_lib::", "horizon-client"),
+        ("horizon_client_render::", "horizon-client-render"),
     ];
     prefixes
         .into_iter()
         .find_map(|(prefix, krate)| target.strip_prefix(prefix).map(|p| (krate, p.to_owned())))
-        .or_else(|| {
-            ["menu", "breathing"].into_iter().find_map(|module| {
-                target
-                    .strip_prefix(&format!("horizon_client::{module}::"))
-                    .map(|p| ("horizon-client", format!("{module}::{p}")))
-            })
-        })
 }
 
 /// Whether a hook function needs its dispatch `call` filled in: false when it
@@ -600,7 +364,11 @@ fn free_function_source(target: &str) -> Option<(&'static str, String)> {
 /// only the placeholder a new hook starts with, `let _ = (every, parameter);`
 /// (`let _ = parameter;` for one). Any other body is an error, left alone.
 fn needs_fill(method: &syn::ItemFn, call: &str, in_game: bool) -> Result<bool, String> {
-    if has_call(&method.block, call) {
+    if has_call(&method.block, call)
+        || call
+            .strip_prefix("dispatch_")
+            .is_some_and(|name| has_call(&method.block, &format!("fire_{name}")))
+    {
         return Ok(false);
     }
     let params: Vec<String> = method
@@ -647,6 +415,7 @@ fn needs_fill(method: &syn::ItemFn, call: &str, in_game: bool) -> Result<bool, S
 }
 
 /// A hook function whose placeholder body becomes `call`.
+#[derive(Clone)]
 struct Fill {
     native: String,
     call: String,
@@ -699,452 +468,102 @@ fn rustfmt(code: &str) -> Result<Vec<u8>, String> {
     Ok(formatted.stdout)
 }
 
+/// The doc of [`BlockPart`], the first part trait in the generated file.
+const PART_DOCS: &str = "/// A block's part: code attached through [`Registrar`] to one block, a mod's own or vanilla's.\n/// Its methods are the scoped hooks', asked only for the blocks it is attached to: a scoped\n/// hook has no [`Hooks`] method. They may run on the window's thread or the server thread.\n/// Annotate each part trait implementation with [`horizon_part`] to derive its subscriptions.\n";
+
+/// The doc of [`EntityPart`], the goal- and behavior-registering part trait (arismoko/horizon#1077, arismoko/horizon#824),
+/// which the general entity tick moment (arismoko/horizon#792) also scopes hooks to.
+const ENTITY_PART_DOCS: &str = "/// An entity type's part (arismoko/horizon#1077): code attached through\n/// `RegistrationContext::entity_part` to one entity type, a mod's own or vanilla's\n/// (`minecraft:zombie`). Its `register_goals` runs at every `Mob` construction of that\n/// type, spawned or loaded, right after the species' own goals — vanilla's `registerGoals`\n/// moment — and the goals it adds join the mob's two selectors beside vanilla's, same\n/// priorities and interruption. Its `register_behaviors` runs wherever a brain-driven\n/// species' brain is built (#824). Its `spawn_cluster_size` answers how large a spawn group of the\n/// type may grow. Its `general_entity_tick` runs for one general entity row's authoritative\n/// tick (#792). Annotate each part trait implementation with\n/// [`horizon_part`] to derive its subscriptions; the goal, behavior and spawn-size methods\n/// are not hooks, so they subscribe nothing whatever they override.\n";
+
 /// The crate whose generated sources are being built.
 #[derive(Clone, Copy)]
 pub enum Target {
+    /// `horizon-mod-api`: the mod-side WebAssembly guest transport.
+    Api,
+    /// Engine vocabulary: hook and host traits, values, and dispatch.
+    Vocab,
+    /// The game: the host traits' implementation on `Game`.
     Client,
 }
 
-/// The renderer's `RenderHooks` and their dispatch, committed: `horizon-client-render` is an engine
-/// crate, which may not depend on this generator (docs/layers.md). [`fill_hooks`] writes it, and
-/// the game's build ([`generate`]) fails while it is out of date.
-pub const RENDER_HOOKS: &str = "crates/horizon-client-render/src/gfx/native_render/generated.rs";
-
-/// Fill new hooks' placeholders in hand-written source, and write the renderer's committed hooks
-/// ([`RENDER_HOOKS`]). Never writes the files generated into `OUT_DIR`.
+/// Fill new hooks' placeholders in `game/native_hooks/`. Never writes generated files.
+/// Named hooks in other logical game modules must already call their own dispatch;
+/// this command validates them but never fills or rewrites their bodies.
 pub fn fill_hooks(root: &Path) -> Result<(), String> {
-    let render = sources(root, FillMode::Fill)?.render;
-    let path = root.join(RENDER_HOOKS);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&path, rustfmt(&render)?).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// Whether the committed [`RENDER_HOOKS`] holds `render`, the code the catalog makes: the same
-/// tokens, so its formatting and plain comments don't count.
-fn render_hooks_current(root: &Path, render: &str) -> Result<(), String> {
-    let path = root.join(RENDER_HOOKS);
-    let committed = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let tokens = |code: &str| {
-        syn::parse_file(code)
-            .map(|file| file.into_token_stream().to_string())
-            .map_err(|e| format!("{}: {e}", path.display()))
-    };
-    if tokens(&committed)? == tokens(render)? {
-        Ok(())
-    } else {
-        Err(format!(
-            "{RENDER_HOOKS} is out of date with the render hooks: run cargo run -p xtask -- mod-api"
-        ))
-    }
+    sources(root, FillMode::Fill).map(|_| ())
 }
 
 #[derive(Debug)]
 struct Sources {
     hooks: String,
     host: String,
-    implementation: String,
-    render: String,
+    /// The area modules `host.rs` includes.
+    areas: String,
+    fire: String,
+    goal_view: String,
 }
 
 /// Parse and validate the catalog and hook/helper signatures.
 fn sources(root: &Path, fill: FillMode) -> Result<Sources, String> {
-    let catalog: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(root.join("native-hooks.json")).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    let source = fs::read_to_string(root.join("crates/horizon-client/src/game/native_hooks.rs"))
-        .map_err(|e| e.to_string())?;
-    let file = syn::parse_file(&source).map_err(|e| e.to_string())?;
+    #[allow(unused_mut)]
+    let mut catalog = Catalog::load(root)?;
+    let mut files = Vec::new();
     let mut methods = Vec::new();
-    for item in file.items {
-        if let Item::Impl(item) = item {
-            methods.extend(impl_functions(item));
+    for path in horizon_game_discovery::native_hook_files(root)? {
+        let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let file = syn::parse_file(&source).map_err(|e| e.to_string())?;
+        let mut names = HashSet::new();
+        for item in file.items {
+            if let Item::Impl(item) = item {
+                for method in impl_functions(item) {
+                    names.insert(method.sig.ident.to_string());
+                    methods.push(method);
+                }
+            }
         }
+        files.push((path, source, names));
     }
-    let mut traits = String::new();
-    let mut dispatch = String::new();
-    let mut render_traits = String::new();
-    let mut render_dispatch = String::new();
-    let hooks = catalog_hooks(root, &catalog)?;
-    let mut fills = Vec::new();
-    for hook in &hooks {
-        let name = hook["name"].as_str().ok_or("hook name missing")?;
-        let api = hook
-            .get("mod_api")
-            .ok_or_else(|| format!("hook {name} has no mod_api entry: add one"))?;
-        let native = format!("native_{name}");
-        let target = hook["target"].as_str().ok_or("target missing")?;
-        let is_render = target.starts_with("horizon_client_render::");
-        let external = free_function_source(target);
-        let in_game = external.is_none();
-        let (method, call) = if let Some((krate, path)) = external {
-            let Some((module, function)) = path.rsplit_once("::") else {
-                return Err(format!("wrong target for {name}"));
-            };
-            if function != native {
-                return Err(format!("wrong target for {name}"));
-            }
-            let path = root
-                .join("crates")
-                .join(krate)
-                .join("src")
-                .join(format!("{}.rs", module.replace("::", "/")));
-            let source =
-                fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let file = syn::parse_file(&source).map_err(|e| e.to_string())?;
-            let functions: Vec<_> = file
-                .items
-                .into_iter()
-                .filter_map(|item| match item {
-                    Item::Fn(function) => Some(function),
-                    _ => None,
-                })
-                .collect();
-            (
-                one_function(functions.iter(), &native)?.clone(),
-                if is_render {
-                    format!("dispatch_{name}")
-                } else {
-                    name.to_owned()
-                },
-            )
-        } else {
-            if !target.starts_with("horizon_client::game::native_hooks::")
-                || !target.ends_with(&format!("::{native}"))
-            {
-                return Err(format!("wrong target for {name}"));
-            }
-            (
-                one_function(methods.iter(), &native)?.clone(),
-                format!("dispatch_{name}"),
-            )
-        };
-        let fill = needs_fill(&method, &call, in_game)?;
-        let sig = &method.sig;
-        let mut args = Vec::new();
-        let mut receiver_mut = None;
-        for arg in &sig.inputs {
-            match arg {
-                FnArg::Receiver(r) => {
-                    receiver_mut = Some(r.mutability.is_some());
-                }
-                FnArg::Typed(arg) => {
-                    let Pat::Ident(pat) = &*arg.pat else {
-                        return Err(format!("unsupported argument in {name}"));
-                    };
-                    args.push((pat.ident.to_string(), &*arg.ty));
-                }
-            }
-        }
-        let is_level = hook["target"]
-            .as_str()
-            .is_some_and(|target| target.contains("::GameLevel<"));
-        let ticks = is_level
-            && args.iter().any(|(name, ty)| {
-                name == "ticks" && ty.to_token_stream().to_string() == "& mut Ticks"
-            });
-        if ticks {
-            args.retain(|(name, _)| name != "ticks");
-        }
-        let mut used: HashSet<_> = args.iter().map(|(name, _)| name.clone()).collect();
-        let mod_list = fresh_name("mods", &mut used);
-        let mod_item = fresh_name("mod_hook", &mut used);
-        let replacement = fresh_name("replacement", &mut used);
-        let contract = api["contract"].as_str().ok_or("contract missing")?;
-        let out = api.get("out").and_then(|v| v.as_str());
-        if !matches!(
-            (contract, out),
-            ("cancel" | "replace" | "collect", Some(_)) | ("listen", None)
-        ) {
-            return Err(format!("invalid contract for {name}"));
-        }
-        let output = if let Some(out) = out {
-            let index = args
-                .iter()
-                .position(|(n, _)| n == out)
-                .ok_or_else(|| format!("missing output {out} in {name}"))?;
-            Some(args.remove(index))
-        } else {
-            None
-        };
-        let result = if let Some((_, ty)) = &output {
-            let Type::Reference(reference) = ty else {
-                return Err(format!("output must be a mutable reference in {name}"));
-            };
-            if reference.mutability.is_none() {
-                return Err(format!("output must be a mutable reference in {name}"));
-            }
-            match contract {
-                "cancel" if reference.elem.to_token_stream().to_string() == "bool" => {
-                    " -> Flow".to_owned()
-                }
-                "replace" => format!(" -> {}", reference.elem.to_token_stream()),
-                "collect" => String::new(),
-                _ => return Err(format!("unexpected output type for {name}")),
-            }
-        } else {
-            String::new()
-        };
-        let host = host_for(is_level, receiver_mut, ticks)
-            .map(|(name, ty)| (fresh_name(name, &mut used), ty));
-        let event = fresh_name("event", &mut used);
-        let event_type = format!(
-            "{}Event",
-            name.split('_')
-                .map(|word| word[..1].to_uppercase() + &word[1..])
-                .collect::<String>()
-        );
-        let mut trait_params = vec!["&self".to_owned()];
-        let mut dispatch_params = Vec::new();
-        let mut call_args = Vec::new();
-        if let Some((name, ty)) = &host {
-            trait_params.push(format!("{name}: {ty}"));
-            dispatch_params.push(format!("{name}: {ty}"));
-            call_args.push(name.clone());
-        }
-        dispatch_params.push(if is_render {
-            format!("{mod_list}: &[&dyn RenderHooks]")
-        } else {
-            format!("{mod_list}: &[Box<dyn Hooks>]")
-        });
-        let mut lifetimes = EventLifetimes::default();
-        let mut fields = String::new();
-        let mut inits = Vec::new();
-        let mut write_back = String::new();
-        let collected = output.as_ref().filter(|_| contract == "collect");
-        for (name, ty) in args.iter().chain(collected) {
-            dispatch_params.push(format!("{name}: {}", ty.to_token_stream()));
-            let (field, scalar) = lifetimes.field(ty);
-            fields.push_str(&format!("pub {name}: {},\n", field.to_token_stream()));
-            if scalar {
-                inits.push(format!("{name}: *{name}"));
-                write_back.push_str(&format!("*{name} = {event}.{name};"));
-            } else {
-                inits.push(name.clone());
-            }
-        }
-        if let Some((name, ty)) = output.as_ref().filter(|_| contract != "collect") {
-            dispatch_params.push(format!("{name}: {}", ty.to_token_stream()));
-        }
-        let (generics, elided) = match (lifetimes.a, lifetimes.b) {
-            (_, true) => ("<'a, 'b>", "<'_, '_>"),
-            (true, false) => ("<'a>", "<'_>"),
-            (false, false) => ("", ""),
-        };
-        trait_params.push(format!("{event}: &mut {event_type}{elided}"));
-        call_args.push(format!("&mut {event}"));
-        let unused = trait_params[1..]
+    #[cfg(feature = "mixed-output-fixture")]
+    mixed_output_fixture::append(&mut catalog, &mut methods)?;
+    let dispatch::HookSources {
+        traits,
+        dispatch,
+        part_traits,
+        fills,
+        fire,
+        hook_ids,
+        hook_constants,
+        cancel_hooks,
+        client_hooks,
+        hook_count,
+        ..
+    } = dispatch::emit(
+        root,
+        catalog
+            .hooks
             .iter()
-            .map(|param| format!("let _ = {};", param.split(':').next().unwrap()))
-            .collect::<String>();
-        let default = match contract {
-            "cancel" => "Flow::Continue",
-            "replace" => "None",
-            _ => "",
-        };
-        if fill {
-            // The dispatch's parameters in order: the host, the mods, the
-            // arguments and the output last.
-            let host = host.as_ref().map(|_| {
-                if ticks {
-                    "&mut super::mod_api_host::LevelTicks { level: self, ticks }"
-                } else {
-                    "self"
-                }
-            });
-            let passed = host
-                .into_iter()
-                .chain(["mod_api::mods()"])
-                .chain(args.iter().chain(output.as_ref()).map(|(n, _)| n.as_str()))
-                .collect::<Vec<_>>()
-                .join(", ");
-            fills.push(Fill {
-                native: native.clone(),
-                call: format!("mod_api::{call}({passed});"),
-            });
-        }
-        let invoke = call_args.join(", ");
-        let trait_params = trait_params.join(", ");
-        let dispatch_params = dispatch_params.join(", ");
-        let trait_name = if is_render { "RenderHooks" } else { "Hooks" };
-        let traits = if is_render {
-            &mut render_traits
-        } else {
-            &mut traits
-        };
-        let dispatch = if is_render {
-            &mut render_dispatch
-        } else {
-            &mut dispatch
-        };
-        traits.push_str(&doc_comments(&method.attrs, name, false)?);
-        match (contract, out) {
-            ("cancel", Some(out)) => traits.push_str(&format!(
-                "///\n/// Return `Flow::Cancel` to take it: this sets `{out}`, and later mods are skipped.\n"
-            )),
-            ("replace", Some(out)) => traits.push_str(&format!(
-                "///\n/// Return `Some` to set `{out}`; the first mod returning `Some` wins.\n"
-            )),
-            ("collect", Some(out)) => traits.push_str(&format!(
-                "///\n/// Every mod gets `{event}.{out}` in order and may add, change or remove {out}.\n"
-            )),
-            _ => {}
-        }
-        traits.push_str(&format!(
-            "fn {name}({trait_params}){result} {{ {unused} {default} }}\n"
-        ));
-        dispatch.push_str(&format!(
-            "/// What [`{trait_name}::{name}`] is told. Fields may be added: the struct is `#[non_exhaustive]`.\n#[non_exhaustive]\npub struct {event_type}{generics} {{\n{fields}}}\n"
-        ));
-        let build = format!("let mut {event} = {event_type} {{ {} }};", inits.join(", "));
-        // A trait mod's call is marked with the mod for a panic to name; render hooks are called bare.
-        let each = if is_render {
-            mod_list.clone()
-        } else {
-            format!("super::entered({mod_list}, \"{name}\")")
-        };
-        let body = match contract {
-            "cancel" => format!(
-                "if *{o} {{ return; }} {build} for {mod_item} in {each} {{ if matches!({mod_item}.{name}({invoke}), Flow::Cancel) {{ *{o} = true; break; }} }} {write_back}",
-                o = out.unwrap()
-            ),
-            "replace" => format!(
-                "if {o}.is_some() {{ return; }} {build} for {mod_item} in {each} {{ if let Some({replacement}) = {mod_item}.{name}({invoke}) {{ *{o} = Some({replacement}); break; }} }} {write_back}",
-                o = out.unwrap()
-            ),
-            _ => format!(
-                "{build} for {mod_item} in {each} {{ {mod_item}.{name}({invoke}); }} {write_back}"
-            ),
-        };
-        dispatch.push_str(&format!(
-            "pub fn dispatch_{name}({dispatch_params}) {{ {body} }}\n"
-        ));
-    }
-    if hooks.is_empty() {
-        return Err("no native hooks".into());
-    }
-    let code = format!(
-        "// @generated by cargo run -p xtask -- mod-api; do not edit.\nuse super::*;\npub trait Hooks: Send + Sync {{\nfn render(&self) -> Option<&dyn RenderHooks> {{ None }}\n{traits}}}\n{dispatch}"
-    );
-    let api_source = fs::read_to_string(root.join("crates/horizon-client/src/mod_api.rs"))
-        .map_err(|e| e.to_string())?;
-    let types = api_types(&api_source, &code)?;
-    let mut game = Vec::new();
-    game_methods(
-        &root.join("crates/horizon-client/src/game"),
-        "horizon_client::game",
-        &mut game,
+            .filter(|hook| !dispatch::is_render(hook)),
+        &methods,
+        &catalog.draw_contexts,
     )?;
-    let mut host_traits = String::new();
-    let mut host_impl = String::new();
-    let mut names = HashSet::new();
-    let mut handles = std::collections::BTreeMap::<&str, String>::new();
-    let mut helpers = catalog["helpers"]
-        .as_array()
-        .ok_or("catalog helpers must be an array")?
-        .clone();
-    let mut fragments = fs::read_dir(root.join("tools/native-hook-fragments"))
-        .map_err(|e| e.to_string())?
-        .map(|entry| entry.map(|entry| entry.path()).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    fragments.sort();
-    for path in fragments
-        .into_iter()
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-    {
-        let fragment: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-        if let Some(pending) = fragment.get("helpers") {
-            helpers.extend(
-                pending
-                    .as_array()
-                    .ok_or("fragment helpers must be an array")?
-                    .iter()
-                    .cloned(),
-            );
-        }
+    if catalog.hooks.is_empty() {
+        return Err(catalog::CatalogError::NoHooks.into());
     }
-    for helper in &helpers {
-        let name = helper["name"].as_str().ok_or("helper name missing")?;
-        if !names.insert(name) {
-            return Err(format!("duplicate helper {name}"));
-        }
-        let target = helper["target"].as_str().ok_or("helper target missing")?;
-        let (_, native) = target
-            .rsplit_once("::")
-            .ok_or("helper target missing method")?;
-        if !native.starts_with("native_") {
-            return Err(format!("invalid helper target {target}"));
-        }
-        let method = one_function(game.iter().map(|(_, method)| method), native)?;
-        let (module, _) = game
-            .iter()
-            .find(|(_, other)| std::ptr::eq(other, method))
-            .expect("the method was found in the list");
-        let expected = format!("{module}::Game<'_>::{native}");
-        if target != expected {
-            return Err(format!(
-                "wrong target for helper {name}: {target}, it is {expected}"
-            ));
-        }
-        let (declaration, implementation) = host_method(method, name, &types.exports)?;
-        host_traits.push_str(&declaration);
-        host_impl.push_str(&implementation);
-        if let Some(receiver) = helper.get("receiver") {
-            let receiver = receiver
-                .as_str()
-                .ok_or("helper receiver must be a string")?;
-            let (handle, code) = handle_method(method, name, receiver, &types.handles)?;
-            handles.entry(handle).or_default().push_str(&code);
-        }
-    }
-    let handles = handles
-        .iter()
-        .map(|(handle, methods)| format!("impl {handle} {{\n{methods}}}\n"))
-        .collect::<String>();
-    struct StdTypes {
-        path_buf: bool,
-        arc: bool,
-    }
-    impl<'ast> Visit<'ast> for StdTypes {
-        fn visit_type_path(&mut self, ty: &'ast syn::TypePath) {
-            if ty.path.segments.len() == 1 {
-                self.path_buf |= ty.path.segments[0].ident == "PathBuf";
-                self.arc |= ty.path.segments[0].ident == "Arc";
-            }
-            syn::visit::visit_type_path(self, ty);
-        }
-    }
-    let host_trait: syn::ItemTrait = syn::parse_str(&format!("trait Host {{ {host_traits} }}"))
-        .map_err(|e| format!("generated Host: {e}"))?;
-    let mut std_types = StdTypes {
-        path_buf: false,
-        arc: false,
-    };
-    std_types.visit_item_trait(&host_trait);
-    let mut imports = String::new();
-    if std_types.path_buf {
-        imports.push_str("use std::path::PathBuf;\n");
-    }
-    if std_types.arc {
-        imports.push_str("use std::sync::Arc;\n");
-    }
-    let host = format!(
-        "// @generated by cargo run -p xtask -- mod-api; do not edit.\nuse super::*;\n{imports}/// Services supplied by the game to trait mods.\n/// Each method's default panics with its name, so a test double implements only what its test calls; the game implements every one.\npub trait Host {{\n{host_traits}}}\n{handles}"
+    let part = |name: &str| part_traits.get(name).map_or("", String::as_str);
+    let code = format!(
+        "// @generated by cargo run -p xtask -- mod-api; do not edit.\nuse super::*;\n#[doc(hidden)]\n#[repr(usize)]\n#[derive(Clone, Copy, horizon_mod_api_macros::Wire)]\npub enum HookId {{ {hook_ids} }}\n#[doc(hidden)]\n#[allow(non_upper_case_globals)]\npub mod hook_ids {{ {hook_constants} }}\n#[doc(hidden)]\n#[allow(non_upper_case_globals)]\npub mod cancel_hooks {{ {cancel_hooks} }}\n/// The client-side hooks, by name: what a `side = \"server\"` mod may not subscribe to.\n#[doc(hidden)]\npub const CLIENT_HOOKS: &[(HookId, &str)] = &[{client_hooks}];\n/// How a trait mod's method listens, from its `#[listener]` attribute: a method without one has priority 0 and is not told of cancelled events.\n#[doc(hidden)]\n#[derive(Clone, Copy, horizon_mod_api_macros::Wire)]\npub struct Listener {{ pub hook: Option<HookId>, pub priority: i32, pub receive_cancelled: bool }}\npub(crate) const HOOK_COUNT: usize = {hook_count};\n/// The hooks a trait mod implements: one method per catalog hook, each documented from its `doc` field.\n/// Annotate the `impl` with `#[mod_api::horizon_mod]`, which subscribes the mod to just the methods it implements.\npub trait Hooks: std::any::Any + Send + Sync {{\n#[doc(hidden)] fn subscribed(&self) -> &'static [Option<HookId>];\n#[doc(hidden)] fn listeners(&self) -> &'static [Listener] {{ &[] }}\n/// Once, at startup: attach this mod's parts (`let shaft = r.block_key(\"mymod:shaft\"); r.block_part(shaft, Shaft)`).\nfn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {{ let _ = (r, cx); }}\n{traits}}}\n{PART_DOCS}pub trait BlockPart: Send + Sync + 'static {{\n#[doc(hidden)] fn block_subscribed(&self) -> &'static [Option<HookId>];\n/// Whether this part's `explosion_resistance` answer depends only on the state and the explosion, not on the position or the level around it: then a batched read (`LevelRef::explosion_resistances`) asks it once a state per call instead of once a cell. False unless the part says so; the answer stays a pure function of its inputs either way.\nfn explosion_resistance_is_pure(&self) -> bool {{ false }}\n{}}}\n/// A block's part that also answers for its block entity, and for the block like a [`BlockPart`].\npub trait BlockEntityPart: BlockPart {{\n#[doc(hidden)] fn block_entity_subscribed(&self) -> &'static [Option<HookId>];\n{}}}\n/// An item's part.\npub trait ItemPart: Send + Sync + 'static {{\n#[doc(hidden)] fn item_subscribed(&self) -> &'static [Option<HookId>];\n#[doc(hidden)] fn __prepare_equip(&self, stack: &ItemStack, kinds: &[&str], reads: &[EquipReadRow]) -> Result<Option<Box<dyn std::any::Any>>, &'static str> {{ let _ = (stack,kinds,reads); Ok(None) }}\n{}}}\n/// A mod menu type's part.\npub trait MenuPart: Send + Sync + 'static {{\n#[doc(hidden)] fn menu_subscribed(&self) -> &'static [Option<HookId>];\n{}}}\n/// A mod world fluid's part.\npub trait FluidPart: Send + Sync + 'static {{\n#[doc(hidden)] fn fluid_subscribed(&self) -> &'static [Option<HookId>];\n{}}}\n{ENTITY_PART_DOCS}pub trait EntityPart: Send + Sync + 'static {{\n#[doc(hidden)] fn entity_subscribed(&self) -> &'static [Option<HookId>] {{ &[] }}\n{}\n/// The mob's mod goals, added to its two selectors as `GoalSelector.addGoal`\n/// does in vanilla's `registerGoals`: fresh at every construction, so a goal's\n/// state is never saved. Branch on the mob with `goals.mob()`.\nfn register_goals(&self, goals: &mut GoalRegistrar<'_>) {{ let _ = goals; }}\n/// Native mods only: entity parts do not cross to wasm yet.\n/// The mob's mod brain behaviors, joined into the species' brain beside\n/// vanilla's (#824): built wherever the brain is built — its first tick and\n/// every rebuild — started and stopped in `Brain.tick`'s order, fresh state\n/// each build, nothing saved. Branch on the mob with `behaviors.mob()`.\nfn register_behaviors(&self, behaviors: &mut BehaviorRegistrar<'_>) {{ let _ = behaviors; }}\n/// How many mobs one spawn group of this mob's type may grow to (`Mob.getMaxSpawnClusterSize`), asked\n/// where the spawner has just added a mob to a group and compares the group's size with the limit:\n/// natural spawning's packs. `mob` is the mob just spawned, finalized and in\n/// no level yet, to read through `host`; `reason` and `spawner` say why and from what it spawned\n/// (`spawner` is none but for a spawner block's mobs); `vanilla` is the limit the species has. Answer\n/// `Some(limit)` to replace it and `None` to leave it to the next part and then to vanilla's. The\n/// first part to answer wins, in dispatch order, and the group stops growing once its size reaches\n/// the limit, so a limit of 0 or 1 ends it with the mob just spawned. The host is the read-only\n/// one: a listener runs on replayed ticks and must be a pure function of its inputs.\nfn spawn_cluster_size(&self, host: &dyn Host, mob: UnspawnedMobRef, reason: SpawnReason, spawner: Option<SpawnSource>, vanilla: u32) -> Option<u32> {{ let _ = (host, mob, reason, spawner, vanilla); None }}\n/// Whether `entity` can be sheared now with `shears` (NeoForge's `IShearable.isShearable`), asked\n/// where a player's shears (`player` is who holds them) or a dispenser's (`player` none) meet it,\n/// before the `player_shear_entity` or `block_shear_entity` hook. The first part to answer wins, in\n/// dispatch order: `Some(true)` shears it through [`EntityPart::on_sheared`] in place of the\n/// species' own shearing, `Some(false)` leaves it unsheared (a player's click then does nothing),\n/// and `None` leaves it to the next part and then to the species. Server-side.\nfn is_shearable(&self, host: &dyn Host, entity: EntityRef, player: Option<PlayerRef>, shears: &ItemStack) -> Option<bool> {{ let _ = (host, entity, player, shears); None }}\n/// Shears `entity` (NeoForge's `IShearable.onSheared`): called on the part whose\n/// [`EntityPart::is_shearable`] said `Some(true)`, once the shear hooks let it through. Change\n/// the entity and play its sound here, and return the drops: the game spawns each as\n/// `spawnShearedDrop` does (one block above the entity's feet, with a small random push), posts\n/// the shear game event and damages the shears. Server-side.\nfn on_sheared(&self, host: &mut dyn ServerHost, entity: EntityRef, player: Option<PlayerRef>, shears: &ItemStack) -> Vec<ItemStack> {{ let _ = (host, entity, player, shears); Vec::new() }}\n}}\n{dispatch}",
+        part("BlockPart"),
+        part("BlockEntityPart"),
+        part("ItemPart"),
+        part("MenuPart"),
+        part("FluidPart"),
+        part("EntityPart"),
     );
-    let implementation = format!(
-        "// @generated by cargo run -p xtask -- mod-api; do not edit.\nuse horizon_client::mod_api::*;\n{imports}impl Host for super::Game<'_> {{\n{host_impl}}}\n"
-    );
-    let render_code = format!(
-        "// @generated by cargo run -p xtask -- mod-api; do not edit.\nuse super::*;\npub trait RenderHooks: Send + Sync {{\n{render_traits}}}\n{render_dispatch}"
-    );
+    let code = complete_hook_constants(code, "Hooks", "hook_ids", "HookId")?;
+    let (host, goal_view) = host::generate(root)?;
+    let areas = host::areas_source(root)?;
     // A new hook's placeholder body becomes its dispatch call.
-    let filled = if fills.is_empty() {
-        None
-    } else if matches!(fill, FillMode::Require) {
+    if !fills.is_empty() && matches!(fill, FillMode::Require) {
         let natives = fills
             .iter()
             .map(|fill| fill.native.as_str())
@@ -1153,26 +572,32 @@ fn sources(root: &Path, fill: FillMode) -> Result<Sources, String> {
         return Err(format!(
             "{natives}: the let _ = (…); placeholder needs its dispatch call; run cargo run -p xtask -- mod-api"
         ));
-    } else if matches!(fill, FillMode::Fill) {
-        Some(filled_hooks(&source, &fills)?)
-    } else {
-        None
-    };
-    for code in [&code, &host, &implementation, &render_code] {
+    }
+    for code in [&code, &host, &areas, &goal_view] {
         syn::parse_file(code).map_err(|e| format!("generated Rust: {e}"))?;
     }
-    if let Some(filled) = filled {
-        fs::write(
-            root.join("crates/horizon-client/src/game/native_hooks.rs"),
-            filled,
-        )
-        .map_err(|e| e.to_string())?;
+    if matches!(fill, FillMode::Fill) {
+        let mut outputs = Vec::new();
+        for (path, source, names) in &files {
+            let local = fills
+                .iter()
+                .filter(|fill| names.contains(&fill.native))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !local.is_empty() {
+                outputs.push((path, filled_hooks(source, &local)?));
+            }
+        }
+        for (path, output) in outputs {
+            fs::write(path, output).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
     }
     Ok(Sources {
         hooks: code,
         host,
-        implementation,
-        render: render_code,
+        areas,
+        fire,
+        goal_view,
     })
 }
 
@@ -1184,330 +609,133 @@ enum FillMode {
 }
 
 mod build;
-pub use build::{generate, inject};
-mod injection;
-pub use injection::{TraitContract, TraitInjection};
-mod staged;
-pub use staged::{MIXINS_STAGE, mob_turn, staged_mods};
-#[cfg(test)]
-mod injection_tests;
+mod capability_providers;
+pub mod crossing;
+mod dispatch;
+mod host_param;
+mod index;
+mod wire;
+pub use wire::generate as generate_wire;
+pub use wire::generate_coverage as generate_wire_coverage;
 
-/// Generate a dispatch fixture without preventing xtask from filling placeholders.
+static GENERATED_ON_STDOUT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// For a tool that prints generated text on stdout (`xtask mod-api coverage`): the generator's
+/// `cargo:rerun-if-changed` lines, meant for a build script's Cargo, are left out of it.
+pub fn generated_on_stdout() {
+    GENERATED_ON_STDOUT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The paths `rerun_if_changed` was given while a test holds the capture.
+    static CAPTURED_RERUNS: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tracks the stager's stamp, `.horizon-source-staged`, only in a staged copy. Cargo reruns a build
+/// script on every build while a tracked path is missing, so tracking an absent stamp rebuilt
+/// horizon-mod-points, horizon-client and every crate above them on each `cargo` invocation of an
+/// ordinary checkout. A stamp never appears in a tree that was already built: staging writes it
+/// first, into a fresh copy, and refuses a tree that already has one.
+pub(crate) fn rerun_if_staged(root: &std::path::Path) {
+    let stamp = root.join(".horizon-source-staged");
+    if stamp.is_file() {
+        rerun_if_changed(&stamp.display());
+    }
+}
+
+/// Tells the build script's Cargo to rerun it when `path` changes.
+pub(crate) fn rerun_if_changed(path: &impl std::fmt::Display) {
+    #[cfg(test)]
+    CAPTURED_RERUNS.with_borrow_mut(|capture| {
+        if let Some(captured) = capture.as_mut() {
+            captured.push(path.to_string());
+        }
+    });
+    if !GENERATED_ON_STDOUT.load(std::sync::atomic::Ordering::Relaxed) {
+        println!("cargo:rerun-if-changed={path}");
+    }
+}
+pub use wire::generate_host as generate_wire_host;
+pub mod functions;
+pub mod internals;
+pub mod internals_view;
+pub mod loops;
+pub mod notes;
+pub mod patch;
+pub mod points;
+pub mod replace;
+pub(crate) mod source;
+pub mod staging;
+pub mod surface;
+pub use build::{
+    generate, generate_engine_points, generate_points, generate_render, write_if_changed,
+};
+pub use notes::generate as generate_hook_notes;
+mod staged;
+pub use staged::{MODS_STAGE, mob_turn, staged_mods};
+
+/// Generate the dispatch test fixture without preventing xtask from filling new placeholders.
 #[doc(hidden)]
 pub fn generate_test_hooks(root: &Path, out_dir: &Path) -> Result<(), String> {
-    build::track(root, Target::Client)?;
-    let code = sources(root, FillMode::Ignore)?.hooks;
+    build::track(root, true)?;
+    dispatch_fixtures::generate(root, out_dir)?;
+    // These fixtures deliberately substitute dispatch-only stub values for API
+    // types. Encoding is exercised by the real mod_api's Wire tests, not stubs.
+    let code = sources(root, FillMode::Ignore)?
+        .hooks
+        .replace(", horizon_mod_api_macros::Wire", "")
+        .replace("#[derive(horizon_mod_api_macros::Wire)]\n", "");
     fs::write(out_dir.join("mod_api_generated.rs"), code).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use quote::ToTokens;
-    use serde_json::Value;
     #[test]
-    fn fragment_hooks_generate_and_duplicates_fail() {
+    fn hook_points_come_from_the_catalog_and_its_fragments() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let catalog: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("native-hooks.json")).unwrap())
-                .unwrap();
-        let hooks = super::catalog_hooks(&root, &catalog).unwrap();
-        let hook = hooks
+        let points = super::hook_points(&root).unwrap();
+        let frame = points
             .iter()
-            .find(|h| h["name"] == "recipes_received")
+            .find(|p| p.name == "render_frame_pre")
             .unwrap();
-        assert_eq!(hook["mod_api"]["contract"], "listen");
+        assert_eq!(frame.version, 2);
+        let post = points
+            .iter()
+            .find(|p| p.name == "render_frame_post")
+            .unwrap();
+        assert_eq!(post.version, 2);
+        assert_eq!(
+            frame.target,
+            "horizon_client::game::native_hooks::render_frame_pre::Game<'_>::native_render_frame_pre"
+        );
+        assert!(!frame.scoped);
+        let scoped = points
+            .iter()
+            .find(|p| p.name == "pre_remove_side_effects")
+            .unwrap();
+        assert!(scoped.scoped);
+        assert_eq!(scoped.version, 1);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn fragment_hooks_generate() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let catalog = super::Catalog::load(&root).unwrap();
+        let hook = catalog
+            .hooks
+            .iter()
+            .find(|h| h.name == "recipes_received")
+            .unwrap();
+        assert_eq!(hook.contract, super::Contract::Listen);
         let generated = super::sources(&root, super::FillMode::Require)
             .unwrap()
             .hooks;
         assert!(generated.contains("fn recipes_received("));
-
-        let dir = root
-            .join("target")
-            .join(format!("mod-api-fragments-{}", std::process::id()));
-        let fragments = dir.join("tools/native-hook-fragments");
-        std::fs::create_dir_all(&fragments).unwrap();
-        std::fs::write(fragments.join("empty.json"), r#"{"hooks":[]}"#).unwrap();
-        std::fs::write(
-            fragments.join("duplicate.json"),
-            r#"{"hooks":[{"name":"same"}]}"#,
-        )
-        .unwrap();
-        let catalog = serde_json::json!({"hooks":[{"name":"same"}]});
-        assert_eq!(
-            super::catalog_hooks(&dir, &catalog).unwrap_err(),
-            "duplicate hook same"
-        );
-        std::fs::remove_file(fragments.join("duplicate.json")).unwrap();
-        assert_eq!(super::catalog_hooks(&dir, &catalog).unwrap().len(), 1);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// The committed render hooks pass while they hold the catalog's code in any layout, and fail
-    /// the build once a hook changes.
-    #[test]
-    fn stale_render_hooks_fail_the_build() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target")
-            .join(format!("render-hooks-{}", std::process::id()));
-        let path = root.join(super::RENDER_HOOKS);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let code = "/// Drawn.\npub trait RenderHooks { fn drawn(&self) {} }\n";
-        std::fs::write(
-            &path,
-            "// @generated\n/// Drawn.\npub trait RenderHooks {\n    fn drawn(&self) {}\n}\n",
-        )
-        .unwrap();
-        super::render_hooks_current(&root, code).unwrap();
-        let changed = code.replace("drawn(&self)", "drawn(&self, partial: f32)");
-        assert!(
-            super::render_hooks_current(&root, &changed)
-                .unwrap_err()
-                .ends_with("run cargo run -p xtask -- mod-api")
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn public_ref_structs_define_receivers_without_registration() {
-        let types = super::api_types(
-            "pub struct BlockEntityRef; pub struct HTTPRequestRef;
-             struct HiddenRef; pub(crate) struct InternalRef;
-             pub enum EnumRef {} pub type AliasRef = BlockEntityRef; pub struct Plain;",
-            "pub struct GeneratedRef;",
-        )
-        .unwrap();
-        for (receiver, ty) in [
-            ("block_entity", "BlockEntityRef"),
-            ("http_request", "HTTPRequestRef"),
-        ] {
-            let name = format!("{receiver}_kind");
-            let method =
-                syn::parse_str(&format!("fn native_{name}(&self, value: {ty}) {{}}")).unwrap();
-            let (handle, code) =
-                super::handle_method(&method, &name, receiver, &types.handles).unwrap();
-            assert_eq!(handle, ty);
-            assert!(code.contains(&format!("host.{name}(self)")));
-        }
-        let method = syn::parse_quote! { fn native_hidden_kind(&self, value: HiddenRef) {} };
-        for receiver in [
-            "hidden",
-            "internal",
-            "enum",
-            "alias",
-            "plain",
-            "generated",
-            "missing",
-        ] {
-            assert!(
-                super::handle_method(&method, "hidden_kind", receiver, &types.handles)
-                    .unwrap_err()
-                    .contains("unknown receiver")
-            );
-        }
-        assert_eq!(
-            super::api_types("pub struct URLRef; pub struct UrlRef;", "")
-                .err()
-                .unwrap(),
-            "duplicate handle receiver url",
-        );
-    }
-
-    #[test]
-    fn handle_methods_call_the_host_and_borrow_it_as_the_helper_borrows_game() {
-        let types = super::api_types("pub struct EntityRef; pub struct LevelRef;", "").unwrap();
-        let read: syn::ItemFn = syn::parse_quote! {
-            /// Where it is.
-            fn native_entity_position(&self, entity: EntityRef, mut scale: f64) -> Option<[f64; 3]> { todo!() }
-        };
-        let (handle, code) =
-            super::handle_method(&read, "entity_position", "entity", &types.handles).unwrap();
-        assert_eq!(handle, "EntityRef");
-        assert!(code.starts_with("/// Where it is.\n"));
-        assert!(code.contains("pub fn position (self , host : & dyn Host , scale : f64)"));
-        assert!(code.contains("host.entity_position(self, scale)"));
-        let write: syn::ItemFn = syn::parse_quote! {
-            fn native_level_set(&mut self, level: LevelRef) {}
-        };
-        let (handle, code) =
-            super::handle_method(&write, "level_set", "level", &types.handles).unwrap();
-        assert_eq!(handle, "LevelRef");
-        assert!(code.contains("host : & mut dyn Host"));
-        for (method, name, receiver, error) in [
-            (
-                syn::parse_quote! { fn native_entity_x(&self, entity: EntityRef) {} },
-                "entity_x",
-                "chunk",
-                "unknown receiver",
-            ),
-            (
-                syn::parse_quote! { fn native_mob_x(&self, entity: EntityRef) {} },
-                "mob_x",
-                "entity",
-                "starts with entity_",
-            ),
-            (
-                syn::parse_quote! { fn native_entity_type(&self, entity: EntityRef) {} },
-                "entity_type",
-                "entity",
-                "not a method name",
-            ),
-            (
-                syn::parse_quote! { fn native_entity_x(entity: EntityRef) {} },
-                "entity_x",
-                "entity",
-                "borrows Game",
-            ),
-            (
-                syn::parse_quote! { fn native_entity_x(&self, level: LevelRef) {} },
-                "entity_x",
-                "entity",
-                "takes a EntityRef first",
-            ),
-        ] {
-            let method: syn::ItemFn = method;
-            assert!(
-                super::handle_method(&method, name, receiver, &types.handles)
-                    .unwrap_err()
-                    .contains(error),
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn host_mapping_preserves_access_and_docs_and_rejects_unavailable_types() {
-        let exports = super::api_types(
-            "pub use external::{Visible, Original as Renamed}; pub struct Defined; struct Hidden;",
-            "pub struct Generated;",
-        )
-        .unwrap()
-        .exports;
-        for ty in ["Visible", "Renamed", "Defined", "Generated"] {
-            let method: syn::ItemFn =
-                syn::parse_str(&format!("fn native_test(&self, value: {ty}) {{ }}")).unwrap();
-            assert!(super::host_method(&method, "test", &exports).is_ok());
-        }
-        let foreign: syn::ItemFn =
-            syn::parse_quote! { fn native_foreign(&self, value: elsewhere::Visible) {} };
-        assert!(super::host_method(&foreign, "foreign", &exports).is_err());
-        let hidden_trait: syn::ItemFn =
-            syn::parse_quote! { fn native_hidden(&self, value: &dyn Hidden) {} };
-        assert!(super::host_method(&hidden_trait, "hidden", &exports).is_err());
-        let read: syn::ItemFn = syn::parse_quote! {
-            /// Read a value exactly.
-            ///
-            /// Keep the blank line too.
-            fn native_read(&self, pos: [i32; 3]) -> String { todo!() }
-        };
-        let (declaration, implementation) = super::host_method(&read, "read", &exports).unwrap();
-        assert!(
-            declaration.contains("/// Read a value exactly.\n///\n/// Keep the blank line too.")
-        );
-        assert!(declaration.contains("& self"));
-        assert!(implementation.contains("self.native_read(pos)"));
-        let dir: syn::ItemFn = syn::parse_quote! { fn native_dir() -> PathBuf { todo!() } };
-        let (declaration, implementation) = super::host_method(&dir, "dir", &exports).unwrap();
-        assert!(declaration.contains("& self"));
-        assert!(implementation.contains("Self::native_dir()"));
-        let owned: syn::ItemFn = syn::parse_quote! { fn native_owned(self) {} };
-        assert!(super::host_method(&owned, "owned", &exports).is_err());
-        let write: syn::ItemFn = syn::parse_quote! {
-            fn native_write(&mut self, value: i32) { }
-        };
-        let (declaration, _) = super::host_method(&write, "write", &exports).unwrap();
-        assert!(declaration.contains("& mut self"));
-        let private: syn::ItemFn = syn::parse_quote! {
-            fn native_private(&self, value: BinOnly) { }
-        };
-        assert!(
-            super::host_method(&private, "private", &exports)
-                .unwrap_err()
-                .contains("BinOnly")
-        );
-        let generic: syn::ItemFn = syn::parse_quote! {
-            fn native_generic<T>(&self, value: T) { }
-        };
-        assert!(
-            super::host_method(&generic, "generic", &exports)
-                .unwrap_err()
-                .contains("object-safe")
-        );
-        let callback: syn::ItemFn = syn::parse_quote! {
-            fn native_callback(&self, callback: impl FnOnce()) { }
-        };
-        assert!(
-            super::host_method(&callback, "callback", &exports)
-                .unwrap_err()
-                .contains("object-safe")
-        );
-        let asynchronous: syn::ItemFn = syn::parse_quote! {
-            async fn native_async(&self) { }
-        };
-        assert!(
-            super::host_method(&asynchronous, "async", &exports)
-                .unwrap_err()
-                .contains("object-safe")
-        );
-    }
-
-    #[test]
-    fn helper_target_can_differ_from_its_name_and_share_a_hook_name() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target")
-            .join(format!("mod-api-helper-target-{}", std::process::id()));
-        let fragments = root.join("tools/native-hook-fragments");
-        std::fs::create_dir_all(fragments).unwrap();
-        for (path, source) in [
-            ("crates/horizon-client/src/mod_api.rs", ""),
-            (
-                "crates/horizon-client/src/game/native_hooks.rs",
-                "impl Game<'_> {
-                    fn native_block_entity(&self, id: u32) {
-                        mod_api::dispatch_block_entity(self, mod_api::mods(), id);
-                    }
-                    fn native_block_entity_ref(&self, id: u32) -> u32 { id }
-                }",
-            ),
-        ] {
-            let path = root.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, source).unwrap();
-        }
-        let catalog = serde_json::json!({
-            "hooks": [{
-                "name": "block_entity",
-                "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity",
-                "mod_api": {"contract": "listen"}
-            }],
-            "helpers": [{
-                "name": "block_entity",
-                "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_ref"
-            }]
-        });
-        std::fs::write(root.join("native-hooks.json"), catalog.to_string()).unwrap();
-        let generated = super::sources(&root, super::FillMode::Require).unwrap();
-        let implementation = syn::parse_file(&generated.implementation).unwrap();
-        #[derive(Default)]
-        struct Calls(Vec<String>);
-        impl<'ast> syn::visit::Visit<'ast> for Calls {
-            fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-                self.0.push(call.method.to_string());
-                syn::visit::visit_expr_method_call(self, call);
-            }
-        }
-        let mut calls = Calls::default();
-        syn::visit::Visit::visit_file(&mut calls, &implementation);
-        assert_eq!(calls.0, ["native_block_entity_ref"]);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn lookup_rejects_missing_and_duplicate_functions() {
-        let first: syn::ItemFn = syn::parse_quote! { fn native_example() {} };
-        let other: syn::ItemFn = syn::parse_quote! { fn unrelated() {} };
-        assert!(super::one_function([&other].into_iter(), "native_example").is_err());
-        assert!(super::one_function([&first, &other].into_iter(), "native_example").is_ok());
-        assert!(super::one_function([&first, &first].into_iter(), "native_example").is_err());
+        assert!(generated.contains("/// Side: client."));
     }
 
     #[test]
@@ -1524,30 +752,146 @@ mod tests {
 
     #[test]
     fn level_hosts_match_receiver_mutability() {
+        use super::{Hook, HostAccess, Side};
+        let level = Hook::sample(
+            "horizon_client::game::GameLevel<'_>::native_test",
+            Side::Server,
+        );
+        let game = Hook::sample("horizon_client::game::Game<'_>::native_test", Side::Both);
+        use super::host_param::{HostParam, host_param};
+        let param = |ty: &str, call| {
+            Some(HostParam {
+                ty: ty.into(),
+                call,
+            })
+        };
         assert_eq!(
-            super::host_for(true, Some(false), false),
-            Some(("level", "&dyn LevelHost".into()))
+            host_param(&level, Some(false), false),
+            param("&dyn LevelHost", "self")
         );
         assert_eq!(
-            super::host_for(true, Some(true), false),
-            Some(("level", "&mut dyn LevelRandomHost".into()))
+            host_param(&level, Some(true), false),
+            param("&mut dyn LevelRandomHost", "self")
+        );
+        let ticks = "&mut super::mod_api_host::LevelTicks { level: self, ticks }";
+        assert_eq!(
+            host_param(&level, Some(false), true),
+            param("&mut dyn LevelTicksHost", ticks)
         );
         assert_eq!(
-            super::host_for(true, Some(false), true),
-            Some(("level", "&mut dyn LevelTicksHost".into()))
+            host_param(&level, Some(true), true),
+            param("&mut dyn LevelWriteHost", ticks)
+        );
+        assert_eq!(host_param(&level, None, false), None);
+        let level_both = Hook {
+            side: Side::Both,
+            ..level.clone()
+        };
+        assert_eq!(
+            host_param(&level_both, Some(false), false),
+            param("LevelSide", "super::mod_api_host::level_side(self)")
+        );
+        for (mutable, ticks) in [(Some(true), false), (Some(false), true)] {
+            assert_eq!(
+                super::host_param::validate(&level_both, "test", true, mutable, ticks).unwrap_err(),
+                "test: a both-side level hook takes the read kind until a client level seam exists"
+            );
+        }
+        assert_eq!(
+            host_param(&game, Some(true), false),
+            param("HostSide", "super::execution_role::host_side(self)")
         );
         assert_eq!(
-            super::host_for(true, Some(true), true),
-            Some(("level", "&mut dyn LevelWriteHost".into()))
+            super::host_param::validate(&game, "test", false, Some(false), false).unwrap_err(),
+            "test: a both-side hook with a &self target takes host \"read\""
         );
-        assert_eq!(super::host_for(true, None, false), None);
+        let read = Hook {
+            host: Some(HostAccess::Read),
+            ..game.clone()
+        };
         assert_eq!(
-            super::host_for(false, Some(true), false),
-            Some(("host", "&mut dyn Host".into()))
+            host_param(&read, Some(false), false),
+            param("&dyn Host", "&*self")
         );
+        let client = Hook {
+            side: Side::Client,
+            ..game.clone()
+        };
+        assert_eq!(
+            host_param(&client, Some(false), false),
+            param("&dyn ClientHost", "&*self")
+        );
+        assert_eq!(
+            host_param(&client, Some(true), false),
+            param("&mut dyn ClientHost", "self")
+        );
+        let client_read = Hook {
+            side: Side::Client,
+            ..read.clone()
+        };
+        assert_eq!(
+            super::host_param::validate(&client_read, "test", false, Some(false), false)
+                .unwrap_err(),
+            "test: this entry takes no host marker"
+        );
+        assert_eq!(
+            super::host_param::validate(&read, "test", true, Some(false), false).unwrap_err(),
+            "test: this entry takes no host marker"
+        );
+        // A hit's level: another receiver than `GameLevel`, marked as a level host.
+        let hit = Hook {
+            host: Some(HostAccess::Level),
+            ..Hook::sample(
+                "horizon_client::game::native_hooks::HitLevel<'_>::native_test",
+                Side::Server,
+            )
+        };
+        assert!(super::host_param::is_level(&hit));
+        assert_eq!(
+            host_param(&hit, Some(true), false),
+            param("&mut dyn LevelRandomHost", "self")
+        );
+        super::host_param::validate(&hit, "test", true, Some(true), false).unwrap();
+        // On both sides a hit's level reads, and its host says which side it is.
+        let hit_both = Hook {
+            side: Side::Both,
+            ..hit.clone()
+        };
+        super::host_param::validate(&hit_both, "test", true, Some(false), false).unwrap();
+        assert_eq!(
+            host_param(&hit_both, Some(false), false),
+            param("LevelSide", "super::mod_api_host::level_side(self)")
+        );
+        assert_eq!(
+            super::host_param::validate(&hit_both, "test", true, Some(false), true).unwrap_err(),
+            "test: this entry takes no host marker"
+        );
+        for (hook, mutable) in [
+            (hit.clone(), Some(false)),
+            (
+                Hook {
+                    side: Side::Both,
+                    ..hit.clone()
+                },
+                Some(true),
+            ),
+            (
+                Hook {
+                    host: Some(HostAccess::Level),
+                    ..level.clone()
+                },
+                Some(true),
+            ),
+        ] {
+            assert_eq!(
+                super::host_param::validate(&hook, "test", true, mutable, false).unwrap_err(),
+                "test: this entry takes no host marker"
+            );
+        }
     }
 
     #[test]
+    #[ignore = "daily"]
     fn only_a_game_hooks_placeholder_body_is_filled() {
         let fill = |body: &str, in_game: bool| {
             let method: syn::ItemFn = syn::parse_str(&format!(
@@ -1558,10 +902,7 @@ mod tests {
         };
         assert_eq!(fill("let _ = (player, cancel);", true), Ok(true));
         assert_eq!(
-            fill(
-                "horizon_client::mod_api::dispatch_h(self, mods(), player, cancel);",
-                true
-            ),
+            fill("mod_api::dispatch_h(self, mods(), player, cancel);", true),
             Ok(false)
         );
         for (body, in_game) in [
@@ -1586,22 +927,25 @@ mod tests {
             source,
             &[super::Fill {
                 native: "native_h".into(),
-                call: "mod_api::dispatch_h(self, mod_api::mods(), player, name, cancel);".into(),
+                call:
+                    "mod_api::dispatch_h(self, mod_api::__private::mods(), player, name, cancel);"
+                        .into(),
             }],
         )
         .unwrap();
         assert_eq!(
             String::from_utf8(filled).unwrap(),
-            "impl Game<'_> {\n    fn native_other(&self, a: u32) {\n        let _ = a;\n    }\n    fn native_h(&mut self, player: u128, name: &str, cancel: &mut bool) {\n        mod_api::dispatch_h(self, mod_api::mods(), player, name, cancel);\n    }\n}\n"
+            "impl Game<'_> {\n    fn native_other(&self, a: u32) {\n        let _ = a;\n    }\n    fn native_h(&mut self, player: u128, name: &str, cancel: &mut bool) {\n        mod_api::dispatch_h(self, mod_api::__private::mods(), player, name, cancel);\n    }\n}\n"
         );
     }
 
-    /// `item_damaged` taken back to how a new hook arrives (its body the
+    /// `item_picked_up` taken back to how a new hook arrives (its body the
     /// placeholder) in a copy of the sources: the check reports it, any other
-    /// body is left alone, a missing `mod_api` entry fails by name, and the
+    /// body is left alone, a hook without its attribute fails by name, and the
     /// generator brings back the shipped file byte for byte with the generated
     /// code unchanged.
     #[test]
+    #[ignore = "daily"]
     fn new_hook_placeholder_is_reported_then_filled() {
         fn copy(from: &std::path::Path, to: &std::path::Path) {
             if from.is_dir() {
@@ -1618,22 +962,19 @@ mod tests {
         let root = real
             .join("target")
             .join(format!("mod-api-fill-{}", std::process::id()));
-        let catalog: Value =
-            serde_json::from_str(&std::fs::read_to_string(real.join("native-hooks.json")).unwrap())
-                .unwrap();
         let mut inputs: Vec<String> = [
-            "native-hooks.json",
-            "tools/native-hook-fragments",
+            "crates/horizon-mod-vocab/src/hooks",
+            "crates/horizon-mod-vocab/src/exports",
+            "crates/horizon-mod-vocab/src/host",
+            "crates/horizon-mod-vocab/src/parts",
+            "crates/horizon-client/src/game.rs",
             "crates/horizon-client/src/game",
-            "crates/horizon-client/src/mod_api.rs",
-            super::RENDER_HOOKS,
+            "crates/horizon-mod-vocab/src/lib.rs",
         ]
         .map(str::to_owned)
         .into();
-        for hook in super::catalog_hooks(&real, &catalog).unwrap() {
-            if let Some((krate, path)) =
-                super::free_function_source(hook["target"].as_str().unwrap())
-            {
+        for hook in super::Catalog::load(&real).unwrap().hooks {
+            if let Some((krate, path)) = super::free_function_source(&hook.target) {
                 let (module, _) = path.rsplit_once("::").unwrap();
                 inputs.push(format!(
                     "crates/{krate}/src/{}.rs",
@@ -1644,51 +985,100 @@ mod tests {
         for input in &inputs {
             copy(&real.join(input), &root.join(input));
         }
-        let hooks = root.join("crates/horizon-client/src/game/native_hooks.rs");
+        // The first hook and helper, by declaration order, and the file declaring each.
+        let catalog = super::Catalog::load(&real).unwrap();
+        let declaring = |name: &str| {
+            std::fs::read_dir(root.join(super::catalog::DECLARATIONS))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    std::fs::read_to_string(path)
+                        .unwrap()
+                        .contains(&format!("fn {name}();"))
+                })
+                .unwrap()
+        };
+        let first = declaring(&catalog.hooks[0].name);
+        let original = std::fs::read_to_string(&first).unwrap();
+        let without_counterparts = super::sources(&root, super::FillMode::Require)
+            .unwrap()
+            .hooks;
+        std::fs::write(
+            &first,
+            original.replacen(
+                "#[hook(",
+                "#[hook(fabric = [\"Example.ONE\", \"Example.TWO\"], paper = \"ExampleEvent\", ",
+                1,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            super::sources(&root, super::FillMode::Require)
+                .unwrap()
+                .hooks,
+            without_counterparts
+        );
+        std::fs::write(&first, original).unwrap();
+        let hooks = root.join("crates/horizon-client/src/game/native_hooks/item_picked_up.rs");
         let shipped = std::fs::read_to_string(&hooks).unwrap();
-        let call = "mod_api::dispatch_item_damaged(self, mod_api::mods(), player, name, item, amount, cancel);";
+        let call = "self.fire_item_picked_up(player, item, can_pickup);";
         assert_eq!(shipped.matches(call).count(), 1);
-        let unfinished = shipped.replace(call, "let _ = (player, name, item, amount);");
+        let unfinished = shipped.replace(call, "let _ = (player, item);");
         std::fs::write(&hooks, &unfinished).unwrap();
         assert!(
             super::fill_hooks(&root)
                 .unwrap_err()
-                .starts_with("missing dispatch_item_damaged call in native_item_damaged: ")
+                .starts_with("missing dispatch_item_picked_up call in native_item_picked_up: ")
         );
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), unfinished);
-        let placeholder = shipped.replace(call, "let _ = (player, name, item, amount, cancel);");
+        let placeholder = shipped.replace(call, "let _ = (player, item, can_pickup);");
         std::fs::write(&hooks, &placeholder).unwrap();
         assert_eq!(
             super::sources(&root, super::FillMode::Require).unwrap_err(),
-            "native_item_damaged: the let _ = (…); placeholder needs its dispatch call; run cargo run -p xtask -- mod-api"
+            "native_item_picked_up: the let _ = (…); placeholder needs its dispatch call; run cargo run -p xtask -- mod-api"
         );
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), placeholder);
-        // A stamped hook lives in the catalog, not in a fragment.
-        let catalog_path = root.join("native-hooks.json");
-        let shipped_catalog = std::fs::read_to_string(&catalog_path).unwrap();
-        let mut json: Value = serde_json::from_str(&shipped_catalog).unwrap();
-        let hook = json["hooks"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|hook| hook["name"] == "item_damaged")
+        // A hook without its attribute fails by name.
+        let declared = declaring("item_picked_up");
+        let shipped_declarations = std::fs::read_to_string(&declared).unwrap();
+        let declaration = shipped_declarations.find("fn item_picked_up();").unwrap();
+        let attribute = shipped_declarations[..declaration]
+            .rfind("#[hook(")
             .unwrap();
-        hook.as_object_mut().unwrap().remove("mod_api").unwrap();
-        std::fs::write(&catalog_path, json.to_string()).unwrap();
-        assert_eq!(
-            super::fill_hooks(&root).unwrap_err(),
-            "hook item_damaged has no mod_api entry: add one"
+        std::fs::write(
+            &declared,
+            format!(
+                "{}{}",
+                &shipped_declarations[..attribute],
+                &shipped_declarations[declaration..]
+            ),
+        )
+        .unwrap();
+        assert!(
+            super::fill_hooks(&root)
+                .unwrap_err()
+                .contains("item_picked_up: needs a #[hook(...)] attribute")
         );
-        std::fs::write(&catalog_path, shipped_catalog).unwrap();
+        std::fs::write(&declared, shipped_declarations).unwrap();
+        let second = root.join("crates/horizon-client/src/game/native_hooks/client_tick_pre.rs");
+        let second_shipped = std::fs::read_to_string(&second).unwrap();
+        std::fs::write(
+            &second,
+            second_shipped.replace("self.fire_client_tick_pre();", "let _ = ();"),
+        )
+        .unwrap();
+        let decoy = hooks.with_file_name("decoy.rs");
+        let decoy_source = "impl Game<'_> { /// mentions fn native_item_picked_up(\n fn unrelated(&self) { let _ = self; } }\n";
+        std::fs::write(&decoy, decoy_source).unwrap();
         super::fill_hooks(&root).unwrap();
         // The generator writes LF; a Windows checkout (core.autocrlf) has CRLF.
         let lf = |s: &str| s.replace("\r\n", "\n");
-        assert_eq!(lf(&std::fs::read_to_string(&hooks).unwrap()), lf(&shipped));
-        // The committed render hooks come back as the generator writes them.
         assert_eq!(
-            lf(&std::fs::read_to_string(root.join(super::RENDER_HOOKS)).unwrap()),
-            lf(&std::fs::read_to_string(real.join(super::RENDER_HOOKS)).unwrap()),
+            lf(&std::fs::read_to_string(&second).unwrap()),
+            lf(&second_shipped)
         );
+        assert_eq!(std::fs::read_to_string(decoy).unwrap(), decoy_source);
+        assert_eq!(lf(&std::fs::read_to_string(&hooks).unwrap()), lf(&shipped));
         // Parsing the sources is the slow part, so each tree is parsed once.
         let filled = super::sources(&root, super::FillMode::Require).unwrap();
         let shipped_sources = super::sources(&real, super::FillMode::Require).unwrap();
@@ -1740,14 +1130,31 @@ mod tests {
 
     #[test]
     fn library_crate_targets_resolve_to_their_source() {
+        assert_eq!(
+            super::free_function_source("horizon_client_lib::menu::native_menu_slot_rules"),
+            Some(("horizon-client", "menu::native_menu_slot_rules".to_owned()))
+        );
+        assert_eq!(
+            super::free_function_source("horizon_client_lib::breathing::native_living_breathe"),
+            Some((
+                "horizon-client",
+                "breathing::native_living_breathe".to_owned()
+            ))
+        );
+        assert_eq!(
+            super::free_function_source(
+                "horizon_client_render::sound_engine::hooks::native_play_sound"
+            ),
+            Some((
+                "horizon-client-render",
+                "sound_engine::hooks::native_play_sound".to_owned()
+            ))
+        );
         for target in [
-            "horizon_client_lib::menu::native_menu_slot_rules",
             "horizon_client::menu::native_menu_slot_rules",
+            "horizon_client::breathing::native_living_breathe",
         ] {
-            assert_eq!(
-                super::free_function_source(target),
-                Some(("horizon-client", "menu::native_menu_slot_rules".to_owned()))
-            );
+            assert_eq!(super::free_function_source(target), None);
         }
         assert_eq!(
             super::free_function_source("horizon_client_lib::crafting::native_ingredient"),
@@ -1764,8 +1171,16 @@ mod tests {
     #[test]
     fn contracted_hook_requires_dispatch_call() {
         let missing: syn::ImplItemFn = syn::parse_quote! { fn native_zoom(&self) { unrelated(); } };
-        let present: syn::ImplItemFn = syn::parse_quote! { fn native_zoom(&self) { horizon_client::mod_api::dispatch_zoom(); } };
+        let present: syn::ImplItemFn =
+            syn::parse_quote! { fn native_zoom(&self) { mod_api::dispatch_zoom(); } };
         assert!(!super::has_call(&missing.block, "dispatch_zoom"));
         assert!(super::has_call(&present.block, "dispatch_zoom"));
+        let generated: syn::ItemFn = syn::parse_quote! {
+            fn native_zoom(&self) { self.fire_zoom(); }
+        };
+        assert_eq!(
+            super::needs_fill(&generated, "dispatch_zoom", true),
+            Ok(false)
+        );
     }
 }

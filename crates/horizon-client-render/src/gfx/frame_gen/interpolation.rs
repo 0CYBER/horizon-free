@@ -833,6 +833,7 @@ mod tests {
     /// clear). The first 10 frames after a reset use the game's vectors only.
     #[test]
     fn moves_what_the_optical_flow_follows_halfway() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut shifts = vec![[0, 0]; 20];
         shifts.push([16, 8]);
         let Some([made, previous, current]) =
@@ -851,6 +852,7 @@ mod tests {
     /// The camera turning: the game's motion vectors put the made frame halfway.
     #[test]
     fn moves_the_view_halfway_with_the_camera() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let size = [512.0, 288.0];
         // What is at a pixel now was 16 pixels to its right last frame.
         let reproject = Mat4::from_translation(glam::Vec3::new(32.0 / size[0], 0.0, 0.0));
@@ -869,6 +871,7 @@ mod tests {
     /// made frame is halfway, as with the camera's.
     #[test]
     fn moves_what_has_its_own_motion_vectors_halfway() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let size = [512.0, 288.0];
         let shifts = [[0, 0], [16, 8], [32, 16], [48, 24]];
         let mv = [-16.0 / size[0], -8.0 / size[1]];

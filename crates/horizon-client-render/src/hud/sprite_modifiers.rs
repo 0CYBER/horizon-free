@@ -4,8 +4,8 @@
 //! as the sprite is drawn (a hotbar stretches), `u0`..`v1` are atlas UVs, `color` is the
 //! vertex colour, and an overlay goes through its own texture's modifier.
 
+use crate::resource_source::ResourceSource;
 use std::collections::HashMap;
-use std::path::Path;
 
 use horizon_polytone::sprites::{SpriteChange, SpriteModifier, sprite_id};
 
@@ -50,35 +50,23 @@ fn sprite_of(key: &str) -> Option<String> {
 impl SpriteModifiers {
     /// The modifiers of the packs merged at `root` for the GUI sprites among `keys` (the atlas's):
     /// for each sprite, the last file that targets it.
-    pub fn read<'a>(root: &Path, keys: impl Iterator<Item = &'a String>) -> Self {
+    pub fn read<'a>(root: &ResourceSource, keys: impl Iterator<Item = &'a String>) -> Self {
         let mut modifiers = Vec::new();
-        let namespaces = std::fs::read_dir(root.join("assets"))
+        for path in root
+            .list("assets/")
             .into_iter()
-            .flatten()
-            .flatten();
-        for namespace in namespaces {
-            let mut stack = vec![namespace.path().join("polytone/overlay_modifiers")];
-            while let Some(dir) = stack.pop() {
-                let mut entries: Vec<_> = std::fs::read_dir(&dir)
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .collect();
-                entries.sort_by_key(|e| e.path());
-                for entry in entries {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                        continue;
-                    }
-                    let parsed = horizon_world::json_file::read::<serde_json::Value>(&path)
-                        .map_err(|e| e.to_string())
-                        .and_then(|json| SpriteModifier::parse(&json));
-                    match parsed {
-                        Ok(m) => modifiers.push(m),
-                        Err(e) => log::warn!("{}: {e}", path.display()),
-                    }
-                }
+            .filter(|path| path.split_once("/polytone/overlay_modifiers/").is_some())
+        {
+            let parsed = root
+                .read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())
+                })
+                .and_then(|json| SpriteModifier::parse(&json));
+            match parsed {
+                Ok(m) => modifiers.push(m),
+                Err(e) => log::warn!("{path}: {e}"),
             }
         }
         Self::from_modifiers(modifiers, keys)

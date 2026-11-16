@@ -1,0 +1,11 @@
+id = "paper_trace"
+name = "Paper parity trace"
+version = "0.1.0"
+api = "0.2"
+side = "client"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "25de76dba1037d2b2e1f910e3346bf023a7e681e"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

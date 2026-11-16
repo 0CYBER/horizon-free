@@ -224,3 +224,18 @@ impl ParticleType {
         }
     }
 }
+
+/// A particle type as its registry name.
+impl From<&ParticleType> for String {
+    fn from(particle: &ParticleType) -> Self {
+        particle.name().to_owned()
+    }
+}
+
+/// The particle type of a registry name; an unknown name is refused as itself.
+impl TryFrom<String> for ParticleType {
+    type Error = String;
+    fn try_from(name: String) -> Result<Self, String> {
+        Self::from_name(&name).ok_or(name)
+    }
+}

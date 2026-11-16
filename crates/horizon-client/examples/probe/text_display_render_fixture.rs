@@ -19,7 +19,9 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let [_, resources, inputs, output] = args.as_slice() else {
         return Err("usage: text_display_render_fixture RESOURCES INPUTS OUTPUT".into());
     };
-    let atlas = HudAtlas::build(std::path::Path::new(resources))?;
+    let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        (std::path::Path::new(resources)).to_owned(),
+    ))?;
     let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
     for line in std::fs::read_to_string(inputs)?.lines() {
         let input: Value = serde_json::from_str(line)?;
@@ -36,7 +38,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         let mut d = TextDisplayData::default();
         d.apply(&packet.values);
         let lines = Lines::split(&atlas.font, &d.text, d.line_width);
-        let mut batch = HudBatch::new([1, 1]);
+        let mut batch = HudBatch::scratch([1, 1]);
         let default_background = background_color(
             input["chat_only"].as_bool().unwrap_or(false),
             input["background_opacity"].as_f64().unwrap_or(0.0),

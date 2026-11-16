@@ -7,6 +7,8 @@ pub use horizon_core::geometry::border::BorderStatus;
 
 /// `WorldBorder.MAX_SIZE` (the float 5.999997E7 as a double).
 pub const MAX_SIZE: f64 = 59_999_968.0;
+/// The farthest a border's centre may be on x or z (`/worldborder center`'s 2.9999984E7).
+pub const MAX_CENTER: f64 = 29_999_984.0;
 
 /// `BorderStatus.getColor`: the wall colour.
 pub fn status_color(status: BorderStatus) -> u32 {
@@ -172,8 +174,8 @@ impl WorldBorder {
             z.clamp(min_z + half, (max_z - half).max(min_z + half)),
         ]
     }
-    pub fn pack(&self) -> horizon_world::nbt::Tag {
-        use horizon_world::nbt::Tag;
+    pub fn pack(&self) -> horizon_core::nbt::Tag {
+        use horizon_core::nbt::Tag;
         Tag::compound([
             ("center_x", Tag::Double(self.center()[0].to_bits())),
             ("center_z", Tag::Double(self.center()[1].to_bits())),
@@ -189,8 +191,8 @@ impl WorldBorder {
             ("lerp_time", Tag::Long(self.remaining_ticks())),
         ])
     }
-    pub fn unpack(tag: &horizon_world::nbt::Tag) -> Self {
-        use horizon_world::nbt::Tag;
+    pub fn unpack(tag: &horizon_core::nbt::Tag) -> Self {
+        use horizon_core::nbt::Tag;
         let d = |k: &str, default: f64| match tag.get(k) {
             Some(Tag::Double(b)) => f64::from_bits(*b),
             _ => default,

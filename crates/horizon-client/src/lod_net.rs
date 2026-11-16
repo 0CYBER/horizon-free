@@ -111,7 +111,8 @@ impl Offer {
             in_flight: next()?.min(64),
             per_second: next()?,
         };
-        (offer.distance > 0 && offer.in_flight > 0 && offer.per_second > 0).then_some(offer)
+        (r.remaining() == 0 && offer.distance > 0 && offer.in_flight > 0 && offer.per_second > 0)
+            .then_some(offer)
     }
 }
 

@@ -1,7 +1,7 @@
 //! Frames in flight: the readbacks a submission starts, landing frames the submit thread
 //! submitted, keeping offscreen frames at most two ahead of the GPU, and a screenshot's copy.
 
-use super::{Renderer, ScreenshotRequest, copy_frame, screenshot_save, submit};
+use super::{Renderer, ScreenshotRequest, copy_frame, submit};
 
 impl Renderer {
     /// The frame's readbacks to start right after its submission (on the submit thread when
@@ -115,15 +115,7 @@ impl Renderer {
                 "screenshots need a 32-bit surface format, not {:?}",
                 self.config.format
             );
-            if request.background {
-                self.saved_screenshots.push(screenshot_save::Saved {
-                    path: request.path,
-                    result: Err(error),
-                    hdr: None,
-                });
-            } else {
-                self.screenshot_result = Some(Err(error));
-            }
+            self.screenshot_result = Some(Err(error));
             None
         }
     }

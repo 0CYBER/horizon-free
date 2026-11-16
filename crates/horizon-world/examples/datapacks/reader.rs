@@ -24,7 +24,7 @@ pub fn overrides(packs: &[&Path]) -> Result<WorldgenOverrides, Error> {
                 let nbt = pack
                     .bytes(&file)
                     .ok_or_else(|| format!("{}: {file}: unreadable", pack.id))?;
-                overrides.set_template(&id, nbt);
+                overrides.set_template(id, horizon_assets::resource_source::Resource::bytes(nbt));
             } else if let PackFile::Unreadable =
                 overrides.add_file(&pack.id, &file, || pack.read(&file))
             {

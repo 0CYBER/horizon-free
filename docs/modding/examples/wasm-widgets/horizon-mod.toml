@@ -1,0 +1,11 @@
+id = "widget_example"
+name = "Widget Example"
+version = "0.1.0"
+description = "A screen of two text fields and two buttons built from mod_api::client::widgets: F8 opens it, Copy copies the first field into the second, Done closes it."
+api = "0.2"
+side = "client"
+capabilities = ["registries"]
+
+[wasm]
+sha512 = "14a5bce5a8ad24ae2a4b32f21e5440747520bb1a5369ac481a3241af630a909ece7725233e21851122f8785df15d5bd11d61edf74e6676115e5cf49743891689"
+toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"

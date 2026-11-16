@@ -10,8 +10,13 @@ use crate::{
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_world::loot::PackOverlay;
+use horizon_world::native_load_context::LoopContext;
+#[cfg(test)]
+mod grindstone_part_tests;
+mod models;
+pub use models::{AnvilResult, EnchantmentRow};
 use serde_json::Value;
-use std::{fs, path::Path, sync::Arc};
+use std::{collections::HashSet, fs, path::Path, sync::Arc};
 
 /// Everything the workstation menus read, loaded once with the resources.
 pub struct StationData {
@@ -20,55 +25,63 @@ pub struct StationData {
     pub recipes: StationRecipes,
     pub brewing: crate::brewing::Brewing,
     pub trades: crate::merchant::Trades,
+    pub professions: Arc<crate::mobs::villager::ResolvedProfessions>,
     pub banners: crate::banner::Banners,
     /// Every recipe's learnability and display count (the server recipe book).
     pub recipe_index: crate::recipe_book::RecipeIndex,
 }
 impl StationData {
-    pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
-        let defaults = horizon_world::item_defaults::shared(root).ok();
-        Self {
-            enchantments: std::sync::Arc::clone(&items.enchantments),
-            recipes: StationRecipes::load_with_defaults(root, items, overlay, defaults.as_deref()),
-            brewing: crate::brewing::Brewing::load(root, items, overlay),
-            trades: crate::merchant::Trades::load(root, overlay),
-            banners: crate::banner::Banners::load_with_defaults(root, defaults.as_deref()),
-            recipe_index: crate::recipe_book::RecipeIndex::load(root, overlay),
-        }
-    }
-    pub fn load_with_recipe_sources(
+    pub fn load(
         root: &Path,
         items: &Items,
         overlay: &PackOverlay,
-        defaults: Option<&horizon_world::item_defaults::Defaults>,
-        sources: &[(String, Value)],
+        defaults: &horizon_world::item_defaults::ItemDefaults,
+        context: &horizon_world::native_load_context::LoadContext,
     ) -> Self {
-        let owned_defaults = if defaults.is_none() {
-            horizon_world::item_defaults::shared(root).ok()
-        } else {
-            None
-        };
-        let defaults = defaults.or(owned_defaults.as_deref());
+        let sources = crate::crafting::ResolvedSources::load_or_empty(root, overlay, context);
+        let recipes = crate::crafting::Recipes::from_resolved(root, items, overlay, &sources)
+            .unwrap_or_else(|error| {
+                log::error!("recipes: could not load station recipe index: {error}");
+                crate::crafting::Recipes::empty()
+            });
+        Self::from_sources(root, items, overlay, defaults, (&sources, &recipes))
+    }
+    /// The tables of one load whose recipes are `sources`.
+    pub fn from_sources(
+        root: &Path,
+        items: &Items,
+        overlay: &PackOverlay,
+        defaults: &horizon_world::item_defaults::ItemDefaults,
+        (sources, recipes): (&crate::crafting::ResolvedSources, &crate::crafting::Recipes),
+    ) -> Self {
         Self {
             enchantments: std::sync::Arc::clone(&items.enchantments),
-            recipes: StationRecipes::load_with_sources(root, items, defaults, sources),
-            brewing: crate::brewing::Brewing::load(root, items, overlay),
+            recipes: StationRecipes::from_sources(root, items, sources),
+            brewing: {
+                let mut brewing = crate::brewing::Brewing::load(root, items, overlay);
+                let added = |key| sources.property_additions.get(key).into_iter().flatten();
+                brewing.reagents.extend(added("brewing_reagent").cloned());
+                brewing.inputs.extend(added("brewing_input").cloned());
+                brewing
+            },
             trades: crate::merchant::Trades::load(root, overlay),
-            banners: crate::banner::Banners::load_with_defaults(root, defaults),
-            recipe_index: crate::recipe_book::RecipeIndex::load_from_sources(sources),
+            professions: Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
+            banners: crate::banner::Banners::load(root, defaults),
+            recipe_index: crate::recipe_book::RecipeIndex::from_recipes(recipes),
         }
     }
 }
 
 // ---------------------------------------------------------------- enchanting
 
-/// `EnchantingTableBlock.BOOKSHELF_OFFSETS`: the 5x5 ring two blocks out, two high.
+/// `EnchantingTableBlock.BOOKSHELF_OFFSETS`: the 5x5 ring two blocks out, two high, in
+/// `BlockPos.betweenClosed` order (x fastest, then y, then z), which a float power sum can see.
 pub fn bookshelf_offsets() -> Vec<[i32; 3]> {
     let mut v = Vec::new();
-    for x in -2i32..=2 {
-        for z in -2i32..=2 {
-            if x.abs() == 2 || z.abs() == 2 {
-                for y in 0..=1 {
+    for z in -2i32..=2 {
+        for y in 0..=1 {
+            for x in -2i32..=2 {
+                if x.abs() == 2 || z.abs() == 2 {
                     v.push([x, y, z]);
                 }
             }
@@ -94,7 +107,7 @@ pub fn enchantment_list(
 ) -> Levels {
     let mut random = LegacyRandom::new(i64::from(seed.wrapping_add(slot as i32)));
     let pool = e.tag("minecraft:in_enchanting_table").to_vec();
-    let mut list = e.select_of(items, &mut random, stack, cost, &pool);
+    let mut list = e.select(items, &mut random, stack, cost, &pool);
     if &*stack.item == "minecraft:book" && list.len() > 1 {
         let i = random.next_int_bound(list.len() as i32).unwrap_or(0) as usize;
         list.remove(i);
@@ -120,6 +133,20 @@ pub fn enchant_offers(
     bookcases: i32,
     stack: Option<&ItemStack>,
 ) -> EnchantOffers {
+    enchant_offers_leveled(e, items, seed, bookcases, stack, |_, cost| cost)
+}
+/// [`enchant_offers`], with `level_set` given each row and its cost as
+/// `getEnchantmentCost` drew it, before a cost below the row is cleared:
+/// what it returns is the row's cost (NeoForge's `EnchantmentLevelSetEvent`).
+/// It is not asked for an item the table can't enchant.
+pub fn enchant_offers_leveled(
+    e: &Enchantments,
+    items: &Items,
+    seed: i32,
+    bookcases: i32,
+    stack: Option<&ItemStack>,
+    mut level_set: impl FnMut(usize, i32) -> i32,
+) -> EnchantOffers {
     let mut offers = EnchantOffers::default();
     let Some(stack) = stack else { return offers };
     if !is_enchantable(e, stack) {
@@ -127,7 +154,8 @@ pub fn enchant_offers(
     }
     let mut random = LegacyRandom::new(i64::from(seed));
     for i in 0..3 {
-        offers.costs[i] = e.enchantment_cost_of(&mut random, i, bookcases, stack);
+        let cost = e.enchantment_cost_of(&mut random, i, bookcases, stack);
+        offers.costs[i] = level_set(i, cost);
         if offers.costs[i] < i as i32 + 1 {
             offers.costs[i] = 0;
         }
@@ -153,7 +181,7 @@ pub fn enchant_clue(
     // getEnchantmentList reseeds the menu random; the clue draws continue from it.
     let mut list_random = LegacyRandom::new(i64::from(seed.wrapping_add(slot as i32)));
     let pool = e.tag("minecraft:in_enchanting_table").to_vec();
-    let mut list = e.select_of(items, &mut list_random, stack, cost, &pool);
+    let mut list = e.select(items, &mut list_random, stack, cost, &pool);
     if &*stack.item == "minecraft:book" && list.len() > 1 {
         let r = list_random.next_int_bound(list.len() as i32).unwrap_or(0) as usize;
         list.remove(r);
@@ -174,6 +202,11 @@ pub fn apply_enchantment(
     stack: &ItemStack,
 ) -> Option<ItemStack> {
     let list = enchantment_list(e, items, seed, slot, cost, stack);
+    apply_enchantment_list(stack, list)
+}
+
+/// Apply a selection to a copy of the stack, storing a book's enchantments in an enchanted book.
+pub fn apply_enchantment_list(stack: &ItemStack, list: Levels) -> Option<ItemStack> {
     if list.is_empty() {
         return None;
     }
@@ -190,86 +223,16 @@ pub fn apply_enchantment(
 
 // ---------------------------------------------------------------- anvil
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct AnvilResult {
-    pub result: Option<ItemStack>,
-    /// Level cost (the `cost` data slot).
-    pub cost: i32,
-    /// Material items consumed from the second slot on take.
-    pub repair_item_count_cost: u32,
-    pub only_renaming: bool,
+/// `ItemStack.isDamageableItem`: durability, and not `minecraft:unbreakable`.
+pub fn is_damageable(items: &Items, stack: &ItemStack) -> bool {
+    horizon_items::properties::damageable(|id| stack.carries_component(items.get(&stack.item), id))
 }
-/// `DataComponents.MAX_DAMAGE` of a stack: its patch, else the item default
-/// (0 when the component is absent or removed).
 pub fn max_damage(items: &Items, stack: &ItemStack) -> i32 {
-    let data = stack.data();
-    if data.is_some_and(|d| d.other("!minecraft:max_damage").is_some()) {
-        return 0;
-    }
-    match data.and_then(|d| d.other("minecraft:max_damage")) {
-        Some(tag) => component_int(tag).filter(|v| *v >= 1).unwrap_or(0),
-        None => items.get(&stack.item).map_or(0, |i| i.max_damage as i32),
-    }
-}
-fn component_int(tag: &horizon_world::nbt::Tag) -> Option<i32> {
-    use horizon_world::nbt::Tag;
-    match tag {
-        Tag::Byte(v) => Some(i32::from(*v)),
-        Tag::Short(v) => Some(i32::from(*v)),
-        Tag::Int(v) => Some(*v),
-        _ => None,
-    }
-}
-/// An item holder set in a component: one id or tag, or a list of them.
-fn component_items(tag: &horizon_world::nbt::Tag) -> Vec<String> {
-    use horizon_world::nbt::Tag;
-    match tag {
-        Tag::String(s) => vec![s.to_string_lossy().to_owned()],
-        Tag::List(list) => list
-            .iter()
-            .filter_map(|item| match item {
-                Tag::String(s) => Some(s.to_string_lossy().to_owned()),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-/// `ItemStack.get(DataComponents.REPAIRABLE)`: the stack's component, else
-/// the item's default; a removed component leaves none.
-fn repairable(e: &Enchantments, stack: &ItemStack) -> Vec<String> {
-    let data = stack.data();
-    if data.is_some_and(|d| d.other("!minecraft:repairable").is_some()) {
-        return Vec::new();
-    }
-    if let Some(tag) = data.and_then(|d| d.other("minecraft:repairable")) {
-        return tag.get("items").map(component_items).unwrap_or_default();
-    }
-    e.props(&stack.item)
-        .map(|p| p.repairable.clone())
-        .unwrap_or_default()
+    stack.max_damage(items.get(&stack.item))
 }
 /// `ItemStack.getDamageValue`: the damage clamped to `[0, max_damage]`.
 fn damage_value(items: &Items, stack: &ItemStack) -> i32 {
     (stack.damage.min(i32::MAX as u32) as i32).clamp(0, max_damage(items, stack).max(0))
-}
-/// `ItemStack.isDamageableItem`: max damage and damage components present,
-/// and not `minecraft:unbreakable`. A patched MAX_DAMAGE alone is not
-/// enough: the stack needs DAMAGE too.
-pub fn is_damageable(items: &Items, stack: &ItemStack) -> bool {
-    let data = stack.data();
-    // `has(DAMAGE)`: a non-zero value or an explicit patch (zero included),
-    // else the item's own default, which `Item.Properties.durability` sets
-    // together with MAX_DAMAGE. Horizon keeps only that value
-    // (`ItemInfo.max_damage`); the vanilla item export pairs the two on every
-    // item, so a positive default stands for both components.
-    let has_damage = data.is_none_or(|d| d.other("!minecraft:damage").is_none())
-        && (stack.damage > 0
-            || data.is_some_and(|d| d.explicit_zero_damage)
-            || items.get(&stack.item).is_some_and(|i| i.max_damage > 0));
-    max_damage(items, stack) > 0
-        && has_damage
-        && data.is_none_or(|d| d.other("minecraft:unbreakable").is_none())
 }
 /// `ItemStack.setDamageValue`: stored clamped to `[0, max_damage]`.
 fn set_damage_value(items: &Items, stack: &mut ItemStack, damage: i32) {
@@ -283,7 +246,18 @@ pub fn is_valid_repair_item(
     stack: &ItemStack,
     material: &ItemStack,
 ) -> bool {
-    Enchantments::item_in(items, &repairable(e, stack), &material.item)
+    if let Some(data) = stack.data() {
+        if let Some(component) = data.other("minecraft:repairable") {
+            return horizon_items::properties::repairable(component, &material.item, |tag| {
+                items.item_in_tag(tag, &material.item)
+            });
+        }
+        if data.other("!minecraft:repairable").is_some() {
+            return false;
+        }
+    }
+    e.props(&stack.item)
+        .is_some_and(|p| Enchantments::item_in(items, &p.repairable, &material.item))
 }
 /// `stack.has(STORED_ENCHANTMENTS)`: the enchanted book's default component
 /// unless removed, or an explicitly set one, even when empty.
@@ -460,7 +434,7 @@ pub fn anvil_result(
             if n != hover_name {
                 naming_cost = 1;
                 price += 1;
-                result.data_mut().custom_name = Some(horizon_world::nbt::Tag::String(n.into()));
+                result.data_mut().custom_name = Some(horizon_core::nbt::Tag::String(n.into()));
             }
         }
         _ => {
@@ -509,51 +483,42 @@ pub fn anvil_result(
         only_renaming,
     }
 }
-impl AnvilResult {
-    /// NeoForge's `CommonHooks.onAnvilUpdate` once the mods answered
-    /// `AnvilUpdateEvent` about this result (vanilla's): a cancel leaves no
-    /// result and both costs at 0. Otherwise their output, their level cost
-    /// through `AnvilMenu.setCost` (a negative one is 0) and their material
-    /// cost, where 0 or less is vanilla's 0 (`onTake` takes the whole right
-    /// stack, unless the anvil only renames). `only_renaming` stays vanilla's.
-    pub fn answer_update(
-        &mut self,
-        canceled: bool,
-        output: Option<ItemStack>,
-        xp_cost: i32,
-        material_cost: i32,
-    ) {
-        if canceled {
-            self.result = None;
-            self.cost = 0;
-            self.repair_item_count_cost = 0;
-            return;
-        }
-        self.result = output;
-        self.cost = xp_cost.max(0);
-        self.repair_item_count_cost = u32::try_from(material_cost).unwrap_or(0);
-    }
-}
 
 // ---------------------------------------------------------------- grindstone
 
 /// `ItemStack.getMaxStackSize`: the stack's `MAX_STACK_SIZE` component (a
 /// removed one is vanilla's default of 1), else the item's default.
 fn max_stack_size(items: &Items, stack: &ItemStack) -> u32 {
-    let data = stack.data();
-    if data.is_some_and(|d| d.other("!minecraft:max_stack_size").is_some()) {
-        return 1;
-    }
-    if let Some(tag) = data.and_then(|d| d.other("minecraft:max_stack_size")) {
-        return component_int(tag)
-            .filter(|v| *v >= 1)
-            .map_or(1, |v| v as u32);
-    }
-    items.get(&stack.item).map_or(64, |i| i.max_stack)
+    crate::menu::item_max_stack(items, stack)
 }
-/// `GrindstoneMenu` slot filter: damageable or enchanted.
-pub fn grindstone_accepts(items: &Items, stack: &ItemStack) -> bool {
-    is_damageable(items, stack) || stack.has_any_enchantments()
+/// `GrindstoneMenu` slot filter: damageable or enchanted, with the damageable test
+/// `ItemStack.canGrindstoneRepair`'s ([`can_grindstone_repair`]).
+pub fn grindstone_accepts(context: &LoopContext, items: &Items, stack: &ItemStack) -> bool {
+    stack.has_any_enchantments() || can_grindstone_repair(context, items, stack)
+}
+/// `ItemStack.canGrindstoneRepair`: vanilla's answer, whether the stack is damageable, then
+/// the parts of its item (`ItemPart::can_grindstone_repair`). An item with no such part keeps
+/// vanilla's answer at the cost of one table lookup.
+pub fn can_grindstone_repair(context: &LoopContext, items: &Items, stack: &ItemStack) -> bool {
+    let mut can_repair = is_damageable(items, stack);
+    crate::native_client_hooks::can_grindstone_repair(context, stack, &mut can_repair);
+    can_repair
+}
+/// Whether the grindstone repairs `stack` as a damageable item
+/// (`IItemExtension.canGrindstoneRepair`) is being decided: `can_repair` starts with vanilla's
+/// answer and the parts of the stack's item may change it. Asked inside the grindstone menu on
+/// both sides.
+#[inline(never)]
+pub fn native_can_grindstone_repair(
+    context: &LoopContext,
+    stack: &mod_api::ItemStack,
+    can_repair: &mut bool,
+) {
+    mod_api::dispatch_can_grindstone_repair(
+        &horizon_client_render::api_context::LoopReader(context).context(),
+        stack,
+        can_repair,
+    );
 }
 fn remove_non_curses(e: &Enchantments, mut item: ItemStack) -> ItemStack {
     let kept: Levels = item
@@ -582,8 +547,10 @@ fn remove_non_curses(e: &Enchantments, mut item: ItemStack) -> ItemStack {
     item.tidy();
     item
 }
-/// `GrindstoneMenu.computeResult`.
+/// `GrindstoneMenu.computeResult`. `context` is the loop the menu runs in, which
+/// `can_grindstone_repair` is given.
 pub fn grindstone_result(
+    context: &LoopContext,
     e: &Enchantments,
     items: &Items,
     input: Option<&ItemStack>,
@@ -605,7 +572,7 @@ pub fn grindstone_result(
                 + (max_damage(items, b) - damage_value(items, b))
                 + durability * 5 / 100;
             let mut count = 1;
-            if !is_damageable(items, a) {
+            if !can_grindstone_repair(context, items, a) {
                 let stack_max = max_stack_size(items, a);
                 if stack_max < 2 || a != b {
                     return None;
@@ -621,7 +588,7 @@ pub fn grindstone_result(
                 data.set_other("!minecraft:max_damage", None);
                 data.set_other(
                     "minecraft:max_damage",
-                    (durability != default).then_some(horizon_world::nbt::Tag::Int(durability)),
+                    (durability != default).then_some(horizon_core::nbt::Tag::Int(durability)),
                 );
                 set_damage_value(items, &mut out, durability - remaining);
             }
@@ -687,118 +654,110 @@ pub enum Smithing {
         template: Option<Ingredient>,
         base: Ingredient,
         addition: Option<Ingredient>,
-        result: SmithingResult,
+        result: crate::crafting::Template,
     },
     Trim {
         id: String,
         template: Ingredient,
         base: Ingredient,
         addition: Ingredient,
-        pattern: crate::item_data::trim::Holder<crate::item_data::trim::Pattern>,
+        pattern: crate::crafting::RecipeTrimPattern,
     },
-}
-/// A smithing transform's `ItemStackTemplate`, retaining the patch as well as
-/// its display stack so explicit zeroes and removals override the input.
-#[derive(Clone, Debug)]
-pub struct SmithingResult {
-    stack: ItemStack,
-    patch: horizon_world::nbt::Tag,
-    defaults: Value,
-}
-impl SmithingResult {
-    fn parse(v: &Value, defaults: &horizon_world::item_defaults::Defaults) -> Option<Self> {
-        let item = horizon_world::loot::recipe_result_id(v)?;
-        if item == "minecraft:air" {
-            return None;
-        }
-        let count = crate::crafting::template_count(v)?;
-        let patch =
-            crate::scoreboard::json_to_tag(v.get("components").unwrap_or(&serde_json::json!({})));
-        if !matches!(patch, horizon_world::nbt::Tag::Compound(_)) {
-            return None;
-        }
-        let (damage, extra) = item_data::decode_components(Some(&patch));
-        Some(Self {
-            stack: ItemStack {
-                item: Arc::from(item),
-                count,
-                damage,
-                extra,
-            },
-            patch,
-            defaults: defaults.get(item)?.clone(),
-        })
-    }
-    /// `ItemStackTemplate.create`, used by the native recipe display export.
-    pub fn create(&self) -> Option<ItemStack> {
-        self.assemble(&ItemStack::new("minecraft:air", 0))
-    }
-    /// `TransmuteRecipe.createWithOriginalComponents` and `ItemStackTemplate.apply`.
-    fn assemble(&self, base: &ItemStack) -> Option<ItemStack> {
-        use horizon_world::nbt::Tag;
-        let mut patch = match item_data::encode_components(base) {
-            Some(Tag::Compound(map)) => map,
-            _ => Default::default(),
-        };
-        if let Tag::Compound(over) = &self.patch {
-            for (key, value) in over {
-                let key = key.to_string_lossy();
-                if let Some(id) = key.strip_prefix('!') {
-                    patch.remove(&horizon_world::nbt::JavaString::from(id));
-                    if self.defaults.get(id).is_some() {
-                        patch.insert(key.as_str().into(), value.clone());
-                    }
-                } else {
-                    patch.remove(&horizon_world::nbt::JavaString::from(
-                        format!("!{key}").as_str(),
-                    ));
-                    patch.insert(key.as_str().into(), value.clone());
-                }
-            }
-        }
-        // Patches are relative to the result item's defaults, as on vanilla's
-        // PatchedDataComponentMap; don't retain an explicit default as a patch.
-        patch.retain(|key, value| {
-            let key = key.to_string_lossy();
-            if let Some(id) = key.strip_prefix('!') {
-                self.defaults.get(id).is_some()
-            } else {
-                self.defaults
-                    .get(key.as_str())
-                    .is_none_or(|default| crate::scoreboard::json_to_tag(default) != *value)
-            }
-        });
-        let components = Tag::Compound(patch);
-        let number = |id: &str, fallback: i64| {
-            if components.get(&format!("!{id}")).is_some() {
-                return fallback;
-            }
-            match components.get(id) {
-                Some(Tag::Int(n)) => i64::from(*n),
-                _ => self.defaults[id].as_i64().unwrap_or(fallback),
-            }
-        };
-        let max_stack = number("minecraft:max_stack_size", 1);
-        let damageable = components.get("!minecraft:max_damage").is_none()
-            && (components.get("minecraft:max_damage").is_some()
-                || self.defaults.get("minecraft:max_damage").is_some());
-        if i64::from(self.stack.count) > max_stack || (damageable && max_stack > 1) {
-            return None;
-        }
-        let (damage, extra) = item_data::decode_components(Some(&components));
-        Some(ItemStack {
-            item: self.stack.item.clone(),
-            count: self.stack.count,
-            damage,
-            extra,
-        })
-    }
 }
 #[derive(Clone, Debug)]
 pub struct Stonecutting {
     pub id: String,
     pub input: Ingredient,
     pub result: ItemStack,
+}
+/// One canonical parse shared by the station tables and the mod recipe view.
+#[derive(Clone, Debug)]
+pub(crate) enum ParsedStationRecipe {
+    Smithing(Smithing),
+    Stonecutting(Stonecutting),
+}
+impl ParsedStationRecipe {
+    pub(crate) fn parse(id: String, v: &Value, items: &Items) -> Option<Self> {
+        match v["type"].as_str().unwrap_or("") {
+            "minecraft:smithing_transform" => {
+                // Only omitted ingredients mean empty slots; malformed present
+                // ingredients invalidate the recipe rather than becoming optional.
+                let parse_optional = |key: &str| match v.get(key) {
+                    None => Some(None),
+                    Some(value) => Ingredient::parse(value, items).map(Some),
+                };
+                Some(Self::Smithing(Smithing::Transform {
+                    id,
+                    template: parse_optional("template")?,
+                    base: Ingredient::parse(&v["base"], items)?,
+                    addition: parse_optional("addition")?,
+                    result: crate::crafting::Template::parse(&v["result"])?,
+                }))
+            }
+            "minecraft:smithing_trim" => Some(Self::Smithing(Smithing::Trim {
+                id,
+                template: Ingredient::parse(&v["template"], items)?,
+                base: Ingredient::parse(&v["base"], items)?,
+                addition: Ingredient::parse(&v["addition"], items)?,
+                // Use the same holder codec as item components, collapsing
+                // unstyled literal text once at the recipe boundary before
+                // publishing the typed snapshot.
+                pattern: match crate::item_data::trim::pattern_from_nbt(
+                    &crate::crafting::json_tag(v.get("pattern")?),
+                )? {
+                    crate::item_data::trim::Holder::Named(id) => {
+                        crate::crafting::RecipeTrimPattern::Reference(id.to_string())
+                    }
+                    crate::item_data::trim::Holder::Direct(pattern) => {
+                        crate::crafting::RecipeTrimPattern::Inline {
+                            asset_id: pattern.asset_id.to_string(),
+                            description: pattern.description,
+                            decal: pattern.decal,
+                        }
+                    }
+                },
+            })),
+            "minecraft:stonecutting" => Some(Self::Stonecutting(Stonecutting {
+                id,
+                input: Ingredient::parse(&v["ingredient"], items)?,
+                result: crate::crafting::Template::parse(&v["result"])?.create(),
+            })),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn rule(&self) -> crate::crafting::RecipeRule {
+        match self {
+            Self::Stonecutting(recipe) => crate::crafting::RecipeRule::Stonecutting {
+                input: recipe.input.clone(),
+                result: recipe.result.clone(),
+            },
+            Self::Smithing(Smithing::Transform {
+                template,
+                base,
+                addition,
+                result,
+                ..
+            }) => crate::crafting::RecipeRule::SmithingTransform {
+                template: template.clone(),
+                base: base.clone(),
+                addition: addition.clone(),
+                result: result.view(),
+            },
+            Self::Smithing(Smithing::Trim {
+                template,
+                base,
+                addition,
+                pattern,
+                ..
+            }) => crate::crafting::RecipeRule::SmithingTrim {
+                template: template.clone(),
+                base: base.clone(),
+                addition: addition.clone(),
+                pattern: pattern.clone(),
+            },
+        }
+    }
 }
 #[derive(Default)]
 pub struct StationRecipes {
@@ -807,267 +766,153 @@ pub struct StationRecipes {
     pub stonecutting: Vec<Stonecutting>,
     /// `trim_material` registry: id -> (asset name, description).
     pub trim_materials: Vec<(String, String)>,
+    /// What mods added to the smithing slots' property sets (template, base,
+    /// addition).
+    smithing_additions: [HashSet<String>; 3],
+    item_limits: std::collections::HashMap<Arc<str>, (u32, u32)>,
 }
-fn ingredient(v: &Value, items: &Items) -> Ingredient {
-    Ingredient::parse(v, items).unwrap_or_else(|| Ingredient::of(Vec::new()))
-}
-
-fn parse_recipe_sources<'a>(
-    items: &Items,
-    defaults: &horizon_world::item_defaults::Defaults,
-    sources: impl IntoIterator<Item = (String, &'a Value)>,
-) -> (Vec<Smithing>, Vec<Stonecutting>) {
-    let mut sources: Vec<_> = sources.into_iter().collect();
-    sources.sort_by_cached_key(|(id, _)| crate::crafting::registration_key(id));
-    let mut smithing = Vec::new();
-    let mut stonecutting = Vec::new();
-    for (id, v) in sources {
-        match v["type"].as_str().unwrap_or("") {
-            "minecraft:smithing_transform" => {
-                // Only omitted optional ingredients mean an empty slot;
-                // malformed present ingredients must not become optional.
-                let parse_optional = |key: &str| match v.get(key) {
-                    None => Some(None),
-                    Some(value) => Ingredient::parse(value, items).map(Some),
-                };
-                if let (Some(template), Some(base), Some(addition), Some(result)) = (
-                    parse_optional("template"),
-                    Ingredient::parse(&v["base"], items),
-                    parse_optional("addition"),
-                    SmithingResult::parse(&v["result"], defaults),
-                ) {
-                    smithing.push(Smithing::Transform {
-                        id,
-                        template,
-                        base,
-                        addition,
-                        result,
-                    });
-                }
-            }
-            "minecraft:smithing_trim" => {
-                // TrimPattern.CODEC: one holder, named or inline; a missing
-                // or malformed pattern fails the recipe.
-                let pattern = crate::scoreboard::json_to_tag(&v["pattern"]);
-                if let Some(pattern) = crate::item_data::trim::pattern_from_nbt(&pattern) {
-                    smithing.push(Smithing::Trim {
-                        id,
-                        template: ingredient(&v["template"], items),
-                        base: ingredient(&v["base"], items),
-                        addition: ingredient(&v["addition"], items),
-                        pattern,
-                    });
-                }
-            }
-            "minecraft:stonecutting" => {
-                // A result count outside 1..=99 fails vanilla's codec: no recipe.
-                if let Some(count) = crate::crafting::template_count(&v["result"]) {
-                    let result = if v["result"].get("components").is_some() {
-                        match SmithingResult::parse(&v["result"], defaults)
-                            .and_then(|result| result.create())
-                        {
-                            Some(result) => result,
-                            None => continue,
-                        }
-                    } else {
-                        ItemStack::new(
-                            horizon_world::loot::recipe_result_id(&v["result"])
-                                .unwrap_or("minecraft:air"),
-                            count,
-                        )
-                    };
-                    stonecutting.push(Stonecutting {
-                        id,
-                        input: ingredient(&v["ingredient"], items),
-                        result,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-    (smithing, stonecutting)
-}
-
-fn load_trim_materials(root: &Path) -> Vec<(String, String)> {
-    let mut trim_materials = Vec::new();
-    let mut tm: Vec<_> = fs::read_dir(root.join("data/minecraft/trim_material"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .collect();
-    tm.sort();
-    for p in tm {
-        if let Ok(bytes) = fs::read(&p)
-            && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
-        {
-            let id = format!(
-                "minecraft:{}",
-                p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
-            );
-            trim_materials.push((
-                id,
-                v["description"]["translate"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_owned(),
-            ));
-        }
-    }
-    trim_materials
-}
-
 impl StationRecipes {
-    pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
-        Self::load_with_defaults(root, items, overlay, None)
-    }
-    #[allow(dead_code)]
-    pub(crate) fn load_with_sources(
-        root: &Path,
-        items: &Items,
-        defaults: Option<&horizon_world::item_defaults::Defaults>,
-        sources: &[(String, Value)],
-    ) -> Self {
-        let owned_defaults;
-        let defaults = match defaults {
-            Some(defaults) => defaults,
-            None => {
-                owned_defaults = horizon_world::item_defaults::shared(root).unwrap_or_default();
-                &owned_defaults
-            }
-        };
-        let (smithing, stonecutting) = parse_recipe_sources(
-            items,
-            defaults,
-            sources
-                .iter()
-                .map(|(id, value)| (crate::crafting::qualified(id), value)),
-        );
-        Self {
-            smithing,
-            stonecutting,
-            trim_materials: load_trim_materials(root),
-        }
-    }
-    pub(crate) fn load_with_defaults(
+    pub fn load(
         root: &Path,
         items: &Items,
         overlay: &PackOverlay,
-        defaults: Option<&horizon_world::item_defaults::Defaults>,
+        context: &horizon_world::native_load_context::LoadContext,
     ) -> Self {
-        // Vanilla's recipes, then the content mods' (docs/modpacks.md).
-        let mut files = Vec::new();
-        let namespaces =
-            std::iter::once("minecraft".to_owned()).chain(crate::mod_content::namespaces(root));
-        // NeoForge's load conditions: a file whose don't hold is silently
-        // absent (`mod_loaded` asks which mods' data is in this root).
-        let mods: Vec<String> = {
-            let mut mods = horizon_items::content_namespaces::mod_ids(root);
-            if !mods.iter().any(|m| m == "minecraft") {
-                mods.push("minecraft".to_owned());
-            }
-            mods
-        };
-        let conditions_hold = |v: &Value| {
-            horizon_world::conditions::conditions_hold(v, &|id: &str| mods.iter().any(|m| m == id))
-        };
-        for namespace in namespaces {
-            let dir = root.join(format!("data/{namespace}/recipe"));
-            if let Ok(folder) = crate::json_folder::read(&dir) {
-                files.push((namespace, folder));
+        let sources = crate::crafting::ResolvedSources::load_or_empty(root, overlay, context);
+        Self::from_sources(root, items, &sources)
+    }
+    /// The station tables of `sources`, the recipes one load resolved.
+    pub fn from_sources(
+        root: &Path,
+        items: &Items,
+        sources: &crate::crafting::ResolvedSources,
+    ) -> Self {
+        let mut smithing = Vec::new();
+        let mut stonecutting = Vec::new();
+        for recipe in sources.station_recipes(items).iter().flatten() {
+            match recipe {
+                ParsedStationRecipe::Smithing(recipe) => smithing.push(recipe.clone()),
+                ParsedStationRecipe::Stonecutting(recipe) if !recipe.input.items.is_empty() => {
+                    stonecutting.push(recipe.clone())
+                }
+                ParsedStationRecipe::Stonecutting(_) => {}
             }
         }
-        let mut sources: Vec<(String, Value)> = files
-            .iter()
-            .flat_map(|(namespace, folder)| folder.files.iter().map(move |f| (namespace, f)))
-            .filter_map(|(namespace, file)| {
-                let v = serde_json::from_slice::<Value>(file.bytes().ok()?).ok()?;
-                Some((format!("{namespace}:{}", file.name), v))
-            })
+        let mut trim_materials = Vec::new();
+        let mut tm: Vec<_> = fs::read_dir(root.join("data/minecraft/trim_material"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
             .collect();
-        // The world's packs' recipes over the game's own: the top pack's
-        // file for each id replaces it (`SimpleJsonResourceReloadListener`).
-        // The gate answers the merged file, as the crafting loader's does:
-        // a false-conditioned pack file leaves the lower one gone too.
-        for (id, files) in overlay.kind("recipe") {
-            let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
-                continue;
-            };
-            match sources.iter_mut().find(|(n, _)| n == id) {
-                Some(slot) => slot.1 = v,
-                None => sources.push((id.to_owned(), v)),
+        tm.sort();
+        for p in tm {
+            if let Ok(bytes) = fs::read(&p)
+                && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
+            {
+                let id = format!(
+                    "minecraft:{}",
+                    p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+                );
+                trim_materials.push((
+                    id,
+                    v["description"]["translate"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                ));
             }
         }
-        // The data's recipe filters, over the final set.
-        let filters = horizon_items::recipe_filters::RecipeFilters::load(root, overlay);
-        sources.retain_mut(|(id, v)| conditions_hold(v) && filters.apply(id, v));
-        // Registration order, not the game's files before the packs': the
-        // stonecutter lists its recipes in it and smithing takes the first match.
-        sources.sort_by_cached_key(|(id, _)| crate::crafting::registration_key(id));
-        let owned_defaults;
-        let defaults = match defaults {
-            Some(defaults) => defaults,
-            None => {
-                owned_defaults = horizon_world::item_defaults::shared(root).unwrap_or_default();
-                &owned_defaults
-            }
+        let added = |key| {
+            sources
+                .property_additions
+                .get(key)
+                .cloned()
+                .unwrap_or_default()
         };
-        let (smithing, stonecutting) = parse_recipe_sources(
-            items,
-            defaults,
-            sources.iter().map(|(id, value)| (id.clone(), value)),
-        );
         Self {
             smithing,
             stonecutting,
-            trim_materials: load_trim_materials(root),
+            trim_materials,
+            item_limits: items
+                .items
+                .iter()
+                .map(|(id, info)| (id.clone(), (info.max_stack, info.max_damage)))
+                .collect(),
+            smithing_additions: [
+                added("smithing_template"),
+                added("smithing_base"),
+                added("smithing_addition"),
+            ],
         }
     }
     /// Recipes whose input accepts `stack`, in display order.
-    pub fn stonecutter(&self, stack: &ItemStack) -> Vec<&Stonecutting> {
+    pub fn stonecutter(&self, context: &LoopContext, stack: &ItemStack) -> Vec<&Stonecutting> {
         self.stonecutting
             .iter()
-            .filter(|r| r.input.test(stack))
+            .filter(|r| r.input.test_in(context, stack))
             .collect()
     }
-    fn slot_ok(&self, slot: usize, stack: &ItemStack) -> bool {
-        self.smithing.iter().any(|r| {
-            let (t, b, a) = match r {
-                Smithing::Transform {
-                    template,
-                    base,
-                    addition,
-                    ..
-                } => (template.as_ref(), base, addition.as_ref()),
-                Smithing::Trim {
-                    template,
-                    base,
-                    addition,
-                    ..
-                } => (Some(template), base, Some(addition)),
-            };
-            [t, Some(b), a][slot].is_some_and(|ingredient| ingredient.test(stack))
-        })
+    fn slot_ok(&self, context: &LoopContext, slot: usize, stack: &ItemStack) -> bool {
+        self.smithing_additions[slot].contains(&*stack.item)
+            || self
+                .smithing
+                .iter()
+                .filter(|r| match r {
+                    Smithing::Transform {
+                        template,
+                        base,
+                        addition,
+                        ..
+                    } => [template.as_ref(), Some(base), addition.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .all(|i| !i.items.is_empty()),
+                    Smithing::Trim {
+                        template,
+                        base,
+                        addition,
+                        ..
+                    } => [template, base, addition]
+                        .into_iter()
+                        .all(|i| !i.items.is_empty()),
+                })
+                .any(|r| match r {
+                    Smithing::Transform {
+                        template,
+                        base,
+                        addition,
+                        ..
+                    } => [template.as_ref(), Some(base), addition.as_ref()][slot]
+                        .is_some_and(|i| i.test_in(context, stack)),
+                    Smithing::Trim {
+                        template,
+                        base,
+                        addition,
+                        ..
+                    } => [template, base, addition][slot].test_in(context, stack),
+                })
     }
     /// `RecipePropertySet` SMITHING_TEMPLATE / BASE / ADDITION.
-    pub fn smithing_accepts(&self, slot: usize, stack: &ItemStack) -> bool {
-        slot < 3 && self.slot_ok(slot, stack)
+    pub fn smithing_accepts(&self, context: &LoopContext, slot: usize, stack: &ItemStack) -> bool {
+        slot < 3 && self.slot_ok(context, slot, stack)
     }
     /// `SmithingMenu.createResult`.
     pub fn smithing_result(
         &self,
+        context: &LoopContext,
         e: &Enchantments,
         template: Option<&ItemStack>,
         base: Option<&ItemStack>,
         addition: Option<&ItemStack>,
     ) -> Option<ItemStack> {
-        self.smithing_recipe(e, template, base, addition)
+        self.smithing_recipe(context, e, template, base, addition)
             .map(|(_, result)| result)
     }
     /// `SmithingMenu.createResult` with the id of the recipe that made the result.
     pub fn smithing_recipe(
         &self,
+        context: &LoopContext,
         e: &Enchantments,
         template: Option<&ItemStack>,
         base: Option<&ItemStack>,
@@ -1080,7 +925,7 @@ impl StationRecipes {
             stack.filter(|s| nonempty(s)),
         ) {
             (None, None) => true,
-            (Some(ingredient), Some(stack)) => ingredient.test(stack),
+            (Some(ingredient), Some(stack)) => ingredient.test_in(context, stack),
             _ => false,
         };
         for r in &self.smithing {
@@ -1093,10 +938,35 @@ impl StationRecipes {
                     result,
                 } => {
                     if optional_matches(t, template)
-                        && b.test(base)
+                        && b.test_in(context, base)
                         && optional_matches(a, addition)
                     {
-                        return result.assemble(base).map(|result| (id.as_str(), result));
+                        let output = result.over(base, 0);
+                        let (mut max_stack, mut max_damage) = self
+                            .item_limits
+                            .get(&output.item)
+                            .copied()
+                            .unwrap_or((64, 0));
+                        if let Some(data) = output.data() {
+                            for (key, value) in &data.other {
+                                match (key.as_str(), value) {
+                                    (
+                                        "minecraft:max_stack_size",
+                                        horizon_core::nbt::Tag::Int(n),
+                                    ) => max_stack = *n as u32,
+                                    ("!minecraft:max_stack_size", _) => max_stack = 1,
+                                    ("minecraft:max_damage", horizon_core::nbt::Tag::Int(n)) => {
+                                        max_damage = *n as u32
+                                    }
+                                    ("!minecraft:max_damage", _) => max_damage = 0,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        return (output.count > 0
+                            && output.count <= max_stack
+                            && !(max_damage > 0 && max_stack > 1))
+                            .then_some((id.as_str(), output));
                     }
                 }
                 Smithing::Trim {
@@ -1107,12 +977,11 @@ impl StationRecipes {
                     pattern,
                     ..
                 } => {
-                    if let (Some(template), Some(addition)) = (template, addition)
-                        && t.test(template)
-                        && b.test(base)
-                        && a.test(addition)
+                    if template.is_some_and(|s| t.test_in(context, s))
+                        && b.test_in(context, base)
+                        && addition.is_some_and(|s| a.test_in(context, s))
                     {
-                        return apply_trim(e, base, addition, pattern).map(|r| (id.as_str(), r));
+                        return apply_trim(e, base, addition?, pattern).map(|r| (id.as_str(), r));
                     }
                 }
             }
@@ -1167,14 +1036,26 @@ fn trim_material(
 }
 /// `SmithingTrimRecipe.applyTrim`: none when the material provides no trim
 /// or the base already has this one.
-fn apply_trim(
+pub fn apply_trim(
     e: &Enchantments,
     base: &ItemStack,
     material: &ItemStack,
-    pattern: &crate::item_data::trim::Holder<crate::item_data::trim::Pattern>,
+    pattern: &crate::crafting::RecipeTrimPattern,
 ) -> Option<ItemStack> {
-    let material = trim_material(e, material)?;
-    let trim: crate::item_data::Trim = (material, pattern.clone());
+    use crate::item_data::trim::{Holder, Pattern};
+    let pattern = match pattern {
+        crate::crafting::RecipeTrimPattern::Reference(id) => Holder::Named(id.as_str().into()),
+        crate::crafting::RecipeTrimPattern::Inline {
+            asset_id,
+            description,
+            decal,
+        } => Holder::Direct(Pattern {
+            asset_id: asset_id.as_str().into(),
+            description: description.clone(),
+            decal: *decal,
+        }),
+    };
+    let trim = (trim_material(e, material)?, pattern);
     if base.data().and_then(|d| d.trim.as_ref()) == Some(&trim) {
         return None;
     }
@@ -1190,7 +1071,12 @@ fn apply_trim(
 mod tests {
     use super::*;
     use crate::enchant::tests::{sample, sample_items};
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
+
+    /// The loop a menu under test runs in: no mods, so every part keeps vanilla's answer.
+    fn context() -> &'static LoopContext {
+        crate::test_resources::server_loop_context()
+    }
 
     fn sword(ench: &[(&str, u32)]) -> ItemStack {
         let mut s = ItemStack::new("minecraft:diamond_sword", 1);
@@ -1212,7 +1098,7 @@ mod tests {
         s.damage = damage;
         s.data_mut().set_other(
             "minecraft:max_damage",
-            Some(horizon_world::nbt::Tag::Int(max)),
+            Some(horizon_core::nbt::Tag::Int(max)),
         );
         s
     }
@@ -1271,14 +1157,14 @@ mod tests {
             book
         };
         let one = enchanted_book(Some(Tag::Int(1)));
-        assert!(grindstone_result(&e, &items, Some(&one), Some(&one)).is_none());
+        assert!(grindstone_result(context(), &e, &items, Some(&one), Some(&one)).is_none());
         // A removed component is vanilla's default of one, not the item's 64.
         let removed = enchanted_book(None);
-        assert!(grindstone_result(&e, &items, Some(&removed), Some(&removed)).is_none());
+        assert!(grindstone_result(context(), &e, &items, Some(&removed), Some(&removed)).is_none());
         // Two plain books still combine to a count of two.
         let mut book = ItemStack::new("minecraft:book", 1);
         book.enchant("minecraft:sharpness", 1);
-        let out = grindstone_result(&e, &items, Some(&book), Some(&book)).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&book), Some(&book)).unwrap();
         assert_eq!(out.count, 2);
         assert!(!out.has_any_enchantments());
     }
@@ -1296,7 +1182,7 @@ mod tests {
                 ]),
                 base: Ingredient::of(vec!["minecraft:diamond_chestplate".into()]),
                 addition: Ingredient::of(vec!["minecraft:gold_ingot".into()]),
-                pattern: "minecraft:coast".into(),
+                pattern: crate::crafting::RecipeTrimPattern::Reference("minecraft:coast".into()),
             }],
             ..Default::default()
         };
@@ -1308,7 +1194,13 @@ mod tests {
             Some(Tag::String("minecraft:copper".into())),
         );
         let out = recipes
-            .smithing_result(&e, Some(&template), Some(&base), Some(&gold))
+            .smithing_result(
+                crate::test_resources::server_loop_context(),
+                &e,
+                Some(&template),
+                Some(&base),
+                Some(&gold),
+            )
             .expect("the gold ingot provides a trim material");
         assert_eq!(
             crate::item_data::trim::named(
@@ -1326,7 +1218,13 @@ mod tests {
             ])),
         );
         let out = recipes
-            .smithing_result(&e, Some(&template), Some(&base), Some(&inline))
+            .smithing_result(
+                crate::test_resources::server_loop_context(),
+                &e,
+                Some(&template),
+                Some(&base),
+                Some(&inline),
+            )
             .expect("the inline material applies");
         assert!(matches!(
             out.data().and_then(|d| d.trim.as_ref()).map(|t| &t.0),
@@ -1386,9 +1284,9 @@ mod tests {
         let e = sample();
         let items = sample_items();
         let removed = || {
-            Some(horizon_world::nbt::Tag::compound(Vec::<(
+            Some(horizon_core::nbt::Tag::compound(Vec::<(
                 &str,
-                horizon_world::nbt::Tag,
+                horizon_core::nbt::Tag,
             )>::new()))
         };
         let mut blade = sword(&[]);
@@ -1439,10 +1337,10 @@ mod tests {
         let items = sample_items();
         let a = worn("minecraft:diamond_sword", 100, 90);
         let b = worn("minecraft:diamond_sword", 200, 190);
-        let out = grindstone_result(&e, &items, Some(&a), Some(&b)).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&a), Some(&b)).unwrap();
         assert_eq!(
             out.data().unwrap().other("minecraft:max_damage"),
-            Some(&horizon_world::nbt::Tag::Int(200))
+            Some(&horizon_core::nbt::Tag::Int(200))
         );
         // remaining 10 + 10 + 200 * 5 / 100 = 30 -> damage 170.
         assert_eq!(out.damage, 170);
@@ -1459,13 +1357,18 @@ mod tests {
             r#"{"minecraft:diamond_sword":{"minecraft:max_stack_size":1,"minecraft:max_damage":1561}}"#,
         )
         .unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let items = Items::catalog(
+            &root,
+            &PackOverlay::NONE,
+            &horizon_world::item_defaults::read(&root).unwrap(),
+        )
+        .unwrap();
         let e = sample();
         let mut a = ItemStack::new("minecraft:diamond_sword", 1);
         a.damage = 819;
         let mut b = ItemStack::new("minecraft:diamond_sword", 1);
         b.damage = 602;
-        let out = grindstone_result(&e, &items, Some(&a), Some(&b)).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&a), Some(&b)).unwrap();
         assert_eq!(
             out.data().and_then(|d| d.other("minecraft:max_damage")),
             None
@@ -1474,10 +1377,10 @@ mod tests {
         assert_eq!(out.damage, 0);
         // A larger patched MAX_DAMAGE on the second stack still wins and is written.
         let b = worn("minecraft:diamond_sword", 2000, 1990);
-        let out = grindstone_result(&e, &items, Some(&a), Some(&b)).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&a), Some(&b)).unwrap();
         assert_eq!(
             out.data().unwrap().other("minecraft:max_damage"),
-            Some(&horizon_world::nbt::Tag::Int(2000))
+            Some(&horizon_core::nbt::Tag::Int(2000))
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -1503,14 +1406,14 @@ mod tests {
         assert!(!has_stored_enchantments(&stick));
         stick.data_mut().set_other(
             "minecraft:stored_enchantments",
-            Some(horizon_world::nbt::Tag::compound(Vec::<(&str, _)>::new())),
+            Some(horizon_core::nbt::Tag::compound(Vec::<(&str, _)>::new())),
         );
         assert!(has_stored_enchantments(&stick));
         let mut book = ItemStack::new("minecraft:enchanted_book", 1);
         assert!(has_stored_enchantments(&book));
         book.data_mut().set_other(
             "!minecraft:stored_enchantments",
-            Some(horizon_world::nbt::Tag::compound(Vec::<(&str, _)>::new())),
+            Some(horizon_core::nbt::Tag::compound(Vec::<(&str, _)>::new())),
         );
         assert!(!has_stored_enchantments(&book));
     }
@@ -1520,6 +1423,41 @@ mod tests {
         let o = bookshelf_offsets();
         assert_eq!(o.len(), 32);
         assert!(o.contains(&[-2, 0, -2]) && o.contains(&[2, 1, 0]) && !o.contains(&[1, 0, 1]));
+        // BlockPos.betweenClosed(-2, 0, -2, 2, 1, 2): x fastest, then y, then z.
+        let start = [[-2, 0, -2], [-1, 0, -2], [0, 0, -2], [1, 0, -2], [2, 0, -2]];
+        assert_eq!(o[..5], start);
+        assert_eq!(o[5], [-2, 1, -2]);
+        assert_eq!(o[10..12], [[-2, 0, -1], [2, 0, -1]]);
+        assert_eq!(o[31], [2, 1, 2]);
+    }
+
+    /// `EnchantmentLevelSetEvent`: each row is asked once, in order, with the
+    /// level `getEnchantmentCost` drew; a level below the row offers nothing,
+    /// and a changed level shows the clue of the list it gives.
+    #[test]
+    fn a_set_enchantment_level_makes_the_offer() {
+        let e = sample();
+        let items = sample_items();
+        let s = ItemStack::new("minecraft:diamond_sword", 1);
+        let plain = enchant_offers(&e, &items, 1234, 15, Some(&s));
+        let mut asked = Vec::new();
+        let set = enchant_offers_leveled(&e, &items, 1234, 15, Some(&s), |row, cost| {
+            asked.push((row, cost));
+            [cost, 1, 10][row]
+        });
+        assert_eq!(asked.iter().map(|a| a.0).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(asked[2].1, plain.costs[2]);
+        assert_eq!(set.costs, [plain.costs[0], 0, 10]);
+        assert_eq!(
+            (set.clues[0].clone(), set.clues[1].clone()),
+            (plain.clues[0].clone(), None)
+        );
+        assert_eq!(set.clues[2], enchant_clue(&e, &items, 1234, 2, 10, &s));
+        // An item the table can't enchant isn't asked about.
+        let enchanted = sword(&[("minecraft:sharpness", 1)]);
+        enchant_offers_leveled(&e, &items, 1234, 15, Some(&enchanted), |_, _| {
+            panic!("asked about an item the table can't enchant")
+        });
     }
 
     #[test]
@@ -1556,50 +1494,6 @@ mod tests {
             apply_enchantment(&e, &items, 99, 2, 30, &ItemStack::new("minecraft:book", 1)).unwrap();
         assert_eq!(&*books.item, "minecraft:enchanted_book");
         assert!(!books.stored_enchantments().is_empty());
-    }
-
-    /// The mods' answer to `AnvilUpdateEvent` replaces vanilla's result as
-    /// `CommonHooks.onAnvilUpdate` sets it: a cancel empties the result and
-    /// both costs, `AnvilMenu.setCost` keeps the level cost at 0 or more, and
-    /// a material cost below 1 is vanilla's 0. The rename flag stays vanilla's.
-    #[test]
-    fn an_anvil_update_answer_replaces_vanillas_result() {
-        let vanilla = AnvilResult {
-            result: Some(ItemStack::new("minecraft:diamond_sword", 1)),
-            cost: 3,
-            repair_item_count_cost: 2,
-            only_renaming: true,
-        };
-        let emerald = Some(ItemStack::new("minecraft:emerald", 1));
-        let mut r = vanilla.clone();
-        r.answer_update(false, emerald.clone(), 7, 4);
-        assert_eq!(
-            r,
-            AnvilResult {
-                result: emerald.clone(),
-                cost: 7,
-                repair_item_count_cost: 4,
-                only_renaming: true,
-            }
-        );
-        let mut r = vanilla.clone();
-        r.answer_update(false, emerald.clone(), -5, -1);
-        assert_eq!((r.cost, r.repair_item_count_cost), (0, 0));
-        // Unchanged values give vanilla's result back.
-        let mut r = vanilla.clone();
-        r.answer_update(false, vanilla.result.clone(), 3, 2);
-        assert_eq!(r, vanilla);
-        let mut r = vanilla.clone();
-        r.answer_update(true, emerald, 7, 4);
-        assert_eq!(
-            r,
-            AnvilResult {
-                result: None,
-                cost: 0,
-                repair_item_count_cost: 0,
-                only_renaming: true,
-            }
-        );
     }
 
     #[test]
@@ -1795,6 +1689,37 @@ mod tests {
         );
     }
 
+    /// `ItemStack.getHoverName`: a custom name, else a written book's non-blank title, else the
+    /// item's name in the client's language.
+    #[test]
+    fn hover_name_prefers_custom_name_then_book_title_then_item_name() {
+        let names = crate::creative::Names::default();
+        let stack = |snbt: &str| item_data::parse_stack(snbt).unwrap().unwrap();
+        let lang = crate::lang::Language::of(
+            "en_us",
+            [
+                ("item.minecraft.diamond", "Diamond"),
+                ("item.minecraft.written_book", "Written Book"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        );
+        crate::lang::scoped(lang, || {
+            let renamed = stack(
+                r#"{id:"minecraft:diamond_pickaxe",count:1,components:{"minecraft:custom_name":"Hammer"}}"#,
+            );
+            assert_eq!(hover_name(&names, &renamed), "Hammer");
+            let book = |title: &str| {
+                stack(&format!(
+                    r#"{{id:"minecraft:written_book",count:1,components:{{"minecraft:written_book_content":{{title:"{title}",author:"A"}}}}}}"#
+                ))
+            };
+            assert_eq!(hover_name(&names, &book("Log")), "Log");
+            assert_eq!(hover_name(&names, &book(" ")), "Written Book");
+            let diamond = stack(r#"{id:"minecraft:diamond",count:1}"#);
+            assert_eq!(hover_name(&names, &diamond), "Diamond");
+        });
+    }
+
     /// `ItemStack.getHoverName` falls back to `getOrDefault(ITEM_NAME, EMPTY)`,
     /// so a removed item name is the empty string, not the localized item.
     #[test]
@@ -1819,7 +1744,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let out = grindstone_result(&e, &items, Some(&book), None).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&book), None).unwrap();
         assert_eq!(&*out.item, "minecraft:book");
         assert_eq!(out.enchantment_level("minecraft:sharpness"), 1);
         assert!(
@@ -1840,7 +1765,7 @@ mod tests {
             "!minecraft:repair_cost",
             Some(Tag::compound(Vec::<(&str, Tag)>::new())),
         );
-        let out = grindstone_result(&e, &items, Some(&book), None).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&book), None).unwrap();
         assert_eq!(out.repair_cost(), 0);
         assert!(
             out.data()
@@ -1858,11 +1783,21 @@ mod tests {
         if !root.join("items.json").exists() {
             return;
         }
-        // The full table: the anvil reads the items' max damage.
-        let assets = crate::assets::Assets::load(&root).unwrap();
-        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
-        let items = Items::load(&root, assets.registry, &facts, &PackOverlay::NONE).unwrap();
-        let data = StationData::load(&root, &items, &PackOverlay::NONE);
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        // Station rules read item prototypes (including durability), not just tags.
+        let (registry, _) = horizon_world::registry::BlockRegistry::from_facts_json_with_flags(
+            std::fs::File::open(root.join("facts.json")).unwrap(),
+        )
+        .unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, &registry).unwrap();
+        let items = Items::load(&root, &registry, &facts, &PackOverlay::NONE, &defaults).unwrap();
+        let data = StationData::load(
+            &root,
+            &items,
+            &PackOverlay::NONE,
+            &defaults,
+            &crate::test_resources::server_load(),
+        );
         let e = &data.enchantments;
         assert_eq!(e.list.len(), 43);
         assert_eq!(
@@ -1891,6 +1826,7 @@ mod tests {
         let out = data
             .recipes
             .smithing_result(
+                crate::test_resources::server_loop_context(),
                 e,
                 Some(&ItemStack::new(
                     "minecraft:netherite_upgrade_smithing_template",
@@ -1908,6 +1844,19 @@ mod tests {
         // default does not accept.
         let mut repairable = ItemStack::new("minecraft:diamond_sword", 1);
         repairable.damage = 100;
+        assert!(
+            anvil_result(
+                e,
+                &items,
+                Some(&repairable),
+                Some(&ItemStack::new("minecraft:stick", 1)),
+                None,
+                "Diamond Sword",
+                false,
+            )
+            .result
+            .is_none()
+        );
         repairable.data_mut().set_other(
             "minecraft:repairable",
             Some(Tag::compound([(
@@ -1935,6 +1884,7 @@ mod tests {
         let out = data
             .recipes
             .smithing_result(
+                crate::test_resources::server_loop_context(),
                 e,
                 Some(&ItemStack::new(
                     "minecraft:coast_armor_trim_smithing_template",
@@ -1974,7 +1924,10 @@ mod tests {
         );
         assert!(
             data.recipes
-                .stonecutter(&ItemStack::new("minecraft:stone", 1))
+                .stonecutter(
+                    crate::test_resources::server_loop_context(),
+                    &ItemStack::new("minecraft:stone", 1)
+                )
                 .len()
                 >= 10
         );
@@ -1986,8 +1939,12 @@ mod tests {
             origin: [0.0; 3],
             maps: None,
         };
-        for p in crate::merchant::PROFESSIONS {
-            let set = crate::merchant::Trades::set_for(p, 1);
+        for p in crate::mobs::villager::profession_table()
+            .entries()
+            .iter()
+            .filter_map(|p| p.trade_set.as_deref())
+        {
+            let set = data.trades.set_for(p, 1);
             let mut random = crate::merchant::sequence_random(
                 12345,
                 &format!(
@@ -2010,14 +1967,20 @@ mod tests {
         let e = sample();
         let items = sample_items();
         let s = sword(&[("minecraft:sharpness", 3)]);
-        let out = grindstone_result(&e, &items, Some(&s), None).unwrap();
+        let out = grindstone_result(context(), &e, &items, Some(&s), None).unwrap();
         assert!(out.enchantments().is_empty());
         assert_eq!(out.repair_cost(), 0);
         assert!(out.extra.is_none());
-        let b =
-            grindstone_result(&e, &items, None, Some(&book(&[("minecraft:mending", 1)]))).unwrap();
+        let b = grindstone_result(
+            context(),
+            &e,
+            &items,
+            None,
+            Some(&book(&[("minecraft:mending", 1)])),
+        )
+        .unwrap();
         assert_eq!(&*b.item, "minecraft:book");
-        assert!(grindstone_result(&e, &items, Some(&sword(&[])), None).is_none());
+        assert!(grindstone_result(context(), &e, &items, Some(&sword(&[])), None).is_none());
         let mut r = LegacyRandom::new(5);
         // min cost of Sharpness III = 23; ceil(23/2)=12 -> 12..23.
         let xp = grindstone_experience(&e, &mut r, Some(&s), None);
@@ -2040,8 +2003,9 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert!(grindstone_result(&e, &items, Some(&zero), Some(&plain)).is_none());
-        let out = grindstone_result(&e, &items, Some(&zero), Some(&zero.clone())).unwrap();
+        assert!(grindstone_result(context(), &e, &items, Some(&zero), Some(&plain)).is_none());
+        let out =
+            grindstone_result(context(), &e, &items, Some(&zero), Some(&zero.clone())).unwrap();
         assert_eq!(out.count, 2);
         assert!(!out.has_any_enchantments());
     }
@@ -2067,7 +2031,12 @@ mod tests {
             r#"{"values":["minecraft:stick"]}"#,
         )
         .unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let items = Items::catalog(
+            &root,
+            &PackOverlay::NONE,
+            &horizon_world::item_defaults::read(&root).unwrap(),
+        )
+        .unwrap();
         let e = sample();
         let stick = |components: &str| {
             let snbt = format!(r#"{{id:"minecraft:stick",count:1,components:{components}}}"#);
@@ -2080,9 +2049,9 @@ mod tests {
         // `/give @s minecraft:stick[minecraft:max_damage=10,minecraft:max_stack_size=1]`
         let patched = stick(r#"{"minecraft:max_damage":10,"minecraft:max_stack_size":1}"#);
         assert_eq!(patched.damage, 0);
-        assert!(!grindstone_accepts(&items, &patched));
+        assert!(!grindstone_accepts(context(), &items, &patched));
         // Two of them are not one "repaired" stick.
-        assert!(grindstone_result(&e, &items, Some(&patched), Some(&patched)).is_none());
+        assert!(grindstone_result(context(), &e, &items, Some(&patched), Some(&patched)).is_none());
         // The anvil's combine gate refuses a non-damageable stack
         // (`AnvilMenu.java:151`), so its enchantments do not merge either.
         let (a, b) = (sharp(patched.clone()), sharp(patched.clone()));
@@ -2095,9 +2064,10 @@ mod tests {
         let explicit = stick(
             r#"{"minecraft:max_damage":10,"minecraft:max_stack_size":1,"minecraft:damage":0}"#,
         );
-        assert!(grindstone_accepts(&items, &explicit));
+        assert!(grindstone_accepts(context(), &items, &explicit));
         // So the grindstone merges two into one and the anvil combines them.
-        let merged = grindstone_result(&e, &items, Some(&explicit), Some(&explicit)).unwrap();
+        let merged =
+            grindstone_result(context(), &e, &items, Some(&explicit), Some(&explicit)).unwrap();
         assert_eq!((merged.count, merged.damage), (1, 0));
         let (a, b) = (sharp(explicit.clone()), sharp(explicit.clone()));
         assert_eq!(
@@ -2110,18 +2080,125 @@ mod tests {
         let sword = item_data::parse_stack(r#"{id:"minecraft:diamond_sword",count:1}"#)
             .unwrap()
             .unwrap();
-        assert!(grindstone_accepts(&items, &sword));
+        assert!(grindstone_accepts(context(), &items, &sword));
         let mut removed = sword.clone();
         removed.data_mut().set_other(
             "!minecraft:damage",
             Some(Tag::compound(Vec::<(&str, Tag)>::new())),
         );
-        assert!(!grindstone_accepts(&items, &removed));
+        assert!(!grindstone_accepts(context(), &items, &removed));
         // An enchanted book is accepted for its enchantments, not its damage.
         let mut book = ItemStack::new("minecraft:enchanted_book", 1);
         book.enchant("minecraft:sharpness", 1);
-        assert!(grindstone_accepts(&items, &book));
+        assert!(grindstone_accepts(context(), &items, &book));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stonecutting_component_result_is_retained() {
+        let items = Items::for_tests(Default::default());
+        let json = serde_json::json!({"type":"minecraft:stonecutting","ingredient":"minecraft:stone","result":{"id":"minecraft:diamond","count":2,"components":{"minecraft:damage":7}}});
+        let rule = ParsedStationRecipe::parse("test:cut".into(), &json, &items)
+            .unwrap()
+            .rule();
+        let crate::crafting::RecipeRule::Stonecutting { result, .. } = rule else {
+            panic!("wrong rule")
+        };
+        assert_eq!(result.item.as_ref(), "minecraft:diamond");
+        assert_eq!(result.count, 2);
+        assert_eq!(result.damage, 7);
+    }
+
+    #[test]
+    fn smithing_transform_omitted_slots_match_empty() {
+        let items = Items::for_tests(Default::default());
+        let json = serde_json::json!({"type":"minecraft:smithing_transform","base":"minecraft:stone","result":"minecraft:diamond"});
+        let parsed = ParsedStationRecipe::parse("test:smith".into(), &json, &items).unwrap();
+        assert!(matches!(
+            parsed.rule(),
+            crate::crafting::RecipeRule::SmithingTransform {
+                template: None,
+                addition: None,
+                ..
+            }
+        ));
+        let ParsedStationRecipe::Smithing(recipe) = parsed else {
+            panic!("wrong rule")
+        };
+        let stations = StationRecipes {
+            smithing: vec![recipe],
+            ..Default::default()
+        };
+        let base = ItemStack::new("minecraft:stone", 1);
+        let ench = Enchantments::default();
+        let ctx = crate::test_resources::server_loop_context();
+        assert!(
+            stations
+                .smithing_result(ctx, &ench, None, Some(&base), None)
+                .is_some()
+        );
+        assert!(
+            stations
+                .smithing_result(ctx, &ench, Some(&base), Some(&base), None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn smithing_rejects_invalid_assembled_stack() {
+        let items = Items::for_tests(Default::default());
+        let json = serde_json::json!({"type":"minecraft:smithing_transform","base":"minecraft:diamond_sword","result":{"id":"minecraft:netherite_sword","count":2}});
+        let ParsedStationRecipe::Smithing(recipe) =
+            ParsedStationRecipe::parse("test:smith".into(), &json, &items).unwrap()
+        else {
+            panic!("wrong rule")
+        };
+        let stations = StationRecipes {
+            smithing: vec![recipe],
+            item_limits: [(Arc::from("minecraft:netherite_sword"), (1, 2031))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let base = ItemStack::new("minecraft:diamond_sword", 1);
+        assert!(
+            stations
+                .smithing_result(
+                    crate::test_resources::server_loop_context(),
+                    &Enchantments::default(),
+                    None,
+                    Some(&base),
+                    None
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn smithing_inline_trim_pattern_is_retained() {
+        let items = Items::for_tests(Default::default());
+        let json = serde_json::json!({"type":"minecraft:smithing_trim","template":"minecraft:stick","base":"minecraft:stone","addition":"minecraft:iron_ingot","pattern":{"asset_id":"example:wave","description":{"translate":"trim.example.wave"},"decal":true}});
+        let rule = ParsedStationRecipe::parse("test:trim".into(), &json, &items)
+            .unwrap()
+            .rule();
+        let crate::crafting::RecipeRule::SmithingTrim {
+            pattern:
+                crate::crafting::RecipeTrimPattern::Inline {
+                    asset_id,
+                    description,
+                    decal,
+                },
+            ..
+        } = rule
+        else {
+            panic!("wrong rule")
+        };
+        assert_eq!(asset_id, "example:wave");
+        assert_eq!(
+            description.get("translate"),
+            Some(&horizon_core::nbt::Tag::String("trim.example.wave".into()))
+        );
+        assert!(decal);
     }
 
     #[test]
@@ -2139,7 +2216,10 @@ mod tests {
         }"#,
         )
         .unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let context = crate::test_resources::server_load();
+        let ctx = crate::test_resources::server_loop_context();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
         let recipe = serde_json::json!({"type":"minecraft:smithing_transform",
             "base":"minecraft:stick", "addition":"minecraft:diamond",
             "result":{"id":"minecraft:emerald","count":3,
@@ -2148,18 +2228,20 @@ mod tests {
             "recipe/test:upgrade".to_owned(),
             vec![serde_json::to_vec(&recipe).unwrap()],
         )];
-        let overlay = PackOverlay { files: &files };
-        let stations = StationRecipes::load(&root, &items, &overlay);
+        let overlay = PackOverlay::new(&files);
+        let stations = StationRecipes::load(&root, &items, &overlay, &context);
         let e = sample();
         let mut base = ItemStack::new("minecraft:stick", 2);
         base.data_mut()
             .set_loot_name("minecraft:custom_name", &serde_json::json!("Original"));
         base.data_mut().repair_cost = 7;
-        base.data_mut()
-            .set_loot_component("minecraft:custom_data", &serde_json::json!({"kept":1}));
+        base.data_mut().set_loot_component(
+            "minecraft:custom_data",
+            &Some(horizon_core::json_nbt::json_to_tag(&serde_json::json!({"kept":1})).unwrap()),
+        );
         let addition = ItemStack::new("minecraft:diamond", 2);
         let result = stations
-            .smithing_result(&e, None, Some(&base), Some(&addition))
+            .smithing_result(ctx, &e, None, Some(&base), Some(&addition))
             .expect("omitted template accepts an empty slot");
         assert_eq!(
             (&*result.item, result.count, result.repair_cost()),
@@ -2167,7 +2249,7 @@ mod tests {
         );
         assert_eq!(
             result.data().unwrap().custom_name,
-            Some(horizon_world::nbt::Tag::String("Upgraded".into()))
+            Some(horizon_core::nbt::Tag::String("Upgraded".into()))
         );
         assert!(
             result
@@ -2178,19 +2260,23 @@ mod tests {
         );
         assert!(
             stations
-                .smithing_result(&e, Some(&addition), Some(&base), Some(&addition))
+                .smithing_result(ctx, &e, Some(&addition), Some(&base), Some(&addition))
                 .is_none()
         );
         assert!(
             stations
-                .smithing_result(&e, None, Some(&base), None)
+                .smithing_result(ctx, &e, None, Some(&base), None)
                 .is_none()
         );
-        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE, &context).unwrap();
         let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
-        let banners = Banners::load(&root);
+        let banners = Banners::load(&root, &defaults);
         let names = Names::default();
         let env = menu::Env {
+            crafting_remainder: None,
+            player: None,
+            player_entity_id: None,
+            loop_context: ctx,
             items: &items,
             recipes: &recipes,
             brewing: &brewing,
@@ -2201,7 +2287,9 @@ mod tests {
             trade: None,
             maps: None,
             limited_crafting: false,
+            can_equip: None,
             known_recipes: None,
+            slot_rules: None,
         };
         let mut menu = menu::Menu::new(menu::Kind::Smithing);
         menu.set_slot(&env, 1, Some(base));
@@ -2225,10 +2313,10 @@ mod tests {
                 "recipe/test:invalid".to_owned(),
                 vec![serde_json::to_vec(&invalid).unwrap()],
             )];
-            let stations = StationRecipes::load(&root, &items, &PackOverlay { files: &files });
+            let stations = StationRecipes::load(&root, &items, &PackOverlay::new(&files), &context);
             assert!(
                 stations
-                    .smithing_result(&e, None, menu.slot(1), menu.slot(2))
+                    .smithing_result(ctx, &e, None, menu.slot(1), menu.slot(2))
                     .is_none(),
                 "{invalid}"
             );
@@ -2240,7 +2328,7 @@ mod tests {
                 "recipe/test:invalid".to_owned(),
                 vec![serde_json::to_vec(&invalid).unwrap()],
             )];
-            let stations = StationRecipes::load(&root, &items, &PackOverlay { files: &files });
+            let stations = StationRecipes::load(&root, &items, &PackOverlay::new(&files), &context);
             assert!(
                 stations.smithing.is_empty(),
                 "malformed {key} must not become optional"
@@ -2274,11 +2362,22 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let items = Items::tags_only(&root, &PackOverlay::NONE).unwrap();
-        let recipes = StationRecipes::load(&root, &items, &PackOverlay::NONE);
+        let items = Items::tags_only(
+            &root,
+            &PackOverlay::NONE,
+            &horizon_world::item_defaults::read(&root).unwrap(),
+        )
+        .unwrap();
+        let recipes = StationRecipes::load(
+            &root,
+            &items,
+            &PackOverlay::NONE,
+            &crate::test_resources::server_load(),
+        );
         assert_eq!(recipes.smithing.len(), 1);
         let out = recipes
             .smithing_result(
+                crate::test_resources::server_loop_context(),
                 &items.enchantments,
                 Some(&ItemStack::new(
                     "minecraft:coast_armor_trim_smithing_template",
@@ -2301,20 +2400,6 @@ mod tests {
     }
 
     #[test]
-    fn smithing_ingredient_parses_holders() {
-        let items = sample_items();
-        let a = ingredient(&serde_json::json!("minecraft:diamond_sword"), &items);
-        assert_eq!(a.order, vec!["minecraft:diamond_sword"]);
-        let b = ingredient(
-            &serde_json::json!(["minecraft:diamond_sword", "minecraft:diamond_axe"]),
-            &items,
-        );
-        assert_eq!(
-            b.order,
-            vec!["minecraft:diamond_sword", "minecraft:diamond_axe"]
-        );
-    }
-    #[test]
     fn stonecutter_result_keeps_its_components() {
         let root = std::env::temp_dir().join(format!(
             "horizon-stonecutter-components-{}",
@@ -2328,9 +2413,17 @@ mod tests {
             r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:stone","result":{"id":"minecraft:stone","components":{"minecraft:custom_name":"Cut Stone"}}}"#,
         )
         .unwrap();
-        let recipes = StationRecipes::load(&root, &sample_items(), &PackOverlay::NONE);
+        let recipes = StationRecipes::load(
+            &root,
+            &sample_items(),
+            &PackOverlay::NONE,
+            &crate::test_resources::server_load(),
+        );
         let _ = fs::remove_dir_all(&root);
-        let listed = recipes.stonecutter(&ItemStack::new("minecraft:stone", 1));
+        let listed = recipes.stonecutter(
+            crate::test_resources::server_loop_context(),
+            &ItemStack::new("minecraft:stone", 1),
+        );
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].result.custom_name().as_deref(), Some("Cut Stone"));
     }
@@ -2354,10 +2447,18 @@ mod tests {
             "recipe/pack:a_cut".to_owned(),
             vec![cut("minecraft:stone_stairs").into_bytes()],
         )];
-        let recipes = StationRecipes::load(&root, &sample_items(), &PackOverlay { files: &packs });
+        let recipes = StationRecipes::load(
+            &root,
+            &sample_items(),
+            &PackOverlay::new(&packs),
+            &crate::test_resources::server_load(),
+        );
         let _ = fs::remove_dir_all(&root);
         let listed: Vec<_> = recipes
-            .stonecutter(&ItemStack::new("minecraft:stone", 1))
+            .stonecutter(
+                crate::test_resources::server_loop_context(),
+                &ItemStack::new("minecraft:stone", 1),
+            )
             .iter()
             .map(|r| (r.id.as_str(), &*r.result.item))
             .collect();

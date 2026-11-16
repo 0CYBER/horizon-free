@@ -8,10 +8,12 @@ description = "OptiFine-format resource pack files: .properties, the name, range
 
 [dependencies]
 horizon-core = { path = "../horizon-core" }
+horizon-assets = { path = "../horizon-assets" }
 log = "0.4"
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 
 [dev-dependencies]
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 # `cpu_seconds` for cem_expr_bench.
 horizon-system = { path = "../horizon-system" }
 

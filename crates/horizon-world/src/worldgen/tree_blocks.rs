@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     block_properties::BlockProperty,
-    fluid::FluidTemplate,
+    fluid::FluidKind,
     registry::{BlockRegistry, BlockStateId},
 };
 use horizon_core::geometry::Direction;
@@ -179,13 +179,12 @@ impl TreeBlocks {
                 *flag |= LIQUID;
             }
             if let Some(fluid) = bindings.fluids.state(id) {
-                match fluid.kind().template() {
-                    FluidTemplate::Water if fluid.is_source() => {
-                        *flag |= WATER_SOURCE | WATER_FLUID | ANY_FLUID
-                    }
-                    FluidTemplate::Water => *flag |= WATER_FLUID | ANY_FLUID,
-                    FluidTemplate::Lava => *flag |= LAVA_FLUID | ANY_FLUID,
-                    FluidTemplate::Empty => {}
+                match fluid.kind() {
+                    FluidKind::Water => *flag |= WATER_SOURCE | WATER_FLUID | ANY_FLUID,
+                    FluidKind::FlowingWater => *flag |= WATER_FLUID | ANY_FLUID,
+                    FluidKind::Lava | FluidKind::FlowingLava => *flag |= LAVA_FLUID | ANY_FLUID,
+                    FluidKind::Mod(_) | FluidKind::ModFlowing(_) => *flag |= ANY_FLUID,
+                    FluidKind::Empty => {}
                 }
                 if fluid.is_source() {
                     *flag |= FLUID_SOURCE;
@@ -257,6 +256,35 @@ impl TreeBlocks {
     }
     pub(crate) fn is_air(&self, state: BlockStateId) -> bool {
         self.has(state, AIR)
+    }
+    /// Whether `state` is one of the registry's states.
+    pub(crate) fn is_state(&self, state: BlockStateId) -> bool {
+        (state.0 as usize) < self.flags.len()
+    }
+    /// Facts for `registry` where only its air blocks (`minecraft:air`,
+    /// `cave_air`, `void_air`) are classified, for tests of one decorator.
+    #[cfg(test)]
+    pub(crate) fn air_only(registry: &BlockRegistry, properties: Arc<StateProperties>) -> Self {
+        let mut flags = vec![0u32; registry.len()];
+        for name in ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"] {
+            if let Some(state) = registry.default_state(name) {
+                flags[state.0 as usize] |= AIR;
+            }
+        }
+        Self {
+            distance: vec![0; flags.len()],
+            block: (0..flags.len() as u32).collect(),
+            flags,
+            properties,
+            defaults: DEFAULTS
+                .iter()
+                .filter_map(|name| {
+                    registry
+                        .default_state(name)
+                        .map(|id| ((*name).to_owned(), id))
+                })
+                .collect(),
+        }
     }
     /// TreeFeature.validTreePos: air or replaceable by trees.
     pub(crate) fn valid_tree_pos(&self, state: BlockStateId) -> bool {
@@ -382,7 +410,7 @@ pub(crate) fn dist_manhattan(a: [i32; 3], b: [i32; 3]) -> i32 {
 /// Java HashSet<BlockPos> with native bucket iteration order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct JavaPos(pub [i32; 3]);
-impl crate::java_hash_map::JavaKey for JavaPos {
+impl horizon_core::java_hash_map::JavaKey for JavaPos {
     fn java_hash(&self) -> i32 {
         let [x, y, z] = self.0;
         y.wrapping_add(z.wrapping_mul(31))
@@ -400,7 +428,7 @@ impl crate::java_hash_map::JavaKey for JavaPos {
     }
 }
 #[derive(Default)]
-pub(crate) struct PosSet(crate::java_hash_map::JavaHashMap<JavaPos, ()>);
+pub(crate) struct PosSet(horizon_core::java_hash_map::JavaHashMap<JavaPos, ()>);
 impl PosSet {
     pub(crate) fn insert(&mut self, p: [i32; 3]) -> bool {
         self.0.put(JavaPos(p), ()).is_none()
@@ -455,7 +483,7 @@ mod tests {
         // insertion order within a bucket.
         let mut expected = inserted.to_vec();
         expected.sort_by_key(|p| {
-            let h = crate::java_hash_map::JavaKey::java_hash(&JavaPos(*p)) as u32;
+            let h = horizon_core::java_hash_map::JavaKey::java_hash(&JavaPos(*p)) as u32;
             (h ^ (h >> 16)) & 15
         });
         assert_eq!(set.to_vec(), expected);

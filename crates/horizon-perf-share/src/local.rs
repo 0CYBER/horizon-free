@@ -242,6 +242,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_right_token_is_served_once_and_then_refused() {
         let (offer, port, token, _dir) = offer_of(b"\x1f\x8bcapture", Duration::from_secs(30));
         let reply = send(port, &get(&token, &format!("Origin: {ORIGIN}\r\n")));
@@ -255,6 +256,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_wrong_token_origin_or_method_gets_404_and_keeps_the_token() {
         let (offer, port, token, _dir) = offer_of(b"bytes", Duration::from_secs(30));
         let wrong_token = get(&"0".repeat(32), "");
@@ -270,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_preflight_allows_the_viewer_and_private_networks_without_spending_the_token() {
         let (offer, port, token, _dir) = offer_of(b"bytes", Duration::from_secs(30));
         let preflight = format!(
@@ -287,6 +290,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn an_aborted_connection_does_not_end_the_offer() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -314,6 +318,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_thread_is_gone_after_the_timeout() {
         let (offer, port, _token, _dir) = offer_of(b"bytes", Duration::from_millis(200));
         assert!(!offer.wait());
@@ -321,6 +326,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_link_is_the_viewer_with_a_random_token() {
         let (offer, _, token, _dir) = offer_of(b"bytes", Duration::from_millis(50));
         assert!(

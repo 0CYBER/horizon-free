@@ -1,11 +1,13 @@
 //! Consume effects bound to an entity's shared active-effect storage.
-use crate::{
-    active_effects::{ActiveEffects, EffectHooks},
-    consume_effect::EffectWorld,
-    java_hash_map::JavaKey,
-    status_effect::EffectInstance,
-};
 use horizon_core::{position::BlockPos, random::RandomSource};
+use {
+    crate::{
+        active_effects::{ActiveEffects, EffectHooks},
+        consume_effect::EffectWorld,
+        status_effect::EffectInstance,
+    },
+    horizon_core::java_hash_map::JavaKey,
+};
 
 /// Actor and level services used alongside concrete status storage. Callbacks
 /// receive the live storage so reentrant mutations remain visible to the next

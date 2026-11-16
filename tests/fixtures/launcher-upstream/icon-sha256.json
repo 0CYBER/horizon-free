@@ -1,0 +1,13 @@
+{
+  "packaging/icons/horizon.ico": "de139ce1bdb40750f532171118a37b643cbb015e6f5aa51c2c827195da34ef2b",
+  "packaging/icons/horizon.icns": "19f532f7cbb45cacb39c4ddd9ff669de88996c4e7934103a92e86e9a76557b58",
+  "packaging/icons/hicolor/48x48/apps/horizon.png": "be885ebce0640e87a48c6f0d5711f69463074edd3537c4f9a847769acb85b2f7",
+  "packaging/icons/hicolor/scalable/apps/horizon.svg": "2a8c0871ae8a1fc4d3be47c8ce187ee5411d9553da241411ddd7e75c61373eb3",
+  "packaging/icons/hicolor/512x512/apps/horizon.png": "fefb808a16c99ce04bb77ffae561548603a6776db8d7d71e76becea3411285a1",
+  "packaging/icons/hicolor/16x16/apps/horizon.png": "924f0dd525a41a0b6b57c7c9d75ba6ec94714e7b0ad3fd09e6082f647011d519",
+  "packaging/icons/hicolor/24x24/apps/horizon.png": "d262dd2c66e771a5a34bbaf2c47ce04ead024659cbe74dc750701603f643007a",
+  "packaging/icons/hicolor/32x32/apps/horizon.png": "8a1d8759b13c60ec5ab52db36d8fdc3977c784c5809125337be0394448cf4b83",
+  "packaging/icons/hicolor/64x64/apps/horizon.png": "1017decdf41f0dba0113dcc02e65845456ae07ed6ce419b71723e7e50a1e3f67",
+  "packaging/icons/hicolor/256x256/apps/horizon.png": "a7621db90a417d8e3dc3ebae1e5bcfaa142fb0c1f09e1f646a8baef4eca06777",
+  "packaging/icons/hicolor/128x128/apps/horizon.png": "cd904b580612cc00a8425c1850c7f9ef39bbe5c4322c676587b2af4d4410a1c7"
+}

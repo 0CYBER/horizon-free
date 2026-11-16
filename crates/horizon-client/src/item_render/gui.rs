@@ -626,7 +626,7 @@ mod tests {
         // average depth is farther away because it slopes along its height.
         let bar = face(0.0, 1.0, |_| 0.0, 0xFF80_4000);
         let cloth = face(0.0, 8.0, |y| 2.0 - y, 0xFFFF_FFFF);
-        let mut batch = HudBatch::new([320, 240]);
+        let mut batch = HudBatch::scratch([320, 240]);
         draw_quads(
             &[bar, cloth],
             (Vec3::Z, Vec3::Z),
@@ -642,7 +642,7 @@ mod tests {
         let flat = face(0.0, 8.0, |_| 0.0, 0xFFFF_0000);
         let tilted = face(0.0, 8.0, |y| y - 4.0, 0xFF00_00FF);
         for quads in [[flat, tilted], [tilted, flat]] {
-            let mut batch = HudBatch::new([320, 240]);
+            let mut batch = HudBatch::scratch([320, 240]);
             draw_quads(
                 &quads,
                 (Vec3::Z, Vec3::Z),
@@ -674,7 +674,7 @@ mod tests {
             ..base
         };
         let quads = [face(0.0, 1.0, |_| 0.0, 0xFF80_4000), base, pattern];
-        let mut batch = HudBatch::new([320, 240]);
+        let mut batch = HudBatch::scratch([320, 240]);
         draw_quads(
             &quads,
             (Vec3::Z, Vec3::Z),
@@ -727,7 +727,7 @@ mod tests {
             rules: &rules,
             millis: 0.0,
         };
-        let mut batch = HudBatch::new([320, 240]);
+        let mut batch = HudBatch::scratch([320, 240]);
         batch.glint_alpha = 0.5;
         let mut quad = face(0.0, 8.0, |_| 0.0, 0xFFFF_FFFF);
         quad.gui_glint_uv = Some([[42.0, 42.0]; 4]);

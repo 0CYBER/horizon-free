@@ -98,10 +98,10 @@ impl Launcher {
                 .child(s)
         };
         let list = match &self.instances.versions {
-            VersionList::NotAsked | VersionList::Loading => list_box("mc-versions", 264.).child(
+            VersionList::NotAsked | VersionList::Loading => list_box("mc-versions", 208.).child(
                 line(tr("Asking Mojang for its versions…").into(), ink::QUIET),
             ),
-            VersionList::Failed(e) => list_box("mc-versions", 264.)
+            VersionList::Failed(e) => list_box("mc-versions", 208.)
                 .child(line(e.clone(), ink::FULL).text_color(ui::danger())),
             VersionList::Ready(versions) => {
                 let rows: Vec<_> = versions
@@ -143,12 +143,12 @@ impl Launcher {
                     })
                     .collect();
                 if rows.is_empty() {
-                    list_box("mc-versions", 264.).child(line(
+                    list_box("mc-versions", 208.).child(line(
                         trf("No version matches “{search}”.", &[("search", &typed)]),
                         ink::QUIET,
                     ))
                 } else {
-                    list_box("mc-versions", 264.).children(rows)
+                    list_box("mc-versions", 208.).children(rows)
                 }
             }
         };

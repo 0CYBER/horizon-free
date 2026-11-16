@@ -65,16 +65,19 @@ struct CitSlot {
 struct CitSlots {
     slots: array<CitSlot, 256>,
 }
+// The glint array is bound twice, once per sampler: naga's GLSL writer pairs each image with one
+// sampler, so one image sampled through both cannot run on OpenGL (#2386).
 @group(1) @binding(0) var cit_tex: texture_2d_array<f32>;
 @group(1) @binding(1) var cit_blur: sampler;
 @group(1) @binding(2) var cit_nearest: sampler;
 @group(1) @binding(3) var<uniform> cit: CitSlots;
+@group(1) @binding(4) var cit_tex_sharp: texture_2d_array<f32>;
 @fragment fn fs_cit_glint(in: Out) -> @location(0) vec4<f32> {
     let mask = textureSample(atlas, atlas_sampler, in.uv).a;
     let index = u32(round(in.color.r * 255.0));
     let slot = cit.slots[index];
     let blurred = textureSampleLevel(cit_tex, cit_blur, in.glint_uv, index, 0.0);
-    let sharp = textureSampleLevel(cit_tex, cit_nearest, in.glint_uv, index, 0.0);
+    let sharp = textureSampleLevel(cit_tex_sharp, cit_nearest, in.glint_uv, index, 0.0);
     if mask < 0.1 { discard; }
     // The layer's colour times its intensity (the glint strength option included) in alpha,
     // cut where vanilla's glint shader cuts, which CIT Resewn draws through.

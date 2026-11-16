@@ -6,9 +6,10 @@
 use super::*;
 use crate::mobs::Seen;
 use crate::mobs::world::with_test_world;
-use horizon_core::random::{EntityRandom, LegacyRandom};
+use horizon_core::random::LegacyRandom;
 
 #[test]
+#[ignore = "daily"]
 fn a_ridden_horse_is_not_counted_for_cramming() {
     // Three counted entities are one more than `maxEntityCramming - 1`.
     let ran = with_test_world(&[], |w, types| {
@@ -48,17 +49,25 @@ fn a_ridden_horse_is_not_counted_for_cramming() {
                 true,
             ),
         ] {
-            let seen: Vec<Seen> = crowd.iter().map(|o| o.seen(None)).collect();
+            let seen: Vec<Seen> = crowd
+                .iter()
+                .map(|o| o.seen(None, &crate::items::Items::empty()))
+                .collect();
             let w = MobWorld {
                 others: &seen,
                 max_entity_cramming: 3,
                 ..base.clone()
             };
             let mut m = pig(99, 0.5);
-            m.random = EntityRandom::own(LegacyRandom::new(1234567));
+            m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(1234567));
             let full = m.health;
             let mut events = Vec::new();
-            push_entities(&mut m, &w, &mut events);
+            push_entities(
+                &mut m,
+                &w,
+                &mut crate::health::TestLevel::new(0).level(),
+                &mut events,
+            );
             assert_eq!(
                 m.last_damage.map(|(d, _)| d.kind),
                 hurt.then_some(DamageKind::Cramming),
@@ -73,5 +82,5 @@ fn a_ridden_horse_is_not_counted_for_cramming() {
     });
     // Without the vanilla data under .local/horizon-client there is no world
     // to push in: the test has nothing to check.
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

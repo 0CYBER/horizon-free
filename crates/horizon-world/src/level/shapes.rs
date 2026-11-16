@@ -3,18 +3,21 @@
 //! Dispatch walks the block's class chain; a handler returning `None` defers
 //! to the next class (the Java `super` call), the end of the chain returns the
 //! state unchanged (`BlockBehaviour.updateShape`).
-use super::{
-    LevelAccess, Sim,
-    classes::Class,
-    query::{axis_of, clockwise, counter_clockwise, is_horizontal},
-    states::BlockId,
-    update::{above, below, rel},
-};
 use crate::{fluid::FluidKind, registry::BlockStateId};
 use horizon_core::{
     geometry::{Axis, Direction},
     position::BlockPos,
     random::RandomSource,
+};
+use {
+    super::{
+        LevelAccess, Sim,
+        classes::Class,
+        query::{axis_of, clockwise, counter_clockwise, is_horizontal},
+        states::BlockId,
+        update::{above, below, rel},
+    },
+    horizon_core::connection_kind::ConnectionKind,
 };
 
 /// `SoundEvents.GEYSER_ERUPTION_START`.
@@ -475,7 +478,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     table.set_bool(
                         state,
                         self.direction_prop(dir),
-                        self.fence_connects_to(state, nstate, sturdy, dir.opposite()),
+                        self.fence_connects_to(pos, state, nstate, sturdy, dir.opposite()),
                     )
                 } else {
                     sup!()
@@ -488,7 +491,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     table.set_bool(
                         state,
                         self.direction_prop(dir),
-                        self.bars_attach_to(nstate, sturdy),
+                        self.bars_attach_to(pos, state, nstate, sturdy, dir),
                     )
                 } else {
                     sup!()
@@ -611,7 +614,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::Liquid => {
                 let fluid = b.fluid(state);
                 if fluid.is_source() || b.fluid(nstate).is_source() {
-                    let delay = self.fluid_tick_delay(fluid.kind());
+                    let delay = self.fluid_tick_delay(fluid.kind(), pos);
                     self.schedule_fluid_tick(pos, fluid.kind(), delay);
                 }
                 if dir == Direction::Down && self.should_bubble_column_occupy(state) {
@@ -799,6 +802,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         .map(|d| {
                             if d == dir {
                                 self.wall_connects_to(
+                                    pos,
+                                    state,
                                     nstate,
                                     b.is_face_sturdy(nstate, opposite),
                                     opposite,
@@ -922,43 +927,115 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             counter_clockwise(facing)
         }
     }
-    /// `FenceBlock.connectsTo`.
+    /// `FenceBlock.connectsTo` for the fence `fence` at `pos`, then the hook.
     pub(crate) fn fence_connects_to(
         &self,
+        pos: BlockPos,
         fence: BlockStateId,
         state: BlockStateId,
         face_solid: bool,
         direction: Direction,
     ) -> bool {
+        // `direction` is vanilla's argument: from the neighbour toward the fence.
         let b = self.b;
         let t = &b.tags;
         let same_fence = b.in_set(state, &t.fences)
             && b.in_set(state, &t.wooden_fences) == b.in_set(fence, &t.wooden_fences);
         let gate = b.instance_of(state, Class::FenceGate)
             && axis_of(b.facing(state)) == axis_of(clockwise(direction));
-        (!b.is_exception_for_connection(state) && face_solid) || same_fence || gate
+        let vanilla = (!b.is_exception_for_connection(state) && face_solid) || same_fence || gate;
+        self.connects_to(
+            ConnectionKind::Fence,
+            pos,
+            fence,
+            state,
+            direction.opposite(),
+            face_solid,
+            vanilla,
+        )
     }
-    /// `IronBarsBlock.attachsTo`.
-    pub(crate) fn bars_attach_to(&self, state: BlockStateId, face_solid: bool) -> bool {
-        let b = self.b;
-        (!b.is_exception_for_connection(state) && face_solid)
-            || b.instance_of(state, Class::IronBars)
-            || b.in_set(state, &b.tags.walls)
-    }
-    /// `WallBlock.connectsTo`.
-    pub(crate) fn wall_connects_to(
+    /// `IronBarsBlock.attachsTo` for the bars or pane `bars` at `pos`, then the
+    /// hook. Vanilla's rule takes no direction: `direction` points from the bars
+    /// toward the neighbour `state`, for the hook only.
+    pub(crate) fn bars_attach_to(
         &self,
+        pos: BlockPos,
+        bars: BlockStateId,
         state: BlockStateId,
         face_solid: bool,
         direction: Direction,
     ) -> bool {
         let b = self.b;
+        let vanilla = (!b.is_exception_for_connection(state) && face_solid)
+            || b.instance_of(state, Class::IronBars)
+            || b.in_set(state, &b.tags.walls);
+        self.connects_to(
+            ConnectionKind::Bars,
+            pos,
+            bars,
+            state,
+            direction,
+            face_solid,
+            vanilla,
+        )
+    }
+    /// `WallBlock.connectsTo` for the wall `wall` at `pos`, then the hook.
+    pub(crate) fn wall_connects_to(
+        &self,
+        pos: BlockPos,
+        wall: BlockStateId,
+        state: BlockStateId,
+        face_solid: bool,
+        direction: Direction,
+    ) -> bool {
+        // `direction` is vanilla's argument: from the neighbour toward the wall.
+        let b = self.b;
         let gate = b.instance_of(state, Class::FenceGate)
             && axis_of(b.facing(state)) == axis_of(clockwise(direction));
-        b.in_set(state, &b.tags.walls)
+        let vanilla = b.in_set(state, &b.tags.walls)
             || (!b.is_exception_for_connection(state) && face_solid)
             || b.instance_of(state, Class::IronBars)
-            || gate
+            || gate;
+        self.connects_to(
+            ConnectionKind::Wall,
+            pos,
+            wall,
+            state,
+            direction.opposite(),
+            face_solid,
+            vanilla,
+        )
+    }
+    /// The level's answer to a `kind` connection of the block `state` at `pos`
+    /// toward `neighbour`, `direction` pointing from the block to it, once
+    /// vanilla's rule answered `vanilla`; vanilla's when no hook listens. The
+    /// neighbour, the target, answers first (`IBlockExtension.canBeConnectedTo`),
+    /// then the connecting block's own rule has the last word.
+    fn connects_to(
+        &self,
+        kind: ConnectionKind,
+        pos: BlockPos,
+        state: BlockStateId,
+        neighbour: BlockStateId,
+        direction: Direction,
+        face_solid: bool,
+        vanilla: bool,
+    ) -> bool {
+        if self.level.has_connection_hook() {
+            let target = self.level.adjust_can_be_connected_to(
+                kind,
+                rel(pos, direction),
+                neighbour,
+                state,
+                direction.opposite(),
+                face_solid,
+                vanilla,
+            );
+            self.level
+                .adjust_connects_to(kind, pos, state, neighbour, direction, face_solid, target)
+        } else {
+            vanilla
+        }
     }
     /// `WallBlock.updateShape(level, state, topPos, topNeighbour, n, e, s, w)`.
     pub(crate) fn wall_shape(
@@ -1233,13 +1310,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return b.default_of(b.named.soul_fire);
         }
         let fire = b.default_of(b.named.fire);
-        if !self.can_burn(below_state) && !b.is_face_sturdy(below_state, Direction::Up) {
+        if !self.can_burn(below_state, below_pos, Direction::Up)
+            && !b.is_face_sturdy(below_state, Direction::Up)
+        {
             let mut result = fire;
             for direction in Direction::ALL {
                 if direction == Direction::Down {
                     continue;
                 }
-                let burn = self.can_burn(self.rel_state(pos, direction));
+                let burn = self.neighbour_can_burn(pos, direction);
                 result = b
                     .table
                     .set_bool(result, self.direction_prop(direction), burn);

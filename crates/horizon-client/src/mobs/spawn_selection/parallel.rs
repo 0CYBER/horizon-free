@@ -39,14 +39,15 @@ impl<'b> Lane<'b> {
         }
     }
     /// `spawnForChunk` for the categories already filtered: each category's pack the chunk
-    /// proposes. `make` creates the mob for a request and its box, or refuses it.
+    /// proposes. `make` creates the mob for a request and its box, or refuses it; it draws on the
+    /// chunk's random, between the position draws, as finalizeSpawn does.
     pub fn chunk<L: NaturalLevel, R: RandomSource, M>(
         &mut self,
         l: &L,
         random: &mut R,
         categories: &[Category],
         chunk: (i32, i32),
-        make: &mut dyn FnMut(&L, &SpawnRequest) -> Option<(Spawned, M)>,
+        make: &mut dyn FnMut(&L, &SpawnRequest, &mut R) -> Option<(Spawned, M)>,
     ) -> Vec<Pack<M>> {
         let mut packs = Vec::new();
         for &category in categories {
@@ -54,9 +55,9 @@ impl<'b> Lane<'b> {
                 continue;
             }
             let mut members = Vec::new();
-            let mut spawn = |l: &L, r: &SpawnRequest| {
+            let mut spawn = |l: &L, r: &SpawnRequest, rng: &mut R| {
                 let kind = l.mob_type(r.entity)?;
-                let (spawned, made) = make(l, r)?;
+                let (spawned, made) = make(l, r, rng)?;
                 members.push(Member {
                     entity: r.entity.to_owned(),
                     species: r.species,

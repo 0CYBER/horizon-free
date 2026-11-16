@@ -14,10 +14,11 @@ if [ "$(uname)" = Darwin ]; then
   { echo "$bin"; echo "$java_home/bin"; echo /opt/homebrew/bin; } >> "$GITHUB_PATH"
   echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
   # Builds go through the machine's sccache (shared with ~/fleet/rbuild), so the build folders runner-gc.sh
-  # removes come back from the cache instead of compiling cold.
+  # removes come back from the cache instead of compiling cold. The shared wrapper retries cache
+  # outages and then compiles directly; it also routes nested Clippy invocations.
   # Not for a release (HORIZON_NO_SCCACHE=1, game-build.yml's trusted builds): pull requests' jobs write that cache.
   if [ -x /opt/homebrew/bin/sccache ] && [ -z "${HORIZON_NO_SCCACHE:-}" ]; then
-    { echo "RUSTC_WRAPPER=/opt/homebrew/bin/sccache"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
+    { echo "RUSTC_WRAPPER=$GITHUB_WORKSPACE/tools/ci/compiler-cache.sh"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
   fi
 else
   python=$(command -v python3.13 || true)
@@ -41,8 +42,8 @@ else
   [ -n "$java_home" ] || { echo "::error::no JDK $java_major on this runner"; exit 1; }
   { echo "$bin"; echo "$java_home/bin"; } >> "$GITHUB_PATH"
   echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
-  if [ -z "${HORIZON_NO_SCCACHE:-}" ] && sccache=$(command -v sccache); then
-    { echo "RUSTC_WRAPPER=$sccache"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
+  if [ -z "${HORIZON_NO_SCCACHE:-}" ] && command -v sccache > /dev/null; then
+    { echo "RUSTC_WRAPPER=$GITHUB_WORKSPACE/tools/ci/compiler-cache.sh"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
   fi
 fi
 echo "HORIZON_NO_AUDIO=1" >> "$GITHUB_ENV"

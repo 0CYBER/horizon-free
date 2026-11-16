@@ -12,9 +12,13 @@ use std::{collections::HashMap, fs, path::Path};
 pub fn main() -> horizon_client::Result<()> {
     let args: Vec<_> = crate::args().collect();
     let root = Path::new(&args[1]);
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let enchantments = Enchantments::load(root);
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let enchantments = Enchantments::load(root, &defaults)?;
     let trades = Trades {
+        professions: std::sync::Arc::new(
+            horizon_client::mobs::villager::ResolvedProfessions::vanilla(),
+        ),
         trades: HashMap::new(),
         tags: HashMap::new(),
         sets: HashMap::new(),
@@ -45,13 +49,15 @@ pub fn main() -> horizon_client::Result<()> {
                             "minecraft:water"
                         });
                     if *kind == "renamed" {
-                        p.data_mut()
-                            .set_loot_component("minecraft:custom_name", &json!("Bottle"));
+                        p.data_mut().set_loot_component(
+                            "minecraft:custom_name",
+                            &Some(horizon_core::nbt::Tag::String("Bottle".into())),
+                        );
                     }
                     if *kind == "extra_potion" {
                         p.data_mut()
                             .potion_extra
-                            .push(("custom_color".into(), horizon_world::nbt::Tag::Int(123)));
+                            .push(("custom_color".into(), horizon_core::nbt::Tag::Int(123)));
                     }
                     let mut a = Some(p);
                     let accepted = o.take(&items, &mut a, &mut None);

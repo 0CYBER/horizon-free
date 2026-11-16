@@ -59,7 +59,8 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: block_transform_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     let assets = Assets::load(root)?;
     let transformers = Transformers::load(root, assets.registry)?;
     let mut out = String::new();

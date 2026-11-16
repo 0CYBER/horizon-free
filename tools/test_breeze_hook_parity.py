@@ -35,7 +35,7 @@ def main():
     sources = [Path(__file__), lab.ROOT / 'tools/lab.py', lab.ROOT / 'tools/oracle_harness.py',
                lab.ROOT / 'tools/test_rust_parity.py', lab.ROOT / 'tools/integration_env.py',
                lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/horizon-client/src/game/fishing.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/items/fishing.rs',
                lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBreezeHookOracle.java',
                lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/ParityData.java']
     hashes = base.source_hashes(sources)

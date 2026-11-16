@@ -1,0 +1,2 @@
+# Cached client entity fluid reads (arismoko/horizon#4697).
+horizon-client game::native_entity_state::tests::client_fluid_reads_use_cached_local_and_tracked_bodies lib daily resources

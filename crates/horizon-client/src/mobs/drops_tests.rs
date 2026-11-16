@@ -7,8 +7,8 @@ use crate::mobs::world::level_random;
 use crate::mobs::{Mob, Species};
 use crate::random_sequences::RandomSequences;
 use horizon_core::geometry::Vec3;
+use horizon_core::nbt::Tag;
 use horizon_world::loot::{LootData, PackOverlay};
-use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
 fn mob(id: &str, species: Species) -> Mob {
@@ -26,7 +26,8 @@ fn empty_loot(tag: &str) -> LootData {
         std::env::temp_dir().join(format!("horizon-drops-tests-{}-{tag}", std::process::id()));
     std::fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
     std::fs::write(root.join("items.json"), "{}").unwrap();
-    let loot = LootData::load(&root, &PackOverlay::default()).unwrap();
+    let defaults = horizon_world::item_defaults::read(&root).unwrap();
+    let loot = LootData::load(&root, &PackOverlay::default(), &defaults).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
     loot
 }
@@ -40,7 +41,8 @@ fn vanilla_loot() -> Option<LootData> {
     if !root.join("data").exists() {
         return None;
     }
-    Some(LootData::load(&root, &PackOverlay::default()).unwrap())
+    let defaults = horizon_world::item_defaults::read(&root).unwrap();
+    Some(LootData::load(&root, &PackOverlay::default(), &defaults).unwrap())
 }
 
 fn named(item: &str, count: u32, name: &str) -> ItemStack {
@@ -181,8 +183,8 @@ fn a_named_saddle_and_wolfs_armor_drop_with_their_names() {
     let mut horse = mob("minecraft:horse", Species::Horse);
     horse.set_saddle(Some(named("minecraft:saddle", 1, "Seat")));
     let mut wolf = mob("minecraft:wolf", Species::Wolf);
-    wolf.extra.body = Some("minecraft:wolf_armor".into());
-    wolf.extra.body_extra = named("minecraft:wolf_armor", 1, "Fang").extra;
+    wolf.extra
+        .set_body_stack(Some(named("minecraft:wolf_armor", 1, "Fang")));
     let mut names = Vec::new();
     for m in [&mut horse, &mut wolf] {
         let (out, _) = die(

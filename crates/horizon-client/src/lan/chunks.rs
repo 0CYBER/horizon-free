@@ -8,15 +8,15 @@ use crate::{
     mobs::spawner::{SpawnDataExt, SpawnerExt},
     section_mask::SectionMask,
 };
+use horizon_core::nbt::{Compound, Tag};
 use horizon_protocol::{
-    buf::{BitSet, Codec, List, Writer, set_bit},
+    buf::{BitSet, Codec, List, Writer, check_network_nbt, set_bit},
     chunk::{
         BIOMES, BLOCKS, BlockEntityInfo, ChunkData, Heightmaps, LightData, Paletted, Strategy,
     },
     packets::play::{ChunkBiomeData, LevelChunkWithLight},
     registry::{Builtin, ceil_log2},
 };
-use horizon_world::nbt::{Compound, Tag};
 use std::{
     collections::HashMap,
     sync::{
@@ -35,7 +35,10 @@ pub type ModUpdateTag = fn([i32; 3], &ModBlockEntity) -> Option<Compound>;
 
 /// The vanilla block entity type of a block (BlockEntityType.validBlocks).
 pub fn block_entity_type(name: &str) -> Option<&'static str> {
-    let n = name.strip_prefix("minecraft:")?;
+    if crate::block_entity_types::factory_valid(name) == Some(false) {
+        return None;
+    }
+    let n = crate::block_entity_types::factory_block(name).strip_prefix("minecraft:")?;
     Some(match n {
         "chest" => "minecraft:chest",
         "trapped_chest" => "minecraft:trapped_chest",
@@ -100,9 +103,8 @@ pub struct ChunkEncoder {
     coder: Arc<SectionCoder>,
     /// Block entity type id per state (-1 for none).
     entity_types: Vec<i32>,
-    /// Whether the state is a mod block's: its type is the block's own, and
-    /// it has a block entity only when the mod made one.
-    mod_entities: Vec<bool>,
+    /// A native state's declared type, sent only for a matching instance.
+    mod_entities: Vec<Option<Arc<str>>>,
     /// The mods' update tags (`native_block_entity_update_tag`).
     pub mod_update_tag: Option<ModUpdateTag>,
     /// The states with `trial_spawner_state=active`, whose trial spawner
@@ -130,6 +132,9 @@ struct SectionCoder {
     flags: Vec<u8>,
     /// Network biome id per internal biome index.
     biome_ids: Vec<i32>,
+    /// Plains' network id, sent for an index past `biome_ids`: a placeholder for a saved
+    /// biome the world lacks, which plays as plains.
+    biome_fallback: i32,
     biome_bits: u8,
 }
 
@@ -306,7 +311,7 @@ impl SectionCoder {
             self.biome_ids
                 .get(usize::from(v as u16))
                 .copied()
-                .unwrap_or(0)
+                .unwrap_or(self.biome_fallback)
         };
         if let Some(v) = section.biomes.uniform() {
             return Paletted {
@@ -551,6 +556,22 @@ impl ChunkEncoder {
         biome_names: &[String],
         biome_registry: &[String],
     ) -> Self {
+        Self::with_types(
+            states,
+            builtin,
+            biome_names,
+            biome_registry,
+            crate::block_entity_types::current(),
+        )
+    }
+
+    pub(super) fn with_types(
+        states: impl IntoIterator<Item = (Arc<str>, bool, Option<crate::blocks::SignForm>)>,
+        builtin: &Builtin,
+        biome_names: &[String],
+        biome_registry: &[String],
+        declared: Option<&crate::block_entity_types::BlockEntityTypes>,
+    ) -> Self {
         let types = builtin.get("minecraft:block_entity_type");
         let blocks = builtin.get("minecraft:block");
         let mut flags = Vec::new();
@@ -569,23 +590,18 @@ impl ChunkEncoder {
                     f |= FLUID;
                 }
             }
-            // A mod block's block entity type is named after the block
-            // (`mod_content`: registries.json), unless it is one of vanilla's.
-            let vanilla = sign.map(crate::blocks::SignForm::block_entity_type);
-            let modded = !name.starts_with("minecraft:") && vanilla.is_none();
-            let t = if modded {
-                Some(&*name)
-            } else {
-                vanilla.or_else(|| block_entity_type(&name))
-            }
-            .and_then(|t| types.and_then(|ids| ids.id(t)))
-            .unwrap_or(-1);
+            let modded = declared.and_then(|d| d.type_for(&name));
+            let t = modded
+                .or_else(|| sign.map(crate::blocks::SignForm::block_entity_type))
+                .or_else(|| block_entity_type(&name))
+                .and_then(|t| types.and_then(|ids| ids.id(t)))
+                .unwrap_or(-1);
             if t >= 0 {
                 f |= ENTITY;
             }
             flags.push(f);
             entity_types.push(t);
-            mod_entities.push(modded && t >= 0);
+            mod_entities.push(modded.map(Arc::from));
             block_ids.push(blocks.and_then(|b| b.id(&name)).unwrap_or(0));
         }
         let biome_ids = biome_names
@@ -601,6 +617,10 @@ impl ChunkEncoder {
             coder: Arc::new(SectionCoder {
                 flags,
                 biome_ids,
+                biome_fallback: biome_registry
+                    .iter()
+                    .position(|b| b == "minecraft:plains")
+                    .map_or(0, |i| i as i32),
                 biome_bits: ceil_log2(biome_registry.len()),
             }),
             entity_types,
@@ -757,9 +777,20 @@ impl ChunkEncoder {
             .filter(|t| **t >= 0)
             .copied()
     }
-    /// The update tag of the block entity at `pos` in block `state`
-    /// (`getUpdateTag`): a mod's from its hook, a vanilla one's from
-    /// [`entity_tag`].
+    /// Native entities must match the state's declared type, for chunks and updates alike.
+    pub fn entity_matches(&self, state: u32, entity: Option<&BlockEntity>) -> bool {
+        match self
+            .mod_entities
+            .get(state as usize)
+            .and_then(Option::as_deref)
+        {
+            Some(kind) => matches!(entity, Some(BlockEntity::Mod(m)) if m.id() == kind),
+            None => !matches!(entity, Some(BlockEntity::Mod(_))),
+        }
+    }
+
+    /// The update tag of the block entity at `pos` (`getUpdateTag`): a
+    /// mod's from its hook, a vanilla one's from [`entity_tag`].
     pub fn update_tag(
         &self,
         pos: (i32, i32, i32),
@@ -772,6 +803,42 @@ impl ChunkEncoder {
                 .and_then(|tag| tag([pos.0, pos.1, pos.2], m))
                 .map(Tag::Compound),
             _ => entity_tag(entity, self.trial_active.contains(&state)),
+        }
+    }
+    /// The tag of a block change at `pos`: [`Self::update_tag`] with a mod's
+    /// queued one-shot fields taken and put over it. It takes them, so build it
+    /// once, with viewers, and send it to them all; a chunk or a single player's
+    /// resend uses `update_tag`, which leaves them for such a change. Fields that would take the
+    /// tag past what a client reads (`buf::check_network_nbt`) are dropped, and the plain
+    /// `update_tag` goes instead: no viewer is disconnected or misses the change.
+    pub fn change_tag(
+        &self,
+        pos: (i32, i32, i32),
+        state: u32,
+        entity: &BlockEntity,
+    ) -> Option<Tag> {
+        let tag = self.update_tag(pos, state, entity);
+        let BlockEntity::Mod(m) = entity else {
+            return tag;
+        };
+        let Some(fields) = m.take_client_update_fields() else {
+            return tag;
+        };
+        let mut merged = match &tag {
+            Some(Tag::Compound(tag)) => tag.clone(),
+            _ => Compound::new(),
+        };
+        merged.extend(fields);
+        let merged = Tag::Compound(merged);
+        match check_network_nbt(&merged) {
+            Ok(()) => Some(merged),
+            Err(e) => {
+                log::warn!(
+                    "[lan] {} at {pos:?}: one-shot client update fields dropped: {e}",
+                    m.id()
+                );
+                tag
+            }
         }
     }
     /// Whether the state holds a fluid (water, lava, or a waterlogged block).
@@ -1158,9 +1225,7 @@ impl ChunkEncoder {
                 let wy = chunk.min_y() + (i as i32) * 16 + y;
                 let pos = (chunk.x * 16 + x, wy, chunk.z * 16 + z);
                 let entity = block_entities.get(&pos);
-                // A mod block whose mod made no block entity has none to send.
-                if self.mod_entities[state as usize] && !matches!(entity, Some(BlockEntity::Mod(_)))
-                {
+                if !self.entity_matches(state, entity) {
                     continue;
                 }
                 entity_infos.push(BlockEntityInfo {
@@ -1556,8 +1621,8 @@ fn write_light(lights: &[(usize, SectionLight)], sky: bool, w: &mut Writer) {
 mod tests {
     use super::*;
     use crate::chunk::{MIN_Y, SECTIONS};
+    use horizon_core::nbt::JavaString;
     use horizon_protocol::packets::play;
-    use horizon_world::nbt::JavaString;
 
     #[test]
     fn block_entity_blocks_are_recognised() {
@@ -1643,62 +1708,57 @@ mod tests {
         assert_eq!(sent(&chunk), scan(&chunk));
     }
 
-    /// A mod block's block entity goes out with its block's own type and the
-    /// tag its mod gives; a mod block whose mod made none is left out.
-    #[test]
-    fn a_loaded_chunks_update_tag_consumes_only_transient_client_fields() {
-        let builtin = Builtin::parse(
-            r#"{"minecraft:block_entity_type":{"entries":{"test:machine":{"protocol_id":49}}}}"#,
-        )
-        .unwrap();
-        let states = ["minecraft:air", "test:machine"].map(|n| (Arc::<str>::from(n), false));
-        let mut encoder = ChunkEncoder::new(states, &builtin, &[], &[]);
-        encoder.mod_update_tag = Some(|_, entity| {
-            let mut tag = entity.nbt.clone();
-            tag.extend(entity.take_client_update_fields());
-            Some(tag)
-        });
-        let mut chunk = Chunk::empty(0, 0);
-        let pos = (1, MIN_Y + 2, 3);
-        chunk.set(pos.0, pos.1, pos.2, 1);
-        let mut machine = ModBlockEntity::new(crate::containers::ModBlockEntityFields {
-            id: "test:machine".into(),
-            nbt: Compound::from([("progress".into(), Tag::Int(7))]),
-            ..Default::default()
-        });
-        let revision = machine.revision();
-        let effects = Tag::List(vec![Tag::Int(23)]);
-        machine.set_client_update_fields(Compound::from([("effects".into(), effects.clone())]));
-        let entities = HashMap::from([(pos, BlockEntity::Mod(Box::new(machine)))]);
-        let saved = crate::save::encode_block_entity(pos, &entities[&pos], "test:machine");
-        let first = encoder.encode(&chunk, &entities).chunk.block_entities;
-        assert_eq!(first[0].tag.get("effects"), Some(&effects));
-        assert_eq!(first[0].tag.get("progress"), Some(&Tag::Int(7)));
-        let second = encoder.encode(&chunk, &entities).chunk.block_entities;
-        assert!(second[0].tag.get("effects").is_none());
-        assert_eq!(second[0].tag.get("progress"), Some(&Tag::Int(7)));
-        assert_eq!(
-            crate::save::encode_block_entity(pos, &entities[&pos], "test:machine"),
-            saved
-        );
-        let BlockEntity::Mod(machine) = &entities[&pos] else {
-            unreachable!();
-        };
-        assert_eq!(machine.revision(), revision);
-    }
+    /// Shared types are resolved per state; undeclared and stale entities stay off the wire.
 
     #[test]
-    fn mod_block_entities_carry_their_blocks_type_and_the_mods_tag() {
+    fn shared_block_entity_types_supply_chunks_updates_and_detached_encoders() {
+        use crate::block_entity_types::BlockEntityTypes;
         let builtin = Builtin::parse(
             r#"{"minecraft:block_entity_type": {"entries": {
                 "minecraft:chest": {"protocol_id": 1},
+                "minecraft:sign": {"protocol_id": 7},
                 "test:machine": {"protocol_id": 49},
                 "test:casing": {"protocol_id": 50}}}}"#,
         )
         .unwrap();
-        let states =
-            ["minecraft:air", "test:machine", "test:casing"].map(|n| (Arc::<str>::from(n), false));
-        let mut encoder = ChunkEncoder::new(states, &builtin, &[], &[]);
+        let types = BlockEntityTypes::new(
+            [
+                ("test:press".into(), "test:machine".into()),
+                ("test:mill".into(), "test:machine".into()),
+            ]
+            .into(),
+            builtin
+                .get("minecraft:block_entity_type")
+                .unwrap()
+                .names
+                .clone(),
+        );
+        let states = [
+            "minecraft:air",
+            "test:press",
+            "test:mill",
+            "test:press",
+            "test:casing",
+        ]
+        .map(|n| {
+            (
+                Arc::<str>::from(n),
+                false,
+                (n == "test:press").then_some(crate::blocks::SignForm {
+                    hanging: false,
+                    wall: false,
+                }),
+            )
+        });
+        let mut encoder = ChunkEncoder::with_types(states, &builtin, &[], &[], Some(&types));
+        for state in [1, 2, 3] {
+            assert_eq!(encoder.entity_type(state), Some(49));
+        }
+        assert_eq!(
+            encoder.entity_type(4),
+            None,
+            "no implicit type=block fallback"
+        );
         encoder.mod_update_tag = Some(|pos, entity| {
             let mut tag = Compound::new();
             tag.insert(
@@ -1710,25 +1770,56 @@ mod tests {
         });
         let mut chunk = Chunk::empty(0, 0);
         chunk.set(1, MIN_Y + 2, 3, 1);
-        chunk.set(5, MIN_Y + 2, 5, 2);
-        let mut machine = ModBlockEntity::new(crate::containers::ModBlockEntityFields {
-            id: "test:machine".into(),
-            ..Default::default()
-        });
+        chunk.set(5, MIN_Y + 2, 5, 4);
+        chunk.set(2, MIN_Y + 2, 3, 2);
+        chunk.set(3, MIN_Y + 2, 3, 3);
+        chunk.set(4, MIN_Y + 2, 3, 1); // declared, but no instance
+        let mut machine = ModBlockEntity::new("test:machine".into(), Default::default());
         machine.nbt.insert("active".into(), Tag::Byte(1));
         machine.nbt.insert("recipe".into(), Tag::Int(7));
-        let block_entities =
-            HashMap::from([((1, MIN_Y + 2, 3), BlockEntity::Mod(Box::new(machine)))]);
+        let mut block_entities = HashMap::from([
+            (
+                (1, MIN_Y + 2, 3),
+                BlockEntity::Mod(Box::new(machine.clone())),
+            ),
+            ((2, MIN_Y + 2, 3), BlockEntity::Mod(Box::new(machine))),
+            (
+                (3, MIN_Y + 2, 3),
+                BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                    "test:wrong".into(),
+                    Default::default(),
+                ))),
+            ),
+        ]);
+        assert!(!encoder.entity_matches(1, None));
+        assert!(!encoder.entity_matches(3, block_entities.get(&(3, MIN_Y + 2, 3))));
         let infos = encoder.encode(&chunk, &block_entities).chunk.block_entities;
-        assert_eq!(infos.len(), 1, "the casing has no block entity");
-        assert_eq!((infos[0].kind, infos[0].y), (49, (MIN_Y + 2) as i16));
-        let mut expected = Compound::new();
-        expected.insert("active".into(), Tag::Byte(1));
-        expected.insert("x".into(), Tag::Int(1));
-        assert_eq!(infos[0].tag, Tag::Compound(expected));
+        assert_eq!(infos.len(), 2, "only the two matching entities are sent");
+        for info in &infos {
+            assert_eq!((info.kind, info.y), (49, (MIN_Y + 2) as i16));
+            let mut expected = Compound::new();
+            expected.insert("active".into(), Tag::Byte(1));
+            expected.insert("x".into(), Tag::Int(i32::from(info.packed_xz as u8 >> 4)));
+            assert_eq!(info.tag, Tag::Compound(expected));
+        }
         // As does an encoder for saved chunks past the view distance (`lan::far`).
         let far = encoder.detached().encode(&chunk, &block_entities);
-        assert_eq!(far.chunk.block_entities[0].tag, infos[0].tag);
+        assert_eq!(far.chunk.block_entities.len(), 2);
+        for info in far.chunk.block_entities {
+            let original = infos
+                .iter()
+                .find(|i| i.packed_xz == info.packed_xz)
+                .unwrap();
+            assert_eq!(info.tag, original.tag);
+        }
+        // The alternate property state of press uses the same type.
+        block_entities.insert(
+            (3, MIN_Y + 2, 3),
+            block_entities[&(1, MIN_Y + 2, 3)].clone(),
+        );
+        let all = encoder.encode(&chunk, &block_entities).chunk.block_entities;
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|e| e.kind == 49));
         // An empty tag is not sent either (BlockEntityInfo.create).
         encoder.mod_update_tag = Some(|_, _| Some(Compound::new()));
         let infos = encoder.encode(&chunk, &block_entities).chunk.block_entities;
@@ -1737,6 +1828,84 @@ mod tests {
         encoder.mod_update_tag = None;
         let infos = encoder.encode(&chunk, &block_entities).chunk.block_entities;
         assert_eq!(infos[0].tag, Tag::End);
+    }
+
+    /// A chunk leaves queued one-shot fields alone; a change's tag takes them, once.
+    #[test]
+    fn only_a_changes_tag_takes_queued_client_update_fields() {
+        use crate::block_entity_types::BlockEntityTypes;
+        let builtin = Builtin::parse(
+            r#"{"minecraft:block_entity_type":{"entries":{"test:machine":{"protocol_id":49}}}}"#,
+        )
+        .unwrap();
+        let types = BlockEntityTypes::new(
+            [("test:machine".into(), "test:machine".into())].into(),
+            builtin
+                .get("minecraft:block_entity_type")
+                .unwrap()
+                .names
+                .clone(),
+        );
+        let states = ["minecraft:air", "test:machine"].map(|n| (Arc::<str>::from(n), false, None));
+        let mut encoder = ChunkEncoder::with_types(states, &builtin, &[], &[], Some(&types));
+        encoder.mod_update_tag =
+            Some(|_, entity| (!entity.nbt.is_empty()).then(|| entity.nbt.clone()));
+        let mut chunk = Chunk::empty(0, 0);
+        let pos = (1, MIN_Y + 2, 3);
+        chunk.set(pos.0, pos.1, pos.2, 1);
+        let progress = (JavaString::from("progress"), Tag::Int(7));
+        let effect = (JavaString::from("effect"), Tag::Int(23));
+        let machine = ModBlockEntity::new(
+            "test:machine".into(),
+            crate::containers::ModBlockEntityFields {
+                nbt: Compound::from([progress.clone()]),
+                ..Default::default()
+            },
+        );
+        machine.set_client_update_fields(Compound::from([effect.clone()]));
+        let entities = HashMap::from([(pos, BlockEntity::Mod(Box::new(machine)))]);
+        let plain = Tag::Compound(Compound::from([progress.clone()]));
+        for _ in 0..2 {
+            let sent = encoder.encode(&chunk, &entities).chunk.block_entities;
+            assert_eq!(sent[0].tag, plain);
+        }
+        assert_eq!(
+            encoder.update_tag(pos, 0, &entities[&pos]),
+            Some(plain.clone())
+        );
+        assert_eq!(
+            encoder.change_tag(pos, 0, &entities[&pos]),
+            Some(Tag::Compound(Compound::from([progress, effect.clone()])))
+        );
+        // Fields a client can't read (one byte past vanilla's 2 MiB network quota, or one tag past
+        // the 262,144 it allows) are dropped: the change still sends the plain tag, nothing waits.
+        let BlockEntity::Mod(queued) = &entities[&pos] else {
+            unreachable!()
+        };
+        for unreadable in [
+            Tag::ByteArray(vec![0; 2_097_153]),
+            Tag::List(vec![Tag::Byte(0); 262_145]),
+        ] {
+            queued.set_client_update_fields(Compound::from([(
+                JavaString::from("effect"),
+                unreadable,
+            )]));
+            assert_eq!(
+                encoder.change_tag(pos, 0, &entities[&pos]),
+                Some(plain.clone())
+            );
+            assert!(!queued.has_client_update_fields());
+        }
+        assert_eq!(encoder.change_tag(pos, 0, &entities[&pos]), Some(plain));
+        // A block entity whose mod sends no tag still sends its fields, alone.
+        let silent = ModBlockEntity::new("test:machine".into(), Default::default());
+        silent.set_client_update_fields(Compound::from([effect.clone()]));
+        let silent = BlockEntity::Mod(Box::new(silent));
+        assert_eq!(
+            encoder.change_tag(pos, 0, &silent),
+            Some(Tag::Compound(Compound::from([effect])))
+        );
+        assert_eq!(encoder.change_tag(pos, 0, &silent), None);
     }
 
     /// A mod's sign is of vanilla's block entity type, as its block is on
@@ -1880,13 +2049,15 @@ mod tests {
                 data: Vec::new()
             }
         );
+        // An index past the table (a placeholder for a saved biome the world lacks) is sent as
+        // plains, network id 1 here, not as whichever biome sorts first.
         section.biomes =
             horizon_core::paletted::PalettedContainer::new(section.biomes.strategy(), 99);
         assert_eq!(
             encoder.coder.biomes(&section),
             Paletted {
                 bits: 0,
-                palette: vec![0],
+                palette: vec![1],
                 data: Vec::new()
             }
         );
@@ -2412,7 +2583,7 @@ mod tests {
         let lone = entity_tag(&BlockEntity::CreakingHeart(Box::default()), false);
         assert_eq!(
             lone,
-            Some(Tag::Compound(horizon_world::nbt::Compound::new()))
+            Some(Tag::Compound(horizon_core::nbt::Compound::new()))
         );
     }
 

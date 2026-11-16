@@ -1,24 +1,5 @@
 use crate::support::common::tag;
 use horizon_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
-use horizon_world::{
-    DATA_VERSION,
-    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
-    block_support::{BlockSupportRegistry, SupportType},
-    block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
-    fluid::{FluidKind, FluidStateTable},
-    heightmap::HeightmapType,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{
-        anchor::WorldGenerationContext,
-        biome::BiomeId,
-        biome_predicate::BiomePredicateBindings,
-        feature::FeatureWorld,
-        placement::{PlacementContext, PlacementQueryError},
-        state_provider::{StateProviderBindings, StateProviderCatalog},
-        tags::TagDefinitions,
-    },
-};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -26,6 +7,27 @@ use std::{
     io::{self, Write},
     path::Path,
     sync::Arc,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
+        block_support::{BlockSupportRegistry, SupportType},
+        block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
+        fluid::{FluidKind, FluidStateTable},
+        heightmap::HeightmapType,
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            anchor::WorldGenerationContext,
+            biome::BiomeId,
+            biome_predicate::BiomePredicateBindings,
+            feature::FeatureWorld,
+            placement::{PlacementContext, PlacementQueryError},
+            state_provider::{StateProviderBindings, StateProviderCatalog},
+            tags::TagDefinitions,
+        },
+    },
 };
 struct World<'a, W> {
     support: &'a BlockSupportRegistry<'a>,
@@ -354,17 +356,17 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         definitions.build(|name, _| biome_names.contains_key(name).then(|| name.to_owned()))?;
     assert!(biome_tags.missing.is_empty());
     let biomes = Arc::new(BiomePredicateBindings::new(&biome_names, &biome_tags.tags)?);
-    let collision_tag = horizon_world::nbt::read_named(
+    let collision_tag = horizon_core::nbt::read_named(
         &fs::read(dir.join("cached-collision.nbt"))?,
-        horizon_world::nbt::Limits::default(),
+        horizon_core::nbt::Limits::default(),
     )?
     .0
     .tag;
     let collision =
         horizon_world::collision::CachedCollisionRegistry::from_nbt(&collision_tag, &registry)?;
-    let properties_tag = horizon_world::nbt::read_named(
+    let properties_tag = horizon_core::nbt::read_named(
         &fs::read(dir.join("block-properties.nbt"))?,
-        horizon_world::nbt::Limits::default(),
+        horizon_core::nbt::Limits::default(),
     )?
     .0
     .tag;
@@ -372,9 +374,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &properties_tag,
         &collision,
     )?;
-    let support_tag = horizon_world::nbt::read_named(
+    let support_tag = horizon_core::nbt::read_named(
         &fs::read(dir.join("cached-support.nbt"))?,
-        horizon_world::nbt::Limits::default(),
+        horizon_core::nbt::Limits::default(),
     )?
     .0
     .tag;

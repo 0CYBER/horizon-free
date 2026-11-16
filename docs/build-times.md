@@ -7,7 +7,7 @@ It only measures. It does not change the build.
 
 ## What it measures
 
-Every build is the one a developer runs, `cargo build --locked -p horizon-client --profile <profile> --timings`
+Every build is the one a developer runs, `cargo build --locked -p horizon-game --profile <profile> --timings`
 (the game and `horizon-ctl`), in a target folder of its own.
 
 - **Cold:** a build from an empty target folder, for the `dev` and `fast` profiles. Its timings page gives the

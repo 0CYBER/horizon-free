@@ -61,3 +61,76 @@ fn recipes_place_in_a_mod_crafting_grid_as_in_the_table() {
         assert_eq!(slots[0], stack("stick", 4));
     });
 }
+
+/// `menu_slot_rules` on a mod crafting menu: an ask about a grid slot names `Grid` and indexes
+/// inside the grid, the result's names `Result`, and either context reads a grid slot and the
+/// result. The parts' copy of the slots is built once for the asks of a plan, and again only
+/// after the menu changes.
+#[test]
+fn slot_rules_read_a_mod_grid_slot_and_the_result() {
+    use mod_api::MenuContainer::{Grid, Result};
+    type Asked = (
+        usize,
+        mod_api::MenuContainer,
+        Option<(String, u32)>,
+        Option<(String, u32)>,
+    );
+    #[derive(Default)]
+    struct GridRules(std::cell::RefCell<Vec<Asked>>, std::cell::Cell<u32>);
+    impl SlotRules for GridRules {
+        fn listens(&self, menu: &str) -> bool {
+            menu == "test:station"
+        }
+        fn rule(
+            &self,
+            _: &str,
+            slot: usize,
+            _: &ItemStack,
+            context: SlotContext<'_>,
+            _: &mut bool,
+            _: &mut u32,
+        ) {
+            context.snapshot.unwrap().get_or_init(|| {
+                self.1.set(self.1.get() + 1);
+                mod_api::MenuSlotContext::default()
+            });
+            let read = |container, index| {
+                let stack = context.slot(container, index)?;
+                Some((stack.item.to_string(), stack.count))
+            };
+            let asked = (slot, context.container, read(Grid, 0), read(Result, 0));
+            self.0.borrow_mut().push(asked);
+        }
+    }
+    with_menu(Kind::Crafting, |env, _| {
+        let rules = GridRules::default();
+        let env = &Env {
+            slot_rules: Some(&rules),
+            ..*env
+        };
+        let station = &mut Menu::new(mod_crafting_table());
+        station.set_slot(env, 1, stack("oak_planks", 1));
+        station.set_slot(env, 4, stack("oak_planks", 1));
+        let planks = stack("oak_planks", 1).unwrap();
+        // Menu slot 2 is grid slot 1; menu slot 0 is the result.
+        station.slot_rules(env, 2, &planks, true, CONTAINER_MAX);
+        station.slot_rules(env, 0, &planks, true, CONTAINER_MAX);
+        let planks = Some(("minecraft:oak_planks".to_owned(), 1));
+        let sticks = Some(("minecraft:stick".to_owned(), 4));
+        assert_eq!(
+            *rules.0.borrow(),
+            [
+                (1, Grid, planks.clone(), sticks.clone()),
+                (0, Result, planks.clone(), sticks.clone()),
+            ]
+        );
+        assert_eq!(rules.1.get(), 1);
+        station.set_slot(env, 1, None);
+        station.slot_rules(env, 5, &stack("stick", 1).unwrap(), true, CONTAINER_MAX);
+        assert_eq!(
+            rules.0.borrow()[2],
+            (4, Grid, None, Some(("minecraft:oak_button".to_owned(), 1)))
+        );
+        assert_eq!(rules.1.get(), 2);
+    });
+}

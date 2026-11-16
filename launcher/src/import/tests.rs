@@ -46,6 +46,8 @@ fn maker(root: &Path) -> impl Fn(&str) -> Result<Instance, String> + '_ {
             icon: None,
             group: None,
             version: None,
+            channel: Default::default(),
+            native_profile: crate::native_mods::Profile::Optimized,
             played: Duration::ZERO,
             last_played: None,
             launch: Default::default(),
@@ -68,7 +70,7 @@ fn fake_program() -> Vec<u8> {
         b"ELF"
     };
     let mut bytes = magic.to_vec();
-    bytes.extend_from_slice(&horizon_mods::api_level::MARK);
+    bytes.extend_from_slice(&horizon_platform::mod_package::game_identity::MARK);
     bytes
 }
 
@@ -102,6 +104,17 @@ fn says_what_a_dropped_file_is() {
             (p, Ok(Dropped::Modpack))
         },
         {
+            let p = dir.join("prism.zip");
+            zip_file(
+                &p,
+                &[
+                    ("Example/mmc-pack.json", b"{}"),
+                    ("Example/.minecraft/mods/example.jar", b""),
+                ],
+            );
+            (p, Ok(Dropped::Modpack))
+        },
+        {
             let p = dir.join("rp.zip");
             zip_file(&p, &[("pack.mcmeta", b"{}"), ("assets/a.png", b"")]);
             (p, Ok(Dropped::Pack(packs::Kind::Resource)))
@@ -124,7 +137,7 @@ fn says_what_a_dropped_file_is() {
         },
         {
             let p = dir.join("glow.hshader");
-            put(&p, b"PK");
+            zip_file(&p, &[("horizon-shaders.toml", b"")]);
             (p, Ok(Dropped::Pack(packs::Kind::Shader)))
         },
         {
@@ -192,6 +205,26 @@ fn says_what_a_dropped_file_is() {
         assert_eq!(what(&file).map_err(|_| ()), want, "{}", file.display());
     }
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_dropped_zip_reports_the_central_directory_limit() {
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("manifest.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"{}").unwrap();
+    let mut bytes = zip.finish().unwrap().into_inner();
+    // A ZIP32 end record with no comment is 22 bytes. Its directory size starts at byte 12.
+    let size = bytes.len() - 22 + 12;
+    bytes[size..size + 4].copy_from_slice(&(128_u32 << 20).to_le_bytes());
+
+    let scratch = tempfile::tempdir().unwrap();
+    for name in ["oversized.zip", "oversized.hshader"] {
+        let path = scratch.path().join(name);
+        fs::write(&path, &bytes).unwrap();
+        let error = what(&path).unwrap_err();
+        assert!(error.contains("ZIP central directory size"), "{error}");
+    }
 }
 
 #[test]

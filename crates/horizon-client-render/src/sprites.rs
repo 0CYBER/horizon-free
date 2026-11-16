@@ -1,7 +1,12 @@
 //! Shared nearest-sampled sprite array for block and item textures.
-use crate::Result;
+use crate::{
+    Result,
+    resource_source::{ResourceRoot, ResourceSource},
+};
 use horizon_assets::animation::{AnimationClip, AnimationMetadata};
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+#[cfg(test)]
+use std::path::Path;
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 pub struct SpriteAnimation {
@@ -100,6 +105,7 @@ struct StillKey {
 
 #[derive(Default)]
 pub struct Sprites {
+    source: ResourceSource,
     /// Edge length of every array layer and the layers' current frames, set
     /// by [`Sprites::finish`].
     pub size: u32,
@@ -213,10 +219,18 @@ pub(crate) fn resample(frame: &[u8], from: u32, to: u32) -> Vec<u8> {
     out
 }
 impl Sprites {
+    /// A sprite atlas retains the source used for this resource load.
+    pub fn new(source: ResourceSource) -> Self {
+        Self {
+            source,
+            ..Self::default()
+        }
+    }
     /// Sprites that reuse textures decoded by an earlier launch, kept in a
     /// cache file in `root`.
-    pub fn with_disk_cache(root: &Path) -> Self {
+    pub fn with_disk_cache(root: &ResourceRoot) -> Self {
         Self {
+            source: root.source().clone(),
             disk: crate::sprite_cache::SpriteCache::open(root),
             ..Self::default()
         }
@@ -265,6 +279,7 @@ impl Sprites {
     /// may ship 32x, 64x... textures, like vanilla's stitched atlas), rounded
     /// up to a power of two and limited to the texture budget (`set_texture_budget`). Smaller
     /// textures are scaled up by whole pixels, so UVs stay per layer.
+    #[horizon_mod_api_macros::replaceable]
     pub fn finish(&mut self) {
         self.lay_out(true);
     }
@@ -352,20 +367,50 @@ impl Sprites {
     }
     /// [`Sprites::insert`] without the missing-texture fallback: a file that doesn't load is an
     /// error, and nothing is added.
-    pub fn try_insert(&mut self, root: &Path, name: &str) -> Result<u32> {
+    pub fn try_insert(&mut self, name: &str) -> Result<u32> {
         match self.layers.get(name) {
             Some(layer) => Ok(*layer),
-            None => self.load(root, name),
+            None => self.load(name, None),
         }
+    }
+    /// Load a sprite id or resource file only when its PNG fits the byte limit,
+    /// including cached layers. The checked bytes are reused when decoding.
+    pub fn try_insert_limited(&mut self, name: &str, max: u64) -> Result<u32> {
+        let bytes = self.limited_png(name, max)?;
+        match self.layers.get(name) {
+            Some(layer) => Ok(*layer),
+            None => self.load(name, Some(&bytes)),
+        }
+    }
+    fn limited_png(&self, name: &str, max: u64) -> Result<Vec<u8>> {
+        let path = if name.contains(':') {
+            crate::atlas_sources::texture_resource(name, "textures")
+        } else {
+            name.to_owned()
+        };
+        Ok(self.source.read_limited(&path, max)?)
+    }
+    /// Like `insert`, but refuses unreadable or oversized PNG data before decoding.
+    pub fn insert_limited(&mut self, name: &str, max: u64) -> Result<u32> {
+        let bytes = self.limited_png(name, max)?;
+        if let Some(layer) = self.layers.get(name) {
+            return Ok(*layer);
+        }
+        let loaded = self.load(name, Some(&bytes));
+        self.or_missing(name, loaded)
     }
     /// The layer of a texture, added on first use. A texture that is missing
     /// or does not load (a resource pack's filter or a broken file) becomes
     /// vanilla's missing texture, as in a stitched atlas.
-    pub fn insert(&mut self, root: &Path, name: &str) -> Result<u32> {
+    pub fn insert(&mut self, name: &str) -> Result<u32> {
         if let Some(layer) = self.layers.get(name) {
             return Ok(*layer);
         }
-        match self.load(root, name) {
+        let loaded = self.load(name, None);
+        self.or_missing(name, loaded)
+    }
+    fn or_missing(&mut self, name: &str, loaded: Result<u32>) -> Result<u32> {
+        match loaded {
             Ok(layer) => Ok(layer),
             Err(e) => {
                 // `MissingTextureAtlasSprite.getLocation()`: vanilla models name the
@@ -402,7 +447,7 @@ impl Sprites {
     /// them in its own order, so the layers are the same as without it. What is already a
     /// layer or in the disk cache is skipped; what fails to decode is left for the insert,
     /// which reports it.
-    pub fn prefetch<'a>(&mut self, root: &Path, names: impl IntoIterator<Item = &'a str>) {
+    pub fn prefetch<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) {
         let names: Vec<&str> = names
             .into_iter()
             .filter(|name| {
@@ -415,9 +460,9 @@ impl Sprites {
             .collect();
         let decoded = crate::par::par_map(&names, |name| {
             if name.contains(':') {
-                Self::decode(root, name).ok()
+                Self::decode(&self.source, name).ok()
             } else {
-                Self::decode_file(&root.join(name), name).ok()
+                Self::decode_file(&self.source, name, name).ok()
             }
         });
         for (name, decoded) in names.into_iter().zip(decoded) {
@@ -426,10 +471,10 @@ impl Sprites {
             }
         }
     }
-    fn load(&mut self, root: &Path, name: &str) -> Result<u32> {
+    fn load(&mut self, name: &str, png: Option<&[u8]>) -> Result<u32> {
         // Custom Item Textures' files are outside `textures/`, which the disk cache's
         // fingerprint covers: like `insert_file`'s, they skip it.
-        let cit = name.starts_with("horizon_cit:");
+        let cit = name.starts_with("horizon_cit:") || !name.contains(':');
         let disk = self.disk.as_mut().filter(|_| !cit);
         let cached = disk.as_ref().and_then(|d| d.get(name)).cloned();
         let decoded = match cached {
@@ -437,7 +482,17 @@ impl Sprites {
             None => {
                 let decoded = match self.ready.remove(name) {
                     Some(decoded) => decoded,
-                    None => Self::decode(root, name)?,
+                    None => match png {
+                        Some(bytes) => {
+                            let path = if name.contains(':') {
+                                crate::atlas_sources::texture_resource(name, "textures")
+                            } else {
+                                name.to_owned()
+                            };
+                            Self::decode_file_data(&self.source, &path, name, Some(bytes))?
+                        }
+                        None => Self::decode(&self.source, name)?,
+                    },
                 };
                 if let Some(disk) = disk {
                     disk.insert(name, decoded.clone());
@@ -445,21 +500,21 @@ impl Sprites {
                 decoded
             }
         };
-        self.register(root, name, decoded)
+        self.register(name, decoded)
     }
     /// The layer of a texture outside `textures/` (an OptiFine pack's connected-texture tile),
     /// named by its resource path and added on first use. Unlike [`Sprites::insert`], a texture
     /// that does not load is an error: the caller drops what needed it. Such files bypass the
     /// disk cache, whose fingerprint covers only `textures/`.
-    pub fn insert_file(&mut self, root: &Path, resource: &str) -> Result<u32> {
+    pub fn insert_file(&mut self, resource: &str) -> Result<u32> {
         if let Some(layer) = self.layers.get(resource) {
             return Ok(*layer);
         }
         let decoded = match self.ready.remove(resource) {
             Some(decoded) => decoded,
-            None => Self::decode_file(&root.join(resource), resource)?,
+            None => Self::decode_file(&self.source, resource, resource)?,
         };
-        self.register(root, resource, decoded)
+        self.register(resource, decoded)
     }
     /// The tiles of the texture `name` (`ns:path`) cut into a `columns` x `rows` grid, row by
     /// row from the top left: a Fusion connecting texture's sheet. Each tile is its own layer
@@ -469,15 +524,12 @@ impl Sprites {
     /// The sheet's own layer, if models already show it, shows its first tile from then on.
     pub fn insert_tiles(
         &mut self,
-        root: &Path,
         name: &str,
         (columns, rows): (u32, u32),
         per_tile: bool,
     ) -> Result<Vec<Option<u32>>> {
-        let path = crate::atlas_sources::texture_path(root, name, "textures");
-        let metadata = match horizon_core::prepared_files::read_to_string(
-            &path.with_extension("png.mcmeta"),
-        ) {
+        let path = crate::atlas_sources::texture_resource(name, "textures");
+        let metadata = match self.source.read_to_string(&format!("{path}.mcmeta")) {
             Ok(text) => Some(crate::packs::first_json::<
                 BTreeMap<String, Box<serde_json::value::RawValue>>,
             >(text.as_bytes())?),
@@ -499,7 +551,7 @@ impl Sprites {
             .as_ref()
             .and_then(|t| t["alpha_cutoff_bias"].as_f64())
             .unwrap_or(0.0) as f32;
-        let (width, height, pixels) = read_rgba(&path)?;
+        let (width, height, pixels) = read_rgba(&self.source, &path)?;
         let side = width / columns.max(1);
         // How far down the next frame of a tile is, and the next row of tiles.
         let (frame_step, row_step) = match per_tile {
@@ -548,7 +600,7 @@ impl Sprites {
                     frames,
                 };
                 let tile_name = format!("fusion/{}#{tile}", name.replace(':', "/"));
-                self.register(root, &tile_name, decoded).map(Some)
+                self.register(&tile_name, decoded).map(Some)
             })
             .collect::<Result<Vec<_>>>()?;
         // Where Fusion doesn't draw the sheet (items, other models), the lone tile rather than
@@ -577,18 +629,28 @@ impl Sprites {
         }
     }
     /// Read and decode one texture and its `.mcmeta`.
-    fn decode(root: &Path, name: &str) -> Result<crate::sprite_cache::Decoded> {
+    fn decode(source: &ResourceSource, name: &str) -> Result<crate::sprite_cache::Decoded> {
         if !name.contains(':') {
             return Err("invalid sprite identifier".into());
         }
-        // `texture_path`, so Custom Item Textures' `horizon_cit:` sprites find their file.
-        let path = crate::atlas_sources::texture_path(root, name, "textures");
-        Self::decode_file(&path, name)
+        // `texture_resource`, so Custom Item Textures' `horizon_cit:` sprites find their file.
+        let path = crate::atlas_sources::texture_resource(name, "textures");
+        Self::decode_file(source, &path, name)
     }
-    fn decode_file(path: &Path, name: &str) -> Result<crate::sprite_cache::Decoded> {
-        let metadata = match horizon_core::prepared_files::read_to_string(
-            &path.with_extension("png.mcmeta"),
-        ) {
+    fn decode_file(
+        source: &ResourceSource,
+        path: &str,
+        name: &str,
+    ) -> Result<crate::sprite_cache::Decoded> {
+        Self::decode_file_data(source, path, name, None)
+    }
+    fn decode_file_data(
+        source: &ResourceSource,
+        path: &str,
+        name: &str,
+        png: Option<&[u8]>,
+    ) -> Result<crate::sprite_cache::Decoded> {
+        let metadata = match source.read_to_string(&format!("{path}.mcmeta")) {
             Ok(text) => Some(crate::packs::first_json::<
                 BTreeMap<String, Box<serde_json::value::RawValue>>,
             >(text.as_bytes())?),
@@ -603,7 +665,10 @@ impl Sprites {
             .as_deref()
             .map(AnimationMetadata::from_json)
             .transpose()?;
-        let (png_width, png_height, pixels) = read_rgba(path)?;
+        let (png_width, png_height, pixels) = match png {
+            Some(bytes) => decode_rgba(bytes)?,
+            None => read_rgba(source, path)?,
+        };
         let (width, height) = if let Some(animation) = &animation {
             let [width, height] =
                 animation.frame_size(i32::try_from(png_width)?, i32::try_from(png_height)?);
@@ -658,12 +723,8 @@ impl Sprites {
         })
     }
     /// Give a decoded texture its layer (or the one an identical still has).
-    fn register(
-        &mut self,
-        root: &Path,
-        name: &str,
-        decoded: crate::sprite_cache::Decoded,
-    ) -> Result<u32> {
+    #[horizon_mod_api_macros::replaceable]
+    fn register(&mut self, name: &str, decoded: crate::sprite_cache::Decoded) -> Result<u32> {
         let crate::sprite_cache::Decoded {
             side,
             frames,
@@ -682,11 +743,12 @@ impl Sprites {
         let layer = u32::try_from(self.native.len())?;
         let pbr = match name.split_once(':') {
             Some(_) if labpbr_maps() => {
-                let path = crate::atlas_sources::texture_path(root, name, "textures");
-                ["_n", "_s"].map(|suffix| pbr_map(&path, suffix, count, animation.as_ref()))
+                let path = crate::atlas_sources::texture_resource(name, "textures");
+                ["_n", "_s"]
+                    .map(|suffix| pbr_map(&self.source, &path, suffix, count, animation.as_ref()))
             }
             None if labpbr_maps() && !name.starts_with("fusion/") => ["_n", "_s"]
-                .map(|suffix| pbr_map(&root.join(name), suffix, count, animation.as_ref())),
+                .map(|suffix| pbr_map(&self.source, name, suffix, count, animation.as_ref())),
             _ => [None, None],
         };
         let settings = crate::mipmap::Settings {
@@ -755,8 +817,10 @@ impl Sprites {
 /// A PNG's width, height and pixels as RGBA. From the prepared data file
 /// when it holds the texture: no file opened per texture, nor for its absent
 /// LabPBR maps.
-pub(crate) fn read_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
-    let bytes = horizon_core::prepared_files::read(path)?;
+fn read_rgba(source: &ResourceSource, path: &str) -> Result<(u32, u32, Vec<u8>)> {
+    decode_rgba(&source.read(path)?)
+}
+pub(crate) fn decode_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.ignore_checksums(true);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -785,15 +849,16 @@ pub(crate) fn read_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
 
 /// Companion frames use the colour image's grid; a single-frame map stays static.
 fn pbr_map(
-    path: &Path,
+    source: &ResourceSource,
+    path: &str,
     suffix: &str,
     count: u32,
     animation: Option<&AnimationMetadata>,
 ) -> Option<(u32, Vec<Vec<u8>>)> {
-    let stem = path.file_stem()?.to_str()?;
-    let map = path.with_file_name(format!("{stem}{suffix}.png"));
-    let (map_width, map_height, pixels) = read_rgba(&map).ok()?;
-    let (width, height, _) = read_rgba(path).ok()?;
+    let stem = path.strip_suffix(".png")?;
+    let map = format!("{stem}{suffix}.png");
+    let (map_width, map_height, pixels) = read_rgba(source, &map).ok()?;
+    let (width, height, _) = read_rgba(source, path).ok()?;
     let [frame_width, frame_height] = animation.map_or([width as i32, height as i32], |a| {
         a.frame_size(width as i32, height as i32)
     });
@@ -887,6 +952,104 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
 mod tests {
     use super::*;
     use std::fs::{self, File};
+    #[test]
+    fn archive_sprites_keep_deferred_reads_and_cache_on_their_reload_snapshot() -> Result<()> {
+        use std::io::Write;
+        let root =
+            std::env::temp_dir().join(format!("horizon-archive-sprites-{}", std::process::id()));
+        fs::create_dir_all(&root)?;
+        let write = |path: &Path, red: u8| -> Result<()> {
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut bytes, 2, 4);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                let pixels = [[red, 0, 0, 255].repeat(4), [0, red, 0, 255].repeat(4)].concat();
+                encoder.write_header()?.write_image_data(&pixels)?;
+            }
+            let mut writer = zip::ZipWriter::new(File::create(path)?);
+            for name in [
+                "assets/demo/textures/block/flow.png",
+                "assets/demo/textures/block/flow_n.png",
+                "assets/demo/optifine/cit/flow.png",
+                "assets/demo/optifine/ctm/flow.png",
+            ] {
+                writer.start_file(name, zip::write::SimpleFileOptions::default())?;
+                writer.write_all(&bytes)?;
+                writer.start_file(
+                    format!("{name}.mcmeta"),
+                    zip::write::SimpleFileOptions::default(),
+                )?;
+                writer.write_all(br#"{"animation":{"frametime":3,"frames":[1,0],"interpolate":true},"texture":{"alpha_cutoff_bias":0.25}}"#)?;
+            }
+            writer.finish()?;
+            Ok(())
+        };
+        let jar = root.join("textures.jar");
+        write(&jar, 10)?;
+        let before = ResourceRoot::new(
+            root.join("prepared"),
+            root.join("cache"),
+            ResourceSource::archive(&jar)?,
+        );
+        let mut sprites = Sprites::with_disk_cache(&before);
+        sprites.prefetch(["demo:block/flow"]);
+        let replacement = root.join("replacement.jar");
+        write(&replacement, 20)?;
+        fs::rename(&jar, root.join("old.jar"))?;
+        fs::rename(replacement, &jar)?;
+        // Insertion after replacement uses the retained source, both prefetched
+        // textures and deferred reads outside textures/ (which bypass the cache).
+        let layer = sprites.try_insert("demo:block/flow")?;
+        assert_eq!(sprites.native[layer as usize].1[0][..4], [10, 0, 0, 255]);
+        assert_eq!(sprites.animations[0].frame(0), 1);
+        assert_eq!(sprites.mips[layer as usize].alpha_cutoff_bias, 0.25);
+        for name in [
+            "horizon_cit:demo/optifine/cit/flow",
+            "assets/demo/optifine/ctm/flow.png",
+        ] {
+            let layer = if name.contains(':') {
+                sprites.try_insert(name)?
+            } else {
+                sprites.insert_file(name)?
+            };
+            assert_eq!(sprites.native[layer as usize].1[0][..4], [10, 0, 0, 255]);
+        }
+        let (_, frames) = pbr_map(
+            before.source(),
+            "assets/demo/textures/block/flow.png",
+            "_n",
+            2,
+            None,
+        )
+        .unwrap();
+        assert_eq!(frames[0][..4], [10, 0, 0, 255]);
+        let mut sheet = Sprites::new(before.source().clone());
+        let tiles = sheet.insert_tiles("demo:block/flow", (1, 1), false)?;
+        assert_eq!(sheet.native[tiles[0].unwrap() as usize].1.len(), 2);
+        sprites.save_disk_cache();
+        let mut cached = Sprites::with_disk_cache(&before);
+        cached.prefetch(["demo:block/flow"]);
+        assert!(
+            cached.ready.is_empty(),
+            "the retained snapshot hits the disk cache"
+        );
+        let layer = cached.try_insert("demo:block/flow")?;
+        assert_eq!(cached.native[layer as usize].1[0][0], 10);
+        let after = ResourceRoot::new(
+            root.join("prepared"),
+            root.join("cache"),
+            ResourceSource::archive(&jar)?,
+        );
+        let mut reloaded = Sprites::with_disk_cache(&after);
+        let layer = reloaded.try_insert("demo:block/flow")?;
+        assert_eq!(reloaded.native[layer as usize].1[0][0], 20);
+        assert!(!root.join("assets").exists());
+        assert!(!root.join("prepared").exists());
+        drop((sprites, sheet, cached, reloaded, before, after));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
     #[test]
     fn native_frames_at_atlas_size_are_shared_without_resampling() {
         let pixels = vec![
@@ -991,13 +1154,27 @@ mod tests {
         let metadata =
             r#"{"width":2,"height":2,"frametime":2,"interpolate":true,"frames":[3,1,2,0]}"#;
         let animation = AnimationMetadata::from_json(metadata).unwrap();
-        let (side, frames) = pbr_map(&root.join("grid.png"), "_s", 4, Some(&animation)).unwrap();
+        let (side, frames) = pbr_map(
+            &ResourceSource::directory(root.clone()),
+            "grid.png",
+            "_s",
+            4,
+            Some(&animation),
+        )
+        .unwrap();
         assert_eq!(side, 2);
         assert_eq!(
             frames.iter().map(|f| f[0]).collect::<Vec<_>>(),
             [10, 11, 12, 13]
         );
-        let (_, normals) = pbr_map(&root.join("grid.png"), "_n", 4, Some(&animation)).unwrap();
+        let (_, normals) = pbr_map(
+            &ResourceSource::directory(root.clone()),
+            "grid.png",
+            "_n",
+            4,
+            Some(&animation),
+        )
+        .unwrap();
         assert_eq!(normals.len(), 1);
         let mut sprite = test_frames(0, vec![vec![0; 16]; 4], metadata);
         sprite.materials = [Some(Arc::new(normals)), Some(Arc::new(frames))];
@@ -1038,14 +1215,14 @@ mod tests {
             .unwrap()
             .write_image_data(&pixels)
             .unwrap();
-        let mut sprites = Sprites::default();
-        let layer = sprites.insert_file(&root, tile).unwrap();
-        assert_eq!(sprites.insert_file(&root, tile).unwrap(), layer);
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
+        let layer = sprites.insert_file(tile).unwrap();
+        assert_eq!(sprites.insert_file(tile).unwrap(), layer);
         assert!(sprites.translucent[layer as usize]);
         // A missing tile is an error, not the missing texture.
         assert!(
             sprites
-                .insert_file(&root, "assets/minecraft/optifine/ctm/glass/1.png")
+                .insert_file("assets/minecraft/optifine/ctm/glass/1.png")
                 .is_err()
         );
         assert_eq!(sprites.count(), 1);
@@ -1086,11 +1263,11 @@ mod tests {
                 .map(|p| (p[0], p[1]))
                 .collect()
         };
-        let mut sprites = Sprites::default();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
         let name = "minecraft:block/sheet";
-        let own = sprites.insert(&root, name).unwrap();
+        let own = sprites.insert(name).unwrap();
         // Still, as a 3 x 2 grid: the empty middle column draws nothing.
-        let tiles = sprites.insert_tiles(&root, name, (3, 2), false).unwrap();
+        let tiles = sprites.insert_tiles(name, (3, 2), false).unwrap();
         // The sheet's own layer now shows the top-left tile, at a tile's size.
         assert_eq!(texels(&sprites, own, 0), [(0, 0), (1, 0), (0, 1), (1, 1)]);
         assert_eq!(
@@ -1108,16 +1285,16 @@ mod tests {
         // per tile, each cell is the column of a tile's frames, which here is the same.
         fs::write(file.with_extension("png.mcmeta"), r#"{"animation":{}}"#).unwrap();
         for per_tile in [false, true] {
-            let mut sprites = Sprites::default();
-            let tiles = sprites.insert_tiles(&root, name, (3, 1), per_tile).unwrap();
+            let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
+            let tiles = sprites.insert_tiles(name, (3, 1), per_tile).unwrap();
             let first = tiles[0].unwrap();
             assert_eq!(texels(&sprites, first, 0), [(0, 0), (1, 0), (0, 1), (1, 1)]);
             assert_eq!(texels(&sprites, first, 1), [(0, 2), (1, 2), (0, 3), (1, 3)]);
             assert_eq!(sprites.animations.len(), 2, "two non-empty tiles");
         }
         // Not a grid of square tiles.
-        assert!(sprites.insert_tiles(&root, name, (4, 1), false).is_err());
-        assert!(sprites.insert_tiles(&root, name, (3, 3), false).is_err());
+        assert!(sprites.insert_tiles(name, (4, 1), false).is_err());
+        assert!(sprites.insert_tiles(name, (3, 3), false).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
     #[test]
@@ -1135,9 +1312,9 @@ mod tests {
             .write_image_data(&pixels)
             .unwrap();
         fs::write(file.with_extension("png.mcmeta"), r#"{"animation":{}}"#).unwrap();
-        let mut sprites = Sprites::default();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
         sprites
-            .insert(&root, "horizon_cit:minecraft/optifine/cit/a")
+            .insert("horizon_cit:minecraft/optifine/cit/a")
             .unwrap();
         fs::remove_dir_all(&root).unwrap();
         // The missing texture would not animate: this one is the file, in three frames.
@@ -1167,14 +1344,18 @@ mod tests {
         write(&file, 10);
         let id = "horizon_cit:minecraft/optifine/cit/a";
         let red = |sprites: &Sprites, layer: u32| sprites.native[layer as usize].1[0][0];
-        let mut first = Sprites::with_disk_cache(&root);
-        let layer = first.insert(&root, id).unwrap();
+        let mut first = Sprites::with_disk_cache(&crate::resource_source::ResourceRoot::directory(
+            root.clone(),
+        ));
+        let layer = first.insert(id).unwrap();
         assert_eq!(red(&first, layer), 10);
         first.save_disk_cache();
         // The pack's file changes; `textures/` does not, so a cached copy would still match.
         write(&file, 20);
-        let mut second = Sprites::with_disk_cache(&root);
-        let layer = second.insert(&root, id).unwrap();
+        let mut second = Sprites::with_disk_cache(
+            &crate::resource_source::ResourceRoot::directory(root.clone()),
+        );
+        let layer = second.insert(id).unwrap();
         fs::remove_dir_all(&root).unwrap();
         assert_eq!(red(&second, layer), 20);
     }
@@ -1201,11 +1382,11 @@ mod tests {
         write("assets/a/textures/block/x.png");
         write("assets/a/textures/item/x.png");
         write("assets/minecraft/optifine/cit/x.png");
-        let mut sprites = Sprites::default();
-        let block = sprites.insert(&root, "a:block/x").unwrap();
-        let item = sprites.insert(&root, "a:item/x").unwrap();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
+        let block = sprites.insert("a:block/x").unwrap();
+        let item = sprites.insert("a:item/x").unwrap();
         let cit = sprites
-            .insert(&root, "horizon_cit:minecraft/optifine/cit/x")
+            .insert("horizon_cit:minecraft/optifine/cit/x")
             .unwrap();
         fs::remove_dir_all(&root).unwrap();
         // The same pixels share a layer only with the same mipmap settings: the CIT texture's
@@ -1262,15 +1443,15 @@ mod tests {
             .collect();
         let tile = "assets/minecraft/optifine/ctm/glass/0.png";
         let load = |prefetch: bool| {
-            let mut sprites = Sprites::default();
+            let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
             if prefetch {
-                sprites.prefetch(&root, names.iter().map(String::as_str).chain([tile]));
+                sprites.prefetch(names.iter().map(String::as_str).chain([tile]));
             }
             let mut layers: Vec<u32> = names
                 .iter()
-                .map(|name| sprites.insert(&root, name).unwrap())
+                .map(|name| sprites.insert(name).unwrap())
                 .collect();
-            layers.push(sprites.insert_file(&root, tile).unwrap());
+            layers.push(sprites.insert_file(tile).unwrap());
             sprites.finish();
             (
                 layers,
@@ -1307,10 +1488,10 @@ mod tests {
         write("one.png", 10);
         write("copy.png", 10);
         write("other.png", 20);
-        let mut sprites = Sprites::default();
-        let one = sprites.insert(&root, "a:block/one").unwrap();
-        let copy = sprites.insert(&root, "a:block/copy").unwrap();
-        let other = sprites.insert(&root, "a:block/other").unwrap();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
+        let one = sprites.insert("a:block/one").unwrap();
+        let copy = sprites.insert("a:block/copy").unwrap();
+        let other = sprites.insert("a:block/other").unwrap();
         // The same pixels as an item sprite mip differently: a layer of its own.
         fs::create_dir_all(root.join("assets/a/textures/item")).unwrap();
         fs::copy(
@@ -1318,7 +1499,7 @@ mod tests {
             root.join("assets/a/textures/item/one.png"),
         )
         .unwrap();
-        let item = sprites.insert(&root, "a:item/one").unwrap();
+        let item = sprites.insert("a:item/one").unwrap();
         fs::remove_dir_all(&root).unwrap();
         assert_eq!((one, copy, other, item), (0, 0, 1, 2));
         assert_eq!((sprites.count(), sprites.layers.len()), (3, 4));
@@ -1349,11 +1530,11 @@ mod tests {
         for name in ["placeholder.png", "named.png", "again.png"] {
             write(name);
         }
-        let mut sprites = Sprites::default();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
         sprites.keep_apart(["a:block/named".to_owned()]);
-        let placeholder = sprites.insert(&root, "a:block/placeholder").unwrap();
-        let named = sprites.insert(&root, "a:block/named").unwrap();
-        let again = sprites.insert(&root, "a:block/again").unwrap();
+        let placeholder = sprites.try_insert("a:block/placeholder").unwrap();
+        let named = sprites.try_insert("a:block/named").unwrap();
+        let again = sprites.try_insert("a:block/again").unwrap();
         fs::remove_dir_all(&root).unwrap();
         // The named one alone; the others still share.
         assert_ne!(named, placeholder);
@@ -1410,11 +1591,9 @@ mod tests {
         {
             return;
         }
-        let mut sprites = Sprites::default();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
         for name in ["fire_0", "fire_1", "soul_fire_0", "soul_fire_1"] {
-            let layer = sprites
-                .insert(&root, &format!("minecraft:block/{name}"))
-                .unwrap();
+            let layer = sprites.insert(&format!("minecraft:block/{name}")).unwrap();
             let animation = sprites
                 .animations
                 .iter()
@@ -1463,8 +1642,8 @@ mod tests {
             .write_image_data(&pixels)
             .unwrap();
         fs::write(path.with_extension("png.mcmeta"), r#"{"animation":{}}"#).unwrap();
-        let mut sprites = Sprites::default();
-        sprites.insert(&root, "test:flow").unwrap();
+        let mut sprites = Sprites::new(ResourceSource::directory(root.clone()));
+        sprites.insert("test:flow").unwrap();
         sprites.finish();
         let size = sprites.size;
         let initial = sprites.pixels.clone();

@@ -1,0 +1,20 @@
+# Parity harness steps: each harness runs its test with the environment it sets (REFERENCE names
+# the harness or the variable); the ignored-tests job skips them.
+horizon-client-lib mobs::villager_brain::poi_classification_tests::vanilla_bed_poi_states tools/test_bed_poi_parity.py harness
+horizon-client-lib arrows::client_tests::client_arrow_parity_fixture tools/test_client_arrow_parity.py harness
+horizon-client-lib mobs::shulker::space_tests::shulker_space_parity_fixture tools/test_shulker_space_parity.py harness
+horizon-client-lib save::loot_tests::opened_loot_parity_fixture tools/test_opened_loot_parity.py harness
+horizon-client-lib mobs::leash::tests::happy_ghast_leash_dispatch_matches_vanilla tools/test_happy_ghast_leash_parity.py harness
+horizon-client game::dragon::tests::dragon_render_parity_fixture tools/test_dragon_render_parity.py harness
+horizon-client game::entity_model_loading_tests::entity_model_document_benchmark ENTITY_MODEL_BENCH_DOCUMENT harness
+horizon-client-lib entity_nbt::equipment_tests::write_fixtures HORIZON_WRITE_FIXTURES harness
+horizon-client-lib save::far_census::far_floating_cells_per_level HORIZON_FAR_SAVE harness
+horizon-client game::maps::save_tests::saved_map_codec_fixture tools/test_map_saved_data_parity.py harness
+horizon-client game::fishing::tests::breeze_hook_parity_fixture tools/test_breeze_hook_parity.py harness
+horizon-client game::remote_mob_data::tests::mob_air_parity_fixture tools/test_mob_air_parity.py harness
+horizon-client game::remote_mob_data::tests::raider_celebration_parity_fixture tools/test_raider_celebration_parity.py harness
+horizon-client-lib item_render::glint_tests::external_item_atlas_oracle HORIZON_GLINT_ROOT harness
+horizon-client-lib mobs::dragon_contacts::parity::contact_transcript tools/test_dragon_contacts_parity.py harness
+horizon-client-lib mobs::villager_brain::farming_tests::vanilla_farming_classification_matches_the_oracle tools/test_villager_farming_parity.py harness
+horizon-client-lib mobs::villager_brain::reputation_witness_tests::witnesses_use_sensor_candidates_radius_invisibility_and_cached_results tools/test_villager_witness_parity.py harness
+horizon-client-render packs::cache::tests::benchmark_real_resource_root HORIZON_OVERLAY_BENCH_VANILLA harness

@@ -1,0 +1,1 @@
+{"schema":1,"build":{"commit":"fixture"},"points":[{"name":"tick","target":"horizon_client::game::Game<'_>::tick","private":false,"at_return":true}]}

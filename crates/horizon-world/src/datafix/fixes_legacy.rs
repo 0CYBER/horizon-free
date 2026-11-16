@@ -9,7 +9,7 @@ use super::schema::flat::entity_tree_known;
 use super::schema::{Key, Ty, block_entity_known, key};
 use super::tables as t;
 use super::{Cx, FixFn, drop_typed, items, mark_read, reread, reread_as};
-use crate::nbt::{JavaString, Tag};
+use horizon_core::nbt::{JavaString, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(100, 0), equipment_to_armor_and_hands));

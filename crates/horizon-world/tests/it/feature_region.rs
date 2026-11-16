@@ -1,15 +1,17 @@
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::{HeightmapState, HeightmapType},
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{
-        anchor::WorldGenerationContext,
-        feature::FeatureWorld,
-        feature_region::{RegionError, TerrainFeatureAccess, TerrainRegion},
-        placement::PlacementContext,
-        terrain::{PreLightChunkStage, TerrainBlockStates, TerrainChunk},
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::{HeightmapState, HeightmapType},
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            anchor::WorldGenerationContext,
+            feature::FeatureWorld,
+            feature_region::{RegionError, TerrainFeatureAccess, TerrainRegion},
+            placement::PlacementContext,
+            terrain::{PreLightChunkStage, TerrainBlockStates, TerrainChunk},
+        },
     },
 };
 #[derive(Clone, Copy)]

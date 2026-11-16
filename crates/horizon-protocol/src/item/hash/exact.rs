@@ -10,7 +10,7 @@
 //! codecs of each component declare, listed by component below.
 use super::gameplay::PREDICATE_BOOLS;
 use super::*;
-use horizon_world::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 
 /// What a component's codec holds that NBT cannot tell apart.
 struct Shape {

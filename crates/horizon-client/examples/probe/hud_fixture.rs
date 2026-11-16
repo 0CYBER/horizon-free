@@ -25,7 +25,9 @@ pub fn main() -> Result<()> {
     let [root, inputs, output] = args.as_slice() else {
         return Err("usage: hud_fixture RESOURCES INPUTS OUTPUT".into());
     };
-    let atlas = HudAtlas::build(root)?;
+    let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        root.to_path_buf(),
+    ))?;
     lang::set(lang::Language::load(&[root], lang::DEFAULT));
     let mut out = BufWriter::new(fs::File::create(output)?);
     for line in fs::read_to_string(inputs)?
@@ -129,6 +131,16 @@ fn encode(draws: &[GuiDraw]) -> Vec<Value> {
                 color,
             } => {
                 json!({"type": "fill", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "color": *color as i32})
+            }
+            GuiDraw::FillGradient {
+                x0,
+                y0,
+                x1,
+                y1,
+                top,
+                bottom,
+            } => {
+                json!({"type": "gradient", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "top": *top as i32, "bottom": *bottom as i32})
             }
             GuiDraw::Text {
                 text,

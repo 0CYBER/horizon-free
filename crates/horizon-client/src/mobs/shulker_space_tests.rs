@@ -1,12 +1,14 @@
 use super::*;
 use horizon_core::geometry::{Axis, VoxelShape};
-use horizon_world::{
-    block_collision::BlockCollisionRegistry,
-    collision::CachedCollisionRegistry,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-};
 use std::sync::Arc;
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        block_collision::BlockCollisionRegistry,
+        collision::CachedCollisionRegistry,
+        registry::{BlockRegistry, BlockStateId},
+    },
+};
 
 fn text(value: &str) -> Tag {
     Tag::String(value.into())

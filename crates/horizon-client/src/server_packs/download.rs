@@ -417,6 +417,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_pack_lands_under_its_hash_and_is_reused_from_the_cache() {
         let dir = scratch();
         let body = b"PK pack".to_vec();
@@ -452,6 +453,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_wrong_hash_a_dead_url_and_a_large_pack_fail() {
         let dir = scratch();
         let (url, server) = serve("200 OK", b"other bytes".to_vec());
@@ -491,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_server_that_goes_silent_fails_the_download() {
         let dir = scratch();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -523,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_queue_logs_each_download() {
         let dir = scratch();
         let (url, server) = serve("200 OK", b"zip".to_vec());

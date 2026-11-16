@@ -8,7 +8,7 @@ Rect2i.contains	skip:ui		GUI hit test on a rectangle; Horizon's widgets hit-test
 RenderPipelines.register	skip:data		pipeline registry; Horizon creates its pipelines in gfx.rs
 RunningTrimmedMean.registerValueAndGetMean	skip:debug		frame-time smoothing helper; no vanilla caller in this source tree
 ScreenEffectRenderer.submit	port	crates/horizon-client-render/src/screen_effects.rs::ScreenEffects::build	gap: minor: the item activation is not built here (see renderItemActivationAnimation)
-ScreenEffectRenderer.renderItemActivationAnimation	port	crates/horizon-client/src/game/totem.rs::Game::item_activation_geometry	the totem flying up to the screen when it saves the player: `ItemActivation.activate`/`tick` and `item_activation.rs`'s pose, drawn in the hand pass with the FIXED display and no camera transform
+ScreenEffectRenderer.renderItemActivationAnimation	port	crates/horizon-client/src/game/items/totem.rs::Game::item_activation_geometry	the totem flying up to the screen when it saves the player: `ItemActivation.activate`/`tick` and `item_activation.rs`'s pose, drawn in the hand pass with the FIXED display and no camera transform
 ScreenEffectRenderer.submitWater	inline	crates/horizon-client-render/src/screen_effects.rs::ScreenEffects::build	underwater overlay branch (misc/underwater)
 ScreenEffectRenderer.submitFire	inline	crates/horizon-client-render/src/screen_effects.rs::ScreenEffects::build	first-person fire overlay branch (block/fire_1, two quads)
 ScreenEffectRenderer.buildFireQuad	inline	crates/horizon-client-render/src/screen_effects.rs::ScreenEffects::build	the two fire quads' corners and offsets
@@ -52,8 +52,8 @@ ShaderManager.PostChainCache.getOrLoadPostChain	inline	crates/horizon-client-ren
 ShaderManager.PostChainCache.loadPostChain	port	crates/horizon-client-render/src/post_chain.rs::PostEffects::load	targets, passes and pipelines are built from the config; a pass whose GLSL does not translate falls back to `post_chain.wgsl`, and a chain that still fails is skipped
 ShaderManager.PostChainCache.close	skip:other		releases post chains; Horizon has none
 Sheets.chooseSprite	port	crates/horizon-client-render/src/block_entity_render.rs::classify	gap: minor: the Christmas chest texture is picked outside this fn (block_entity_render.rs extended_christmas)
-SkyRenderer.<init>	inline	crates/horizon-client-render/src/gfx/pack_sky.rs::PackSky::new	gap: minor: builds the disc, sunset fan, stars and void up front; sun and moon quads are built per frame in game/frame_geometry.rs::celestial_geometry
-SkyRenderer.extractRenderState	port	crates/horizon-client-render/src/environment.rs::Environment::sample	gap: minor: the End flash state is read in game/end.rs (end_flash_sky)
+SkyRenderer.<init>	inline	crates/horizon-client-render/src/gfx/pack_sky.rs::PackSky::new	gap: minor: builds the disc, sunset fan, stars and void up front; sun and moon quads are built per frame in game.rs celestial_geometry
+SkyRenderer.extractRenderState	port	crates/horizon-client-render/src/environment.rs::Environment::sample	gap: minor: the End flash state is read in game/world/end.rs (end_flash_sky)
 SkyRenderer.render	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	sky pass; the frame's sky and dark-disc flags come from Game::render
 SkyRenderer.renderSkyDisc	port	crates/horizon-client-render/src/gfx/pack_sky.rs::disc	top sky disc fan, sky colour from PackSky::prepare
 SkyRenderer.renderDarkDisc	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	dark disc pipeline (fs_dark_disc) drawn when frame.dark_disc is set
@@ -92,22 +92,22 @@ StagedVertexBuffer.GpuBufferPool.close	skip:other		releases buffers; Rust drops 
 StagedVertexBuffer.GpuBufferPool.PendingRecycle.tryRecycle	skip:other		fence wait for GPU reuse; Horizon has no fence here
 SubmitNodeCollection.<init>	skip:other		builds the phase lists (improved transparency or not); Horizon has fixed passes in gfx.rs
 SubmitNodeCollection.submitShadow	port	crates/horizon-client/src/game.rs::Game::entity_geometry	entity shadow quads (misc/shadow) when the entity_shadows option is on
-SubmitNodeCollection.nameTag	port	crates/horizon-client/src/game/names.rs::Game::name_tag_geometry	name tags
-SubmitNodeCollection.submitNameTagPart	port	crates/horizon-client/src/game/names.rs::Game::name_tag_quads	adds the text quads of one name tag part
-SubmitNodeCollection.canRenderAsSolid	inline	crates/horizon-client/src/game/names.rs::Game::name_tag_geometry	the choice between the opaque and see-through pass
-SubmitNodeCollection.submitText	port	crates/horizon-client/src/game/text_displays.rs::Game::text_display_geometry	world text (text displays)
-SubmitNodeCollection.submitTextBackground	inline	crates/horizon-client/src/game/text_displays.rs::Game::text_display_geometry	background quad of a text display
-SubmitNodeCollection.submitTextPart	inline	crates/horizon-client/src/game/text_displays.rs::Game::text_display_geometry	the see-through or opaque choice for a text part
+SubmitNodeCollection.nameTag	port	crates/horizon-client/src/game/interface/names.rs::Game::name_tag_geometry	name tags
+SubmitNodeCollection.submitNameTagPart	port	crates/horizon-client/src/game/interface/names.rs::Game::name_tag_quads	adds the text quads of one name tag part
+SubmitNodeCollection.canRenderAsSolid	inline	crates/horizon-client/src/game/interface/names.rs::Game::name_tag_geometry	the choice between the opaque and see-through pass
+SubmitNodeCollection.submitText	port	crates/horizon-client/src/game/entities/text_displays.rs::Game::text_display_geometry	world text (text displays)
+SubmitNodeCollection.submitTextBackground	inline	crates/horizon-client/src/game/entities/text_displays.rs::Game::text_display_geometry	background quad of a text display
+SubmitNodeCollection.submitTextPart	inline	crates/horizon-client/src/game/entities/text_displays.rs::Game::text_display_geometry	the see-through or opaque choice for a text part
 SubmitNodeCollection.submitFlame	port	crates/horizon-client/src/fire_render.rs::flames	entity fire flames
-SubmitNodeCollection.submitLeash	port	crates/horizon-client/src/game/leads.rs::Game::leash_geometry	lead rope from a leashed mob to its holder
-SubmitNodeCollection.submitModel	port	crates/horizon-client/src/game/creatures/mob_geometry.rs::Game::mob_geometry	mob models
-SubmitNodeCollection.submitCrumblingOverlay	port	crates/horizon-client/src/game/frame_geometry.rs::Game::cracks	block break cracks (destroy_stage sprites) over a block
-SubmitNodeCollection.submitMovingBlock	port	crates/horizon-client/src/game/moving_pistons.rs::Game::moving_piston_geometry	moving piston blocks
+SubmitNodeCollection.submitLeash	port	crates/horizon-client/src/game/entities/leads.rs::Game::leash_geometry	lead rope from a leashed mob to its holder
+SubmitNodeCollection.submitModel	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::mob_geometry	mob models
+SubmitNodeCollection.submitCrumblingOverlay	port	crates/horizon-client/src/game.rs::Game::cracks	block break cracks (destroy_stage sprites) over a block
+SubmitNodeCollection.submitMovingBlock	port	crates/horizon-client/src/game/blocks/moving_pistons.rs::Game::moving_piston_geometry	moving piston blocks
 SubmitNodeCollection.submitBlockModel	port	crates/horizon-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_block	gap: minor: block models driven by block entities only
 SubmitNodeCollection.getOutlineRenderType	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_outline	one outline pass; the render type choice is folded into it
 SubmitNodeCollection.submitBreakingBlockModel	port	crates/horizon-client/src/game/frame_geometry.rs::Game::cracks	gap: minor: drawn as cracks; the block model itself is not redrawn
 SubmitNodeCollection.submitShapeOutline	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_outline	block shape outline (selection box)
-SubmitNodeCollection.submitItem	port	crates/horizon-client/src/game/item_draw.rs::Game::dropped_item_geometry	dropped item entities
+SubmitNodeCollection.submitItem	port	crates/horizon-client/src/game/interface/item_draw.rs::Game::dropped_item_geometry	dropped item entities
 SubmitNodeCollection.submitCustomGeometry	port	crates/horizon-client/src/mobs/guardian.rs::beam_geometry	gap: minor: the guardian beam only; screen overlay quads are built in ScreenEffects::build
 SubmitNodeCollection.submitGizmoPrimitives	skip:debug		debug gizmo overlay
 SubmitNodeStorage.setUseImprovedTransparency	skip:other		storage toggle for the transparency path; Horizon fixes its path in Renderer::new

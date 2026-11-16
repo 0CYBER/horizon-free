@@ -1,0 +1,40 @@
+[package]
+name = "horizon-mod-vocab"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Engine-owned mod interface vocabulary, host contracts and dispatch tables"
+
+[lib]
+name = "mod_vocab"
+
+[dependencies]
+horizon-mod-runtime = { path = "../horizon-mod-runtime" }
+horizon-core = { path = "../horizon-core" }
+horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+log = "0.4"
+bytemuck = { version = "1.24", features = ["derive"] }
+glam = "0.30"
+
+[build-dependencies]
+horizon-mod-api-gen = { path = "../horizon-mod-api-gen" }
+
+[dev-dependencies]
+# Shared API docs deliberately exercise the mod-facing facade, as mods do.
+horizon-mod-api = { path = "../horizon-mod-api" }
+# `Items::for_tests` for the fluid ingredient unit tests.
+horizon-items = { path = "../horizon-items", features = ["test-support"] }
+
+[features]
+# Scoped mod installation for other crates' tests (`mod_api::testing`).
+testing = []
+# The mod side of the wasm boundary on a native build, for the boundary's tests.
+wasm-guest = []
+# Test-only generated mixed-output contract, not a shipped gameplay hook.
+mixed-output-fixture = ["horizon-mod-api-gen/mixed-output-fixture"]
+
+[lints]
+workspace = true

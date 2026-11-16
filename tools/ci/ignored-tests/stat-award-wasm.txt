@@ -1,0 +1,2 @@
+# Supply both the locally compiled fixture and HORIZON_WASM_STD explicitly; no adopted workflow builds them.
+horizon-client game::stats::stat_award_tests::wasm_real_break_and_jump_rewrite_awards HORIZON_WASM_FIXTURE needs

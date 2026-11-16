@@ -1,0 +1,1 @@
+A mod's layer on a living entity renderer: the game calls it for each entity of its target in view.

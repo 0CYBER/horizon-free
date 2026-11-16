@@ -1,0 +1,12 @@
+{"schema": 1, "build": {"commit": "fixture"}, "internals":
+[
+  {"path":"horizon_client::game::Game","kind":"struct","signature":"struct Game<'a> { world: World }","hash":"1111"},
+  {"path":"horizon_client::game::Game<'_>::reach","kind":"method","signature":"impl Game<'_> { fn reach(&self) -> f64 }","hash":"2222"},
+  {"path":"horizon_client::game::Game::creative","kind":"field","signature":"creative: bool","hash":"3333"},
+  {"path":"horizon_client::pad::hardware::PadId","kind":"struct","cfg":"feature = \"controllers\"","signature":"struct PadId(u32)","hash":"4444"},
+  {"path":"horizon_world::World","kind":"struct","signature":"struct World { revision: u64 }","hash":"5555","shape_only":true},
+  {"path":"horizon_client::game::debug","kind":"fn","cfg":"debug_assertions","signature":"fn debug() -> bool","hash":"6666"},
+  {"path":"horizon_client::game::debug","kind":"fn","signature":"fn debug()","hash":"7777"},
+  {"path":"horizon_client::game::conditional","kind":"fn","signature":"fn conditional()","hash":"8888"}
+]
+}

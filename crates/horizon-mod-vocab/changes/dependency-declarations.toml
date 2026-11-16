@@ -1,0 +1,3 @@
+ids = ["type:PackageDependency", "type:Side", "handle:PackageDependency::new", "handle:PackageDependency::optional"]
+why = "Dependency metadata now retains declaration kind, dispatch order, installation side, reason and URL, and installation sides include dedicated servers."
+migrate = "Rebuild against the new Wire layout; replace optional() with kind() == DependencyKind::Optional and pass kind, order, side, reason and URL to PackageDependency::new."

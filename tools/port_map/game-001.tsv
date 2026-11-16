@@ -22,20 +22,20 @@ ChunkHolder.updateFutures	inline	crates/horizon-client/src/game.rs::Game::start_
 ChunkLevel.getStatusAroundFullChunk	inline	crates/horizon-client-render/src/streaming.rs::Ranges::margins	fixed margins around the view instead of a status per distance
 ChunkLevel.byStatus	skip:other		per status ticket levels; Horizon streams by distance (Ranges), not by level
 ChunkLevel.fullStatus	port	crates/horizon-client/src/ticket_levels.rs::Levels::loaded_ticking	31 entity ticking, 32 block ticking, 33 full as predicates on Levels
-ChunkLoadCounter.track	inline	crates/horizon-client/src/game/integrated.rs::Game::publish_load_view	gap: minor: counts only the spawn's 7x7 chunks, not the initial forced or ticketed chunks
-ChunkLoadCounter.pendingChunks	inline	crates/horizon-client/src/game/integrated.rs::Game::publish_load_view	counts lit chunks in the 7x7 around the spawn
+ChunkLoadCounter.track	inline	crates/horizon-client/src/game/world/integrated.rs::Game::publish_load_view	gap: minor: counts only the spawn's 7x7 chunks, not the initial forced or ticketed chunks
+ChunkLoadCounter.pendingChunks	inline	crates/horizon-client/src/game/world/integrated.rs::Game::publish_load_view	counts lit chunks in the 7x7 around the spawn
 ChunkMap.<init>	inline	crates/horizon-client-render/src/streaming.rs::Streaming::new	worker pool and generator; light engine and POI storage are set up elsewhere
 ChunkMap.isChunkTracked	inline	crates/horizon-client/src/lan/hub.rs::Hub::broadcast_block_changes	sent_chunks.contains: in the view and already sent
 ChunkMap.getChunkQueueLevel	inline	crates/horizon-client-render/src/streaming.rs::Ranges::priority	job priority is a distance from the centre, not a ticket level
 ChunkMap.getChunkDebugData	skip:debug		chunk debug renderer text
 ChunkMap.getChunkRangeFuture	inline	crates/horizon-client-render/src/streaming.rs::Streaming::update	neighbourhood waits: 3x3 protos to decorate, 3x3 decorated to finish, 3x3 lit to mesh
 ChunkMap.debugFuturesAndCreateReportedException	skip:debug		crash report detail
-ChunkMap.prepareEntityTickingChunk	inline	crates/horizon-client/src/game/creatures.rs::Game::entity_ticking_area	entity ticking comes from the ticket levels alone
+ChunkMap.prepareEntityTickingChunk	inline	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::entity_ticking_area	entity ticking comes from the ticket levels alone
 ChunkMap.updateChunkScheduling	inline	crates/horizon-client-render/src/streaming.rs::Streaming::update	columns past every kept range are unloaded in the update scan
 ChunkMap.onLevelChange	port	crates/horizon-client-render/src/streaming.rs::Streaming::requeue	queued jobs are ranked again when the centre moves
 ChunkMap.close	port	crates/horizon-client-render/src/streaming.rs::Streaming::drop	waits for saves in flight
 ChunkMap.saveAllChunks	port	crates/horizon-client/src/game/saving.rs::Game::save_level	modified chunks only; wait picks the flushing form
-ChunkMap.hasWork	port	crates/horizon-client-render/src/streaming.rs::Streaming::busy	
+ChunkMap.hasWork	port	crates/horizon-client-render/src/streaming.rs::Streaming::busy
 ChunkMap.processUnloads	inline	crates/horizon-client/src/game/world_update.rs::Game::update_world	unloaded columns: modified ones saved, entities and block entities dropped
 ChunkMap.saveChunksEagerly	port	crates/horizon-client/src/game.rs::Game::save_chunks_eagerly	ordered dirty queue; per-level cooldown, tick-time and active chunk write gates
 ChunkMap.scheduleUnload	inline	crates/horizon-client/src/game/world_update.rs::Game::update_world	save if modified, unload entities and block entities
@@ -45,25 +45,25 @@ ChunkMap.handleChunkLoadFailure	inline	crates/horizon-client/src/save.rs::SaveDi
 ChunkMap.createEmptyChunk	inline	crates/horizon-client-render/src/streaming.rs::Streaming::schedule_generation	no saved data: the Generate job makes a fresh proto
 ChunkMap.markPosition	skip:java		chunk type cache for isExistingChunkFull
 ChunkMap.applyStep	inline	crates/horizon-client-render/src/streaming.rs::Streaming::new	the worker loop runs the Generate, Decorate and Finish jobs
-ChunkMap.scheduleGenerationTask	port	crates/horizon-client-render/src/streaming.rs::Streaming::schedule_generation	
+ChunkMap.scheduleGenerationTask	port	crates/horizon-client-render/src/streaming.rs::Streaming::schedule_generation
 ChunkMap.runGenerationTask	port	crates/horizon-client-render/src/streaming.rs::Streaming::submit	queues the job by distance
 ChunkMap.onChunkReadyToSend	inline	crates/horizon-client/src/lan/hub.rs::Hub::next_batch	queued columns are sent once lit
 ChunkMap.prepareAccessibleChunk	inline	crates/horizon-client-render/src/streaming.rs::Streaming::update	a column finishes once its 3x3 is decorated
-ChunkMap.allChunksWithAtLeastStatus	inline	crates/horizon-client/src/game/integrated.rs::Game::publish_load_view	only the loading screen asks: lit chunks around the spawn
+ChunkMap.allChunksWithAtLeastStatus	inline	crates/horizon-client/src/game/world/integrated.rs::Game::publish_load_view	only the loading screen asks: lit chunks around the spawn
 ChunkMap.saveChunkIfNeeded	inline	crates/horizon-client/src/game.rs::Game::save_chunks_eagerly	resident full chunks only; ordered selection delegates to World.modified
 ChunkMap.isExistingChunkFull	inline	crates/horizon-client-render/src/streaming.rs::Streaming::save_checked_out	protos exist only for columns not final, so one cannot overwrite a final chunk
 ChunkMap.markChunkPendingToSend	port	crates/horizon-client/src/lan/hub.rs::requeue	chunks entering the view join the guest's queue, closest first
 ChunkMap.getChunkToSend	inline	crates/horizon-client/src/lan/hub.rs::Hub::next_batch	only lit columns are taken
 ChunkMap.dumpChunks	skip:debug		CSV chunk dump
-ChunkMap.printFuture	skip:debug		
+ChunkMap.printFuture	skip:debug
 ChunkMap.readChunk	port	crates/horizon-client/src/save.rs::SaveDir::read_record	reads the raw record (pending writes first); the upgrade is done when the world opens
 ChunkMap.upgradeChunkTag	inline	crates/horizon-world/src/datafix/files.rs::upgrade_world_data	chunks are upgraded all at once when an older world opens, not as each is read
 ChunkMap.getChunkDataFixContextTag	inline	crates/horizon-world/src/datafix/files.rs::upgrade_world_data	dimension id and generator type passed to update_chunk per dimension folder
 ChunkMap.forEachBlockTickingChunk	port	crates/horizon-client/src/ticket_levels.rs::Levels::random_ticking	simulation entity ticking and a ticking chunk
-ChunkMap.anyPlayerCloseEnoughForSpawningInternal	inline	crates/horizon-client/src/game/natural_spawning.rs::Game::spawning_chunks	any non-spectator within 128 blocks of the chunk centre
-ChunkMap.playerIsCloseEnoughForSpawning	port	crates/horizon-client/src/game/natural_spawning.rs::close_enough_for_spawning	
-ChunkMap.playerIsCloseEnoughTo	inline	crates/horizon-client/src/game.rs::GameLevel::can_spread_fire_around	the only caller (fire spread radius), spectators left out
-ChunkMap.skipPlayer	port	crates/horizon-client/src/game/game_mode.rs::loads_chunks	a skipped player holds no ticket and streams no chunks; sending chunks to a spectator is unchanged
+ChunkMap.anyPlayerCloseEnoughForSpawningInternal	inline	crates/horizon-client/src/game/mobs/natural_spawning.rs::Game::spawning_chunks	any non-spectator within 128 blocks of the chunk centre
+ChunkMap.playerIsCloseEnoughForSpawning	port	crates/horizon-client/src/game/mobs/natural_spawning.rs::close_enough_for_spawning
+ChunkMap.playerIsCloseEnoughTo	inline	crates/horizon-client/src/game/blocks/level_access.rs::GameLevel::can_spread_fire_around	the only caller (fire spread radius), spectators left out
+ChunkMap.skipPlayer	port	crates/horizon-client/src/game/interface/game_mode.rs::loads_chunks	a skipped player holds no ticket and streams no chunks; sending chunks to a spectator is unchanged
 ChunkMap.updatePlayerStatus	inline	crates/horizon-client/src/game.rs::Game::update_chunk_tickets	tickets follow every player in the level each tick; a leaving guest's view is dropped by the hub
 ChunkMap.updateChunkTracking	port	crates/horizon-client/src/lan/hub.rs::Hub::update_view	a new centre or view distance (center reset) re-applies the view
 ChunkMap.applyChunkTrackingView	inline	crates/horizon-client/src/lan/hub.rs::Hub::update_view	SetChunkCacheCenter, then forget and queue the difference
@@ -74,7 +74,7 @@ ChunkMap.sendToTrackingPlayersFiltered	port	crates/horizon-client/src/lan/contai
 ChunkMap.sendToTrackingPlayersAndSelf	port	crates/horizon-client/src/lan/containers.rs::Hub::critical_hit	the one caller, the crit animation, goes to the attacker and the clients tracking them
 ChunkMap.isTrackedByAnyPlayer	skip:debug		only the debug synchronizers ask
 ChunkMap.forEachEntityTrackedBy	skip:debug		only the debug synchronizers ask
-ChunkMap.resendBiomesForChunks	inline	crates/horizon-client/src/game/commands/terrain_cmds.rs::Game::cmd_fillbiome	/fillbiome sends the changed columns' biomes to the guests that have them (Hub::resend_biomes, a ChunksBiomes packet), in the order the columns were gathered
+ChunkMap.resendBiomesForChunks	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_fillbiome	/fillbiome sends the changed columns' biomes to the guests that have them (Hub::resend_biomes, a ChunksBiomes packet), in the order the columns were gathered
 ChunkMap.waitForLightBeforeSending	inline	crates/horizon-client/src/lan/hub.rs::Hub::next_batch	columns are sent only once lit
 ChunkMap.forEachReadyToSendChunk	skip:debug		only the debug synchronizers ask
 ChunkMap.TrackedEntity.equals	skip:java		identity by entity id; Horizon keys tracked entities by id
@@ -85,13 +85,13 @@ ChunkMap.TrackedEntity.broadcastRemoved	inline	crates/horizon-client/src/lan/ent
 ChunkMap.TrackedEntity.removePlayer	inline	crates/horizon-client/src/lan/entity.rs::Entities::tick	the client's tracker loses entities out of range or level
 ChunkMap.TrackedEntity.updatePlayers	port	crates/horizon-client/src/lan/entity.rs::Entities::tick	broadcastToPlayer is checked: a spectator is hidden from everyone but other spectators, and sees players only while its camera is itself
 ChunkResult.error	skip:java		result type
-ChunkTaskDispatcher.hasWork	port	crates/horizon-client-render/src/streaming.rs::Streaming::busy	
-ChunkTaskDispatcher.onLevelChange	port	crates/horizon-client-render/src/streaming.rs::Streaming::requeue	
+ChunkTaskDispatcher.hasWork	port	crates/horizon-client-render/src/streaming.rs::Streaming::busy
+ChunkTaskDispatcher.onLevelChange	port	crates/horizon-client-render/src/streaming.rs::Streaming::requeue
 ChunkTaskDispatcher.release	port	crates/horizon-client-render/src/streaming.rs::release_columns	the columns a view drop or a moved view unloads release their queued jobs (`Streaming::forget_columns`), so their protos are never generated and dropped on arrival
-ChunkTaskDispatcher.submit	port	crates/horizon-client-render/src/streaming.rs::Streaming::submit	
+ChunkTaskDispatcher.submit	port	crates/horizon-client-render/src/streaming.rs::Streaming::submit
 ChunkTaskDispatcher.pollTask	inline	crates/horizon-client-render/src/streaming.rs::Streaming::new	each worker pops the most urgent job
 ChunkTaskDispatcher.scheduleForExecution	inline	crates/horizon-client-render/src/streaming.rs::Streaming::new	the worker runs the job it popped
-ChunkTaskPriorityQueue.resortChunkTasks	port	crates/horizon-client-render/src/streaming.rs::rank_again	
+ChunkTaskPriorityQueue.resortChunkTasks	port	crates/horizon-client-render/src/streaming.rs::rank_again
 ChunkTaskPriorityQueue.release	port	crates/horizon-client-render/src/streaming.rs::release_columns	the jobs queued for a released column are dropped from the heap, the jobs without a column (saves, meshes to free) stay
 ChunkTaskPriorityQueue.pop	inline	crates/horizon-client-render/src/streaming.rs::Streaming::new	BinaryHeap pop in the worker loop
 ChunkTracker.checkNeighborsAfterUpdate	inline	crates/horizon-client/src/ticket_levels.rs::compute	closed form: ticket level plus Chebyshev distance, rebuilt when sources change
@@ -100,7 +100,7 @@ ChunkTracker.computeLevelFromNeighbor	inline	crates/horizon-client/src/ticket_le
 ChunkTrackingView.difference	inline	crates/horizon-client/src/lan/hub.rs::Hub::update_view	forget what left (scan of sent chunks), queue what entered (requeue)
 ChunkTrackingView.isWithinDistance	port	crates/horizon-client/src/lan/hub.rs::tracked	buffer 2 form; the buffer 1 form is streaming.rs in_view_distance
 ChunkTrackingView.Positioned.squareIntersects	skip:java		optimisation that picks a box scan over a full enumeration
-ChunkTrackingView.Positioned.contains	port	crates/horizon-client/src/lan/hub.rs::tracked	
+ChunkTrackingView.Positioned.contains	port	crates/horizon-client/src/lan/hub.rs::tracked
 ChunkTrackingView.Positioned.forEach	inline	crates/horizon-client/src/lan/hub.rs::requeue	loops the view's square around the centre
 ColumnPos.asLong	skip:java		key packing
 DemoMode	missing		minor: no demo mode: no demo timer, intro hints or five day limit (the dedicated server's --demo argument is accepted and ignored)
@@ -115,7 +115,7 @@ DistanceManager.FixedPlayerDistanceChunkTracker.setLevel	inline	crates/horizon-c
 DistanceManager.FixedPlayerDistanceChunkTracker.havePlayer	inline	crates/horizon-client/src/game.rs::Game::update_chunk_tickets	players' chunks are the sources
 DistanceManager.PlayerTicketTracker.onLevelChange	inline	crates/horizon-client/src/ticket_levels.rs::compute	loading level 31 plus distance beyond the view; no throttle of 4 loads at a time
 DistanceManager.PlayerTicketTracker.updateViewDistance	inline	crates/horizon-client/src/ticket_levels.rs::reach	view distance sets how far the loading levels reach
-DistanceManager.PlayerTicketTracker.runAllUpdates	inline	crates/horizon-client/src/ticket_levels.rs::ChunkTickets::update	
+DistanceManager.PlayerTicketTracker.runAllUpdates	inline	crates/horizon-client/src/ticket_levels.rs::ChunkTickets::update
 GenerationChunkHolder.scheduleChunkGenerationTask	inline	crates/horizon-client-render/src/streaming.rs::Streaming::schedule_generation	the scan picks the columns that need a job
 GenerationChunkHolder.applyStep	inline	crates/horizon-client-render/src/streaming.rs::Streaming::update	queues the Decorate and Finish jobs
 GenerationChunkHolder.updateHighestAllowedStatus	inline	crates/horizon-client-render/src/streaming.rs::Ranges::requested	how far a column may be generated follows the ranges
@@ -127,18 +127,18 @@ GenerationChunkHolder.failAndClearPendingFuture	skip:java		future bookkeeping
 GenerationChunkHolder.completeFuture	skip:java		future bookkeeping
 GenerationChunkHolder.findHighestStatusWithPendingFuture	skip:java		future bookkeeping
 GenerationChunkHolder.acquireStatusBump	skip:java		future bookkeeping
-GenerationChunkHolder.isStatusDisallowed	inline	crates/horizon-client-render/src/streaming.rs::Ranges::requested	
+GenerationChunkHolder.isStatusDisallowed	inline	crates/horizon-client-render/src/streaming.rs::Ranges::requested
 GenerationChunkHolder.increaseGenerationRefCount	skip:other		keeps a chunk from saving or unloading under a task; Horizon checks protos out to the job instead
 GenerationChunkHolder.decreaseGenerationRefCount	skip:other		see increaseGenerationRefCount
 GenerationChunkHolder.getChunkIfPresentUnchecked	skip:java		future lookup; Horizon reads protos and world.chunks
 GenerationChunkHolder.getLatestChunk	skip:java		future lookup; Horizon reads protos and world.chunks
 GenerationChunkHolder.getPersistedStatus	skip:other		Horizon tells proto and final apart by type (SavedProto or Chunk)
-GenerationChunkHolder.getAllFutures	skip:debug		
+GenerationChunkHolder.getAllFutures	skip:debug
 GenerationChunkHolder.getLatestStatus	port	crates/horizon-client-render/src/streaming.rs::Streaming::latest_status	furthest step reached, for the loading map
 LoadingChunkTracker.getLevel	port	crates/horizon-client/src/ticket_levels.rs::Levels::get	the loading half of the pair
 LoadingChunkTracker.setLevel	inline	crates/horizon-client/src/ticket_levels.rs::ChunkTickets::update	levels are rebuilt when sources change
 PlayerSpawnFinder.scheduleNext	port	crates/horizon-client/src/world_spawn.rs::PlayerSpawnFinder::next_candidate	coprime stride order, then the suggestion
-PlayerSpawnFinder.scheduleCandidate	port	crates/horizon-client/src/game/initial_spawn.rs::Game::search_spawn	gap: minor: a server tick passes over candidates in unloaded chunks instead of waiting for the candidate's chunk, so a new player can stand on another spot of the radius
-SectionTracker.checkNeighborsAfterUpdate	inline	crates/horizon-client/src/game/raids.rs::sections_to_village	its only subclass is the POI village distance: Chebyshev distance in sections, 7 when farther than 6
-SectionTracker.getComputedLevel	inline	crates/horizon-client/src/game/raids.rs::sections_to_village	
-SectionTracker.computeLevelFromNeighbor	inline	crates/horizon-client/src/game/raids.rs::sections_to_village	
+PlayerSpawnFinder.scheduleCandidate	port	crates/horizon-client/src/game/world/initial_spawn.rs::Game::search_spawn	gap: minor: a server tick passes over candidates in unloaded chunks instead of waiting for the candidate's chunk, so a new player can stand on another spot of the radius
+SectionTracker.checkNeighborsAfterUpdate	inline	crates/horizon-client/src/game/mobs/raids/mod.rs::sections_to_village	its only subclass is the POI village distance: Chebyshev distance in sections, 7 when farther than 6
+SectionTracker.getComputedLevel	inline	crates/horizon-client/src/game/mobs/raids/mod.rs::sections_to_village
+SectionTracker.computeLevelFromNeighbor	inline	crates/horizon-client/src/game/mobs/raids/mod.rs::sections_to_village

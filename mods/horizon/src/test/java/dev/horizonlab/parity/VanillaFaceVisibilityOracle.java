@@ -38,7 +38,7 @@ public final class VanillaFaceVisibilityOracle {
         VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(directory.resolve("tags.json"))).getAsJsonObject());
         if(args[0].equals("export")) {
             VanillaCollisionOracle.main(new String[]{"generate",args[1]});
-            try(var output=new DataOutputStream(Files.newOutputStream(directory.resolve("occlusion.nbt")))) {
+            try(var output=new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(directory.resolve("occlusion.nbt"))))) {
                 NbtIo.write(VanillaCollisionOracle.occlusionDefinitions(),output);
             }
             var definitions=new TreeMap<String,Object>();

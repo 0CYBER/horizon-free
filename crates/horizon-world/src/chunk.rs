@@ -1,19 +1,23 @@
 //! Saved section palettes and storage-level chunk access. Changes here do not
 //! run block behavior, lighting, heightmaps, neighbor updates or scheduled ticks.
 pub use crate::block_state_properties::BlockProperties;
-use crate::{
-    DATA_VERSION,
-    compression::invalid,
-    nbt::{Compound, JavaString, NamedTag, Tag},
-    registry::{BlockRegistry, BlockStateId},
-    tick_data::{self, TickKind},
-};
 use horizon_core::{
     position::{BlockPos, ChunkPos},
     storage::PackedStorage,
     ticks::{ChunkTicks, SavedTick, TickTypeId},
 };
-use std::{collections::HashMap, io};
+use std::collections::HashMap;
+use std::io;
+use {
+    crate::{
+        DATA_VERSION,
+        compression::invalid,
+        registry::{BlockRegistry, BlockStateId},
+        tick_data,
+        tick_data::TickKind,
+    },
+    horizon_core::nbt::{Compound, JavaString, NamedTag, Tag},
+};
 
 fn key(value: &str) -> JavaString {
     JavaString::from(value)

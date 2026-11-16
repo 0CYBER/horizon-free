@@ -242,10 +242,7 @@ fn input(font: &Font, i: usize, control: &Control) -> Element {
             // CommonLayouts.labeledElement: the label, 4 below it the box,
             // both on the left. The label is a plain StringWidget: it has no
             // click handler, so a click event in it does nothing.
-            let mut shown = label.clone();
-            for span in &mut shown.spans {
-                span.style.click = None;
-            }
+            let shown = label.map_styles(|style| style.click = None);
             Element {
                 w: w.max(font.width_text(label)),
                 h: 9.0 + 4.0 + h,
@@ -484,7 +481,7 @@ mod tests {
     fn message_hit_testing_respects_sprite_advances_and_glyph_bounds() {
         use crate::{component, hud::Rect, text::ClickEvent};
         let font = Font::load(
-            std::path::Path::new("/nonexistent-horizon-dialog-test-resources"),
+            &horizon_assets::resource_source::ResourceSource::default(),
             &std::collections::HashMap::new(),
             &[],
             (1, 1),
@@ -556,7 +553,7 @@ mod tests {
             std::fs::write(path, bytes).unwrap();
         }
         let font = Font::load(
-            &root,
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
             &std::collections::HashMap::new(),
             &[],
             (4096, 1024),

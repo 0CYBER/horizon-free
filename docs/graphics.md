@@ -158,7 +158,7 @@ It runs only in frames drawn flat (Metal past `flat::MIN_SECTIONS` sections in v
 `tools/graphics_bench.py` opens a fresh creative world (seed 1234) on a virtual screen and flies the camera along four fixed 192-block paths, over a village, a forest, the ocean and a mountain, at render distances 8, 16 and 32, one game per distance. Each flight takes 12 seconds and reports average FPS, 1% lows, frame-time percentiles, CPU time per frame (frame time minus waits for the GPU, the display and the limiter), the split of that CPU time (world update, ticks, frame preparation, renderer) for all frames and for the slowest 1%, and GPU time per frame from timestamp queries.
 
 ```sh
-cargo build --release -p horizon-client -p horizon-client-lib --bins
+cargo build --release -p horizon-game -p horizon-client-lib --bins
 python3 tools/graphics_bench.py --label mine                 # lavapipe on vscreen: CPU-side numbers
 python3 tools/graphics_bench.py --label mine-gpu --offscreen  # the desktop's RTX 4080
 python3 tools/graphics_bench.py --compare baseline-4080 mine-gpu   # markdown table

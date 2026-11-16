@@ -1,6 +1,10 @@
 use super::*;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-fn png(path: &Path, w: u32, h: u32, color: [u8; 4]) {
+pub(super) fn png(path: &Path, w: u32, h: u32, color: [u8; 4]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut encoder = png::Encoder::new(fs::File::create(path).unwrap(), w, h);
     encoder.set_color(png::ColorType::Rgba);
@@ -104,7 +108,16 @@ fn state(sprite: &str, foil: FoilType, display: DisplayContext) -> ItemRenderSta
 #[test]
 fn gui_glint_matches_pinned_vanilla_atlas_input() {
     let root = fixture("gui");
-    let renderer = ItemRenderer::load(&root).unwrap();
+    let data = crate::test_resources::item_data(
+        &root,
+        horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+    )
+    .unwrap();
+    let renderer = ItemRenderer::load(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        &data,
+    )
+    .unwrap();
     renderer.prepare_glint_atlas(16384, (0, 2)).unwrap();
     // The real vanilla oracle also checks a rectangular texture, an animation frame,
     // an unstitch source and an equal-sized sprite in a second namespace.
@@ -148,7 +161,7 @@ fn gui_glint_matches_pinned_vanilla_atlas_input() {
         ),
     ]);
     let render = |foil| {
-        let mut batch = crate::hud::HudBatch::new([64, 64]);
+        let mut batch = crate::hud::HudBatch::scratch([64, 64]);
         gui::draw(
             &state("minecraft:item/enchanted_book", foil, DisplayContext::Gui),
             &renderer,
@@ -239,7 +252,12 @@ fn glint_atlas_boundaries() {
     .into_iter()
     .enumerate()
     {
-        let atlas = glint_atlas::load(&root, 1 << i, 16384).unwrap();
+        let atlas = glint_atlas::load(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            1 << i,
+            16384,
+        )
+        .unwrap();
         let r = atlas["item/enchanted_book"];
         assert_eq!(
             [r.u0, r.v0, r.u1, r.v1],
@@ -257,20 +275,37 @@ fn glint_atlas_boundaries() {
         1,
         [255; 4],
     );
-    let atlas = glint_atlas::load(&root, 1, 32768).unwrap();
+    let atlas = glint_atlas::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+        1,
+        32768,
+    )
+    .unwrap();
     let book = atlas["item/enchanted_book"];
     assert_eq!(
         [book.u0, book.v0, book.u1, book.v1],
         [1.0 / 32768.0, 33.0 / 64.0, 17.0 / 32768.0, 49.0 / 64.0]
     );
-    let atlas = glint_atlas::load(&root, 1, 16384).unwrap();
+    let atlas = glint_atlas::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+        1,
+        16384,
+    )
+    .unwrap();
     let book = atlas["item/enchanted_book"];
     assert_eq!(
         [book.u0, book.v0, book.u1, book.v1],
         [1.0 / 64.0, 33.0 / 128.0, 17.0 / 64.0, 49.0 / 128.0]
     );
     assert_eq!(atlas["item/wide"].u0, atlas["missingno"].u0);
-    assert!(glint_atlas::load(&root, 1, 16).is_err());
+    assert!(
+        glint_atlas::load(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            1,
+            16
+        )
+        .is_err()
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -315,7 +350,12 @@ fn invalid_and_generated_sprites_match_vanilla() {
             color,
         );
     }
-    let atlas = glint_atlas::load(&root, 1, 16384).unwrap();
+    let atlas = glint_atlas::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+        1,
+        16384,
+    )
+    .unwrap();
     // Real SpriteResourceLoader rejects both invalid animations; TextureAtlas resolves missingno.
     for name in ["item/invalid_size", "item/invalid_metadata"] {
         let r = atlas[name];
@@ -353,7 +393,12 @@ fn invalid_texture_metadata_does_not_move_book_glint() {
         r#"{"texture":{"alpha_cutoff_bias":"0.5"}}"#,
     ] {
         fs::write(&metadata, invalid).unwrap();
-        let atlas = glint_atlas::load(&root, 1, 16384).unwrap();
+        let atlas = glint_atlas::load(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            1,
+            16384,
+        )
+        .unwrap();
         let rejected = atlas["item/large"];
         let missing = atlas["missingno"];
         assert_eq!(
@@ -377,7 +422,12 @@ fn invalid_texture_metadata_does_not_move_book_glint() {
             .to_string(),
         )
         .unwrap();
-        let atlas = glint_atlas::load(&root, 1, 16384).unwrap();
+        let atlas = glint_atlas::load(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            1,
+            16384,
+        )
+        .unwrap();
         assert_eq!((atlas["item/large"].w, atlas["item/large"].h), (512, 256));
     }
     fs::remove_dir_all(root).unwrap();
@@ -400,7 +450,12 @@ fn glint_atlas_reads_prepared_images_and_metadata_together() {
         256,
         [0, 255, 0, 255],
     );
-    let atlas = glint_atlas::load(&root, 1, 16384).unwrap();
+    let atlas = glint_atlas::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+        1,
+        16384,
+    )
+    .unwrap();
     assert_eq!(atlas["item/large"].u0, atlas["missingno"].u0);
     let book = atlas["item/enchanted_book"];
     assert_eq!(
@@ -411,11 +466,16 @@ fn glint_atlas_reads_prepared_images_and_metadata_together() {
 }
 
 #[test]
-#[ignore = "requires the player's prepared pinned 26.3 resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn prepared_item_atlas_matches_pinned_vanilla() {
     let root =
         PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources"));
-    let atlas = glint_atlas::load(&root, 1, 16384).unwrap();
+    let atlas = glint_atlas::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+        1,
+        16384,
+    )
+    .unwrap();
     assert_eq!(atlas.len(), 896);
     let book = atlas["item/enchanted_book"];
     assert_eq!(
@@ -438,6 +498,11 @@ fn prepared_item_atlas_matches_pinned_vanilla() {
 #[ignore = "requires an independently generated pinned vanilla atlas JSON and matching resources"]
 fn external_item_atlas_oracle() {
     let root = PathBuf::from(std::env::var_os("HORIZON_GLINT_ROOT").expect("resource root"));
+    let data = crate::test_resources::item_data(
+        &root,
+        horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+    )
+    .unwrap();
     let expected: Value = serde_json::from_str(
         &fs::read_to_string(
             std::env::var_os("HORIZON_GLINT_EXPECTED").expect("vanilla atlas JSON"),
@@ -450,7 +515,7 @@ fn external_item_atlas_oracle() {
         .parse()
         .unwrap();
     let sprites = glint_atlas::load(
-        &root,
+        &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
         1 << glint_padding(if bit == 0 { 0 } else { 2 }, bit),
         32768,
     )
@@ -477,7 +542,11 @@ fn external_item_atlas_oracle() {
                 [missing.u0, missing.v0, missing.u1, missing.v1]
             );
         }
-        let renderer = ItemRenderer::load(&root).unwrap();
+        let renderer = ItemRenderer::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            &data,
+        )
+        .unwrap();
         renderer
             .prepare_glint_atlas(32768, (if bit == 0 { 0 } else { 2 }, bit))
             .unwrap();
@@ -485,7 +554,7 @@ fn external_item_atlas_oracle() {
             ("item/enchanted_book".into(), missing),
             ("misc/enchanted_glint_item".into(), missing),
         ]);
-        let mut batch = crate::hud::HudBatch::new([64, 64]);
+        let mut batch = crate::hud::HudBatch::scratch([64, 64]);
         gui::draw(
             &state(
                 "minecraft:item/enchanted_book",

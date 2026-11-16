@@ -360,6 +360,7 @@ mod tests {
     #[test]
     #[ignore = "requires a Vulkan/Metal/DX12 adapter"]
     fn weather_shader_uvs_match_legacy_bits() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -450,16 +451,16 @@ mod tests {
         let source = format!(
             "{math}\n{}",
             r#"
-struct Case { animation: vec4<f32>, bases: vec4<u32>, time: vec4<f32>, uv: vec2<f32>, snow: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> cases: array<Case>;
-@group(0) @binding(1) var<storage, read_write> results: array<vec4<u32>>;
-@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    struct Case { animation: vec4<f32>, bases: vec4<u32>, time: vec4<f32>, uv: vec2<f32>, snow: u32, pad: u32 }
+    @group(0) @binding(0) var<storage, read> cases: array<Case>;
+    @group(0) @binding(1) var<storage, read_write> results: array<vec4<u32>>;
+    @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= arrayLength(&cases) { return; }
     let c = cases[id.x];
     let uv = c.uv + weather_phase(c.animation, c.bases, c.snow, c.time);
     let texel = weather_texel(uv, vec4(0.25, 0.5, 0.015625, 0.03125), vec2(1024u));
     results[id.x] = vec4(bitcast<vec2<u32>>(uv), vec2<u32>(texel));
-}"#
+    }"#
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Weather parity"),

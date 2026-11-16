@@ -6,6 +6,7 @@ use crate::options_ui::{MusicGroup, MusicTrack};
 use crate::sound_engine::{InstanceId, MUSIC, PlayResult, SoundEngine, SoundInstance, Sounds};
 use crate::sound_events::{Sentinel, SoundRegistry};
 use horizon_core::random::{LegacyRandom, RandomSource};
+pub use mod_api::client::music::{Music, MusicLayer};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -13,76 +14,6 @@ use std::{
     path::Path,
 };
 
-/// `Music`: a sound event and the delay range (ticks) before it starts.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Music {
-    pub sound: String,
-    pub min_delay: i32,
-    pub max_delay: i32,
-    pub replace_current_music: bool,
-}
-impl Music {
-    pub fn new(sound: &str, min_delay: i32, max_delay: i32, replace_current_music: bool) -> Self {
-        Self {
-            sound: sound.to_owned(),
-            min_delay,
-            max_delay,
-            replace_current_music,
-        }
-    }
-    /// `Musics.MENU`.
-    pub fn menu() -> Self {
-        Self::new("minecraft:music.menu", 20, 600, true)
-    }
-    /// `Musics.CREDITS`.
-    pub fn credits() -> Self {
-        Self::new("minecraft:music.credits", 0, 0, true)
-    }
-    /// `Musics.END_BOSS`.
-    pub fn end_boss() -> Self {
-        Self::new("minecraft:music.dragon", 0, 0, true)
-    }
-    /// `Musics.CREATIVE`.
-    pub fn creative() -> Self {
-        Self::new("minecraft:music.creative", 12000, 24000, false)
-    }
-    /// `Musics.END`.
-    pub fn end() -> Self {
-        Self::new("minecraft:music.end", 6000, 24000, true)
-    }
-    /// `Musics.UNDER_WATER`.
-    pub fn under_water() -> Self {
-        Self::new("minecraft:music.under_water", 12000, 24000, false)
-    }
-    /// `Musics.GAME`.
-    pub fn game() -> Self {
-        Self::new("minecraft:music.game", 12000, 24000, false)
-    }
-    /// The built-in situations the Music page lists, in its order: the lang key
-    /// of the heading the page's group shows and the music that situation plays.
-    pub fn builtin() -> [(&'static str, Music); 7] {
-        [
-            ("horizon.pages.music.menu", Self::menu()),
-            ("horizon.pages.music.overworld", Self::game()),
-            ("horizon.pages.music.creative", Self::creative()),
-            ("horizon.pages.music.underwater", Self::under_water()),
-            ("horizon.pages.music.end", Self::end()),
-            ("horizon.pages.music.boss", Self::end_boss()),
-            ("horizon.pages.music.credits", Self::credits()),
-        ]
-    }
-    /// `Music.CODEC`.
-    fn parse(v: &Value) -> Option<Self> {
-        let sound = v["sound"].as_str()?;
-        let int = |k: &str| v[k].as_i64().unwrap_or(0) as i32;
-        Some(Self::new(
-            sound,
-            int("min_delay"),
-            int("max_delay"),
-            v["replace_current_music"].as_bool().unwrap_or(false),
-        ))
-    }
-}
 /// The Music page's groups: each built-in situation's own tracks first, then
 /// every other `music.` event's tracks that no earlier group listed, under
 /// its dimension's biomes. A track several pools share is listed once, from
@@ -356,13 +287,6 @@ fn next_int(random: &mut LegacyRandom, min: i32, max: i32) -> i32 {
     } else {
         random.next_int_bound(max - min + 1).unwrap_or(0) + min
     }
-}
-/// A track a native mod plays over or instead of the music
-/// (`native_music_layers`): a sound event and its volume, 0 to 1.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MusicLayer {
-    pub sound: String,
-    pub volume: f32,
 }
 
 /// The layers playing: each a looping music-source instance whose volume

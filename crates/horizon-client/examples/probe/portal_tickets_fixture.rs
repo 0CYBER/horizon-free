@@ -4,7 +4,7 @@
 //! `PORTAL` ticket holds now.
 use horizon_client::save::{LevelShape, SaveDir, read_dat, write_dat};
 use horizon_client::ticket_levels::ChunkTickets;
-use horizon_world::nbt::{Tag, parse_snbt};
+use horizon_core::nbt::{Tag, parse_snbt};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io::Write;

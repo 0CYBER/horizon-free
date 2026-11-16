@@ -12,6 +12,7 @@ use std::{
 };
 
 #[test]
+#[ignore = "daily"]
 fn guest_joins_do_not_starve_a_hosts_pings() {
     // The real 20 s ping and 60 s silence, scaled down 100 times and 60 times: a ping is due every 200 ms
     // and a host silent for 1 s is gone, so joins every ~150 ms would hold the old schedule off for good.

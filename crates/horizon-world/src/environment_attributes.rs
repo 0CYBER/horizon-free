@@ -353,9 +353,15 @@ fn boolean(json: &Json) -> Result<bool, String> {
 /// decimal text to a float once; this rounds through a double, which differs only for decimals
 /// a hair from a float midpoint.)
 fn float(json: &Json) -> Result<f32, String> {
-    json.as_f64()
+    let value = json
+        .as_f64()
         .map(|f| f as f32)
-        .ok_or_else(|| format!("not a number: {json}"))
+        .ok_or_else(|| format!("not a number: {json}"))?;
+    // A server's or a pack's `1e300` would be an infinite attribute for `Range::Any` ones.
+    if !value.is_finite() {
+        return Err(format!("{json} is not a finite float"));
+    }
+    Ok(value)
 }
 
 /// `Codec.INT` of a JSON number (`Number.intValue`: truncated).
@@ -875,5 +881,18 @@ impl Attribute {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod finite_tests {
+    use super::AttributeMap;
+    use serde_json::json;
+
+    #[test]
+    fn a_float_that_overflows_is_refused() {
+        let refused = AttributeMap::parse(&json!({"minecraft:visual/cloud_height": 1e300}));
+        assert!(refused.unwrap_err().contains("not a finite float"));
+        assert!(AttributeMap::parse(&json!({"minecraft:visual/cloud_height": 192.5})).is_ok());
     }
 }

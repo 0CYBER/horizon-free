@@ -42,6 +42,7 @@ fn takes_terrain(programs: &[&str]) -> Option<(bool, bool)> {
 
 #[test]
 fn a_pack_without_terrain_programs_takes_terrain_from_the_game() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(taken) = takes_terrain(&["composite"]) else {
         return;
     };

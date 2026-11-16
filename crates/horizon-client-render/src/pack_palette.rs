@@ -4,7 +4,7 @@
 //! dust, while gameplay keeps vanilla's `DyeColor`), mob effect colours, the experience number's,
 //! entity shadows, the effect fogs' settings and durability bar colours. Lock-free: the draw paths
 //! and the mesher's workers read the dye, sheep and redstone tables per face.
-use std::path::Path;
+use crate::resource_source::ResourceSource;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, RwLock};
 
@@ -110,7 +110,7 @@ static REDSTONE: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 
 /// The colours of the pack overlay at `root`, from the installed pack formats; their dye, sheep
 /// and redstone colours go to the draw paths' tables ([`set`]).
-pub fn read(root: &Path) -> PackColors {
+pub fn read(root: &ResourceSource) -> PackColors {
     let formats = crate::pack_hooks::formats();
     let colors = formats.colors(root).unwrap_or_default();
     set(&colors);

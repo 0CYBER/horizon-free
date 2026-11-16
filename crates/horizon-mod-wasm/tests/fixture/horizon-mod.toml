@@ -1,0 +1,53 @@
+id = "wasm_fixture"
+name = "Wasm fixture"
+version = "0.1.0"
+description = "Minimal shared-memory wasm fixture."
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[[inject]]
+id = "tick"
+at = "horizon_client::game::Game<'_>::tick"
+kind = "head"
+with = "on_tick"
+hash = "fixture"
+
+[[inject]]
+id = "shutdown"
+at = "horizon_client::game::server_lifecycle::remember_shutdown"
+kind = "head"
+with = "on_shutdown"
+hash = "fixture"
+
+[[inject]]
+id = "average"
+at = "horizon_client::game::beacon::average"
+kind = "replace"
+with = "own_average"
+hash = "fixture"
+
+[[inject]]
+id = "sum"
+at = "listener_fixture::sum"
+kind = "return"
+with = "sum_return"
+hash = "fixture"
+
+[[inject]]
+id = "mirrors"
+at = "listener_fixture::mirrors"
+kind = "head"
+with = "mirrors"
+hash = "fixture"
+
+[[inject]]
+id = "turn"
+at = "horizon_client::game::commands::wrap_degrees"
+kind = "head"
+with = "turn_angle"
+hash = "fixture"
+
+[wasm]
+sha512 = "98ef821d61b4eab03acb83040c9ac12ca890cf369e8813358a0362076cd6add937e95d11ad5f455c180bb9c76382b16fb65f7745b3c8e9d93bd99070bfa297bf"
+toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"

@@ -43,7 +43,7 @@ pub fn install(first: i32, mut names: Vec<String>) -> Result<(), InstallError> {
         return Err(InstallError::InvalidRange);
     }
     if names.iter().any(|name| {
-        horizon_world::identifier::Identifier::parse_namespaced(name)
+        horizon_core::identifier::Identifier::parse_namespaced(name)
             .is_none_or(|id| id.namespace() == "minecraft")
     }) {
         return Err(InstallError::InvalidName);
@@ -55,42 +55,6 @@ pub fn install(first: i32, mut names: Vec<String>) -> Result<(), InstallError> {
     TYPES
         .set(Types { first, names })
         .map_err(|_| InstallError::AlreadyInstalled)
-}
-
-/// Validate an opaque value against the same limits used by the network reader.
-pub fn validate(value: &horizon_world::nbt::Tag) -> crate::Result<()> {
-    if matches!(value, horizon_world::nbt::Tag::End) {
-        return Err(crate::Error::new("a component value cannot be NBT End"));
-    }
-    let bytes = horizon_world::nbt::write_network(
-        value,
-        horizon_world::nbt::Limits {
-            max_bytes: crate::buf::NBT_QUOTA,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| crate::Error::new(error.to_string()))?;
-    Reader::new(&bytes).nbt()?;
-    // Disk NBT canonicalizes NaNs, and its reader normalizes negative zero.
-    // Reject values that would change when saved and reloaded.
-    let limits = horizon_world::nbt::Limits {
-        max_bytes: crate::buf::NBT_QUOTA + 2,
-        ..Default::default()
-    };
-    let named = horizon_world::nbt::NamedTag {
-        name: "".into(),
-        tag: value.clone(),
-    };
-    let saved = horizon_world::nbt::write_named(&named, limits)
-        .map_err(|error| crate::Error::new(error.to_string()))?;
-    let (loaded, _) = horizon_world::nbt::read_named(&saved, limits)
-        .map_err(|error| crate::Error::new(error.to_string()))?;
-    if loaded.tag != *value {
-        return Err(crate::Error::new(
-            "component value changes on save and reload",
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) fn contains(id: i32) -> bool {
@@ -186,3 +150,24 @@ pub fn entries() -> impl Iterator<Item = (i32, &'static str)> {
         })
     })
 }
+
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+impl crate::retained::OwnedHeap for Types {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self { first, names } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(first))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(names))
+    }
+}
+impl crate::retained::OwnedHeap for InstallError {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::InvalidRange => 0usize,
+            Self::DuplicateName => 0usize,
+            Self::InvalidName => 0usize,
+            Self::AlreadyInstalled => 0usize,
+        }
+    }
+}
+// End generated retained traversals.

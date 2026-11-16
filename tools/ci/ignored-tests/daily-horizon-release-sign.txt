@@ -1,0 +1,10 @@
+# The daily tests of horizon-release-sign: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-release-sign cli::a_nightly_is_signed_for_its_channel_and_for_its_version test:it daily child-process
+horizon-release-sign cli::a_signature_made_like_openssls_checks_and_tampering_fails test:it daily child-process
+horizon-release-sign cli::keygen_writes_the_secret_to_a_pipe_and_the_public_key_to_a_file test:it daily child-process
+horizon-release-sign cli::publishing_never_bypasses_signatures_for_fork_or_unknown_repositories test:it daily child-process
+horizon-release-sign cli::the_openssl_script_signs_what_the_launcher_checks test:it daily child-process
+horizon-release-sign cli::unsigned_releases_go_out_only_until_a_key_is_listed test:it daily child-process
+horizon-release-sign native_build::a_key_launchers_would_refuse_or_a_misnamed_archive_signs_nothing test:it daily child-process
+horizon-release-sign native_build::the_workflows_signature_is_what_the_launcher_checks test:it daily child-process

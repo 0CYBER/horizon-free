@@ -92,6 +92,9 @@ pub struct Glass {
     pub plate_alpha: f32,
     pub tint: f32,
     pub blur: f32,
+    /// The plates frost the theme's own painted sky instead of the sunset (a painted theme's
+    /// night): the launcher blurs that sky for them.
+    pub own_sky: bool,
 }
 
 impl Glass {
@@ -111,7 +114,9 @@ impl Glass {
             accent,
             accent_soft: mix_oklab(accent, 0xffffff, 0.52),
             base,
-            on_accent: if luminance(accent) > 0.4 {
+            // The label that reads better on this accent, by its actual WCAG contrast: a
+            // luminance cut-off gave white at 3.45:1 on `#a078d0`.
+            on_accent: if crate::contrast(ON_LIGHT, accent) > crate::contrast(0xffffff, accent) {
                 ON_LIGHT
             } else {
                 0xffffff
@@ -120,6 +125,7 @@ impl Glass {
             plate_alpha: alpha,
             tint,
             blur,
+            own_sky: false,
         }
     }
 
@@ -269,6 +275,26 @@ mod tests {
     fn a_light_accent_takes_dark_labels() {
         assert_eq!(Glass::new(0xf2c46b, TINT, BLUR).on_accent, ON_LIGHT);
         assert_eq!(Glass::default_look().on_accent, 0xffffff);
+    }
+
+    /// Mid-luminance accents took white labels below 4.5:1 under the old 0.4 cut-off.
+    #[test]
+    fn labels_take_the_better_contrast() {
+        assert_eq!(Glass::new(0xa078d0, TINT, BLUR).on_accent, ON_LIGHT);
+        for hue in 0..360 {
+            let accent = crate::glass::from_oklab([
+                0.65,
+                0.12 * (hue as f32).to_radians().cos(),
+                0.12 * (hue as f32).to_radians().sin(),
+            ]);
+            let g = Glass::new(accent, TINT, BLUR);
+            let other = if g.on_accent == ON_LIGHT {
+                0xffffff
+            } else {
+                ON_LIGHT
+            };
+            assert!(crate::contrast(g.on_accent, accent) >= crate::contrast(other, accent));
+        }
     }
 
     #[test]

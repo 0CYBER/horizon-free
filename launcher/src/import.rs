@@ -16,6 +16,7 @@ use crate::browser::{download, installed, FileRef};
 use crate::export::{FILES, FOLDERS};
 use crate::instances::{self, Instance};
 use crate::packs;
+use horizon_port_pack::zip_intake::{self, Archive};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -48,11 +49,9 @@ fn is_build(file: &Path) -> bool {
     crate::build_import::holds_game(file)
 }
 
-fn open(file: &Path) -> Result<zip::ZipArchive<fs::File>, String> {
-    fs::File::open(file)
-        .ok()
-        .and_then(|f| zip::ZipArchive::new(f).ok())
-        .ok_or_else(|| format!("{} is not a zip file that can be read.", name_of(file)))
+fn open(file: &Path) -> Result<Archive<fs::File>, String> {
+    let archive = fs::File::open(file).map_err(|e| format!("{}: {e}", name_of(file)))?;
+    zip_intake::open(archive).map_err(|e| format!("{}: {e}", name_of(file)))
 }
 
 fn name_of(file: &Path) -> String {
@@ -61,7 +60,7 @@ fn name_of(file: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn read_index(zip: &mut zip::ZipArchive<fs::File>) -> Result<serde_json::Value, String> {
+fn read_index(zip: &mut Archive<fs::File>) -> Result<serde_json::Value, String> {
     let mut text = Vec::new();
     zip.by_name(INDEX)
         .map_err(|_| format!("It has no {INDEX}: not a .mrpack."))?
@@ -78,7 +77,7 @@ pub fn what(file: &Path) -> Result<Dropped, String> {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase());
     match ext.as_deref() {
-        Some("hshader") => return Ok(Dropped::Pack(packs::Kind::Shader)),
+        Some("hshader") => return packs::kind_of(file).map(Dropped::Pack),
         // A game build: the program itself, or a release archive around it.
         // Taken on the extension alone, unread, so that `build_import` is the
         // one to say why a file with this name is not a game -- a better answer
@@ -111,6 +110,9 @@ pub fn what(file: &Path) -> Result<Dropped, String> {
         .map_err(|e| e.to_string())?;
     let under = |p: &str| names.iter().any(|n| n.starts_with(p));
     if has("manifest.json") && !has("pack.mcmeta") {
+        return Ok(Dropped::Modpack);
+    }
+    if !has("pack.mcmeta") && horizon_port_pack::import::prism_archive_layout(&names)?.is_some() {
         return Ok(Dropped::Modpack);
     }
     if has("pack.mcmeta") {
@@ -251,7 +253,7 @@ fn size_text(limit: u64) -> String {
 }
 
 fn fill(
-    zip: &mut zip::ZipArchive<fs::File>,
+    zip: &mut Archive<fs::File>,
     index: Option<&serde_json::Value>,
     home: &Path,
     java: bool,

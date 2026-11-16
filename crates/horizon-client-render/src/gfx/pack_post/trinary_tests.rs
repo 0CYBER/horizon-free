@@ -52,6 +52,7 @@ fn pack() -> Post {
 
 #[test]
 fn trinary_min_max_and_median_per_component() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     let pixels = gpu.render(&mut post, [8, 8]);

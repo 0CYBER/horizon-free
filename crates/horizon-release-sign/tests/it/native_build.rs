@@ -67,6 +67,7 @@ fn read_signature(dir: &Path, r: &Request) -> String {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_workflows_signature_is_what_the_launcher_checks() {
     // The script runs on the Linux runner of horizon-mods' sign job.
     if cfg!(windows) || openssl().is_none() {
@@ -121,6 +122,7 @@ fn the_workflows_signature_is_what_the_launcher_checks() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_key_launchers_would_refuse_or_a_misnamed_archive_signs_nothing() {
     if cfg!(windows) || openssl().is_none() {
         eprintln!("skipped: tools/ci/sign_native_build.sh is tested on Linux (bash, OpenSSL 3)");

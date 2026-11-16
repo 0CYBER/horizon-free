@@ -5,6 +5,8 @@
 //! This file only lists the probes, so that adding one reruns no harness: tools/parity.py leaves it out of
 //! their dependencies. How a probe runs is in dispatch.rs.
 extern crate horizon_client_lib as horizon_client;
+#[path = "../../src/test_resources.rs"]
+mod test_resources;
 #[macro_use]
 mod dispatch;
 
@@ -75,6 +77,7 @@ mod marker_particles_probe;
 mod menu_fixture;
 mod mipmap_probe;
 mod mob_ai_probe;
+mod mob_attribute_nbt_fixture;
 mod mob_attributes_fixture;
 mod music_fixture;
 mod natural_spawn_fixture;
@@ -193,6 +196,7 @@ probes! {
     menu_fixture,
     mipmap_probe,
     mob_ai_probe,
+    mob_attribute_nbt_fixture,
     mob_attributes_fixture,
     music_fixture,
     natural_spawn_fixture,

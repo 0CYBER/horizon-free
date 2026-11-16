@@ -1,0 +1,175 @@
+/* The modding book's look, on top of mdBook's themes: calmer type, a readable measure, tables and
+   code that sit quietly, and the landing page's cards. Colours come from mdBook's theme variables,
+   so every theme (light and dark) keeps its own. */
+
+:root {
+    --content-max-width: 900px;
+    --horizon-radius: 10px;
+    --mono-font: "Source Code Pro", ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html {
+    font-family: "Open Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Liberation Sans", sans-serif;
+}
+
+.content main {
+    line-height: 1.65;
+}
+
+.content h1,
+.content h2,
+.content h3 {
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+}
+
+.content h1 {
+    font-size: 2.3em;
+    margin-top: 0.6em;
+}
+
+.content h2 {
+    margin-top: 2em;
+    padding-bottom: 0.25em;
+    border-bottom: 1px solid var(--table-border-color);
+}
+
+.content p,
+.content li {
+    max-width: 72ch;
+}
+
+/* The first paragraph of the landing page. */
+.content .lede {
+    font-size: 1.2em;
+    line-height: 1.55;
+    color: var(--fg);
+    opacity: 0.78;
+    max-width: 62ch;
+}
+
+/* Figures: centred, never wider than the column. */
+.content main img {
+    display: block;
+    margin: 1.75em auto;
+    max-width: 100%;
+    height: auto;
+}
+
+/* Diagrams take the column's full width, so their labels stay legible. */
+.content p:has(> img) {
+    max-width: none;
+}
+
+.content main img[src$=".svg"] {
+    width: 100%;
+}
+
+/* Tables: full width, light rules, roomy cells. */
+.content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25em 0;
+    font-size: 0.95em;
+}
+
+.content table td,
+.content table th {
+    padding: 0.55em 0.8em;
+    border: none;
+    border-bottom: 1px solid var(--table-border-color);
+    vertical-align: top;
+}
+
+table thead,
+.content table thead tr {
+    background: var(--quote-bg);
+    border: none;
+}
+
+.content table thead th {
+    text-align: left;
+    font-weight: 650;
+    border-bottom-width: 2px;
+}
+
+.content table tbody tr:nth-child(2n) {
+    background: transparent;
+}
+
+/* Code. */
+code {
+    font-family: var(--mono-font);
+    font-size: 0.875em;
+}
+
+.content pre {
+    border-radius: var(--horizon-radius);
+}
+
+.content pre > code {
+    padding: 1em 1.1em;
+    line-height: 1.5;
+    border-radius: var(--horizon-radius);
+}
+
+.content :not(pre) > code {
+    padding: 0.1em 0.35em;
+    border-radius: 5px;
+}
+
+/* Notes written as block quotes. */
+.content blockquote {
+    margin: 1.5em 0;
+    padding: 0.6em 1.1em;
+    border-inline-start: 4px solid var(--links);
+    border-block: none;
+    border-radius: 0 var(--horizon-radius) var(--horizon-radius) 0;
+    background: var(--quote-bg);
+}
+
+/* The landing page's "where to start" cards. */
+.content .cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1em;
+    margin: 1.5em 0 2em;
+}
+
+@media (max-width: 640px) {
+    .content .cards {
+        grid-template-columns: 1fr;
+    }
+}
+
+.content .cards p {
+    margin: 0;
+    padding: 1em 1.2em;
+    border: 1px solid var(--table-border-color);
+    border-radius: var(--horizon-radius);
+    line-height: 1.5;
+    transition: border-color 0.15s ease;
+}
+
+.content .cards p:hover {
+    border-color: var(--links);
+}
+
+.content .cards a {
+    display: block;
+    margin-bottom: 0.3em;
+    font-size: 1.08em;
+}
+
+/* Sidebar: a little more air between chapters. */
+.chapter li.chapter-item {
+    line-height: 1.45;
+    margin-block-start: 0.45em;
+}
+
+.chapter li.part-title {
+    margin-block-start: 1.6em;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+}

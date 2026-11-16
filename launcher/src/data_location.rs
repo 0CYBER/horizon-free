@@ -35,9 +35,25 @@ pub fn bootstrap_path() -> Result<PathBuf> {
     {
         return pointer_path(Path::new(&path));
     }
+    if cfg!(test) {
+        return Ok(test_home().join("location.json"));
+    }
     dirs::config_dir()
         .map(|p| p.join("horizon-launcher-location").join("location.json"))
         .ok_or_else(|| "Cannot locate the platform configuration folder for location.json".into())
+}
+
+/// Where the library's own tests keep the launcher's and the game's data (`launcher`, `game`,
+/// `location.json` inside) unless `HORIZON_LAUNCHER_HOME` or `HORIZON_HOME` name another:
+/// never a player's install. A fixed path, not an environment change, so it holds from the
+/// first call on any thread, and a test that runs its own binary again shares it.
+///
+/// The temporary folder in its real spelling, as [`crate::backend::build_dir`] resolves it:
+/// Windows can name it by its 8.3 short form (`C:\Users\RUNNER~1\…`), so every test path
+/// compares under one spelling.
+pub fn test_home() -> PathBuf {
+    let temp = std::env::temp_dir();
+    crate::backend::plain(temp.canonicalize().unwrap_or(temp)).join("horizon-launcher-lib-tests")
 }
 
 fn overridden(name: &str) -> bool {
@@ -76,6 +92,17 @@ fn remember_startup_error(error: Option<String>) {
 pub fn configured_roots() -> Result<Option<Roots>> {
     if FORCE_DEFAULT.load(Ordering::Acquire) {
         return Ok(None);
+    }
+    // A unit test never reaches the player's real folders: unless it points at a location file
+    // of its own, its roots are this test process's, under the temporary folder.
+    if cfg!(test) && !overridden("HORIZON_LAUNCHER_LOCATION_FILE") {
+        let home =
+            std::env::temp_dir().join(format!("horizon-launcher-test-{}", std::process::id()));
+        return Ok(Some(Roots {
+            launcher: home.join("launcher"),
+            game: home.join("game"),
+            build: home.join("launcher"),
+        }));
     }
     let mut slot = location();
     if slot.is_none() {

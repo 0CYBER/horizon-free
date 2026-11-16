@@ -1562,7 +1562,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_heavy_part_of_a_pass_has_the_largest_time() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU with timestamps inside passes: skipped");
             return;
@@ -1746,6 +1748,7 @@ mod tests {
 
     #[test]
     fn counters_see_the_overdraw_that_draw_order_makes() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = stats_device() else {
             eprintln!("no GPU with pipeline statistics: skipped");
             return;
@@ -1834,7 +1837,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn stages_split_a_render_pass_in_a_plain_frame_and_kept_frames_hold_them() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

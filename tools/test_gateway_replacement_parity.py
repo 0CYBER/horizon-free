@@ -38,8 +38,8 @@ def main():
     source = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaGatewayReplacementOracle.java'
     sources = [Path(__file__), source, source.parent / 'ParityData.java', lab.ROOT / 'Cargo.lock',
                lab.ROOT / 'crates/horizon-client/src/game.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/block_entity_anims.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/spill.rs']
+               lab.ROOT / 'crates/horizon-client/src/game/blocks/block_entity_anims.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/blocks/spill.rs']
     hashes = base.source_hashes(sources)
 
     def run(command, label, **kwargs):

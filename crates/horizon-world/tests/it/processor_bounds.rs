@@ -1,21 +1,23 @@
 //! The decode-time bounds vanilla's processor codecs check, which a data pack
 //! that vanilla refuses must not get past here either.
-use horizon_world::{
-    DATA_VERSION,
-    nbt::Tag,
-    registry::BlockRegistry,
-    worldgen::{
-        block_feature::FeatureBlockBindings,
-        structure::{
-            StateTransforms, StructureResources,
-            processor::{Processor, ProcessorList},
-        },
-    },
-};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        registry::BlockRegistry,
+        worldgen::{
+            block_feature::FeatureBlockBindings,
+            structure::{
+                StateTransforms, StructureResources,
+                processor::{Processor, ProcessorList},
+            },
+        },
+    },
 };
 
 fn names() -> [&'static str; 4] {

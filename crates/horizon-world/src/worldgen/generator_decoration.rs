@@ -4,10 +4,6 @@
 //! Roots whose algorithm or bindings are not implemented are left out of
 //! execution (but keep their place in vanilla's per-step feature ordering, so
 //! decoration seeds of the remaining features are unchanged).
-use super::structure::{
-    BoundingBox,
-    start::{STEPS, place_in_chunk},
-};
 use super::{
     anchor::WorldGenerationContext,
     biome::BiomeId,
@@ -57,6 +53,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+use {
+    super::structure::start::{STEPS, place_in_chunk},
+    horizon_core::bounding_box::BoundingBox,
+};
 
 pub(super) struct Decoration {
     plan: FeatureDecorationPlan,
@@ -93,6 +93,7 @@ fn possible_biomes(source: &ResolvedBiomeSource) -> Vec<String> {
             .iter()
             .map(|(_, name)| name.clone())
             .collect(),
+        ResolvedBiomeSource::Regions(source) => source.biomes().map(str::to_owned).collect(),
         ResolvedBiomeSource::End(source) => [
             &source.center,
             &source.highlands,
@@ -134,6 +135,12 @@ const FLAT_LAKES: [&str; 2] = [
     "minecraft:lake_lava_surface",
 ];
 impl FlatDecoration {
+    /// None of the biome's entries: the structure pieces alone, for a mod's chunk generator that
+    /// asks for no features.
+    pub(super) const NONE: Self = Self {
+        features: false,
+        lakes: false,
+    };
     /// The settings' `features` and `lakes`, for layers that are all air (`void_gen`) or not and a
     /// biome that is the_void or not.
     pub(super) fn new(features: bool, lakes: bool, void_gen: bool, the_void: bool) -> Self {
@@ -445,7 +452,7 @@ impl Decoration {
             Ok(terrain) => terrain,
             Err(e) => return Err(resource(e.to_string())),
         };
-        let structures_only = worker.structures_only || !region[4].features;
+        let structures_only = worker.structures_only;
         let references = region[4].structure_starts.clone();
         let mut block_entities = Vec::new();
         for chunk in region.iter_mut() {
@@ -759,10 +766,9 @@ impl PlacementContext for OriginWorld<'_> {
 /// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
-    /// The region's full chunks (`ImposterProtoChunk(chunk, false)`).
     full: Vec<ChunkPos>,
-    block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
-    entities: Vec<crate::nbt::Compound>,
+    block_entities: Vec<([i32; 3], horizon_core::nbt::Compound)>,
+    entities: Vec<horizon_core::nbt::Compound>,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
     structure_mobs: Option<Arc<dyn super::generator::StructureMobs>>,
     starts: Vec<Arc<super::structure::start::StructureStart>>,
@@ -799,6 +805,7 @@ struct ShapeLevel<'w, 'a> {
     world: &'w World<'a>,
     random: horizon_core::random::LegacyRandom,
 }
+impl crate::level::BlockEntityNeighbors for ShapeLevel<'_, '_> {}
 impl crate::level::LevelAccess for ShapeLevel<'_, '_> {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world
@@ -872,7 +879,7 @@ impl World<'_> {
             for t in &ticks {
                 let at = [t.pos.x, t.pos.y, t.pos.z];
                 if t.fluid {
-                    if let Some(fluid) = crate::fluid::FluidKind::from_index(t.kind as usize) {
+                    if let Some(fluid) = crate::fluid::FluidKind::from_tick_id(t.kind) {
                         self.schedule_fluid_tick(at, fluid, t.delay)?;
                     }
                 } else {
@@ -1067,13 +1074,13 @@ fn loot_table_nbt(
     state: BlockStateId,
     table: &str,
     random: &mut impl horizon_core::random::RandomSource,
-) -> Option<crate::nbt::Compound> {
-    use crate::nbt::Tag;
+) -> Option<horizon_core::nbt::Compound> {
+    use horizon_core::nbt::Tag;
     let name = registry.state(state)?.name.to_string();
     if !randomizable_container(&name) {
         return None;
     }
-    let mut nbt = crate::nbt::Compound::new();
+    let mut nbt = horizon_core::nbt::Compound::new();
     nbt.insert("id".into(), Tag::String(name.as_str().into()));
     nbt.insert("LootTable".into(), Tag::String(table.into()));
     nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
@@ -1286,7 +1293,10 @@ impl PlacementContext for World<'_> {
                 (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
             }))
     }
-    fn add_entity(&mut self, mut nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+    fn add_entity(
+        &mut self,
+        mut nbt: horizon_core::nbt::Compound,
+    ) -> Result<(), PlacementQueryError> {
         if let Some(mobs) = self.structure_mobs.clone()
             && nbt.contains_key(&"horizon:finalize".into())
         {
@@ -1319,8 +1329,8 @@ impl PlacementContext for World<'_> {
         beam_target: Option<[i32; 3]>,
         invulnerable: bool,
     ) -> Result<(), PlacementQueryError> {
-        use crate::nbt::Tag;
-        let mut nbt = crate::nbt::Compound::new();
+        use horizon_core::nbt::Tag;
+        let mut nbt = horizon_core::nbt::Compound::new();
         nbt.insert("id".into(), Tag::String("minecraft:end_crystal".into()));
         nbt.insert(
             "Pos".into(),
@@ -1340,7 +1350,7 @@ impl PlacementContext for World<'_> {
     fn set_block_entity(
         &mut self,
         position: [i32; 3],
-        nbt: crate::nbt::Compound,
+        nbt: horizon_core::nbt::Compound,
     ) -> Result<(), PlacementQueryError> {
         self.block_entities.retain(|(p, _)| *p != position);
         self.block_entities.push((position, nbt));
@@ -1360,8 +1370,8 @@ impl PlacementContext for World<'_> {
         if registry.state(state).map(|s| s.name.as_str()) != Some("minecraft:end_gateway") {
             return Ok(());
         }
-        use crate::nbt::Tag;
-        let mut nbt = crate::nbt::Compound::new();
+        use horizon_core::nbt::Tag;
+        let mut nbt = horizon_core::nbt::Compound::new();
         nbt.insert("id".into(), Tag::String("minecraft:end_gateway".into()));
         nbt.insert("Age".into(), Tag::Long(0));
         nbt.insert("exit_portal".into(), Tag::IntArray(exit.to_vec()));
@@ -1697,12 +1707,12 @@ impl PlacementContext for World<'_> {
 }
 
 /// The block an entity's `Pos` is in.
-fn block_of(nbt: &crate::nbt::Compound) -> Option<[i32; 3]> {
-    let Some(crate::nbt::Tag::List(p)) = nbt.get(&"Pos".into()) else {
+fn block_of(nbt: &horizon_core::nbt::Compound) -> Option<[i32; 3]> {
+    let Some(horizon_core::nbt::Tag::List(p)) = nbt.get(&"Pos".into()) else {
         return None;
     };
     Some(std::array::from_fn(|i| match p.get(i) {
-        Some(crate::nbt::Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
+        Some(horizon_core::nbt::Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
         _ => 0,
     }))
 }
@@ -1779,18 +1789,20 @@ mod tests {
             .unwrap_or_else(|| panic!("no loot table for {name}"));
             assert_eq!(
                 nbt.get(&"id".into()),
-                Some(&crate::nbt::Tag::String(name.into()))
+                Some(&horizon_core::nbt::Tag::String(name.into()))
             );
             assert_eq!(
                 nbt.get(&"LootTable".into()),
-                Some(&crate::nbt::Tag::String(
+                Some(&horizon_core::nbt::Tag::String(
                     "minecraft:chests/simple_dungeon".into()
                 ))
             );
             // The seed is the first long of the random: same seed, same draw.
             assert_eq!(
                 nbt.get(&"LootTableSeed".into()),
-                Some(&crate::nbt::Tag::Long(LegacyRandom::new(4).next_long()))
+                Some(&horizon_core::nbt::Tag::Long(
+                    LegacyRandom::new(4).next_long()
+                ))
             );
         }
     }

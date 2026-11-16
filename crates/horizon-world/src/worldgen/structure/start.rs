@@ -1,13 +1,5 @@
 //! Structures, structure sets and their placements, structure starts,
 //! references, terrain adaptation and per-chunk piece placement.
-use super::{
-    BoundingBox, StructureResources,
-    jigsaw::{
-        JigsawConfig, JigsawContext, PlaceFeature, PoolPiece, Pools, Projection, lay_out_children,
-        place_start,
-    },
-    legacy::{LegacyPiece, PieceContext},
-};
 use crate::{
     heightmap::HeightmapType,
     worldgen::{
@@ -30,6 +22,18 @@ use serde_json::{Value, value::RawValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
+};
+use {
+    super::{
+        StructureResources,
+        jigsaw::{
+            JigsawConfig, JigsawContext, PlaceFeature, PoolPiece, Pools, Projection,
+            lay_out_children, place_start,
+        },
+        legacy::{LegacyPiece, PieceContext},
+        mod_types::{ModStructureType, ModStructureTypes},
+    },
+    horizon_core::bounding_box::BoundingBox,
 };
 
 pub const STEPS: [&str; 11] = [
@@ -97,8 +101,27 @@ pub enum StructureKind {
     EndCity,
     /// `horizon:formations`: Formations' SimpleStructure.
     Formations(super::formations::Def),
+    /// A structure type a mod registered (`"type": "modid:tower"`): vanilla's
+    /// `StructureType` as code, with the structure's own JSON config.
+    Mod(ModType),
     /// A structure type whose generator is not implemented yet.
     Unsupported(String),
+}
+
+/// A mod's structure type as a structure's kind carries it: the type's engine
+/// side and the structure's own JSON config, which its
+/// `find_generation_point` reads.
+pub struct ModType {
+    pub ty: Arc<dyn ModStructureType>,
+    /// The mod's config, prepared once while decoding this definition.
+    pub config: Arc<horizon_core::nbt::Tag>,
+}
+impl std::fmt::Debug for ModType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModType")
+            .field("type", &self.config.get("type"))
+            .finish()
+    }
 }
 #[derive(Debug)]
 pub struct StructureDef {
@@ -338,6 +361,9 @@ impl StructureRegistry {
         sets: &BTreeMap<String, String>,
         pools: BTreeMap<String, String>,
         biome_set: &dyn Fn(&Value) -> Result<BTreeSet<BiomeId>, DecodeError>,
+        // The structure types the executable's mods registered, looked up
+        // before `Unsupported` (`"type": "modid:tower"`).
+        mod_types: &ModStructureTypes,
     ) -> Result<Self, DecodeError> {
         let mut defs = Vec::new();
         for (name, json) in structures {
@@ -420,7 +446,15 @@ impl StructureRegistry {
                     Ok(def) => StructureKind::Formations(def),
                     Err(_) => StructureKind::Unsupported("horizon:formations".into()),
                 },
-                other => StructureKind::Unsupported(other.to_owned()),
+                other => match mod_types.get(other) {
+                    Some(ty) => StructureKind::Mod(ModType {
+                        ty: ty.clone(),
+                        config: ty.prepare_config(&v).map_err(|error| {
+                            DecodeError::Registry(format!("structure {name}: {error}"))
+                        })?,
+                    }),
+                    None => StructureKind::Unsupported(other.to_owned()),
+                },
             };
             defs.push(StructureDef {
                 name: name.clone(),
@@ -479,19 +513,20 @@ impl StructureRegistry {
                 },
                 _ => Placement::Unsupported,
             };
+            let mut structures = Vec::new();
+            for entry in v["structures"].as_array().into_iter().flatten() {
+                // StructureSelectionEntry.CODEC uses ExtraCodecs.POSITIVE_INT.
+                let weight = entry["weight"]
+                    .as_i64()
+                    .filter(|w| (1..=i64::from(i32::MAX)).contains(w))
+                    .ok_or(DecodeError::Field("structure set positive int weight"))?;
+                if let Some(definition) = entry["structure"].as_str().and_then(index) {
+                    structures.push((definition, weight as i32));
+                }
+            }
             out.push(StructureSet {
                 name: name.clone(),
-                structures: v["structures"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| {
-                        Some((
-                            index(e["structure"].as_str()?)?,
-                            e["weight"].as_i64().unwrap_or(1) as i32,
-                        ))
-                    })
-                    .collect(),
+                structures,
                 placement,
                 salt: p["salt"].as_i64().unwrap_or(0) as i32,
                 frequency: frequency as f32,
@@ -795,7 +830,7 @@ impl Piece {
         }
     }
     /// `StructurePiece.createTag`; None for a type Horizon cannot save yet.
-    pub fn save(&self) -> Option<crate::nbt::Compound> {
+    pub fn save(&self) -> Option<horizon_core::nbt::Compound> {
         match self {
             Self::Pool(p) => Some(p.save()),
             Self::Legacy(p) => p.save(),
@@ -842,13 +877,15 @@ pub struct StructureStart {
     pub pieces: Vec<Piece>,
     /// Piece union, inflated by 12 for terrain-adapting structures.
     pub bounding_box: BoundingBox,
+    /// Whether any piece supplied cached terrain metadata.
+    pub(crate) has_piece_beardifier: bool,
 }
 impl StructureStart {
     /// `StructureStart.createTag` in its own chunk; None while one of its
     /// pieces cannot be saved. `references` counts `addReference` calls,
     /// which only locating structures makes: 0 in a freshly made world.
-    pub fn save(&self) -> Option<crate::nbt::Tag> {
-        use crate::nbt::Tag;
+    pub fn save(&self) -> Option<horizon_core::nbt::Tag> {
+        use horizon_core::nbt::Tag;
         let children: Option<Vec<Tag>> = self
             .pieces
             .iter()
@@ -899,6 +936,22 @@ impl NoiseColumn {
     }
 }
 
+/// A caller-owned final noise column, filled directly during one sampling pass.
+pub trait NoiseColumnTarget {
+    fn resize(&mut self, min: i32, height: usize);
+    fn set(&mut self, index: usize, block: NoiseBlock);
+}
+impl NoiseColumnTarget for NoiseColumn {
+    fn resize(&mut self, min: i32, height: usize) {
+        self.min = min;
+        self.blocks.clear();
+        self.blocks.resize(height, NoiseBlock::Air);
+    }
+    fn set(&mut self, index: usize, block: NoiseBlock) {
+        self.blocks[index] = block;
+    }
+}
+
 /// Biome and height queries for one structure generation attempt.
 pub trait StartContext: JigsawContext {
     /// A chunk an older version generated: its structure starts are the ones
@@ -920,11 +973,27 @@ pub trait StartContext: JigsawContext {
     }
     /// ChunkGenerator.getBaseColumn as heightmap opacity, indexed from min_y.
     fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool>;
-    /// base_column for several heightmap kinds from one noise-column pass.
-    fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>>;
+    /// Several heightmap predicates from one pass, for the engine's vanilla callers.
+    fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
+        self.base_columns_by(x, z, kinds.len(), &|index| kinds[index])
+    }
+    /// Several heightmap predicates from one pass, projected without a temporary kind vector.
+    fn base_columns_by(
+        &mut self,
+        x: i32,
+        z: i32,
+        count: usize,
+        kind: &dyn Fn(usize) -> HeightmapType,
+    ) -> Vec<Vec<bool>>;
     /// ChunkGenerator.getBaseColumn's blocks: the noise column's states, as
     /// mods' placements test them (Formations').
-    fn noise_column(&mut self, x: i32, z: i32) -> NoiseColumn;
+    fn noise_column(&mut self, x: i32, z: i32) -> NoiseColumn {
+        let mut column = NoiseColumn::default();
+        self.noise_column_into(x, z, &mut column);
+        column
+    }
+    /// Fill the caller's final column directly, with no intermediate classified-block vector.
+    fn noise_column_into(&mut self, x: i32, z: i32, column: &mut dyn NoiseColumnTarget);
     /// Biome.coldEnoughToSnow at a position.
     fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool;
     fn generation(&self) -> WorldGenerationContext;
@@ -1016,17 +1085,10 @@ pub(crate) fn create_starts_with_saved(
         let mut options = set.structures.clone();
         let mut random = WorldgenRandom::new(LegacyRandom::new(0));
         random.set_large_feature_seed(seed, chunk.x, chunk.z);
-        let mut total: i32 = options.iter().map(|o| o.1).sum();
         while !options.is_empty() {
-            let mut choice = random.next_int_bound(total).unwrap_or(0);
-            let mut index = 0;
-            for option in &options {
-                choice -= option.1;
-                if choice < 0 {
-                    break;
-                }
-                index += 1;
-            }
+            let Some(index) = pick_structure(&options, &mut random) else {
+                break;
+            };
             let selected = options[index];
             if let Some(start) = try_generate(
                 registry, resources, bindings, context, selected.0, chunk, false,
@@ -1035,12 +1097,24 @@ pub(crate) fn create_starts_with_saved(
                 break;
             }
             options.remove(index);
-            total -= selected.1;
         }
     }
     starts.extend(saved);
     starts
 }
+// StructureSet uses a list of positive-int entries, not WeightedList: vanilla
+// does not reject oversized totals in its codec. Keep vanilla's int draw below
+// the limit; above it use one unsigned nextLong modulo the i64 total, just as
+// the other wide structure selectors do.
+fn pick_structure(options: &[(usize, i32)], random: &mut impl RandomSource) -> Option<usize> {
+    let total: i64 = options.iter().map(|o| i64::from(o.1)).sum();
+    let mut choice = crate::worldgen::weighted::draw(total, random)?;
+    options.iter().position(|option| {
+        choice -= i64::from(option.1);
+        choice < 0
+    })
+}
+
 /// `Structure.generate` of one structure for one chunk: what the chunk's
 /// structure set would build there, or, for `/place structure`, the start this
 /// structure builds in any chunk (the set's placement is not consulted, and
@@ -1429,6 +1503,19 @@ fn generate(
             )?;
             (position, pieces.into_iter().map(Piece::Pool).collect())
         }
+        StructureKind::Mod(mod_type) => {
+            // The type's own start and pieces; the biome check below and the
+            // set's spacing stay the game's, as for every other kind.
+            let context: &mut dyn StartContext = context;
+            let (position, pieces) = mod_type.ty.find_generation_point(
+                context,
+                resources,
+                chunk,
+                &mod_type.config,
+                &mut random,
+            )?;
+            (position, pieces.into_iter().map(Piece::Legacy).collect())
+        }
         StructureKind::Unsupported(_) => return None,
     };
     let quart = position.map(|v| v >> 2);
@@ -1444,11 +1531,30 @@ impl StructureStart {
     /// least one: their box, grown where the structure adapts the terrain.
     pub fn new(structure: usize, def: &StructureDef, chunk: ChunkPos, pieces: Vec<Piece>) -> Self {
         let mut bounding_box = pieces[0].bounding_box();
-        for piece in &pieces[1..] {
-            bounding_box.encapsulate(&piece.bounding_box());
+        let mut override_bounds: Option<BoundingBox> = None;
+        let mut has_piece_beardifier = false;
+        for (index, piece) in pieces.iter().enumerate() {
+            if index != 0 {
+                bounding_box.encapsulate(&piece.bounding_box());
+            }
+            if let Piece::Legacy(legacy) = piece
+                && let Some(rigid) = legacy.beardifier()
+            {
+                has_piece_beardifier = true;
+                if rigid.adjustment != TerrainAdjustment::None {
+                    let bounds = influence_box(rigid.bounds.minimum(), rigid.bounds.maximum());
+                    match &mut override_bounds {
+                        Some(union) => union.encapsulate(&bounds),
+                        None => override_bounds = Some(bounds),
+                    }
+                }
+            }
         }
         if def.terrain != TerrainAdjustment::None {
             bounding_box = bounding_box.inflated(12, 12);
+        }
+        if let Some(bounds) = override_bounds {
+            bounding_box.encapsulate(&bounds);
         }
         if let Some(enhanced) = def.enhanced_terrain.as_ref().filter(|e| e.inflate) {
             let r = enhanced.radius();
@@ -1461,6 +1567,7 @@ impl StructureStart {
             references: 0,
             pieces,
             bounding_box,
+            has_piece_beardifier,
         }
     }
 }
@@ -1539,10 +1646,29 @@ pub fn beardifier(
             include(b, &mut kernels);
         }
         let adjustment = def.terrain;
-        if adjustment == TerrainAdjustment::None {
+        if adjustment == TerrainAdjustment::None && !start.has_piece_beardifier {
             continue;
         }
         for piece in &start.pieces {
+            if start.has_piece_beardifier
+                && let Piece::Legacy(legacy) = piece
+                && let Some(rigid) = legacy.beardifier()
+            {
+                let b = BoundingBox::new(rigid.bounds.minimum(), rigid.bounds.maximum());
+                if rigid.adjustment != TerrainAdjustment::None
+                    && b.max[0] >= bx - 12
+                    && b.min[0] <= bx + 15 + 12
+                    && b.max[2] >= bz - 12
+                    && b.min[2] <= bz + 15 + 12
+                {
+                    rigids.push(rigid);
+                    include(b, &mut any);
+                }
+                continue;
+            }
+            if adjustment == TerrainAdjustment::None {
+                continue;
+            }
             let b = piece.bounding_box();
             let near = b.max[0] >= bx - 12
                 && b.min[0] <= bx + 15 + 12
@@ -1663,10 +1789,31 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
     Ok(())
 }
 
+/// A piece's terrain box grown by the beardifier's reach (12 around), without overflowing:
+/// a mod's bounds may sit at the `i32` limits.
+fn influence_box(minimum: [i32; 3], maximum: [i32; 3]) -> BoundingBox {
+    BoundingBox::new(
+        minimum.map(|v| v.saturating_sub(12)),
+        maximum.map(|v| v.saturating_add(12)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_terrain_box_at_the_i32_limits_grows_without_overflowing() {
+        assert_eq!(
+            influence_box([i32::MIN, i32::MIN + 5, 0], [i32::MAX, i32::MAX - 5, 3]),
+            BoundingBox::new([i32::MIN, i32::MIN, -12], [i32::MAX, i32::MAX, 15])
+        );
+        assert_eq!(
+            influence_box([0, 64, 0], [8, 73, 8]),
+            BoundingBox::new([-12, 52, -12], [20, 85, 20])
+        );
+    }
 
     fn registry(structures: &[(&str, Value)], sets: &[(&str, Value)]) -> StructureRegistry {
         let text = |l: &[(&str, Value)]| {
@@ -1675,24 +1822,37 @@ mod tests {
                 .collect::<BTreeMap<_, _>>()
         };
         // Biome tags: `#t:one` is biome 1, `#t:two` biome 2.
-        StructureRegistry::new(&text(structures), &text(sets), BTreeMap::new(), &|v| {
-            Ok(match v.as_str() {
-                Some("#t:one") => BTreeSet::from([BiomeId(1)]),
-                Some("#t:two") => BTreeSet::from([BiomeId(2)]),
-                _ => BTreeSet::new(),
-            })
-        })
+        StructureRegistry::new(
+            &text(structures),
+            &text(sets),
+            BTreeMap::new(),
+            &|v| {
+                Ok(match v.as_str() {
+                    Some("#t:one") => BTreeSet::from([BiomeId(1)]),
+                    Some("#t:two") => BTreeSet::from([BiomeId(2)]),
+                    _ => BTreeSet::new(),
+                })
+            },
+            &ModStructureTypes::new(),
+        )
         .unwrap()
     }
 
     fn try_registry(placement: Value) -> Result<StructureRegistry, DecodeError> {
+        try_weight_registry(placement, json!(1))
+    }
+
+    fn try_weight_registry(
+        placement: Value,
+        weight: Value,
+    ) -> Result<StructureRegistry, DecodeError> {
         let structures = BTreeMap::from([(
             "t:s".to_owned(),
             json!({"type": "minecraft:igloo", "biomes": []}).to_string(),
         )]);
         let sets = BTreeMap::from([(
             "t:set".to_owned(),
-            json!({"structures": [{"structure": "t:s", "weight": 1}],
+            json!({"structures": [{"structure": "t:s", "weight": weight}],
                 "placement": placement})
             .to_string(),
         )]);
@@ -1701,7 +1861,54 @@ mod tests {
             &sets,
             BTreeMap::new(),
             &|_| Ok(BTreeSet::new()),
+            &ModStructureTypes::new(),
         )
+    }
+
+    #[test]
+    fn structure_weights_decode_positive_int() {
+        let placement = json!({"type": "minecraft:dimension_origin"});
+        for weight in [
+            json!(-1),
+            json!(0),
+            json!(2147483648_i64),
+            json!(u64::MAX),
+            json!(1.5),
+            json!("1"),
+            Value::Null,
+        ] {
+            assert!(
+                try_weight_registry(placement.clone(), weight.clone()).is_err(),
+                "{weight}"
+            );
+        }
+        for weight in [1, i32::MAX] {
+            assert!(try_weight_registry(placement.clone(), json!(weight)).is_ok());
+        }
+    }
+
+    #[test]
+    fn structure_weights_wide_pick_matches_old_small_lists() {
+        for weights in [[1, 1, 1], [1, 2, 5], [7, 3, 1]] {
+            let options: Vec<_> = weights.into_iter().enumerate().collect();
+            for seed in -20..20 {
+                let mut old = LegacyRandom::new(seed);
+                let mut new = old.clone();
+                let mut choice = old.next_int_bound(weights.iter().sum()).unwrap();
+                let expected = weights.iter().position(|w| {
+                    choice -= w;
+                    choice < 0
+                });
+                assert_eq!(pick_structure(&options, &mut new), expected);
+                assert_eq!(new.next_long(), old.next_long());
+            }
+        }
+        let mut options = vec![(0, i32::MAX), (1, i32::MAX), (2, i32::MAX)];
+        let mut random = LegacyRandom::new(71);
+        while !options.is_empty() {
+            let index = pick_structure(&options, &mut random).unwrap();
+            options.remove(index);
+        }
     }
 
     #[test]

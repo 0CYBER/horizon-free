@@ -36,9 +36,9 @@ pub fn slept_on(
 /// `VoxelShape.max(Axis.Y)` of the boxes the pack gives a block, in the
 /// block's own coordinates: the top of the bed, `1.0` for a full cube, and
 /// `None` for a shape with nothing in it (`VoxelShape.isEmpty`).
-pub fn shape_top(boxes: &[[f64; 6]], base_y: f64) -> Option<f64> {
+pub fn shape_top(boxes: impl IntoIterator<Item = [f64; 6]>, base_y: f64) -> Option<f64> {
     boxes
-        .iter()
+        .into_iter()
         .map(|b| b[4] - base_y)
         .fold(None, |top: Option<f64>, y| {
             Some(top.map_or(y, |top| top.max(y)))
@@ -113,15 +113,15 @@ mod tests {
     fn the_height_is_the_top_of_the_shape() {
         // The boxes are the pack's, in world space, as `outline_boxes` gives them.
         let bed = [[10.0, 70.0, 5.0, 11.0, 70.5625, 6.0]];
-        assert_eq!(shape_top(&bed, 70.0), Some(0.5625));
+        assert_eq!(shape_top(bed, 70.0), Some(0.5625));
         let pillow = [[10.0, 70.0, 5.0, 11.0, 70.6875, 6.0]];
-        assert_eq!(shape_top(&pillow, 70.0), Some(0.6875));
+        assert_eq!(shape_top(pillow, 70.0), Some(0.6875));
         let two = [
             [10.0, 70.0, 5.0, 11.0, 70.5625, 6.0],
             [10.0, 70.0, 5.0, 10.5, 70.25, 5.5],
         ];
-        assert_eq!(shape_top(&two, 70.0), Some(0.5625), "the tallest box");
-        assert_eq!(shape_top(&[], 70.0), None, "a bed with no shape");
+        assert_eq!(shape_top(two, 70.0), Some(0.5625), "the tallest box");
+        assert_eq!(shape_top([], 70.0), None, "a bed with no shape");
     }
 
     /// `setPosToBed`: `0.125` above the height, in the middle of the block.

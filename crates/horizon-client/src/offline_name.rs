@@ -77,7 +77,7 @@ mod tests {
         for seed in [0, 7, 99_999, 100_000, u64::MAX] {
             let name = generate(seed);
             assert!(is_valid(&name), "{name}");
-            // The LAN host's own profile (game/chat.rs PLAYER_NAME).
+            // The LAN host's own profile (game/interface/chat.rs PLAYER_NAME).
             assert_ne!(name, "Player");
             assert_eq!(name.len(), 11);
         }

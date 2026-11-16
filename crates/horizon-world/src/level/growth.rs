@@ -4,22 +4,45 @@
 use super::{Behaviours, LevelAccess, LevelEvent, Sim, feature_world::LevelFeatureWorld, flags};
 use crate::{registry::BlockStateId, worldgen::live::LiveFeatures};
 use horizon_core::{position::BlockPos, random::RandomSource};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, RwLock};
 
 /// Runtime extensions of [`Behaviours`] that depend on the worldgen bundle.
 #[derive(Default)]
 pub struct Growth {
-    features: OnceLock<Arc<LiveFeatures>>,
+    /// The open world's feature registry. Replaced whole when another world
+    /// opens: a reader holds its own `Arc`, so it sees the old registry or the
+    /// new one, never a mix.
+    features: RwLock<Option<Arc<LiveFeatures>>>,
 }
 
 impl Behaviours {
-    /// Install the live feature registry used by sapling growth and bone meal.
-    /// Without it, saplings report [`LevelEvent::GrowTree`] instead of growing.
-    pub fn set_live_features(&self, features: Arc<LiveFeatures>) -> bool {
-        self.growth.features.set(features).is_ok()
+    /// Install the live feature registry used by sapling growth and bone meal,
+    /// replacing the previous world's: vanilla resolves features through the
+    /// world's own registry, data packs included. Without one, saplings
+    /// report [`LevelEvent::GrowTree`] instead of growing.
+    pub fn set_live_features(&self, features: Arc<LiveFeatures>) {
+        *self
+            .growth
+            .features
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(features);
     }
-    pub fn live_features(&self) -> Option<&Arc<LiveFeatures>> {
-        self.growth.features.get()
+    /// Drop the installed registry (a world whose features failed to load must
+    /// not keep the previous world's).
+    pub fn clear_live_features(&self) {
+        *self
+            .growth
+            .features
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+    /// The installed registry. Take it once per operation and reuse it.
+    pub fn live_features(&self) -> Option<Arc<LiveFeatures>> {
+        self.growth
+            .features
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
     /// `JigsawPlacement.generateJigsaw`: `assemble` builds the pieces (from
     /// the generation context's own random), then each piece is placed into
@@ -33,7 +56,7 @@ impl Behaviours {
         reference: [i32; 3],
         keep_jigsaws: bool,
         assemble: impl FnOnce() -> Option<crate::worldgen::generator::JigsawPieces>,
-    ) -> (bool, Vec<crate::nbt::Compound>) {
+    ) -> (bool, Vec<horizon_core::nbt::Compound>) {
         let Some(features) = self.live_features() else {
             return (false, Vec::new());
         };
@@ -45,11 +68,11 @@ impl Behaviours {
         let entities = {
             let mut world = LevelFeatureWorld {
                 sim: &mut sim,
-                features,
+                features: &features,
                 entities: Vec::new(),
             };
             let unbounded =
-                crate::worldgen::structure::BoundingBox::new([i32::MIN; 3], [i32::MAX; 3]);
+                horizon_core::bounding_box::BoundingBox::new([i32::MIN; 3], [i32::MAX; 3]);
             for piece in &jigsaw.pieces {
                 let mut place_feature =
                     |w: &mut LevelFeatureWorld<'_, '_, L>,
@@ -85,7 +108,7 @@ impl Behaviours {
         level: &mut L,
         ticks: &mut super::Ticks,
         start: &crate::worldgen::structure::start::StructureStart,
-    ) -> (bool, Vec<crate::nbt::Compound>) {
+    ) -> (bool, Vec<horizon_core::nbt::Compound>) {
         let Some(features) = self.live_features() else {
             return (false, Vec::new());
         };
@@ -106,7 +129,7 @@ impl Behaviours {
         let entities = {
             let mut world = LevelFeatureWorld {
                 sim: &mut sim,
-                features,
+                features: &features,
                 entities: Vec::new(),
             };
             let mut place_feature =
@@ -116,7 +139,7 @@ impl Behaviours {
                  p: [i32; 3]| { Ok(features.place_placed(name, w, r, p)) };
             for cx in cx0..=cx1 {
                 for cz in cz0..=cz1 {
-                    let chunk_box = crate::worldgen::structure::BoundingBox::new(
+                    let chunk_box = horizon_core::bounding_box::BoundingBox::new(
                         [cx * 16, low_y, cz * 16],
                         [cx * 16 + 15, high_y, cz * 16 + 15],
                     );
@@ -276,7 +299,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let placed = {
             let mut world = LevelFeatureWorld {
                 sim: self,
-                features,
+                features: &features,
                 entities: Vec::new(),
             };
             features.place_configured(name, &mut world, &mut random, [pos.x, pos.y, pos.z])
@@ -299,7 +322,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let placed = {
             let mut world = LevelFeatureWorld {
                 sim: self,
-                features,
+                features: &features,
                 entities: Vec::new(),
             };
             features.place_definition(
@@ -323,7 +346,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let placed = {
             let mut world = LevelFeatureWorld {
                 sim: self,
-                features,
+                features: &features,
                 entities: Vec::new(),
             };
             features.place_placed(name, &mut world, &mut random, [pos.x, pos.y, pos.z])
@@ -331,10 +354,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         *self.random() = random;
         placed
     }
-    fn feature_exists(&self, name: &str) -> bool {
+    pub(crate) fn feature_exists(&self, name: &str) -> bool {
         self.b
             .live_features()
             .is_some_and(|f| f.configured(name).is_some())
+    }
+    /// `BlockGrowFeatureEvent`: the feature `pos` grows into once mods may
+    /// cancel or replace `feature`, if it is installed. `feature` is vanilla's,
+    /// `None` when it has none (no key drawn, or the key isn't installed): a mod
+    /// may still supply one (the event's feature is nullable).
+    pub(crate) fn grow_feature_event<'a>(
+        &mut self,
+        pos: BlockPos,
+        feature: Option<&'a str>,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        let feature = feature.filter(|name| self.feature_exists(name));
+        self.level
+            .block_grow_feature(pos, feature)
+            .filter(|name| self.feature_exists(name))
     }
 
     /// `TreeGrower.hasFlowers`: a flower within 2 blocks horizontally, 1 vertically.
@@ -391,10 +428,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             && self.feature_exists(mega)
             && let Some((dx, dz, around)) = self.two_by_two(state, pos)
         {
+            let Some(feature) = self.grow_feature_event(pos, Some(mega)) else {
+                return false;
+            };
             for &(_, p) in &around {
                 self.remove_sapling(p);
             }
-            if self.place_configured_feature(mega, pos.offset(dx, 0, dz)) {
+            if self.place_configured_feature(&feature, pos.offset(dx, 0, dz)) {
                 return true;
             }
             for &(s, p) in &around {
@@ -408,14 +448,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         } else {
             grower.trees
         };
-        let Some(feature) = weighted(list, self.random()) else {
+        let feature = weighted(list, self.random());
+        let Some(feature) = self.grow_feature_event(pos, feature) else {
             return false;
         };
-        if !self.feature_exists(feature) {
-            return false;
-        }
         self.remove_sapling(pos);
-        if self.place_configured_feature(feature, pos) {
+        if self.place_configured_feature(&feature, pos) {
             return true;
         }
         self.set_block(pos, state, flags::UPDATE_NONE);
@@ -475,12 +513,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `MushroomBlock.growMushroom`.
     pub(crate) fn grow_mushroom(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
-        let Some(feature) = self.b.data(state).feature.clone() else {
+        let feature = self.b.data(state).feature.clone();
+        let Some(feature) = self.grow_feature_event(pos, feature.as_deref()) else {
             return false;
         };
-        if !self.feature_exists(&feature) {
-            return false;
-        }
         self.remove_block(pos, false);
         if self.place_configured_feature(&feature, pos) {
             return true;

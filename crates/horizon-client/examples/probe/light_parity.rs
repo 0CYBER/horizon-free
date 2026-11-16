@@ -13,11 +13,11 @@ use horizon_client::{
     save,
 };
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    nbt::{Limits, Tag},
-    region::RegionFile,
-};
 use std::{collections::HashMap, path::PathBuf};
+use {
+    horizon_core::nbt::{Limits, Tag},
+    horizon_world::region::RegionFile,
+};
 
 type Arrays = HashMap<i32, (Option<Vec<u8>>, Option<Vec<u8>>)>;
 
@@ -31,7 +31,9 @@ pub fn main() -> horizon_client::Result<()> {
     let sky_light = !args.iter().any(|a| a == "--nether");
     let assets = Assets::load(&root)?;
     let facts = BlockFacts::load(&root, assets.registry)?;
-    let biomes = Biomes::load(&root)?;
+    let biomes = Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+        root.to_path_buf(),
+    ))?;
     let tables = if args.iter().any(|a| a == "--no-shapes") {
         LightTables::new(&facts)
     } else {

@@ -1,7 +1,8 @@
 //! Game builds the player imports: a `horizon-client` they already have (one built on their
 //! fork's Actions, to try a merged change before the next Nightly), installed as its own
 //! version beside the releases. The program alone can't start: it needs a version folder's
-//! game files. So an import is a copy of an installed release or Nightly's folder (its
+//! game files. So an import copies an installed base's folder (a signed release/Nightly, or an
+//! explicitly selected unsigned developer base), including its
 //! research-lock.json, preparer sources and prepared resources) with the picked program in
 //! place of that version's own, as a native build is (`native_mods::install`).
 //!
@@ -11,6 +12,7 @@
 use crate::backend::{self, CLIENT};
 use crate::i18n::{tr, trf};
 use crate::native_mods::{self, Target};
+use horizon_port_pack::zip_intake::{self, Archive};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Cursor, Read, Seek};
@@ -36,7 +38,7 @@ pub fn label(version: &str) -> Option<String> {
 /// What an imported build was made from: its `imported.json`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct About {
-    /// The release or Nightly whose game files it plays with.
+    /// The installed base whose game files it plays with; a developer base remains unsigned.
     pub base: String,
     /// The file the player picked.
     pub file: String,
@@ -57,30 +59,32 @@ pub fn about(version: &str) -> Option<About> {
     })
 }
 
-/// A version Horizon published and signed: a release or a Nightly.
-fn official(version: &str) -> bool {
-    backend::is_game_tag(version) || crate::nightly::date_of(version).is_some()
+/// A supported base: a signed release/Nightly, or an explicitly chosen unsigned developer build.
+fn eligible_base(version: &str) -> bool {
+    backend::is_game_tag(version)
+        || crate::nightly::date_of(version).is_some()
+        || crate::developer_install::is_developer(version)
 }
 
 /// The installed version an import takes its game files from: `requested` (`--version`), else
-/// `selected` when Horizon published it, else the newest installed release or Nightly.
+/// `selected` when it is an eligible base, else the newest installed release or Nightly.
+/// Developer bases never enter that automatic fallback.
 fn base_for(
     installed: &[String],
     requested: Option<&str>,
     selected: Option<&str>,
 ) -> Result<String, String> {
-    let usable = |v: &str| official(v) && installed.iter().any(|t| t == v);
+    let usable = |v: &str| eligible_base(v) && installed.iter().any(|t| t == v);
     match requested {
         Some(b) if usable(b) => Ok(b.to_owned()),
-        Some(b) => Err(format!("{b} is not an installed release or Nightly.")),
+        Some(b) => Err(trf("{version} is not an installed base. Choose an installed release, Nightly or local unsigned developer build.", &[("version", b)])),
         None => {
             selected
                 .filter(|s| usable(s))
                 .map(str::to_owned)
                 .or_else(|| native_mods::newest_installed(installed).cloned())
                 .ok_or_else(|| {
-                    tr("Install a release or Nightly first: an imported build plays with its game \
-                    files.")
+                    tr("Install a release or Nightly, or explicitly select a local unsigned developer base first: an imported build reuses its game files.")
                 .to_string()
                 })
         }
@@ -144,14 +148,14 @@ fn not_a_game(file: &str) -> String {
 /// "horizon-client (1).exe" as a browser saves a second copy), or from a zip or a .tar.gz, its
 /// entry named as the game is on this platform (`CLIENT`), in any folder. A GitHub Actions
 /// artifact is a zip around the release's own archive: one archive inside is looked into too.
-/// The launcher and horizon-ctl carry the mod API mark too: the name tells them apart.
+/// The name also prevents importing launcher and control-tool downloads.
 fn read_program(path: &Path, file: &str) -> Result<Vec<u8>, String> {
     let open = || fs::File::open(path).map_err(|e| format!("{file}: {e}"));
     let lower = file.to_ascii_lowercase();
     if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
         return from_tar(open()?, file);
     }
-    let zip = match zip::ZipArchive::new(open()?) {
+    let zip = match zip_intake::open(open()?) {
         Ok(zip) => zip,
         // A download cut short, say.
         Err(e) if lower.ends_with(".zip") => return Err(format!("{file}: {e}")),
@@ -170,7 +174,7 @@ fn holds_no_game(file: &str) -> String {
 
 /// The game in `zip`, else (`nested`) in the first zip or .tar.gz it holds.
 fn from_zip<R: Read + Seek>(
-    mut zip: zip::ZipArchive<R>,
+    mut zip: Archive<R>,
     file: &str,
     nested: bool,
 ) -> Result<Vec<u8>, String> {
@@ -204,7 +208,7 @@ fn from_zip<R: Read + Seek>(
     if !name.ends_with(".zip") {
         return from_tar(&archive[..], file);
     }
-    let zip = zip::ZipArchive::new(Cursor::new(archive)).map_err(|e| format!("{name}: {e}"))?;
+    let zip = zip_intake::open(Cursor::new(archive)).map_err(|e| format!("{name}: {e}"))?;
     from_zip(zip, file, false)
 }
 
@@ -237,7 +241,7 @@ fn read_at_most(from: impl Read, file: &str) -> Result<Vec<u8>, String> {
 
 /// Whether `program` is a Horizon game for this computer: it starts as this platform's programs
 /// do (PE on Windows, Mach-O on macOS, ELF elsewhere: a Linux build picked on Windows would
-/// only fail to start) and carries the mod API mark every game since 0.2.69 does.
+/// only fail to start) and carries the exact game executable identity signature.
 fn is_game(program: &[u8]) -> bool {
     let magic: &[&[u8]] = if cfg!(windows) {
         &[b"MZ"]
@@ -248,7 +252,9 @@ fn is_game(program: &[u8]) -> bool {
         &[b"\x7fELF"]
     };
     magic.iter().any(|m| program.starts_with(m))
-        && horizon_mods::api_level::read_mark(program).is_some()
+        && program
+            .windows(horizon_platform::mod_package::game_identity::MARK.len())
+            .any(|w| w == horizon_platform::mod_package::game_identity::MARK)
 }
 
 /// Installs `program` in `versions` as a copy of installed version `base` with it in place of
@@ -261,6 +267,8 @@ fn install_in(
     file: &str,
     date: &str,
 ) -> Result<String, String> {
+    let _publication =
+        crate::run_leases::installation().map_err(crate::native_mods::cache_error)?;
     let sha256: String = Sha256::digest(program)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -293,7 +301,9 @@ fn install_in(
     let record = serde_json::json!({ "base": base, "file": file, "sha256": sha256 });
     let made = fs::create_dir_all(&partial)
         .map_err(|e| e.to_string())
-        .and_then(|()| native_mods::copy_base(&versions.join(base), &partial, Target::Client))
+        .and_then(|()| {
+            native_mods::copy_base(&versions.join(base), &partial, Target::Client, false)
+        })
         .and_then(|()| finish(&partial, &dir, program, &record).map_err(|e| e.to_string()));
     let _ = retried(|| fs::remove_dir_all(&partial).or_else(|_| gone(&partial)));
     if let Err(e) = made {
@@ -318,6 +328,8 @@ fn finish(
         fs::set_permissions(partial.join(CLIENT), fs::Permissions::from_mode(0o755))?;
     }
     fs::write(partial.join(RECORD), record.to_string())?;
+    crate::run_leases::publish(partial)
+        .map_err(|error| std::io::Error::other(crate::native_mods::cache_error(error)))?;
     fs::write(partial.join(".installed"), "")?;
     retried(|| match fs::rename(partial, dir) {
         Err(_) if dir.join(".installed").exists() => Ok(()),
@@ -372,7 +384,7 @@ mod tests {
             .count()
     }
 
-    /// A program as this platform's are, carrying the mod API mark the game's do.
+    /// A program as this platform's are, carrying the game's identity signature.
     fn program(body: &[u8]) -> Vec<u8> {
         let magic: &[u8] = if cfg!(windows) {
             b"MZ"
@@ -381,7 +393,12 @@ mod tests {
         } else {
             b"\x7fELF"
         };
-        [magic, body, &horizon_mods::api_level::MARK[..]].concat()
+        [
+            magic,
+            body,
+            &horizon_platform::mod_package::game_identity::MARK[..],
+        ]
+        .concat()
     }
 
     #[test]
@@ -411,7 +428,7 @@ mod tests {
             tag.starts_with("imported-2026-11-01-") && tag.len() == 27,
             "{tag}"
         );
-        assert!(is_imported(&tag) && !official(&tag));
+        assert!(is_imported(&tag) && !eligible_base(&tag));
         assert_eq!(label(&tag).as_deref(), Some("Imported · 2026-11-01"));
         let dir = versions.join(&tag);
         assert_eq!(fs::read(dir.join(CLIENT)).unwrap(), built);
@@ -469,15 +486,33 @@ mod tests {
     #[test]
     fn only_a_horizon_game_for_this_computer_is_imported() {
         assert!(is_game(&program(b"")));
-        // Another program of this platform, without the game's mark.
-        assert!(!is_game(&program(b"")[..program(b"").len() - 27]));
+        let marked = program(b"");
+        let unmarked =
+            &marked[..marked.len() - horizon_platform::mod_package::game_identity::MARK.len()];
+        assert!(!is_game(unmarked));
+        // Retired WIT levels, partial signatures and mutated signatures aren't game identity.
+        for mark in [
+            &b"horizon-mod-api-level:0007;"[..],
+            &horizon_platform::mod_package::game_identity::MARK
+                [..horizon_platform::mod_package::game_identity::MARK.len() - 1],
+            &b"horizon-game-executable:"[..],
+        ] {
+            assert!(!is_game(&[unmarked, mark].concat()));
+        }
+        assert!(!is_game(
+            &horizon_platform::mod_package::game_identity::MARK
+        ));
         let other = if cfg!(windows) {
             &b"\x7fELF"[..]
         } else {
             &b"MZ"[..]
         };
         assert!(!is_game(
-            &[other, &horizon_mods::api_level::MARK[..]].concat()
+            &[
+                other,
+                &horizon_platform::mod_package::game_identity::MARK[..]
+            ]
+            .concat()
         ));
         let d = dir("zip");
         let zip_path = d.join("horizon-client-windows-x86_64.zip");
@@ -497,7 +532,7 @@ mod tests {
         let plain = d.join(name);
         fs::write(&plain, program(b"plain")).unwrap();
         assert_eq!(read_program(&plain, name).unwrap(), program(b"plain"));
-        // The launcher carries the mark too.
+        // Even a marked program under another executable's name is refused.
         let launcher = d.join("horizon-launcher");
         fs::write(&launcher, program(b"launcher")).unwrap();
         assert!(read_program(&launcher, "horizon-launcher").is_err());
@@ -580,7 +615,21 @@ mod tests {
             assert_eq!(base_for(&installed, None, selected), newest);
         }
         assert!(base_for(&installed[2..], None, None).is_err());
-        // --version: an installed release or Nightly, never another local build.
+        let developer = "developer-0123456789abcdef";
+        let local = [developer.to_string()];
+        assert!(base_for(&local, None, None).is_err());
+        assert_eq!(
+            base_for(&local, None, Some(developer)),
+            Ok(developer.to_string())
+        );
+        assert_eq!(
+            base_for(&local, Some(developer), None),
+            Ok(developer.to_string())
+        );
+        let mut mixed = installed.to_vec();
+        mixed.insert(0, developer.to_string());
+        assert_eq!(base_for(&mixed, None, None), newest);
+        // --version can explicitly name a developer base, but not an imported or native derivative.
         let asked = |b| base_for(&installed, Some(b), Some("v0.2.95"));
         assert_eq!(asked("nightly-2026-11-01-c9d474d"), newest);
         for b in [

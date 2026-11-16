@@ -19,88 +19,33 @@
 //! second part (horse markings, llama strength, panda hidden gene, tropical
 //! fish base colour), `variant3` the tropical fish pattern colour, and
 //! `sound_variant` the index in the species' sound variant registry.
-use super::{Mob, Species, equip, farm::Climate, gear, spawning::LocalDifficulty};
+use super::{
+    Mob, MobWorld, Species, equip, farm::Climate, gear, spawn_rules::Reason,
+    spawning::LocalDifficulty,
+};
 use crate::{enchant::Enchantments, items::Items};
+use horizon_core::equipment_slot::EquipmentSlot;
 use horizon_core::{geometry::Aabb, random::RandomSource};
-use horizon_world::player_inventory::EquipmentSlot;
 use serde_json::Value;
 use std::{fs, path::Path, sync::Arc};
 
-/// `EntitySpawnReason`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Reason {
-    Natural,
-    ChunkGeneration,
-    Spawner,
-    Structure,
-    Breeding,
-    MobSummoned,
-    Jockey,
-    Event,
-    Conversion,
-    Reinforcement,
-    Triggered,
-    Bucket,
-    SpawnItemUse,
-    Command,
-    Dispenser,
-    Patrol,
-    TrialSpawner,
-    Load,
-    DimensionTravel,
-}
-impl Reason {
-    pub const ALL: [Self; 19] = [
-        Self::Natural,
-        Self::ChunkGeneration,
-        Self::Spawner,
-        Self::Structure,
-        Self::Breeding,
-        Self::MobSummoned,
-        Self::Jockey,
-        Self::Event,
-        Self::Conversion,
-        Self::Reinforcement,
-        Self::Triggered,
-        Self::Bucket,
-        Self::SpawnItemUse,
-        Self::Command,
-        Self::Dispenser,
-        Self::Patrol,
-        Self::TrialSpawner,
-        Self::Load,
-        Self::DimensionTravel,
-    ];
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Natural => "NATURAL",
-            Self::ChunkGeneration => "CHUNK_GENERATION",
-            Self::Spawner => "SPAWNER",
-            Self::Structure => "STRUCTURE",
-            Self::Breeding => "BREEDING",
-            Self::MobSummoned => "MOB_SUMMONED",
-            Self::Jockey => "JOCKEY",
-            Self::Event => "EVENT",
-            Self::Conversion => "CONVERSION",
-            Self::Reinforcement => "REINFORCEMENT",
-            Self::Triggered => "TRIGGERED",
-            Self::Bucket => "BUCKET",
-            Self::SpawnItemUse => "SPAWN_ITEM_USE",
-            Self::Command => "COMMAND",
-            Self::Dispenser => "DISPENSER",
-            Self::Patrol => "PATROL",
-            Self::TrialSpawner => "TRIAL_SPAWNER",
-            Self::Load => "LOAD",
-            Self::DimensionTravel => "DIMENSION_TRAVEL",
-        }
-    }
-    pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|r| r.name() == name)
-    }
+/// What a level's finalizeSpawn event decided for a mob another mob's
+/// finalizeSpawn created: the rider is dropped, added without its own rolls,
+/// or finalized. Vanilla fires the event for every `finalizeSpawn` call,
+/// riders included.
+#[derive(Debug, PartialEq)]
+pub enum SpawnEvent {
+    Cancelled,
+    Skip,
+    Finalize,
 }
 
 /// The level as finalizeSpawn reads it.
 pub trait FinalizeLevel {
+    /// The owning world's immutable builtin generation (vanilla for bare fixtures).
+    fn mob_maps(&self) -> &crate::neoforge_mob_maps::NeoForgeMobMaps {
+        crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla()
+    }
     /// The biome id at a block.
     fn biome(&self, pos: [i32; 3]) -> String;
     /// The biome at a block is in a biome tag (`minecraft:...`).
@@ -127,6 +72,15 @@ pub trait FinalizeLevel {
     /// own random from the caller), or None where it cannot exist (monsters
     /// in peaceful).
     fn create(&mut self, kind: &str, reason: Reason) -> Option<Mob>;
+    /// Fires the level's finalizeSpawn event for a mob another mob's
+    /// finalizeSpawn creates (`ZombieHorse`'s zombie, a chicken jockey).
+    /// The default finalizes: a level without the event keeps vanilla's flow.
+    fn spawn_event(&mut self, _: &mut Mob, _: Reason) -> SpawnEvent {
+        SpawnEvent::Finalize
+    }
+    /// What finalizeSpawn needs besides the level: the variant registries,
+    /// enchantments and items the level owns.
+    fn spawn_data(&self) -> SpawnData<'_>;
 }
 
 /// `AgeableMob.AgeableMobGroupData`.
@@ -383,7 +337,6 @@ pub struct Ctx<'a, L: FinalizeLevel + ?Sized, R: RandomSource> {
     pub level: &'a mut L,
     pub random: &'a mut R,
     pub difficulty: LocalDifficulty,
-    pub data: &'a SpawnData<'a>,
     /// Jockeys and mounts made along the way, finalized, with their riding
     /// links set (`Extra::mount` / `Extra::rider`).
     pub created: Vec<Mob>,
@@ -453,19 +406,51 @@ impl Attr {
             Self::FlyingSpeed => "minecraft:flying_speed",
         }
     }
-    /// `RangedAttribute` bounds.
-    fn range(self) -> (f64, f64) {
-        match self {
-            Self::MaxHealth => (1.0, 1024.0),
-            Self::MovementSpeed => (0.0, 1024.0),
-            Self::FollowRange => (0.0, 2048.0),
-            Self::AttackDamage => (0.0, 2048.0),
-            Self::KnockbackResistance | Self::SpawnReinforcements => (0.0, 1.0),
-            Self::JumpStrength => (0.0, 32.0),
-            Self::Armor => (0.0, 30.0),
-            Self::BurningTime | Self::FlyingSpeed => (0.0, 1024.0),
+}
+/// The definition of each [`Attr`] and of `max_absorption`
+/// (`RangedAttribute`'s default and bounds), read once from the attribute
+/// catalog when the mob types load: what a mob's own attribute record
+/// sanitizes its values with, as `AttributeInstance` does. A type built
+/// without a catalog (a test fixture, the player's render type) has none,
+/// and its values are not clamped.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AttrBounds {
+    attrs: [Option<horizon_world::attributes::Definition>; Attr::ALL.len()],
+    /// `Attributes.MAX_ABSORPTION`'s, for a mob with no attribute map yet.
+    max_absorption: Option<horizon_world::attributes::Definition>,
+}
+impl AttrBounds {
+    /// Each attribute's definition in `catalog`.
+    pub fn of(catalog: &horizon_world::attributes::entity::Catalog) -> Self {
+        Self {
+            attrs: Attr::ALL.map(|a| catalog.definition(a.id())),
+            max_absorption: catalog.definition("minecraft:max_absorption"),
         }
     }
+    /// `RangedAttribute.sanitizeValue` of `a`: NaN to the minimum, then into
+    /// the bounds.
+    pub fn sanitize(&self, a: Attr, value: f64) -> f64 {
+        sanitize(self.attrs[a as usize], value)
+    }
+    /// The saved base `base` of the attribute `id` as a load takes it
+    /// ([`crate::living_attributes::loaded_base`]): clamped into an [`Attr`]'s
+    /// bounds when a mod that widened them is gone.
+    pub fn loaded_base(&self, id: &str, base: f64) -> f64 {
+        Attr::ALL
+            .into_iter()
+            .find(|a| a.id() == id)
+            .and_then(|a| self.attrs[a as usize])
+            .map_or(base, |definition| {
+                crate::living_attributes::loaded_base(id, definition, base)
+            })
+    }
+    /// `RangedAttribute.sanitizeValue` of `max_absorption`.
+    pub fn sanitize_max_absorption(&self, value: f64) -> f64 {
+        sanitize(self.max_absorption, value)
+    }
+}
+fn sanitize(definition: Option<horizon_world::attributes::Definition>, value: f64) -> f64 {
+    definition.map_or(value, |definition| definition.sanitize(value))
 }
 /// `AttributeModifier.Operation`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,6 +473,9 @@ pub struct Modifier {
 pub struct Attributes {
     pub bases: Vec<(Attr, f64)>,
     pub modifiers: Vec<Modifier>,
+    /// The transient modifiers mods added: in the value and synced, never
+    /// saved.
+    pub transient: Vec<Modifier>,
     /// `NAME_TAG_DISTANCE` from a server attribute update: the client reads
     /// it for nameplates and a save never writes it.
     pub name_tag_distance: Option<f64>,
@@ -611,7 +599,7 @@ fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
     m.extra
         .effects
         .iter()
-        .filter_map(move |&(effect, _, amplifier)| effect_modifier(effect, amplifier, a))
+        .filter_map(move |effect| effect_modifier(effect.id, effect.amplifier, a))
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
@@ -645,20 +633,33 @@ pub fn equipment_modifiers(
         if max_damage > 0 && stack.damage >= max_damage {
             continue;
         }
-        let own = items
-            .attribute_modifiers(&stack)
-            .into_iter()
-            .filter(|row| equip::group_matches(&row.4, slot));
+        let own = crate::item_attributes::attribute_modifiers(&stack, items)
+            .iter()
+            .filter(|row| equip::group_matches(&row.slot, slot))
+            .map(|row| {
+                (
+                    row.attribute.clone(),
+                    row.id.clone(),
+                    row.amount,
+                    row.operation.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         // `EnchantmentHelper.forEachModifier`: `matchingSlot`, one modifier
         // per slot, its id suffixed with the slot (`idForSlot`).
         let enchanted = enchantments
             .modifier_rows(&stack)
             .into_iter()
-            .filter(|row| equip::group_matches(&row.4, slot))
-            .map(|(kind, id, amount, op, group)| {
-                (kind, format!("{id}/{}", slot_name(slot)), amount, op, group)
+            .filter(|row| equip::group_matches(&row.slot, slot))
+            .map(|row| {
+                (
+                    row.attribute,
+                    format!("{}/{}", row.id, slot_name(slot)),
+                    row.amount,
+                    row.operation,
+                )
             });
-        for (kind, id, amount, operation, _) in own.chain(enchanted) {
+        for (kind, id, amount, operation) in own.into_iter().chain(enchanted) {
             if kind != attribute {
                 continue;
             }
@@ -711,6 +712,14 @@ fn compute_replacing(
         .filter(|x| x.attr == a && !replaced.iter().any(|(id, _, _)| *id == x.id))
         .map(|x| (x.amount, x.op))
         .collect();
+    if let Some(s) = m.extra.attributes.as_deref() {
+        ops.extend(
+            s.transient
+                .iter()
+                .filter(|x| x.attr == a)
+                .map(|x| (x.amount, x.op)),
+        );
+    }
     if with_transient {
         ops.extend(transient(m, a));
         ops.extend(effect_modifiers(m, a));
@@ -732,12 +741,7 @@ fn compute_replacing(
             result *= 1.0 + amount;
         }
     }
-    let (lo, hi) = a.range();
-    if result.is_nan() {
-        lo
-    } else {
-        result.clamp(lo, hi)
-    }
+    m.kind.attribute_bounds.sanitize(a, result)
 }
 /// Copies the attribute values into the fields the game reads.
 fn refresh(m: &mut Mob, a: Attr) {
@@ -774,6 +778,7 @@ pub fn set_base(m: &mut Mob, a: Attr, v: f64) {
         Some(b) => b.1 = v,
         None => s.bases.push((a, v)),
     }
+    m.extra.live.invalidate();
     refresh(m, a);
 }
 pub fn has_modifier(m: &Mob, a: Attr, id: &str) -> bool {
@@ -810,13 +815,48 @@ pub fn add_modifier(
         Some(x) => *x = new,
         None => s.modifiers.push(new),
     }
+    m.extra.live.invalidate();
     refresh(m, a);
 }
-/// `AttributeInstance.removeModifier`.
+/// Whether a mod's transient modifier with id `id` is on `a`.
+pub fn has_transient_modifier(m: &Mob, a: Attr, id: &str) -> bool {
+    m.extra
+        .attributes
+        .as_ref()
+        .is_some_and(|s| s.transient.iter().any(|x| x.attr == a && x.id == id))
+}
+/// `addOrUpdateTransientModifier` for a mod: the modifier counts in the value
+/// and is synced, but is not saved.
+pub fn add_transient_modifier(m: &mut Mob, a: Attr, id: &str, amount: f64, op: Op) {
+    let s = m.extra.attributes.get_or_insert_with(Box::default);
+    s.transient.retain(|x| x.attr != a || x.id != id);
+    s.transient.push(Modifier {
+        attr: a,
+        id: id.to_owned().into(),
+        amount,
+        op,
+    });
+    // The live map is built from the saved record, so it keeps the modifier
+    // itself for the next build.
+    let operation = match op {
+        Op::AddValue => horizon_world::attributes::Operation::AddValue,
+        Op::AddMultipliedBase => horizon_world::attributes::Operation::AddMultipliedBase,
+        Op::AddMultipliedTotal => horizon_world::attributes::Operation::AddMultipliedTotal,
+    };
+    let modifier = horizon_world::attributes::Modifier::new(id, amount, operation).ok();
+    m.extra.live.keep_transient(a.id(), id, modifier);
+    m.extra.live.invalidate();
+    refresh(m, a);
+}
+/// `AttributeInstance.removeModifier`: the permanent modifier or a mod's
+/// transient one with that id.
 pub fn remove_modifier(m: &mut Mob, a: Attr, id: &str) {
     if let Some(s) = m.extra.attributes.as_mut() {
         s.modifiers.retain(|x| x.attr != a || x.id != id);
+        s.transient.retain(|x| x.attr != a || x.id != id);
     }
+    m.extra.live.keep_transient(a.id(), id, None);
+    m.extra.live.invalidate();
     refresh(m, a);
 }
 /// `Mob.finalizeSpawn`, which every mob's own `finalizeSpawn` reaches
@@ -906,13 +946,10 @@ pub fn loaded_max_health(m: &Mob) -> f32 {
 }
 /// `LivingEntity.onAttributeUpdated(MAX_HEALTH)` after a Health Boost
 /// change: the cached maximum follows the attribute model again, and Health
-/// above it is lowered (nothing is healed). Wolves keep the maximum their
-/// taming left (`tame::set_tame`), as they did before their base was an
-/// attribute base.
+/// above it is lowered (nothing is healed). Wolves use the type's default
+/// unless a saved base or `tame::set_tame` stored one; neither refreshing an
+/// effect nor the tame flag may replace that base (#16719).
 pub fn health_boost_changed(m: &mut Mob) {
-    if m.species() == Species::Wolf {
-        return;
-    }
     refresh(m, Attr::MaxHealth);
     clamp_health(m);
 }
@@ -1063,15 +1100,18 @@ pub fn baby_start_age(s: Species) -> i32 {
 /// The age a non-ageable baby (zombies, piglins, zoglins) keeps.
 pub const NON_AGEABLE_BABY: i32 = i32::MIN / 2;
 
-/// `AgeableMob.setAge`, with each class's `ageBoundaryReached`.
-pub fn set_age(m: &mut Mob, age: i32) {
+/// `AgeableMob.setAge`, with each class's `ageBoundaryReached`. `w` is the
+/// ticking world where the age crosses; the spawn and load paths pass none,
+/// and no happy ghast grows up there (a hatch is the baby setup, a spawn was
+/// never a ghastling), so the ghastling's brain stop needs no deferral.
+pub fn set_age(m: &mut Mob, age: i32, w: Option<&MobWorld<'_>>) {
     let old = m.extra.age;
     m.extra.age = age;
     if (old < 0) != (age < 0) {
-        age_boundary_reached(m);
+        age_boundary_reached(m, w);
     }
 }
-fn age_boundary_reached(m: &mut Mob) {
+fn age_boundary_reached(m: &mut Mob, w: Option<&MobWorld<'_>>) {
     let baby = m.is_baby();
     match m.species() {
         Species::Goat | Species::Hoglin => {
@@ -1084,7 +1124,7 @@ fn age_boundary_reached(m: &mut Mob) {
         // then Animal's no-op. A hatched ghastling needs it before it is in
         // the level (DriedGhastBlock.spawnGhastling sets the baby age before
         // addFreshEntity), or its first tick flies the adult goals.
-        Species::HappyGhast => super::happy_ghast::ensure_setup(m),
+        Species::HappyGhast => super::happy_ghast::ensure_setup(m, w),
         _ => {}
     }
 }
@@ -1097,7 +1137,7 @@ pub fn goat_spawn(m: &mut Mob, r: &mut impl RandomSource) {
     let ram = r.next_int_between_inclusive(600, 6000).unwrap_or(600);
     set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
     m.extra.screaming = r.next_double() < 0.02;
-    age_boundary_reached(m);
+    age_boundary_reached(m, None);
     if !m.is_baby() && r.next_float() < 0.1 {
         let left = r.next_boolean();
         m.extra.lost_horns[usize::from(!left)] = true;
@@ -1128,7 +1168,7 @@ pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color
 pub fn set_baby(m: &mut Mob, baby: bool) {
     let s = m.species();
     if ageable(s) {
-        set_age(m, if baby { baby_start_age(s) } else { 0 });
+        set_age(m, if baby { baby_start_age(s) } else { 0 }, None);
         return;
     }
     match s {
@@ -1157,15 +1197,10 @@ pub fn set_baby(m: &mut Mob, baby: bool) {
 
 /// `EquipmentSlot` names (the `drops::SLOTS` order).
 pub const SLOT_NAMES: [&str; 8] = super::drops::SLOTS;
-pub const MAINHAND: usize = 0;
-pub const OFFHAND: usize = 1;
-pub const FEET: usize = 2;
-pub const LEGS: usize = 3;
-pub const CHEST: usize = 4;
-pub const HEAD: usize = 5;
-pub const SADDLE: usize = 7;
+pub use horizon_items::equipment::{CHEST, FEET, HEAD, LEGS, MAINHAND, OFFHAND};
+const SADDLE: usize = horizon_items::equipment::SADDLE;
 /// The `gear` slot of an `EquipmentSlot`.
-fn gear_slot(slot: usize) -> usize {
+pub fn gear_slot(slot: usize) -> usize {
     match slot {
         MAINHAND => gear::MAIN,
         OFFHAND => gear::OFF,
@@ -1177,28 +1212,21 @@ fn gear_slot(slot: usize) -> usize {
 }
 pub fn item(m: &Mob, slot: usize) -> Option<Arc<str>> {
     match slot {
-        MAINHAND => m.extra.main_hand.clone(),
-        OFFHAND => m.extra.off_hand.clone(),
-        FEET => m.extra.feet.clone(),
-        LEGS => m.extra.legs.clone(),
-        CHEST => m.extra.chest.clone(),
-        HEAD => m.extra.head.clone(),
-        SADDLE => m.extra.saddled.then(|| Arc::from("minecraft:saddle")),
+        MAINHAND..=HEAD | SADDLE => m.extra.slot_stack(slot).map(|s| s.item.clone()),
         _ => None,
     }
 }
 /// The whole stack a mob keeps in `slot` (damage, name, components, count,
 /// enchantments and trim), when it kept more than the item id.
 pub fn stored_stack(m: &Mob, slot: usize) -> Option<crate::items::ItemStack> {
-    let id = item(m, slot)?;
+    if slot > HEAD {
+        return None;
+    }
+    let mut stack = m.extra.slot_stack(slot)?.clone();
+    if stack.damage == 0 && stack.count <= 1 && stack.extra.is_none() {
+        return None;
+    }
     let index = gear_slot(slot);
-    let mut stack = if slot == MAINHAND {
-        m.extra.main_hand_stack()?.clone()
-    } else {
-        gear::gear(m)?.stacks[index]
-            .clone()
-            .filter(|s| s.item == id)?
-    };
     if let Some(g) = gear::gear(m) {
         if !g.slots[index].is_empty() {
             stack.data_mut().enchantments = g.slots[index].clone();
@@ -1215,6 +1243,9 @@ pub fn item_stack(m: &Mob, slot: usize) -> Option<crate::items::ItemStack> {
     stored_stack(m, slot).or_else(|| {
         let mut stack = crate::items::ItemStack::new(&item(m, slot)?, 1);
         stack.set_crafting_enchantments(slot_enchantments(m, slot));
+        if let Some(trim) = gear::gear(m).and_then(|g| g.trims[gear_slot(slot)].clone()) {
+            stack.data_mut().trim = Some(trim);
+        }
         Some(stack)
     })
 }
@@ -1223,9 +1254,9 @@ pub fn item_stack(m: &Mob, slot: usize) -> Option<crate::items::ItemStack> {
 /// body and saddle from their own fields.
 pub fn equipment_stack(
     m: &Mob,
-    slot: horizon_world::player_inventory::EquipmentSlot,
+    slot: horizon_core::equipment_slot::EquipmentSlot,
 ) -> Option<crate::items::ItemStack> {
-    use horizon_world::player_inventory::EquipmentSlot as S;
+    use horizon_core::equipment_slot::EquipmentSlot as S;
     match slot {
         S::Body | S::Saddle => m.item_by_slot(slot),
         _ => item_stack(m, slot as usize),
@@ -1236,10 +1267,15 @@ pub fn equipment_stack(
 pub fn set_item_stack(m: &mut Mob, slot: usize, stack: crate::items::ItemStack) {
     set_item(m, slot, &stack.item);
     set_slot_enchantments(m, slot, stack.enchantments().to_vec());
-    if slot == MAINHAND {
-        m.extra.set_main_hand_stack(Some(stack));
-    } else if slot <= HEAD {
-        gear::set_stack(m, gear_slot(slot), stack);
+    if slot <= HEAD {
+        gear::set_trim(
+            m,
+            gear_slot(slot),
+            stack.data().and_then(|d| d.trim.clone()),
+        );
+    }
+    if slot <= HEAD {
+        m.extra.set_slot_stack(slot, Some(stack));
     }
 }
 /// `ItemStack.setDamageValue` on what `m` has in `slot` (one of the hands or
@@ -1248,34 +1284,19 @@ pub fn set_slot_damage(m: &mut Mob, slot: usize, damage: u32) {
     let Some(id) = item(m, slot).filter(|_| slot <= HEAD) else {
         return;
     };
-    let kept = if slot == MAINHAND {
-        m.extra.main_hand_stack().cloned()
-    } else {
-        gear::gear(m).and_then(|g| g.stacks[gear_slot(slot)].clone())
-    };
+    let kept = m.extra.slot_stack(slot).cloned();
     let mut stack = kept
         .filter(|s| s.item == id)
         .unwrap_or_else(|| crate::items::ItemStack::new(&id, 1));
     stack.damage = damage;
-    if slot == MAINHAND {
-        m.extra.set_main_hand_stack(Some(stack));
-    } else {
-        gear::set_stack(m, gear_slot(slot), stack);
-    }
+    m.extra.set_slot_stack(slot, Some(stack));
 }
 /// `setItemSlot` with a fresh stack (enchantments cleared).
 pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
-    let v = Some(Arc::from(id));
     match slot {
-        MAINHAND => m.extra.set_main_hand(v),
-        OFFHAND => m.extra.off_hand = v,
-        FEET => m.extra.feet = v,
-        LEGS => m.extra.legs = v,
-        CHEST => m.extra.chest = v,
-        HEAD => m.extra.head = v,
+        MAINHAND..=HEAD => m.extra.set_slot_id(slot, Some(Arc::from(id))),
         SADDLE => {
-            m.extra.saddled = true;
-            m.extra.saddle_stack = None;
+            m.extra.set_saddled(true);
             return;
         }
         _ => return,
@@ -1310,10 +1331,9 @@ pub fn equip_stack(
         let trim = stack
             .components
             .iter()
+            .rev()
             .find(|(id, _)| id == "minecraft:trim")
-            .and_then(|(_, v)| {
-                crate::item_data::trim::from_nbt(&horizon_client_core::scoreboard::json_to_tag(v))
-            });
+            .and_then(|(_, v)| v.as_ref().and_then(crate::item_data::trim::from_nbt));
         gear::set_trim(m, gear_slot(slot), trim);
     }
     if let Some(chance) = drop_chance {
@@ -1354,7 +1374,7 @@ pub fn halloween_head(m: &mut Mob, random: &mut impl RandomSource, halloween: bo
     if !(zombie(m.species()) || skeleton(m.species())) {
         return;
     }
-    if m.extra.head.is_none() && halloween && random.next_float() < 0.25 {
+    if m.extra.head_id().is_none() && halloween && random.next_float() < 0.25 {
         let head = if random.next_float() < 0.1 {
             "minecraft:jack_o_lantern"
         } else {
@@ -1396,7 +1416,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             let (should, size, chance) = (a.should_spawn_baby, a.size, a.baby_chance);
             if should && size > 0 && self.float() <= chance {
                 let start = baby_start_age(m.species());
-                set_age(m, start);
+                set_age(m, start, None);
             }
             if let Some(a) = g.ageable() {
                 a.size += 1;
@@ -1567,9 +1587,16 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     fn enchant_by_cost(&mut self, m: &mut Mob, slot: usize, id: &str) {
         let top = 5 + (self.special() * 17.0) as i32;
         let cost = self.random.next_int_between_inclusive(5, top).unwrap_or(5);
-        let e = self.data.enchantments;
+        let d = self.level.spawn_data();
+        let e = d.enchantments;
         let pool = e.tag("minecraft:on_mob_spawn_equipment");
-        let picked = e.select(self.data.items, self.random, id, cost, pool);
+        let picked = e.select(
+            d.items,
+            self.random,
+            &item_stack(m, slot).unwrap_or_else(|| crate::items::ItemStack::new(id, 1)),
+            cost,
+            pool,
+        );
         for (enchantment, level) in picked {
             gear::upgrade(m, gear_slot(slot), &enchantment, level);
         }
@@ -1591,6 +1618,19 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         j.head_yaw = at.yaw;
         j.head_pitch = 0.0;
         Some(j)
+    }
+    /// The finalizeSpawn event for a rider one of the classes above created:
+    /// `false` drops it, otherwise it is finalized unless the level said the
+    /// listener already did (`Mob.finalizeSpawn` fires for riders too).
+    fn rider_kept(&mut self, j: &mut Mob, reason: Reason, group: Option<Group>) -> bool {
+        match self.level.spawn_event(j, reason) {
+            SpawnEvent::Cancelled => false,
+            SpawnEvent::Skip => true,
+            SpawnEvent::Finalize => {
+                self.finalize(j, reason, group);
+                true
+            }
+        }
     }
     /// `startRiding`: the rider leaves the vehicle it was on.
     fn ride(&mut self, rider: &mut Mob, vehicle: &mut Mob) {
@@ -1638,8 +1678,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                     } else if f64::from(self.float()) < 0.05
                         && let Some(mut chicken) =
                             self.create("minecraft:chicken", Reason::Jockey, m)
+                        && self.rider_kept(&mut chicken, Reason::Jockey, None)
                     {
-                        self.finalize(&mut chicken, Reason::Jockey, None);
                         chicken.extra.jockey = true;
                         self.ride(m, &mut chicken);
                         self.jockey_rider = Some(m.clone());
@@ -1680,7 +1720,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 m.position.y.floor(),
                 m.position.z.floor(),
             );
-            let (w, h) = self.data.camel_husk_size;
+            let (w, h) = self.level.spawn_data().camel_husk_size;
             let half = w / 2.0;
             let bounds = Aabb::new(
                 horizon_core::geometry::Vec3::new(
@@ -1704,17 +1744,18 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                         // setPos: the husk's position, the camel's own rotation.
                         camel.position = m.position;
                         camel.previous = m.position;
-                        self.finalize(&mut camel, reason, None);
-                        self.ride(m, &mut camel);
-                        if let Some(mut parched) =
-                            self.create("minecraft:parched", Reason::Natural, m)
-                        {
-                            self.finalize(&mut parched, reason, None);
-                            self.ride(&mut parched, &mut camel);
-                            self.created.push(camel);
-                            self.created.push(parched);
-                        } else {
-                            self.created.push(camel);
+                        if self.rider_kept(&mut camel, reason, None) {
+                            self.ride(m, &mut camel);
+                            if let Some(mut parched) =
+                                self.create("minecraft:parched", Reason::Natural, m)
+                                && self.rider_kept(&mut parched, reason, None)
+                            {
+                                self.ride(&mut parched, &mut camel);
+                                self.created.push(camel);
+                                self.created.push(parched);
+                            } else {
+                                self.created.push(camel);
+                            }
                         }
                     }
                 }
@@ -1724,7 +1765,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn drowned(&mut self, m: &mut Mob, g: Option<Group>, reason: Reason) -> Option<Group> {
         let g = self.zombie(m, g, reason);
-        if m.extra.off_hand.is_none() && self.float() < 0.03 {
+        if m.extra.off_hand_id().is_none() && self.float() < 0.03 {
             set_item(m, OFFHAND, "minecraft:nautilus_shell");
             set_drop_chance(m, OFFHAND, 2.0);
         }
@@ -1734,18 +1775,18 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             m.position.z.floor() as i32,
         ];
         if matches!(reason, Reason::Natural | Reason::Structure)
-            && m.extra.main_hand.as_deref() == Some("minecraft:trident")
+            && m.extra.main_hand_id() == Some("minecraft:trident")
             && self.float() < 0.5
             && !m.is_baby()
             && !self
                 .level
                 .biome_tag("minecraft:more_frequent_drowned_spawns", at)
             && let Some(mut nautilus) = self.create("minecraft:zombie_nautilus", Reason::Jockey, m)
+            && self.rider_kept(&mut nautilus, reason, None)
         {
             if reason == Reason::Structure {
                 nautilus.persistent = true;
             }
-            self.finalize(&mut nautilus, reason, None);
             self.ride(m, &mut nautilus);
             self.created.push(nautilus);
         }
@@ -1766,8 +1807,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         let mut g = self.mob(m, g);
         if self.int(100) == 0
             && let Some(mut skeleton) = self.create("minecraft:skeleton", Reason::Jockey, m)
+            && self.rider_kept(&mut skeleton, reason, None)
         {
-            self.finalize(&mut skeleton, reason, None);
             self.ride(&mut skeleton, m);
             self.created.push(skeleton);
         }
@@ -1836,15 +1877,18 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         if self.int(30) == 0 && self.level.spawning_monsters() {
             if let Some(mut jockey) = self.create("minecraft:zombified_piglin", Reason::Jockey, m) {
                 let baby = self.float() < 0.05;
-                g = Some(self.strider_jockey(
-                    m,
+                if !self.rider_kept(
                     &mut jockey,
+                    Reason::Jockey,
                     Some(Group::Zombie {
                         baby,
                         jockey: false,
                         husk: None,
                     }),
-                ));
+                ) {
+                    return self.ageable(m, Some(Group::Ageable(Ageable::chance(0.0))));
+                }
+                g = Some(self.strider_jockey(m, &mut jockey));
                 set_item(&mut jockey, MAINHAND, "minecraft:warped_fungus_on_a_stick");
                 set_item(m, SADDLE, "minecraft:saddle");
                 set_drop_chance(m, SADDLE, 2.0);
@@ -1852,8 +1896,11 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             }
         } else if self.int(10) == 0 {
             if let Some(mut jockey) = self.create("minecraft:strider", Reason::Jockey, m) {
-                set_age(&mut jockey, -24000);
-                g = Some(self.strider_jockey(m, &mut jockey, None));
+                set_age(&mut jockey, -24000, None);
+                if !self.rider_kept(&mut jockey, Reason::Jockey, None) {
+                    return self.ageable(m, Some(Group::Ageable(Ageable::chance(0.0))));
+                }
+                g = Some(self.strider_jockey(m, &mut jockey));
                 self.created.push(jockey);
             }
         } else {
@@ -1862,10 +1909,9 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         self.ageable(m, g)
     }
     /// `Strider.spawnJockey`.
-    fn strider_jockey(&mut self, m: &mut Mob, jockey: &mut Mob, g: Option<Group>) -> Group {
+    fn strider_jockey(&mut self, m: &mut Mob, jockey: &mut Mob) -> Group {
         jockey.position = m.position;
         jockey.yaw = m.yaw;
-        self.finalize(jockey, Reason::Jockey, g);
         self.ride(jockey, m);
         Group::Ageable(Ageable::chance(0.0))
     }
@@ -1926,11 +1972,11 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn villager_type(&mut self, m: &mut Mob) {
         let at = block(m);
-        m.extra.variant = villager_type(&self.level.biome(at));
+        m.extra.variant = self.level.mob_maps().villager_type(&self.level.biome(at));
     }
     /// `VariantUtils.selectVariantToSpawn` into `variant`, by registry name.
     fn variant(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
-        let r = registry(self.data.registries);
+        let r = registry(self.level.spawn_data().registries);
         let at = block(m);
         if let Some(i) = r.select(&*self.level, at, self.random) {
             let name = r.names[i].clone();
@@ -1938,7 +1984,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         }
     }
     fn sound(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
-        let r = registry(self.data.registries);
+        let r = registry(self.level.spawn_data().registries);
         m.extra.sound_variant = Some(r.random(self.random) as u8);
     }
 
@@ -1973,7 +2019,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                         Some(Group::Wolf(a, v))
                     }
                     other => {
-                        let r = &self.data.registries.wolf;
+                        let r = &self.level.spawn_data().registries.wolf;
                         let at = block(m);
                         match r.select(&*self.level, at, self.random) {
                             Some(i) => {
@@ -2058,7 +2104,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let mut g = g;
                 if s == S::TraderLlama {
                     if reason == Reason::Event {
-                        set_age(m, 0);
+                        set_age(m, 0, None);
                     }
                     if g.is_none() {
                         g = Some(Group::Ageable(Ageable::babies(false)));
@@ -2083,8 +2129,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::ZombieHorse => {
                 if reason == Reason::Natural
                     && let Some(mut zombie) = self.create("minecraft:zombie", Reason::Jockey, m)
+                    && self.rider_kept(&mut zombie, reason, None)
                 {
-                    self.finalize(&mut zombie, reason, None);
                     set_item(&mut zombie, MAINHAND, "minecraft:iron_spear");
                     self.ride(&mut zombie, m);
                     self.created.push(zombie);
@@ -2100,7 +2146,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Goat => {
                 goat_init_memories(m, self.random);
                 m.extra.screaming = self.random.next_double() < 0.02;
-                age_boundary_reached(m);
+                age_boundary_reached(m, None);
                 if !m.is_baby() && self.float() < 0.1 {
                     let left = self.random.next_boolean();
                     m.extra.lost_horns[usize::from(!left)] = true;
@@ -2132,7 +2178,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 };
                 m.extra.variant = variant;
                 if baby {
-                    set_age(m, -24000);
+                    set_age(m, -24000, None);
                 }
                 self.populate(m);
                 self.ageable(m, Some(g))
@@ -2161,7 +2207,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                     m.extra.variant = types[self.int(2) as usize];
                 }
                 if baby {
-                    set_age(m, -24000);
+                    set_age(m, -24000, None);
                 }
                 self.ageable(m, Some(g))
             }
@@ -2180,7 +2226,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Villager | S::WanderingTrader => {
                 if s == S::Villager {
                     if reason == Reason::Breeding {
-                        m.extra.variant2 = 0;
+                        m.extra.profession = Default::default();
                     }
                     self.villager_type(m);
                 }
@@ -2269,6 +2315,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 // `ZombieVillager.finalizeSpawn` chooses the villager type and
                 // nothing else: the profession came from the constructor.
                 self.villager_type(m);
+                // The profession is drawn at construction, not finalizeSpawn.
                 self.zombie(m, g, reason)
             }
             S::Husk => self.husk(m, g, reason),
@@ -2530,30 +2577,141 @@ pub fn variant_name(s: Species, index: u8) -> &'static str {
             .unwrap_or("temperate"),
     }
 }
-/// `VillagerType.byBiome` (index into `render::VILLAGER_TYPES`: plains,
-/// desert, jungle, savanna, snow, swamp, taiga).
+/// `VillagerType.BY_BIOME` (index into `render::VILLAGER_TYPES`: plains,
+/// desert, jungle, savanna, snow, swamp, taiga); other biomes are plains.
+pub const BIOME_VILLAGER_TYPES: &[(&str, u8)] = &[
+    ("badlands", 1),
+    ("desert", 1),
+    ("eroded_badlands", 1),
+    ("wooded_badlands", 1),
+    ("bamboo_jungle", 2),
+    ("jungle", 2),
+    ("sparse_jungle", 2),
+    ("savanna_plateau", 3),
+    ("savanna", 3),
+    ("windswept_savanna", 3),
+    ("deep_frozen_ocean", 4),
+    ("frozen_ocean", 4),
+    ("frozen_river", 4),
+    ("ice_spikes", 4),
+    ("snowy_beach", 4),
+    ("snowy_taiga", 4),
+    ("snowy_plains", 4),
+    ("grove", 4),
+    ("snowy_slopes", 4),
+    ("frozen_peaks", 4),
+    ("jagged_peaks", 4),
+    ("swamp", 5),
+    ("mangrove_swamp", 5),
+    ("old_growth_spruce_taiga", 6),
+    ("old_growth_pine_taiga", 6),
+    ("windswept_gravelly_hills", 6),
+    ("windswept_hills", 6),
+    ("taiga", 6),
+    ("windswept_forest", 6),
+];
+/// `VillagerType.byBiome` over vanilla's table.
 pub fn villager_type(biome: &str) -> u8 {
-    match biome.strip_prefix("minecraft:").unwrap_or(biome) {
-        "badlands" | "desert" | "eroded_badlands" | "wooded_badlands" => 1,
-        "bamboo_jungle" | "jungle" | "sparse_jungle" => 2,
-        "savanna_plateau" | "savanna" | "windswept_savanna" => 3,
-        "deep_frozen_ocean" | "frozen_ocean" | "frozen_river" | "ice_spikes" | "snowy_beach"
-        | "snowy_taiga" | "snowy_plains" | "grove" | "snowy_slopes" | "frozen_peaks"
-        | "jagged_peaks" => 4,
-        "swamp" | "mangrove_swamp" => 5,
-        "old_growth_spruce_taiga"
-        | "old_growth_pine_taiga"
-        | "windswept_gravelly_hills"
-        | "windswept_hills"
-        | "taiga"
-        | "windswept_forest" => 6,
-        _ => 0,
-    }
+    let biome = biome.strip_prefix("minecraft:").unwrap_or(biome);
+    BIOME_VILLAGER_TYPES
+        .iter()
+        .find(|(b, _)| *b == biome)
+        .map_or(0, |(_, t)| *t)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wolves_refresh_health_boost_with_default_and_stored_bases() {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.id = "minecraft:wolf".into();
+        kind.species = Species::Wolf;
+        kind.max_health = 8.0;
+        kind.attributes = Arc::new([(Attr::MaxHealth.id().to_owned(), 8.0)].into());
+        let kind = Arc::new(kind);
+        // A fresh wild wolf, an owner-only load, a wild load's stored 8,
+        // a newly tamed wolf's 40, and a saved custom tame maximum.
+        for (tame, stored, base) in [
+            (false, None, 8.0),
+            (true, None, 8.0),
+            (false, Some(8.0), 8.0),
+            (true, Some(40.0), 40.0),
+            (true, Some(80.0), 80.0),
+        ] {
+            let mut m = Mob::new(
+                1,
+                Arc::clone(&kind),
+                horizon_core::geometry::Vec3::ZERO,
+                0.0,
+            );
+            m.extra.tame = tame;
+            if let Some(base) = stored {
+                set_base(&mut m, Attr::MaxHealth, base);
+            }
+            m.health = 4.0;
+            m.add_effect("minecraft:health_boost", 600, 1);
+            assert_eq!(m.attrs.max_health, base as f32 + 8.0);
+            assert_eq!(m.health, 4.0, "adding Health Boost must not heal");
+            assert_eq!(base_value(&m, Attr::MaxHealth), base);
+            m.health = m.attrs.max_health;
+            assert!(m.retain_effects(|e| e.id != "minecraft:health_boost"));
+            assert_eq!(m.attrs.max_health, base as f32);
+            assert_eq!(
+                m.health, base as f32,
+                "removal clamps to the unboosted maximum"
+            );
+            assert_eq!(base_value(&m, Attr::MaxHealth), base);
+            assert_eq!(
+                m.extra
+                    .attributes
+                    .as_ref()
+                    .and_then(|s| s.bases.first().map(|(_, v)| *v)),
+                stored,
+                "effect changes must not synthesize or overwrite a saved base"
+            );
+        }
+    }
+
+    /// A mob's own attribute record sanitizes with the definitions of the
+    /// catalog its type loaded with, not with copies of vanilla's bounds:
+    /// 26.3's catalog keeps `max_health` at 1..1024 and `knockback_resistance`
+    /// at -2..1, and a catalog with wider bounds keeps more.
+    #[test]
+    fn a_mobs_attributes_take_the_bounds_of_the_types_catalog() {
+        use horizon_world::attributes::entity::Catalog;
+        let bits = |v: f64| format!("{:016x}", v.to_bits());
+        let catalog = |max_health: f64| {
+            Catalog::from_json(&serde_json::json!({
+                "data_version": horizon_world::DATA_VERSION,
+                "attributes": [
+                    {"id": "minecraft:max_health", "default": bits(20.0), "min": bits(1.0), "max": bits(max_health), "syncable": true},
+                    {"id": "minecraft:knockback_resistance", "default": bits(0.0), "min": bits(-2.0), "max": bits(1.0), "syncable": true},
+                ],
+                "entities": {},
+            }))
+            .unwrap()
+        };
+        let mob = |catalog: &Catalog| {
+            let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+            kind.attribute_bounds = AttrBounds::of(catalog);
+            let mut m = Mob::new(1, Arc::new(kind), horizon_core::geometry::Vec3::ZERO, 0.0);
+            set_base(&mut m, Attr::MaxHealth, 5000.0);
+            set_base(&mut m, Attr::KnockbackResistance, -1.5);
+            m
+        };
+        let vanilla = mob(&catalog(1024.0));
+        assert_eq!(value(&vanilla, Attr::MaxHealth), 1024.0);
+        assert_eq!(vanilla.attrs.max_health, 1024.0);
+        assert_eq!(value(&vanilla, Attr::KnockbackResistance), -1.5);
+        let mut nan = mob(&catalog(1024.0));
+        set_base(&mut nan, Attr::MaxHealth, f64::NAN);
+        assert_eq!(value(&nan, Attr::MaxHealth), 1.0, "NaN is the minimum");
+        let wide = mob(&catalog(1e6));
+        assert_eq!(value(&wide, Attr::MaxHealth), 5000.0);
+        assert_eq!(wide.attrs.max_health, 5000.0);
+    }
 
     #[test]
     fn panda_genes_follow_the_vanilla_table() {
@@ -2837,12 +2995,6 @@ mod tests {
         // An effect does not touch attributes it does not modify.
         assert!(effect_modifier("weakness", 0, Attr::MovementSpeed).is_none());
         assert!(effect_modifier("poison", 0, Attr::AttackDamage).is_none());
-    }
-    #[test]
-    fn reasons_round_trip() {
-        for r in Reason::ALL {
-            assert_eq!(Reason::parse(r.name()), Some(r));
-        }
     }
     #[test]
     fn villager_types_by_biome() {

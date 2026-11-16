@@ -127,6 +127,24 @@ impl Clone for LegacyRandom {
     }
 }
 
+/// The whole generator: its 48-bit state and the cached second gaussian, so a copy draws on
+/// exactly as the original would.
+impl From<&LegacyRandom> for (u64, Option<f64>) {
+    fn from(random: &LegacyRandom) -> Self {
+        (random.state, random.gaussian)
+    }
+}
+/// A generator from its state (masked to 48 bits) and cached gaussian.
+impl From<(u64, Option<f64>)> for LegacyRandom {
+    fn from((state, gaussian): (u64, Option<f64>)) -> Self {
+        Self {
+            state: state & Self::MASK,
+            gaussian,
+            gate: None,
+        }
+    }
+}
+
 impl LegacyRandom {
     const MULTIPLIER: u64 = 0x5_deec_e66d;
     const MASK: u64 = (1 << 48) - 1;

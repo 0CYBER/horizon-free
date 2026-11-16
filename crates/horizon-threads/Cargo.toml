@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Scheduling hints for the game's threads and its allocator, and the other OS calls the crates that forbid unsafe code can't make"
 
 [dependencies]
+horizon-guest-stack = { path = "../horizon-guest-stack" }
 mimalloc = { version = "0.1.52", default-features = false }
 libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"] }
 
@@ -24,12 +25,18 @@ rustc-demangle = "0.1"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Console", "Win32_System_IO", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
+# Raw CPU timer calibration for Linux sampling tests in dependent crates.
+sampling-test-support = []
 # Set by horizon-client's `system-allocator`, which leaves nothing to count.
 system-allocator = []
 # Counts each thread's allocations and frees (`alloc_count`); the game allocator counts them.
 alloc-count = []
 # Counts live heap bytes by startup step and thread (`CensusAllocator`); for measuring only.
 alloc-census = ["alloc-count"]
+# Test-only synchronous allocation accounting; never enabled by game builds.
+test-allocation-probe = []
+# Counts allocation calls on the current thread in behavior tests only.
+test-allocation-count = []
 
 [lints]
 workspace = true

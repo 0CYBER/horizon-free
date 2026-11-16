@@ -1,27 +1,27 @@
-PlayerList.updateEntireScoreboard	port	crates/horizon-client/src/lan/scoreboard.rs::View::changes	the join is View::changes against the guest's empty view, sent from game/scoreboard.rs lan_sync_scoreboard
+PlayerList.updateEntireScoreboard	port	crates/horizon-client/src/lan/scoreboard.rs::View::changes	the join is View::changes against the guest's empty view, sent from game/interface/scoreboard/mod.rs lan_sync_scoreboard
 PlayerList.loadPlayerData	port	crates/horizon-client/src/lan/playerdata.rs::load_owner	gap: minor: the owner gets the file level.dat names as Level::read_root read it, anyone else playerdata.rs::load; the files are datafixed when the world is upgraded (datafix/files.rs), not on load
-PlayerList.save	port	crates/horizon-client/src/game/lan.rs::Game::save_guest	player file, advancements and statistics of a guest
+PlayerList.save	port	crates/horizon-client/src/game/network/lan/mod.rs::Game::save_guest	player file, advancements and statistics of a guest
 PlayerList.disconnectAllPlayersWithProfile	port	crates/horizon-client/src/lan/hub.rs::Hub::poll	kicks every connection of the uuid on NetEvent::Duplicate; the refusal of a second login is Shared::try_admit (lan/mod.rs)
-PlayerList.broadcastSystemToTeam	port	crates/horizon-client/src/lan/hub.rs::Hub::system_message_to	
+PlayerList.broadcastSystemToTeam	port	crates/horizon-client/src/lan/hub.rs::Hub::system_message_to
 PlayerList.broadcastSystemToAllExceptTeam	port	crates/horizon-client-core/src/scoreboard.rs::death_message_reaches	HideForOwnTeam sends the death message to everyone outside the dying player's team, checked before the LAN hub broadcasts it and before the local chat line
 PlayerList.getPlayerNamesArray	skip:server		the GS4 query reply's player list; RCON and query server code; Horizon has no RCON or GS4 query port
-PlayerList.op	inline	crates/horizon-client/src/game/dedicated.rs::Game::console_command	the op arm: list add, reply, and sync_ops (permission level push to the hub)
-PlayerList.deop	inline	crates/horizon-client/src/game/dedicated.rs::Game::console_command	the deop arm: list remove, reply, sync_ops and kick_unlisted_players
-PlayerList.saveAll	port	crates/horizon-client/src/game/dedicated.rs::Game::stop_dedicated	gap: minor: /save-all (save-all arm of console_command) writes the world only; players are saved on leave and when the server stops
-PlayerList.getPlayersWithAddress	inline	crates/horizon-client/src/game/dedicated.rs::Game::console_command	the ban-ip arm filters the guests by address
-PlayerList.getPlayerStats	inline	crates/horizon-client/src/game/lan.rs::Game::load_guest_records	statistics are read when the guest joins, not on first use
-PlayerList.locateStatsFile	port	crates/horizon-client/src/game/stats.rs::locate_player_json	the stats file an older version named after the player is moved to the uuid file; FileUtil.isValidPathSegment refuses a name vanilla would not write, and 26.3 has no name-based advancements file
-PlayerList.getPlayerAdvancements	inline	crates/horizon-client/src/game/lan.rs::Game::load_guest_records	advancements are read when the guest joins, not on first use
-PlayerList.getPlayer	port	crates/horizon-client/src/game/commands/players.rs::Game::target_by_uuid	gap: minor: the uuid lookup also returns entities (selector fallback); the name overload is Game::player_named
-PlayerList.reloadResources	port	crates/horizon-client/src/game/functions/loading.rs::Game::try_reload_datapacks	gap: player: /reload re-reads the datapacks but sends no tags or recipes to connected players and does not reload advancements; the sync data is loaded once per process (game/lan.rs SYNC), so new tags and recipes wait for a restart
-ProfileResolver.Cached.fetchByName	port	crates/horizon-client/src/game/dedicated.rs::Game::resolve	name to profile through the user cache, else the profile service (profiles::find_by_name)
+PlayerList.op	inline	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	the op arm: list add, reply, and sync_ops (permission level push to the hub)
+PlayerList.deop	inline	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	the deop arm: list remove, reply, sync_ops and kick_unlisted_players
+PlayerList.saveAll	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::stop_dedicated	gap: minor: /save-all (save-all arm of console_command) writes the world only; players are saved on leave and when the server stops
+PlayerList.getPlayersWithAddress	inline	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	the ban-ip arm filters the guests by address
+PlayerList.getPlayerStats	inline	crates/horizon-client/src/game/network/lan/mod.rs::Game::load_guest_records	statistics are read when the guest joins, not on first use
+PlayerList.locateStatsFile	port	crates/horizon-client/src/game/interface/stats.rs::locate_player_json	the stats file an older version named after the player is moved to the uuid file; FileUtil.isValidPathSegment refuses a name vanilla would not write, and 26.3 has no name-based advancements file
+PlayerList.getPlayerAdvancements	inline	crates/horizon-client/src/game/network/lan/mod.rs::Game::load_guest_records	advancements are read when the guest joins, not on first use
+PlayerList.getPlayer	port	crates/horizon-client/src/game/administration/commands/players.rs::Game::target_by_uuid	gap: minor: the uuid lookup also returns entities (selector fallback); the name overload is Game::player_named
+PlayerList.reloadResources	port	crates/horizon-client/src/game/administration/functions.rs::Game::reload_datapacks	gap: player: /reload re-reads the datapacks but sends no tags or recipes to connected players and does not reload advancements; the sync data is loaded once per process (game/network/lan/mod.rs SYNC), so new tags and recipes wait for a restart
+ProfileResolver.Cached.fetchByName	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::resolve	name to profile through the user cache, else the profile service (profiles::find_by_name)
 ServerOpList.getUserList	skip:ui		tab-completion names only (DeOpCommands suggestions); the console has no completion
 ServerOpList.add	port	crates/horizon-server-files/src/user_lists.rs::UserList::add	gap: minor: the Opped reply and the permission push are in console_command's op arm
 ServerOpList.remove	port	crates/horizon-server-files/src/user_lists.rs::UserList::remove	gap: minor: the Deopped reply, sync_ops and the kick are in console_command's deop arm
 ServerOpList.clear	port	crates/horizon-server-files/src/user_lists.rs::UserList::clear	empties the list, tells each removal and saves; vanilla's only callers are the JSON-RPC allow-list and ban-list services, which Horizon's management methods do not have, so nothing here calls it
-ServerOpList.canBypassPlayerLimit	port	crates/horizon-client/src/game/dedicated.rs::Game::run_dedicated	the bypasses_limit closure: an op entry with bypassesPlayerLimit; read by Shared::try_admit
+ServerOpList.canBypassPlayerLimit	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::run_dedicated	the bypasses_limit closure: an op entry with bypassesPlayerLimit; read by Shared::try_admit
 ServerOpListEntry.serialize	port	crates/horizon-server-files/src/user_lists.rs::OpEntry::serialize	level and bypassesPlayerLimit keys
-SleepStatus.areEnoughDeepSleeping	port	crates/horizon-client/src/game/lan_actions.rs::Game::enough_slept	counts players asleep for 100 ticks (sleep_counts) against sleepers_needed
+SleepStatus.areEnoughDeepSleeping	port	crates/horizon-client/src/game/network/lan_actions/sleep.rs::Game::enough_slept	counts players asleep for 100 ticks (sleep_counts) against sleepers_needed
 StoredUserList.clear	port	crates/horizon-server-files/src/user_lists.rs::UserList::clear	empties the list, tells each removal and saves; vanilla's only callers are the JSON-RPC allow-list and ban-list services, which Horizon's management methods do not have, so nothing here calls it
 StoredUserList.removeExpired	port	crates/horizon-server-files/src/user_lists.rs::UserList::get	expired entries are dropped on each get, as vanilla
 UserBanList.getUserList	skip:ui		tab-completion names only (PardonCommand suggestions)
@@ -29,7 +29,7 @@ UserBanList.add	port	crates/horizon-server-files/src/user_lists.rs::UserList::ad
 UserBanList.remove	port	crates/horizon-server-files/src/user_lists.rs::UserList::remove	gap: minor: the unbanned notice is in console_command's pardon arm
 UserBanList.clear	port	crates/horizon-server-files/src/user_lists.rs::UserList::clear	empties the list, tells each removal and saves; vanilla's only callers are the JSON-RPC allow-list and ban-list services, which Horizon's management methods do not have, so nothing here calls it
 UserBanListEntry.serialize	port	crates/horizon-server-files/src/user_lists.rs::BanEntry::serialize	the player's name and the ban fields
-UserBanListEntry.getDisplayName	inline	crates/horizon-client/src/game/dedicated.rs::Game::console_command	the banlist arm prints the name; Horizon entries always carry one, so no Unknown-user fallback
+UserBanListEntry.getDisplayName	inline	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	the banlist arm prints the name; Horizon entries always carry one, so no Unknown-user fallback
 UserWhiteList.add	port	crates/horizon-server-files/src/user_lists.rs::UserList::add	gap: minor: the allowlist notice is in console_whitelist's add arm
 UserWhiteList.remove	port	crates/horizon-server-files/src/user_lists.rs::UserList::remove	gap: minor: the notice is in console_whitelist's remove arm
 UserWhiteList.clear	port	crates/horizon-server-files/src/user_lists.rs::UserList::clear	empties the list, tells each removal and saves; vanilla's only callers are the JSON-RPC allow-list and ban-list services, which Horizon's management methods do not have, so nothing here calls it
@@ -39,7 +39,7 @@ PktUtils.stringFromByteArray	inline	crates/horizon-server/src/rcon.rs::read_requ
 PktUtils.intFromByteArray	inline	crates/horizon-server/src/rcon.rs::read_request	the little-endian length, request id and type; the rest of PktUtils is the GS4 query server
 PktUtils.intFromNetworkByteArray	inline	crates/horizon-server/src/query.rs::Query::answer	the token of a stat request: four big-endian bytes at 7, zero when the packet is short
 PktUtils.toHexString	skip:server		RCON and query server code; Horizon has no RCON or GS4 query port
-RconConsoleSource.createCommandSourceStack	port	crates/horizon-client/src/game/dedicated.rs::Game::rcon_line	the console at level 4 from the world respawn position with the source named Rcon (its `say`, and its feedback to the operators as [Rcon: ...]); gap: minor: the dedicated-only console commands keep their own wording
+RconConsoleSource.createCommandSourceStack	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::rcon_line	the console at level 4 from the world respawn position with the source named Rcon (its `say`, and its feedback to the operators as [Rcon: ...]); gap: minor: the dedicated-only console commands keep their own wording
 GenericThread.start	inline	crates/horizon-server/src/rcon.rs::serve	the listener and a thread per connection; GenericThread is also the GS4 query server's helper
 GenericThread.stop	skip:server		the RCON threads end with the supervisor; GenericThread is also the GS4 query server's helper
 QueryThreadGs4.create	port	crates/horizon-server/src/query.rs::setup	query.port 1 to 65535 with vanilla's warning, server-ip (0.0.0.0 when empty)
@@ -62,15 +62,15 @@ RconThread.run	port	crates/horizon-server/src/rcon.rs::serve	accept a connection
 RconThread.create	port	crates/horizon-server/src/rcon.rs::start	server-ip (0.0.0.0 when empty), rcon.port 1 to 65535 and a password, with vanilla's three warnings
 RconThread.stop	skip:server		the listener runs as long as the supervisor does, through game restarts
 RconThread.closeSocket	skip:server		the listener runs as long as the supervisor does
-ServerWaypointManager.trackWaypoint	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::track	
-ServerWaypointManager.updateWaypoint	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::update_waypoint	
-ServerWaypointManager.untrackWaypoint	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::untrack	
-ServerWaypointManager.addPlayer	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::add_player	
-ServerWaypointManager.updatePlayer	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::update_player	
-ServerWaypointManager.removePlayer	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::remove_player	
+ServerWaypointManager.trackWaypoint	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::track
+ServerWaypointManager.updateWaypoint	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::update_waypoint
+ServerWaypointManager.untrackWaypoint	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::untrack
+ServerWaypointManager.addPlayer	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::add_player
+ServerWaypointManager.updatePlayer	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::update_player
+ServerWaypointManager.removePlayer	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::remove_player
 ServerWaypointManager.remakeConnections	inline	crates/horizon-client/src/lan/waypoints.rs::Waypoints::tick_level	called on scoreboard team changes; the per-tick update re-checks every connection instead
-ServerWaypointManager.createConnection	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::create_connection	
-ServerWaypointManager.updateConnection	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::update_or_create	
+ServerWaypointManager.createConnection	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::create_connection
+ServerWaypointManager.updateConnection	port	crates/horizon-client/src/lan/waypoints.rs::Waypoints::update_or_create
 SoundEvent.create	skip:data		registry object construction; Horizon's sound_events.rs models sounds.json entries, not SoundEvent objects
 SoundEvent.getRange	inline	crates/horizon-client/src/lan/containers.rs::Hub::broadcast_near	16*max(volume,1) is the whole formula: no 26.3 event sets a fixed range (SoundEvents never calls createFixedRangeEvent), and a player exactly on it is left out
 SoundEvents.register	skip:data		registry bootstrap of sound events and variant sets; Horizon has no registry layer
@@ -91,13 +91,13 @@ ServerRecipeBook.loadRecipes	port	crates/horizon-client/src/recipe_book.rs::Sett
 ServerRecipeBook.pack	port	crates/horizon-client/src/recipe_book.rs::Settings::write	the saved compound of the book
 ServerRecipeBook.apply	inline	crates/horizon-client/src/recipe_book.rs::Settings::read_valid	replaces the book's known and highlighted recipes on load
 ServerStatsCounter.createTypedStatsCodec	skip:java		codec builder for the stats map
-ServerStatsCounter.parse	port	crates/horizon-client/src/game/stats.rs::Stats::read	gap: minor: no data fixer runs on old stats files
+ServerStatsCounter.parse	port	crates/horizon-client/src/game/interface/stats.rs::Stats::read	gap: minor: no data fixer runs on old stats files
 Stat.equals	skip:java		Horizon keys stats by name strings; there are no Stat objects to compare
 StatType.get	skip:java		instance cache of Stat objects; Horizon keys stats by name strings
 Stats.makeCustomStat	skip:data		registration of custom stat ids
 Stats.makeRegistryStatType	skip:data		registration of stat types
-StatsCounter.increment	port	crates/horizon-client/src/game/stats.rs::Stats::add	saturating add, as vanilla's clamp at Integer.MAX_VALUE
-StatsCounter.getValue	port	crates/horizon-client/src/game/stats.rs::Stats::get	the count of a stat, 0 when missing
+StatsCounter.increment	port	crates/horizon-client/src/game/interface/stats.rs::Stats::add	saturating add, as vanilla's clamp at Integer.MAX_VALUE
+StatsCounter.getValue	port	crates/horizon-client/src/game/interface/stats.rs::Stats::get	the count of a stat, 0 when missing
 BlockItemTagId.create	skip:data		tag key constructors; Horizon reads tag files by name
 net/minecraft/tags/TagEntry#visitRequiredDependencies	inline	crates/horizon-world/src/worldgen/tags.rs::TagDefinitions::build	the required tag edges built in TagDefinitions::build
 net/minecraft/tags/TagEntry#visitOptionalDependencies	inline	crates/horizon-world/src/worldgen/tags.rs::TagDefinitions::build	the optional tag edges built in TagDefinitions::build
@@ -123,7 +123,7 @@ ARGB.greyscale	skip:other		int overload has no caller in 26.3; ColorModifier use
 ARGB.alphaBlend	skip:other		int overload has no caller in 26.3; ColorModifier uses the Vector4fc overload
 ARGB.alphaBlendChannel	skip:other		private helper of alphaBlend, which has no caller in 26.3
 ARGB.linearLerp	skip:other		no caller in 26.3
-ARGB.vector4fFromARGB32	port	crates/horizon-client/src/game/lan_particles.rs::rgba	ARGB int to float colour, used for particle option colours; the colour codecs have no counterpart
+ARGB.vector4fFromARGB32	port	crates/horizon-client/src/game/network/lan_particles.rs::rgba	ARGB int to float colour, used for particle option colours; the colour codecs have no counterpart
 ARGB.setVector4fFromARGB32	skip:ui		clear colour of the start-up loading overlay; drawing only
 ARGB.toABGR	port	crates/horizon-client-render/src/hud_layout.rs::abgr	swaps red and blue into the HUD's packed colour
 AbstractListBuilder.add	skip:java		DataResult list builder of the codec layer

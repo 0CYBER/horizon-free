@@ -8,7 +8,8 @@ use std::path::PathBuf;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let root = PathBuf::from(args.next().ok_or("client resource directory")?);
-    let data = LootData::load(&root, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(&root)?;
+    let data = LootData::load(&root, &PackOverlay::NONE, &defaults)?;
     let tables: Vec<String> = args
         .next()
         .ok_or("table")?

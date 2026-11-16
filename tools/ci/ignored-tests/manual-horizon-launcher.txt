@@ -1,0 +1,16 @@
+# horizon-launcher's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-launcher account::tests::secrets_file_writer subprocess manual # a child process of processes_sharing_the_secrets_file_lose_nothing
+horizon-launcher account::tests::system_keychain_keeps_long_secrets by-hand manual # writes to the OS keychain
+horizon-launcher backend::release_loading_tests::benchmark_shared_startup_response by-hand manual # local release-loading benchmark; run explicitly with --ignored --nocapture
+horizon-launcher browser::tests::live_modrinth_search_pick_and_download by-hand manual # needs the network
+horizon-launcher cli_settings_work_with_one_mib_process_stack by-hand manual # Windows only; from launcher/ run cargo test --test startup cli_settings_work_with_one_mib_process_stack -- --ignored --exact
+horizon-launcher cull::desktop_tests::desktop_list_renders_the_viewport_after_scrollbar_jumps by-hand manual # requires an interactive Windows desktop and graphics adapter
+horizon-launcher hardware_probes_run_hidden_after_the_first_frame by-hand manual # requires an interactive Windows desktop and graphics adapter
+horizon-launcher loaders::forge_install::tests::a_real_installer_installs by-hand manual # real Forge and NeoForge installers over the network; needs HORIZON_FORGE_TEST_DIR, HORIZON_FORGE_TEST_JAVA and HORIZON_FORGE_TEST
+horizon-launcher loaders::tests::the_real_loaders_install by-hand manual # the real Fabric and Quilt services over the network
+horizon-launcher native_mods::registry_compile::tests::real_sdk_registry_compile by-hand manual # requires an explicitly prepared private SDK, mod and launcher executable
+horizon-launcher pictures::tests::a_32k_screenshot_is_read_in_little_memory by-hand manual # slow soak: 2 GiB of pixels; run with --ignored --nocapture
+horizon-launcher rust_toolchain::tests::managed_arm64_toolchain_builds_the_game ci.yml manual # downloads the managed Windows ARM64 toolchain and builds Horizon
+horizon-launcher storage::inventory::eviction_tests::allocated_forty_gib_cleanup_proof by-hand manual # manual allocated 40 GiB proof; requires HORIZON_EVICTION_PROOF_ROOT in checkout scratch
+horizon-launcher telemetry::tests::official_count_follows_the_srv_record by-hand manual # asks the live official server
+horizon-launcher downloads::tests::benchmark_download_pipeline by-hand manual # local download throughput benchmark; run explicitly in a fresh process per mode

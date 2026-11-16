@@ -478,7 +478,10 @@ mod tests {
     use super::*;
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+        HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            (std::path::Path::new("/nonexistent/horizon-test-assets")).to_owned(),
+        ))
+        .unwrap()
     }
 
     fn x_span(batch: &HudBatch, plain: &HudBatch) -> (f32, f32) {
@@ -524,10 +527,10 @@ mod tests {
             let draw = |batch: &mut HudBatch, text: &Text| {
                 menu_style::with_surfaces(surfaces, || draw(batch, &atlas, rect, text))
             };
-            let mut plain = HudBatch::new([640, 480]);
+            let mut plain = HudBatch::scratch([640, 480]);
             draw(&mut plain, &Text::empty());
             let base = plain.vertices.len();
-            let mut batch = HudBatch::new([640, 480]);
+            let mut batch = HudBatch::scratch([640, 480]);
             draw(&mut batch, &long);
             assert!(batch.vertices.len() > base, "{name}: long label drawn");
             // The widget's own fill, track and handle also draw: only the label's vertices count.
@@ -544,7 +547,7 @@ mod tests {
                 );
             }
             // The label's own glyphs (past the widget's fill) start centred.
-            let mut batch = HudBatch::new([640, 480]);
+            let mut batch = HudBatch::scratch([640, 480]);
             draw(&mut batch, &short);
             let (lo, hi) = x_span(&batch, &plain);
             let middle = (lo + hi) / 2.0;

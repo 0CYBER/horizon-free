@@ -97,7 +97,7 @@ fn identifier(value: &Value) -> io::Result<String> {
         .as_str()
         .ok_or_else(|| invalid("expected particle identifier"))?;
     let canonical =
-        crate::identifier::Identifier::parse(name).map_err(|e| invalid(format!("{e:?}")))?;
+        horizon_core::identifier::Identifier::parse(name).map_err(|e| invalid(format!("{e:?}")))?;
     if canonical.to_string() != name {
         return Err(invalid("noncanonical particle identifier"));
     }

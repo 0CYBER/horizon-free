@@ -28,9 +28,10 @@
 //! Written from OptiFine's `random_entities.properties` and ETF's `RANDOM_GUIDE.md`; no mod's
 //! source was read.
 
+use horizon_assets::resource_source::ResourceSource;
 use std::collections::{BTreeMap, HashMap};
+#[cfg(test)]
 use std::fs;
-use std::path::Path;
 
 use crate::paths::files_under;
 use crate::properties::Properties;
@@ -83,7 +84,7 @@ struct Source {
 }
 
 impl RandomTextures {
-    pub fn scan(root: &Path) -> Self {
+    pub fn scan(root: &ResourceSource) -> Self {
         static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
@@ -97,16 +98,9 @@ impl RandomTextures {
         self.generation
     }
 
-    fn scan_files(root: &Path) -> Self {
+    fn scan_files(root: &ResourceSource) -> Self {
         let mut found: HashMap<String, [Source; FOLDERS.len()]> = HashMap::new();
-        let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-            return Self::default();
-        };
-        let mut namespaces: Vec<String> = namespaces
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        namespaces.sort();
+        let namespaces = root.namespaces("assets");
         for ns in &namespaces {
             let prefix = format!("assets/{ns}/");
             for (source, (folder, mirror)) in FOLDERS.iter().enumerate() {
@@ -148,11 +142,9 @@ impl RandomTextures {
                 }
                 // A real rules file is a few KB, and parsing grows with the square of its size:
                 // a bigger or unreadable one holds no rules, so the texture keeps its default.
-                let path = root.join(&file);
-                let text = fs::metadata(&path)
-                    .is_ok_and(|m| m.len() <= MAX_PROPERTIES)
-                    .then(|| fs::read(&path).ok())
-                    .flatten()
+                let text = root
+                    .read_limited(&file, MAX_PROPERTIES)
+                    .ok()
                     .map(decode)
                     .unwrap_or_default();
                 out.rules.push(Rules::parse(&Properties::parse(&text)));
@@ -296,7 +288,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, text).unwrap();
         }
-        let found = RandomTextures::scan(&root);
+        let found = RandomTextures::scan(&ResourceSource::directory(root.clone()));
         (root, found)
     }
 
@@ -540,7 +532,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("creeper2.png"), b"").unwrap();
-        let t = RandomTextures::scan(&root);
+        let t = RandomTextures::scan(&ResourceSource::directory(root.clone()));
         let id = t.get("entity/creeper/creeper").unwrap().rules.unwrap();
         let named = |name| Facts {
             name: Some(name),

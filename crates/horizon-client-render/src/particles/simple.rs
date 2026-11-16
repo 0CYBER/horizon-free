@@ -116,7 +116,7 @@ impl ParticleEngine {
         if let Behaviour::Spark { fade, twinkle, .. } = p.behaviour {
             let mut child = self.spark(p.position, [0.0; 3], p.rgba, fade, false, twinkle);
             child.age = child.lifetime / 2;
-            self.pending.push(child);
+            self.pending.push(super::PendingParticle::Ordinary(child));
         }
     }
     /// One tick of every live particle. The ones `tick_simple` covers are independent of each

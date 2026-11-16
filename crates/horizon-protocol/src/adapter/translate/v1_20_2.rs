@@ -329,7 +329,7 @@ mod tests {
                 let (name, render, format) = p.display.unwrap();
                 assert_eq!(
                     name,
-                    horizon_world::nbt::Tag::String("Wire objective".into())
+                    horizon_core::nbt::Tag::String("Wire objective".into())
                 );
                 assert_eq!(render, 1);
                 assert!(format.is_none());
@@ -353,7 +353,7 @@ mod tests {
             );
             assert_eq!(
                 p.prompt,
-                Some(horizon_world::nbt::Tag::String("Wire pack".into()))
+                Some(horizon_core::nbt::Tag::String("Wire pack".into()))
             );
         }
     }
@@ -623,7 +623,7 @@ mod tests {
             assert_eq!(p.container, 7);
             assert_eq!(
                 p.title,
-                horizon_world::nbt::Tag::String("Horizon menu".into())
+                horizon_core::nbt::Tag::String("Horizon menu".into())
             );
             if name == "minecraft:merchant" {
                 assert_eq!(p.menu, 19);
@@ -649,7 +649,7 @@ mod tests {
             &play::OpenScreen {
                 container: 7,
                 menu: 24,
-                title: horizon_world::nbt::Tag::String("Horizon menu".into()),
+                title: horizon_core::nbt::Tag::String("Horizon menu".into()),
             },
             &mut invalid,
         );

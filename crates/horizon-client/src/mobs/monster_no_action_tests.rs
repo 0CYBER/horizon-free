@@ -3,9 +3,10 @@
 //! report 1.0, so with `Mob.serverAiStep`'s own +1 they gain 3 a tick whatever
 //! the light and pass the despawn threshold of 600 after 201 ticks.
 use super::*;
+use crate::health::TestLevel;
 use crate::mobs::ai::tick;
 use crate::mobs::world::with_test_world;
-use horizon_core::{geometry::Vec3, random::LegacyRandom};
+use horizon_core::geometry::Vec3;
 use std::sync::Arc;
 
 /// A fully ticking mob of that type, hovering so the empty test world's floor
@@ -25,17 +26,21 @@ fn mob(types: &crate::mobs::MobTypes, name: &str) -> Mob {
 /// the threshold is the 201st.
 fn no_action_times(types: &crate::mobs::MobTypes, w: &MobWorld<'_>, name: &str) -> (i32, i32) {
     let mut m = mob(types, name);
-    let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(7));
+    let mut test_level = TestLevel::new(7);
     let mut events = Vec::new();
     let mut seen = Vec::with_capacity(201);
     for _ in 0..201 {
-        assert!(tick(&mut m, w, &mut lr, &mut events), "{name} went away");
+        assert!(
+            tick(&mut m, w, &mut test_level.level(), &mut events),
+            "{name} went away"
+        );
         seen.push(m.ai.no_action_time);
     }
     (seen[199], seen[200])
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_blaze_and_a_vex_keep_their_extra_no_action_time_in_the_dark() {
     let mut out = None;
     if !with_test_world(&[], |w, types| {

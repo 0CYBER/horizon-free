@@ -1,4 +1,4 @@
-<!-- Generated from crates/horizon-server/src (the help text, config::TEMPLATE, api::ROUTES) by reference.rs; a test fails when this file is out of date. Update it with: HORIZON_WRITE_DOCS=1 cargo test -p horizon-server reference -->
+<!-- Generated from crates/horizon-server/src and crates/horizon-server-launch/src (the help text, config::TEMPLATE, api::ROUTES) by reference.rs; a test fails when this file is out of date. Update it with: HORIZON_WRITE_DOCS=1 cargo test -p horizon-server reference -->
 # Server reference
 
 Everything `horizon-server` offers a host or a tool: its commands, every `server.toml` key and the control API. How to host: [hosting.md](../hosting.md); the design: [server.md](../server.md); stability and versions: [stability.md](stability.md).
@@ -91,6 +91,10 @@ Horizon server settings (docs/server.md). The server writes them into server.pro
 | `view_distance` | `10` | `view-distance` | chunks sent around each player |
 | `simulation_distance` | `10` | `simulation-distance` | chunks around each player where mobs, crops and redstone tick |
 | `max_view_distance` | `0` | `horizon-max-view-distance` | past view_distance, saved chunks only, up to this (never generated; 0: off) |
+| `max_viewed_loaded_chunks` | `2048` | `horizon-max-viewed-loaded-chunks` | chunks a mod may keep loaded for one player in another level (0: none; at most 4489, higher values lowered with a warning; an older Horizon client gets at most 2048) |
+| `max_viewed_ticking_chunks` | `441` | `horizon-max-viewed-ticking-chunks` | of them, ticking (one player's simulation area at distance 10) |
+| `max_viewed_loaded_chunks_per_level` | `16384` | `horizon-max-viewed-loaded-chunks-per-level` | the same for all players together, per level |
+| `max_viewed_ticking_chunks_per_level` | `3528` | `horizon-max-viewed-ticking-chunks-per-level` | ticking, all players together, per level |
 | `admin_feedback_to_ops` | `true` | `horizon-admin-feedback-to-ops` | operators see each other's commands ([name: ...], vanilla); false: only the log |
 | `accept_older_clients` | `false` | `horizon-accept-older-clients` | true: 26.2 clients join too, their packets translated (docs/hosting.md) |
 
@@ -194,7 +198,7 @@ HTTP and JSON on 127.0.0.1. A running server writes its address and a random tok
 | `POST` | `/api/v1/update` | `{"tag": "...", "timeout": seconds}` (both optional) | `{"ok": true}`; `status` says how it went (`update`) | Restart on that installed release, or download the newest first; goes back if the game isn't up within the timeout |
 | `GET` | `/api/v1/metrics/prometheus` | nothing | the latest sample as Prometheus text: `horizon_up`, `horizon_tps`, `horizon_mspt{stat}`, `horizon_players_online`, `horizon_memory_rss_bytes`, `horizon_loaded_chunks{dimension}` and `horizon_entities{dimension}` (players and block entities apart)... | Metrics for a monitoring tool to scrape |
 | `GET` | `/api/v1/players` | nothing | `online` (name, uuid, address, ping_ms, dimension, position, op_level), `max_players`, `ops`, `whitelist` (`enabled`, `players`), `bans`, `ip_bans` (with reason, source, created, expires) | Who is online, and vanilla's lists |
-| `GET` | `/api/v1/mods` | nothing | `engine` (`found`, `target`, `base`, `horizon`, `hooks`) and `native` (id, version, sha256), from the `native-mods.json` the launcher wrote beside the game program | The native mods the server's game program was built with |
+| `GET` | `/api/v1/mods` | nothing | `mods` (id, version) from the running engine's LoadedMods inventory; `provenance` contains `engine` (found, target, base, horizon, hooks) and `native` (id, version, sha256) from the configured program's native-mods.json. 409 when the runtime inventory is unavailable | The packages loaded by the running server, with build provenance separate |
 | `POST` | `/api/v1/players/kick` | `{"name", "reason"}` (reason optional) | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Kick an online player |
 | `POST` | `/api/v1/players/ban` | `{"name", "reason"}` (reason optional) | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Ban a player (kicked if online) |
 | `POST` | `/api/v1/players/pardon` | `{"name"}` | `{"changed": bool, "output": [...]}`: whether the list (or who is online) changed, and the console's lines | Lift a player's ban |

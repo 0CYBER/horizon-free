@@ -1,0 +1,23 @@
+# The daily tests of cargo-horizon-mod: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+cargo-horizon-mod bounded_catalog_commands test:bounded_reads daily slow
+cargo-horizon-mod bounded_discovery_reread test:bounded_reads daily child-process
+cargo-horizon-mod bounded_manifest_commands test:bounded_reads daily child-process
+cargo-horizon-mod bounded_special_manifests test:bounded_reads daily child-process
+cargo-horizon-mod compiler_wrapper_preserves_diagnostics_exit_code_and_signal test:wasm_rustc_status daily child-process
+cargo-horizon-mod git_project_build_checks_only_the_files_it_packages test:content_project daily child-process
+cargo-horizon-mod inject_add_head_uses_launcher_module_catalog_hash test:module_discovery daily child-process
+cargo-horizon-mod internals_add_refuses_missing_gated_and_shape_only_paths_without_partial_edits test:internals daily child-process
+cargo-horizon-mod internals_add_requires_kind_for_ambiguous_paths_and_update_keeps_it test:internals daily child-process
+cargo-horizon-mod internals_add_uses_launcher_module_catalog_hash test:module_discovery daily child-process
+cargo-horizon-mod internals_add_writes_pinned_hashes_and_preserves_the_rest_of_the_manifest test:internals daily child-process
+cargo-horizon-mod internals_commands_refuse_wasm_mods_without_edits test:internals daily child-process
+cargo-horizon-mod internals_sync_invokes_the_launcher_and_never_edits_on_failure test:internals daily child-process
+cargo-horizon-mod layouts::tests::the_probe_builds_dependencies_with_their_resolved_features bin:cargo-horizon-mod daily slow
+cargo-horizon-mod module_free_add_commands_keep_prebuilt_output_and_never_run_launcher test:module_discovery daily child-process
+cargo-horizon-mod native_sync_refuses_repo test:internals daily child-process
+cargo-horizon-mod run_refuses_code_mods_without_building test:run daily child-process
+cargo-horizon-mod table_declarations_keep_their_format_when_adding_and_refreshing test:internals daily child-process
+cargo-horizon-mod unreadable_new_catalog_does_not_move_either_pin_or_hashes test:internals daily child-process
+cargo-horizon-mod update_diffs_signatures_refreshes_present_hashes_and_keeps_missing_declarations test:internals daily child-process
+cargo-horizon-mod use_jar_records_exact_metadata_hash_and_order_without_copying_the_jar test:use_jar daily child-process

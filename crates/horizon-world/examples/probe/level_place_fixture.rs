@@ -1,5 +1,5 @@
 //! Rust side of `tools/test_level_place_parity.py`: evaluates
-//! `Behaviours::placement_state` for generated neighbourhoods.
+//! `Behaviours::placement_preview` for generated neighbourhoods.
 use horizon_core::{
     geometry::{Direction, Vec3},
     position::{BlockPos, ChunkPos},
@@ -22,6 +22,7 @@ struct Cells {
     random: LegacyRandom,
     obstructed: bool,
 }
+impl horizon_world::level::BlockEntityNeighbors for Cells {}
 impl LevelAccess for Cells {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.cells.get(&pos).copied().unwrap_or(self.air)
@@ -103,8 +104,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             item: case["item"].as_str().unwrap().to_owned(),
             can_use_game_master_blocks: false,
         };
-        match behaviours.placement_state(&mut level, &mut ticks, &ctx) {
-            Some((pos, state)) => writeln!(out, "place {},{},{} {}", pos.x, pos.y, pos.z, state.0)?,
+        match behaviours.placement_preview(&mut level, &mut ticks, &ctx) {
+            Some(preview) => {
+                let (pos, state) = (preview.pos, preview.state);
+                writeln!(out, "place {},{},{} {}", pos.x, pos.y, pos.z, state.0)?
+            }
             None => writeln!(out, "place none")?,
         }
     }

@@ -1,5 +1,6 @@
 """Execute release shell steps with optional archives present and absent."""
 
+import base64
 import hashlib
 import os
 from pathlib import Path
@@ -86,3 +87,47 @@ gh() {
                 for name in set(OPTIONAL) - present:
                     self.assertIn(f"::warning::{name} is missing", signed.stdout)
                     self.assertIn(f"::warning::{name} is missing", published.stdout)
+
+    def test_sign_release_covers_sdk_archive_bytes_and_index(self):
+        # SDK publishing workflows are deferred, but the signing helper accepts SDK assets
+        # explicitly, just like game archives. Check that API without assuming a Nightly SDK job.
+        build = "c" * 40
+        for tag, also_for in ((f"sdk-{build}", ""), ("nightly", "nightly-2026-11-04-0123456")):
+            with self.subTest(tag=tag), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                assets = {"sdk.json": b'{"build":"' + build.encode() + b'"}\n',
+                          "runtime-x86_64-unknown-linux-gnu.tar.xz": bytes(range(256)),
+                          "build-data.tar.xz": b"\x00binary build data\xff"}
+                for name, data in assets.items():
+                    (root / name).write_bytes(data)
+                result = subprocess.run(
+                    [BASH, str(ROOT / "tools/ci/sign_release.sh"), tag,
+                     *(str(root / name) for name in assets)],
+                    env={**os.environ, "EPHEMERAL": "yes", "ALSO_FOR": also_for,
+                         "RELEASE_SIGNING_KEY": "", "RELEASE_SIGNING_KEY_NEXT": ""},
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                sums = (root / "SHA256SUMS").read_bytes()
+                self.assertEqual(
+                    {name.removeprefix("*"): digest for digest, name in
+                     (line.split() for line in sums.decode().splitlines())},
+                    {name: hashlib.sha256(data).hexdigest() for name, data in assets.items()},
+                )
+                # Ed25519 SubjectPublicKeyInfo: the helper emits its raw 32-byte public key.
+                public = root / "public.der"
+                public.write_bytes(bytes.fromhex("302a300506032b6570032100") +
+                                   base64.b64decode((root / "ephemeral.pub").read_bytes()))
+                signatures = [(tag, "SHA256SUMS.sig")]
+                if also_for:
+                    signatures.append((also_for, "SHA256SUMS.v2.sig"))
+                for signed_tag, filename in signatures:
+                    message, signature = root / "message", root / "signature"
+                    message.write_bytes(f"horizon release {signed_tag}\n".encode() + sums)
+                    signature.write_bytes(base64.b64decode((root / filename).read_bytes()))
+                    verified = subprocess.run(
+                        ["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER",
+                         "-inkey", str(public), "-in", str(message), "-sigfile", str(signature)],
+                        capture_output=True, text=True,
+                    )
+                    self.assertEqual(verified.returncode, 0, verified.stderr)

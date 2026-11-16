@@ -1,0 +1,6 @@
+horizon-client game::viewed_worlds::tests::each_open_refusal_has_a_fixed_reason lib daily resources
+horizon-client game::viewed_worlds::tests::a_level_not_named_at_login_is_viewed_in_its_slot lib daily resources
+horizon-client game::viewed_worlds::tests::a_late_packet_of_a_slot_bound_again_is_dropped lib daily resources
+horizon-client game::viewed_worlds::tests::an_opens_column_cap_bounds_its_world lib daily resources
+horizon-client game::viewed_worlds::switch::tests::travels_between_two_runtime_levels_of_one_type_keep_both_worlds lib daily resources
+horizon-client game::viewed_worlds::switch::tests::a_swap_the_client_did_not_make_is_refused lib daily resources

@@ -8,8 +8,11 @@ description = "Downloads, prepares and starts Horizon builds"
 [workspace]
 
 [dependencies]
+horizon-mod-point-emit = { path = "../crates/horizon-mod-point-emit" }
+horizon-addresses = { path = "../crates/horizon-addresses" }
+# Reads the object members out of the mods' rlibs for the API route's C link (`native_mods/api_route.rs`).
+object = { version = "0.39", default-features = false, features = ["read_core", "archive", "pe", "std"] }
 # The catalog and mod-owned trait injections share their generation rules.
-horizon-mod-api-gen = { path = "../crates/horizon-mod-api-gen" }
 # GPUI Fast (longbridge/gpui-fast): Zed's GPUI with retained views and cached scroll layers, under
 # its own name. wgpu renders on Linux, not blade (#3812).
 gpui = { package = "gpui-fast", version = "0.1.13" }
@@ -30,6 +33,7 @@ futures-util = "0.3"
 httpdate = "1"
 # The mod browser checks Modrinth's SHA-512 before a pack reaches the game folder (browser/download.rs).
 sha2 = "0.10"
+tempfile = "3"
 # The secrets file is encrypted where no keychain answers (account.rs, FileStore).
 chacha20poly1305 = "0.10"
 pulldown-cmark = { version = "0.12", default-features = false }
@@ -43,10 +47,13 @@ dirs = "5"
 sys-locale = "0.3"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+horizon-server-launch = { path = "../crates/horizon-server-launch" }
 horizon-theme = { path = "../crates/horizon-theme" }
+# The sunset scene, painted skies, rain and frosted glass (`scenery/`).
+horizon-launcher-scenery = { path = "scenery" }
 # The engine, through the platform's public API (docs/layers.md): the pinned version, No AI, the preparer,
 # level.dat and servers.dat (the worlds and server lists of instances), and the official server's SRV record.
-horizon-platform = { path = "../crates/horizon-platform", features = ["prepare", "protocol", "world"] }
+horizon-platform = { path = "../crates/horizon-platform", features = ["prepare", "protocol", "world", "mod-build", "mod-index", "mod-prebuilt", "mod-runtime-process"] }
 horizon-cosmetics = { path = "../crates/horizon-cosmetics" }
 glam = "0.30"
 # `horizon-launcher mcp`: the Model Context Protocol, shared with horizon-ctl and horizon-server.
@@ -55,8 +62,6 @@ horizon-mcp = { path = "../crates/horizon-mcp" }
 horizon-friends = { path = "../crates/horizon-friends" }
 # Import modpack: the porting pipeline, run on the player's own files (docs/modpacks.md).
 horizon-port-pack = { path = "../crates/horizon-port-pack" }
-# Horizon's mod registry: its index and the checks a download passes before install.
-horizon-mods = { path = "../crates/horizon-mods", features = ["index"] }
 # Use the game's manifest validation for native shader identities.
 horizon-shader-api = { path = "../crates/horizon-shader-api" }
 # Signed updates: archives are checked against the release's signed checksums (docs/security.md).
@@ -75,6 +80,8 @@ getrandom = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # Screenshots read a row at a time and shrunk as they come (`pictures`): the version `image` uses.
 png = "0.18"
+cap-std = "3"
+cap-fs-ext = "3"
 
 # Native builds at low priority (rust_toolchain::low_priority); already in the lockfile.
 [target.'cfg(unix)'.dependencies]
@@ -99,7 +106,7 @@ raw-window-handle = "0.6"
 keyring = { version = "3", features = ["windows-native"] }
 # Java's heap slider reads the computer's memory; the uninstaller hides its running copy; an
 # abandoned launcher update is one whose process has gone. Already in the lockfile.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 # Shortcuts written by the shell itself (shortcut::write_windows_link): the hand-laid Shell Link has
 # no target ID list, so Explorer shows an empty target and starts nothing.
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }
@@ -111,9 +118,17 @@ winreg = "0.56"
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile = "3"
+# The mod inventory's `Side` in tests (`mod_api::Side`, which the launcher does not depend on).
+horizon-mod-vocab = { path = "../crates/horizon-mod-vocab" }
+horizon-mod-api-gen = { path = "../crates/horizon-mod-api-gen", features = ["listener-fixture"] }
+libc = "0.2"
 # Tokenize source strings for the translation completeness test, including multiline calls.
 syn = "2"
 
 [profile.release]
 strip = true
+
+# The scenery's pixel loops (blurring a sky, baking the frosted plates) are optimised in debug
+# builds too: unoptimised, one Blur step took 0.7-1 s and one Glass step 70 ms.
+[profile.dev.package.horizon-launcher-scenery]
+opt-level = 3

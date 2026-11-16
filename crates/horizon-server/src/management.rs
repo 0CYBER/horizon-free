@@ -14,6 +14,7 @@ use crate::{
 use horizon_platform::server_files::properties::{
     OsEntropy, ServerProperties, SystemEntropy, generate_secret_key,
 };
+use horizon_server_launch::config;
 use serde_json::{Value, json};
 use std::{
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
@@ -212,11 +213,11 @@ fn valid_secret(secret: &str) -> bool {
 /// The settings when the server is on. Vanilla writes the secret it generates into server.properties; here
 /// it goes into server.toml's `[properties]` too, which writes server.properties.
 fn settings(dir: &Path) -> Result<Option<Settings>, String> {
-    let config = crate::config::Config::load(dir)?;
+    let config = config::Config::load(dir)?;
     config
         .write_properties(dir)
         .map_err(|e| format!("server.properties: {e}"))?;
-    let file = crate::config::read_properties(&dir.join(crate::config::PROPERTIES))?;
+    let file = config::read_properties(&dir.join(config::PROPERTIES))?;
     let generated = file.get("management-server-secret").is_none();
     let p = ServerProperties::new(file, &mut SystemEntropy::default())?;
     if !p.management_server_enabled {
@@ -226,7 +227,7 @@ fn settings(dir: &Path) -> Result<Option<Settings>, String> {
     let mut secret = p.management_server_secret;
     if generated {
         secret = generate_secret_key(&mut OsEntropy);
-        crate::config::update_all(
+        config::update_all(
             dir,
             &[(
                 "properties".into(),
@@ -249,7 +250,7 @@ fn settings(dir: &Path) -> Result<Option<Settings>, String> {
                     toml::Value::String(value.into()),
                 )
             };
-            crate::config::update_all(
+            config::update_all(
                 dir,
                 &[
                     key("management-server-tls-keystore", management_tls::GENERATED),
@@ -932,6 +933,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn notifications_go_to_every_client_as_vanilla_writes_them() {
         let shared = shared();
         let address = listen_on(shared.clone(), settings());
@@ -975,6 +977,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_games_events_become_the_notifications_vanilla_sends() {
         let shared = shared();
         let address = listen_on(shared.clone(), settings());
@@ -1041,6 +1044,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_login_is_an_activity_notification_and_the_heartbeat_carries_the_status() {
         let shared = shared();
         let address = listen_on(
@@ -1077,6 +1081,7 @@ mod tests {
     /// `serversettings/status_heartbeat_interval/set`: the heartbeat of a server that started with none begins
     /// at once, and one that was on stops, with no restart; the interval the server reports follows.
     #[test]
+    #[ignore = "daily"]
     fn the_heartbeat_interval_can_change_while_the_server_runs() {
         let shared = shared();
         let address = listen_on(shared.clone(), settings());
@@ -1152,6 +1157,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_websocket_client_discovers_the_methods() {
         let address = listen(settings());
         let mut refused = std::net::TcpStream::connect(address).unwrap();
@@ -1173,6 +1179,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn over_tls_with_a_generated_keystore() {
         let dir =
             std::env::temp_dir().join(format!("horizon-management-wss-{}", std::process::id()));

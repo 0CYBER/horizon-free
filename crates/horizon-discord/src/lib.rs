@@ -378,16 +378,17 @@ fn activity(status: Status, since: Option<u64>) -> Option<Value> {
                 assets["small_text"] = text.into();
             }
             let place = match dimension {
-                Dimension::Overworld => "In the Overworld",
-                Dimension::Nether => "In the Nether",
-                Dimension::End => "In the End",
+                Dimension::Overworld => Some("In the Overworld"),
+                Dimension::Nether => Some("In the Nether"),
+                Dimension::End => Some("In the End"),
+                Dimension::Other => None,
             };
             let (details, party) = match play {
                 Play::Singleplayer => ("Singleplayer", None),
                 Play::Multiplayer => ("Multiplayer", None),
                 Play::Hosting { players, max } => ("Hosting a world", Some((players, max))),
             };
-            (details, Some(place), party)
+            (details, place, party)
         }
     };
     let mut a = json!({"details": details, "assets": assets});
@@ -657,6 +658,11 @@ mod tests {
         assert_eq!(single["timestamps"]["start"], 1000);
         assert!(single.get("party").is_none());
         assert!(single["assets"].get("small_image").is_none());
+
+        let custom = activity(world(Play::Singleplayer, Dimension::Other), Some(1000)).unwrap();
+        assert_eq!(custom["details"], "Singleplayer");
+        assert!(custom.get("state").is_none());
+        assert_eq!(custom["timestamps"]["start"], 1000);
 
         let multi = activity(world(Play::Multiplayer, Dimension::End), Some(5)).unwrap();
         assert_eq!(multi["details"], "Multiplayer");

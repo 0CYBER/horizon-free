@@ -382,6 +382,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn round_trip() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -417,6 +418,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_line_past_the_limit_is_a_400() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();

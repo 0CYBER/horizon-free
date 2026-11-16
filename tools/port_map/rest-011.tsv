@@ -4,15 +4,15 @@ RateKickingConnection.tickSecond	inline	crates/horizon-client/src/lan/conn.rs::P
 UnconfiguredPipelineHandler.Inbound.channelRead	skip:other		Netty guard for packets before a protocol is set; Horizon's connection loops only read their own phase
 UnconfiguredPipelineHandler.Inbound.write	skip:other		Netty guard for configuration tasks on the inbound pipeline; no pipeline in Horizon
 UnconfiguredPipelineHandler.Outbound.write	skip:other		Netty guard for packets sent before a protocol is set; no pipeline in Horizon
-VarInt.getByteSize	port	crates/horizon-protocol/src/buf.rs::varint_size	
+VarInt.getByteSize	port	crates/horizon-protocol/src/buf.rs::varint_size
 VarLong.getByteSize	skip:java		byte-size helper with no caller here; Horizon writes varlongs and measures the buffer
 Varint21FrameDecoder.copyVarint	inline	crates/horizon-protocol/src/frame.rs::split	the 3-byte length read and the 'length wider than 21 bits' error
 Varint21FrameDecoder.decode	port	crates/horizon-protocol/src/frame.rs::split	the length prefix is read by frame::header, which refuses a zero frame as corrupted, and split cuts the frame at it
 ChatType.bind	port	crates/horizon-client/src/lan/hub/chat.rs::Hub::handle_chat	the bound takes the chat type and the sender's display name
 ChatTypeDecoration.incomingDirectMessage	skip:data		chat_type registry bootstrap; the msg decorations come from the chat_type data
 ChatTypeDecoration.outgoingDirectMessage	skip:data		chat_type registry bootstrap; the msg decorations come from the chat_type data
-ChatTypeDecoration.decorate	port	crates/horizon-client/src/game/remote.rs::chat_type_decorate	the chat type's translation with its style, on the client when a PlayerChat or DisguisedChat arrives
-ChatTypeDecoration.resolveParameters	port	crates/horizon-client/src/game/remote.rs::chat_type_decorate	the parameter list (sender, target, content) built in format_chat
+ChatTypeDecoration.decorate	port	crates/horizon-client/src/game/network/remote/mod.rs::chat_type_decorate	the chat type's translation with its style, on the client when a PlayerChat or DisguisedChat arrives
+ChatTypeDecoration.resolveParameters	port	crates/horizon-client/src/game/network/remote/mod.rs::chat_type_decorate	the parameter list (sender, target, content) built in format_chat
 ClickEvent.Action.filterForSerialization	port	crates/horizon-client-core/src/component.rs::object_style	gap: minor: a disallowed action (open_file) is dropped; vanilla refuses the whole component
 CommonComponents.optionStatus	port	crates/horizon-client-render/src/options_ui.rs::on_off	options.on / options.off text
 CommonComponents.joinForNarration	port	crates/horizon-client-render/src/widgets.rs::join_for_narration	the parts joined with ". " (NARRATION_SEPARATOR), as vanilla; every narrated title-and-message screen goes through it
@@ -33,7 +33,7 @@ ComponentSerialization.FuzzyCodec.encode	skip:java		encode side; Text::component
 ComponentSerialization.FuzzyCodec.keys	skip:java		codec key listing
 ComponentSerialization.StrictEither.decode	port	crates/horizon-client-core/src/component.rs::to_text_with	gap: minor: an explicit type field is not read; the content is matched by its key
 ComponentSerialization.StrictEither.keys	skip:java		codec key listing
-ComponentUtils.resolve	port	crates/horizon-client/src/game/commands/text_commands.rs::Game::component_arg	gap: minor: hover text selectors stay unresolved (resolveStyle is missing)
+ComponentUtils.resolve	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::component_arg	gap: minor: hover text selectors stay unresolved (resolveStyle is missing)
 ComponentUtils.resolveStyle	missing		minor: a selector inside a show_text hover is not resolved for the source
 ComponentUtils.formatAndSortList	port	crates/horizon-client/src/scoreboard_cmd.rs::format_names	gap: minor: the name formatter is fixed (green names); the list is sorted with gray commas
 ComponentUtils.fromMessage	port	crates/horizon-client-core/src/text.rs::Text::from	a plain message becomes a literal
@@ -43,24 +43,24 @@ FilterMask.applyWithFormatting	missing		minor: masks are ignored, so filtered wo
 FilterMask.equals	skip:java		value equality
 FilterMask.hashCode	skip:java		hashing
 FormattedText.of	skip:java		adapter from a String to FormattedText
-FormattedText.getString	port	crates/horizon-client-core/src/text.rs::Text::plain	
+FormattedText.getString	port	crates/horizon-client-core/src/text.rs::Text::plain
 HoverEvent.Action.filterForSerialization	port	crates/horizon-client-core/src/component.rs::object_style	show_text, show_item and show_entity are kept; a show_entity hover draws its tooltip in chat with advanced item tooltips on
-HoverEvent.EntityTooltipInfo.getTooltipLines	port	crates/horizon-client/src/game/chat.rs::Game::entity_tooltip_lines	the name when the event has one, then the entity type and the uuid, for a show_entity hover
+HoverEvent.EntityTooltipInfo.getTooltipLines	port	crates/horizon-client/src/game/interface/chat.rs::Game::entity_tooltip_lines	the name when the event has one, then the entity type and the uuid, for a show_entity hover
 HoverEvent.EntityTooltipInfo.equals	skip:java		value equality
 HoverEvent.EntityTooltipInfo.hashCode	skip:java		hashing
 LastSeenMessages.updateSignature	inline	crates/horizon-protocol/src/secure_chat.rs::signed_payload	the last-seen list written into the signed payload
-LastSeenMessages.Packed.unpack	inline	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm
+LastSeenMessages.Packed.unpack	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	PlayerChat arm
 LastSeenMessages.Update.verifyChecksum	inline	crates/horizon-protocol/src/secure_chat.rs::LastSeenValidator::apply_update	the checksum check; 0 means not checked
-LastSeenMessagesTracker.addPending	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::add_pending	
+LastSeenMessagesTracker.addPending	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::add_pending
 LastSeenMessagesTracker.addEntry	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::add_pending	inlined
 LastSeenMessagesTracker.ignorePending	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::ignore_pending	handle_delete_chat calls it
-LastSeenMessagesTracker.generateAndApplyUpdate	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::update	
+LastSeenMessagesTracker.generateAndApplyUpdate	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::update
 LastSeenTrackedEntry.acknowledge	missing		minor: part of the client-side last-seen tracker, which is absent
-LocalChatSession.createMessageEncoder	port	crates/horizon-protocol/src/secure_chat.rs::Encoder::new	
+LocalChatSession.createMessageEncoder	port	crates/horizon-protocol/src/secure_chat.rs::Encoder::new
 MessageSignature.equals	skip:java		value equality
-MessageSignature.Packed.unpack	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::unpack	
-MessageSignatureCache.push	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::push	
-MutableComponent.withColor	port	crates/horizon-client-core/src/text.rs::Text::with_color	
+MessageSignature.Packed.unpack	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::unpack
+MessageSignatureCache.push	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::push
+MutableComponent.withColor	port	crates/horizon-client-core/src/text.rs::Text::with_color
 MutableComponent.getVisualOrderText	skip:ui		bidi reordering for drawing; Horizon lays text out in logical order
 MutableComponent.equals	skip:java		value equality
 MutableComponent.hashCode	skip:java		hashing
@@ -78,8 +78,8 @@ RemoteChatSession.createMessageValidator	port	crates/horizon-protocol/src/secure
 ResolutionContext.Builder.build	skip:java		builder
 SignableCommand.getArgument	port	crates/horizon-client/src/lan/hub/chat.rs::Hub::signed_arguments	the command's message arguments, looked up by name
 SignedMessageBody.updateSignature	inline	crates/horizon-protocol/src/secure_chat.rs::signed_payload	salt, time, content and last seen in the signed payload
-SignedMessageBody.Packed.unpack	inline	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm: the last seen only, the body is not kept
-SignedMessageChain.encoder	port	crates/horizon-protocol/src/secure_chat.rs::Encoder::sign	
+SignedMessageBody.Packed.unpack	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	PlayerChat arm: the last seen only, the body is not kept
+SignedMessageChain.encoder	port	crates/horizon-protocol/src/secure_chat.rs::Encoder::sign
 SignedMessageChain.Decoder.unsigned	port	crates/horizon-protocol/src/secure_chat.rs::Chain::unpack	no session: unsigned, or refused when the server enforces secure chat
 SignedMessageLink.updateSignature	inline	crates/horizon-protocol/src/secure_chat.rs::signed_payload	sender, session and index in the signed payload
 SignedMessageLink.isDescendantOf	port	crates/horizon-protocol/src/secure_chat.rs::MessageValidator::update_and_validate	a greater index, from the same sender in the same session (the server's Chain::unpack still requires the exact next index, as SignedMessageChain.Decoder does)
@@ -118,9 +118,9 @@ KeybindContents.equals	skip:java		value equality
 ObjectContents.resolve	inline	crates/horizon-client-core/src/component.rs::inline_object	the object's own fallback text: '[sprite]' for a sprite and '[name head]' for a player head, replaced by the drawn sprite
 ObjectContents.visit	port	crates/horizon-client-render/src/hud.rs::draw_inline_object	the sprite or player head is drawn at the text's U+FFFC placeholder span, with the hat toggle and the span's tint
 PlainTextContents.LiteralContents.visit	skip:java		leaf of the visit walk; Text holds the literal in its spans
-ScoreContents.findTargetName	inline	crates/horizon-client/src/game/commands/text_commands.rs::Game::resolve_score_component	a selector matching one entity is that entity, none is the name, more than one is an error
-ScoreContents.getScore	port	crates/horizon-client/src/game/commands/text_commands.rs::Game::resolve_score_component	the objective's value in the holder's format; empty when there is none
-SelectorContents.resolve	port	crates/horizon-client/src/game/commands/text_commands.rs::Game::component_arg	gap: minor: the separator is always ', '
+ScoreContents.findTargetName	inline	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::resolve_score_component	a selector matching one entity is that entity, none is the name, more than one is an error
+ScoreContents.getScore	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::resolve_score_component	the objective's value in the holder's format; empty when there is none
+SelectorContents.resolve	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::component_arg	gap: minor: the separator is always ', '
 SelectorContents.visit	port	crates/horizon-client-core/src/component.rs::to_text	with a literal resolver the selector text is shown, as visit does
 TranslatableContents.filterAllowedArguments	skip:java		codec filter; Text arguments are typed
 TranslatableContents.isAllowedPrimitiveArgument	skip:java		Text arguments are typed
@@ -129,12 +129,12 @@ TranslatableContents.create	skip:java		codec factory
 TranslatableContents.decompose	port	crates/horizon-client-core/src/text.rs::format_translation	the template parsed into parts; the fallback is handled in to_text_with
 TranslatableContents.getArgument	inline	crates/horizon-client-core/src/text.rs::format_translation	a missing argument index shows the raw template
 TranslatableContents.visit	inline	crates/horizon-client-core/src/text.rs::format_translation	the parts in order; no reference-cycle guard is needed for eager text
-TranslatableContents.resolve	port	crates/horizon-client/src/game/commands/text_commands.rs::Game::component_arg	the arguments are resolved with the rest of the tree
+TranslatableContents.resolve	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::component_arg	the arguments are resolved with the rest of the tree
 TranslatableContents.equals	skip:java		value equality
 TranslatableContents.hashCode	skip:java		hashing
 TranslatableContents.toString	skip:debug		debug text
-BlockDataSource.getData	inline	crates/horizon-client/src/game/commands/text_commands.rs::Game::resolve_nbt_component	the block branch: the block's data for an nbt component
-EntityDataSource.getData	inline	crates/horizon-client/src/game/commands/text_commands.rs::Game::resolve_nbt_component	the entity branch: the entity's data for an nbt component
+BlockDataSource.getData	inline	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::resolve_nbt_component	the block branch: the block's data for an nbt component
+EntityDataSource.getData	inline	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::resolve_nbt_component	the entity branch: the entity's data for an nbt component
 AtlasSprite.toShortName	inline	crates/horizon-client-core/src/component.rs::inline_object	a minecraft id drops its namespace, any other id keeps it
 AtlasSprite.defaultFallback	inline	crates/horizon-client-core/src/component.rs::inline_object	'[sprite]', or '[sprite@atlas]' when the atlas is not minecraft:blocks
 PlayerSprite.defaultFallback	inline	crates/horizon-client-core/src/component.rs::inline_object	'[name head]', or '[unknown player head]' for a profile with no name

@@ -37,6 +37,10 @@ impl Launcher {
             hidden,
             &self.theme,
         )
+        .tooltip(ui::tip(match hidden {
+            true => tr("Show the screenshots"),
+            false => tr("Blur the screenshots"),
+        }))
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
             this.shot_blur.hidden = !this.shot_blur.hidden;
             cx.notify();

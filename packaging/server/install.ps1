@@ -43,7 +43,7 @@ $RawTag = $Tag
 # A Nightly installs under its date and commit, as `horizon-server update` names it:
 # "Nightly 2026-10-28 <middle dot> 0c02067" is nightly-2026-10-28-0c02067 ([char]0xB7: this file stays ASCII).
 # Its signature is checked for exactly that version, so the title must name it (as
-# horizon_release_sign::nightly_title_version reads it, strictly).
+# horizon_release_sign::build_title_version reads it, strictly).
 $Nightly = $null
 if ($Tag -eq "nightly" -or $Tag.StartsWith("nightly-")) {
     if ($Release.name -cnotmatch "^Nightly (\d{4}-\d{2}-\d{2}) $([char]0xB7) ([0-9a-f]{7,40})$") {

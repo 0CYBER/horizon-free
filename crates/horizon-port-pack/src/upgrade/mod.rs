@@ -273,7 +273,7 @@ pub fn read_pack(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
         }
     } else {
         let file = fs::File::open(path).map_err(|e| at(&e))?;
-        let mut zip = zip::ZipArchive::new(file).map_err(|e| at(&e))?;
+        let mut zip = crate::zip_intake::open(file).map_err(|e| at(&e))?;
         let mut budget = crate::entry::Budget::archive();
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).map_err(|e| at(&e))?;

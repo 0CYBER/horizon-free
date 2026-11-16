@@ -1,0 +1,1 @@
+horizon-client game::commands::forced_respawn_tests::a_forced_spawnpoint_on_a_respawn_anchor_still_depletes_with_its_sound lib daily resources

@@ -470,7 +470,7 @@ def launch(args, distance, tag):
         command += ["--width", width, "--height", height]
     if args.offscreen:
         command.append("--offscreen")
-    env = lab.game_env(HORIZON_TELEMETRY_URL="off", HORIZON_SPIKES=str(args.spike_ms))
+    env = lab.game_env(HORIZON_SPIKES=str(args.spike_ms))
     for kv in args.env:
         k, _, v = kv.partition("=")
         env[k] = v

@@ -486,12 +486,30 @@ pub(super) mod tests {
         .unwrap();
     }
 
-    /// A device with WebGPU's default limits (what every GPU wgpu runs on has), or `None`
-    /// without a GPU.
+    /// A default-limits device that can write the optical-flow storage format,
+    /// or `None` with an observable reason when no suitable adapter is available.
     pub fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::gfx::test_gpu::instance();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        let adapter = crate::gfx::test_gpu::adapter()?;
+        if !crate::gfx::test_gpu::supports_texture_usage(
+            &adapter,
+            wgpu::TextureFormat::Rg32Sint,
+            wgpu::TextureUsages::STORAGE_BINDING,
+        ) {
+            return None;
+        }
+        if !adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rg32Sint)
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::STORAGE_WRITE_ONLY)
+        {
+            let info = adapter.get_info();
+            eprintln!(
+                "skipped: {} / {:?} lacks Rg32Sint storage write access",
+                info.name, info.backend
+            );
+            return None;
+        }
+        Some(crate::gfx::test_gpu::device(&adapter))
     }
 
     /// Noise in 4x4 pixel cells, moved by `shift` pixels: what was at `p` is at `p + shift`.
@@ -636,6 +654,7 @@ pub(super) mod tests {
     /// (-16, -8), and nothing reads as a scene change. A much darker frame then does.
     #[test]
     fn finds_a_shift_and_a_scene_change() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             return;
         };
@@ -673,6 +692,7 @@ pub(super) mod tests {
 
     #[test]
     fn repeated_cuts_and_stable_frames_update_the_history() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             return;
         };

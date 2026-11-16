@@ -326,7 +326,9 @@ impl super::Adapter {
                 // Windows doesn't recognize `GL_MAX_VERTEX_ATTRIB_STRIDE`.
                 let new = (unsafe { gl.get_parameter_i32(glow::MAX_COMPUTE_SHADER_STORAGE_BLOCKS) }
                     as u32);
-                log::debug!("Max vertex shader storage blocks is zero, but GL_ARB_shader_storage_buffer_object is specified. Assuming the compute value {new}");
+                log::debug!(
+                    "Max vertex shader storage blocks is zero, but GL_ARB_shader_storage_buffer_object is specified. Assuming the compute value {new}"
+                );
                 new
             } else {
                 value
@@ -829,13 +831,17 @@ impl super::Adapter {
                             // This should be at least 2048, but the driver for AMD Radeon HD 5870 on
                             // Windows doesn't recognize `GL_MAX_VERTEX_ATTRIB_STRIDE`.
 
-                            log::debug!("Max vertex attribute stride is 0. Assuming it is the OpenGL minimum spec 2048");
+                            log::debug!(
+                                "Max vertex attribute stride is 0. Assuming it is the OpenGL minimum spec 2048"
+                            );
                             2048
                         } else {
                             value
                         }
                     } else {
-                        log::debug!("Max vertex attribute stride unknown. Assuming it is the OpenGL minimum spec 2048");
+                        log::debug!(
+                            "Max vertex attribute stride unknown. Assuming it is the OpenGL minimum spec 2048"
+                        );
                         2048
                     }
                 } else {

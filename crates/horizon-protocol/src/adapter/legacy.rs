@@ -1,7 +1,7 @@
 //! Connection-local registry names used by the pre-component NBT item format.
 use super::{ServerVersion, ids, v1_20_2_ids as before, v1_20_3_ids as old};
 use crate::{Error, Result, packets::configuration, registry};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 pub(super) fn registries(version: ServerVersion) -> ids::LegacyRegistries {

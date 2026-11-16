@@ -1,9 +1,18 @@
 //! `Mob.equipItemIfPossible` and the comparisons behind it: `compareArmor`,
 //! `compareWeapons`, `canReplaceEqualItem` and the per-species gates that
 //! decide whether a mob takes an item off the ground at all (`wantsToPickUp`,
-//! `canHoldItem`). `game/mob_looting.rs` reads the item data and calls these.
+//! `canHoldItem`). `game/mobs/mob_looting.rs` reads the item data and calls these.
+#[path = "equip_decision.rs"]
+mod decision;
+#[path = "equip_source.rs"]
+mod source;
 use super::Species;
-use horizon_world::player_inventory::EquipmentSlot;
+use crate::items::ItemStack;
+pub use decision::{EquipAnswer, EquipDecision, EquipEntityStamp, EquipStamp};
+use horizon_core::equipment_slot::EquipmentSlot;
+use horizon_core::nbt::Tag;
+pub use source::{EquipInput, source_stamp, source_stamp_at};
+use std::collections::{HashMap, HashSet};
 
 /// An `EquipmentSlot`, in the order `finalize::item` and `drops::SLOTS` keep
 /// them.
@@ -22,6 +31,17 @@ impl Slot {
     pub fn is_armor(self) -> bool {
         matches!(self, Slot::Feet | Slot::Legs | Slot::Chest | Slot::Head)
     }
+    /// `EquipmentSlot.getName`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Slot::MainHand => "mainhand",
+            Slot::OffHand => "offhand",
+            Slot::Feet => "feet",
+            Slot::Legs => "legs",
+            Slot::Chest => "chest",
+            Slot::Head => "head",
+        }
+    }
     /// The `drops::SLOTS` index (`set_item`, `item`, `set_drop_chance`).
     pub fn index(self) -> usize {
         self as usize
@@ -37,6 +57,142 @@ impl Slot {
             Slot::Head => EquipmentSlot::Head,
         }
     }
+}
+
+/// `DataComponents.EQUIPPABLE` as `ItemStack.get` reads it: the stack's own component, else its
+/// item's default; a removed component (`!minecraft:equippable`) leaves none. It borrows the stack
+/// or the item catalog, so reading it allocates nothing.
+pub struct Equippable<'a> {
+    /// `Equippable.slot`, an `EquipmentSlot` name (`head`, `mainhand`, `body`, `saddle`, ...).
+    pub slot: &'static str,
+    allowed: Allowed<'a>,
+}
+
+/// `Equippable.allowedEntities`: when absent every entity type may wear it; a set, even an empty
+/// one, allows only its members.
+enum Allowed<'a> {
+    Any,
+    /// The item's default, resolved to entity type ids when the items loaded.
+    Ids(&'a HashSet<String>),
+    /// A stack's own `HolderSet<EntityType>`: one id, a `#tag`, or a list of ids.
+    Holders(&'a Tag),
+}
+
+impl Equippable<'_> {
+    /// `Equippable.canBeEquippedBy`: whether the entity type `entity` may wear it, with `tags` the
+    /// entity type tags a stack's `#tag` names.
+    pub fn allows(&self, entity: &str, tags: &HashMap<String, HashSet<String>>) -> bool {
+        match self.allowed {
+            Allowed::Any => true,
+            Allowed::Ids(ids) => ids.contains(entity),
+            Allowed::Holders(Tag::List(list)) => list.iter().any(|h| holds(h, entity, tags)),
+            Allowed::Holders(one) => holds(one, entity, tags),
+        }
+    }
+}
+
+/// The `EquipmentSlot` names, by `EquipmentSlot.getName`.
+const SLOT_NAMES: [&str; 8] = [
+    "mainhand", "offhand", "feet", "legs", "chest", "head", "body", "saddle",
+];
+
+/// `ItemStack.get(DataComponents.EQUIPPABLE)` of `stack`, with `items` the item defaults. A stack
+/// component whose slot is no `EquipmentSlot` does not decode, so the stack has none.
+pub fn equippable<'a>(
+    items: &'a crate::items::Items,
+    stack: &'a ItemStack,
+) -> Option<Equippable<'a>> {
+    let data = stack.data();
+    if data.is_some_and(|d| d.other("!minecraft:equippable").is_some()) {
+        return None;
+    }
+    if let Some(tag) = data.and_then(|d| d.other("minecraft:equippable")) {
+        let Some(Tag::String(slot)) = tag.get("slot") else {
+            return None;
+        };
+        return Some(Equippable {
+            slot: SLOT_NAMES
+                .into_iter()
+                .find(|name| slot.0.iter().copied().eq(name.encode_utf16()))?,
+            allowed: tag
+                .get("allowed_entities")
+                .map_or(Allowed::Any, Allowed::Holders),
+        });
+    }
+    let info = items.get(&stack.item)?;
+    let slot = info.equip_slot.as_deref()?;
+    Some(Equippable {
+        slot: SLOT_NAMES.into_iter().find(|name| *name == slot)?,
+        allowed: info
+            .equip_allowed
+            .as_ref()
+            .map_or(Allowed::Any, Allowed::Ids),
+    })
+}
+
+/// `LivingEntity.isEquippableInSlot` as the stack's data answers it for an entity of type `kind`
+/// (`canUseSlot`, what the entity may wear at all, is the caller's): with no `equippable`
+/// component only the main hand, else the component's slot when it allows `kind`. `tags` are the
+/// entity type tags.
+pub fn equippable_in_slot(
+    items: &crate::items::Items,
+    tags: &HashMap<String, HashSet<String>>,
+    stack: &ItemStack,
+    slot: &str,
+    kind: &str,
+) -> bool {
+    equippable(items, stack).map_or(slot == "mainhand", |e| {
+        e.slot == slot && e.allows(kind, tags)
+    })
+}
+
+/// Whether the `HolderSet` entry `holder`, an entity type id or a `#tag` (`minecraft:` when it
+/// names no namespace), holds the entity type `entity`.
+fn holds(holder: &Tag, entity: &str, tags: &HashMap<String, HashSet<String>>) -> bool {
+    let Tag::String(holder) = holder else {
+        return false;
+    };
+    match holder.0.split_first() {
+        Some((&hash, tag)) if hash == u16::from(b'#') => tags
+            .iter()
+            .any(|(name, members)| names(tag, name) && members.contains(entity)),
+        _ => names(&holder.0, entity),
+    }
+}
+
+/// Whether the UTF-16 resource location `units` (`minecraft:` when it names no namespace) is `id`.
+fn names(units: &[u16], id: &str) -> bool {
+    let id = if units.contains(&u16::from(b':')) {
+        id
+    } else if let Some(path) = id.strip_prefix("minecraft:") {
+        path
+    } else {
+        return false;
+    };
+    units.iter().copied().eq(id.encode_utf16())
+}
+
+/// NeoForge's `IItemExtension.canEquip` inside a menu click, which cannot reach the game: the game
+/// lends the menu one for the click, with its read-only `Host` and the target behind it. A menu
+/// that has none (a data-only consumer) keeps the component's answer.
+pub trait CanEquip {
+    /// Prepare the immutable input before candidate traversal.
+    fn prepare(&self, _stack: &ItemStack, _entity: u32, _kind: &str) -> bool {
+        true
+    }
+    /// Recheck retained answer preconditions before applying a menu placement.
+    fn can_apply(&self, _stack: &ItemStack, _entity: u32) -> bool {
+        true
+    }
+    /// O(1) gate before creating a source decision or converting its payload.
+    fn listens(&self, _stack: &ItemStack) -> bool {
+        true
+    }
+    /// May `stack` go into the equipment slot `slot` of the entity `entity` of type `kind`? `data`
+    /// is the stack's `equippable` answer (`LivingEntity.isEquippableInSlot`), which the parts of
+    /// its item may change.
+    fn can_equip(&self, stack: &ItemStack, slot: &str, entity: u32, kind: &str, data: bool)
+    -> bool;
 }
 
 /// `LivingEntity.getEquipmentSlotForItem`: the item's own `equippable` slot,
@@ -86,13 +242,20 @@ pub(super) fn group_matches(group: &str, slot: EquipmentSlot) -> bool {
 /// own attribute value) plus the item's modifiers for `attribute` that apply
 /// in `slot`, in the order the item lists them.
 pub fn attribute_with(
-    modifiers: &[(String, String, f64, String, String)],
+    modifiers: &[horizon_items::item_data::ModifierRow],
     attribute: &str,
     base: f64,
     slot: Slot,
 ) -> f64 {
     let mut value = base;
-    for (kind, _, amount, operation, group) in modifiers {
+    for horizon_items::item_data::ModifierRow {
+        attribute: kind,
+        amount,
+        operation,
+        slot: group,
+        ..
+    } in modifiers
+    {
         if kind != attribute || !group_matches(group, slot.equipment()) {
             continue;
         }
@@ -401,12 +564,12 @@ mod tests {
     #[test]
     fn attribute_modifiers_apply_by_slot_group_and_operation() {
         let entry = |attribute: &str, amount: f64, operation: &str, group: &str| {
-            (
-                attribute.to_owned(),
-                "minecraft:test".to_owned(),
+            horizon_items::item_data::ModifierRow::new(
+                attribute,
+                "minecraft:test",
                 amount,
-                operation.to_owned(),
-                group.to_owned(),
+                operation,
+                group,
             )
         };
         let modifiers = [

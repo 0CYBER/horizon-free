@@ -1,6 +1,6 @@
 //! Persistent enchantment components and their displayed names.
+use horizon_core::nbt::parse_snbt;
 use horizon_items::{enchant::Enchantments, item_nbt::item_from_nbt};
-use horizon_world::nbt::parse_snbt;
 use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
@@ -24,7 +24,9 @@ fn describe(enchantments: &Enchantments, levels: &[(Arc<str>, u32)]) -> String {
 
 fn main() -> horizon_items::Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    let enchantments = Enchantments::load(Path::new(&args[1]));
+    let root = Path::new(&args[1]);
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let enchantments = Enchantments::load(root, &defaults)?;
     let mut out = BufWriter::new(File::create(&args[3])?);
     for line in BufReader::new(File::open(&args[2])?).lines() {
         let line = line?;

@@ -9,17 +9,17 @@ Orientation.generateIndex	port	crates/horizon-world/src/level/orientation.rs::Or
 Orientation.toString	skip:debug		debug string
 Orientation.withFrontAdjustSideBias	port	crates/horizon-world/src/level/orientation.rs::Orientation::with_front_adjust_side_bias	mirrors the bias when the old front becomes the new side
 Orientation.withFrontPreserveUp	port	crates/horizon-world/src/level/orientation.rs::Orientation::with_front_preserve_up	preserves the context for a front on the up axis
-RedstoneWireEvaluator.getIncomingWireSignal	port	crates/horizon-world/src/level/redstone.rs::Sim::wire_incoming_signal	
-RedstoneWireEvaluator.getWireSignal	port	crates/horizon-world/src/level/redstone.rs::Sim::wire_power_of	
+RedstoneWireEvaluator.getIncomingWireSignal	port	crates/horizon-world/src/level/redstone.rs::Sim::wire_incoming_signal
+RedstoneWireEvaluator.getWireSignal	port	crates/horizon-world/src/level/redstone.rs::Sim::wire_power_of
 SavedDataType	skip:java		equals over the saved-data type record; Horizon keys saved data by name
-WanderingTraderData.setSpawnChance	inline	crates/horizon-client/src/game/wandering_trader.rs::Game::tick_wandering_trader	field write of spawn_chance inside the tick; no setter
-WanderingTraderData.setSpawnDelay	inline	crates/horizon-client/src/game/wandering_trader.rs::Game::tick_wandering_trader	field write of spawn_delay inside the tick; no setter
-MapBanner.fromWorld	port	crates/horizon-client/src/game/banners.rs::Game::map_banner_at	ticked in #3517; `MapBanner.fromWorld` is cited at crates/horizon-client/src/game/banners.rs:19
-MapBanner.getDecoration	port	crates/horizon-client/src/game/maps.rs::MapBanner::sprite	ticked in #3517; `MapBanner.getDecoration` is cited at crates/horizon-client/src/game/maps.rs:50
-MapBanner.getId	inline	crates/horizon-client/src/game/maps.rs::toggle_banner	a banner marker is filed under Key::Banner(pos): the id as an enum key, so the map keeps one marker per banner
+WanderingTraderData.setSpawnChance	inline	crates/horizon-client/src/game/mobs/wandering_trader.rs::Game::tick_wandering_trader	field write of spawn_chance inside the tick; no setter
+WanderingTraderData.setSpawnDelay	inline	crates/horizon-client/src/game/mobs/wandering_trader.rs::Game::tick_wandering_trader	field write of spawn_delay inside the tick; no setter
+MapBanner.fromWorld	port	crates/horizon-client/src/game/blocks/banners.rs::Game::map_banner_at	ticked in arismoko/horizon#3517; `MapBanner.fromWorld` is cited at crates/horizon-client/src/game/blocks/banners.rs:19
+MapBanner.getDecoration	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapBanner::sprite	ticked in arismoko/horizon#3517; `MapBanner.getDecoration` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:50
+MapBanner.getId	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::toggle_banner	a banner marker is filed under Key::Banner(pos): the id as an enum key, so the map keeps one marker per banner
 MapDecorationTypes	skip:data		registry of map decoration types; maps.rs keeps its own DECORATION_TYPES table
 MapId.addToTooltip	port	crates/horizon-client/src/item_tooltip.rs::PlayerHeadName::map_id_lines	ticked in #3517; `MapId.addToTooltip` is cited at crates/horizon-client/src/item_tooltip.rs:412
-MapIndex.getNextMapId	port	crates/horizon-client/src/game/maps.rs::Game::next_map_id	
+MapIndex.getNextMapId	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::next_map_id
 DerivedLevelData	skip:debug		crash report category
 LevelData	skip:debug		crash report category
 LevelStorageSource.createAccess	port	crates/horizon-client/src/save.rs::SessionLock::acquire	gap: minor: takes the folder's session lock; there is no separate access object
@@ -29,7 +29,7 @@ LevelStorageSource.getFileModificationTime	inline	crates/horizon-client/src/titl
 LevelStorageSource.getLevelDataAndDimensions	port	crates/horizon-client/src/save.rs::Level::read	gap: minor: reads level.dat; dimension and world-gen registry setup happen elsewhere
 LevelStorageSource.isNewLevelIdAcceptable	port	crates/horizon-client/src/title.rs::Title::target_folder	gap: minor: sanitises the name and picks a free folder instead of rejecting it
 LevelStorageSource.levelExists	inline	crates/horizon-client/src/title.rs::Title::target_folder	folder-exists check
-LevelStorageSource.loadLevelSummaries	port	crates/horizon-client/src/title.rs::list_worlds	
+LevelStorageSource.loadLevelSummaries	port	crates/horizon-client/src/title.rs::list_worlds
 LevelStorageSource.makeLevelSummary	inline	crates/horizon-client/src/title.rs::list_worlds	per-folder name, version, mode and last played
 LevelStorageSource.parseFeatureFlagsFromSummary	port	crates/horizon-client/src/save.rs::Level::read_summary	the summary read goes through read_root, which parses WorldDataConfiguration's enabled_features; gap: minor: the world list still shows no experimental marker for them
 LevelStorageSource.parseValidator	skip:other		symlink allow-list (allowed_symlinks.txt); Horizon does not read that file
@@ -41,7 +41,7 @@ LevelSummary.getLevelName	inline	crates/horizon-client/src/title.rs::list_worlds
 LevelSummary.getWorldVersionName	inline	crates/horizon-client/src/title.rs::list_worlds	WorldEntry.version from Version.Name
 LevelSummary.isDisabled	port	crates/horizon-client/src/title.rs::disabled	locked, or saved by another series; primaryActionActive (can_play) and canEdit build on it
 LevelVersion.parse	inline	crates/horizon-client/src/title.rs::list_worlds	reads Version.Name only
-PrimaryLevelData.createTag	port	crates/horizon-client/src/save.rs::Level::write	
+PrimaryLevelData.createTag	port	crates/horizon-client/src/save.rs::Level::write
 PrimaryLevelData.setModdedInfo	inline	crates/horizon-client/src/save.rs::Level::write	gap: minor: writes WasModded 0 and the brand list; there is no modded save state
 PrimaryLevelData.stringCollectionToTag	inline	crates/horizon-client/src/save.rs::Level::write	ServerBrands and DataPacks lists
 PrimaryLevelData.writeLastPlayed	inline	crates/horizon-client/src/save.rs::Level::write	LastPlayed
@@ -70,7 +70,7 @@ IntRangePredicate.Line.validate	skip:data		validation at datapack load
 LootContextArg.ArgCodecBuilder	skip:java		codec builders for context arguments
 LootContextArg.Getter.get	skip:java		codec getter for a context argument
 LootDataType	skip:data		validation of loot data at datapack load
-LootParams.addDynamicDrops	port	crates/horizon-client/src/game/spill.rs::Pending::dynamic	gap: minor: decorated pot sherds only; shulker contents are attached by Pending::attach
+LootParams.addDynamicDrops	port	crates/horizon-client/src/game/blocks/spill.rs::Pending::dynamic	gap: minor: decorated pot sherds only; shulker contents are attached by Pending::attach
 LootParams.Builder	skip:java		builder for loot params
 Validatable	skip:data		validation at datapack load
 ValidationContext	skip:data		validation at datapack load
@@ -101,7 +101,7 @@ ApplyBonusCount.UniformBonusCount.calculateNewCount	inline	crates/horizon-items/
 ApplyExplosionDecay.run	port	crates/horizon-items/src/items.rs::LootContext::modifiers	explosion_decay arm
 CopyBlockState.run	port	crates/horizon-items/src/items.rs::LootContext::modifiers	copy_state arm; copies the listed properties
 CopyBlockState.Builder	skip:java		builder (build, copy)
-CopyComponentsFunction.run	port	crates/horizon-client/src/game/spill.rs::Pending::record	gap: minor: copies only what spill.rs keeps for block entities (shulker, banner, names, heads, bees)
+CopyComponentsFunction.run	port	crates/horizon-client/src/game/blocks/spill.rs::Pending::record	gap: minor: copies only what spill.rs keeps for block entities (shulker, banner, names, heads, bees)
 CopyComponentsFunction.Builder	skip:java		builder (build, exclude, include)
 CopyCustomDataFunction.run	missing		minor: no vanilla loot table or item modifier uses copy_custom_data
 CopyCustomDataFunction.copyData	skip:java		builder factory

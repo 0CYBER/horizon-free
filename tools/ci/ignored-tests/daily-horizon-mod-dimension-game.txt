@@ -1,0 +1,6 @@
+# The daily tests of horizon-mod-dimension-game: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-mod-dimension-game concurrent_production_parents_share_one_clean_artifact test:compile_child daily child-process
+horizon-mod-dimension-game missing_key_exits_one_and_writes_nothing test:compile_child daily child-process
+horizon-mod-dimension-game private_compile_exits_zero_and_writes_one_artifact test:compile_child daily child-process
+horizon-mod-dimension-game production_parent_uses_child_artifact test:compile_child daily child-process

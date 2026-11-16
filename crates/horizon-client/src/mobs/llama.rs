@@ -109,75 +109,26 @@ pub fn finalize(m: &mut Mob, r: &mut impl RandomSource) {
     m.extra.variant = variant as u8;
     m.extra.vector[0] = m.kind.jump_strength;
 }
-/// `Llama.getBreedOffspring` after `setOffspringAttributes`: the strength
-/// (rarely one more) and either parent's coat.
-pub fn offspring(child: &mut Mob, a: &Mob, b: &Mob, r: &mut impl RandomSource) {
-    let top = strength(a).max(strength(b));
-    let mut s = r.next_int_bound(top).unwrap_or(0) + 1;
-    if r.next_float() < 0.03 {
-        s += 1;
-    }
-    child.extra.variant2 = s.clamp(1, 5) as u8;
-    child.extra.variant = if r.next_boolean() {
-        a.extra.variant
-    } else {
-        b.extra.variant
-    };
-    if is_trader(child) {
-        child.persistent = true;
-    }
-}
-/// A llama's baby as `Llama.getBreedOffspring` makes it.
-#[derive(Clone, Debug)]
-pub struct Offspring {
-    pub max_health: f32,
-    pub jump: f64,
-    pub speed: f64,
-    pub strength: u8,
-    pub variant: u8,
-}
 /// `Llama.getBreedOffspring` with `AbstractHorse.setOffspringAttributes`,
 /// drawn from the parent's random with the partner's stock.
-pub fn breed_offspring(m: &mut Mob, partner: &Seen) -> Offspring {
-    // Seen.profession is the partner's strength.
-    let top = strength(m).max(i32::from(partner.profession));
-    let (health, jump, speed, own) = (
-        f64::from(m.attrs.max_health),
-        m.extra.vector[0],
-        m.attrs.speed,
-        m.extra.variant,
-    );
+pub fn breed_offspring(m: &mut Mob, partner: &Seen) -> equine::Offspring {
+    // Seen.secondary_variant is the partner's strength.
+    let top = strength(m).max(i32::from(partner.secondary_variant));
+    let attributes = equine::OffspringAttributes::draw(m, partner);
     let r = &mut m.random;
-    let max_health = equine::offspring(health, partner.stats[0], 15.0, 30.0, r) as f32;
-    let jump = equine::offspring(jump, partner.stats[1], 0.4, 1.0, r);
-    let speed = equine::offspring(speed, partner.stats[2], 0.1125, 0.3375, r);
     let mut s = r.next_int_bound(top).unwrap_or(0) + 1;
     if r.next_float() < 0.03 {
         s += 1;
     }
     let variant = if r.next_boolean() {
-        own
+        m.extra.variant
     } else {
         partner.variant
     };
-    Offspring {
-        max_health,
-        jump,
-        speed,
-        strength: s.clamp(1, 5) as u8,
+    equine::Offspring {
+        attributes,
         variant,
-    }
-}
-/// The game makes the baby drawn by `breed_offspring`.
-pub fn apply_offspring(child: &mut Mob, o: &Offspring) {
-    set_base(child, Attr::MaxHealth, f64::from(o.max_health));
-    child.health = o.max_health;
-    child.extra.vector[0] = o.jump;
-    set_base(child, Attr::MovementSpeed, o.speed);
-    child.extra.variant2 = o.strength;
-    child.extra.variant = o.variant;
-    if is_trader(child) {
-        child.persistent = true;
+        variant2: s.clamp(1, 5) as u8,
     }
 }
 /// `LlamaHurtByTargetGoal`: stops hunting right after a spit.
@@ -239,7 +190,7 @@ fn spit(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
 /// `AbstractHorse.aiStep` for llamas, which never graze: the slow healing.
 pub fn ai_step(m: &mut Mob, w: &MobWorld) {
     if m.alive() && m.random.next_int_bound(900).unwrap_or(1) == 0 && m.death_time == 0 {
-        m.heal(1.0);
+        m.heal(w.loop_context, 1.0);
     }
     if is_trader(m) {
         super::caravan::trader_llama_tick(m, w);
@@ -247,15 +198,15 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
 }
 /// The llama's own save fields, over the horse ones: `Variant` (the coat id),
 /// `Strength` and a trader llama's `DespawnDelay`.
-pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
-    use horizon_world::nbt::Tag;
+pub fn to_nbt(m: &Mob, map: &mut horizon_core::nbt::Compound) {
+    use horizon_core::nbt::Tag;
     map.insert("Variant".into(), Tag::Int(i32::from(m.extra.variant)));
     map.insert("Strength".into(), Tag::Int(strength(m)));
     if is_trader(m) {
         map.insert("DespawnDelay".into(), Tag::Int(m.extra.ints[0]));
     }
 }
-pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
+pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
     use crate::save::number;
     m.extra.variant = number(tag.get("Variant")).unwrap_or(0).clamp(0, 3) as u8;
     m.extra.variant2 = number(tag.get("Strength")).unwrap_or(1).clamp(1, 5) as u8;
@@ -273,8 +224,7 @@ pub fn texture(m: &Mob) -> String {
 /// The carpet colour on the llama, if it wears one.
 pub(super) fn carpet(m: &Mob) -> Option<&str> {
     m.extra
-        .body
-        .as_deref()
+        .body_id()
         .and_then(|i| i.strip_prefix("minecraft:"))
         .and_then(|i| i.strip_suffix("_carpet"))
 }
@@ -316,6 +266,114 @@ mod tests {
             fives += i32::from(s > 3);
         }
         assert!(fives > 0 && fives < 200);
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn breeding_experience_uses_only_the_parent_random_when_drops_are_enabled() {
+        super::super::world::with_test_world(&[], |_, types| {
+            for kind in ["minecraft:llama", "minecraft:horse", "minecraft:cow"] {
+                let mut parent = Mob::new(
+                    1,
+                    std::sync::Arc::new(types.types[kind].clone()),
+                    Vec3::ZERO,
+                    0.0,
+                );
+                parent.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(0));
+                assert_eq!(super::super::breeding_experience(&mut parent, false), None);
+                assert_eq!(parent.random.state(), 25_214_903_917);
+                assert_eq!(
+                    super::super::breeding_experience(&mut parent, true),
+                    Some(6)
+                );
+                assert_eq!(parent.random.state(), 205_749_139_540_596);
+            }
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn breeding_experience_is_drawn_in_the_goal_unless_a_mod_must_decide() {
+        let mut kind = None;
+        super::super::world::with_test_world(&[], |_, types| {
+            kind = Some(std::sync::Arc::new(types.types["minecraft:llama"].clone()));
+        });
+        let Some(kind) = kind else { return };
+        let llama = |id, x| {
+            let mut m = Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.5), 0.0);
+            m.on_ground = true;
+            // AbstractHorse.canParent: tame and in love.
+            m.extra.tame = true;
+            m.extra.in_love = 600;
+            register(&mut m);
+            m
+        };
+        let partner = [llama(2, 2.5).seen(None, &crate::items::Items::empty())];
+        super::super::world::with_test_world(&partner, |w, _| {
+            for (ask_mods, mob_drops) in
+                [(false, true), (true, true), (false, false), (true, false)]
+            {
+                let w = MobWorld {
+                    goal_host: None,
+                    asks_baby_spawn: ask_mods,
+                    mob_drops,
+                    ..w.clone()
+                };
+                let mut m = llama(1, 0.5);
+                m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(0));
+                let mut events = Vec::new();
+                let mut goals = std::mem::take(&mut m.ai.goals);
+                let mut test_level = crate::health::TestLevel::new(0);
+                let level = &mut test_level.level();
+                let mut cx = Cx {
+                    w: &w,
+                    level,
+                    events: &mut events,
+                };
+                for _ in 0..80 {
+                    goals.tick(&mut m, &mut cx);
+                    if cx
+                        .events
+                        .iter()
+                        .any(|e| matches!(e, MobEvent::Breed { .. }))
+                    {
+                        break;
+                    }
+                }
+                assert!(
+                    events.iter().any(|e| matches!(
+                        e,
+                        MobEvent::Breed {
+                            parent: 1,
+                            partner: 2,
+                            equine: Some(_),
+                            ..
+                        }
+                    )),
+                    "the pair breeds a llama"
+                );
+                let experience = events.iter().find_map(|e| match e {
+                    MobEvent::Breed { experience, .. } => Some(*experience),
+                    _ => None,
+                });
+                assert_eq!(
+                    m.random.state(),
+                    if !ask_mods && mob_drops {
+                        77_392_660_919_880
+                    } else {
+                        49_533_068_356_881
+                    },
+                    "asking mods: {ask_mods}, drops: {mob_drops}"
+                );
+                assert_eq!(
+                    experience,
+                    Some(if ask_mods {
+                        super::super::BreedExperience::Deferred
+                    } else {
+                        super::super::BreedExperience::Drawn(mob_drops.then_some(2))
+                    }),
+                    "asking mods: {ask_mods}, drops: {mob_drops}"
+                );
+            }
+        });
     }
     #[test]
     fn a_chest_holds_strength_columns() {

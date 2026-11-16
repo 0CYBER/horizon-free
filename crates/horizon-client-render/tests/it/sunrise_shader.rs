@@ -43,7 +43,8 @@ fn extracted_sunrise_shader_validates() {
 #[ignore = "requires a host GPU; run with --ignored --nocapture"]
 fn sunrise_sectors_match_reference_on_real_gpu() {
     use wgpu::util::DeviceExt;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     eprintln!("Sunrise GPU correctness: {}", adapter.get_info().name);
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();

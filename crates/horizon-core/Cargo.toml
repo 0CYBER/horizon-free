@@ -12,6 +12,9 @@ rng-trace = []
 
 [dependencies]
 libm = "=0.2.16"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+serde = { version = "1", features = ["derive"] }
+unicode_names2 = "=2.0.0"
 
 # The binaries hold no tests (the library does): `cargo test` builds no empty test harness for them, each of which
 # linked the whole crate again. They still build for integration tests (CARGO_BIN_EXE_*) and clippy --all-targets.

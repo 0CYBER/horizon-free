@@ -19,8 +19,10 @@
 //! ```
 //! use horizon_client_render::hud::HudAtlas;
 //! use horizon_client_render::hud_kit::tabs::{self, TabStrip};
+//! use horizon_client_render::resource_source::ResourceSource;
 //!
-//! let atlas = HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
+//! let resources = ResourceSource::directory(std::path::PathBuf::from("/nonexistent"));
+//! let atlas = HudAtlas::build(&resources).unwrap();
 //! let names = ["General", "Camera", "Build"].map(String::from);
 //! let strip = tabs::collapsed(&atlas, &names, 0, [8.0, 100.0, 112.0, 16.0]);
 //! assert_eq!(strip.label, "General");
@@ -342,7 +344,10 @@ mod tests {
     use super::*;
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+        HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap()
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -395,7 +400,7 @@ mod tests {
         }
         // The first page: its `‹` is drawn in the dimmed colour, its `›` in the arrow's.
         let alpha = |strip: &Strip, i: usize| {
-            let mut batch = HudBatch::new([854, 480]);
+            let mut batch = HudBatch::scratch([854, 480]);
             draw(&mut batch, &atlas, strip);
             let [ax, _] = strip.arrows[i];
             (batch.vertices.iter())
@@ -568,7 +573,7 @@ mod tests {
         let atlas = atlas();
         let pages: Vec<String> = (0..9).map(|i| format!("Page {i}")).collect();
         let area = [40.0, 10.0, 200.0, 12.0];
-        let mut batch = HudBatch::new([854, 480]);
+        let mut batch = HudBatch::scratch([854, 480]);
         let strip = tab_strip(&atlas, &pages, 4, area, 0.0);
         draw_tabs(&mut batch, &atlas, &strip, 1.0);
         for v in &batch.vertices {
@@ -597,7 +602,7 @@ mod tests {
         let pages: Vec<String> = (0..9).map(|i| format!("Page {i}")).collect();
         let area = [40.0, 10.0, 200.0, 12.0];
         let strip = tab_strip(&atlas, &pages, 4, area, 13.0);
-        let mut batch = HudBatch::new([854, 480]);
+        let mut batch = HudBatch::scratch([854, 480]);
         draw_tabs(&mut batch, &atlas, &strip, 1.0);
         assert!(!batch.vertices.is_empty());
         for v in &batch.vertices {
@@ -607,12 +612,12 @@ mod tests {
                 "{x} {y}"
             );
         }
-        let mut faded = HudBatch::new([854, 480]);
+        let mut faded = HudBatch::scratch([854, 480]);
         draw_tabs(&mut faded, &atlas, &strip, 0.0);
         assert!(faded.vertices.iter().all(|v| v.color >> 24 == 0));
         // A collapsed strip fades as a whole too.
         let narrow = tab_strip(&atlas, &pages, 4, [0.0, 0.0, 80.0, 12.0], 0.0);
-        let mut faded = HudBatch::new([854, 480]);
+        let mut faded = HudBatch::scratch([854, 480]);
         draw_tabs(&mut faded, &atlas, &narrow, 0.0);
         assert!(!faded.vertices.is_empty());
         assert!(faded.vertices.iter().all(|v| v.color >> 24 == 0));

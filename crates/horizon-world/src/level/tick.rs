@@ -297,8 +297,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         // Only lava's fluid state ticks randomly. A lava block is ticked twice
         // (LiquidBlock.randomTick, then FluidState.randomTick), as in vanilla.
-        let fluid = self.b.fluid(state).kind();
-        if matches!(fluid, FluidKind::Lava | FluidKind::FlowingLava) {
+        if super::fluids::fluid_randomly_ticks(self.b.fluid(state).kind()) {
             self.lava_random_tick(pos);
         }
     }
@@ -320,14 +319,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::BambooStalk => {
-                    if b.table.int(state, p.stage) == 0
-                        && self.rand_int(3) == 0
-                        && self.is_empty_block(above(pos))
-                        && self.raw_brightness(above(pos), 0) >= 9
-                    {
-                        let height = self.bamboo_height_below(pos) + 1;
-                        if height < 16 {
-                            self.bamboo_grow(state, pos, height);
+                    if b.table.int(state, p.stage) == 0 {
+                        // Vanilla's roll comes first, in vanilla's order, before
+                        // the crop hook is asked.
+                        let roll = self.rand_int(3) == 0;
+                        if self.is_empty_block(above(pos))
+                            && self.raw_brightness(above(pos), 0) >= 9
+                        {
+                            let height = self.bamboo_height_below(pos) + 1;
+                            if height < 16 && self.level.crop_grow_pre(pos, state, roll) {
+                                self.bamboo_grow(state, pos, height);
+                                self.level.crop_grow_post(pos, state);
+                            }
                         }
                     }
                 }
@@ -341,11 +344,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Cactus => self.cactus_random_tick(state, pos),
                 Class::ChorusFlower => self.chorus_flower_random_tick(state, pos),
                 Class::Cocoa => {
-                    if self.rand_int(5) == 0 {
-                        let age = b.table.int(state, p.age);
-                        if age < 2 {
-                            self.set_block(pos, b.table.set_int(state, p.age, age + 1), 2);
-                        }
+                    let roll = self.rand_int(5) == 0;
+                    let age = b.table.int(state, p.age);
+                    if age < 2 && self.level.crop_grow_pre(pos, state, roll) {
+                        self.set_block(pos, b.table.set_int(state, p.age, age + 1), 2);
+                        self.level.crop_grow_post(pos, state);
                     }
                 }
                 Class::Farmland => self.farmland_random_tick(state, pos),
@@ -368,13 +371,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::GrowingPlantHead => {
-                    if b.table.int(state, p.age) < 25
-                        && self.random().next_double() < data.grow_probability
-                    {
+                    if b.table.int(state, p.age) < 25 {
+                        let roll = self.random().next_double() < data.grow_probability;
                         let growth = rel(pos, data.growth_direction);
-                        if self.growing_plant_can_grow_into(state, self.state(growth)) {
+                        if self.level.crop_grow_pre(growth, state, roll)
+                            && self.growing_plant_can_grow_into(state, self.state(growth))
+                        {
                             let next = self.growing_plant_grow_into_state(state);
                             self.set_block_and_update(growth, next);
+                            // The hook gets the new head as the original state.
+                            let grown = self.state(growth);
+                            self.level.crop_grow_post(growth, grown);
                         }
                     }
                 }
@@ -417,8 +424,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Mushroom => self.mushroom_random_tick(state, pos),
                 Class::NetherWart => {
                     let age = b.table.int(state, p.age);
-                    if age < 3 && self.rand_int(10) == 0 {
-                        self.set_block(pos, b.table.set_int(state, p.age, age + 1), 2);
+                    if age < 3 {
+                        let roll = self.rand_int(10) == 0;
+                        if self.level.crop_grow_pre(pos, state, roll) {
+                            self.set_block(pos, b.table.set_int(state, p.age, age + 1), 2);
+                            self.level.crop_grow_post(pos, state);
+                        }
                     }
                 }
                 Class::Nylium => {
@@ -456,23 +467,31 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         while b.is_block(self.state(pos.offset(0, -height, 0)), block) {
                             height += 1;
                         }
-                        if height < 3 {
+                        if height < 3 && self.level.crop_grow_pre(pos, state, true) {
                             let age = b.table.int(state, p.age);
                             if age == 15 {
-                                self.grow_set_update(above(pos), b.default_of(block));
-                                self.grow_set(pos, b.table.set_int(state, p.age, 0), 260);
+                                self.set_block_and_update(above(pos), b.default_of(block));
+                                self.level.crop_grow_post(above(pos), b.default_of(block));
+                                self.set_block(pos, b.table.set_int(state, p.age, 0), 260);
                             } else {
-                                self.grow_set(pos, b.table.set_int(state, p.age, age + 1), 260);
+                                self.set_block(pos, b.table.set_int(state, p.age, age + 1), 260);
                             }
                         }
                     }
                 }
                 Class::SweetBerryBush => {
                     let age = b.table.int(state, p.age);
-                    if age < 3 && self.rand_int(5) == 0 && self.raw_brightness(above(pos), 0) >= 9 {
-                        let next = b.table.set_int(state, p.age, age + 1);
-                        self.set_block(pos, next, 2);
-                        self.game_event(pos, "minecraft:block_change");
+                    if age < 3 {
+                        // Vanilla rolls before the light check.
+                        let roll = self.rand_int(5) == 0;
+                        if self.raw_brightness(above(pos), 0) >= 9
+                            && self.level.crop_grow_pre(pos, state, roll)
+                        {
+                            let next = b.table.set_int(state, p.age, age + 1);
+                            self.set_block(pos, next, 2);
+                            self.game_event(pos, "minecraft:block_change");
+                            self.level.crop_grow_post(pos, state);
+                        }
                     }
                 }
                 Class::Vine => self.vine_random_tick(state, pos),
@@ -630,12 +649,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.remove_block(pos, false);
         }
         let below_state = self.below_state(pos);
-        let infiniburn = match self.level.dimension_type().infiniburn.as_str() {
-            "#minecraft:infiniburn_nether" => &b.tags.infiniburn_nether,
-            "#minecraft:infiniburn_end" => &b.tags.infiniburn_end,
-            _ => &b.tags.infiniburn_overworld,
-        };
-        let infini = b.in_set(below_state, infiniburn);
+        static EMPTY: std::sync::LazyLock<super::data::BlockSet> =
+            std::sync::LazyLock::new(super::data::BlockSet::default);
+        let infiniburn = self
+            .level
+            .infiniburn()
+            .or_else(|| {
+                let name = &self.level.dimension_type().infiniburn;
+                b.tag(name.strip_prefix('#').unwrap_or(name))
+            })
+            .unwrap_or(&EMPTY);
+        let mut infini = None;
+        self.level
+            .before_is_fire_source(below_state, below(pos), &mut infini);
+        let infini = infini.unwrap_or_else(|| b.in_set(below_state, infiniburn));
         let age = b.table.int(state, p.age);
         let raining = self.level.is_raining();
         if !infini
@@ -659,7 +686,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 return;
             }
-            if age == 15 && self.rand_int(4) == 0 && !self.can_burn(self.below_state(pos)) {
+            if age == 15
+                && self.rand_int(4) == 0
+                && !self.can_burn(self.below_state(pos), below(pos), Direction::Up)
+            {
                 self.remove_block(pos, false);
                 return;
             }
@@ -675,7 +705,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             (Direction::North, 300),
             (Direction::South, 300),
         ] {
-            self.fire_check_burn_out(pos, rel(pos, direction), chance + extra, age);
+            self.fire_check_burn_out(pos, direction, chance + extra, age);
         }
         for xx in -1..=1 {
             for zz in -1..=1 {
@@ -690,7 +720,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     let test = pos.offset(xx, yy, zz);
                     let ignite = self.fire_ignite_odds_at(test);
                     if ignite > 0 {
-                        let mut odds = (ignite + 40 + self.level.difficulty() * 7) / (age + 30);
+                        let mut odds = (ignite
+                            .saturating_add(40)
+                            .saturating_add(self.level.difficulty() * 7))
+                            / (age + 30);
                         if burnout {
                             odds /= 2;
                         }
@@ -718,7 +751,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         Direction::ALL
             .into_iter()
-            .map(|d| self.ignite_odds(self.rel_state(pos, d)))
+            .map(|d| {
+                let at = rel(pos, d);
+                self.ignite_odds(self.state(at), at, d.opposite())
+            })
             .max()
             .unwrap_or(0)
     }
@@ -729,12 +765,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             || self.level.is_raining_at(rel(pos, Direction::North))
             || self.level.is_raining_at(rel(pos, Direction::South))
     }
-    /// `FireBlock.checkBurnOut` of the block at `pos` by the fire at `fire`.
-    fn fire_check_burn_out(&mut self, fire: BlockPos, pos: BlockPos, chance: i32, age: i32) {
+    /// `FireBlock.checkBurnOut` of the block beside the fire at `fire` in
+    /// `direction`: notify after the cancel gates, before replacing the block.
+    fn fire_check_burn_out(&mut self, fire: BlockPos, direction: Direction, chance: i32, age: i32) {
         let b = self.b;
-        let odds = self.burn_odds(self.state(pos));
+        let (pos, face) = (rel(fire, direction), direction.opposite());
+        let old = self.state(pos);
+        let odds = self.burn_odds(old, pos, face);
         if self.rand_int(chance) < odds {
-            let old = self.state(pos);
             let allowed = self.level.allow_spread(Spread::Fire, fire, pos);
             let mut burned = false;
             if self.rand_int(age + 10) < 5 && !self.level.is_raining_at(pos) {
@@ -744,10 +782,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     && self.level.allow_block_ignite(pos, "spread")
                 {
                     let next = self.fire_state_with_age(pos, new_age);
+                    self.level.on_caught_fire(self.ticks, old, pos, face);
                     self.set_block_and_update(pos, next);
                     burned = true;
                 }
             } else if allowed && self.level.allow_block_burn(pos) {
+                self.level.on_caught_fire(self.ticks, old, pos, face);
                 self.remove_block(pos, false);
                 burned = true;
             }
@@ -822,13 +862,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let mut speed = 1.0f32;
         let under = below(pos);
+        let asks = self.level.asks_is_fertile();
         for xx in -1..=1 {
             for zz in -1..=1 {
                 let mut block_speed = 0.0f32;
-                let state = self.state(under.offset(xx, 0, zz));
+                let at = under.offset(xx, 0, zz);
+                let state = self.state(at);
                 if b.in_set(state, &b.tags.grows_crops) {
                     block_speed = 1.0;
-                    if b.table.int(state, b.props.moisture) > 0 {
+                    // IBlockExtension.isFertile: vanilla's moisture, as a part leaves it.
+                    let mut fertile = b.table.int(state, b.props.moisture) > 0;
+                    if asks {
+                        self.level.before_is_fertile(state, at, &mut fertile);
+                    }
+                    if fertile {
                         block_speed = 3.0;
                     }
                 }
@@ -856,26 +903,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         speed
     }
-    /// A growth or spread step at `pos` (a crop, a stem, cactus or sugar cane,
-    /// bamboo, a mushroom or vine spreading, grass spreading onto dirt): asked of
-    /// the level first (`LevelAccess::block_grow`), which may cancel it.
-    fn grow_set(&mut self, pos: BlockPos, to: BlockStateId, flags: i32) {
-        let from = self.state(pos);
-        let mut cancel = false;
-        self.level.block_grow(pos, from, to, &mut cancel);
-        if !cancel {
-            self.set_block(pos, to, flags);
-        }
-    }
-    /// `grow_set` with `set_block_and_update`.
-    fn grow_set_update(&mut self, pos: BlockPos, to: BlockStateId) {
-        let from = self.state(pos);
-        let mut cancel = false;
-        self.level.block_grow(pos, from, to, &mut cancel);
-        if !cancel {
-            self.set_block_and_update(pos, to);
-        }
-    }
     fn crop_random_tick(&mut self, state: BlockStateId, pos: BlockPos) {
         let b = self.b;
         if self.raw_brightness(pos, 0) < 9 {
@@ -885,9 +912,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let max = self.crop_max_age(state);
         if age < max {
             let speed = self.crop_growth_speed(b.block(state), pos);
-            if self.rand_int((25.0 / speed) as i32 + 1) == 0 {
+            let roll = self.rand_int((25.0 / speed) as i32 + 1) == 0;
+            if self.level.crop_grow_pre(pos, state, roll) {
                 let next = self.crop_state_for_age(state, age + 1);
-                self.grow_set(pos, next, 2);
+                self.set_block(pos, next, 2);
+                self.level.crop_grow_post(pos, state);
             }
         }
     }
@@ -897,12 +926,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return;
         }
         let speed = self.crop_growth_speed(b.block(state), pos);
-        if self.rand_int((25.0 / speed) as i32 + 1) != 0 {
+        let roll = self.rand_int((25.0 / speed) as i32 + 1) == 0;
+        if !self.level.crop_grow_pre(pos, state, roll) {
             return;
         }
+        self.stem_grow(state, pos);
+        self.level.crop_grow_post(pos, state);
+    }
+    fn stem_grow(&mut self, state: BlockStateId, pos: BlockPos) {
+        let b = self.b;
         let age = b.table.int(state, b.props.age);
         if age < 7 {
-            self.grow_set(pos, b.table.set_int(state, b.props.age, age + 1), 2);
+            self.set_block(pos, b.table.set_int(state, b.props.age, age + 1), 2);
             return;
         }
         let direction = HORIZONTAL[self.rand_int(4) as usize];
@@ -991,7 +1026,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let block = b.block(state);
         let above_pos = above(pos);
-        if !self.is_empty_block(above_pos) {
+        if !self.is_empty_block(above_pos) || !self.level.crop_grow_pre(above_pos, state, true) {
             return;
         }
         let mut height = 1;
@@ -1008,25 +1043,38 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.set_block_and_update(above_pos, b.default_of(b.named.cactus_flower));
             }
         } else if age == 15 && height < 3 {
-            self.grow_set_update(above_pos, b.default_of(block));
+            self.set_block_and_update(above_pos, b.default_of(block));
             let reset = b.table.set_int(state, b.props.age, 0);
-            self.grow_set(pos, reset, 260);
+            self.set_block(pos, reset, 260);
             self.neighbor_changed_full(reset, above_pos, block, false);
         }
         if age < 15 {
-            self.grow_set(pos, b.table.set_int(state, b.props.age, age + 1), 260);
+            self.set_block(pos, b.table.set_int(state, b.props.age, age + 1), 260);
         }
+        self.level.crop_grow_post(pos, state);
     }
+    /// `FarmlandBlock.randomTick`, with session-only watered areas before `isNearWater`.
     fn farmland_random_tick(&mut self, state: BlockStateId, pos: BlockPos) {
         let b = self.b;
         let moisture = b.table.int(state, b.props.moisture);
-        let mut near_water = false;
-        'search: for x in -4..=4 {
-            for y in 0..=1 {
-                for z in -4..=4 {
-                    if b.is_water_fluid(self.fluid_at(pos.offset(x, y, z)).kind()) {
-                        near_water = true;
-                        break 'search;
+        let mut near_water = self.level.has_water_ticket(pos);
+        // IBlockExtension.canBeHydrated: the farmland's parts, looked up once.
+        let asks = !near_water && self.level.asks_can_be_hydrated(state);
+        if !near_water {
+            'search: for x in -4..=4 {
+                for y in 0..=1 {
+                    for z in -4..=4 {
+                        let at = pos.offset(x, y, z);
+                        let fluid = self.fluid_at(at);
+                        let mut hydrates = None;
+                        if asks && fluid.kind() != FluidKind::Empty {
+                            self.level
+                                .before_can_be_hydrated(state, pos, fluid, at, &mut hydrates);
+                        }
+                        if hydrates.unwrap_or_else(|| b.is_water_fluid(fluid.kind())) {
+                            near_water = true;
+                            break 'search;
+                        }
                     }
                 }
             }
@@ -1082,7 +1130,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             offset = self.mushroom_offset(pos);
         }
         if self.is_empty_block(offset) && self.can_survive(state, offset) {
-            self.grow_set(offset, state, 2);
+            self.set_block(offset, state, 2);
         }
     }
     fn mushroom_offset(&mut self, pos: BlockPos) -> BlockPos {
@@ -1145,7 +1193,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 && !b.is_water_fluid(self.fluid_at(above(test)).kind())
             {
                 let snowy = b.in_set(self.above_state(test), &b.tags.snow);
-                self.grow_set_update(test, b.table.set_bool(default, b.props.snowy, snowy));
+                self.set_block_and_update(test, b.table.set_bool(default, b.props.snowy, snowy));
             }
         }
     }
@@ -1196,7 +1244,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let bamboo = b.default_of(b.named.bamboo);
         let state = b.table.set_text(bamboo, b.props.leaves, "small");
-        self.grow_set(above(pos), state, 3);
+        self.set_block(above(pos), state, 3);
     }
     pub(crate) fn bamboo_height_below(&self, pos: BlockPos) -> i32 {
         let mut height = 0;
@@ -1275,7 +1323,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             stage,
         );
         let _ = self.bamboo_height_above(pos);
-        self.grow_set(above(pos), next, 3);
+        self.set_block(above(pos), next, 3);
     }
     /// `VineBlock.randomTick`.
     fn vine_random_tick(&mut self, state: BlockStateId, pos: BlockPos) {
@@ -1305,13 +1353,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let cw_test = rel(test, cw);
                 let ccw_test = rel(test, ccw);
                 if cw_face && b.multiface_can_attach(self.state(cw_test), cw) {
-                    self.grow_set(
+                    self.set_block(
                         test,
                         b.table.set_bool(default, self.direction_prop(cw), true),
                         2,
                     );
                 } else if ccw_face && b.multiface_can_attach(self.state(ccw_test), ccw) {
-                    self.grow_set(
+                    self.set_block(
                         test,
                         b.table.set_bool(default, self.direction_prop(ccw), true),
                         2,
@@ -1322,7 +1370,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         && self.is_empty_block(cw_test)
                         && b.multiface_can_attach(self.rel_state(pos, cw), opposite)
                     {
-                        self.grow_set(
+                        self.set_block(
                             cw_test,
                             b.table
                                 .set_bool(default, self.direction_prop(opposite), true),
@@ -1332,7 +1380,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         && self.is_empty_block(ccw_test)
                         && b.multiface_can_attach(self.rel_state(pos, ccw), opposite)
                     {
-                        self.grow_set(
+                        self.set_block(
                             ccw_test,
                             b.table
                                 .set_bool(default, self.direction_prop(opposite), true),
@@ -1341,11 +1389,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     } else if self.random().next_float() < 0.05
                         && b.multiface_can_attach(self.state(above(test)), Direction::Up)
                     {
-                        self.grow_set(test, b.table.set_bool(default, p.up, true), 2);
+                        self.set_block(test, b.table.set_bool(default, p.up, true), 2);
                     }
                 }
             } else if b.multiface_can_attach(edge, direction) {
-                self.grow_set(
+                self.set_block(
                     pos,
                     b.table
                         .set_bool(state, self.direction_prop(direction), true),
@@ -1356,7 +1404,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         if direction == Direction::Up && pos.y < self.level.max_y() - 1 {
             if b.multiface_can_attach(self.state(above_pos), Direction::Up) {
-                self.grow_set(pos, b.table.set_bool(state, p.up, true), 2);
+                self.set_block(pos, b.table.set_bool(state, p.up, true), 2);
                 return;
             }
             if self.is_empty_block(above_pos) {
@@ -1375,7 +1423,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     .into_iter()
                     .any(|d| b.table.bool(above_state, self.direction_prop(d)))
                 {
-                    self.grow_set(above_pos, above_state, 2);
+                    self.set_block(above_pos, above_state, 2);
                 }
                 return;
             }
@@ -1400,7 +1448,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         .into_iter()
                         .any(|d| b.table.bool(after, self.direction_prop(d)))
                 {
-                    self.grow_set(below_pos, after, 2);
+                    self.set_block(below_pos, after, 2);
                 }
             }
         }
@@ -1425,16 +1473,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn chorus_flower_random_tick(&mut self, state: BlockStateId, pos: BlockPos) {
         let b = self.b;
         let p = b.props;
-        let block = b.block(state);
-        let plant = b.named.chorus_plant;
         let above_pos = above(pos);
         if !self.is_empty_block(above_pos) || above_pos.y > self.level.max_y() - 1 {
             return;
         }
         let age = b.table.int(state, p.age);
-        if age >= 5 {
+        if age >= 5 || !self.level.crop_grow_pre(above_pos, state, true) {
             return;
         }
+        self.chorus_flower_grow(state, pos, age);
+        self.level.crop_grow_post(pos, state);
+    }
+    fn chorus_flower_grow(&mut self, state: BlockStateId, pos: BlockPos, age: i32) {
+        let b = self.b;
+        let p = b.props;
+        let block = b.block(state);
+        let plant = b.named.chorus_plant;
+        let above_pos = above(pos);
         let mut grow_up = false;
         let mut pillar_on_support = false;
         let below_state = self.below_state(pos);
@@ -1640,10 +1695,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block_and_update(pos, next);
         }
     }
-    /// `WeatheringCopper.getNext` by registry naming.
+    /// `WeatheringCopper.getNext`: the world's `neoforge:oxidizables` value
+    /// (`DataMapHooks.getNextOxidizedStage`), else by registry naming.
     pub(crate) fn copper_next(&self, state: BlockStateId) -> Option<BlockStateId> {
         let b = self.b;
         let name = &*b.table.info(b.block(state)).name;
+        if let Some(next) = b.read_block_maps(|maps| {
+            maps.next_oxidation(name)
+                .and_then(|n| b.table.block_by_name(n))
+        }) {
+            return Some(b.table.with_properties_of(next, state));
+        }
         let path = name.strip_prefix("minecraft:")?;
         let next = if path == "copper_block" {
             "exposed_copper".to_owned()
@@ -1676,14 +1738,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             })
         }
     }
+    /// One oxidation step back, or all of them: the world's
+    /// `neoforge:oxidizables` inverse (`DataMapHooks.getPreviousOxidizedStage`)
+    /// first, else by registry naming.
     fn copper_stepped(&self, state: BlockStateId, all_the_way: bool) -> Option<BlockStateId> {
         let b = self.b;
-        let name = &*b.table.info(b.block(state)).name;
-        let mut path = Self::copper_previous_name(name.strip_prefix("minecraft:")?)?;
-        while all_the_way && let Some(earlier) = Self::copper_previous_name(&path) {
-            path = earlier;
-        }
-        let block = b.table.block_by_name(&format!("minecraft:{path}"))?;
+        let previous = |name: &str| -> Option<String> {
+            b.read_block_maps(|maps| maps.previous_oxidation(name).map(str::to_owned))
+                .or_else(|| {
+                    let path = Self::copper_previous_name(name.strip_prefix("minecraft:")?)?;
+                    Some(format!("minecraft:{path}"))
+                })
+        };
+        let start: &str = &b.table.info(b.block(state)).name;
+        let name = if all_the_way {
+            first_stage(start, previous)?
+        } else {
+            previous(start)?
+        };
+        let block = b.table.block_by_name(&name)?;
         Some(b.table.with_properties_of(block, state))
     }
     /// `LightningBolt.clearCopperOnLightningStrike`: the struck copper goes
@@ -1733,6 +1806,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
     }
+}
+
+/// The first oxidation stage before `start`: `previous` stepped back until it gives nothing
+/// (`LightningBolt.clearCopperOnLightningStrike`'s walk to the unoxidized block), none when
+/// `start` has no earlier stage. A pack's chain that comes back to a block it already passed
+/// stops there, so mod data can't hang the walk; vanilla's chain has four stages.
+fn first_stage(start: &str, previous: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let mut name = previous(start)?;
+    let mut passed = vec![start.to_owned()];
+    while let Some(earlier) = previous(&name) {
+        if passed.contains(&earlier) || earlier == name {
+            break;
+        }
+        passed.push(std::mem::replace(&mut name, earlier));
+    }
+    Some(name)
 }
 
 /// `Biome.Precipitation` at a position.
@@ -1803,7 +1892,7 @@ impl Behaviours {
             horizon_threads::work::set_chunk(tick.pos.x >> 4, tick.pos.z >> 4);
             horizon_threads::work::set_block(self.block(state).0);
             let fluid = self.fluid(state).kind();
-            if TickTypeId(fluid.index() as u32) == tick.kind {
+            if TickTypeId(fluid.tick_id()) == tick.kind {
                 sim.fluid_tick(tick.pos);
             }
         }
@@ -1855,7 +1944,7 @@ impl Behaviours {
             horizon_threads::work::set_chunk(tick.pos.x >> 4, tick.pos.z >> 4);
             horizon_threads::work::set_block(self.block(state).0);
             let fluid = self.fluid(state).kind();
-            if TickTypeId(fluid.index() as u32) == tick.kind {
+            if TickTypeId(fluid.tick_id()) == tick.kind {
                 sim.fluid_tick(tick.pos);
             }
         } else {
@@ -1961,10 +2050,7 @@ impl Behaviours {
     /// ticks a randomly ticking block, then lava's fluid.
     pub fn random_tick_candidate(&self, state: BlockStateId) -> bool {
         self.is_randomly_ticking(state)
-            || matches!(
-                self.fluid(state).kind(),
-                FluidKind::Lava | FluidKind::FlowingLava
-            )
+            || super::fluids::fluid_randomly_ticks(self.fluid(state).kind())
     }
     /// Random-tick a single position (block then fluid), as `tickChunk` does.
     pub fn random_tick<L: LevelAccess + ?Sized>(
@@ -1983,6 +2069,19 @@ impl Behaviours {
         struck: BlockPos,
     ) {
         self.sim(level, ticks).lightning_clear_copper(struck);
+    }
+    /// `ServerLevel.tickBlock` for the block at `pos` now, as a due tick from the queue runs it:
+    /// the level's say first (a mod block's part), else `BlockState.tick`. The queue is not
+    /// read or changed.
+    pub fn due_block_tick<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        sim.tick_due_block(state, pos);
     }
     /// Run one scheduled block tick at `pos` immediately (no queue check).
     pub fn scheduled_block_tick<L: LevelAccess + ?Sized>(
@@ -2043,5 +2142,46 @@ impl RandomTickMask {
     pub fn may_tick(&self, pos: BlockPos) -> bool {
         let i = ((pos.y & 15) << 8 | (pos.z & 15) << 4 | (pos.x & 15)) as usize;
         self.0[i >> 6] >> (i & 63) & 1 != 0
+    }
+}
+
+#[cfg(test)]
+#[path = "fire_tick_tests.rs"]
+mod fire_tick_tests;
+
+#[cfg(test)]
+#[path = "block_maps_tests.rs"]
+mod block_maps_tests;
+
+#[cfg(test)]
+mod first_stage_tests {
+    use super::first_stage;
+
+    fn chain<'a>(steps: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            steps
+                .iter()
+                .find(|(from, _)| *from == name)
+                .map(|(_, to)| (*to).to_owned())
+        }
+    }
+
+    #[test]
+    fn the_lightning_walk_reaches_the_first_stage_and_stops_where_a_chain_loops() {
+        let vanilla = [
+            ("oxidized", "weathered"),
+            ("weathered", "exposed"),
+            ("exposed", "copper"),
+        ];
+        assert_eq!(
+            first_stage("oxidized", chain(&vanilla)).as_deref(),
+            Some("copper")
+        );
+        assert_eq!(first_stage("copper", chain(&vanilla)), None);
+        // b -> c -> d -> b: the walk from a stops at d, the last block before it repeats.
+        let looped = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "b")];
+        assert_eq!(first_stage("a", chain(&looped)).as_deref(), Some("d"));
+        // A block that is its own previous stage stays as it is.
+        assert_eq!(first_stage("x", chain(&[("x", "x")])).as_deref(), Some("x"));
     }
 }

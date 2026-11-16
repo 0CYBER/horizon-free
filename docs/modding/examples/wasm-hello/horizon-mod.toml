@@ -1,0 +1,11 @@
+id = "hello_wasm"
+name = "Hello Wasm"
+version = "0.1.0"
+description = "Signs every chat message and counts server ticks through a hook, to show a mod.wasm running in the game."
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[wasm]
+sha512 = "51b83b0f81b32da48144d0e88e2be3f7ab1b23324e4f87e2daa9490a53c08fb6138dd790bfe3db96ff2b25d33bd535b29d5320745385a7140938a5f19d5c36ac"
+toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"

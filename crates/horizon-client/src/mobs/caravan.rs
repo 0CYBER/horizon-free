@@ -240,7 +240,7 @@ impl Goal for DefendTrader {
         target_continue(&mut self.st, false, m, cx)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        m.ai.target = self.attacker;
+        m.set_ai_target(cx.w, self.attacker);
         if let Some(super::leash::Holder::Mob(id)) = m.extra.leash
             && let Some(owner) = cx.w.seen(id)
             && let Some((_, stamp)) = owner.hurt_by
@@ -248,8 +248,8 @@ impl Goal for DefendTrader {
             self.timestamp = stamp;
         }
     }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
-        m.ai.target = None;
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.set_ai_target(cx.w, None);
     }
 }
 /// `TraderLlama.maybeDespawn`: counts down its own delay, or follows the
@@ -286,6 +286,7 @@ mod defend_trader_tests {
     /// through `TargetingConditions.DEFAULT`, which never accepts a
     /// spectator.
     #[test]
+    #[ignore = "daily"]
     fn a_trader_llama_does_not_defend_the_trader_from_a_spectator() {
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {
@@ -299,7 +300,7 @@ mod defend_trader_tests {
                 let mut owner = Mob::new(2, Arc::new(owner_kind), Vec3::new(1.5, 64.0, 0.5), 0.0);
                 owner.ai.last_hurt_by = Some(Who::Player);
                 owner.ai.last_hurt_by_time = 5;
-                let seen = [owner.seen(None)];
+                let seen = [owner.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
                     others: &seen,
                     ..world
@@ -309,11 +310,11 @@ mod defend_trader_tests {
                 let mut llama = Mob::new(1, Arc::new(llama_kind), Vec3::new(0.5, 64.0, 0.5), 0.0);
                 llama.extra.leash = Some(super::super::leash::Holder::Mob(2));
                 llama.ai.goals.add(1, DefendTrader::default());
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut lr = crate::health::TestLevel::new(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
-                    lr: &mut lr,
+                    level: &mut lr.level(),
                     events: &mut events,
                 };
                 let mut goals = std::mem::take(&mut llama.ai.goals);

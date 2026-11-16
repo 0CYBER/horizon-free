@@ -2,7 +2,7 @@
 //! join gives the slot back, spoken to the relay over raw sockets.
 use horizon_friends::wire::{self, ErrorCode, FromRelay, ToRelay};
 use horizon_relay::{Config, Relay};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -89,6 +89,7 @@ fn settles_to_zero(relay: &Relay) {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_waiting_join_holds_its_slot_and_a_timeout_gives_it_back() {
     let (relay, address) = relay(1);
     let (mut control, _keep, nameplate, _) = host(address);
@@ -128,6 +129,7 @@ fn a_waiting_join_holds_its_slot_and_a_timeout_gives_it_back() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_bridge_gives_its_slot_back_when_either_end_closes() {
     let (relay, address) = relay(1);
     let (mut control, _keep, nameplate, token) = host(address);
@@ -159,7 +161,47 @@ fn a_bridge_gives_its_slot_back_when_either_end_closes() {
     settles_to_zero(&relay);
 }
 
+/// A guest that goes quiet and stops reading, with its socket open and the host still sending.
 #[test]
+#[ignore = "daily"]
+fn a_bridge_gives_its_slot_back_when_a_peer_stops_reading() {
+    let (relay, address, _) = Relay::spawn_local(Config {
+        max_bridges: 1,
+        per_address: false,
+        idle: Duration::from_millis(300),
+        session_rate: 1e9,
+        total_rate: 1e9,
+        ..Config::default()
+    })
+    .unwrap();
+    let (mut control, _keep, nameplate, token) = host(address);
+    let mut guest = join(address, &nameplate);
+    let FromRelay::Join { session } = next(&mut control) else {
+        panic!()
+    };
+    let mut attach = connect(address);
+    wire::send(
+        &mut attach,
+        &ToRelay::Attach {
+            v: wire::VERSION,
+            session,
+            token,
+        },
+    )
+    .unwrap();
+    assert!(matches!(answer(&mut guest), FromRelay::Bridged { .. }));
+    assert!(matches!(answer(&mut attach), FromRelay::Bridged { .. }));
+    let sender = std::thread::spawn(move || {
+        let chunk = vec![0; 256 * 1024];
+        while attach.write_all(&chunk).is_ok() {}
+    });
+    settles_to_zero(&relay);
+    sender.join().unwrap();
+    drop(guest);
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_wrong_attach_or_a_refusal_holds_no_slot() {
     let (relay, address) = relay(1);
     let (mut control, _keep, nameplate, _) = host(address);

@@ -1,0 +1,8 @@
+id = "hog"
+name = "Hog"
+version = "1.0.0"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+# Its group's memory, small enough that the allocator's eviction retry shows.
+wasm_memory_mib = 256

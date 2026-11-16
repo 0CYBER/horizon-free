@@ -11,6 +11,26 @@ use super::{
 use crate::{fluid::FluidState, registry::BlockStateId};
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 
+/// Who answers a bone meal target: a mod, or the block's own `BonemealableBlock`.
+#[derive(Clone, Copy)]
+enum Target {
+    Mod,
+    Block(Kind),
+}
+
+/// `isValidBonemealTarget` asked once for a block (see
+/// [`Behaviours::is_valid_bonemeal_target`]): handing it back to `growCrop`
+/// keeps a mod's answer from being asked a second time.
+#[derive(Clone, Copy)]
+pub struct BonemealCheck(Option<Target>);
+
+impl BonemealCheck {
+    /// Whether the block is a valid target.
+    pub fn is_valid(self) -> bool {
+        self.0.is_some()
+    }
+}
+
 /// The `BonemealableBlock` implementation a block uses (most derived wins).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -146,7 +166,7 @@ impl Behaviours {
         template: &crate::worldgen::structure::StructureTemplate,
         pos: BlockPos,
         settings: TemplateSettings,
-    ) -> Option<(bool, Vec<crate::nbt::Compound>)> {
+    ) -> Option<(bool, Vec<horizon_core::nbt::Compound>)> {
         use crate::worldgen::structure::processor::{PlaceSettings, Processor, place_in_world};
         let features = self.live_features()?;
         let resources = features.structure_resources()?;
@@ -167,7 +187,7 @@ impl Behaviours {
         }
         let mut world = LevelFeatureWorld {
             sim: &mut sim,
-            features,
+            features: &features,
             entities: Vec::new(),
         };
         let at = [pos.x, pos.y, pos.z];
@@ -187,16 +207,21 @@ impl Behaviours {
     /// `BoneMealItem.useOn` for a player clicking `pos` on `face`. Returns
     /// whether bone meal was used (the caller then shrinks the stack unless
     /// the player is in creative mode). Reports level event 1505 (growth
-    /// particles and sound) at the grown position.
+    /// particles and sound) at the grown position. `crop` is `growCrop`'s
+    /// answer when it is already settled (a canceled `BonemealEvent`'s
+    /// `successful`), or None to run it; `check` is the target's validity when
+    /// the event already asked for it.
     pub fn use_bone_meal<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         pos: BlockPos,
         face: Direction,
+        crop: Option<bool>,
+        check: Option<BonemealCheck>,
     ) -> bool {
         let mut sim = self.sim(level, ticks);
-        if sim.grow_crop(pos) {
+        if crop.unwrap_or_else(|| sim.grow_crop(pos, check)) {
             sim.level_event(1505, pos, 15);
             return true;
         }
@@ -212,29 +237,24 @@ impl Behaviours {
     /// it succeeds there (the server's packet does the growing). A sapling,
     /// an azalea or a mushroom is only a valid target on a `ServerLevel`
     /// (`isValidBonemealTarget`), so the client passes on them; `growWaterPlant`
-    /// takes any full water block beside a sturdy clicked face.
+    /// takes any full water block beside a sturdy clicked face. `crop` is as
+    /// for [`Self::use_bone_meal`].
     pub fn bone_meal_succeeds_on_client<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         pos: BlockPos,
         face: Direction,
+        crop: Option<bool>,
+        check: Option<BonemealCheck>,
     ) -> bool {
         let mut ticks = Ticks::default();
         let mut sim = self.sim(level, &mut ticks);
         let state = sim.state(pos);
-        // A mod block answers `isValidBonemealTarget` on both sides, so the
-        // client predicts the use with the mod's own answer.
-        let answer = sim.level.is_valid_bonemeal_target(pos, state);
-        if answer == Some(true) {
-            return true;
-        }
-        // Refused (`Some(false)`): growCrop fails, and only growWaterPlant
-        // below can still take the meal.
-        if answer.is_none()
-            && let Some(kind) = self.bonemeal_kind(state)
-            && !matches!(kind, Kind::Sapling | Kind::Azalea | Kind::Mushroom)
-            && sim.bonemeal_valid(kind, pos, state)
-        {
+        let valid = |sim: &mut Sim<'_, L>| match check {
+            Some(check) => check.is_valid(),
+            None => sim.bonemeal_target(pos, state, true).is_some(),
+        };
+        if crop.unwrap_or_else(|| valid(&mut sim)) {
             return true;
         }
         let water = sim.state(rel(pos, face));
@@ -242,14 +262,30 @@ impl Behaviours {
             && self.is_block(water, self.named.water)
             && self.fluid(water).amount() == 8
     }
-    /// `BoneMealItem.growCrop` (dispensers call this directly).
+    /// `BonemealableBlock.isValidBonemealTarget` for the block at `pos`, as
+    /// `growCrop` asks it (`BonemealEvent.isValidBonemealTarget`), on a
+    /// server's level or a client's copy (`client`).
+    pub fn is_valid_bonemeal_target<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        pos: BlockPos,
+        client: bool,
+    ) -> BonemealCheck {
+        let mut ticks = Ticks::default();
+        let mut sim = self.sim(level, &mut ticks);
+        let state = sim.state(pos);
+        BonemealCheck(sim.bonemeal_target(pos, state, client))
+    }
+    /// `BoneMealItem.growCrop` (dispensers call this directly); `check` is
+    /// the target's validity when the event already asked for it.
     pub fn grow_crop<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         pos: BlockPos,
+        check: Option<BonemealCheck>,
     ) -> bool {
-        self.sim(level, ticks).grow_crop(pos)
+        self.sim(level, ticks).grow_crop(pos, check)
     }
     /// `BoneMealItem.growWaterPlant` (dispensers pass no clicked face).
     pub fn grow_water_plant<L: LevelAccess + ?Sized>(
@@ -294,32 +330,51 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     /// `BoneMealItem.growCrop`: true when the block is a valid target (bone
     /// meal is consumed even when `isBonemealSuccess` fails).
-    pub(crate) fn grow_crop(&mut self, pos: BlockPos) -> bool {
+    pub(crate) fn grow_crop(&mut self, pos: BlockPos, check: Option<BonemealCheck>) -> bool {
         let state = self.state(pos);
-        // A mod block answers vanilla's three questions itself, ahead of the
-        // `BonemealableBlock` its template would give it; a block nothing
-        // answers for keeps its own, and vanilla's is what the port runs.
-        match self.level.is_valid_bonemeal_target(pos, state) {
-            Some(true) => {
+        let target = match check {
+            Some(BonemealCheck(target)) => target,
+            None => self.bonemeal_target(pos, state, false),
+        };
+        match target {
+            Some(Target::Mod) => {
                 if self.level.is_bonemeal_success(pos, state) {
                     self.level.perform_bonemeal(self.ticks, pos, state);
                 }
-                return true;
+            }
+            Some(Target::Block(kind)) => {
+                if self.bonemeal_success(kind, pos, state) {
+                    self.perform_bonemeal(kind, pos, state);
+                }
             }
             // `growCrop` returns false and keeps the meal.
-            Some(false) => return false,
-            None => {}
-        }
-        let Some(kind) = self.b.bonemeal_kind(state) else {
-            return false;
-        };
-        if !self.bonemeal_valid(kind, pos, state) {
-            return false;
-        }
-        if self.bonemeal_success(kind, pos, state) {
-            self.perform_bonemeal(kind, pos, state);
+            None => return false,
         }
         true
+    }
+
+    /// The `BonemealableBlock` `growCrop` grows at `pos`, when
+    /// `isValidBonemealTarget` says yes. A mod block answers vanilla's three
+    /// questions itself, ahead of the one its template would give it (on both
+    /// sides, so a client predicts the use with the mod's own answer); a block
+    /// nothing answers for keeps its own. On a client's copy (`client`) a
+    /// sapling, an azalea or a mushroom is only a valid target on a
+    /// `ServerLevel`.
+    fn bonemeal_target(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        client: bool,
+    ) -> Option<Target> {
+        if let Some(valid) = self.level.is_valid_bonemeal_target(pos, state) {
+            return valid.then_some(Target::Mod);
+        }
+        let kind = self.b.bonemeal_kind(state)?;
+        if client && matches!(kind, Kind::Sapling | Kind::Azalea | Kind::Mushroom) {
+            return None;
+        }
+        self.bonemeal_valid(kind, pos, state)
+            .then_some(Target::Block(kind))
     }
 
     /// `BonemealableBlock.isValidBonemealTarget`.
@@ -497,7 +552,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.grow_mushroom(pos, state);
             }
             Kind::Fungus => {
-                if let Some(feature) = b.data(state).feature.clone() {
+                let feature = b.data(state).feature.clone();
+                if let Some(feature) = self.grow_feature_event(pos, feature.as_deref()) {
                     self.place_configured_feature(&feature, pos);
                 }
             }
@@ -1147,7 +1203,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     continue 'attempts;
                 }
             }
-            let corals = match (features, self.level.biome_name(test)) {
+            let corals = match (features.as_deref(), self.level.biome_name(test)) {
                 (Some(f), Some(biome)) => {
                     f.biome_in_tag(biome, "minecraft:produces_corals_from_bonemeal")
                 }

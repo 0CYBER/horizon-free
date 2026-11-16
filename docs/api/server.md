@@ -72,13 +72,40 @@ curl -s -H "Authorization: Bearer $token" -o world.zip "http://$address/api/v1/b
 ## Stability
 
 Stable ([stability.md](stability.md)): the commands, `server.toml`'s keys and `/api/v1`. A new key or endpoint is an
-addition; a change to one starts `/api/v2`, served beside `/api/v1`.
+addition; a change to one starts `/api/v2`, served beside `/api/v1`. The clean-break runtime mod
+inventory contract below is an explicit exception: the old build-only reply is replaced, not kept as a second path.
+
+## Runtime mod inventory
+
+`GET /api/v1/mods` asks the running engine over its authenticated control connection for its canonical
+`LoadedMods` package inventory. `mods` lists package ids and versions in inventory order, including
+native code, wasm code and content packages installed in that inventory. This is the startup inventory,
+not a new package rescan or a list inferred from resource namespaces.
+
+```json
+{
+  "mods": [{"id": "example", "version": "1.0"}],
+  "provenance": {
+    "engine": {"found": true, "target": "server", "base": "v1", "horizon": "abc", "hooks": 326},
+    "native": [{"id": "build_example", "version": "0.9", "sha256": "ff"}]
+  }
+}
+```
+
+`provenance` comes only from `native-mods.json` beside the **configured** game program; it does not
+claim which mods the running process loaded. A missing build record has `engine.found: false`, null
+build fields and an empty provenance `native` list. Build records never supply or replace `mods`.
+A successful query with no installed packages returns `mods: []`. A stopped, unreachable or incompatible
+engine (including one that cannot answer the inventory query) returns HTTP 409 with an `error`, not an
+empty successful inventory or a build-record fallback.
+
+Diverges from upstream: runtime inventory replaces the old top-level build-only `engine` and `native`
+answer; those fields now live only under `provenance`.
 
 ## Not there yet
 
 - **Mods on a dedicated server**: turn on and off, and their settings, once native mods can be built for the
-  server ([mods.md](../mods.md), [native-mods.md](../native-mods.md#multiplayer)). `GET /api/v1/mods` lists the native
-  mods the game program was built with.
+  server ([content mods](../modding/src/how-to/content-mods.md), [native mods](../modding/src/how-to/native-mods/11-multiplayer.md)).
 - **Vanilla's management protocol**: `serversettings/*` (the live settings not yet done) and the world
   upgrade's notifications (the others are sent). The methods answer
   an internal error saying so; a kick's translatable message is sent as its key.

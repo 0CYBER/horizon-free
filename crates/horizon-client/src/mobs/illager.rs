@@ -234,7 +234,10 @@ impl Goal for UseSpell {
         if self.spell == Spell::Wololo {
             // EvokerWololoSpellGoal.canUse: a blue sheep within the box
             // (16 sideways, 4 up or down) and `range(16)`, no target, griefing on.
-            if m.ai.target.is_some() || m.extra.counter > 0 || age < self.next || !cx.w.mob_griefing
+            if m.ai.target.is_some()
+                || m.extra.counter > 0
+                || age < self.next
+                || !cx.w.can_grief(m.id)
             {
                 return false;
             }
@@ -254,7 +257,7 @@ impl Goal for UseSpell {
                                 // `getVisibilityPercent` scales the range, with a
                                 // floor of 2. The sheep's `isInvisible` is the
                                 // flag (or the effect, which sets it).
-                                let range = (16.0 * s.visibility_percent()).max(2.0);
+                                let range = cx.w.reach_sqr(s.id, m, 16.0).sqrt();
                                 s.position.distance_squared(p) <= range * range
                             }
                     })
@@ -486,7 +489,7 @@ pub fn charge_ticks(m: &Mob) -> i32 {
     25 - 5 * super::gear::level(m, super::gear::MAIN, "minecraft:quick_charge") as i32
 }
 fn holding_crossbow(m: &Mob) -> bool {
-    m.extra.main_hand.as_deref() == Some("minecraft:crossbow")
+    m.extra.main_hand_id() == Some("minecraft:crossbow")
 }
 
 /// `CrossbowItem.setCharged`: the loaded arrow lives in the stack's
@@ -534,9 +537,9 @@ impl Goal for CrossbowAttack {
                 .is_some_and(|t| t.alive && !(t.is_player && t.creative));
         valid && holding_crossbow(m)
     }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.ai.aggressive = false;
-        m.ai.target = None;
+        m.set_ai_target(cx.w, None);
         self.see_time = 0;
         m.extra.flag = false;
         m.extra.using_item = 0;
@@ -595,7 +598,8 @@ impl Goal for CrossbowAttack {
                 }
             }
             Crossbow::Charging => {
-                m.extra.using_item += 1;
+                // A mod may have set the use's ticks left to anything.
+                m.extra.using_item = m.extra.using_item.saturating_add(1);
                 if m.extra.using_item >= charge_ticks(m) {
                     m.extra.using_item = 0;
                     m.extra.flag = false;
@@ -665,6 +669,18 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
         Some(Who::Mob(m.id)),
     );
     p.set_bonus(super::gear::arrow_bonus(m));
+    if let Some(state) = p.arrow.as_mut() {
+        state.fired_from_weapon = if m.extra.using_off_hand {
+            m.extra
+                .slot_stack(horizon_items::equipment::OFFHAND)
+                .cloned()
+        } else {
+            m.extra.main_hand_stack().cloned()
+        };
+        if state.fired_from_weapon.is_some() {
+            p.bonus.damage = 0.0;
+        }
+    }
     // rangedAttackUncertainty: 14 - 4 * difficulty.
     p.shoot_own(
         [dx, dy, dz],
@@ -779,7 +795,7 @@ pub fn anim_pose(m: &Mob, s: &State, p: &mut Poses, pose: ArmPose) {
     }
     match pose {
         ArmPose::Attacking => {
-            if m.extra.main_hand.is_none() {
+            if m.extra.main_hand_id().is_none() {
                 // animateZombieArms + bobArms
                 let swing = s.swing;
                 let a = (swing * PI).msin();
@@ -941,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn spellcasters_remember_an_unseen_player() {
         use crate::mobs::world::{test_player, with_test_world};
         let ran = with_test_world(&[], |w, types| {
@@ -955,10 +972,10 @@ mod tests {
                 let mut mob = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                 let mut goals = std::mem::take(&mut mob.ai.targets);
                 let mut events = Vec::new();
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut test_level = crate::health::TestLevel::new(0);
                 let mut cx = Cx {
                     w: &w,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 };
                 for _ in 0..100 {
@@ -986,7 +1003,7 @@ mod tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     fn pillager() -> Mob {
@@ -1040,6 +1057,7 @@ mod tests {
     /// sturdy up face, not for a full cube. Soul sand is 14/16 high and still
     /// supports a fang, which a full-collision test drops into the block.
     #[test]
+    #[ignore = "daily"]
     fn a_fang_stands_on_a_soul_sand_floor() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -1065,7 +1083,7 @@ mod tests {
             // the first sturdy block and the fang sits at 65.
             assert_eq!(fang_floor(w, 0.5, 0.5, 64.0, 65.875), Some(65.0));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Vindicator.setCustomName` latches `isJohnny` the first time the name is
@@ -1076,7 +1094,7 @@ mod tests {
     /// one that was named Johnny but is now Bob never started.
     #[test]
     fn a_vindicator_that_was_named_johnny_stays_johnny() {
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         let mut m = Mob::new(
             1,
             {
@@ -1138,6 +1156,7 @@ mod tests {
     /// `TargetingConditions.forNonCombat().range(16)`: an invisible sheep at
     /// five blocks is out of range, one at two blocks is not.
     #[test]
+    #[ignore = "daily"]
     fn an_invisible_blue_sheep_is_not_wololoed_from_five_blocks() {
         use crate::mobs::world::with_test_world;
         let mut outcomes = Vec::new();
@@ -1150,9 +1169,9 @@ mod tests {
                 let mut sheep = Mob::new(2, Arc::new(sheep_kind), Vec3::new(5.5, 64.0, 0.5), 0.0);
                 sheep.extra.color = 11;
                 if invisible {
-                    sheep.extra.effects.push(("minecraft:invisibility", 200, 0));
+                    sheep.add_effect("minecraft:invisibility", 200, 0);
                 }
-                let seen = [sheep.seen(None)];
+                let seen = [sheep.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
                     others: &seen,
                     ..world
@@ -1160,11 +1179,11 @@ mod tests {
                 let mut m = evoker(0);
                 m.position = Vec3::new(0.5, 64.0, 0.5);
                 m.ai.goals.add(6, UseSpell::new(Spell::Wololo));
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut lr = crate::health::TestLevel::new(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
-                    lr: &mut lr,
+                    level: &mut lr.level(),
                     events: &mut events,
                 };
                 let mut goals = std::mem::take(&mut m.ai.goals);
@@ -1186,6 +1205,7 @@ mod tests {
     /// reads the flag, so a flagged sheep at fourteen blocks is out of range
     /// (0.07 of 16, floored to 2) while a visible one is picked.
     #[test]
+    #[ignore = "daily"]
     fn a_flagged_invisible_blue_sheep_is_not_wololoed_from_fourteen_blocks() {
         use crate::mobs::world::with_test_world;
         let mut outcomes = Vec::new();
@@ -1198,7 +1218,7 @@ mod tests {
                 let mut sheep = Mob::new(2, Arc::new(sheep_kind), Vec3::new(14.5, 64.0, 0.5), 0.0);
                 sheep.extra.color = 11;
                 sheep.invisible = invisible;
-                let seen = [sheep.seen(None)];
+                let seen = [sheep.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
                     others: &seen,
                     ..world
@@ -1206,11 +1226,11 @@ mod tests {
                 let mut m = evoker(0);
                 m.position = Vec3::new(0.5, 64.0, 0.5);
                 m.ai.goals.add(6, UseSpell::new(Spell::Wololo));
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut test_level = crate::health::TestLevel::new(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 };
                 let mut goals = std::mem::take(&mut m.ai.goals);

@@ -1,0 +1,3 @@
+ids = ["hook:entity_interact", "hook:item_interact_mob", "hook:use_on", "method:Hooks::entity_interact", "method:ItemPart::item_interact_mob", "method:ItemPart::use_on"]
+why = "Both logical sides now answer via HostSide and Option<InteractionResult>, replacing claimed/swing; mob interaction also receives its hand. All three hooks move from version 1 to 2 for observable side and result changes."
+migrate = "Match HostSide::Server or HostSide::Client. Return None to defer; Some(Success) swings on the client, SuccessServer swings on the server, and Consume consumes without a swing. Client hosts permit reads and local effects only. Replace claimed/swing outputs with result and use the mob event hand."

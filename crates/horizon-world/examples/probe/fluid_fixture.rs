@@ -1,15 +1,17 @@
 use crate::support::common::tag;
-use horizon_world::{
-    DATA_VERSION,
-    fluid::{FluidBlockBindings, FluidHeightWorld, FluidKind, FluidState, FluidStateTable},
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        fluid::{FluidBlockBindings, FluidHeightWorld, FluidKind, FluidState, FluidStateTable},
+        registry::{BlockRegistry, BlockStateId},
+    },
 };
 struct World<'a, W> {
     out: &'a mut W,

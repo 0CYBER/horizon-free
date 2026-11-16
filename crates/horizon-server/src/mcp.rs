@@ -435,6 +435,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn protocol_and_tool_contracts_match_goldens() {
         let golden: Value = serde_json::from_str(MCP_GOLDENS).unwrap();
         let dir = Path::new("mcp-golden-no-server");
@@ -575,6 +576,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_protocol_answers_without_a_server() {
         let dir = std::env::temp_dir().join(format!("horizon-server-mcp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

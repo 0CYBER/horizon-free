@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone)]
 pub struct FluidPredicateBindings {
     table: Arc<FluidStateTable>,
-    tags: BTreeMap<String, crate::fluid::FluidMask>,
+    tags: BTreeMap<String, u8>,
 }
 impl FluidPredicateBindings {
     pub fn new(registry: &BlockRegistry) -> Result<Self, DecodeError> {
@@ -59,32 +59,49 @@ impl FluidPredicateBindings {
                 .is_some_and(|mask| state.kind().mask() & mask != 0)
         })
     }
+    /// A fluid holder set in any form `crate::holder_set` reads, as a mask.
     pub fn resolve(&self, json: &str) -> Result<BoundFluidSet, DecodeError> {
-        let mask = if let Ok(name) = serde_json::from_str::<String>(json) {
-            if let Some(tag) = name.strip_prefix('#') {
-                *self
-                    .tags
-                    .get(&super::tags::identifier(tag)?)
-                    .ok_or_else(|| DecodeError::Registry(format!("unknown fluid tag {tag}")))?
-            } else {
-                fluid(&name)?.mask()
-            }
-        } else {
-            let names: Vec<String> = serde_json::from_str(json)?;
-            if names.len() > 8192 {
-                return Err(DecodeError::Field("fluid holder list"));
-            }
-            let mut mask = 0;
-            for name in names {
-                mask |= fluid(&name)?.mask();
-            }
-            mask
-        };
+        let set: serde_json::Value = serde_json::from_str(json)?;
+        if set.as_array().is_some_and(|names| names.len() > 8192) {
+            return Err(DecodeError::Field("fluid holder list"));
+        }
+        let mask = crate::holder_set::resolve(&set, self)
+            .map_err(DecodeError::Registry)?
+            .into_iter()
+            .fold(0, |mask, bit| mask | bit);
         Ok(BoundFluidSet {
             table: self.table.clone(),
             mask,
         })
     }
+}
+/// Members are single mask bits, so `not` complements the mask.
+impl crate::holder_set::HolderLookup for FluidPredicateBindings {
+    type Id = u8;
+    fn what(&self) -> &str {
+        "fluid"
+    }
+    fn entry(&self, id: &str) -> Result<Vec<u8>, String> {
+        fluid(id)
+            .map(|kind| bits(kind.mask()))
+            .map_err(|e| e.to_string())
+    }
+    fn tag(&self, tag: &str) -> Result<Vec<u8>, String> {
+        let tag = super::tags::identifier(tag).map_err(|e| e.to_string())?;
+        self.tags
+            .get(&tag)
+            .map(|mask| bits(*mask))
+            .ok_or_else(|| format!("unknown fluid tag {tag}"))
+    }
+    fn all(&self) -> Result<Vec<u8>, String> {
+        Ok(bits(u8::MAX))
+    }
+}
+fn bits(mask: u8) -> Vec<u8> {
+    (0..8)
+        .map(|bit| 1 << bit)
+        .filter(|bit| mask & bit != 0)
+        .collect()
 }
 fn fluid(name: &str) -> Result<FluidKind, DecodeError> {
     FluidKind::from_name(&identifier(name)?)
@@ -96,7 +113,7 @@ fn fluid(name: &str) -> Result<FluidKind, DecodeError> {
 #[derive(Clone, Debug)]
 pub struct BoundFluidSet {
     table: Arc<FluidStateTable>,
-    mask: crate::fluid::FluidMask,
+    mask: u8,
 }
 impl BoundFluidSet {
     pub fn contains(&self, state: BlockStateId) -> bool {

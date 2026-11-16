@@ -1,0 +1,3 @@
+# Opt-in measurements, never selected by daily shards; exact reasons/rationales are in ../ignored-test-exceptions.json.
+horizon-world chunk::tests::benchmark_section_get_set by-hand manual # microbenchmark; run with --ignored --nocapture; opt-in measurement on an idle machine, not a daily correctness check
+horizon-world worldgen::terrain::tests::benchmark_fill_noise by-hand manual # benchmark; opt-in measurement on an idle machine, not a daily correctness check

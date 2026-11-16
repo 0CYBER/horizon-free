@@ -1,0 +1,20 @@
+id = "fnr_loop_second"
+name = "Function replacement check: a second loop mod"
+version = "0.1.0"
+description = "fn-replace: beside fnr_loop, a second mod's ticking block entities and a slot in block_entities.tick that counts only its own"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+# Counts this mod's counters among everything the loop visits, fnr_loop's counters included.
+[[native.loop]]
+id = "own"
+loop = "block_entities.tick"
+helper = "src/loops/own.rs"
+with = "Own"

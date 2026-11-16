@@ -1,9 +1,9 @@
-use horizon_world::{nbt::Tag, retrogen::BelowZeroRetrogen};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
 };
+use {horizon_core::nbt::Tag, horizon_world::retrogen::BelowZeroRetrogen};
 fn tag(row: &Value) -> Tag {
     let value = &row[1];
     match row[0].as_str().unwrap() {

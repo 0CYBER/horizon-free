@@ -1,0 +1,2 @@
+# horizon-mod-package's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-mod-package holder::game_entry::tests::write_missing_registration_actor subprocess manual # fixture writer subprocess only

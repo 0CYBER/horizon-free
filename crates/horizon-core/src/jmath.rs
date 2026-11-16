@@ -42,63 +42,76 @@ pub fn round_f32(a: f32) -> i32 {
     (f64::from(a) + 0.5).floor() as i32
 }
 
+/// Which platform's `Math` behaviour this build follows: AArch64 first, then
+/// Windows, then the platform libm on every remaining target. Fixed at
+/// compile time; every operation below that differs by platform reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Platform {
+    /// HotSpot on AArch64: fdlibm with fused multiply-adds for `sin`/`cos`.
+    Aarch64,
+    /// Windows: correctly rounded `sin`, `cos` and `log`.
+    Windows,
+    /// The platform libm.
+    Libm,
+}
+
+/// The platform this build follows.
+pub const PLATFORM: Platform = if cfg!(target_arch = "aarch64") {
+    Platform::Aarch64
+} else if cfg!(windows) {
+    Platform::Windows
+} else {
+    Platform::Libm
+};
+
 /// Java `sin`.
 pub fn sin(x: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        aarch64::sin(x)
-    } else if cfg!(windows) {
-        exact::sin(x)
-    } else {
-        x.sin()
+    match PLATFORM {
+        Platform::Aarch64 => aarch64::sin(x),
+        Platform::Windows => exact::sin(x),
+        Platform::Libm => x.sin(),
     }
 }
 
 /// Java `cos`.
 pub fn cos(x: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        aarch64::cos(x)
-    } else if cfg!(windows) {
-        exact::cos(x)
-    } else {
-        x.cos()
+    match PLATFORM {
+        Platform::Aarch64 => aarch64::cos(x),
+        Platform::Windows => exact::cos(x),
+        Platform::Libm => x.cos(),
     }
 }
 
 /// Java `tan`.
 pub fn tan(x: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        libm::tan(x)
-    } else {
-        x.tan()
+    match PLATFORM {
+        Platform::Aarch64 => libm::tan(x),
+        Platform::Windows | Platform::Libm => x.tan(),
     }
 }
 
 /// Java `exp`.
 pub fn exp(x: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        libm::exp(x)
-    } else {
-        x.exp()
+    match PLATFORM {
+        Platform::Aarch64 => libm::exp(x),
+        Platform::Windows | Platform::Libm => x.exp(),
     }
 }
 
 /// Java `log`.
 pub fn log(x: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        fdlibm::log(x)
-    } else if cfg!(windows) {
-        exact::log(x)
-    } else {
-        x.ln()
+    match PLATFORM {
+        Platform::Aarch64 => fdlibm::log(x),
+        Platform::Windows => exact::log(x),
+        Platform::Libm => x.ln(),
     }
 }
 
 /// Java `log10`.
 pub fn log10(x: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        fdlibm::log10(x)
-    } else {
-        x.log10()
+    match PLATFORM {
+        Platform::Aarch64 => fdlibm::log10(x),
+        Platform::Windows | Platform::Libm => x.log10(),
     }
 }
 
@@ -109,10 +122,9 @@ pub fn pow(x: f64, y: f64) -> f64 {
     if y.is_nan() || (x.abs() == 1.0 && y.is_infinite()) {
         return f64::NAN;
     }
-    if cfg!(target_arch = "aarch64") {
-        libm::pow(x, y)
-    } else {
-        x.powf(y)
+    match PLATFORM {
+        Platform::Aarch64 => libm::pow(x, y),
+        Platform::Windows | Platform::Libm => x.powf(y),
     }
 }
 

@@ -1,0 +1,2 @@
+# A mod's gradient fills (DrawContext::fill_gradient, GuiDraw::FillGradient, arismoko/horizon#4525) through the game's dispatch.
+horizon-client game::gui_gradient_tests::a_mods_gradients_draw_top_to_bottom_in_the_clip_and_pose_and_empty_ones_draw_nothing lib daily resources

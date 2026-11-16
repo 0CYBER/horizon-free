@@ -252,13 +252,13 @@ const DUNGEON_MOBS: [&str; 4] = [
 ];
 /// Initial data for a fresh dungeon spawner, preserving the generation
 /// sink's fields and insertion order. The entity was already selected.
-pub(crate) fn dungeon_spawner_nbt(entity: &str) -> crate::nbt::Compound {
-    use crate::nbt::Tag;
-    let mut mob = crate::nbt::Compound::new();
+pub(crate) fn dungeon_spawner_nbt(entity: &str) -> horizon_core::nbt::Compound {
+    use horizon_core::nbt::Tag;
+    let mut mob = horizon_core::nbt::Compound::new();
     mob.insert("id".into(), Tag::String(entity.into()));
-    let mut data = crate::nbt::Compound::new();
+    let mut data = horizon_core::nbt::Compound::new();
     data.insert("entity".into(), Tag::Compound(mob));
-    let mut nbt = crate::nbt::Compound::new();
+    let mut nbt = horizon_core::nbt::Compound::new();
     nbt.insert("id".into(), Tag::String("minecraft:mob_spawner".into()));
     nbt.insert("SpawnData".into(), Tag::Compound(data));
     nbt.insert("SpawnPotentials".into(), Tag::List(Vec::new()));
@@ -733,7 +733,7 @@ mod dungeon_spawner_data_tests {
     use super::*;
     #[test]
     fn extracted_generation_builder_preserves_exact_payload_and_order() {
-        use crate::nbt::{Limits, Tag, write_network};
+        use horizon_core::nbt::{Limits, Tag, write_network};
         for entity in [
             "minecraft:skeleton",
             "minecraft:zombie",
@@ -741,11 +741,11 @@ mod dungeon_spawner_data_tests {
             "example:bound_entity",
         ] {
             let expected = {
-                let mut mob = crate::nbt::Compound::new();
+                let mut mob = horizon_core::nbt::Compound::new();
                 mob.insert("id".into(), Tag::String(entity.into()));
-                let mut data = crate::nbt::Compound::new();
+                let mut data = horizon_core::nbt::Compound::new();
                 data.insert("entity".into(), Tag::Compound(mob));
-                let mut nbt = crate::nbt::Compound::new();
+                let mut nbt = horizon_core::nbt::Compound::new();
                 nbt.insert("id".into(), Tag::String("minecraft:mob_spawner".into()));
                 nbt.insert("SpawnData".into(), Tag::Compound(data));
                 nbt.insert("SpawnPotentials".into(), Tag::List(Vec::new()));

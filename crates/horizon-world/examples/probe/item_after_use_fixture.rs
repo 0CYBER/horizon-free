@@ -1,17 +1,21 @@
-use horizon_world::{
-    component_patch::{Patch, Prototype},
-    identifier::Identifier,
-    item_after_use::{self, AfterUseWorld},
-    item_cooldowns::{self, CooldownUser, ItemCooldowns, Observer, UseCooldown},
-    item_stack_refs::{ItemStacks, StackRef},
-    item_stack_storage::ItemStackData,
-    item_template::{ItemTemplate, ValidationRules},
-};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::identifier::Identifier,
+    horizon_world::{
+        component_patch::{Patch, Prototype},
+        item_after_use,
+        item_after_use::AfterUseWorld,
+        item_cooldowns,
+        item_cooldowns::{CooldownUser, ItemCooldowns, Observer, UseCooldown},
+        item_stack_refs::{ItemStacks, StackRef},
+        item_stack_storage::ItemStackData,
+        item_template::{ItemTemplate, ValidationRules},
+    },
 };
 #[derive(Clone, Debug, PartialEq)]
 enum Component {

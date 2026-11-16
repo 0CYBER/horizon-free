@@ -311,6 +311,7 @@ mod tests {
     /// disc, the bottom half stays clear.
     #[test]
     fn a_pack_sky_shader_paints_the_disc_above_the_horizon() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let root = resources();
         let Ok(vertex) =
             std::fs::read_to_string(root.join("assets/minecraft/shaders/core/sky.vsh"))

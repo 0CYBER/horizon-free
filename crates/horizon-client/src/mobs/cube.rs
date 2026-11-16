@@ -39,8 +39,7 @@ pub fn register(m: &mut Mob) {
         NearestTarget::new(Prey::Player, true)
             .interval(10)
             .when(|m, w| {
-                w.player
-                    .as_ref()
+                w.selected_player()
                     .is_some_and(|p| (p.position.y - m.position.y).abs() <= 4.0)
             }),
     );
@@ -70,6 +69,42 @@ pub fn set_size(m: &mut Mob, size: i32) {
     }
     m.health = super::finalize::max_health(m);
 }
+/// `AbstractCubeMob.getSplitCount`, including the sulfur cube override.
+pub fn split_count(m: &mut Mob) -> u32 {
+    if m.species() == Species::SulfurCube {
+        super::sulfur_cube::split_count(m) as u32
+    } else {
+        (2 + m.random.next_int_bound(3).unwrap_or(0)) as u32
+    }
+}
+
+/// `ConversionType.SPLIT_ON_DEATH` and `setUpSplitCube` for one child.
+pub fn split_child(parent: &mut Mob, child: &mut Mob, index: u32) {
+    super::conversion::common(parent, child, false);
+    let offset = parent.width() / 2.0;
+    let xd = (index % 2) as f32 - 0.5;
+    let zd = (index / 2) as f32 - 0.5;
+    child.position = Vec3::new(
+        parent.position.x + f64::from(xd * offset),
+        parent.position.y + 0.5,
+        parent.position.z + f64::from(zd * offset),
+    );
+    child.previous = child.position;
+    if parent.species() == Species::SulfurCube {
+        super::sulfur_cube::set_size(child, parent.extra.size / 2, true);
+        super::finalize::set_baby(child, true);
+    } else {
+        set_size(child, parent.extra.size / 2);
+    }
+    let yaw = parent.random.next_float() * 360.0;
+    child.yaw = yaw;
+    child.previous_yaw = yaw;
+    child.body_yaw = yaw;
+    child.previous_body_yaw = yaw;
+    child.head_yaw = yaw;
+    child.previous_head_yaw = yaw;
+}
+
 /// AbstractCubeMob.setSpawnSize: a scale of 0 to 2, and below 2 one more when
 /// `nextFloat() < 0.5 * getSpecialMultiplier()` (the float is drawn for every
 /// scale below 2, whatever the multiplier), so sizes 1, 2 or 4.
@@ -245,7 +280,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if can_deal_damage(m)
         && !m.no_ai
         && m.alive()
-        && let Some(p) = &w.player
+        && let Some(p) = w.selected_player()
         && p.alive
         && !p.creative
         && crate::scoreboard::teams_allow_damage(
@@ -260,11 +295,11 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             .is_some_and(|t| m.melee_reaches(w, t.hitbox))
             && m.sees(w, Who::Player)
         {
-            events.push(MobEvent::CubeHurtPlayer {
+            events.push(w.route_player_event(MobEvent::CubeHurtPlayer {
                 cube: m.id,
                 amount: attack_damage(m),
                 from: [m.position.x, m.position.y, m.position.z],
-            });
+            }));
         }
     }
     hurt_touching_golems(m, w, events);
@@ -457,6 +492,61 @@ mod golem_touch_tests {
     use crate::mobs::world::with_test_world;
     use std::sync::Arc;
 
+    #[test]
+    #[ignore = "daily"]
+    fn split_uses_parent_random_and_width_for_both_cube_types() {
+        assert!(
+            with_test_world(&[], |_, types| {
+                for kind in ["minecraft:slime", "minecraft:magma_cube"] {
+                    let ty = Arc::new(types.types[kind].clone());
+                    let mut parent = Mob::new(1, ty.clone(), Vec3::new(10.0, 64.0, 20.0), 0.0);
+                    set_size(&mut parent, 4);
+                    parent.random = horizon_core::random::EntityRandom::own(
+                        horizon_core::random::LegacyRandom::new(0),
+                    );
+                    assert_eq!(split_count(&mut parent), 2);
+                    for (i, bits) in [(0, 13_949_265), (1, 4_035_531)] {
+                        let mut child = Mob::new(i + 2, ty.clone(), parent.position, 0.0);
+                        split_child(&mut parent, &mut child, i);
+                        let x = if i == 0 { -0.52_f32 } else { 0.52_f32 };
+                        assert_eq!(
+                            child.position,
+                            Vec3::new(10.0 + f64::from(x), 64.5, 20.0 - f64::from(0.52_f32))
+                        );
+                        assert_eq!(child.yaw, (bits as f32 / 16_777_216.0) * 360.0);
+                        assert_eq!(child.extra.size, 2);
+                    }
+                    assert_eq!(parent.random.state(), 67_704_983_304_270);
+                }
+            }),
+            "vanilla data is missing"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn sulfur_split_has_fixed_count_and_draws_only_yaws() {
+        assert!(
+            with_test_world(&[], |_, types| {
+                let ty = Arc::new(types.types["minecraft:sulfur_cube"].clone());
+                let mut parent = Mob::new(1, ty.clone(), Vec3::ZERO, 0.0);
+                super::super::sulfur_cube::set_size(&mut parent, 2, true);
+                parent.random = horizon_core::random::EntityRandom::own(
+                    horizon_core::random::LegacyRandom::new(0),
+                );
+                assert_eq!(split_count(&mut parent), 2);
+                assert_eq!(parent.random.state(), 25_214_903_917);
+                let mut child = Mob::new(2, ty, parent.position, 0.0);
+                split_child(&mut parent, &mut child, 0);
+                assert_eq!(child.yaw, (12_263_604_f32 / 16_777_216.0) * 360.0);
+                assert_eq!(parent.random.state(), 205_749_139_540_596);
+                assert_eq!(child.extra.size, 1);
+                assert!(child.is_baby());
+            }),
+            "vanilla data is missing"
+        );
+    }
+
     /// The golems a cube of this kind and size, `x` blocks east of an iron
     /// golem, hurts in one `ai_step`, and the damage.
     fn hits(name: &str, size: i32, x: f64) -> Option<Vec<(u32, f32)>> {
@@ -472,7 +562,7 @@ mod golem_touch_tests {
             let mut cube = mob(1, name, Vec3::new(0.5 + x, 64.0, 0.5));
             set_size(&mut cube, size);
             cube.no_ai = no_ai;
-            out = Some((cube, golem.seen(None)));
+            out = Some((cube, golem.seen(None, &crate::items::Items::empty())));
         });
         let (mut cube, golem) = out?;
         let mut events = Vec::new();
@@ -500,6 +590,7 @@ mod golem_touch_tests {
     /// into hurts it like a touching player (#3513), for `getAttackDamage`;
     /// a tiny slime (`canDealDamage`) and a cube clear of the golem do not.
     #[test]
+    #[ignore = "daily"]
     fn a_cube_touching_an_iron_golem_hurts_it() {
         let Some(slime) = hits("minecraft:slime", 2, 1.0) else {
             return;
@@ -533,6 +624,7 @@ mod golem_touch_tests {
     /// `CubeHurtPlayer` without queueing `entity.slime.attack` in `ai_step`
     /// (the sound only follows a hit that `hurtServer` accepts).
     #[test]
+    #[ignore = "daily"]
     fn a_cube_touching_a_player_defers_its_attack_sound_to_hurt_server() {
         use horizon_core::geometry::Aabb;
         let mut events = Vec::new();
@@ -547,6 +639,7 @@ mod golem_touch_tests {
                 ),
                 eye: [at.x, at.y + 1.62, at.z],
                 alive: true,
+                invulnerable: false,
                 creative: false,
                 sneaking: false,
                 swimming: false,
@@ -621,14 +714,15 @@ mod keep_jumping_tests {
     /// `CubeMobKeepOnJumpingGoal.canUse` is `!isPassenger()`: a cube riding
     /// a boat or another mob holds still, while one on its own keeps hopping.
     #[test]
+    #[ignore = "daily"]
     fn a_cube_that_rides_something_does_not_keep_jumping() {
         let mut starts = None;
         let ran = with_test_world(&[], |w, types| {
-            let mut lr = crate::mobs::world::level_random(0);
+            let mut fixture = crate::health::TestLevel::new(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
-                lr: &mut lr,
+                level: &mut fixture.level(),
                 events: &mut events,
             };
             starts = Some([true, false].map(|passenger| {
@@ -660,6 +754,7 @@ mod keep_jumping_tests {
     /// `AbstractCubeMob.tick` is not gated by NoAI (only `serverAiStep` is):
     /// a standing NoAI cube still records `wasOnGround`.
     #[test]
+    #[ignore = "daily"]
     fn a_no_ai_cube_updates_was_on_ground() {
         let mut result = None;
         let ran = with_test_world(&[], |w, types| {
@@ -673,9 +768,9 @@ mod keep_jumping_tests {
                 m.no_ai = true;
                 m.on_ground = true;
                 m.extra.flag2 = false;
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut lr = crate::health::TestLevel::new(0);
                 let mut events = Vec::new();
-                super::super::ai::tick(&mut m, w, &mut lr, &mut events);
+                super::super::ai::tick(&mut m, w, &mut lr.level(), &mut events);
                 result = Some(m.extra.flag2);
                 assert!(result.unwrap(), "{name}: wasOnGround stays false");
             }

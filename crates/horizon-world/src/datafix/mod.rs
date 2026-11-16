@@ -27,13 +27,15 @@ mod items;
 pub mod json;
 pub mod progress;
 pub mod schema;
+mod single;
 mod tables;
 mod text;
 pub mod world_upgrader;
 
-use crate::nbt::Tag;
 use dynamic::{as_str, string};
+use horizon_core::nbt::Tag;
 use schema::{Key, Ty, key, walk};
+pub use single::{MAX_DEPTH, UpgradeError, upgrade_block_entity, upgrade_entity};
 pub use tables::{available as tables_available, set_resources};
 
 /// The DataVersion of the game.

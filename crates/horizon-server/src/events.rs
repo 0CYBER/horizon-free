@@ -242,6 +242,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_stream_sends_what_happens() {
         use std::io::{BufRead, BufReader};
         let dir =
@@ -297,6 +298,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn event_replies_match_api_v1_goldens() {
         use std::io::Read;
 

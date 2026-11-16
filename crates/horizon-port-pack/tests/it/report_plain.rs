@@ -181,7 +181,11 @@ fn every_reason_has_a_plain_sentence_and_the_technical_reason_is_kept() {
     assert!(said("hud").contains("Built into Horizon"));
     assert_eq!(said("nothing"), "Nothing to port.");
     // The plain words come beside the technical ones; nothing is replaced.
-    assert!(by["machine"].reason.starts_with("needs mod API 0.4"));
+    assert!(
+        by["machine"]
+            .reason
+            .starts_with("needs native machine code")
+    );
     assert_eq!(
         by["mystery"].reason,
         "unclassified: its jar (mods.toml, file census) or a reviewed row decides"

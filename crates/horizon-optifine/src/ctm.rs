@@ -9,7 +9,7 @@
 pub mod connect;
 
 use crate::{BlockMatch, IdList, Name, Properties, RangeList};
-use std::path::Path;
+use horizon_assets::resource_source::ResourceSource;
 
 /// In this order: the overlays last ([`Method::is_overlay`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -199,11 +199,12 @@ pub struct Rule {
 
 /// Every rule `root` holds, in the order they are tried: prioritized (tile) rules first, then by
 /// weight (highest first), then by path. Broken files are logged and left out.
-pub fn load(root: &Path) -> Vec<Rule> {
+pub fn load(root: &ResourceSource) -> Vec<Rule> {
     let mut rules: Vec<Rule> = crate::properties_files(root, "ctm")
         .into_iter()
         .filter_map(|path| {
-            let bytes = std::fs::read(root.join(&path))
+            let bytes = root
+                .read(&path)
                 .map_err(|e| log::warn!("Horizon: connected textures {path}: {e}"))
                 .ok()?;
             // Java's `Properties.load(InputStream)` reads ISO-8859-1; UTF-8 when it is valid.
@@ -890,7 +891,7 @@ mod tests {
         let latin1 = b"matchBlocks=furnace\nmethod=fixed\ntiles=0\nname=\xc9p\xe9e\n";
         std::fs::write(ctm.join("c.properties"), latin1).unwrap();
         std::fs::write(ctm.join("z.properties"), "method=fixed\ntiles=0").unwrap();
-        let rules = load(&root);
+        let rules = load(&ResourceSource::directory(root.clone()));
         let names: Vec<_> = rules
             .iter()
             .map(|r| r.path.rsplit('/').next().unwrap())

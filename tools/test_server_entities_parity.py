@@ -176,7 +176,7 @@ def main():
     # SERVER_ENTITIES_SIDES=vanilla (or horizon) runs one side and reads the other's last transcript.
     sides = [s for s in os.environ.get('SERVER_ENTITIES_SIDES', 'vanilla,horizon').split(',') if s]
     if 'horizon' in sides:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
                        check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],

@@ -8,7 +8,7 @@ use super::super::ai::tick;
 use super::super::{Mob, MobWorld};
 use super::with_built_test_world;
 use crate::chunk::{Chunk, Light, Section};
-use horizon_core::{LevelKey, geometry::Vec3, random::LegacyRandom};
+use horizon_core::{LevelKey, geometry::Vec3};
 use horizon_world::dimension_type::DimensionFacts;
 use std::sync::Arc;
 
@@ -48,11 +48,11 @@ fn the_end_ambient_light_reaches_mob_brightness_and_its_no_action_time() {
             nearest_player: Some(Vec3::new(40.5, 64.0, 0.5)),
             ..end
         };
-        let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(7));
+        let mut test_level = crate::health::TestLevel::new(7);
         let mut events = Vec::new();
         for _ in 0..10 {
             assert!(
-                tick(&mut m, &end, &mut lr, &mut events),
+                tick(&mut m, &end, &mut test_level.level(), &mut events),
                 "the zombie went away"
             );
         }

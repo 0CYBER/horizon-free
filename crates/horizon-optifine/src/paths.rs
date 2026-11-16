@@ -2,9 +2,7 @@
 //! resource paths inside the overlay resource root (`assets/<namespace>/...`, `/`-separated),
 //! the tree `horizon_client::packs::resource_root` builds from the enabled packs.
 
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use horizon_assets::resource_source::ResourceSource;
 
 /// The resource path a value of the properties file at `props` names:
 /// - `~/x`: `assets/minecraft/optifine/x`;
@@ -59,99 +57,33 @@ fn resolve_unchecked(props: &str, value: &str) -> String {
 /// Every `.properties` file under `assets/*/optifine/<feature>/` and the legacy
 /// `assets/*/mcpatcher/<feature>/` of `root`, as sorted resource paths. `feature` is a folder
 /// (`ctm`, `cit`, `random/entity`, `sky/world0`).
-pub fn properties_files(root: &Path, feature: &str) -> Vec<String> {
-    properties_files_in(root, &["optifine", "mcpatcher"], feature)
+pub fn properties_files(root: &ResourceSource, feature: &str) -> Vec<String> {
+    properties_files_in(root, &["mcpatcher", "optifine"], feature)
 }
 
-/// `properties_files` under other top folders too, for a feature a mod reads from its own
-/// (CIT Resewn's `citresewn/cit/`).
-pub fn properties_files_in(root: &Path, tops: &[&str], feature: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return out;
-    };
-    for ns in namespaces.flatten() {
-        let ns = ns.file_name().to_string_lossy().into_owned();
-        for top in tops {
-            let base = format!("assets/{ns}/{top}/{feature}");
-            walk(
-                &root.join(&base),
-                &base,
-                &[".properties"],
-                0,
-                &mut seen,
-                &mut out,
-            );
-        }
-    }
-    out.sort();
-    out
+/// Property files in every selected feature folder, including mod-specific roots.
+pub fn properties_files_in(root: &ResourceSource, tops: &[&str], feature: &str) -> Vec<String> {
+    let mut kinds: Vec<String> = tops.iter().map(|top| format!("{top}/{feature}")).collect();
+    kinds.sort();
+    let kinds: Vec<&str> = kinds.iter().map(String::as_str).collect();
+    root.list_under("assets", &kinds)
+        .into_iter()
+        .filter(|name| name.ends_with(".properties"))
+        .collect()
 }
 
-/// The files under `root/<dir>` (`assets/minecraft/optifine/random`) whose names end in one of
-/// `endings`, as paths from `root`, sorted. Links are followed as [`properties_files`] does.
-pub fn files_under(root: &Path, dir: &str, endings: &[&str]) -> Vec<String> {
-    let mut out = Vec::new();
-    walk(
-        &root.join(dir),
-        dir,
-        endings,
-        0,
-        &mut HashSet::new(),
-        &mut out,
-    );
-    out.sort();
-    out
-}
-
-/// How deep a feature folder's tree is read: far past any real pack, short of a link loop's
-/// `PATH_MAX`.
-const MAX_DEPTH: usize = 16;
-
-fn walk(
-    dir: &Path,
-    rel: &str,
-    endings: &[&str],
-    depth: usize,
-    seen: &mut HashSet<PathBuf>,
-    out: &mut Vec<String>,
-) {
-    // A prepared root's folder: from its data file, without listing the disk.
-    if depth == 0
-        && let Some(files) = horizon_core::prepared_files::files_under(dir)
-    {
-        out.extend(
-            files
-                .into_iter()
-                .filter(|file| endings.iter().any(|end| file.ends_with(end)))
-                .map(|file| format!("{rel}/{file}")),
-        );
-        return;
-    }
-    // Links are followed (overlay folders are links into the packs and vanilla), so a link back
-    // to a parent would loop: each real folder is read once, and never deeper than MAX_DEPTH.
-    if depth > MAX_DEPTH || !fs::canonicalize(dir).is_ok_and(|real| seen.insert(real)) {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let rel = format!("{rel}/{name}");
-        // `metadata` follows links: overlay folders are links into the packs and vanilla.
-        match fs::metadata(e.path()) {
-            Ok(m) if m.is_dir() => walk(&e.path(), &rel, endings, depth + 1, seen, out),
-            Ok(_) if endings.iter().any(|end| name.ends_with(end)) => out.push(rel),
-            _ => {}
-        }
-    }
+/// Matching files beneath a resource folder, in name order.
+pub fn files_under(root: &ResourceSource, dir: &str, endings: &[&str]) -> Vec<String> {
+    root.list(&format!("{dir}/"))
+        .into_iter()
+        .filter(|name| endings.iter().any(|ending| name.ends_with(ending)))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn resolving() {
@@ -212,7 +144,7 @@ mod tests {
             fs::write(path, "").unwrap();
         }
         assert_eq!(
-            properties_files(&root, "ctm"),
+            properties_files(&ResourceSource::directory(root.clone()), "ctm"),
             [
                 "assets/minecraft/mcpatcher/ctm/old.properties",
                 "assets/minecraft/optifine/ctm/glass/glass.properties",
@@ -233,7 +165,7 @@ mod tests {
         fs::write(ctm.join("a.properties"), "").unwrap();
         std::os::unix::fs::symlink(&ctm, ctm.join("again")).unwrap();
         assert_eq!(
-            properties_files(&root, "ctm"),
+            properties_files(&ResourceSource::directory(root.clone()), "ctm"),
             ["assets/minecraft/optifine/ctm/a.properties"]
         );
         fs::remove_dir_all(&root).unwrap();

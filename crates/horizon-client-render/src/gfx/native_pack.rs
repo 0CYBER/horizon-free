@@ -617,6 +617,7 @@ pub(in crate::gfx) mod tests {
     /// functions it calls, or its `displacement`, reads `opaque_depth` or `opaque_color` (#16124).
     #[test]
     fn the_opaque_copies_are_made_only_for_a_pack_that_reads_them() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use horizon_shader_api::{MANIFEST, Pack, check};
         let reads = |material: &str, displacement: &str| {
             let manifest = "schema = 1
@@ -665,6 +666,7 @@ file = \"material.wgsl\"
     /// a validation panic (#10095).
     #[test]
     fn a_pack_the_backend_refuses_is_an_error_not_a_panic() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -805,6 +807,7 @@ file = \"material.wgsl\"
 
     #[test]
     fn the_shadow_map_follows_its_options() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let options = [
             option("shadows", OptionKind::Bool { default: true }),
             option(

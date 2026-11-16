@@ -7,6 +7,7 @@ elapsed-time reports and batch-start messages are predeclared diagnostics.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -158,12 +159,15 @@ def run(label, command, client_command, build, world, java):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, required=True)
-    parser.add_argument('--work-dir', type=Path, required=True)
+    # tools/parity.py runs every harness with no arguments: build the Horizon binary, capture into a new folder
+    # and run both sides.
+    parser.add_argument('--binary', type=Path, help='A Horizon client binary; built when omitted')
+    parser.add_argument('--work-dir', type=Path, help='A new capture folder; one under .local/ when omitted')
     parser.add_argument('--reference-only', action='store_true')
     parser.add_argument('--reference-dir', type=Path)
     args = parser.parse_args()
-    build = args.work_dir.resolve()
+    build = (args.work_dir or net.lab.LOCAL / 'run-coordinate-feedback'
+             / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{os.getpid()}").resolve()
     build.mkdir(parents=True, exist_ok=False)
     manifest = dict(script=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     helpers={p: hashlib.sha256((net.lab.ROOT / p).read_bytes()).hexdigest() for p in HELPERS},
@@ -171,7 +175,7 @@ def main():
                     diagnostics='whole elapsed-ms/batch-start messages and all remaining chat/packet bodies retained; no row mask',
                     declared_at=sound.now())
     (build / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    _, _, java, native, client = net.sides(str(build), args.binary.resolve())
+    _, _, java, native, client = net.sides(str(build), args.binary.resolve() if args.binary else None)
     reference = args.reference_dir.resolve() if args.reference_dir else build
     if not args.reference_dir:
         world = generate(java, build)

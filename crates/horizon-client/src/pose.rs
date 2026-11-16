@@ -19,16 +19,10 @@ pub enum Pose {
 }
 impl Pose {
     /// `Pose` by its network id (`Pose.id`); the poses a player never takes
-    /// are standing.
+    /// are standing. One id table: `mod_api::Pose`'s, narrowed to the avatar's
+    /// six stances.
     pub fn from_id(id: i32) -> Self {
-        match id {
-            1 => Self::FallFlying,
-            2 => Self::Sleeping,
-            3 => Self::Swimming,
-            4 => Self::SpinAttack,
-            5 => Self::Crouching,
-            _ => Self::Standing,
-        }
+        mod_api::Pose::from_id(id).into()
     }
     /// Network ID for this pose (`Pose.id`).
     pub fn id(self) -> i32 {
@@ -69,13 +63,88 @@ impl Pose {
         }
     }
 }
+impl From<Pose> for mod_api::Pose {
+    /// The living entity's pose (`Entity.getPose`) the avatar's stance names.
+    fn from(pose: Pose) -> Self {
+        match pose {
+            Pose::Standing => Self::Standing,
+            Pose::FallFlying => Self::FallFlying,
+            Pose::Sleeping => Self::Sleeping,
+            Pose::Swimming => Self::Swimming,
+            Pose::SpinAttack => Self::SpinAttack,
+            Pose::Crouching => Self::Crouching,
+        }
+    }
+}
+impl From<mod_api::Pose> for Pose {
+    /// Narrow a living entity's pose to a movement stance. Dimension queries
+    /// use `Dimensions::avatar` to preserve Avatar.POSES's fixed dying box.
+    fn from(pose: mod_api::Pose) -> Self {
+        match pose {
+            mod_api::Pose::FallFlying => Self::FallFlying,
+            mod_api::Pose::Sleeping => Self::Sleeping,
+            mod_api::Pose::Swimming => Self::Swimming,
+            mod_api::Pose::SpinAttack => Self::SpinAttack,
+            mod_api::Pose::Crouching => Self::Crouching,
+            _ => Self::Standing,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Dimensions {
     pub width: f32,
     pub height: f32,
     pub eye_height: f32,
 }
+/// What `entity_size` (`EntityEvent.Size`) answered for an entity whose size vanilla
+/// recalculated (`Entity.refreshDimensions`) to `vanilla` (width, height, eye height) in
+/// `pose`: `size` replaces it while both still hold. Any change to either goes back to
+/// vanilla's until the hook is asked again; `size` is `None` when the listeners left it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SizeAnswer {
+    pub pose: mod_api::Pose,
+    pub vanilla: [f32; 3],
+    pub size: Option<[f32; 3]>,
+}
+impl SizeAnswer {
+    /// Whether this answer is for `pose` and vanilla's `vanilla`.
+    pub fn asked(&self, pose: mod_api::Pose, vanilla: [f32; 3]) -> bool {
+        self.pose == pose && self.vanilla == vanilla
+    }
+    /// The size to use instead of `vanilla` in `pose`, if this answer still holds.
+    pub fn holds(&self, pose: mod_api::Pose, vanilla: [f32; 3]) -> Option<[f32; 3]> {
+        self.size.filter(|_| self.asked(pose, vanilla))
+    }
+    /// The size the entity had with this answer: the listeners', else vanilla's.
+    pub fn effective(&self) -> [f32; 3] {
+        self.size.unwrap_or(self.vanilla)
+    }
+}
 impl Dimensions {
+    pub fn to_array(self) -> [f32; 3] {
+        [self.width, self.height, self.eye_height]
+    }
+    pub fn from_array([width, height, eye_height]: [f32; 3]) -> Self {
+        Self {
+            width,
+            height,
+            eye_height,
+        }
+    }
+    /// `Avatar.getDefaultDimensions` with the living scale applied, including
+    /// the fixed DYING entry that is not a movement stance.
+    pub fn avatar(pose: mod_api::Pose, scale: f32) -> Self {
+        if pose == mod_api::Pose::Dying {
+            Self {
+                width: 0.2,
+                height: 0.2,
+                eye_height: 1.62,
+            }
+        } else {
+            Pose::from(pose).dimensions(scale)
+        }
+    }
+
     pub fn bounds(self, position: Vec3) -> Aabb {
         let half = f64::from(self.width / 2.0);
         Aabb::new(
@@ -107,6 +176,13 @@ impl PlayerMotion {
     pub fn refresh_dimensions(&mut self) -> Result<()> {
         self.scale = self.attribute("minecraft:scale")? as f32;
         self.dimensions = self.pose.dimensions(self.scale);
+        // `EntityEvent.Size`: an `entity_size` answer for this pose and size still holds.
+        if let Some(size) = self
+            .size_answer
+            .and_then(|answer| answer.holds(self.pose.into(), self.dimensions.to_array()))
+        {
+            self.dimensions = crate::pose::Dimensions::from_array(size);
+        }
         Ok(())
     }
     pub fn set_pose(&mut self, pose: Pose) -> Result<()> {

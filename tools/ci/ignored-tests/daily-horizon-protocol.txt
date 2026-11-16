@@ -1,0 +1,19 @@
+# The daily tests of horizon-protocol: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-protocol connection::tests::a_dead_address_does_not_hold_up_the_next lib daily network
+horizon-protocol connection::tests::a_silent_peer_times_out_and_a_closed_one_ends_the_stream lib daily network
+horizon-protocol connection::tests::an_empty_compressed_frame_is_skipped lib daily network
+horizon-protocol connection::tests::connects_to_ipv4_although_the_resolver_lists_ipv6_first lib daily network
+horizon-protocol connection::tests::encrypted_bytes_read_before_enabling_encryption lib daily network
+horizon-protocol connection::tests::every_failure_reports_the_first_address lib daily network
+horizon-protocol connection::tests::falls_back_to_ipv6_when_ipv4_refuses lib daily network
+horizon-protocol connection::tests::loopback_with_compression_and_encryption lib daily network
+horizon-protocol connection::tests::packets_of_every_size_arrive_whole lib daily slow
+horizon-protocol connection::tests::tcp_stream_enables_nodelay_and_keepalive lib daily network
+horizon-protocol resolver::dns::tests::asks_each_server_in_turn_and_retries_truncated_replies_over_tcp lib daily network
+horizon-protocol resolver::tests::literal_address_can_connect_without_dns lib daily network
+horizon-protocol rsa::tests::generated_keys_round_trip lib daily slow
+horizon-protocol rsa::tests::generated_keys_sign lib daily slow
+horizon-protocol secure_chat::tests::encoder_signs_what_the_chain_accepts lib daily slow
+horizon-protocol server_status::tests::a_server_answers_its_player_count lib daily network
+horizon-protocol server_status::tests::nobody_listening_fails_within_the_timeout lib daily network

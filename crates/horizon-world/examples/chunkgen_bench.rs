@@ -11,15 +11,6 @@
 //!     runs. The content mods' biome modifiers (`biome-modifiers.json`) are
 //!     the client's, so they are not applied, and a warning says so.
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::HeightmapType,
-    nbt::Tag,
-    registry::BlockRegistry,
-    worldgen::generator::{
-        DecorateStats, GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, StageTimings,
-    },
-};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -31,6 +22,18 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     time::Instant,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::HeightmapType,
+        registry::BlockRegistry,
+        worldgen::generator::{
+            DecorateStats, GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk,
+            StageTimings,
+        },
+    },
 };
 #[path = "datapacks/reader.rs"]
 mod pack_reader;
@@ -686,12 +689,12 @@ fn snapshot(chunks: &[Option<ProtoChunk>], path: &Path, phase: &str) -> Result<(
         for (position, tag) in &chunk.block_entities {
             writeln!(out, "blockentity {position:?}")?;
             let bytes =
-                horizon_world::nbt::write_network(&Tag::Compound(tag.clone()), Default::default())?;
+                horizon_core::nbt::write_network(&Tag::Compound(tag.clone()), Default::default())?;
             out.write_all(&(bytes.len() as u64).to_le_bytes())?;
             out.write_all(&bytes)?;
         }
         let entities = Tag::List(chunk.entities.iter().cloned().map(Tag::Compound).collect());
-        let bytes = horizon_world::nbt::write_network(&entities, Default::default())?;
+        let bytes = horizon_core::nbt::write_network(&entities, Default::default())?;
         out.write_all(&(bytes.len() as u64).to_le_bytes())?;
         out.write_all(&bytes)?;
     }

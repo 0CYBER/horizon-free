@@ -150,7 +150,14 @@ fn a_dropped_file_goes_to_its_folder_under_a_free_name() {
     let drops = scratch("drops");
     zip_file(&drops.join("Zed.zip"), &[("pack.mcmeta", META)]);
     zip_file(&drops.join("Shiny.zip"), &[("shaders/composite.fsh", b"")]);
-    fs::write(drops.join("glow.hshader"), b"PK").unwrap();
+    zip_file(
+        &drops.join("glow.hshader"),
+        &[
+            (SHADER_MANIFEST, SHADER_META.as_bytes()),
+            ("post.wgsl", b""),
+        ],
+    );
+    fs::write(drops.join("broken.hshader"), b"PK").unwrap();
     zip_file(&drops.join("random.zip"), &[("a.txt", b"")]);
     fs::write(drops.join("picture.png"), b"").unwrap();
 
@@ -165,6 +172,7 @@ fn a_dropped_file_goes_to_its_folder_under_a_free_name() {
     );
     assert!(home.join("shaderpacks/Shiny.zip").is_file());
     assert_eq!(kind_of(&drops.join("glow.hshader")).unwrap(), Kind::Shader);
+    assert!(add(&home, &drops.join("broken.hshader")).is_err());
     assert!(add(&home, &drops.join("random.zip")).is_err());
     assert!(add(&home, &drops.join("picture.png")).is_err());
     fs::remove_dir_all(&home).unwrap();

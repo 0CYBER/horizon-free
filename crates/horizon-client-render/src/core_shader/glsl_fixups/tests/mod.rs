@@ -228,6 +228,7 @@ fn a_sampler_parameter_without_a_name_is_left_as_it_was() {
 /// Each call rewritten reads the whole text again: thousands of them stop at the scan budget,
 /// the shader left as it was (never half rewritten) instead of freezing the load.
 #[test]
+#[ignore = "daily"]
 fn thousands_of_calls_are_left_as_they_were() {
     let shader = format!(
         "uniform sampler2D S;\nvec4 t(sampler2D s) {{ return texture(s, vec2(0.0)); }}\n\

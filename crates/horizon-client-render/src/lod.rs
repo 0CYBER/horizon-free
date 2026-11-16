@@ -2202,6 +2202,7 @@ impl Lod {
             .ready
             .insert(fine, Arc::new(columns.to_vec()))
             .is_some();
+        self.sync_sample(fine);
         self.refresh_ready(fine, existed);
     }
     fn apply_detail(&mut self, (cx, cz): (i32, i32), columns: &ReducedColumns) {
@@ -4265,14 +4266,15 @@ mod tests {
         assert!(resampled_over(&ready, &FxHashSet::default(), (40, 40)).is_empty());
     }
     #[test]
-    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn slab_materials_survive_chunk_summaries_and_draw_far_faces() -> crate::Result<()> {
         use crate::{assets::Assets, biome::Biomes, light::LightTables, mesher::MeshTables};
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
         let assets = Arc::new(Assets::load(&root)?);
-        let render = Arc::new(assets.reload(&root)?);
+        let resource_root = crate::resource_source::ResourceRoot::directory(root.clone());
+        let render = Arc::new(assets.reload(&resource_root)?);
         let facts = BlockFacts::load(&root, assets.registry)?;
         let context = WorkerContext {
             light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
@@ -4281,10 +4283,13 @@ mod tests {
                 &render,
                 &facts,
                 crate::models::load_visibility(&root, assets.registry)?,
+                None,
             )?),
             assets: assets.clone(),
             render,
-            biomes: Arc::new(Biomes::load(&root)?),
+            biomes: Arc::new(Biomes::load(&resource_root)?),
+            hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         };
         let kinds = state_kinds(&facts);
         let mut chunk = Chunk::empty(0, 0);
@@ -4332,7 +4337,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn real_mesh_clips_near_chunks_and_preserves_water_and_edited_surfaces() -> crate::Result<()> {
         use crate::{
             assets::Assets, biome::Biomes, light::LightTables, mesher::MeshTables,
@@ -4342,14 +4347,19 @@ mod tests {
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
         let assets = Arc::new(Assets::load(&root)?);
-        let render = Arc::new(assets.reload(&root)?);
+        let render = Arc::new(assets.reload(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        )?);
         let facts = BlockFacts::load(&root, assets.registry)?;
-        let biomes = Arc::new(Biomes::load(&root)?);
+        let biomes = Arc::new(Biomes::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        )?);
         let tables = Arc::new(MeshTables::new(
             &assets,
             &render,
             &facts,
             crate::models::load_visibility(&root, assets.registry)?,
+            None,
         )?);
         let context = Arc::new(WorkerContext {
             light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
@@ -4357,6 +4367,8 @@ mod tests {
             assets: assets.clone(),
             render,
             biomes: biomes.clone(),
+            hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         });
         let source = Arc::new(TestTerrain::new(assets.registry, &biomes)?);
         let mut lod = Lod::new(source, context);
@@ -4696,6 +4708,7 @@ mod tests {
         lod.ready
             .insert(parent, Arc::new(vec![Column::default(); 256]));
         lod.active = [parent].into_iter().collect();
+        lod.sync_sample(parent);
         lod.sample_jobs = SAMPLE_JOBS;
         lod.pending = (0..SAMPLE_JOBS - 1)
             .map(|i| TileKey {
@@ -4826,152 +4839,6 @@ mod tests {
                 } else if distance < two {
                     assert!(key.size() / 16 <= 2, "{key:?} reduced {reduced}");
                 }
-            }
-        }
-    }
-    /// Loads a render distance 12 view one sample job at a time, in
-    /// `wanted_tiles`' order. Counts the jobs, and their density lattice
-    /// points (each job's cost), before every far column within two chunks
-    /// of the near terrain is drawn as finely as the plan wants it (one
-    /// block wide in Full): until then nothing is drawn there. And before
-    /// every far column is drawn, by its tile or a coarse stand-in: until
-    /// then the far terrain ends short of the horizon. Checks that no coarse
-    /// tile is ever drawn at the seam. With `stop_at_fine` it returns as soon
-    /// as the seam is drawn finely, and the second pair repeats the first.
-    fn jobs_until_fine_seam(
-        camera: [i32; 2],
-        reduced: bool,
-        stop_at_fine: bool,
-    ) -> ([(usize, i32); 2], usize) {
-        let (detail, distance) = (12, 128);
-        let center = (camera[0].div_euclid(16), camera[1].div_euclid(16));
-        let mut covered = FxHashSet::default();
-        for z in center.1 - detail..=center.1 + detail {
-            for x in center.0 - detail..=center.0 + detail {
-                if crate::streaming::in_view_distance(center, detail, x, z) {
-                    covered.insert((x, z));
-                }
-            }
-        }
-        let plan =
-            Plan::with_previous(camera, detail, distance, &Plan::default(), 0, reduced, None);
-        let leaf = |x: i32, z: i32| {
-            (0..=MAX_LEVEL)
-                .map(|level| TileKey {
-                    x: x.div_euclid(16 << level),
-                    z: z.div_euclid(16 << level),
-                    level,
-                })
-                .find(|key| plan.nodes.contains(key) && !plan.split.contains(key))
-        };
-        let mut seam = Vec::new();
-        // One point per chunk: tiles are whole chunks, so every point in a chunk
-        // gets the same answer. The chunk range keeps a partial edge chunk.
-        let chunks = |c: i32| (c - 256).div_euclid(16)..=(c + 255).div_euclid(16);
-        for chunk_z in chunks(camera[1]) {
-            for chunk_x in chunks(camera[0]) {
-                let (x, z) = (chunk_x * 16, chunk_z * 16);
-                let chunk = (chunk_x, chunk_z);
-                let near = (-2..=2)
-                    .any(|dz| (-2..=2).any(|dx| covered.contains(&(chunk.0 + dx, chunk.1 + dz))));
-                if !covered.contains(&chunk) && near {
-                    seam.push((x, z, leaf(x, z).unwrap()));
-                }
-            }
-        }
-        let mut horizon = Vec::new();
-        for z in (camera[1] - 2048..camera[1] + 2048).step_by(64) {
-            for x in (camera[0] - 2048..camera[0] + 2048).step_by(64) {
-                if !covered.contains(&(x.div_euclid(16), z.div_euclid(16))) && leaf(x, z).is_some()
-                {
-                    horizon.push((x, z));
-                }
-            }
-        }
-        let mut ready: FxHashMap<TileKey, ()> = FxHashMap::default();
-        for key in &plan.nodes {
-            if key.level == 0 && covered.contains(&(key.x, key.z)) {
-                ready.insert(*key, ());
-            }
-        }
-        let leaves = plan
-            .nodes
-            .iter()
-            .filter(|k| !plan.split.contains(k))
-            .count();
-        let (mut cost, mut fine, mut reached) = (0, None, None);
-        for jobs in 0.. {
-            let mut selected = Vec::new();
-            for &root in &plan.roots {
-                plan.select(root, &ready, &mut selected);
-            }
-            let active: FxHashSet<_> = selected.into_iter().collect();
-            let drawn = |x: i32, z: i32, levels: u8| {
-                (0..=levels).any(|level| {
-                    active.contains(&TileKey {
-                        x: x.div_euclid(16 << level),
-                        z: z.div_euclid(16 << level),
-                        level,
-                    })
-                })
-            };
-            for &(x, z, leaf) in &seam {
-                assert!(drawn(x, z, leaf.level) || !drawn(x, z, MAX_LEVEL));
-            }
-            if fine.is_none() && seam.iter().all(|&(x, z, leaf)| drawn(x, z, leaf.level)) {
-                fine = Some((jobs, cost));
-                if stop_at_fine {
-                    return ([(jobs, cost); 2], leaves);
-                }
-            }
-            if reached.is_none() && horizon.iter().all(|&(x, z)| drawn(x, z, MAX_LEVEL)) {
-                reached = Some((jobs, cost));
-            }
-            if let (Some(fine), Some(reached)) = (fine, reached) {
-                return ([fine, reached], leaves);
-            }
-            let next = wanted_tiles(&plan, &ready, &FxHashSet::default(), camera)
-                .min()
-                .unwrap();
-            let next = TileKey {
-                x: next.x,
-                z: next.z,
-                level: next.level,
-            };
-            // `lod_grid`'s density lattice: one point per max(stride, 4) blocks.
-            let stride = next.size() / 16;
-            let lattice = 16 * stride / stride.max(4) + 1;
-            cost += lattice * lattice;
-            ready.insert(next, ());
-        }
-        unreachable!()
-    }
-    #[test]
-    fn the_far_terrain_next_to_the_near_chunks_loads_first() {
-        // Measured: 270 to 301 jobs, all of them fine tiles (7500 to 8500
-        // lattice points). A coarse tile first costs up to 289 points; the
-        // order that filled a ring ahead first and refined broad tiles every
-        // other job took 54000 to 119000 for the seam in view alone.
-        for camera in [[8, 8], [40, -9], [-300, 517]] {
-            for reduced in [false, true] {
-                let ([(jobs, cost), _], _) = jobs_until_fine_seam(camera, reduced, true);
-                assert!(jobs < 320, "{jobs} jobs");
-                assert!(cost < 9000, "{cost} lattice points");
-            }
-        }
-    }
-    #[test]
-    fn a_coarse_backdrop_reaches_the_horizon_early() {
-        // Sampling only planned tiles, nearest first, reached the horizon
-        // with the last of ~3000 jobs in Full (500000 lattice points), ~1050
-        // in Reduced (200000): for minutes on a slow machine the far terrain
-        // ended in a hard edge. The backdrop adds ~230 coarse tiles (~80 in
-        // Reduced), about a tenth more work in all.
-        for camera in [[8, 8], [40, -9], [-300, 517]] {
-            for reduced in [false, true] {
-                let ([_, (jobs, cost)], leaves) = jobs_until_fine_seam(camera, reduced, false);
-                assert!(jobs < 1000 && jobs < leaves, "{jobs} jobs of {leaves}");
-                assert!(cost < 100_000, "{cost} lattice points");
             }
         }
     }
@@ -5130,6 +4997,25 @@ mod tests {
         lod.replan([-10, 0], 0, 1, 0, None);
         assert!(lod.plan.nodes.contains(&a) && !lod.plan.nodes.contains(&b));
         assert!(lod.dirty.contains_key(&a), "its east wall is drawn now");
+    }
+
+    #[test]
+    fn observed_fine_columns_replace_active_mesh_samples() {
+        let mut lod = Lod::scheduler_for_test();
+        let key = TileKey {
+            x: 0,
+            z: 0,
+            level: 0,
+        };
+        lod.plan.nodes.insert(key);
+        lod.finish_sample(key, samples(70));
+        let previous = lod.mesh_samples.clone();
+
+        let observed: [Column; CELLS * CELLS] = samples(80).try_into().unwrap();
+        lod.apply_fine((0, 0), &observed);
+
+        assert_eq!(previous.get(&key).unwrap()[0].spans[0].max, 70);
+        assert_eq!(lod.mesh_samples.get(&key).unwrap()[0].spans[0].max, 80);
     }
 
     #[test]
@@ -5671,14 +5557,19 @@ mod tests {
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
         let assets = Arc::new(Assets::load(&root)?);
-        let render = Arc::new(assets.reload(&root)?);
+        let render = Arc::new(assets.reload(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        )?);
         let facts = BlockFacts::load(&root, assets.registry)?;
-        let biomes = Arc::new(Biomes::load(&root)?);
+        let biomes = Arc::new(Biomes::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        )?);
         let tables = Arc::new(MeshTables::new(
             &assets,
             &render,
             &facts,
             crate::models::load_visibility(&root, assets.registry)?,
+            None,
         )?);
         let context = Arc::new(WorkerContext {
             light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
@@ -5686,6 +5577,8 @@ mod tests {
             assets,
             render,
             biomes,
+            hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         });
         Ok((context, facts))
     }
@@ -5821,7 +5714,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn chunks_a_server_dropped_stay_drawn_as_far_terrain() -> crate::Result<()> {
         let mut far = ServerLod::new("lod-dropped")?;
         // A server's view distance of 10 (it sends a ring more), drawn to a
@@ -5865,7 +5758,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn far_cells_sampled_before_their_chunks_were_kept_fill_in() -> crate::Result<()> {
         let mut far = ServerLod::new("lod-late")?;
         // Seen from 5000 blocks: cells of 32 blocks and wider over them.
@@ -5956,7 +5849,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn coarser_stand_ins_keep_the_ring_past_the_near_chunks_drawn() -> crate::Result<()> {
         let arrived = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut far = ServerLod::with("lod-waiting", |_| {

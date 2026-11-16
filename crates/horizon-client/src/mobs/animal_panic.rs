@@ -55,7 +55,8 @@ impl Goal for AnimalPanic {
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         // `Behavior.tryStart`: 100 + level.getRandom().nextInt(21).
-        self.end = i64::from(m.age) + 100 + i64::from(cx.lr.next_int_bound(21).unwrap_or(0));
+        self.end =
+            i64::from(m.age) + 100 + i64::from(cx.level.random().next_int_bound(21).unwrap_or(0));
         m.ai.panicking = true;
         // `start`: `eraseMemory(WALK_TARGET)` and `getNavigation().stop()`.
         m.nav_stop();

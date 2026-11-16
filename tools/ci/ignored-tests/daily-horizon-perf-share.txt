@@ -1,0 +1,10 @@
+# The daily tests of horizon-perf-share: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-perf-share an_upload_the_server_no_longer_has_is_made_again_and_its_receipt_replaced test:share daily network
+horizon-perf-share local::tests::a_wrong_token_origin_or_method_gets_404_and_keeps_the_token lib daily network
+horizon-perf-share local::tests::an_aborted_connection_does_not_end_the_offer lib daily network
+horizon-perf-share local::tests::the_link_is_the_viewer_with_a_random_token lib daily network
+horizon-perf-share local::tests::the_preflight_allows_the_viewer_and_private_networks_without_spending_the_token lib daily network
+horizon-perf-share local::tests::the_right_token_is_served_once_and_then_refused lib daily network
+horizon-perf-share local::tests::the_thread_is_gone_after_the_timeout lib daily network
+horizon-perf-share sharing_retries_the_pin_without_reuploading_or_exposing_the_owner_token test:share daily network

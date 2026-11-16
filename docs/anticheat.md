@@ -33,7 +33,7 @@ ban_after = 0              # the kick (counting this check's earlier ones) that 
 | `prediction` | no, logs only | 5, 15, 60 |
 
 It lives in the server for now, in its own crate (`horizon-anticheat`) plus one file of the hub
-(`lan/anticheat.rs`), because the native mod API ([native-mods.md](native-mods.md)) has no hooks yet for a
+(`lan/anticheat.rs`), because the native mod API ([modding/src/how-to/native-mods.md](modding/src/how-to/native-mods.md)) has no hooks yet for a
 player's moves (the position, the on-ground claim, cancelling a move) or for packet timing. It moves into a
 native mod once those hooks exist.
 
@@ -111,7 +111,7 @@ ones in this version.
   flagged, and nothing happens with the anticheat off.
 
 ```sh
-cargo build --profile fast -p horizon-client --bin horizon-client
+cargo build --profile fast -p horizon-game --bin horizon-client
 cargo build --profile fast -p horizon-bots
 python3 tools/anticheat_e2e.py --bin-dir target/fast
 python3 tools/server_bench.py --servers horizon --bots 60 --behaviour walk --anticheat   # its cost

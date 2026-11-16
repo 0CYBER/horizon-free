@@ -22,7 +22,7 @@ ServerboundAttackPacket at its victim twice a second (`--attack`) from:
 
 A hit shows in the victim's health (SetHealth, in the bots' report). The server runs in a fresh folder with
 fresh HORIZON_HOME and XDG folders (lab.game_env), on a free port. Build first:
-    cargo build --profile fast -p horizon-client --bin horizon-client
+    cargo build --profile fast -p horizon-game --bin horizon-client
     cargo build --profile fast -p horizon-bots
 """
 import argparse

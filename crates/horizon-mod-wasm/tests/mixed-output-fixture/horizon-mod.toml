@@ -1,0 +1,7 @@
+id = "mixed_output_fixture"
+name = "Mixed output boundary fixture"
+version = "0.1.0"
+description = "Test-only generated stack-list, scalar and cancellation boundary."
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

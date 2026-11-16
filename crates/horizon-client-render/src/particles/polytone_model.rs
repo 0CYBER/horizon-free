@@ -8,8 +8,10 @@
 //! and its rotation mode turns them as it turns a sprite quad (`+Z` facing the camera for
 //! `look_at_xyz`, world axes for `none`).
 use glam::{Quat, Vec3};
+use horizon_assets::resource_source::ResourceSource;
 use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::path::Path;
 
 /// One face of a model particle: corners in blocks around the model's centre, in drawing order,
@@ -42,17 +44,19 @@ fn sprite_name(texture: &str) -> String {
 }
 
 /// A model JSON and its parents' `textures` and `elements`, the child's winning.
-fn read_model(pack_root: &Path, id: &str, depth: u32) -> Option<(Map<String, Json>, Vec<Json>)> {
+fn read_model(
+    pack_root: &ResourceSource,
+    id: &str,
+    depth: u32,
+) -> Option<(Map<String, Json>, Vec<Json>)> {
     if depth > 8 {
         return None;
     }
     let (namespace, path) = split_id(id);
-    let file = pack_root
-        .join("assets")
-        .join(namespace)
-        .join("models")
-        .join(format!("{path}.json"));
-    let json: Json = horizon_world::json_file::read(&file).ok()?;
+    let bytes = pack_root
+        .read(&format!("assets/{namespace}/models/{path}.json"))
+        .ok()?;
+    let json: Json = serde_json::from_slice(&bytes).ok()?;
     let (mut textures, mut elements) = match json.get("parent").and_then(Json::as_str) {
         Some(parent) => read_model(pack_root, parent, depth + 1).unwrap_or_default(),
         None => Default::default(),
@@ -163,7 +167,7 @@ fn element_rotation(element: &Json) -> Option<(Quat, Vec3)> {
 impl ParticleModel {
     /// The model `id` (`davidparticles:block/fullblock_glow`) under a pack overlay root; `None`
     /// when it's missing or has no face to draw.
-    pub(crate) fn read(pack_root: &Path, id: &str) -> Option<Self> {
+    pub(crate) fn read(pack_root: &ResourceSource, id: &str) -> Option<Self> {
         let (textures, elements) = read_model(pack_root, id, 0)?;
         let mut quads = Vec::new();
         for element in &elements {
@@ -227,7 +231,7 @@ impl ParticleModel {
 
 /// The packs' model particles: each custom particle type with a `model`, its faces.
 pub(crate) fn read_models<'a>(
-    pack_root: &Path,
+    pack_root: &ResourceSource,
     types: impl Iterator<Item = (&'a String, &'a Json)>,
 ) -> HashMap<String, std::sync::Arc<ParticleModel>> {
     types
@@ -280,7 +284,8 @@ mod tests {
                 }]
             }),
         );
-        let model = ParticleModel::read(&root, "fx:block/glow").unwrap();
+        let model =
+            ParticleModel::read(&ResourceSource::directory(root.clone()), "fx:block/glow").unwrap();
         assert_eq!(model.quads.len(), 1);
         let quad = &model.quads[0];
         assert_eq!(quad.sprite, "fx:block/glow");
@@ -318,14 +323,17 @@ mod tests {
                 "parent": "block/base", "textures": {"all": "fx:block/sand"}
             }),
         );
-        let model = ParticleModel::read(&root, "fx:slab").unwrap();
+        let model =
+            ParticleModel::read(&ResourceSource::directory(root.clone()), "fx:slab").unwrap();
         assert_eq!(model.quads.len(), 1);
         // The child's texture wins; `up` at y 8 px, seen from above with north on top.
         assert_eq!(model.quads[0].sprite, "fx:block/sand");
         assert_eq!(model.quads[0].corners[0], Vec3::new(-0.5, 0.0, -0.5));
         assert_eq!(model.quads[0].corners[2], Vec3::new(0.5, 0.0, 0.5));
         assert_eq!(model.quads[0].uv[2], [1.0, 1.0]);
-        assert!(ParticleModel::read(&root, "fx:missing").is_none());
+        assert!(
+            ParticleModel::read(&ResourceSource::directory(root.clone()), "fx:missing").is_none()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

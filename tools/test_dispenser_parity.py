@@ -361,6 +361,11 @@ def cases(facts, count, seed, only):
     yield from vehicle_cases(states, seed, only)
     yield from egg_and_pickup_cases(states, only)
     kinds = list(ITEMS)
+    if not only:
+        yield {'seed': 42, 'mode': 'dispense', 'pos': [0, 0, 0],
+               'cells': [[0, 0, 0, states.get('dropper', facing='east', triggered='false')]],
+               'items': [[0, 0, 0, 0, plain('stone', 3)]],
+               'entities': [{'type': 'minecraft:chest_minecart', 'pos': [1.5, 0.0, 0.5]}]}
     for n in range(count):
         kind = kinds[n % len(kinds)]
         item = item_choice(rng, kind)
@@ -544,7 +549,7 @@ def main():
          '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaDispenserOracle.java')])
     run(['java', '-Xmx3G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaDispenserOracle',
          str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
         env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
     executable = lab.cargo_target() / ('fast/horizon-client.exe' if os.name == 'nt' else 'fast/horizon-client')
     with tempfile.TemporaryDirectory(prefix='game-', dir=work) as game_dir:

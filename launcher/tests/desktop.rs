@@ -10,6 +10,12 @@ fn desktop_entry(home: &Path, wrapper: Option<&str>, args: &[&str]) {
         .arg("desktop-entry")
         .args(args)
         .env("HORIZON_LAUNCHER_HOME", home.join("launcher"))
+        .env("HORIZON_HOME", home.join("game"))
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("HORIZON_LAUNCHER_TRASH", home.join("trash"))
+        .env("HORIZON_LAUNCHER_CLIPBOARD", home.join("clipboard"))
+        .env("HORIZON_LAUNCHER_DESKTOP", home.join("desktop"))
+        .env("HORIZON_NO_AUDIO", "1")
         .env("XDG_DATA_HOME", home.join("data"))
         .env("HORIZON_LAUNCHER_NO_SELF_UPDATE", "1")
         .env_remove("HORIZON_LAUNCHER_DESKTOP_EXEC");

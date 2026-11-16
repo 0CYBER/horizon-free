@@ -27,6 +27,7 @@ fn join(address: SocketAddr, nameplate: &str) -> FromRelay {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_spent_global_budget_refuses_unknown_codes_but_not_real_ones() {
     let (_relay, address, _) = Relay::spawn_local(Config {
         per_address: false,

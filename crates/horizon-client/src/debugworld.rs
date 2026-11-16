@@ -4,7 +4,7 @@ use crate::{
     chunk::{Chunk, LevelShape},
     streaming::ChunkGenerator,
 };
-use horizon_world::{nbt::Tag, registry::BlockRegistry};
+use {horizon_core::nbt::Tag, horizon_world::registry::BlockRegistry};
 
 /// `DebugLevelSource.HEIGHT`: the layer the block states stand in.
 pub const HEIGHT: i32 = 70;

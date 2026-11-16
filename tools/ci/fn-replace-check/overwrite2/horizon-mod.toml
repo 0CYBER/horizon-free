@@ -1,0 +1,20 @@
+id = "fnr_overwrite2"
+name = "Function replacement check: a second OVERWRITE"
+version = "0.1.0"
+description = "fn-replace: OVERWRITE on the function alpha overwrites; the build refuses the pair by name"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.mixin]]
+id = "overwrite"
+target = "horizon_client::game::commands::misc::millis"
+kind = "OVERWRITE"
+helper = "src/mixins/overwrite.rs"
+bindings = [{ name = "nanos", ty = "u64", value = "nanos" }]

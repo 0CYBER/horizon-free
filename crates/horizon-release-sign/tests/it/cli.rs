@@ -80,6 +80,7 @@ fn sign_script_for(tag: &str, dir: &Path, env: &[(&str, &str)]) -> Output {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_signature_made_like_openssls_checks_and_tampering_fails() {
     let dir = folder("lib");
     let (key, _) = SigningKey::generate().unwrap();
@@ -98,6 +99,7 @@ fn a_signature_made_like_openssls_checks_and_tampering_fails() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn unsigned_releases_go_out_only_until_a_key_is_listed() {
     let dir = folder("unsigned");
     assert_eq!(
@@ -109,6 +111,7 @@ fn unsigned_releases_go_out_only_until_a_key_is_listed() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_openssl_script_signs_what_the_launcher_checks() {
     // The script runs on Linux runners only (the `sign` jobs of launcher.yml and nightly-build.yml).
     // On Windows, Command finds System32's bash (WSL's) before the one on PATH.
@@ -174,6 +177,7 @@ fn the_openssl_script_signs_what_the_launcher_checks() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn keygen_writes_the_secret_to_a_pipe_and_the_public_key_to_a_file() {
     let dir = folder("keygen");
     let public = dir.join("key.pub");
@@ -188,6 +192,7 @@ fn keygen_writes_the_secret_to_a_pipe_and_the_public_key_to_a_file() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_nightly_is_signed_for_its_channel_and_for_its_version() {
     if cfg!(windows) || openssl().is_none() {
         eprintln!("skipped: tools/ci/sign_release.sh is tested on Linux (bash, OpenSSL 3)");
@@ -233,7 +238,8 @@ fn a_nightly_is_signed_for_its_channel_and_for_its_version() {
     // What a current launcher does with it.
     let sums = std::fs::read(dir.join(SUMS)).unwrap();
     let v2 = std::fs::read_to_string(dir.join(SIGNATURE_V2)).unwrap();
-    let digest = horizon_release_sign::nightly_digest(
+    let digest = horizon_release_sign::build_digest(
+        horizon_release_sign::Channel::Nightly,
         VERSION,
         "horizon-windows-x64.zip",
         Some(&sums),
@@ -251,5 +257,19 @@ fn a_nightly_is_signed_for_its_channel_and_for_its_version() {
         &[("RELEASE_SIGNING_KEY", &secret), ("ALSO_FOR", "v0.2.81")],
     );
     assert!(!out.status.success());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "daily"]
+fn publishing_never_bypasses_signatures_for_fork_or_unknown_repositories() {
+    let dir = folder("repository-fail-closed");
+    for repo in ["someone/horizon", "unknown/horizon"] {
+        let output = verify(&dir, &["--repository", repo, "--publishing"]);
+        assert!(
+            !output.status.success(),
+            "unsigned {repo} archive was accepted"
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

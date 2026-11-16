@@ -16,7 +16,7 @@ The owner's guide is [hosting.md](hosting.md); every command, `server.toml` key 
 
 The dedicated server is the game itself, run headless:
 `horizon-client --resources <prepared> --dedicated [--nogui] [--port N] [--world NAME] [--universe DIR]
-[--initSettings]`, started in the server folder (`crates/horizon-client/src/game/dedicated.rs`).
+[--initSettings]`, started in the server folder (`crates/horizon-client/src/game/interface/dedicated/mod.rs`).
 
 - **Startup.** It follows vanilla's `Main.main` and `DedicatedServer.initServer`. It reads `server.properties`
   and writes it straight back with vanilla's defaults filled in (`horizon_client::server`, byte-exact with
@@ -85,10 +85,13 @@ The supervisor/engine split stays even after the engine becomes headless, for th
 With `--control-socket <dir>/.horizon/engine.json` (the existing control protocol: TCP on 127.0.0.1 plus a token, on
 every OS), the dedicated loop answers `server-status` with TPS, MSPT (average, P50/P95/P99 from the tick
 clock `/tick query` uses), players (name, UUID, address, ping, position), loaded chunks and uptime. It answers
-`console <line>` with the command's output.
+`console <line>` with the command's output. `server-mods` reads the canonical `LoadedMods` package
+inventory on this same server thread and answers `{"mods":[{"id":"example","version":"1"}]}`.
+It includes native, wasm and content packages installed in that inventory, in inventory order; an empty
+inventory is `{"mods":[]}`. The supervisor's `GET /api/v1/mods` uses this query, never a build-record fallback.
 
 **A proxy moving a player between two servers** uses more requests on this endpoint (`lan/arrivals.rs`,
-`game/dedicated/transfer.rs`). They are a built-in module, **off by default**, that the owner turns on in
+`game/interface/dedicated/transfer.rs`). They are a built-in module, **off by default**, that the owner turns on in
 `server.toml`:
 
 ```toml
@@ -431,7 +434,7 @@ controllers, no Play with Friends: the `friends` feature; nor Discord presence o
 only the official executable has), which links neither `libasound.so.2` nor `libudev.so.1`. `release.yml` builds it after the
 client archive (`xtask package-server`) and fails if `tools/check_imports.py --server` finds either library;
 CI lints the same build. `horizon-server` runs `horizon-engine` when it is beside it or on the PATH, else
-`horizon-client`. Build it yourself with `cargo build --release -p horizon-client --no-default-features`
+`horizon-client`. Build it yourself with `cargo build --release -p horizon-game --no-default-features`
 and copy `target/release/horizon-client` as `horizon-engine`. macOS and Windows have no such libraries to
 avoid, so they keep the one archive.
 
@@ -529,6 +532,17 @@ Every question has a flag (`--eula`, `--world`, `--seed`, `--port`, `--whitelist
 The owner edits only `server.toml`. The supervisor writes `server.properties` from it before every engine
 start, so the engine stays exactly vanilla. The file is short: typed sections for what owners change, and
 a `[properties]` table that passes any other vanilla key through unchanged.
+
+For Unix wasm compilation, add `"wasm.compile_timeout_secs" = "120"` under
+`[properties]` to allow 120 seconds per uncached module. The engine reads this
+runtime setting from the dedicated game directory's `server.properties`; edit the
+TOML when using the supervisor. Zero or non-numeric values publish a refusal naming
+the setting and value, excluding the affected package's code and content. Unix cache
+trust/write failures and compiler failures refuse compilation rather than drop the
+deadline; restore a private writable `.horizon-cache/wasm` and working executable.
+Removing the key restores the available-thread default; see the
+[wasm compilation settings](modding/src/how-to/wasm-mods.md#compilation-time-setting)
+for the exact formula and platform limitations.
 
 ```toml
 # Horizon server settings (docs/server.md). The server writes them into server.properties before
@@ -819,7 +833,7 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   - built: the WebSocket and its authentication, TLS, `rpc.discover`, `players`, `players/kick`,
     `server/{status,save,stop,system_message}`, and the four lists (`allowlist/*`, `bans/*`, `ip_bans/*`,
     `operators/*`), whose changes the game applies itself (its control endpoint's `management` request, in
-    `game/dedicated/management.rs`), so the source, expiry, log lines and kicks are vanilla's;
+    `game/interface/dedicated/management.rs`), so the source, expiry, log lines and kicks are vanilla's;
   - notifications: the supervisor pushes them to every connected client as vanilla's `JsonRpcNotificationService`
     does (a JSON-RPC request without an `id`, its one parameter in an array), through a queue and a thread so a slow
     client never holds the game's output. Built: `server/started` (the game's `Done`) and `server/stopping`
@@ -899,5 +913,123 @@ reproducible by anyone, and show the same gameplay on both sides.
   machine, commit, Java version, settings and every run) and prints a comparison table. Results are
   published like the client benchmark, with the machine, the versions and the exact commands. TPS is derived
   from `/tick query`'s average (20 while it fits in 50 ms), since the command reports times, not the rate.
-- **Results.** The latest comparison (Horizon, Pumpkin and vanilla under the same bots) is
-  [performance/server-vs-pumpkin.md](performance/server-vs-pumpkin.md); `tools/server_bench.py` reruns it.
+- **First run (PR 5,** on a busy shared Mac mini, so the numbers are noisy). With 1 bot Horizon ticks in
+  3.5 ms against vanilla's 11.2 ms and uses 1.6 GB against 3.6 GB. At 10 and 25 `mixed` bots Horizon falls
+  to about 10 TPS where vanilla keeps 20, and at 50 both land at about 15 TPS. The work isn't equal yet:
+  - Vanilla pulls fast players back when it lags (`moved too quickly`), which Horizon never does, so
+    vanilla's `explore` bots generated less terrain.
+  - Vanilla's chunk sending yields under load.
+  - Horizon sent each nearby `walk` bot 1.5–4 times as many chunks.
+
+  Horizon sent 2–4 times the chunks per second in every multi-bot run.
+- **Equal-work run (2026-10-17,** `benchmarks/server-equal-work-2026-10-17/`, on the ThinkPad with the bots
+  on the Mac mini). Horizon now checks moves and paces chunks as vanilla does (arismoko/horizon#586), the bots wait for the
+  chunk they stand in, an `--explore-speed` pass keeps both servers at the same rate, and vanilla runs with
+  `gamerule locator_bar false` (Horizon had no locator bar when this ran; since arismoko/horizon#692, merged the same day,
+  it sends one to vanilla clients). Results:
+  - Memory: Horizon's RSS is 1.9 to 2.6 times smaller in every run (vanilla's heap is fixed at 4 GB).
+  - Walking near spawn: Horizon's tick is shorter with 1 and 10 bots (5.5 against 18.3 ms, 11.5 against
+    16.8), and longer with 25 and 50 (20.7 against 16.0, 31.4 against 20.5). Both keep 20 TPS up to 50.
+  - Exploring at the same rate: Horizon's tick is about half of vanilla's (13.5 against 29.2 ms at 10 bots,
+    20.2 against 37.0 at 25).
+  - At 100 bots: vanilla's watchdog stops it in every pass; Horizon runs at 9 to 11 TPS.
+
+  Two server costs were found and fixed on the way: every chunk section was encoded once per player (arismoko/horizon#623),
+  and every packet woke its connection's writer thread (arismoko/horizon#649). Together they took the 50-bot walking tick
+  from 281 ms to 31 ms. At 25 walking bots most of what remains is the engine's streaming and block entity
+  ticks, both of which grow with players (the README has the profile).
+- **Mixed bots, as installed (2026-10-18,** `benchmarks/server-mixed-2026-10-18/`, the first published
+  run for the working version). It used the v2026.10.18.15 release as `install.sh` installs it, against
+  vanilla 26.3, with 1, 10, 25 and 50 `mixed` bots and vanilla's default game rules on both (Horizon has
+  the locator bar now). The servers ran on the ThinkPad and the bots on the Mac mini. Results:
+  - Both kept 20 TPS in every run.
+  - Horizon's RSS was 3.7 to 5.2 times smaller (1.0 GB against 4.0 GB at 50).
+  - Horizon's average tick was shorter with 1, 10 and 25 bots (2.4 against 17.9 ms, 12.4 against 34.5,
+    24.0 against 31.6) and longer with 50 (35.2 against 29.7). Its P99 was lower at every count.
+  - Horizon also did more work: it kept up with the exploring bots, so it generated 1.9 to 2.9 times
+    the new terrain a second.
+- **Mixed bots, equal work (2026-10-18,** `benchmarks/server-equal-mixed-2026-10-18/`). This is the same
+  run with the load made equal. The explore bots fly at 0.8 blocks a second, so every bot follows the same
+  path on both servers and none waits for terrain. A 300-second warm-up lets both finish the bots' first
+  views before the measurement. `server_bench.py` now prints a work table that compares each count's chunks
+  a second across servers and flags a run that isn't equal. Horizon ran as `horizon-engine`, the server
+  build, installed from its archive. Results, on the ThinkPad again (the desktop didn't wake):
+  - The work was equal at 1 and 10 bots. At 25 the chunks sent a second were equal (158.6 against 157.6),
+    and vanilla still sent 2.5 more first-time chunks a second while it caught up.
+  - Tick: 1.8 against 11.3 ms at 1 bot, 4.7 against 34.3 at 10, 11.7 against 50.5 at 25 (vanilla 19.8 TPS).
+    At 50 Horizon ran at 23.8 ms. Vanilla's watchdog stopped its server 30 s after the last bot joined (a
+    60-second tick). This is one pass, to repeat on a bigger machine.
+  - Horizon's RSS was 4.1 to 4.9 times smaller (1.03 GB at 50).
+  - Served in full, vanilla's walking bots got 5400 to 6100 chunks each, against 640 to 1100 in the first
+    run. That is why vanilla held 50 bots there and not here.
+- **Four servers, equal work (2026-10-19,** `benchmarks/server-four-way-2026-10-19/`). The same load
+  against vanilla, Paper (build 205, its defaults except the connection throttle, which refused bots that
+  share an address) and vanilla on Fabric with Lithium. Horizon was release v2026.10.19, which spawns mobs
+  and ticks blocks around every player as vanilla does (arismoko/horizon#950, arismoko/horizon#931), so it now does vanilla's work away
+  from spawn too. Results, on the ThinkPad (the desktop didn't wake):
+  - The work was equal on all four at every count (chunks a second within 4 %).
+  - Horizon's RSS was 3.8 to 4.8 times smaller (0.72 to 1.11 GB). It started in 8.2 to 8.5 s, against
+    14.7 to 22.4 s for the Java servers. From 10 bots up it used the least CPU.
+  - Average tick: Paper was ahead of Horizon at every count (10.3 against 13.7 ms at 1 bot, 28.3 against
+    30.9 at 25, 46.9 against 47.8 at 50). Fabric + Lithium was ahead at 1 and 10 bots (12.5 and 20.2
+    against 13.7 and 22.9), behind at 25, and fell to 17.2 TPS at 50. Vanilla was slowest, and its
+    watchdog stopped it at 50.
+  - Horizon's P99 was the lowest from 10 bots up (73 ms at 50, against Paper's 110 and Fabric's 174), and
+    its worst single P99 the lowest at every count.
+- **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
+  and fixes startup, RAM and packaging.
+
+## 10. Working version for 2026-10-23
+
+Goal: `horizon-server` installs with one command, starts from a clean config, serves Horizon and vanilla 26.3
+clients, backs up and restores, has a CLI and a basic web panel, and has a first published benchmark against
+vanilla.
+
+**In:**
+
+1. `horizon-server` crate and binary, `horizon-server-files` (the vanilla files, moved out of the client
+   unchanged), `server.toml` with import, the CLI (`init`, `run`, `start`, `stop`, `status`, `cmd`, `op`,
+   `whitelist`, `backup`, `backups`, `restore`, `logs`), crash restart, and the engine status endpoint.
+2. `install.sh` and `install.ps1`, the Dockerfile, systemd and launchd units, `service install`, and the server
+   archive in the release.
+3. The web panel MVP: status, live TPS/MSPT/RAM/CPU, players, console, backups and login links.
+4. `horizon-bots` and `tools/server_bench.py`, with a first run against vanilla (1/10/25/50 bots, `mixed`)
+   published in `benchmarks/`: done, `benchmarks/server-mixed-2026-10-18/`, and with equal work
+   `benchmarks/server-equal-mixed-2026-10-18/` (section 9).
+5. Small engine fixes found on the way: logging refused logins (vanilla's lines).
+
+**Where it stands (2026-10-16):** items 1 to 4 are built and in review (section 11). What's left for the 23rd:
+run the Dockerfile and `install.ps1` once on a machine that has Docker and on Windows; publish a release
+that holds `horizon-server`, so the installers have something to install; a clean benchmark run on a quiet
+machine, then published in `benchmarks/`; and item 5.
+
+**Out (next):**
+
+- the Nether and End for remote players;
+- the headless engine and its RAM win;
+- a server-only prepare without a JDK;
+- a Windows service, hot reload, modpacks in the panel;
+
+Online mode works, so a public server can check accounts. An offline server should still run only on a
+LAN, a tailnet, or behind a whitelist.
+
+## 11. Pull requests
+
+In order, each one small and shippable alone:
+
+1. **This design** (docs only).
+2. **`horizon-server`**, stacked in three parts:
+   - a. The crate, the vanilla files moved out of the client unchanged (`horizon-server-files`),
+     `server.toml` with import, `init`, `run` (crash restart, clean stop on Ctrl-C and SIGTERM), and `op`
+     and `whitelist` for a stopped server: arismoko/horizon#551.
+   - b. The control API on 127.0.0.1 with its token, `start`, `stop`, `restart`, `status`, `cmd` and
+     `logs`, plus the engine status endpoint. That endpoint is about 30 additive lines in
+     `game/interface/dedicated/mod.rs` plus a new `game/interface/dedicated/status.rs`. perf-ticks-2's branches touch
+     `dedicated.rs` elsewhere (`listen: true`), so the edits don't overlap. It also makes the dedicated loop
+     record its tick times, so `/tick query` reports them: arismoko/horizon#552.
+   - c. Backups, restore and automatic backups: arismoko/horizon#553.
+3. **Install scripts, Docker and services** (`service install`), and `horizon-server` in the releases: arismoko/horizon#554.
+4. **Web panel MVP:** arismoko/horizon#555.
+5. **Bots and the first benchmark against vanilla:** arismoko/horizon#556.
+
+Each PR is stacked on the one before. Merging them in order keeps every step shippable alone.

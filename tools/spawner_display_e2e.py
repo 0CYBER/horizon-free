@@ -45,7 +45,7 @@ def main():
     for key in ("HORIZON_HOME", "HORIZON_LAUNCHER_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
         homes[key] = work / key
         homes[key].mkdir()
-    env = lab.game_env(**homes, HORIZON_TELEMETRY_URL="off")
+    env = lab.game_env(**homes)
     socket = work / "ctl.sock"
 
     def ctl(*words, timeout=60):

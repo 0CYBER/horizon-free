@@ -14,6 +14,7 @@ pub struct PositionSender {
 }
 
 impl PositionSender {
+    #[horizon_mod_api_macros::replaceable]
     pub fn update(
         &mut self,
         position: [f64; 3],

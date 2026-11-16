@@ -8,16 +8,12 @@
 //! offsets), styled drawing and StringSplitter-style line wrapping.
 use crate::{
     hud::Rect,
+    resource_source::ResourceSource,
     text::{Span, Style, Text, legacy_format},
     zip::Zip,
 };
 use ab_glyph::{Font as _, ScaleFont as _};
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 /// `FontDescription.DEFAULT`.
 pub const DEFAULT: &str = "minecraft:default";
@@ -131,11 +127,7 @@ pub struct Font {
     sheets: HashMap<String, Rect>,
     missing: Glyph,
     white: Rect,
-    root: PathBuf,
-    /// The game's own resources, below a pack overlay: a font file the overlay
-    /// lacks (a pack adds providers over vanilla's, or the overlay left a
-    /// directory out) is read from here, as vanilla's resource stack does.
-    fallback: Option<PathBuf>,
+    source: ResourceSource,
     /// Atlas size and the reserved dynamic region (y, height).
     atlas: (u32, u32),
     region: (u32, u32),
@@ -204,15 +196,8 @@ fn parse_hex(text: &[u8], out: &mut HashMap<u32, HexGlyph>) {
         out.insert(codepoint, HexGlyph { rows, left, right });
     }
 }
-/// A resource file's bytes, from `root` or, when the overlay lacks it, from
-/// the game's own resources below (`defaults`).
-fn read_resource(root: &Path, defaults: Option<&Path>, path: &str) -> Option<Vec<u8>> {
-    std::fs::read(root.join(path))
-        .ok()
-        .or_else(|| defaults.and_then(|d| std::fs::read(d.join(path)).ok()))
-}
-fn read_json(root: &Path, path: &str) -> Option<serde_json::Value> {
-    serde_json::from_slice(&std::fs::read(root.join(path)).ok()?).ok()
+fn read_json(source: &ResourceSource, path: &str) -> Option<serde_json::Value> {
+    serde_json::from_slice(&source.read(path).ok()?).ok()
 }
 fn resource_path(id: &str, folder: &str, ext: &str) -> String {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
@@ -220,17 +205,22 @@ fn resource_path(id: &str, folder: &str, ext: &str) -> String {
 }
 /// Providers of a font definition with references expanded, in order, with
 /// their `filter` objects.
-fn providers(root: &Path, id: &str, depth: u32, out: &mut Vec<serde_json::Value>) {
+fn providers(source: &ResourceSource, id: &str, depth: u32, out: &mut Vec<serde_json::Value>) {
     if depth > 8 {
         return;
     }
-    let Some(def) = read_json(root, &resource_path(id, "font", ".json")) else {
+    let Some(def) = read_json(source, &resource_path(id, "font", ".json")) else {
         return;
     };
     for p in def["providers"].as_array().into_iter().flatten() {
         if p["type"] == "reference" {
             let mut nested = Vec::new();
-            providers(root, p["id"].as_str().unwrap_or(""), depth + 1, &mut nested);
+            providers(
+                source,
+                p["id"].as_str().unwrap_or(""),
+                depth + 1,
+                &mut nested,
+            );
             for mut n in nested {
                 // A reference's filter applies to everything it includes.
                 if let Some(f) = p["filter"].as_object() {
@@ -292,8 +282,7 @@ fn hex_advance(h: &HexGlyph) -> f32 {
 /// when the sheet is in it (`pixels` its RGBA), else from the sheet's own
 /// pixels, copied into the atlas when first drawn.
 fn load_bitmap(
-    root: &Path,
-    defaults: Option<&Path>,
+    source: &ResourceSource,
     p: &serde_json::Value,
     sheets: &HashMap<String, Rect>,
     pixels: &[u8],
@@ -318,21 +307,17 @@ fn load_bitmap(
             let (w, h) = rect.texels(atlas);
             (w, h, None)
         }
-        None => {
-            let path = resource_path(file, "textures", "");
-            let sheet = crate::hud::decode(&root.join(&path)).or_else(|first| {
-                defaults
-                    .and_then(|d| crate::hud::decode(&d.join(&path)).ok())
-                    .ok_or(first)
-            });
-            match sheet {
-                Ok((w, h, rgba)) => (w, h, Some(Arc::new((w, rgba)))),
-                Err(_) => {
-                    log::warn!("font sheet {file} could not be read");
-                    return out;
-                }
+        None => match source
+            .read(&resource_path(file, "textures", ""))
+            .map_err(Into::into)
+            .and_then(|bytes| crate::hud::decode_bytes(&bytes))
+        {
+            Ok((w, h, rgba)) => (w, h, Some(Arc::new((w, rgba)))),
+            Err(_) => {
+                log::warn!("font sheet {file} could not be read");
+                return out;
             }
-        }
+        },
     };
     let rows: Vec<Vec<char>> = p["chars"]
         .as_array()
@@ -409,13 +394,12 @@ fn load_bitmap(
 }
 /// `TrueTypeGlyphProviderDefinition.load`: a TrueType file (not CFF) under
 /// `font/`, its Unicode characters but the `skip` ones.
-fn load_true_type(root: &Path, defaults: Option<&Path>, p: &serde_json::Value) -> Option<TrueType> {
+fn load_true_type(source: &ResourceSource, p: &serde_json::Value) -> Option<TrueType> {
     let file = p["file"].as_str()?;
-    let path = resource_path(file, "font", "");
-    let Some(data) = read_resource(root, defaults, &path) else {
-        log::warn!("font file {file} could not be read");
-        return None;
-    };
+    let data = source
+        .read(&resource_path(file, "font", ""))
+        .map_err(|e| log::warn!("font file {file}: {e}"))
+        .ok()?;
     // FT_Get_Font_Format must say TrueType: CFF outlines ("OTTO") are refused.
     if data.starts_with(b"OTTO") {
         log::warn!("font file {file} is not in TTF format");
@@ -515,16 +499,13 @@ impl TrueType {
         )
     }
 }
-fn load_hex(root: &Path, defaults: Option<&Path>, p: &serde_json::Value) -> HashMap<u32, HexGlyph> {
+fn load_hex(source: &ResourceSource, p: &serde_json::Value) -> HashMap<u32, HexGlyph> {
     let mut glyphs = HashMap::new();
     let Some(file) = p["hex_file"].as_str() else {
         return glyphs;
     };
     let path = resource_path(file, "", "").replace("//", "/");
-    let Some(zip) = Zip::open(&root.join(&path))
-        .ok()
-        .or_else(|| defaults.and_then(|d| Zip::open(&d.join(&path)).ok()))
-    else {
+    let Ok(zip) = source.read(&path).and_then(Zip::from_bytes) else {
         return glyphs;
     };
     let names: Vec<String> = zip
@@ -557,34 +538,17 @@ fn load_hex(root: &Path, defaults: Option<&Path>, p: &serde_json::Value) -> Hash
     glyphs
 }
 /// The ids of every font definition (`font/**/*.json` of each namespace).
-fn font_ids(root: &Path) -> Vec<String> {
-    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() {
-                walk(&path, &format!("{prefix}{name}/"), out);
-            } else if let Some(stem) = name.strip_suffix(".json") {
-                out.push(format!("{prefix}{stem}"));
-            }
-        }
-    }
-    let mut ids = Vec::new();
-    for ns in std::fs::read_dir(root.join("assets"))
+fn font_ids(source: &ResourceSource) -> Vec<String> {
+    source
+        .list_under("assets", &["font"])
         .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let ns = ns.file_name().to_string_lossy().into_owned();
-        walk(
-            &root.join("assets").join(&ns).join("font"),
-            &format!("{ns}:"),
-            &mut ids,
-        );
-    }
-    ids.sort();
-    ids
+        .filter_map(|file| {
+            let (namespace, path) = file.strip_prefix("assets/")?.split_once("/font/")?;
+            Some(format!("{namespace}:{}", path.strip_suffix(".json")?))
+        })
+        .collect()
 }
+
 impl Region {
     /// Place `w x h` pixels in the region (rows left to right); their atlas
     /// position, or none when it is full.
@@ -627,36 +591,57 @@ fn next_generation() -> u64 {
 impl Font {
     /// Build from the atlas holding the bitmap font sheets (`sprites`, of
     /// `atlas` size) with `region` the reserved rows.
+    #[horizon_mod_api_macros::replaceable]
     pub fn load(
-        root: &Path,
+        source: &ResourceSource,
         sprites: &HashMap<String, Rect>,
         pixels: &[u8],
         atlas: (u32, u32),
         region: (u32, u32),
         white: Rect,
     ) -> Self {
-        Self::load_with(root, None, sprites, pixels, atlas, region, white, false)
+        Self::load_with(source, sprites, pixels, atlas, region, white, false)
     }
-    /// [`Font::load`] over a pack overlay: a sheet, TrueType file or Unihex
-    /// file the overlay lacks is read from `defaults`, the game's own
-    /// resources, as vanilla's resource stack does. (Definitions stay the
-    /// overlay's: a pack's filter may hide one from a lower pack.)
+    /// Resolve provider files against the game's resources when an overlay lacks them.
+    /// Definitions remain the overlay's so pack filters still hide lower definitions.
     #[allow(clippy::too_many_arguments)]
     pub fn load_over(
-        root: &Path,
-        defaults: &Path,
+        source: &ResourceSource,
+        defaults: &ResourceSource,
         sprites: &HashMap<String, Rect>,
         pixels: &[u8],
         atlas: (u32, u32),
         region: (u32, u32),
         white: Rect,
     ) -> Self {
-        let fallback = (root != defaults).then_some(defaults);
-        Self::load_with(root, fallback, sprites, pixels, atlas, region, white, false)
+        if source == defaults {
+            return Self::load(source, sprites, pixels, atlas, region, white);
+        }
+        use horizon_assets::resource_source::Resource;
+        let mut files: std::collections::BTreeMap<_, _> = defaults
+            .list("assets/")
+            .into_iter()
+            .filter(|p| !(p.contains("/font/") && p.ends_with(".json")))
+            .map(|p| (p.clone(), Resource::file(defaults.clone(), p)))
+            .collect();
+        files.extend(
+            source
+                .list("assets/")
+                .into_iter()
+                .map(|p| (p.clone(), Resource::file(source.clone(), p))),
+        );
+        Self::load(
+            &ResourceSource::indexed(files),
+            sprites,
+            pixels,
+            atlas,
+            region,
+            white,
+        )
     }
     /// A server measures text but never draws it. Decode bitmap sheets only
     /// to obtain advances, then release their pixels; never rasterize glyphs.
-    pub fn metrics(root: &Path) -> Self {
+    pub fn metrics(source: &ResourceSource) -> Self {
         let white = Rect {
             u0: 0.0,
             v0: 0.0,
@@ -665,21 +650,11 @@ impl Font {
             w: 1,
             h: 1,
         };
-        Self::load_with(
-            root,
-            None,
-            &HashMap::new(),
-            &[],
-            (1, 1),
-            (0, 0),
-            white,
-            true,
-        )
+        Self::load_with(source, &HashMap::new(), &[], (1, 1), (0, 0), white, true)
     }
     #[allow(clippy::too_many_arguments)]
     fn load_with(
-        root: &Path,
-        fallback: Option<&Path>,
+        source: &ResourceSource,
         sprites: &HashMap<String, Rect>,
         pixels: &[u8],
         atlas: (u32, u32),
@@ -700,8 +675,7 @@ impl Font {
                 offset: 1.0,
             },
             white,
-            root: root.to_owned(),
-            fallback: fallback.map(|p| p.to_owned()),
+            source: source.clone(),
             atlas,
             region,
             metrics_only,
@@ -721,7 +695,7 @@ impl Font {
             japanese: false,
         };
         // FontManager.prepare: every font definition of the resources.
-        let mut ids = font_ids(root);
+        let mut ids = font_ids(source);
         ids.sort_by_key(|id| id != DEFAULT);
         let sets = ids
             .into_iter()
@@ -736,7 +710,7 @@ impl Font {
     /// `FontManager`: a font's providers with references expanded.
     fn load_set(&self, id: &str, pixels: &[u8]) -> FontSet {
         let mut all = Vec::new();
-        providers(&self.root, id, 0, &mut all);
+        providers(&self.source, id, 0, &mut all);
         let providers = all
             .iter()
             .filter_map(|p| match p["type"].as_str()? {
@@ -751,8 +725,7 @@ impl Font {
                 "bitmap" => Some(Provider::Bitmap(
                     Filter::of(p),
                     load_bitmap(
-                        &self.root,
-                        self.fallback.as_deref(),
+                        &self.source,
                         p,
                         &self.sheets,
                         pixels,
@@ -763,7 +736,7 @@ impl Font {
                 "unihex" => Some(Provider::Unihex(Filter::of(p), p.clone(), None)),
                 "ttf" => Some(Provider::TrueType(
                     Filter::of(p),
-                    Box::new(load_true_type(&self.root, self.fallback.as_deref(), p)?),
+                    Box::new(load_true_type(&self.source, p)?),
                 )),
                 _ => None,
             })
@@ -923,8 +896,7 @@ impl Font {
                     }
                 }
                 Provider::Unihex(filter, def, glyphs) if filter.passes(uniform, japanese) => {
-                    let glyphs = glyphs
-                        .get_or_insert_with(|| load_hex(&self.root, self.fallback.as_deref(), def));
+                    let glyphs = glyphs.get_or_insert_with(|| load_hex(&self.source, def));
                     if let Some(h) = glyphs.get(&u32::from(c)).copied()
                         && !(non_fishy && fishy_advance(hex_advance(&h)))
                     {
@@ -1082,8 +1054,7 @@ impl Font {
                     }
                 }
                 Provider::Unihex(filter, def, glyphs) if filter.passes(uniform, japanese) => {
-                    let glyphs = glyphs
-                        .get_or_insert_with(|| load_hex(&self.root, self.fallback.as_deref(), def));
+                    let glyphs = glyphs.get_or_insert_with(|| load_hex(&self.source, def));
                     if let Some(h) = glyphs.get(&u32::from(c)) {
                         return Some(hex_advance(h));
                     }
@@ -1099,6 +1070,7 @@ impl Font {
         None
     }
     /// Atlas pixels rasterized since the last call.
+    #[horizon_mod_api_macros::replaceable]
     pub fn take_patches(&self) -> Vec<Patch> {
         std::mem::take(&mut self.cache.borrow_mut().region.pending)
     }
@@ -1192,11 +1164,11 @@ impl Font {
     /// goes on in the style at the break. Lines keep their codes for drawing.
     pub fn split_formatted(&self, t: &Text, max_width: f32) -> Vec<Text> {
         let max_width = max_width.max(1.0);
-        let mut parts: Vec<(Vec<char>, Style)> = t
+        let mut parts: Vec<(Vec<char>, Span)> = t
             .spans
             .iter()
             .filter(|s| !s.text.is_empty())
-            .map(|s| (s.text.chars().collect(), s.style.clone()))
+            .map(|s| (s.text.chars().collect(), s.with_text(String::new())))
             .collect();
         let mut flat: Vec<char> = parts.iter().flat_map(|p| p.0.iter().copied()).collect();
         let mut out = Vec::new();
@@ -1211,15 +1183,12 @@ impl Font {
             flat.drain(..at + skip);
         }
         if !parts.is_empty() {
-            let mut rest = Text::default();
-            rest.spans = parts
-                .into_iter()
-                .map(|(text, style)| Span {
-                    text: text.into_iter().collect(),
-                    style,
-                })
-                .collect();
-            out.push(rest);
+            out.push(Text::from_spans(
+                parts
+                    .into_iter()
+                    .map(|(text, span)| span.with_text(text.into_iter().collect::<String>()))
+                    .collect(),
+            ));
         } else if force_new_line {
             out.push(Text::empty());
         }
@@ -1227,11 +1196,11 @@ impl Font {
     }
     /// `StringSplitter.LineBreakFinder` fed by `StringDecomposer.iterateFormatted`:
     /// where the parts break (a character index) and the style there.
-    fn line_break(&self, parts: &[(Vec<char>, Style)], max_width: f32) -> Option<(usize, Style)> {
+    fn line_break(&self, parts: &[(Vec<char>, Span)], max_width: f32) -> Option<(usize, Style)> {
         let (mut width, mut had_visible, mut last_space) = (0.0f32, false, None);
         let mut offset = 0;
         for (contents, part_style) in parts {
-            let mut style = part_style.clone();
+            let mut style = part_style.style.clone();
             let mut i = 0;
             while i < contents.len() {
                 let c = contents[i];
@@ -1271,7 +1240,9 @@ impl Font {
             .into_iter()
             .map(|(line, wrapped)| {
                 if wrapped {
-                    Text::literal(" ").append(line)
+                    let mut spans = Text::literal(" ").into_spans();
+                    spans.extend(line.into_spans());
+                    Text::from_spans(spans)
                 } else {
                     line
                 }
@@ -1358,13 +1329,10 @@ impl Font {
 
 /// `StringSplitter.FlatComponents.splitAt`: the parts before `at` as a line,
 /// `skip` characters dropped, and the part it ends in restyled as `style`.
-fn split_at(parts: &mut Vec<(Vec<char>, Style)>, at: usize, skip: usize, style: &Style) -> Text {
-    let mut line = Text::default();
-    let mut push = |text: &[char], style: &Style| {
-        line.spans.push(Span {
-            text: text.iter().collect(),
-            style: style.clone(),
-        })
+fn split_at(parts: &mut Vec<(Vec<char>, Span)>, at: usize, skip: usize, style: &Style) -> Text {
+    let mut line = Vec::new();
+    let mut push = |text: &[char], span: &Span| {
+        line.push(span.with_text(text.iter().collect::<String>()));
     };
     // Each part done is removed, so the one at hand is always the first.
     let (mut position, mut in_skip) = (at, false);
@@ -1387,19 +1355,22 @@ fn split_at(parts: &mut Vec<(Vec<char>, Style)>, at: usize, skip: usize, style: 
             if position == size {
                 parts.remove(0);
             } else {
-                parts[0] = (text[position..].to_vec(), style.clone());
+                let mut span = part_style.clone();
+                span.style = style.clone();
+                parts[0] = (text[position..].to_vec(), span);
             }
             break;
         }
         parts.remove(0);
         position -= size;
     }
-    line
+    Text::from_spans(line)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
     #[test]
     fn unihex_rows_and_widths() {
         let mut out = HashMap::new();
@@ -1452,7 +1423,7 @@ mod tests {
     }
     fn load(root: &Path) -> Font {
         Font::load(
-            root,
+            &ResourceSource::directory(root.to_owned()),
             &HashMap::new(),
             &[],
             (4096, 1024),
@@ -1480,6 +1451,77 @@ mod tests {
     }
 
     #[test]
+    fn archive_fonts_keep_lazy_unihex_on_the_open_reload_snapshot() {
+        use std::io::{Cursor, Write};
+        let root =
+            std::env::temp_dir().join(format!("horizon-font-archive-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let write = |path: &Path, bits: &str| {
+            let mut unifont = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            unifont
+                .start_file("glyphs.hex", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            unifont
+                .write_all(format!("0041:{}\n", bits.repeat(16)).as_bytes())
+                .unwrap();
+            let unifont = unifont.finish().unwrap().into_inner();
+            let image = png(4, 8, |_, _| true);
+            let mut pack = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+            for (name, bytes) in [
+                ("assets/minecraft/font/default.json", br#"{"providers":[{"type":"reference","id":"demo:nested/bitmap"}]}"#.as_slice()),
+                ("assets/demo/font/nested/bitmap.json", br#"{"providers":[{"type":"bitmap","file":"demo:font/sheet.png","ascent":7,"chars":["a"]}]}"#),
+                ("assets/demo/font/hex.json", br#"{"providers":[{"type":"unihex","hex_file":"demo:font/unifont.zip"}]}"#),
+                ("assets/demo/font/type.json", br#"{"providers":[{"type":"ttf","file":"demo:mono.ttf","size":11}]}"#),
+                ("assets/demo/font/mono.ttf", horizon_theme::fonts::GEIST_MONO),
+                ("assets/demo/font/unifont.zip", unifont.as_slice()),
+                ("assets/demo/textures/font/sheet.png", image.as_slice()),
+            ] {
+                pack.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                pack.write_all(bytes).unwrap();
+            }
+            pack.finish().unwrap();
+        };
+        let jar = root.join("fonts.jar");
+        write(&jar, "FF");
+        let source = ResourceSource::archive(&jar).unwrap();
+        let font = Font::load(
+            &source,
+            &HashMap::new(),
+            &[],
+            (4096, 1024),
+            (512, 512),
+            white(),
+        );
+        let metrics = Font::metrics(&source);
+        let replacement = root.join("replacement.jar");
+        write(&replacement, "F0");
+        std::fs::rename(&jar, root.join("old.jar")).unwrap();
+        std::fs::rename(replacement, &jar).unwrap();
+        assert_eq!(
+            font.glyph('a').advance,
+            5.0,
+            "bitmap font reference in another namespace"
+        );
+        assert!(
+            font.glyph_in("demo:type", 'A').rect.is_some(),
+            "archive TrueType data"
+        );
+        assert_eq!(
+            font.glyph_in("demo:hex", 'A').advance,
+            5.0,
+            "first lazy read uses the old nested archive"
+        );
+        assert_eq!(metrics.glyph_in("demo:hex", 'A').advance, 5.0);
+        assert!(metrics.glyph_in("demo:hex", 'A').rect.is_none());
+        let reloaded_source = ResourceSource::archive(&jar).unwrap();
+        let reloaded = Font::metrics(&reloaded_source);
+        assert_eq!(reloaded.glyph_in("demo:hex", 'A').advance, 3.0);
+        assert!(!root.join("assets").exists());
+        drop((font, metrics, reloaded, source, reloaded_source));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn server_metrics_preserve_bitmap_true_type_and_unihex_advances() {
         let sheet = png(16, 8, |x, _| x < 2 || (8..14).contains(&x));
         let def = br#"{"providers":[{"type":"space","advances":{" ":4}},{"type":"bitmap","file":"minecraft:font/a.png","ascent":7,"chars":["ab"]}]}"#;
@@ -1497,7 +1539,7 @@ mod tests {
             ],
         );
         let rendered = load(&root);
-        let metrics = Font::metrics(&root);
+        let metrics = Font::metrics(&ResourceSource::directory(root.clone()));
         assert_eq!(metrics.width("a b"), 14.0);
         assert_eq!(metrics.width("§lab"), 12.0);
         let text = Text::literal("ab ab");
@@ -1603,7 +1645,14 @@ mod tests {
                 &[("assets/minecraft/font/default.json", def.as_bytes())],
             );
             let sprites = HashMap::from([(key.to_string(), rect)]);
-            let font = Font::load(&root, &sprites, &pixels, (16, 8), (0, 8), white());
+            let font = Font::load(
+                &ResourceSource::directory(root.clone()),
+                &sprites,
+                &pixels,
+                (16, 8),
+                (0, 8),
+                white(),
+            );
             let _ = std::fs::remove_dir_all(&root);
             assert_eq!(font.glyph('a').advance, 3.0, "{ns}");
             assert_eq!(font.glyph('b').advance, 7.0, "{ns}");
@@ -1765,13 +1814,11 @@ mod tests {
         );
         let font = load(&root);
         let _ = std::fs::remove_dir_all(&root);
-        let mut text = Text::default();
-        text.spans = ["a§", "a a"]
-            .map(|part| Span {
-                text: part.into(),
-                style: Style::default(),
-            })
-            .into();
+        let text = Text::from_spans(
+            ["a§", "a a"]
+                .map(|part| Span::new(part, Style::default()))
+                .into(),
+        );
         // 3 + 3 + 4 + 3 is past 12: the line breaks at the space.
         let lines: Vec<String> = font
             .split_formatted(&text, 12.0)
@@ -1779,6 +1826,21 @@ mod tests {
             .map(Text::plain)
             .collect();
         assert_eq!(lines, ["a§a", "a"]);
+        let mixed = Text::literal("aa")
+            .append(Text::untrusted("aa"))
+            .with_style(&Style {
+                click: Some(crate::text::ClickEvent::OpenFile("/tmp/local".into())),
+                ..Style::default()
+            });
+        let lines = font.split_formatted(&mixed, 6.0);
+        assert_eq!(
+            lines.iter().map(Text::plain).collect::<Vec<_>>(),
+            ["aa", "aa"]
+        );
+        assert_eq!(lines[0].spans[0].origin(), crate::text::Origin::Local);
+        assert_eq!(lines[1].spans[0].origin(), crate::text::Origin::Remote);
+        assert!(lines[0].spans[0].click_event().is_some());
+        assert!(lines[1].spans[0].click_event().is_none());
     }
 
     /// A renderer rebuilt over the same font (the loading screen's handoff)
@@ -1840,7 +1902,14 @@ mod tests {
             ],
         );
         // A 10 wide atlas fits one 8 pixel glyph per row; the region two rows.
-        let font = Font::load(&root, &HashMap::new(), &[], (10, 64), (0, 8), white());
+        let font = Font::load(
+            &ResourceSource::directory(root.clone()),
+            &HashMap::new(),
+            &[],
+            (10, 64),
+            (0, 8),
+            white(),
+        );
         let _ = std::fs::remove_dir_all(&root);
         let epoch = font.epoch();
         let a = font.glyph('a');
@@ -1871,7 +1940,14 @@ mod tests {
                 ("assets/pack/textures/font/s.png", &sheet),
             ],
         );
-        let font = Font::load(&root, &HashMap::new(), &[], (10, 64), (0, 8), white());
+        let font = Font::load(
+            &ResourceSource::directory(root.clone()),
+            &HashMap::new(),
+            &[],
+            (10, 64),
+            (0, 8),
+            white(),
+        );
         let _ = std::fs::remove_dir_all(&root);
         let epoch = font.epoch();
         assert!(font.glyph('z').rect.is_none());

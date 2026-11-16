@@ -1,5 +1,5 @@
 //! Bind resource selectors to a block's property schema and ordered states.
-use super::{BlockStateDefinition, Condition, Term};
+use super::{BlockStateDefinition, Condition, Term, Variant, VariantSet};
 use crate::json::{Result, error};
 use horizon_core::text::parse_java_integer;
 use std::collections::{BTreeMap, BTreeSet};
@@ -156,5 +156,32 @@ impl BlockStateDefinition {
             }
         }
         Ok(result)
+    }
+}
+impl BlockStateDefinition {
+    /// The definition a mod's definition type makes of its picks, one per state in [`Self::bind`]'s
+    /// order, bound as `bind` would: each picked state draws its variant, and a state with no pick
+    /// is left unbound, as a vanilla definition leaves a state it doesn't name. Equal picks share
+    /// one variant, so they bake once.
+    pub fn from_picks(picks: Vec<Option<Variant>>) -> (Self, Vec<Option<SelectedModels>>) {
+        let mut variants = Vec::new();
+        let mut indices = BTreeMap::new();
+        let bound = picks
+            .into_iter()
+            .map(|pick| {
+                let pick = pick?;
+                let key = (pick.model.clone(), pick.rotations, pick.uv_lock);
+                let index = *indices.entry(key).or_insert_with(|| {
+                    variants.push((String::new(), VariantSet::Single(pick)));
+                    variants.len() - 1
+                });
+                Some(SelectedModels::Variant(index))
+            })
+            .collect();
+        let definition = Self {
+            variants: Some(variants),
+            multipart: None,
+        };
+        (definition, bound)
     }
 }

@@ -74,7 +74,7 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     report = build / 'report.json'
     report.unlink(missing_ok=True)
-    paths = ['crates/horizon-world/src/snbt_text.rs', 'crates/horizon-world/src/nbt.rs',
+    paths = ['crates/horizon-world/src/snbt_text.rs', 'crates/horizon-core/src/nbt.rs',
              'crates/horizon-world/tests/it/snbt_unicode_order.rs',
              'crates/horizon-world/examples/probe/main.rs',
              'crates/horizon-world/examples/probe/snbt_unicode_fixture.rs',

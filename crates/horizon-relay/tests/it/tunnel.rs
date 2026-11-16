@@ -145,6 +145,7 @@ fn long(code: &str) -> Invite {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_code_alone_connects_without_any_server() {
     let host = start(None, PathMode::Auto);
     let (code, short) = invite_of(&host, false);
@@ -180,6 +181,7 @@ fn the_code_alone_connects_without_any_server() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_loopback_port_takes_only_the_client_with_its_token() {
     let host = start(None, PathMode::Auto);
     let (code, _) = invite_of(&host, false);
@@ -211,6 +213,7 @@ fn the_loopback_port_takes_only_the_client_with_its_token() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_short_code_through_a_self_hosted_relay() {
     let (relay, address) = relay(generous());
     let host = start(Some(&address), PathMode::Auto);
@@ -236,6 +239,7 @@ fn a_short_code_through_a_self_hosted_relay() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn unreachable_endpoints_fall_back_to_the_relay_in_the_code() {
     let (relay, address) = relay(generous());
     let host = start(Some(&address), PathMode::Auto);
@@ -265,6 +269,7 @@ fn unreachable_endpoints_fall_back_to_the_relay_in_the_code() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn wrong_secrets_fail() {
     let (_relay, address) = relay(generous());
     let host = start(Some(&address), PathMode::Auto);
@@ -350,6 +355,7 @@ fn slow_door(to: SocketAddr, delay: Duration) -> SocketAddr {
 }
 
 #[test]
+#[ignore = "daily"]
 fn another_host_answering_first_does_not_end_the_join() {
     // A housemate's game answers first at one endpoint; the invite's own host, behind a slower
     // door, at the other.
@@ -374,6 +380,7 @@ fn another_host_answering_first_does_not_end_the_join() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn bad_codes_unknown_codes_versions_and_ended_invites() {
     assert!(matches!(
         join("hello", None, PathMode::Auto),
@@ -427,6 +434,7 @@ fn bad_codes_unknown_codes_versions_and_ended_invites() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_host_that_never_attaches_is_unreachable() {
     use horizon_friends::wire::{self, FromRelay, ToRelay};
     let (_relay, address) = relay(Config {
@@ -475,6 +483,7 @@ fn a_host_that_never_attaches_is_unreachable() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn relayed_bandwidth_is_capped() {
     let rate = 200_000.0;
     let (_relay, address) = relay(Config {
@@ -500,6 +509,7 @@ fn relayed_bandwidth_is_capped() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn health_and_whoami_answer_http() {
     let (_relay, address) = relay(Config::default());
     let get = |path: &str| {
@@ -519,6 +529,7 @@ fn health_and_whoami_answer_http() {
 /// A first line trickled a byte at a time still has to arrive within
 /// `first_line` in all; past `max_connections`, connections close unanswered.
 #[test]
+#[ignore = "daily"]
 fn slow_first_lines_and_too_many_connections_are_closed() {
     let (_relay, address) = relay(Config {
         first_line: Duration::from_secs(1),

@@ -47,6 +47,10 @@ pub fn decode_intention(id: i32, payload: &[u8], host_limit: usize) -> crate::Re
     Ok(intention)
 }
 
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+
+// End generated retained traversals.
+
 #[cfg(test)]
 mod tests {
     use super::*;

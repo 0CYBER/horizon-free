@@ -1,16 +1,16 @@
 name: mod-registry
 # The submission service is its own workspace (crates/horizon-mod-registry), so the checks job doesn't build
-# it: this one does, when it or horizon-mods (the checks it shares with the launcher and the game) changes.
+# it: this one does, when it or horizon-mod-package (the checks it shares with the launcher and the game) changes.
 on:
   push:
     branches: [main]
     paths:
-      - 'crates/horizon-mods/**'
+      - 'crates/horizon-mod-package/**'
       - 'crates/horizon-mod-registry/**'
       - '.github/workflows/mod-registry.yml'
   pull_request:
     paths:
-      - 'crates/horizon-mods/**'
+      - 'crates/horizon-mod-package/**'
       - 'crates/horizon-mod-registry/**'
       - '.github/workflows/mod-registry.yml'
 permissions:

@@ -55,7 +55,7 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
 
   --server HOST:PORT     default 127.0.0.1:25565
   --bots N               default 10
-  --behaviour B          idle, walk, explore, fight or mixed (60 % walk, 20 % explore, 20 % idle); default mixed.
+  --behaviour B          idle, hotbar, walk, explore, fight or mixed (60 % walk, 20 % explore, 20 % idle); default mixed.
                          fight needs gamemode=survival, force-gamemode=true and allow-flight=true.
                          stand: stays on the ground where the server puts it (/tp), for a survival test.
                          One abusive client, to test a server's limits (run it beside a normal crowd):
@@ -91,6 +91,7 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --view-distance N      what the bots ask for; default 10
   --seed N               default 12345
   --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
+  --explore-distance B   stop exploring after B blocks, then hold position; default unlimited
   --pvp B                fight bots also attack each other (true or false); default true
   --crits                fight bots swing at a sword's full strength (every 13 ticks) and jump into every
                          other swing, landing it while falling: a critical hit, then a sweep from the
@@ -116,6 +117,7 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
 enum Behaviour {
     Idle,
     Stand,
+    Hotbar,
     Walk,
     Explore,
     Fight,
@@ -136,6 +138,7 @@ impl Behaviour {
         match self {
             Self::Idle => "idle",
             Self::Stand => "stand",
+            Self::Hotbar => "hotbar",
             Self::Walk => "walk",
             Self::Explore => "explore",
             Self::Fight => "fight",
@@ -163,6 +166,7 @@ struct Options {
     view_distance: i8,
     seed: u64,
     explore_speed: f64,
+    explore_distance: f64,
     pvp: bool,
     /// The players or entity UUIDs to attack, how long after joining to start,
     /// and how many rounds.
@@ -206,6 +210,7 @@ fn options() -> Result<Options, String> {
         view_distance: 10,
         seed: 12345,
         explore_speed: 22.0,
+        explore_distance: f64::INFINITY,
         pvp: true,
         attack: None,
         attack_after: 5.0,
@@ -269,6 +274,12 @@ fn options() -> Result<Options, String> {
             "--seed" => o.seed = value.parse().map_err(|_| number("a number"))?,
             "--explore-speed" => {
                 o.explore_speed = value.parse().map_err(|_| number("blocks a second"))?;
+            }
+            "--explore-distance" => {
+                o.explore_distance = value.parse().map_err(|_| number("positive blocks"))?;
+                if !o.explore_distance.is_finite() || o.explore_distance <= 0.0 {
+                    return Err(number("positive finite blocks"));
+                }
             }
             "--pvp" => o.pvp = value.parse().map_err(|_| number("true or false"))?,
             "--ack-mode" => {
@@ -343,13 +354,14 @@ fn options() -> Result<Options, String> {
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
-    const BEHAVIOURS: [&str; 16] = [
+    const BEHAVIOURS: [&str; 17] = [
         "idle",
         "walk",
         "explore",
         "fight",
         "mixed",
         "stand",
+        "hotbar",
         "flood-move",
         "flood-acks",
         "flood-packets",
@@ -373,6 +385,8 @@ fn options() -> Result<Options, String> {
 /// What one bot is doing, shared between its reader and its ticks.
 #[derive(Default)]
 struct Bot {
+    explore_complete: AtomicBool,
+    server_time: Mutex<Option<i64>>,
     online: AtomicBool,
     chunks: AtomicU64,
     /// Chunks received while the bot already held them (no ForgetLevelChunk in between).
@@ -845,6 +859,7 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
         let (id, body) = c.recv().map_err(err)?;
         let reply = match id {
             cb::SELECT_KNOWN_PACKS
+            | cb::CUSTOM_PAYLOAD
             | cb::KEEP_ALIVE
             | cb::PING
             | cb::CODE_OF_CONDUCT
@@ -852,6 +867,12 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
             | cb::DISCONNECT
             | cb::FINISH_CONFIGURATION => {
                 match configuration::Clientbound::decode(id, &body).map_err(err)? {
+                    configuration::Clientbound::CustomPayload(p) => {
+                        let Some(answer) = raw_protocol_answer(o.brand.as_deref(), &p)? else {
+                            continue;
+                        };
+                        configuration::Serverbound::CustomPayload(answer)
+                    }
                     configuration::Clientbound::SelectKnownPacks(p) => {
                         configuration::Serverbound::SelectKnownPacks(p)
                     }
@@ -883,6 +904,24 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
             _ => continue,
         };
         c.send(&reply.encode()).map_err(err)?;
+    }
+}
+
+/// Only a bot claiming Horizon support answers the fork's raw-protocol Query.
+fn raw_protocol_answer(
+    brand: Option<&str>,
+    payload: &configuration::CustomPayload,
+) -> Result<Option<configuration::CustomPayload>, String> {
+    use horizon_protocol::payload_negotiation::{CHANNEL, Control, Manifest};
+    if brand != Some("horizon") || payload.channel != CHANNEL {
+        return Ok(None);
+    }
+    match Control::decode(&payload.data).map_err(err)? {
+        Control::Query => Ok(Some(configuration::CustomPayload {
+            channel: CHANNEL.into(),
+            data: Control::Offer(Manifest::default()).encode().map_err(err)?,
+        })),
+        Control::Offer(_) => Ok(None),
     }
 }
 
@@ -992,6 +1031,10 @@ fn read(
         }
         let mut r = Reader::new(&body);
         let sent = match id {
+            cb::SET_TIME => {
+                *lock(&bot.server_time) = r.i64().ok();
+                Ok(())
+            }
             cb::KEEP_ALIVE => match r.i64() {
                 Ok(v) => send(raw(sb::KEEP_ALIVE, |w| w.i64(v))),
                 Err(_) => Ok(()),
@@ -1219,7 +1262,9 @@ fn run_bot(
     let mut since_attack = ATTACK_COOLDOWN_TICKS;
     let mut crits = Crits::default();
     let heading = random.unit() * std::f64::consts::TAU;
+    let mut explored = 0.0_f64;
     let mut target = pos;
+    let (mut hotbar_deadline, mut hotbar_step) = (None, 0usize);
     let mut next = Instant::now();
     let (joined, mut tick) = (Instant::now(), 0u64);
     loop {
@@ -1232,7 +1277,22 @@ fn run_bot(
         }
         let here = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
         // The abusive client doesn't wait for its chunk, as a real client must.
-        if behaviour == Behaviour::Stand {
+        if behaviour == Behaviour::Hotbar {
+            // Server time packets pace requests even during slow startup ticks.
+            if let Some(time) = *lock(&bot.server_time) {
+                let deadline = hotbar_deadline.get_or_insert(time + 40);
+                if time >= *deadline {
+                    *deadline = time + 20;
+                    if hotbar_step == 3 {
+                        bot.explore_complete.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    let slot = [3, 7, 3][hotbar_step];
+                    send(play::Serverbound::SetCarriedItem(play::SetCarriedItem { slot }).encode());
+                    hotbar_step += 1;
+                }
+            }
+        } else if behaviour == Behaviour::Stand {
             // Where the server put it, on the ground.
         } else if behaviour == Behaviour::FloodMove {
             // The last of these moves goes out below, with the tick's end.
@@ -1270,7 +1330,7 @@ fn run_bot(
             pos[1] = (pos[1] + 0.5).min(cruise);
         } else {
             match behaviour {
-                Behaviour::Idle | Behaviour::Stand => {}
+                Behaviour::Idle | Behaviour::Stand | Behaviour::Hotbar => {}
                 Behaviour::Walk => walk_step(&mut pos, &mut target, spawn, cruise, &mut random),
                 Behaviour::Fight => {
                     let near = lock(&bot.entities).nearest(pos, o.pvp, &bots);
@@ -1327,9 +1387,12 @@ fn run_bot(
                     }
                     // Flying in creative, by default about 22 blocks a second, which keeps new
                     // chunks coming as fast as the server sends them.
-                    let step = o.explore_speed / 20.0;
+                    let step = (o.explore_speed / 20.0).min(o.explore_distance - explored);
                     pos[0] += heading.cos() * step;
                     pos[2] += heading.sin() * step;
+                    explored += step;
+                    bot.explore_complete
+                        .store(explored >= o.explore_distance, Ordering::Relaxed);
                 }
             }
         }
@@ -1428,6 +1491,7 @@ fn behaviour_of(mode: &str, index: usize) -> Behaviour {
     match mode {
         "idle" => Behaviour::Idle,
         "stand" => Behaviour::Stand,
+        "hotbar" => Behaviour::Hotbar,
         "walk" => Behaviour::Walk,
         "explore" => Behaviour::Explore,
         "fight" => Behaviour::Fight,
@@ -1564,6 +1628,7 @@ fn main() {
             "forgotten": b.forgotten.load(Ordering::Relaxed),
             "pulled_back": b.pulled_back.load(Ordering::Relaxed),
             "waited_ticks": b.waited.load(Ordering::Relaxed),
+            "explore_complete": b.explore_complete.load(Ordering::Relaxed),
             "error": *lock(&b.error),
             "attacks": b.attacks.load(Ordering::Relaxed),
             "health": *lock(&b.health),
@@ -1599,6 +1664,37 @@ mod tests {
     use play::{
         AddEntity, Clientbound, MoveEntity, MoveEntityPos, RemoveEntities, SetEntityData, VecDelta,
     };
+
+    #[test]
+    fn horizon_bot_answers_only_a_marked_query_with_an_empty_offer() {
+        use horizon_protocol::payload_negotiation::CHANNEL;
+        let mut payload = configuration::CustomPayload {
+            channel: CHANNEL.into(),
+            data: vec![0, 1],
+        };
+        let answer = raw_protocol_answer(Some("horizon"), &payload)
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer.channel, CHANNEL);
+        assert_eq!(answer.data, [1, 1, 0]);
+        for brand in [None, Some("vanilla")] {
+            assert!(raw_protocol_answer(brand, &payload).unwrap().is_none());
+        }
+        payload.data = vec![1, 1, 0];
+        assert!(
+            raw_protocol_answer(Some("horizon"), &payload)
+                .unwrap()
+                .is_none()
+        );
+        payload.data = vec![0, 2];
+        assert!(raw_protocol_answer(Some("horizon"), &payload).is_err());
+        payload.channel = "other:plugin".into();
+        assert!(
+            raw_protocol_answer(Some("horizon"), &payload)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     /// Exercise the production reader over framed connections. Pings are barriers
     /// so extra ACKs are observable without sleeps or timing guesses.

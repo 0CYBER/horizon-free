@@ -14,11 +14,11 @@ use super::{
     copper_golem as cg,
 };
 use crate::{containers::BlockEntity, items::ItemStack};
+use horizon_core::java_hash_map::{JavaHashMap, JavaKey};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
 };
-use horizon_world::java_hash_map::{JavaHashMap, JavaKey};
 
 /// `TransportItemState`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -349,7 +349,7 @@ fn open_or_close(cx: &mut Bx, p: [i32; 3], open: bool, mob: u32) {
             at[2] += f64::from(o[2] - p[2]) * 0.5;
         }
         let sound = chest_hinge_sound(&name_at(w, p), open).trim_start_matches("minecraft:");
-        let pitch = cx.lr.next_float() * 0.1 + 0.9;
+        let pitch = cx.level.random().next_float() * 0.1 + 0.9;
         cx.events.push(MobEvent::Sound(sound, at, 0.5, pitch));
     }
     cx.events.push(MobEvent::ChestOpen {
@@ -371,7 +371,7 @@ impl Transport {
             return false;
         }
         self.running = true;
-        self.end = cx.now + i64::from(cx.lr.next_int_bound(1).unwrap_or(0)) + 60;
+        self.end = cx.now + i64::from(cx.level.random().next_int_bound(1).unwrap_or(0)) + 60;
         m.ai.nav.below_surface = true;
         true
     }

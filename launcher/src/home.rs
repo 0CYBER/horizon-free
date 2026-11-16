@@ -243,7 +243,15 @@ impl Launcher {
             .child(label(
                 tr(if running { "Running" } else { "Play" }).to_string(),
             ));
-        match play_press(ready, self.owner, self.preparing || running) {
+        match play_press(
+            ready,
+            if horizon_launcher::developer_offline::selected() {
+                Some(true)
+            } else {
+                self.owner
+            },
+            self.preparing || running,
+        ) {
             PlayPress::Nothing => play = disabled(play),
             PlayPress::Play => {
                 play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -255,7 +263,10 @@ impl Launcher {
             PlayPress::PrepareThenPlay => {
                 play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.picker.open = false;
-                    this.play_when_prepared = this.selected().cloned();
+                    this.play_when_prepared = this
+                        .selected()
+                        .cloned()
+                        .zip(this.selected_instance().map(|i| i.id.clone()));
                     this.prepare(backend::MinecraftFrom::Install);
                     cx.notify();
                 }))

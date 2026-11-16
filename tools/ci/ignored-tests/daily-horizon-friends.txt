@@ -1,0 +1,18 @@
+# The daily tests of horizon-friends: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-friends crypto::tests::a_wrong_secret_is_refused_on_both_ends lib daily network
+horizon-friends crypto::tests::same_code_same_key_and_frames_flow lib daily network
+horizon-friends crypto::tests::the_session_is_part_of_the_key lib daily network
+horizon-friends direct::tests::the_race_connects_and_checks_the_session lib daily slow
+horizon-friends portmap::tests::a_router_that_grants_no_lifetime_maps_nothing lib daily network
+horizon-friends portmap::tests::a_router_trickling_its_answer_runs_out_of_time lib daily network
+horizon-friends portmap::tests::nat_pmp_when_pcp_is_unsupported lib daily network
+horizon-friends portmap::tests::nothing_answering_says_why lib daily slow
+horizon-friends portmap::tests::pcp_maps_renews_and_deletes lib daily network
+horizon-friends portmap::tests::upnp_maps_and_deletes lib daily network
+horizon-friends portmap::tests::upnp_permanent_leases_and_taken_ports lib daily network
+horizon-friends stun::tests::a_query_kept_fed_with_noise_still_ends lib daily network
+horizon-friends stun::tests::asks_and_reads_the_mapped_address lib daily network
+horizon-friends tests::a_deadline_ends_a_peer_that_sends_one_byte_at_a_time lib daily network
+horizon-friends tests::a_deadline_ends_the_stream_unless_dropped lib daily network
+horizon-friends tests::tcp_keepalive_configures_stream lib daily network

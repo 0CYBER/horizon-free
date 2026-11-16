@@ -30,6 +30,23 @@ impl Drop for Temp {
 }
 
 #[test]
+fn incomplete_targets_refuse_manual_and_automatic_cleanup_even_when_idle() {
+    let home = Temp::new();
+    let output = home.put(
+        "native/target/fast/output",
+        b"keep this game-accessible output",
+    );
+    let cache = Cache::acquire(&home.0).unwrap();
+    assert!(matches!(cache.clear(), Err(Error::IncompleteUnit)));
+    assert!(matches!(cache.trim(1), Err(Error::IncompleteUnit)));
+    assert_eq!(
+        fs::read(output).unwrap(),
+        b"keep this game-accessible output"
+    );
+    assert_eq!(cache.trim(0).unwrap(), 0);
+}
+
+#[test]
 fn clears_only_disposable_outputs_and_keeps_installed_games_and_player_data() {
     let dir = Temp::new();
     let protected = [
@@ -60,9 +77,9 @@ fn clears_only_disposable_outputs_and_keeps_installed_games_and_player_data() {
         .unwrap();
     let cache = Cache::acquire(&dir.0).unwrap();
     assert_eq!(cache.bytes().unwrap(), 10);
-    assert_eq!(cache.clear().unwrap(), 10);
+    assert_eq!(cache.process(None, true).unwrap(), 10);
     assert_eq!(cache.bytes().unwrap(), 0);
-    assert_eq!(cache.clear().unwrap(), 0);
+    assert_eq!(cache.process(None, true).unwrap(), 0);
     assert!(!dir.0.join("native/built.json").exists());
     for path in protected {
         assert_eq!(fs::read(dir.0.join(path)).unwrap(), path.as_bytes());
@@ -101,7 +118,7 @@ fn a_released_lock_is_free_while_a_spawned_child_still_holds_its_descriptor() {
     let path = dir.put("native/.build.lock", b"");
     let held = lock(&path).unwrap();
     // What a child spawned at this moment holds until its exec: a copy of the same descriptor.
-    let inherited = held.0.try_clone().unwrap();
+    let inherited = held.file().try_clone().unwrap();
     drop(held);
     assert!(lock(&path).is_ok());
     drop(inherited);
@@ -116,7 +133,7 @@ fn limit_keeps_warm_cache_until_exceeded_and_zero_disables_automatic_cleanup() {
     assert_eq!(cache.trim(6).unwrap(), 0);
     assert_eq!(cache.trim(5).unwrap(), 0);
     assert_eq!(fs::read(&artifact).unwrap(), b"12345");
-    assert_eq!(cache.trim(4).unwrap(), 5);
+    assert_eq!(cache.process(Some(4), true).unwrap(), 5);
     assert!(!artifact.exists());
 }
 
@@ -130,7 +147,7 @@ fn launcher_build_lease_refuses_concurrent_operations_and_releases_without_delet
     drop(first);
     assert!(dir.0.join("native/.build.lock").is_file());
     let next = Cache::acquire(&dir.0).unwrap();
-    assert_eq!(next.clear().unwrap(), 4);
+    assert_eq!(next.process(None, true).unwrap(), 4);
 }
 
 #[test]
@@ -146,11 +163,12 @@ fn an_active_release_build_prevents_any_deletion_in_the_fast_profile_too() {
         .unwrap();
     active.try_lock().unwrap();
     let cache = Cache::acquire(&dir.0).unwrap();
-    assert!(matches!(cache.clear(), Err(Error::Busy)));
+    assert!(matches!(cache.process(None, true), Err(Error::Busy)));
     assert_eq!(fs::read(first).unwrap(), b"first");
     assert_eq!(fs::read(second).unwrap(), b"second");
+    active.unlock().unwrap(); // A parallel fork may still hold its pre-exec descriptor copy.
     drop(active);
-    assert_eq!(cache.clear().unwrap(), 11);
+    assert_eq!(cache.process(None, true).unwrap(), 11);
     assert!(cargo_lock.exists());
 }
 
@@ -196,7 +214,7 @@ fn refuses_directory_links_and_junctions_before_deleting_anything() {
             Err(Error::Unsafe(_)) => assert_eq!(name, "native"),
             Ok(cache) => {
                 assert!(matches!(cache.bytes(), Err(Error::Unsafe(_))));
-                assert!(matches!(cache.clear(), Err(Error::Unsafe(_))));
+                assert!(matches!(cache.process(None, true), Err(Error::Unsafe(_))));
             }
             Err(error) => panic!("{error:?}"),
         }
@@ -225,12 +243,15 @@ fn an_ancestor_redirect_cannot_remove_external_player_data() {
                 "{error}"
             );
             assert_eq!(fs::read(&original).unwrap(), b"original cache");
-            assert_eq!(cache.clear().unwrap(), b"original cache".len() as u64);
+            assert_eq!(
+                cache.process(None, true).unwrap(),
+                b"original cache".len() as u64
+            );
             assert_eq!(fs::read(&player).unwrap(), b"player data");
             return;
         }
     }
-    assert!(matches!(cache.clear(), Err(Error::Unsafe(_))));
+    assert!(matches!(cache.process(None, true), Err(Error::Unsafe(_))));
     assert_eq!(fs::read(player).unwrap(), b"player data");
     assert_eq!(
         fs::read(old.join(original.strip_prefix(managed).unwrap())).unwrap(),
@@ -253,7 +274,7 @@ fn unexpected_file_types_and_linked_records_fail_before_removing_outputs() {
             fs::create_dir_all(dir.0.join(wrong)).unwrap();
         }
         let cache = Cache::acquire(&dir.0).unwrap();
-        assert!(matches!(cache.clear(), Err(Error::Unsafe(_))));
+        assert!(matches!(cache.process(None, true), Err(Error::Unsafe(_))));
         assert_eq!(fs::read(artifact).unwrap(), b"preserve");
     }
 }
@@ -358,7 +379,7 @@ fn real_cargo_build_is_protected_and_installed_copy_survives_cleanup() {
     drop(cache);
     let cache = Cache::acquire(&dir.0).unwrap();
     assert!(
-        matches!(cache.clear(), Err(Error::Busy)),
+        matches!(cache.process(None, true), Err(Error::Busy)),
         "real Cargo lock must prevent cleanup"
     );
     assert_eq!(fs::read(sentinel).unwrap(), b"still in use");
@@ -374,7 +395,7 @@ fn real_cargo_build_is_protected_and_installed_copy_survives_cleanup() {
     )
     .unwrap();
     fs::rename(&temp_installed, &installed).unwrap();
-    assert!(cache.clear().unwrap() > 0);
+    assert!(cache.process(None, true).unwrap() > 0);
     assert!(!dir.0.join("native/target/fast").join(binary).exists());
     let output = retry_busy(|| Command::new(&installed).output()).unwrap();
     assert!(output.status.success());

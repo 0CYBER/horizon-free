@@ -40,8 +40,8 @@ def main():
     sources = [Path(__file__), lab.ROOT / 'tools/lab.py', lab.ROOT / 'tools/oracle_harness.py',
                lab.ROOT / 'tools/test_rust_parity.py', lab.ROOT / 'tools/integration_env.py',
                lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/horizon-client/src/game/lan.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/remote_mob_data.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/lan/mod.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/remote_mob_data.rs',
                lab.ROOT / 'crates/horizon-client/src/mobs.rs',
                lab.ROOT / 'crates/horizon-client/src/lan/entity.rs',
                lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaMobAirOracle.java']

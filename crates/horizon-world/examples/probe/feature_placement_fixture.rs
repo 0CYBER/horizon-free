@@ -40,6 +40,8 @@ fn fixture(
                 let fail = n(&f["fail"]);
                 let draw = f["draw"].as_bool().unwrap();
                 let mode = n(&f["result"]);
+                // A positive bound draws nextInt(bound), as a mod callback would (arismoko/horizon#815).
+                let bound = n(&f["draw_bound"]);
                 let result = placer.place_in(
                     &modifiers,
                     &mut context,
@@ -54,7 +56,15 @@ fn fixture(
                         writeln!(out.borrow_mut(), "feature {} {} {}", p[0], p[1], p[2])?;
                         let mut value = i64::from(p[0].wrapping_add(p[1]).wrapping_add(p[2]));
                         if draw {
-                            value = random.next_long();
+                            value = if bound > 0 {
+                                i64::from(
+                                    random
+                                        .next_int_bound(bound)
+                                        .map_err(|_| io::Error::other("invalid bound"))?,
+                                )
+                            } else {
+                                random.next_long()
+                            };
                             writeln!(out.borrow_mut(), "consumer {value}")?;
                         }
                         let result = mode == 1 || (mode == 2 && value & 1 == 0);

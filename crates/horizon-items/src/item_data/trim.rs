@@ -1,5 +1,5 @@
 //! ArmorTrim's two registry holders: names or actual inline definitions.
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]

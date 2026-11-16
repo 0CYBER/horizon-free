@@ -18,11 +18,6 @@ use horizon_world::worldgen::{
     material_surface::{ClayBandBlocks, MaterialSurface},
     tags::TagDefinitions,
 };
-use horizon_world::{
-    DATA_VERSION,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId, BlockStateJsonCodec},
-};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,6 +25,13 @@ use std::{
     io::{self, Write},
     path::Path,
     sync::{Arc, Mutex},
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        registry::{BlockRegistry, BlockStateId, BlockStateJsonCodec},
+    },
 };
 // Canonicalize numeric values as double bits, avoiding differences in JSON
 // number formatting while preserving every encoded int32/double value.

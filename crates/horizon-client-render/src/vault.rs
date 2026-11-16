@@ -9,8 +9,8 @@
 //! differential test world roll them the same way.
 pub use crate::chunk::block_entity::{Vault, VaultConfig};
 use crate::items::ItemStack;
+use horizon_core::nbt::{Compound, Tag};
 use horizon_core::random::RandomSource;
-use horizon_world::nbt::{Compound, Tag};
 
 /// A player's UUID as its four ints (`UUIDUtil.CODEC`).
 pub type Uuid = [i32; 4];
@@ -638,7 +638,7 @@ mod tests {
     use horizon_core::random::LegacyRandom;
 
     fn tag(snbt: &str) -> Tag {
-        horizon_world::nbt::parse_snbt(snbt).expect("snbt").0
+        horizon_core::nbt::parse_snbt(snbt).expect("snbt").0
     }
     struct Level {
         time: i64,

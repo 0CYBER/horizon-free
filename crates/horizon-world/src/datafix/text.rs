@@ -7,7 +7,7 @@ use super::dynamic::{
 };
 use super::json;
 use super::schema::{Key, Ty, key};
-use crate::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(4290, 0), |cx| cx.each(Ty::TextComponent, unflatten)));
@@ -68,7 +68,7 @@ fn legacy_hover_event(v: &mut Tag) {
             ("action", string("show_text")),
             (
                 "contents",
-                Tag::compound([("text", Tag::String(crate::nbt::JavaString(text)))]),
+                Tag::compound([("text", Tag::String(horizon_core::nbt::JavaString(text)))]),
             ),
         ])
     };

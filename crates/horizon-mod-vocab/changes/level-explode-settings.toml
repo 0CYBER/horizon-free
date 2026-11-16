@@ -1,0 +1,3 @@
+ids = ["handle:LevelRef::explode"]
+why = "LevelRef::explode adds an ExplosionSettings argument and changes its return from bool to Result<(), ExplodeError>."
+migrate = "Pass ExplosionSettings::default() to retain default explosion settings, or supply explicit settings; replace boolean success checks with Result handling and handle ExplodeError refusals. Rebuild native and wasm mods against the updated SDK."

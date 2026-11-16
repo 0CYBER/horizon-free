@@ -81,7 +81,7 @@ impl RandomSequences {
     }
     /// `SavedDataStorage.collectDirtyTagsToSave`: the data to write when it is dirty,
     /// which `setDirty(false)` then clears.
-    pub fn take_dirty_nbt(&mut self) -> Option<horizon_world::nbt::Tag> {
+    pub fn take_dirty_nbt(&mut self) -> Option<horizon_core::nbt::Tag> {
         self.settle();
         std::mem::take(&mut self.dirty).then(|| self.to_nbt())
     }
@@ -105,8 +105,8 @@ impl RandomSequences {
         self.sequences.insert(id, random);
     }
     /// `RandomSequences.CODEC` (`random_sequences.dat`'s data).
-    pub fn to_nbt(&self) -> horizon_world::nbt::Tag {
-        use horizon_world::nbt::Tag;
+    pub fn to_nbt(&self) -> horizon_core::nbt::Tag {
+        use horizon_core::nbt::Tag;
         let mut all: BTreeMap<&str, &XoroshiroRandom> =
             self.lent.iter().map(|(id, r)| (id.as_str(), r)).collect();
         all.extend(self.sequences.iter().map(|(id, r)| (id.as_str(), r)));
@@ -133,8 +133,8 @@ impl RandomSequences {
             ("sequences", Tag::compound(sequences)),
         ])
     }
-    pub fn from_nbt(tag: &horizon_world::nbt::Tag) -> Self {
-        use horizon_world::nbt::Tag;
+    pub fn from_nbt(tag: &horizon_core::nbt::Tag) -> Self {
+        use horizon_core::nbt::Tag;
         let int = |k: &str| match tag.get(k) {
             Some(Tag::Int(v)) => Some(*v),
             Some(Tag::Byte(v)) => Some(i32::from(*v)),

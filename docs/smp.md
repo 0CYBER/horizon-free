@@ -29,33 +29,33 @@ on what the stock client renders, never on a client mod.
 
 | Part | Where | What |
 |---|---|---|
-| Server hook points | this repository, `crates/horizon-client/src/game/native_hooks.rs` ([native-mods.md](native-mods.md)) | stable, versioned (`NATIVE_HOOKS_API`), empty when no mod hooks them |
+| Server hook points | this repository, `crates/horizon-client/src/game/native_hooks/` ([modding/src/how-to/native-mods.md](modding/src/how-to/native-mods.md)) | compiled against the installed game's exact source revision, empty when no mod hooks them |
 | The `smp` mod | [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods), `native/smp/` | a horizon-mixins bundle: `smp_store.rs`, `smp_economy.rs`, `smp_market.rs`... hold the rules and data (also the mod's own crate, with its tests, no game types), `glue.rs` and small helpers hook the points |
 | The official server's engine | built from a Horizon release's commit with the bundle applied | `horizon-server`'s `[engine] path` points at it; the rest of the server is unchanged |
 
 Why a native mod: it is the mod system Horizon has now, it runs on the server
 that simulates the world, and it keeps the SMP out of everyone else's game. Why hook points rather than reaching into
-the game's private code: a mod on the hook points builds on any later Horizon (`"hooks": N`), so the official server
-updates with each release without the mod being ported again.
+the game's private code: hook points give mods a named contract at the intended action. The official server rebuilds
+its mod against the exact source revision of the game it runs, updating the mod when that contract changes.
 
 Why not a datapack: no command arguments, no inventory transactions, no trade window, no way to refuse an action in a
 claim.
 
 ### Hook points the SMP needs
 
-Each is added in its own pull request, raising `NATIVE_HOOKS_API`, documented in [native-mods.md](native-mods.md),
-and free when no mod hooks it (an empty function). Where a contributor's pull request already adds one (block
-breaking and placing, item use: #4483, #4302), the SMP uses theirs.
+Each is added in its own pull request, documented in [modding/src/how-to/native-mods.md](modding/src/how-to/native-mods.md), and free when no mod hooks it
+(an empty function). Where a contributor's pull request already adds one (block breaking and placing, item use:
+horizon-rust/horizon#4483, horizon-rust/horizon#4302), the SMP uses theirs.
 
-| Phase | API | Hook points and helpers |
-|---|---|---|
-| 1. Economy | 8 | `native_register_commands` (commands every player's chat box completes), `native_perform_command` (a player's command on the server, with that player's state as the acting player); helpers: the online players and their game mode, a line to one player or to all, the world's folder |
-| 1. Market | 9 | the acting player's items: held, count, carried, take, room, give (plain stacks only, nothing dropped) |
-| 2. Trading | 10 | a vanilla chest menu the server opens and fills for a player, display only: its clicks and its closing go to the mod; an atomic exchange of two players' items; a player left or died |
+| Phase | Hook points and helpers |
+|---|---|
+| 1. Economy | `native_register_commands` (commands every player's chat box completes), `native_run_mod_command` (a player's command on the server, with that player's state as the acting player); helpers: the online players and their game mode, a line to one player or to all, the world's folder |
+| 1. Market | the acting player's items: held, count, carried, take, room, give (plain stacks only, nothing dropped) |
+| 2. Trading | a vanilla chest menu the server opens and fills for a player, display only: its clicks and its closing go to the mod; an atomic exchange of two players' items; a player left or died |
 | 3. Gambling | nothing new |
-| 4. Organisation | 21 | a right click on a block that a mod can refuse (beside #4302's item use and #4483's block breaking), the acting player, a command run as the server (teleports across levels with `execute in … run tp`), a player's health (a teleport's warmup stops when it drops) |
-| 4. Claims | 22 | the world kept out of claims: fluid and fire spreading, pistons, explosions' blocks, buckets, a player's blow on an entity (frames, armor stands, animals); right-clicking an entity is #4648's |
-| 5. Public server polish | 49 | a sidebar and Tab list lines for one player (the richest players, the server's TPS), the server's tick times, AFK players out of the sleep count, where players look |
+| 4. Organisation | a right click on a block that a mod can refuse (beside horizon-rust/horizon#4302's item use and horizon-rust/horizon#4483's block breaking), the acting player, a command run as the server (teleports across levels with `execute in … run tp`), a player's health (a teleport's warmup stops when it drops) |
+| 4. Claims | the world kept out of claims: fluid and fire spreading, pistons, explosions' blocks, buckets, a player's blow on an entity (frames, armor stands, animals); right-clicking an entity is horizon-rust/horizon#4648's |
+| 5. Public server polish | a sidebar and Tab list lines for one player (the richest players, the server's TPS), the server's tick times, AFK players out of the sleep count, where players look |
 
 ## Mojang's rules
 
@@ -151,9 +151,9 @@ with. The coin is a fresh random key from the system, never the world's random.
 
 ## Building the official server's engine
 
-A native mod is built into the game it runs in ([native-mods.md](native-mods.md)). For the server: the source of the
+A native mod is built into the game it runs in ([modding/src/how-to/native-mods.md](modding/src/how-to/native-mods.md)). For the server: the source of the
 release the server runs, `horizon-mixins apply` with the `smp` bundle, then the server build
-(`cargo build --release --no-default-features -p horizon-client`), and `horizon-server`'s `[engine] path` set to
+(`cargo build --release --no-default-features -p horizon-game`), and `horizon-server`'s `[engine] path` set to
 the result. When to deploy it on the official server is the owners' decision; the mod's README holds the exact
 commands.
 

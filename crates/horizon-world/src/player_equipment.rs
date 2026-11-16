@@ -1,8 +1,8 @@
 //! Player hand access through the selected inventory slot and shared equipment.
 //! Equipping writes storage before invoking LivingEntity's onEquipItem hook.
-use crate::{
-    item_stack_refs::StackRef,
-    player_inventory::{EquipmentSlot, PlayerInventory},
+use {
+    crate::{item_stack_refs::StackRef, player_inventory::PlayerInventory},
+    horizon_core::equipment_slot::EquipmentSlot,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractionHand {

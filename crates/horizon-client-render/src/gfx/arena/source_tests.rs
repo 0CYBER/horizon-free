@@ -24,8 +24,9 @@ fn read(
 }
 
 #[test]
-#[ignore = "offscreen GPU control; run explicitly with an available adapter"]
+#[ignore = "daily"]
 fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
         .expect("GPU control requires an adapter");

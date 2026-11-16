@@ -11,6 +11,7 @@ use std::sync::Arc;
 /// `AnimalMakeLove` only ever pairs a `Camel` with a `Camel`: two husks fed
 /// their food never walk off together, and never spawn a child.
 #[test]
+#[ignore = "daily"]
 fn a_camel_husk_never_breeds() {
     let mut mobs = None;
     let ran = with_test_world(&[], |_, types| {
@@ -33,18 +34,21 @@ fn a_camel_husk_never_breeds() {
             make(5, husk, 0.5, false),
         ));
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
     let Some((mut husk, husk_partner, mut camel, camel_partner, mut fed)) = mobs else {
         return;
     };
-    let seen = [husk_partner.seen(None), camel_partner.seen(None)];
+    let seen = [
+        husk_partner.seen(None, &crate::items::Items::empty()),
+        camel_partner.seen(None, &crate::items::Items::empty()),
+    ];
     let ran = with_test_world(&seen, |w, _| {
-        let mut lr = crate::mobs::world::level_random(0);
+        let mut lr = crate::health::TestLevel::new(0);
         let mut events = Vec::new();
         let husk_breeds = {
             let mut cx = Cx {
                 w,
-                lr: &mut lr,
+                level: &mut lr.level(),
                 events: &mut events,
             };
             Breed::new(1.0).can_use(&mut husk, &mut cx)
@@ -55,14 +59,14 @@ fn a_camel_husk_never_breeds() {
         let camel_breeds = {
             let mut cx = Cx {
                 w,
-                lr: &mut lr,
+                level: &mut lr.level(),
                 events: &mut events,
             };
             Breed::new(1.0).can_use(&mut camel, &mut cx)
         };
         assert!(camel_breeds, "a camel in love still breeds");
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
     // `Animal.mobInteract` asks `canFallInLove` before it sets love mode, so a
     // husk fed its food never even starts (its `canBeABaby` is false too).
     let mut level = LegacyRandom::new(0);
@@ -76,33 +80,40 @@ fn a_camel_husk_never_breeds() {
 /// answers for a player only when the camel is saddled): a player on an
 /// unsaddled camel is carried down, a saddled one drives.
 #[test]
+#[ignore = "daily"]
 fn an_unsaddled_camel_sits_down_under_its_rider() {
     let sits = |saddled: bool, rider: bool| {
         let mut camel = None;
-        with_test_world(&[], |_, types| {
-            let kind = Arc::new(types.types["minecraft:camel"].clone());
-            let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            m.extra.saddled = saddled;
-            if rider {
-                m.rider = Some(crate::mobs::equine::Rider::default());
-            }
-            camel = Some(m);
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let kind = Arc::new(types.types["minecraft:camel"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.extra.set_saddled(saddled);
+                if rider {
+                    m.rider = Some(crate::mobs::equine::Rider::default());
+                }
+                camel = Some(m);
+            }),
+            "vanilla data is missing"
+        );
         let mut m = camel?;
         m.age = 1000;
         m.extra.egg_time = 0;
         m.on_ground = true;
         let mut started = false;
-        with_test_world(&[], |w, _| {
-            let mut lr = crate::mobs::world::level_random(0);
-            let mut events = Vec::new();
-            let mut cx = Cx {
-                w,
-                lr: &mut lr,
-                events: &mut events,
-            };
-            started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                let mut lr = crate::health::TestLevel::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    level: &mut lr.level(),
+                    events: &mut events,
+                };
+                started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
+            }),
+            "vanilla data is missing"
+        );
         Some(started)
     };
     let Some(alone) = sits(false, false) else {
@@ -125,6 +136,7 @@ fn an_unsaddled_camel_sits_down_under_its_rider() {
 /// is `#minecraft:camel_husk_food` (a rabbit's foot). `FollowTemptation` reads
 /// the same tag, so a cactus tempts a camel.
 #[test]
+#[ignore = "daily"]
 fn a_camel_is_tempted_by_cactus() {
     let mut got = None;
     let ran = with_test_world(&[], |_, types| {
@@ -134,7 +146,7 @@ fn a_camel_is_tempted_by_cactus() {
             types.types["minecraft:camel_husk"].tempt.to_vec(),
         ));
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
     let Some((camel_food, camel_tempt, husk_tempt)) = got else {
         return;
     };

@@ -5,7 +5,7 @@ mod slot_sources;
 
 use super::args::{Registries, is_id_char, parse_identifier, slot_ranges};
 use super::{CmdResult, CommandError, Reader};
-use horizon_world::nbt::{Compound, JavaString, Tag};
+use horizon_core::nbt::{Compound, JavaString, Tag};
 
 pub fn snbt(t: &Tag) -> String {
     horizon_client_core::snbt::to_snbt(t)
@@ -457,7 +457,7 @@ mod predicate_tests {
     fn inline_constant_combinators_require_decodable_children() {
         let reg = Registries::default();
         let decode_text = |text| {
-            let (tag, _) = horizon_world::nbt::parse_snbt(text).unwrap();
+            let (tag, _) = horizon_core::nbt::parse_snbt(text).unwrap();
             decode("minecraft:predicate", &tag, &reg)
         };
         assert!(decode_text(r#"{type:"minecraft:all_of",terms:[{type:"minecraft:inverted",term:{type:"minecraft:any_of",terms:[]}}]}"#).is_ok());
@@ -488,7 +488,7 @@ mod feature_tests {
         // codec; a `config` key is just another unread key.
         let reg = Registries::default();
         let decode_text = |text| {
-            let (tag, _) = horizon_world::nbt::parse_snbt(text).unwrap();
+            let (tag, _) = horizon_core::nbt::parse_snbt(text).unwrap();
             decode("minecraft:worldgen/feature", &tag, &reg)
         };
         assert_eq!(
@@ -573,7 +573,7 @@ mod slot_range_tests {
                 resource_or_id(&mut reader, &reg, "minecraft:slot_source").is_err(),
                 "{name} crossed argument parsing"
             );
-            let (raw, _) = horizon_world::nbt::parse_snbt(&input).unwrap();
+            let (raw, _) = horizon_core::nbt::parse_snbt(&input).unwrap();
             let message = format!("Unknown element name:{name}");
             assert_eq!(
                 decode("minecraft:slot_source", &raw, &reg),

@@ -1,0 +1,10 @@
+# The daily tests of horizon-world: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-world biome_direct_lists::inline_multi_noise_biome_list_has_no_size_ceiling test:it daily slow
+horizon-world block_collision_scan::passing_missing_chunks_and_empty_sections_changes_nothing test:it daily slow
+horizon-world native_load_context::tests::fifo_and_directory_do_not_block_or_become_settings lib daily child-process
+horizon-world native_load_context::tests::validates_open_handle_after_entry_replacement lib daily child-process
+horizon-world state_provider_bounds::bound_recursive_providers_and_registry_lists_before_sampling test:it daily slow
+horizon-world weighted_provider::branching_provider_decoders_share_a_total_node_budget test:it daily slow
+horizon-world worldgen::climate::index::tests::search_matches_the_reference_with_ties_and_wrapping lib daily slow
+horizon-world worldgen::generator::tests::uniform_surface_biomes_preserve_zoom_and_missing_corner_errors lib daily slow

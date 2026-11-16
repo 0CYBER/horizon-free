@@ -67,6 +67,14 @@ and some are waiting for Ludovic:
   a secret of GitHub's `release` environment, which only real releases from main can use. The job that signs runs
   nothing from the repository but a short script calling OpenSSL, so no pull request can read the key by changing
   the code that gets built. Nobody, Ludovic included, ever needs to see it.
+- **A test SDK key, developer builds only.** An SDK is checked against the release keys like a release is. The daily
+  run's `fn-replace-check` checks its own, unpublished SDK, signed with a throwaway key made for that run; it gives
+  the launcher the public key in `HORIZON_SDK_TRUSTED_KEY` (one base64 Ed25519 key, `ephemeral.pub` from
+  `EPHEMERAL=yes tools/ci/sign_release.sh`). `horizon_release_sign::sdk_keys_for` adds it for SDK checks only (the
+  launcher's SDK index and `cargo horizon-mod`'s fetch) and only in a build with `debug_assertions`: a release build
+  does not compile the lookup, so no environment adds trust to a shipped launcher, and game and launcher releases
+  are never checked with it. A test in both profiles proves the release profile ignores the variable. No release
+  key enters the daily job.
 - **Nightly signatures.** A Nightly carries two signatures over the same `SHA256SUMS`. `SHA256SUMS.sig` is signed
   for the channel (`horizon release nightly`), for launchers and servers from before this change, which read only
   that one. `SHA256SUMS.v2.sig` is signed for the Nightly's own version (`horizon release nightly-<date>-<commit>`),

@@ -75,7 +75,7 @@ def scenario(m, out):
     assert init['serverInfo']['name'] == 'horizon-launcher', init
     tools = {t['name'] for t in m.rpc('tools/list', {})['tools']}
     for name in ['play', 'server', 'versions', 'settings', 'mods_search', 'modpack_list', 'servers_list',
-                 'data_status', 'account_list', 'game_args', 'game_state', 'game_ui', 'game_click',
+                 'account_list', 'game_args', 'game_state', 'game_ui', 'game_click',
                  'game_screenshot']:
         assert name in tools, f'{name} missing from {sorted(tools)}'
     for name in ['game_launch', 'mcp', 'no_ai', 'agent_config']:
@@ -224,8 +224,8 @@ def main():
     lab.link_dir(resources, version / '.local/horizon-client' / lab.VERSION)
     (version / '.installed').write_text('')
     (work / 'home').mkdir()
-    # The game's default endpoint, this run's: a player's game with Agent Control on stays out of it.
-    env = lab.game_env(HORIZON_LAUNCHER_HOME=work / 'launcher', HORIZON_HOME=work / 'home', HORIZON_TELEMETRY_URL='off',
+    # Isolate the game control endpoint from any player session.
+    env = lab.game_env(HORIZON_LAUNCHER_HOME=work / 'launcher', HORIZON_HOME=work / 'home',
                        HORIZON_CONTROL=work / 'default.sock')
     m = Mcp(Path(args.launcher).resolve(), env)
     try:

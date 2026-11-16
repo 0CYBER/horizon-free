@@ -66,6 +66,10 @@ packet_enum!(Serverbound, crate::ids::login::serverbound {
     CookieResponse(CookieResponse) = COOKIE_RESPONSE,
 });
 
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+
+// End generated retained traversals.
+
 #[cfg(test)]
 mod tests {
     use super::*;

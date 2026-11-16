@@ -49,13 +49,13 @@ fn window_depth(distance: f64, far: f64) -> f64 {
 }
 
 /// The pack's picture of a frame of the fixture, whose world drew nothing but left
-/// `world_depth` (GL window depth) everywhere.
+/// `world_depth` (GL window depth) everywhere, and the format colortex1 got.
 fn picture(
     gpu: &Gpu,
     program: &str,
     world_depth: f32,
     celestial: &[crate::mesher::Vertex],
-) -> Vec<[u8; 4]> {
+) -> (Vec<[u8; 4]>, wgpu::TextureFormat) {
     let color = gpu.texture(T::Rgba8Unorm);
     let depth = gpu.texture(T::Depth32Float);
     // The world's depth is reverse-Z.
@@ -83,12 +83,39 @@ fn picture(
         },
     );
     assert!(post.sky.is_some(), "{:?}", post.notes);
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let mut frame = fixture_frame(&hud);
     frame.title = false;
     frame.skybox = true;
     frame.celestial = celestial;
-    gpu.render(&mut post, &color, &depth, &frame, &mut |_, _, _, _| {})
+    let format = post.formats[1];
+    let pixels = gpu.render(&mut post, &color, &depth, &frame, &mut |_, _, _, _| {});
+    (pixels, format)
+}
+
+/// The values colortex1 may hold for `depth` (in 0..1): `RGBA32F` where the adapter renders
+/// 32-bit floats, else the half floats `target_format` falls back to (OpenGL without
+/// `EXT_color_buffer_float`). A render target's conversion to half floats may round to nearest
+/// or toward zero (both Vulkan and OpenGL allow either), so both half-float neighbours count.
+fn stored(depth: f64, format: wgpu::TextureFormat) -> Vec<f64> {
+    match format {
+        T::Rgba32Float => vec![f64::from(depth as f32)],
+        T::Rgba16Float => {
+            let nearest = half::f16::from_f64(depth);
+            let toward_zero = if nearest.to_f64() > depth {
+                half::f16::from_bits(nearest.to_bits() - 1)
+            } else {
+                nearest
+            };
+            vec![nearest.to_f64(), toward_zero.to_f64()]
+        }
+        other => panic!("colortex1 is RGBA32F or its half-float fallback, not {other:?}"),
+    }
+}
+
+/// `got` decodes to one of the `stored` values, within the 24-bit encoding's step.
+fn holds(got: f64, stored: &[f64]) -> bool {
+    stored.iter().any(|value| (got - value).abs() < 2e-5)
 }
 
 fn decode(p: [u8; 4]) -> f64 {
@@ -100,16 +127,17 @@ fn decode(p: [u8; 4]) -> f64 {
 /// 16 / tan(elevation) = 16 / (1 - (row + 0.5) / 8) blocks.
 #[test]
 fn the_sky_disc_reads_its_own_depth() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else { return };
-    let pixels = picture(&gpu, "gbuffers_skybasic", 1.0, &[]);
+    let (pixels, format) = picture(&gpu, "gbuffers_skybasic", 1.0, &[]);
     for row in 0..4 {
         let along = 16.0 / (1.0 - (row as f64 + 0.5) / 8.0);
-        let expected = window_depth(along, 1000.0);
+        let expected = stored(window_depth(along, 1000.0), format);
         for x in 0..SIZE[0] as usize {
             let got = decode(pixels[row * SIZE[0] as usize + x]);
             assert!(
-                (got - expected).abs() < 2e-5,
-                "row {row}, column {x}: gl_FragCoord.z {got}, expected {expected}"
+                holds(got, &expected),
+                "row {row}, column {x}: gl_FragCoord.z {got}, expected one of {expected:?}                  ({format:?})"
             );
         }
     }
@@ -119,6 +147,7 @@ fn the_sky_disc_reads_its_own_depth() {
 /// one depth everywhere.
 #[test]
 fn the_sun_reads_its_own_depth() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else { return };
     let quad = |z: f32| {
         [
@@ -138,13 +167,13 @@ fn the_sun_reads_its_own_depth() {
         })
     };
     let quads: Vec<_> = quad(100.0).into_iter().chain(quad(-100.0)).collect();
-    let pixels = picture(&gpu, "gbuffers_skytextured", 1.0, &quads);
-    let expected = window_depth(100.0, 1000.0);
+    let (pixels, format) = picture(&gpu, "gbuffers_skytextured", 1.0, &quads);
+    let expected = stored(window_depth(100.0, 1000.0), format);
     for (i, &p) in pixels[..pixels.len() / 2].iter().enumerate() {
         let got = decode(p);
         assert!(
-            (got - expected).abs() < 2e-5,
-            "pixel {i}: gl_FragCoord.z {got}, expected {expected}"
+            holds(got, &expected),
+            "pixel {i}: gl_FragCoord.z {got}, expected one of {expected:?} ({format:?})"
         );
     }
 }
@@ -153,10 +182,11 @@ fn the_sun_reads_its_own_depth() {
 /// disc, the world shows (the fixture's grey), not the sky's red.
 #[test]
 fn the_sky_shows_only_where_the_world_left_the_far_plane() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else { return };
     let half = SIZE[0] as usize * SIZE[1] as usize / 2;
-    let far = picture(&gpu, "gbuffers_skybasic", 1.0, &[]);
-    let near = picture(&gpu, "gbuffers_skybasic", 0.9999, &[]);
+    let (far, _) = picture(&gpu, "gbuffers_skybasic", 1.0, &[]);
+    let (near, _) = picture(&gpu, "gbuffers_skybasic", 0.9999, &[]);
     // The sky disc covers the upper half of the view (row 7 sees it 256 blocks away, at a
     // window depth of 0.9998).
     for (i, (f, n)) in far[half..].iter().zip(&near[half..]).enumerate() {

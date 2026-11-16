@@ -70,6 +70,7 @@ pub(crate) fn capture(registry: &BlockRegistry, flags: &[(bool, bool)]) -> Snaps
         index: HashMap::new(),
     };
     let states = registry
+        .data
         .states
         .iter()
         .map(|state| strings.state(state))
@@ -78,13 +79,20 @@ pub(crate) fn capture(registry: &BlockRegistry, flags: &[(bool, bool)]) -> Snaps
         .iter()
         .map(|&(air, fluid)| air as u8 | ((fluid as u8) << 1))
         .collect();
-    let ids = registry.ids.iter().map(|(&key, &id)| (key, id)).collect();
+    let ids = registry
+        .data
+        .ids
+        .iter()
+        .map(|(&key, &id)| (key, id))
+        .collect();
     let collided = registry
+        .data
         .collided
         .iter()
         .map(|(state, id)| (strings.state(state), id.0))
         .collect();
     let defaults = registry
+        .data
         .defaults
         .iter()
         .map(|(name, id)| (strings.get(name.as_str()), id.0))
@@ -193,10 +201,14 @@ pub(crate) fn restore(snapshot: Snapshot) -> io::Result<(BlockRegistry, Vec<(boo
     let flags = flags.iter().map(|f| (f & 1 != 0, f & 2 != 0)).collect();
     Ok((
         BlockRegistry {
-            states,
-            ids: id_map,
-            collided: collided_map,
-            defaults: default_map,
+            mod_worker_resource: std::sync::OnceLock::new(),
+            structure_block_entity_transform: std::sync::OnceLock::new(),
+            data: std::sync::Arc::new(super::data::Data {
+                states,
+                ids: id_map,
+                collided: collided_map,
+                defaults: default_map,
+            }),
             saved_states: RwLock::new(horizon_core::fast_hash::FxHashMap::default()),
         },
         flags,

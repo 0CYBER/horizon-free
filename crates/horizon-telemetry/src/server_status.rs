@@ -214,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_server_answers_its_player_count() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -240,7 +241,7 @@ mod tests {
     #[test]
     fn bad_answers_are_refused() {
         assert!(read_answer(&mut [0x00].as_slice()).is_err());
-        assert!(read_answer(&mut answer("{}")[..2].as_ref()).is_err());
+        assert!(read_answer(&mut &answer("{}")[..2]).is_err());
         let mut wrong_id = answer("{}");
         wrong_id[1] = 0x01;
         assert!(read_answer(&mut wrong_id.as_slice()).is_err());
@@ -257,6 +258,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn nobody_listening_fails_within_the_timeout() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();

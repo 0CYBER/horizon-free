@@ -74,7 +74,7 @@ pub fn living_near(m: &Mob, w: &MobWorld) -> Vec<Who> {
             found.push((Who::Mob(o.id), m.distance_sqr(o.position)));
         }
     }
-    if let Some(p) = &w.player
+    if let Some(p) = w.selected_player()
         && p.alive
         && p.bounds.intersects(area)
     {
@@ -189,7 +189,7 @@ impl Sink {
         }
     }
 }
-use horizon_world::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 
 /// `finalizeSpawn`'s memories (`m.extra.memories`) as `Brain.Packed` writes
 /// them: a `Unit` empty compound, a boolean, an integer, or a global position

@@ -1,10 +1,12 @@
 //! LivingEntity effect tick loop, including native iterator failure handling.
-use crate::{
-    active_effects::{ActiveEffects, EffectHooks},
-    java_hash_map::{CursorError, JavaKey},
-    status_effect::{BlendWorld, EffectInstance, TickWorld},
-};
 use horizon_core::random::RandomSource;
+use {
+    crate::{
+        active_effects::{ActiveEffects, EffectHooks},
+        status_effect::{BlendWorld, EffectInstance, TickWorld},
+    },
+    horizon_core::java_hash_map::{CursorError, JavaKey},
+};
 
 pub trait TickHooks<H: JavaKey + Clone>: EffectHooks<H> {
     type Rng: RandomSource;

@@ -7,9 +7,41 @@ rust-version.workspace = true
 description = "The game as the platform runs it: the engine's entry with the platform's parts registered, for an executable to start (docs/layers.md)"
 
 [dependencies]
-horizon-client = { path = "../horizon-client" }
-horizon-threads = { path = "../horizon-threads" }
-horizon-mods = { path = "../horizon-mods", default-features = false, features = ["index"] }
+horizon-guest-stack = { path = "../horizon-guest-stack" }
+horizon-client = { path = "../horizon-client", default-features = false }
+horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index"] }
+
+horizon-mod-host = { path = "../horizon-mod-host", default-features = false }
 
 [lints]
 workspace = true
+
+# The binary holds no tests (the library does): `cargo test` builds no empty test harness for it, which linked the
+# whole crate again. It still builds for integration tests (CARGO_BIN_EXE_*) and clippy --all-targets.
+[[bin]]
+name = "horizon-client"
+path = "src/main.rs"
+test = false
+
+[features]
+default = ["audio", "controllers", "horizon-extras"]
+audio = ["horizon-client/audio"]
+controllers = ["horizon-client/controllers"]
+horizon-extras = ["horizon-client/horizon-extras"]
+testing = ["horizon-client/testing"]
+friends = ["horizon-client/friends"]
+rng-trace = ["horizon-client/rng-trace"]
+system-allocator = ["horizon-client/system-allocator"]
+alloc-census = ["horizon-client/alloc-census"]
+alloc-count = ["horizon-client/alloc-count"]
+windows-mimalloc = ["horizon-client/windows-mimalloc"]
+windows-segment-heap = ["horizon-client/windows-segment-heap"]
+
+[build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+horizon-protocol = { path = "../horizon-protocol" }
+tempfile = "3"
+horizon-core = { path = "../horizon-core" }
+serde_json = "1"

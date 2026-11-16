@@ -21,8 +21,8 @@ LavaFluid.Flowing.createFluidStateDefinition	skip:data	-	state property list, re
 WaterFluid.beforeDestroyingBlock	port	crates/horizon-world/src/level/update.rs::Sim::drop_resources	called from spread_to for water only
 WaterFluid.canBeReplacedWith	port	crates/horizon-world/src/level/fluids.rs::Sim::can_be_replaced_with	-
 WaterFluid.Flowing.createFluidStateDefinition	skip:data	-	state property list, read from data tables
-MapColor.calculateARGBColor	port	crates/horizon-client/src/game/maps.rs::packed_rgba	packed id with brightness in, ARGB out; id 0 is transparent as in vanilla NONE
-MapColor.getPackedId	inline	crates/horizon-client/src/game/maps.rs::Game::render_biome_preview	the packed id (color << 2 | brightness) is built where map pixels are written (maps.rs:682 and in update_map)
+MapColor.calculateARGBColor	port	crates/horizon-client/src/game/blocks/maps/mod.rs::packed_rgba	packed id with brightness in, ARGB out; id 0 is transparent as in vanilla NONE
+MapColor.getPackedId	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::render_biome_preview	the packed id (color << 2 | brightness) is built where map pixels are written (maps.rs:682 and in update_map)
 AmphibiousNodeEvaluator.done	skip:other	-	vanilla sets the mob malus for WATER, WALKABLE and WATER_BORDER in prepare and restores it here; Horizon never writes the mob malus, Finder::malus applies the amphibious values per search
 AmphibiousNodeEvaluator.isVerticalNeighborValid	inline	crates/horizon-client/src/mobs/path.rs::Finder::walk_neighbors	the amphibious up and down neighbours need a valid node that is WATER; folded into the amphibious branch
 BinaryHeap.remove	skip:other	-	no vanilla caller: the search only uses insert, pop and changeCost, Horizon has heap_insert, heap_pop and change_cost
@@ -51,27 +51,27 @@ WalkNodeEvaluator.doesBlockHavePartialCollision	port	crates/horizon-client/src/m
 WalkNodeEvaluator.getCachedPathType	port	crates/horizon-client/src/mobs/path.rs::Finder::path_type	-
 WalkNodeEvaluator.getPathTypeWithinMobBB	port	crates/horizon-client/src/mobs/path.rs::Finder::within_bb	-
 MapItemSavedData.type	skip:data	-	saved-data type and codec; Horizon saves map files in save_maps
-MapItemSavedData.<init>	port	crates/horizon-client/src/game/maps.rs::MapData::fresh	gap: minor: sets the grid cell, scale and dimension; locked and the tracking flags are set by the caller or the NBT load
-MapItemSavedData.createForClient	port	crates/horizon-client/src/game/maps.rs::Game::remote_map_item_data	the client map is created from the packet (fresh map, locked flag from the packet)
-MapItemSavedData.mapMatcher	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	the carried maps are the map ids in the inventory and offhand, which is what the matcher finds
-MapItemSavedData.tickCarriedBy	port	crates/horizon-client/src/game/maps.rs::Game::tick_maps	gap: player: no framed-map marker when the map hangs in an item frame, and no removal of a player who wears map-invisibility gear
-MapItemSavedData.hasMapInvisibilityItemEquipped	port	crates/horizon-client/src/game/maps.rs::Holder::new	ticked in #3517; `MapItemSavedData.hasMapInvisibilityItemEquipped` is cited at crates/horizon-client/src/game/maps.rs:161
-MapItemSavedData.removeDecoration	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	decorations are rebuilt each tick (holder markers kept, the rest replaced) instead of removed by key
-MapItemSavedData.addDecoration	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	gap: player: only the item target decorations go through here; banner and frame markers never reach it
-MapItemSavedData.calculateDecorationLocationAndType	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	player branch and item branch both done inline, with clamping
-MapItemSavedData.playerDecorationTypeAndRotation	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	player marker sprite and rotation chosen inline (decoration_rotation for the rotation)
-MapItemSavedData.isInsideMap	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	the plus or minus 63 range test is inline
-MapItemSavedData.decorationTypeForPlayerOutsideMap	inline	crates/horizon-client/src/game/maps.rs::Game::tick_maps	off-map and off-limits sprite choice inline
-MapItemSavedData.setColorsDirty	inline	crates/horizon-client/src/game/maps.rs::MapData::update_color	the holders dirty rectangle is updated in update_color
-MapItemSavedData.getHoldingPlayer	port	crates/horizon-client/src/game/maps.rs::MapData::holder	-
-MapItemSavedData.toggleBanner	port	crates/horizon-client/src/game/maps.rs::MapData::toggle_banner	ticked in #3517; `MapItemSavedData.toggleBanner` is cited at crates/horizon-client/src/game/maps.rs:403
-MapItemSavedData.checkBanners	port	crates/horizon-client/src/game/maps.rs::MapData::check_banners	ticked in #3517; `MapItemSavedData.checkBanners` is cited at crates/horizon-client/src/game/maps.rs:443
-MapItemSavedData.removedFromFrame	port	crates/horizon-client/src/game/maps.rs::MapData::removed_from_frame	ticked in #3517; `MapItemSavedData.removedFromFrame` is cited at crates/horizon-client/src/game/maps.rs:387
-MapItemSavedData.setColor	port	crates/horizon-client/src/game/maps.rs::MapData::update_color	-
-MapItemSavedData.addClientSideDecorations	port	crates/horizon-client/src/game/maps.rs::Game::remote_map_item_data	decorations are replaced from the packet list
-MapItemSavedData.HoldingPlayer.createPatch	port	crates/horizon-client/src/game/maps.rs::MapData::update_packet	the dirty rectangle is copied into the patch
-MapItemSavedData.HoldingPlayer.markColorsDirty	inline	crates/horizon-client/src/game/maps.rs::MapData::update_color	the holder dirty rectangle is widened in update_color
-MapItemSavedData.MapPatch.applyToMap	port	crates/horizon-client/src/game/maps.rs::Game::remote_map_item_data	the patch loop writes each colour through update_color
+MapItemSavedData.<init>	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::fresh	gap: minor: sets the grid cell, scale and dimension; locked and the tracking flags are set by the caller or the NBT load
+MapItemSavedData.createForClient	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::remote_map_item_data	the client map is created from the packet (fresh map, locked flag from the packet)
+MapItemSavedData.mapMatcher	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	the carried maps are the map ids in the inventory and offhand, which is what the matcher finds
+MapItemSavedData.tickCarriedBy	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	gap: player: no framed-map marker when the map hangs in an item frame, and no removal of a player who wears map-invisibility gear
+MapItemSavedData.hasMapInvisibilityItemEquipped	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Holder::new	ticked in arismoko/horizon#3517; `MapItemSavedData.hasMapInvisibilityItemEquipped` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:161
+MapItemSavedData.removeDecoration	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	decorations are rebuilt each tick (holder markers kept, the rest replaced) instead of removed by key
+MapItemSavedData.addDecoration	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	gap: player: only the item target decorations go through here; banner and frame markers never reach it
+MapItemSavedData.calculateDecorationLocationAndType	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	player branch and item branch both done inline, with clamping
+MapItemSavedData.playerDecorationTypeAndRotation	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	player marker sprite and rotation chosen inline (decoration_rotation for the rotation)
+MapItemSavedData.isInsideMap	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	the plus or minus 63 range test is inline
+MapItemSavedData.decorationTypeForPlayerOutsideMap	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::tick_maps	off-map and off-limits sprite choice inline
+MapItemSavedData.setColorsDirty	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_color	the holders dirty rectangle is updated in update_color
+MapItemSavedData.getHoldingPlayer	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::holder	-
+MapItemSavedData.toggleBanner	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::toggle_banner	ticked in arismoko/horizon#3517; `MapItemSavedData.toggleBanner` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:403
+MapItemSavedData.checkBanners	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::check_banners	ticked in arismoko/horizon#3517; `MapItemSavedData.checkBanners` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:443
+MapItemSavedData.removedFromFrame	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::removed_from_frame	ticked in arismoko/horizon#3517; `MapItemSavedData.removedFromFrame` is cited at crates/horizon-client/src/game/blocks/maps/mod.rs:387
+MapItemSavedData.setColor	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_color	-
+MapItemSavedData.addClientSideDecorations	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::remote_map_item_data	decorations are replaced from the packet list
+MapItemSavedData.HoldingPlayer.createPatch	port	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_packet	the dirty rectangle is copied into the patch
+MapItemSavedData.HoldingPlayer.markColorsDirty	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::MapData::update_color	the holder dirty rectangle is widened in update_color
+MapItemSavedData.MapPatch.applyToMap	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::remote_map_item_data	the patch loop writes each colour through update_color
 LootContext.createVisitedEntry	inline	crates/horizon-world/src/loot.rs::Context::table_raw	gap: minor: only the loot-table cycle guard (visited list); predicates and modifiers are not tracked
 LootContext.EntityTarget.getByName	port	crates/horizon-world/src/loot.rs::Context::target	-
 LootPool.addRandomItems	inline	crates/horizon-world/src/loot.rs::Context::table_raw	pool condition, bonus rolls, the rolls loop and the pool modifier are in table_raw
@@ -102,7 +102,7 @@ EnchantWithLevelsFunction.Builder.build	skip:java	-	builder
 ExplorationMapFunction.claimStructureAt	missing	-	minor: no structure reference is added for the explored structure when the map is filled; Horizon keeps chunk references only (vanillagen.rs)
 ExplorationMapFunction.Builder.build	skip:java	-	builder
 ListOperation.codec	skip:data	-	codec
-ListOperation.Append.apply	inline	crates/horizon-client/src/game/commands/items.rs::list_operation	gap: minor: an append over 256 entries is truncated to 256, vanilla logs an error and keeps the original list
+ListOperation.Append.apply	inline	crates/horizon-client/src/game/administration/commands/items.rs::list_operation	gap: minor: an append over 256 entries is truncated to 256, vanilla logs an error and keeps the original list
 CommandStorage.get	port	crates/horizon-client/src/command_storage.rs::CommandStorage::get	-
 CommandStorage.getContainer	inline	crates/horizon-client/src/command_storage.rs::CommandStorage::get	namespace lookup; Horizon keeps every namespace in one map, so no container load
 CommandStorage.getOrCreateContainer	inline	crates/horizon-client/src/command_storage.rs::CommandStorage::set	the namespace entry is created on write
@@ -146,5 +146,5 @@ PortalShape.getDistanceUntilTop	inline	crates/horizon-world/src/level/portal.rs:
 TeleportTransition.playPortalSound	inline	crates/horizon-client/src/lan/hub.rs::Hub::land	level event 1032 is sent on arrival
 TeleportTransition.withRotation	inline	crates/horizon-client/src/lan/hub.rs::Hub::change_level	the turned yaw is applied with the level change
 TeleportTransition.withPosition	inline	crates/horizon-client/src/lan/hub.rs::Hub::land	the exit position is applied on arrival
-TeleportTransition.transitionAsPassenger	port	crates/horizon-client/src/game/server_travel.rs::Game::carry_riders_through_portals	riders travel with the vehicle and ride it again on arrival
+TeleportTransition.transitionAsPassenger	port	crates/horizon-client/src/game/world/server_travel.rs::Game::carry_riders_through_portals	riders travel with the vehicle and ride it again on arrival
 DefaultRedstoneWireEvaluator.calculateTargetStrength	inline	crates/horizon-world/src/level/redstone.rs::Sim::wire_update_power	the 15 shortcut and the max with the incoming signal are inline

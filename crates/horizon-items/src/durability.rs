@@ -37,8 +37,8 @@ mod tests {
     use super::*;
     use crate::item_data::{command_components, decode_components, encode_components_with_items};
     use crate::item_nbt::{item_from_nbt, item_to_nbt};
+    use horizon_core::nbt::Tag;
     use horizon_world::loot::PackOverlay;
-    use horizon_world::nbt::Tag;
     use std::fs;
 
     /// A normally non-durable item type becomes damageable when the stack
@@ -56,7 +56,8 @@ mod tests {
             r#"{"minecraft:stick":{},"minecraft:diamond_pickaxe":{"minecraft:max_damage":1561}}"#,
         )
         .unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
         let mut stick = ItemStack::new("minecraft:stick", 1);
 
         let durable = command_components(

@@ -254,7 +254,7 @@ impl MobWorld<'_> {
             .iter()
             .map(|b| std::array::from_fn(|i| f64::from(at[i % 3]) + b[i]))
             .collect();
-        shape_top(&boxes, f64::from(at[1])).map(|height| pos_to_bed(head, height))
+        shape_top(boxes, f64::from(at[1])).map(|height| pos_to_bed(head, height))
     }
     /// The biome's base temperature at a position.
     pub fn temperature(&self, x: i32, y: i32, z: i32) -> f32 {
@@ -628,7 +628,7 @@ impl MobWorld<'_> {
             return Some(target);
         }
         match who {
-            Who::Player => self.player.as_ref().map(|p| TargetInfo {
+            Who::Player => self.selected_player().map(|p| TargetInfo {
                 position: p.position,
                 eye_y: p.eye[1],
                 bounds: p.bounds,
@@ -695,6 +695,12 @@ impl MobWorld<'_> {
                 fallback: Some(self.others.iter()),
             }
         }
+    }
+    /// A passenger edge can name an object refused level residency.
+    /// Keep this separate from combat and spatial lookup through `seen`.
+    pub fn passenger_object(&self, id: u32) -> Option<&Seen> {
+        self.seen(id)
+            .or_else(|| self.passenger_objects.iter().find(|s| s.id == id))
     }
     pub fn seen(&self, id: u32) -> Option<&Seen> {
         let own = match self.others_index {
@@ -862,6 +868,7 @@ pub(crate) fn with_built_test_world_rules(
     f: impl FnOnce(&MobWorld<'_>, &super::MobTypes),
 ) -> bool {
     let Some(resources) = TestResources::vanilla() else {
+        crate::test_fixtures::report_missing();
         return false;
     };
     run_test_world(resources, others, mob_griefing, mob_drops, build, f)
@@ -878,6 +885,7 @@ pub(crate) fn with_resource_test_world(
 ) -> bool {
     // A mod's root is a scratch folder the test wrote: read it as it is now.
     let Some(resources) = TestResources::load(root) else {
+        crate::test_fixtures::report_missing();
         return false;
     };
     run_test_world(&resources, others, mob_griefing, mob_drops, build, f)
@@ -910,14 +918,17 @@ impl TestResources {
         let registry = assets.registry;
         let facts = BlockFacts::load(root, registry).unwrap();
         let motion = crate::motion::MotionResources::load(root, &assets).unwrap();
-        let data = super::MobData::load(root, &facts);
+        let source = horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf());
+        let data = super::MobData::load(&source, &facts);
         let types = super::MobTypes::load(root).unwrap();
-        let biomes = crate::biome::Biomes::load(root).unwrap();
+        let biomes = crate::biome::Biomes::load(&source).unwrap();
+        let defaults = horizon_world::item_defaults::read(root).unwrap();
         let items = crate::items::Items::load(
             root,
             registry,
             &facts,
             &horizon_world::loot::PackOverlay::NONE,
+            &defaults,
         )
         .unwrap();
         let collision = std::sync::Arc::new(crate::collisions::load(root, registry).unwrap());
@@ -941,9 +952,13 @@ impl TestResources {
         static VANILLA: std::sync::OnceLock<Option<TestResources>> = std::sync::OnceLock::new();
         VANILLA
             .get_or_init(|| {
-                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../.local/horizon-client")
-                    .join(horizon_core::VANILLA_VERSION);
+                let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../.local/horizon-client")
+                            .join(horizon_core::VANILLA_VERSION)
+                    });
                 Self::load(&root)
             })
             .as_ref()
@@ -976,25 +991,34 @@ fn run_test_world(
     build(&mut world, registry);
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
+        mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
+        goal_host: None,
         teams: Default::default(),
+        professions: crate::mobs::villager::profession_table(),
+        loop_context: crate::test_resources::server_loop_context(),
         world: &world,
         registry,
         facts,
         fluid_tables: &motion.fluids,
+        attributes: &motion.attributes,
         movement: &motion.blocks,
         collision,
         suffocation,
         data,
         player: None,
+        player_identity: None,
+        player_selection: None,
         controlling_player_movement: None,
         nearest_player: None,
         others,
+        live_mobs: None,
         dragon: None,
         leash_boats: &[],
         who_lookup: None,
         foreign: None,
         others_grid: None,
         others_index: None,
+        passenger_objects: &[],
         others_villagers: None,
         others_solid: None,
         daylight: true,
@@ -1018,7 +1042,12 @@ fn run_test_world(
         items: Some(items),
         lid_openers: &lid_openers,
         mod_effects: None,
+        mob_hooks: None,
+        asks_animal_tame: false,
+        asks_living_destroy_block: false,
+        asks_baby_spawn: false,
         border: None,
+        section_writer: None,
     };
     f(&w, types);
     true
@@ -1034,6 +1063,7 @@ pub(crate) fn test_player(position: Vec3) -> super::PlayerView {
         ),
         eye: [position.x, position.y + 1.62, position.z],
         alive: true,
+        invulnerable: false,
         creative: false,
         sneaking: false,
         swimming: false,
@@ -1074,6 +1104,7 @@ mod scaffolding_sight_tests {
     /// ScaffoldingBlock.getCollisionShape: a viewer below the block sees
     /// through it, one above does not (issue 9607).
     #[test]
+    #[ignore = "daily"]
     fn scaffolding_blocks_sight_only_from_above() {
         let ran = super::with_built_test_world(
             &[],
@@ -1092,7 +1123,60 @@ mod scaffolding_sight_tests {
                 assert!(!w.line_of_sight_for(Some(66.0), above, below));
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
+    }
+}
+
+#[cfg(test)]
+mod missing_data_report_tests {
+    #[test]
+    #[ignore = "daily"]
+    fn missing_mob_data_reports_one_counted_skip_per_test() {
+        const CHILD: &str = "HORIZON_MISSING_MOB_DATA_REPORT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = std::env::temp_dir().join(format!(
+                "horizon-missing-mob-data-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            for _ in 0..2 {
+                assert!(!super::with_resource_test_world(
+                    &root,
+                    &[],
+                    true,
+                    true,
+                    |_, _| panic!("missing data must not build the world"),
+                    |_, _| panic!("missing data must not run the case"),
+                ));
+            }
+            std::fs::remove_dir(root).unwrap();
+            return;
+        }
+        let test = concat!(
+            module_path!(),
+            "::missing_mob_data_reports_one_counted_skip_per_test"
+        )
+        .split_once("::")
+        .unwrap()
+        .1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--include-ignored", "--exact", test]) // Deliberately keep libtest's default capture.
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr.matches("skipped: no vanilla data").count(),
+            1,
+            "{stderr}"
+        );
+        assert!(stderr.contains("skipped tests=1"), "{stderr}");
+        assert!(stderr.contains(test), "{stderr}");
     }
 }
 

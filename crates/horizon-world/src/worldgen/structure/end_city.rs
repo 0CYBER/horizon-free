@@ -1,13 +1,16 @@
 //! End cities: EndCityStructure piece assembly (EndCityPieces section
 //! generators) and EndCityPiece data markers.
-use super::{
-    BoundingBox, Mirror, Rotation, StructureResources, StructureTemplate,
-    legacy::{LegacyPiece, PieceContext, Result, TemplateHandler, TemplatePiece, offset},
-    processor::ProcessorList,
-};
-use crate::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 use horizon_core::{geometry::Direction, random::RandomSource};
 use std::sync::Arc;
+use {
+    super::{
+        Mirror, Rotation, StructureResources, StructureTemplate,
+        legacy::{LegacyPiece, PieceContext, Result, TemplateHandler, TemplatePiece, offset},
+        processor::ProcessorList,
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
 
 const MAX_GEN_DEPTH: i32 = 8;
 const TOWER_BRIDGES: [(Rotation, [i32; 3]); 4] = [
@@ -412,11 +415,14 @@ impl LegacyPiece for EndCityPiece {
     }
     /// `EndCityPiece`: the template piece's tag, `OW` for the pieces that
     /// overwrite air (only structure blocks ignored).
-    fn save(&self) -> Option<crate::nbt::Compound> {
+    fn save(&self) -> Option<horizon_core::nbt::Compound> {
         let mut tag = self.0.saved();
-        tag.insert("GD".into(), crate::nbt::Tag::Int(self.1));
+        tag.insert("GD".into(), horizon_core::nbt::Tag::Int(self.1));
         let overwrite = self.0.ignore.len() == 1;
-        tag.insert("OW".into(), crate::nbt::Tag::Byte(i8::from(overwrite)));
+        tag.insert(
+            "OW".into(),
+            horizon_core::nbt::Tag::Byte(i8::from(overwrite)),
+        );
         Some(tag)
     }
     fn type_name(&self) -> &'static str {

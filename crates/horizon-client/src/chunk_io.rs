@@ -5,7 +5,7 @@
 //! here; the window drains the queue every frame (`Minecraft.execute`).
 //! `SystemToast.addOrUpdate` makes a repeat reset the toast it already shows,
 //! so only the newest chunk of each kind is kept.
-use crate::{lang, save, toasts::SystemToast};
+use crate::{save, text::Text, toasts::SystemToast};
 use std::{path::Path, sync::Mutex};
 
 /// What the window has still to toast.
@@ -88,8 +88,8 @@ fn red() -> u32 {
 /// `SystemToast.onLowDiskSpace` (`SystemToastId.LOW_DISK_SPACE`: ten seconds).
 pub fn low_disk_space_toast() -> SystemToast {
     SystemToast::new(
-        lang::tr("chunk.toast.lowDiskSpace", &[]),
-        Some(lang::tr("chunk.toast.lowDiskSpace.description", &[])),
+        Text::tr("chunk.toast.lowDiskSpace", &[]),
+        Some(Text::tr("chunk.toast.lowDiskSpace.description", &[])),
     )
     .with_display_time(SystemToast::LONG_DISPLAY_TIME)
 }
@@ -98,8 +98,8 @@ fn chunk_toast(key: &str, x: i32, z: i32) -> SystemToast {
     // `Component.translationArg(ChunkPos)` is `ChunkPos.toString`.
     let pos = format!("[{x}, {z}]");
     SystemToast::new(
-        lang::tr(key, &[&pos]),
-        Some(lang::tr("chunk.toast.checkLog", &[])),
+        Text::tr(key, &[&pos]),
+        Some(Text::tr("chunk.toast.checkLog", &[])),
     )
     .with_title_color(red())
 }

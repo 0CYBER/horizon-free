@@ -8,7 +8,7 @@ use super::fixes_a::fix_block_pos;
 use super::fixes_b::feature_flag_remove;
 use super::schema::{Key, Ty, key};
 use super::{Cx, FixFn, id_is, renamer, reread_as};
-use crate::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(3077, 0), chunk_delete_ignored_light));

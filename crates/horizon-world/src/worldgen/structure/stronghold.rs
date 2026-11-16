@@ -1,16 +1,19 @@
 //! Strongholds: StrongholdStructure, StrongholdPieces and the concentric
 //! ring positions of ChunkGeneratorStructureState.
-use super::{
-    BoundingBox,
-    legacy::{LegacyPiece, PieceContext, PieceFrame, Result, make_bounding_box, random_horizontal},
-};
-use crate::{nbt::Tag, registry::BlockStateId, worldgen::biome::BiomeId};
+use crate::{registry::BlockStateId, worldgen::biome::BiomeId};
+use horizon_core::nbt::Tag;
 use horizon_core::{
     geometry::Direction,
     position::ChunkPos,
     random::{LegacyRandom, RandomSource, WorldgenRandom},
 };
 use std::{collections::BTreeSet, f64::consts::PI, sync::Mutex};
+use {
+    super::legacy::{
+        LegacyPiece, PieceContext, PieceFrame, Result, make_bounding_box, random_horizontal,
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
 
 /// ChunkGeneratorStructureState.generateRingPositions with
 /// BiomeSource.findBiomeHorizontal (radius 112, step 1, not closest).
@@ -1221,8 +1224,8 @@ impl LegacyPiece for StrongholdPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
-    fn save(&self) -> Option<crate::nbt::Compound> {
-        use crate::nbt::Tag;
+    fn save(&self) -> Option<horizon_core::nbt::Compound> {
+        use horizon_core::nbt::Tag;
         let flag = |b: bool| Tag::Byte(i8::from(b));
         let mut tag = super::legacy::piece_tag(
             self.type_name(),

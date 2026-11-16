@@ -140,12 +140,15 @@ impl Goal for Spell {
             // `performSpellCasting` blinds the target whatever it is: a
             // villager or an iron golem as well as the player.
             match m.ai.target {
-                Some(Who::Player) => cx.events.push(MobEvent::EffectPlayer {
-                    effect: BLINDNESS,
-                    ticks: 400,
-                    amplifier: 0,
-                    ambient: false,
-                }),
+                Some(Who::Player) => {
+                    cx.events
+                        .push(cx.w.route_player_event(MobEvent::EffectPlayer {
+                            effect: BLINDNESS,
+                            ticks: 400,
+                            amplifier: 0,
+                            ambient: false,
+                        }))
+                }
                 Some(Who::Mob(target)) => cx.events.push(MobEvent::EffectMob {
                     target,
                     effect: BLINDNESS,
@@ -167,10 +170,9 @@ impl Goal for Spell {
 /// `Entity.isInvisible` of an illusioner on a client: the shared flag stands
 /// in for the effect the server holds, which draws the mirror images.
 pub fn set_invisible(m: &mut Mob, on: bool) {
-    m.extra.effects.retain(|e| e.0 != INVISIBILITY);
-    m.extra.effect_fallbacks.retain(|h| h.id != INVISIBILITY);
+    m.retain_effects(|e| e.id != INVISIBILITY);
     if on {
-        m.extra.effects.push((INVISIBILITY, i32::MAX, 0));
+        m.add_effect(INVISIBILITY, i32::MAX, 0);
     }
 }
 
@@ -295,6 +297,7 @@ mod tests {
     /// Without it the count stayed at 20 after the first spell, so the
     /// illusioner kept casting: no second spell and no bow.
     #[test]
+    #[ignore = "daily"]
     fn the_cast_counts_down() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
@@ -307,9 +310,13 @@ mod tests {
                 0.0,
             );
             m.extra.counter = 20;
-            let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
+            m.random =
+                horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(0));
+            let mut fixture = crate::health::TestLevel::new(0);
+            let mut level = fixture.level();
+            let mut events = Vec::new();
             for _ in 0..5 {
-                crate::mobs::ai::tick(&mut m, w, &mut lr, &mut events);
+                crate::mobs::ai::tick(&mut m, w, &mut level, &mut events);
             }
             left = Some(m.extra.counter);
         });
@@ -324,6 +331,7 @@ mod tests {
     /// an iron golem (mob 2) gets it as the player does. Without the fix the
     /// cast on a mob sent no effect at all.
     #[test]
+    #[ignore = "daily"]
     fn the_blindness_spell_reaches_a_targeted_mob() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
@@ -339,12 +347,17 @@ mod tests {
                 m.ai.target = Some(target);
                 let mut spell = Spell::new(BLINDNESS_SPELL);
                 spell.warmup = 1;
-                let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
+                m.random = horizon_core::random::EntityRandom::own(
+                    horizon_core::random::LegacyRandom::new(0),
+                );
+                let mut fixture = crate::health::TestLevel::new(0);
+                let mut level = fixture.level();
+                let mut events = Vec::new();
                 spell.tick(
                     &mut m,
                     &mut Cx {
                         w,
-                        lr: &mut lr,
+                        level: &mut level,
                         events: &mut events,
                     },
                 );

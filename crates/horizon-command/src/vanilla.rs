@@ -5,7 +5,7 @@ use super::{
     Dispatcher,
     args::{ArgType, Resource, integer},
 };
-use horizon_client_core::gamerules::{MINECART_IMPROVEMENTS, Value, available_rules};
+use horizon_client_core::gamerules::{MINECART_IMPROVEMENTS, RuleRegistry, Value, rule_registry};
 
 /// Permission levels (Commands.LEVEL_*).
 pub const ALL: u8 = 0;
@@ -41,10 +41,15 @@ pub fn build_with(dev: bool) -> Dispatcher {
 /// [`build_with`] for a server of the given kind (Commands.CommandSelection):
 /// an integrated server's tree, or with `dedicated` a dedicated server's.
 pub fn build_for(dev: bool, dedicated: bool) -> Dispatcher {
-    build_for_features(dev, dedicated, false)
+    build_for_features(dev, dedicated, false, &rule_registry())
 }
-fn build_for_features(dev: bool, dedicated: bool, minecart_improvements: bool) -> Dispatcher {
-    let mut d = registered_with_features(dev, minecart_improvements);
+fn build_for_features(
+    dev: bool,
+    dedicated: bool,
+    minecart_improvements: bool,
+    registry: &RuleRegistry,
+) -> Dispatcher {
+    let mut d = registered_with_features(dev, minecart_improvements, registry);
     if dedicated {
         dedicated_selection(&mut d);
     }
@@ -75,9 +80,13 @@ fn dedicated_selection(d: &mut Dispatcher) {
 /// [`vanilla_order`](super::vanilla_order) puts children in vanilla's order
 /// (tools/generate_command_order.py compares the two).
 pub fn registered(dev: bool) -> Dispatcher {
-    registered_with_features(dev, false)
+    registered_with_features(dev, false, &rule_registry())
 }
-fn registered_with_features(dev: bool, minecart_improvements: bool) -> Dispatcher {
+fn registered_with_features(
+    dev: bool,
+    minecart_improvements: bool,
+    registry: &RuleRegistry,
+) -> Dispatcher {
     let mut d = Dispatcher::new();
     let root = 0;
 
@@ -298,9 +307,10 @@ fn registered_with_features(dev: bool, minecart_improvements: bool) -> Dispatche
     // gamerule <rule> [<value>] (short and namespaced names)
     let gr = d.literal(root, "gamerule");
     d.requires(gr, GAMEMASTERS);
-    for rule in available_rules(minecart_improvements) {
-        for name in [rule.name.to_owned(), format!("minecraft:{}", rule.name)] {
-            let r = d.literal(gr, &name);
+    for rule in registry.available_rules(minecart_improvements) {
+        for name in std::iter::once(rule.name.as_str()).chain(rule.name.strip_prefix("minecraft:"))
+        {
+            let r = d.literal(gr, name);
             d.executes(r, "gamerule");
             let ty = match rule.default {
                 Value::Bool(_) => ArgType::Bool,
@@ -582,25 +592,36 @@ pub fn game_dispatcher() -> &'static Dispatcher {
         DEDICATED_COMMANDS.load(std::sync::atomic::Ordering::Relaxed),
     )
 }
-/// The server's tree for this world's enabled features. Cache entries are
-/// separate from vanilla-only worlds and from each server/command selection.
-pub fn game_dispatcher_with_features(features: &[String]) -> &'static Dispatcher {
-    if !features.iter().any(|f| f == MINECART_IMPROVEMENTS) {
-        return game_dispatcher();
-    }
-    static TREES: [std::sync::OnceLock<Dispatcher>; 8] = [const { std::sync::OnceLock::new() }; 8];
+/// Profiler permission in parser and report-format clientbound trees.
+pub const MODPROFILE_PERMISSION: (u8, &str) = (3, "admins");
+/// Session-only profiler literals and their execution identifiers.
+pub const MODPROFILE_ACTIONS: [(&str, &str); 3] = [
+    ("start", "modprofile.start"),
+    ("stop", "modprofile.stop"),
+    ("report", "modprofile.report"),
+];
+/// Build the command tree for one server session's registry.
+pub fn session_dispatcher(registry: &RuleRegistry, features: &[String]) -> Dispatcher {
     let dev = std::env::var_os("HORIZON_DEV_COMMANDS").is_some();
     let horizon = HORIZON_COMMANDS.load(std::sync::atomic::Ordering::Relaxed);
     let dedicated = DEDICATED_COMMANDS.load(std::sync::atomic::Ordering::Relaxed);
-    TREES[usize::from(dev) | usize::from(horizon) << 1 | usize::from(dedicated) << 2].get_or_init(
-        || {
-            let mut d = build_for_features(dev, dedicated, true);
-            if horizon {
-                horizon_commands(&mut d, 0);
-            }
-            d
-        },
-    )
+    let mut tree = build_for_features(
+        dev,
+        dedicated,
+        features.iter().any(|f| f == MINECART_IMPROVEMENTS),
+        registry,
+    );
+    if horizon {
+        horizon_commands(&mut tree, 0);
+    }
+    // Game-session tooling, not part of vanilla's reference/parity dispatcher.
+    let profile = tree.literal(0, "modprofile");
+    tree.requires(profile, MODPROFILE_PERMISSION.0);
+    for (name, id) in MODPROFILE_ACTIONS {
+        let node = tree.literal(profile, name);
+        tree.executes(node, id);
+    }
+    tree
 }
 /// Whether this process is a dedicated server, whose tree has the dedicated
 /// commands (`/op`, `/ban`, `/whitelist`...). Single player's server thread

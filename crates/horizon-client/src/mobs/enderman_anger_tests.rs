@@ -34,11 +34,11 @@ fn world_with_player<'a>(w: &MobWorld<'a>, m: &Mob, at: Vec3) -> MobWorld<'a> {
 /// Whether the look goal starts this tick.
 fn look_goal_starts(m: &mut Mob, world: &MobWorld) -> bool {
     m.ai.goals.add(1, look_goal());
-    let mut lr = crate::mobs::world::level_random(0);
+    let mut lr = crate::health::TestLevel::new(0);
     let mut events = Vec::new();
     let mut cx = Cx {
         w: world,
-        lr: &mut lr,
+        level: &mut lr.level(),
         events: &mut events,
     };
     let mut goals = std::mem::take(&mut m.ai.goals);
@@ -53,6 +53,7 @@ fn look_goal_starts(m: &mut Mob, world: &MobWorld) -> bool {
 /// `setTarget(null)`) keeps the anger, which runs down tick by tick, and the look goal takes the
 /// player back on sight with no stare. A calm enderman ignores the same player.
 #[test]
+#[ignore = "daily"]
 fn an_angry_enderman_takes_its_player_back_on_sight_without_a_stare() {
     let mut out = None;
     if !with_test_world(&[], |w, _| {
@@ -90,6 +91,7 @@ fn an_angry_enderman_takes_its_player_back_on_sight_without_a_stare() {
 
 /// The anger ends when its time runs out with no target (`stopBeingAngry`): the enderman is calm.
 #[test]
+#[ignore = "daily"]
 fn an_enderman_calms_down_when_its_anger_runs_out() {
     let mut out = None;
     if !with_test_world(&[], |w, _| {
@@ -112,17 +114,18 @@ fn an_enderman_calms_down_when_its_anger_runs_out() {
 /// `continueAggroTargetConditions` is `forCombat().ignoreLineOfSight()`, which has no range: an
 /// enderman keeps a player target that went beyond its 64-block follow range.
 #[test]
+#[ignore = "daily"]
 fn an_enderman_keeps_a_target_beyond_its_follow_range() {
     let mut out = None;
     if !with_test_world(&[], |w, _| {
         let mut m = enderman();
         let world = world_with_player(w, &m, Vec3::new(80.5, 64.0, 0.5));
         m.ai.target = Some(Who::Player);
-        let mut lr = crate::mobs::world::level_random(0);
+        let mut lr = crate::health::TestLevel::new(0);
         let mut events = Vec::new();
         let mut cx = Cx {
             w: &world,
-            lr: &mut lr,
+            level: &mut lr.level(),
             events: &mut events,
         };
         out = Some(look_goal().can_continue(&mut m, &mut cx));

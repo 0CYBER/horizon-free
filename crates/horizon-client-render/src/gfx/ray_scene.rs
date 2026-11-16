@@ -1632,6 +1632,7 @@ mod tests {
     /// `HORIZON_RAY_TRACING`, and every plain build) gets no scene, and its buffers no usage.
     #[test]
     fn without_ray_queries_there_is_no_scene() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

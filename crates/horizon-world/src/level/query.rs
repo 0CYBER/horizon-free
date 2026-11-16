@@ -1,7 +1,7 @@
 //! Block-state queries shared by the ported behaviour (`BlockStateBase`
 //! accessors and `Block` static helpers).
 use super::{
-    Behaviours, LevelAccess, Sim,
+    Behaviours, LevelAccess, Signals, Sim,
     classes::{Class, Interface},
     data::{BlockSet, state_flags},
     states::{BlockId, PropKey},
@@ -75,7 +75,7 @@ impl Behaviours {
     pub(crate) fn implements(&self, state: BlockStateId, interface: Interface) -> bool {
         self.data(state).implements(interface)
     }
-    pub(crate) fn fluid_in(&self, kind: FluidKind, mask: crate::fluid::FluidMask) -> bool {
+    pub(crate) fn fluid_in(&self, kind: FluidKind, mask: u8) -> bool {
         mask & kind.mask() != 0
     }
     pub(crate) fn is_water_fluid(&self, kind: FluidKind) -> bool {
@@ -173,8 +173,8 @@ impl crate::block_collision::DynamicCollisionWorld for NoBlockEntities {
 /// Block-entity lookups for dynamic shapes, read from the level itself: a
 /// shulker box's lid state decides whether its support shape is the open plate
 /// or the closed full cube (`ShulkerBoxBlock.getBlockSupportShape`).
-struct LevelBlockEntities<'a, L: LevelAccess + ?Sized>(&'a L);
-impl<L: LevelAccess + ?Sized> crate::dynamic_support::DynamicSupportWorld
+struct LevelBlockEntities<'a, L: super::signal_access::SignalAccess + ?Sized>(&'a L);
+impl<L: super::signal_access::SignalAccess + ?Sized> crate::dynamic_support::DynamicSupportWorld
     for LevelBlockEntities<'_, L>
 {
     type Error = std::convert::Infallible;
@@ -211,6 +211,62 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             None => super::data::ShapeInfo::default(),
         }
     }
+    /// `Block.canSupportRigidBlock(level, below)`.
+    pub fn can_support_rigid_block(&self, pos: BlockPos) -> bool {
+        self.signals().can_support_rigid_block(pos)
+    }
+    /// Rigid support from the neighbour state supplied by a shape update,
+    /// using the live block entity at `pos` through the shared signal queries.
+    pub(super) fn can_support_rigid_block_on(&self, pos: BlockPos, state: BlockStateId) -> bool {
+        self.signals().can_support_rigid_block_on(pos, state)
+    }
+    /// `Block.canSupportCenter(level, pos, direction)`.
+    pub fn can_support_center(&self, pos: BlockPos, direction: Direction) -> bool {
+        self.signals().can_support_center(pos, direction)
+    }
+    pub fn is_empty_block(&self, pos: BlockPos) -> bool {
+        self.signals().is_empty_block(pos)
+    }
+    /// `LevelReader.isWaterAt`: the fluid at `pos` is in the water tag.
+    pub fn is_water_at(&self, pos: BlockPos) -> bool {
+        self.signals().is_water_at(pos)
+    }
+}
+
+/// `Sim` reads these through its [`Signals`], so there is one implementation of each.
+impl<L: LevelAccess + ?Sized> Sim<'_, L> {
+    pub fn sturdy(&self, pos: BlockPos, direction: Direction) -> bool {
+        self.signals().sturdy(pos, direction)
+    }
+    pub fn is_redstone_conductor(&self, state: BlockStateId, _pos: BlockPos) -> bool {
+        self.signals().is_redstone_conductor(state, _pos)
+    }
+    pub(crate) fn above_state(&self, pos: BlockPos) -> BlockStateId {
+        self.signals().above_state(pos)
+    }
+}
+
+impl<L: LevelAccess + ?Sized> Sim<'_, L> {
+    /// `Level.getRawBrightness(pos, darken)`.
+    pub fn raw_brightness(&self, pos: BlockPos, darken: i32) -> i32 {
+        self.signals().raw_brightness(pos, darken)
+    }
+    /// `LevelReader.getMaxLocalRawBrightness(pos)`.
+    pub fn max_local_raw_brightness(&self, pos: BlockPos) -> i32 {
+        self.signals().max_local_raw_brightness(pos)
+    }
+    pub(crate) fn below_state(&self, pos: BlockPos) -> BlockStateId {
+        self.state(below(pos))
+    }
+    pub(crate) fn rel_state(&self, pos: BlockPos, direction: Direction) -> BlockStateId {
+        self.state(rel(pos, direction))
+    }
+    pub(crate) fn is_inside_build_height(&self, y: i32) -> bool {
+        y >= self.level.min_y() && y < self.level.max_y()
+    }
+}
+
+impl<L: super::signal_access::SignalAccess + ?Sized> Signals<'_, L> {
     /// The state whose cached support facts stand in for the block at `pos`.
     /// Vanilla reads a retracting piston's `moving_piston` block through its
     /// block entity, whose collision shape contains the extended base; the
@@ -303,7 +359,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         {
             return None;
         }
-        let mut world = LevelBlockEntities(&*self.level);
+        let mut world = LevelBlockEntities(self.level);
         self.b
             .dynamic
             .get(&state)?
@@ -360,8 +416,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `LevelReader.isWaterAt`: the fluid at `pos` is in the water tag.
     pub fn is_water_at(&self, pos: BlockPos) -> bool {
-        self.b.is_water_fluid(self.fluid_at(pos).kind())
+        self.b.is_water_fluid(self.b.fluid(self.state(pos)).kind())
     }
+    pub fn is_redstone_conductor(&self, state: BlockStateId, _pos: BlockPos) -> bool {
+        self.b.has_flag(state, state_flags::CONDUCTOR)
+    }
+    pub(crate) fn above_state(&self, pos: BlockPos) -> BlockStateId {
+        self.state(above(pos))
+    }
+}
+
+impl<L: LevelAccess + ?Sized> Signals<'_, L> {
     /// `Level.getRawBrightness(pos, darken)`.
     pub fn raw_brightness(&self, pos: BlockPos, darken: i32) -> i32 {
         super::raw_brightness(self.level, pos, darken)
@@ -375,20 +440,5 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return 15;
         }
         self.raw_brightness(pos, self.level.sky_darken())
-    }
-    pub fn is_redstone_conductor(&self, state: BlockStateId, _pos: BlockPos) -> bool {
-        self.b.has_flag(state, state_flags::CONDUCTOR)
-    }
-    pub(crate) fn above_state(&self, pos: BlockPos) -> BlockStateId {
-        self.state(above(pos))
-    }
-    pub(crate) fn below_state(&self, pos: BlockPos) -> BlockStateId {
-        self.state(below(pos))
-    }
-    pub(crate) fn rel_state(&self, pos: BlockPos, direction: Direction) -> BlockStateId {
-        self.state(rel(pos, direction))
-    }
-    pub(crate) fn is_inside_build_height(&self, y: i32) -> bool {
-        y >= self.level.min_y() && y < self.level.max_y()
     }
 }

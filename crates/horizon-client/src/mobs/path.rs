@@ -2,102 +2,36 @@
 //! the walking, swimming, flying and amphibious node evaluators
 //! (`WalkNodeEvaluator`, `SwimNodeEvaluator`, `FlyNodeEvaluator`,
 //! `AmphibiousNodeEvaluator`), ported rule for rule.
-use super::{MobWorld, data};
+use super::{
+    MobWorld,
+    data::{self, PathComputationType},
+};
 use crate::blocks::Fluid;
 use crate::fast_hash::FxHashMap;
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::position::BlockPos;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PathType {
-    Blocked,
-    Open,
-    Walkable,
-    WalkableDoor,
-    Trapdoor,
-    PowderSnow,
-    OnTopOfPowderSnow,
-    Fence,
-    Lava,
-    Water,
-    WaterBorder,
-    Rail,
-    UnpassableRail,
-    FireInNeighbor,
-    Fire,
-    DamagingInNeighbor,
-    Damaging,
-    DoorOpen,
-    DoorWoodClosed,
-    DoorIronClosed,
-    Breach,
-    Leaves,
-    StickyHoney,
-    Cocoa,
-    DamageCautious,
-    OnTopOfTrapdoor,
-    BigMobsCloseToDanger,
-}
-pub const PATH_TYPES: usize = 27;
-impl PathType {
-    pub fn from_name(name: &str) -> Self {
-        match name {
-            "OPEN" => Self::Open,
-            "WALKABLE" => Self::Walkable,
-            "WALKABLE_DOOR" => Self::WalkableDoor,
-            "TRAPDOOR" => Self::Trapdoor,
-            "POWDER_SNOW" => Self::PowderSnow,
-            "ON_TOP_OF_POWDER_SNOW" => Self::OnTopOfPowderSnow,
-            "FENCE" => Self::Fence,
-            "LAVA" => Self::Lava,
-            "WATER" => Self::Water,
-            "WATER_BORDER" => Self::WaterBorder,
-            "RAIL" => Self::Rail,
-            "UNPASSABLE_RAIL" => Self::UnpassableRail,
-            "FIRE_IN_NEIGHBOR" => Self::FireInNeighbor,
-            "FIRE" => Self::Fire,
-            "DAMAGING_IN_NEIGHBOR" => Self::DamagingInNeighbor,
-            "DAMAGING" => Self::Damaging,
-            "DOOR_OPEN" => Self::DoorOpen,
-            "DOOR_WOOD_CLOSED" => Self::DoorWoodClosed,
-            "DOOR_IRON_CLOSED" => Self::DoorIronClosed,
-            "BREACH" => Self::Breach,
-            "LEAVES" => Self::Leaves,
-            "STICKY_HONEY" => Self::StickyHoney,
-            "COCOA" => Self::Cocoa,
-            "DAMAGE_CAUTIOUS" => Self::DamageCautious,
-            "ON_TOP_OF_TRAPDOOR" => Self::OnTopOfTrapdoor,
-            "BIG_MOBS_CLOSE_TO_DANGER" => Self::BigMobsCloseToDanger,
-            _ => Self::Blocked,
-        }
-    }
-    /// PathType's default malus.
-    pub fn malus(self) -> f32 {
-        match self {
-            Self::Blocked | Self::PowderSnow | Self::Fence | Self::Lava | Self::UnpassableRail => {
-                -1.0
-            }
-            Self::Damaging | Self::DoorWoodClosed | Self::DoorIronClosed | Self::Leaves => -1.0,
-            Self::Water
-            | Self::WaterBorder
-            | Self::FireInNeighbor
-            | Self::DamagingInNeighbor
-            | Self::StickyHoney => 8.0,
-            Self::Fire => 16.0,
-            Self::Breach | Self::BigMobsCloseToDanger => 4.0,
-            _ => 0.0,
-        }
-    }
-}
+/// The node kinds, moved to `mod_api` so mods can name them (arismoko/horizon#944).
+pub use mod_api::PathType;
+pub const PATH_TYPES: usize = PathType::COUNT;
 
 impl MobWorld<'_> {
     pub fn path_type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
-        self.data.state(self.world.block(x, y, z)).path
+        self.world.cached_path_type(BlockPos::new(x, y, z), || {
+            let state = self.world.block(x, y, z);
+            self.mob_hooks
+                .and_then(|hooks| hooks.block_path_type(state, [x, y, z]))
+                .unwrap_or_else(|| self.data.path_type(state))
+        })
     }
     /// WalkNodeEvaluator.getPathTypeStatic.
+    /// A mod's supplied path is classified through here, so every block step
+    /// saturates: a finite coordinate at `i32::MIN` or `i32::MAX` is never
+    /// refused, and never overflows a checked build either (arismoko/horizon#4443).
     pub fn path_type_static(&self, x: i32, y: i32, z: i32) -> PathType {
         let t = self.path_type_from_state(x, y, z);
         if t == PathType::Open && y > self.world.bottom_y() {
-            match self.path_type_from_state(x, y - 1, z) {
+            match self.path_type_from_state(x, y.saturating_sub(1), z) {
                 PathType::Open | PathType::Water | PathType::Lava | PathType::Walkable => {
                     PathType::Open
                 }
@@ -113,28 +47,60 @@ impl MobWorld<'_> {
             t
         }
     }
-    /// WalkNodeEvaluator.checkNeighbourBlocks.
+    /// WalkNodeEvaluator.checkNeighbourBlocks: the first neighbour that gives a node a type
+    /// (`getAdjacentBlockPathType`) decides it. The neighbour step saturates, so a
+    /// node at the edge of the `i32` range still reads its eight neighbours (arismoko/horizon#4443).
     pub fn check_neighbours(&self, x: i32, y: i32, z: i32, t: PathType) -> PathType {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    if dx != 0 || dz != 0 {
-                        match self.path_type_from_state(x + dx, y + dy, z + dz) {
-                            PathType::Damaging => return PathType::DamagingInNeighbor,
-                            PathType::Fire | PathType::Lava => return PathType::FireInNeighbor,
-                            PathType::Water => return PathType::WaterBorder,
-                            PathType::DamageCautious => return PathType::DamageCautious,
-                            _ => {}
-                        }
+                    if dx == 0 && dz == 0 {
+                        continue;
+                    }
+                    let pos = [
+                        x.saturating_add(dx),
+                        y.saturating_add(dy),
+                        z.saturating_add(dz),
+                    ];
+                    let state = self.world.block(pos[0], pos[1], pos[2]);
+                    let own = self.path_type_from_state(pos[0], pos[1], pos[2]);
+                    let facts = self.facts.get(state);
+                    let default = if facts.name.as_ref() == "minecraft:sweet_berry_bush" {
+                        Some(PathType::DamagingInNeighbor)
+                    } else if data::vanilla_burning_block(
+                        &facts.name,
+                        facts.emission > 0,
+                        self.has_tag("minecraft:fire", &facts.name),
+                    ) {
+                        Some(PathType::FireInNeighbor)
+                    } else {
+                        None
+                    };
+                    let adjacent = self.mob_hooks.map_or(default, |hooks| {
+                        hooks.adjacent_block_path_type(state, pos, own, default)
+                    });
+                    if let Some(adjacent) = adjacent {
+                        return adjacent;
+                    }
+                    // A declined block answer keeps this neighbour's fluid
+                    // contribution before the vanilla type mappings.
+                    if matches!(facts.fluid, Fluid::Water | Fluid::Modded) {
+                        return PathType::WaterBorder;
+                    }
+                    if let Some(adjacent) = data::vanilla_adjacent(own) {
+                        return adjacent;
                     }
                 }
             }
         }
         t
     }
-    /// WalkNodeEvaluator.getFloorLevel(level, pos).
+    /// WalkNodeEvaluator.getFloorLevel(level, pos). Saturating, as the
+    /// neighbour step is: a follower asking under a node at `i32::MIN` lands on
+    /// the same block instead of overflowing (arismoko/horizon#4443).
     pub fn floor_level(&self, x: i32, y: i32, z: i32) -> f64 {
-        f64::from(y - 1) + f64::from(self.data.state(self.world.block(x, y - 1, z)).top)
+        let below = y.saturating_sub(1);
+        f64::from(below) + f64::from(self.data.state(self.world.block(x, below, z)).top)
     }
 }
 
@@ -294,12 +260,12 @@ impl Path {
             if !is_cauldron(node.x, node.y, node.z) {
                 continue;
             }
-            self.nodes[i].y = node.y + 1;
+            self.nodes[i].y = node.y.saturating_add(1);
             if let Some(&next) = self.nodes.get(i + 1)
                 && node.y >= next.y
             {
                 self.nodes[i + 1] = PathNode {
-                    y: node.y + 1,
+                    y: node.y.saturating_add(1),
                     ..next
                 };
             }
@@ -463,9 +429,18 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         self.mob.malus(t)
     }
+    /// The static `PathType` of a position under this finder's evaluator,
+    /// through the world's cached classification. One classification per
+    /// position: a mod's supplied path is classified here on submit.
+    pub fn path_type_at(&self, x: i32, y: i32, z: i32) -> PathType {
+        self.path_type(x, y, z)
+    }
     // --- world access -------------------------------------------------
     fn state(&self, x: i32, y: i32, z: i32) -> data::StateData {
         self.w.data.state(self.w.world.block(x, y, z))
+    }
+    fn pathfindable(&self, x: i32, y: i32, z: i32, kind: PathComputationType) -> bool {
+        self.w.data.pathfindable(self.w.world.block(x, y, z), kind)
     }
     fn type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
         self.w.path_type_from_state(x, y, z)
@@ -478,7 +453,8 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
     /// WalkNodeEvaluator.getFloorLevel(level, pos).
     pub fn static_floor(&self, x: i32, y: i32, z: i32) -> f64 {
-        f64::from(y - 1) + f64::from(self.state(x, y - 1, z).top)
+        let below = y.saturating_sub(1);
+        f64::from(below) + f64::from(self.state(x, below, z).top)
     }
     fn floor_level(&self, x: i32, y: i32, z: i32) -> f64 {
         let amphibious = matches!(self.eval, Evaluator::Amphibious { .. });
@@ -531,7 +507,12 @@ impl<'a, 'w> Finder<'a, 'w> {
                         (-1, 0, 0),
                         (1, 0, 0),
                     ] {
-                        if self.type_from_state(x + dx, y + dy, z + dz) == PathType::Blocked {
+                        if self.type_from_state(
+                            x.saturating_add(dx),
+                            y.saturating_add(dy),
+                            z.saturating_add(dz),
+                        ) == PathType::Blocked
+                        {
                             return PathType::WaterBorder;
                         }
                     }
@@ -552,13 +533,14 @@ impl<'a, 'w> Finder<'a, 'w> {
     fn fly_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut t = self.type_from_state(x, y, z);
         if t == PathType::Open && y > self.w.world.bottom_y() {
-            let below = self.type_from_state(x, y - 1, z);
+            let below_y = y.saturating_sub(1);
+            let below = self.type_from_state(x, below_y, z);
             t = match below {
                 PathType::Fire | PathType::Lava => PathType::Fire,
                 PathType::Damaging => PathType::Damaging,
                 PathType::Cocoa => PathType::Cocoa,
                 PathType::Fence => {
-                    if [x, y - 1, z] != self.mob.block_position() {
+                    if [x, below_y, z] != self.mob.block_position() {
                         PathType::Fence
                     } else {
                         t
@@ -579,7 +561,11 @@ impl<'a, 'w> Finder<'a, 'w> {
         for dx in 0..self.entity_width {
             for dy in 0..self.entity_height {
                 for dz in 0..self.entity_depth {
-                    let mut t = self.path_type(x + dx, y + dy, z + dz);
+                    let mut t = self.path_type(
+                        x.saturating_add(dx),
+                        y.saturating_add(dy),
+                        z.saturating_add(dz),
+                    );
                     if t == PathType::DoorWoodClosed
                         && self.mob.can_open_doors
                         && self.mob.can_pass_doors
@@ -591,7 +577,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                     }
                     if t == PathType::Rail
                         && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1] - 1, mp[2]) != PathType::Rail
+                        && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
                     {
                         t = PathType::UnpassableRail;
                     }
@@ -648,13 +634,20 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
     fn swim_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut last = (x, y, z);
-        for xx in x..x + self.entity_width {
-            for yy in y..y + self.entity_height {
-                for zz in z..z + self.entity_depth {
+        for xx in x..x.saturating_add(self.entity_width) {
+            for yy in y..y.saturating_add(self.entity_height) {
+                for zz in z..z.saturating_add(self.entity_depth) {
                     let fluid = self.fluid(xx, yy, zz);
                     if let Some(t) = swim_cell_type(
                         fluid,
-                        || self.state(xx, yy - 1, zz).flags & data::WATER != 0,
+                        || {
+                            self.pathfindable(
+                                xx,
+                                yy.saturating_sub(1),
+                                zz,
+                                PathComputationType::Water,
+                            )
+                        },
                         || self.is_air(xx, yy, zz),
                     ) {
                         return t;
@@ -663,7 +656,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 }
             }
         }
-        if self.state(last.0, last.1, last.2).flags & data::WATER != 0 {
+        if self.pathfindable(last.0, last.1, last.2, PathComputationType::Water) {
             PathType::Water
         } else {
             PathType::Blocked
@@ -767,7 +760,9 @@ impl<'a, 'w> Finder<'a, 'w> {
                     start_y = y;
                     y -= 1;
                     let s = self.w.world.block(bx, y, bz);
-                    if !self.w.facts.is_air(s) && self.w.data.state(s).flags & data::LAND == 0 {
+                    if !self.w.facts.is_air(s)
+                        && !self.w.data.pathfindable(s, PathComputationType::Land)
+                    {
                         break;
                     }
                 }
@@ -838,7 +833,7 @@ impl<'a, 'w> Finder<'a, 'w> {
             f64::from(nz) - p.z + (hi.z - lo.z) / 2.0,
         );
         let len = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
-        let steps = (len / size).ceil().max(1.0) as i32;
+        let steps = collision_steps(len, size);
         delta = Vec3::new(
             delta.x / f64::from(steps),
             delta.y / f64::from(steps),
@@ -1514,9 +1509,58 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
 }
 
+// The smallest natural mob mean size (baby bee: 0.2666...) at minimum
+// minecraft:scale (0.0625) still exceeds 1/64. Preserve vanilla subdivision
+// counts above that conservative boundary, even for long airborne-start legs.
+// Only smaller mod boxes need a work cap to avoid a saturated i32 loop.
+fn collision_steps(length: f64, box_size: f64) -> i32 {
+    if !box_size.is_finite() || box_size <= 0.0 {
+        return 1;
+    }
+    let steps = (length / box_size).ceil().max(1.0);
+    if box_size < 1.0 / 64.0 {
+        steps.min(16_384.0) as i32
+    } else {
+        steps as i32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collision_subdivision_preserves_small_vanilla_boxes_and_bounds_pathological_ones() {
+        // Minimum-scale silverfish, west candidate from (0.99, 70, 0.921591).
+        let width = f64::from(0.4_f32 * 0.0625);
+        let height = f64::from(0.3_f32 * 0.0625);
+        let delta = Vec3::new(
+            -1.0 - 0.99 + width / 2.0,
+            height / 2.0,
+            -0.921591 + width / 2.0,
+        );
+        let length = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+        let size = (2.0 * width + height) / 3.0;
+        assert_eq!((length / size).ceil() as i32, 95);
+        assert_eq!(collision_steps(length, size), 95);
+        assert_eq!(collision_steps(1.0, 1e-30), 16_384);
+        assert_eq!(collision_steps(1.0, f64::from(f32::from_bits(1))), 16_384);
+        // Vanilla-size boxes keep the original formula, even above the work cap.
+        let boundary = 1.0_f64 / 64.0;
+        let below = f64::from_bits(boundary.to_bits() - 1);
+        let above = f64::from_bits(boundary.to_bits() + 1);
+        for size in [boundary, above] {
+            assert_eq!(collision_steps(512.0, size), (512.0 / size).ceil() as i32);
+        }
+        assert_eq!(collision_steps(512.0, below), 16_384);
+        // Pin both sides of the exact sub-vanilla work limit.
+        assert_eq!(collision_steps(16_383.0 / 128.0, 1.0 / 128.0), 16_383);
+        assert_eq!(collision_steps(16_383.5 / 128.0, 1.0 / 128.0), 16_384);
+        assert_eq!(collision_steps(16_384.5 / 128.0, 1.0 / 128.0), 16_384);
+        for size in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(collision_steps(1.0, size), 1);
+        }
+    }
 
     #[test]
     fn swim_cells_only_check_below_for_missing_fluid() {

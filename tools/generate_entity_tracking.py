@@ -37,6 +37,54 @@ def parse(sources):
     return sorted(out)
 
 
+TAIL = """
+/// the content mods' entity types and the vanilla types they copy
+/// (`template`), sorted by id: set once per process, from the startup root.
+static TEMPLATES: std::sync::OnceLock<Vec<(&'static str, &'static str)>> =
+    std::sync::OnceLock::new();
+
+/// registers the content mods' entity types, `(id, template)`, a list set
+/// once per process (false when it already was).
+pub fn register_templates(types: impl IntoIterator<Item = (String, String)>) -> bool {
+    if TEMPLATES.get().is_some() {
+        return false;
+    }
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    let mut types: Vec<_> = types
+        .into_iter()
+        .map(|(id, t)| (leak(id), leak(t)))
+        .collect();
+    types.sort_unstable();
+    TEMPLATES.set(types).is_ok()
+}
+
+/// the content mods' types, by id, with the vanilla types they copy.
+pub fn templates() -> &'static [(&'static str, &'static str)] {
+    TEMPLATES.get().map_or(&[], Vec::as_slice)
+}
+
+/// the vanilla type a content mod's type copies; out of line, as vanilla's
+/// types never ask.
+#[cold]
+#[inline(never)]
+fn template(kind: &str) -> Option<&'static str> {
+    let types = templates();
+    let i = types.binary_search_by(|t| t.0.cmp(kind)).ok()?;
+    Some(types[i].1)
+}
+
+/// the settings of one entity type: a content mod's type takes its
+/// template's, other unknown types the builder defaults.
+pub fn settings(kind: &str) -> (u8, u32, bool) {
+    let row = |kind: &str| TRACKING.binary_search_by(|row| row.0.cmp(kind)).ok();
+    let row = row(kind).or_else(|| template(kind).and_then(row));
+    row.map_or((5, 3, true), |i| {
+        (TRACKING[i].1, TRACKING[i].2, TRACKING[i].3)
+    })
+}
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sources", type=Path, default=lab.GAME / "sources/client")
@@ -55,17 +103,9 @@ def main():
         "pub const TRACKING: &[(&str, u8, u32, bool)] = &[",
     ]
     lines += [f'    ("{n}", {r}, {i}, {str(t).lower()}),' for n, r, i, t in rows]
-    lines += [
-        "];",
-        "",
-        "/// The settings of one entity type; unknown types get the builder defaults.",
-        "pub fn settings(kind: &str) -> (u8, u32, bool) {",
-        "    TRACKING",
-        "        .binary_search_by(|row| row.0.cmp(kind))",
-        "        .map_or((5, 3, true), |i| (TRACKING[i].1, TRACKING[i].2, TRACKING[i].3))",
-        "}",
-        "",
-    ]
+    lines += ["];"]
+    # The lookup, hand-written: a content mod's type takes its template's settings.
+    lines += TAIL.split("\n")
     args.out.write_text("\n".join(lines))
     print(f"wrote {len(rows)} entity types to {args.out}")
 

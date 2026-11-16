@@ -2,6 +2,7 @@
 use crate::{
     json::*,
     model::*,
+    model_loaders::{LoaderGeometry, LoaderQuad},
     obj::{ObjModel, parse_mtl, parse_obj},
 };
 use std::{
@@ -26,6 +27,12 @@ pub struct ModelLibrary {
     assets: Option<Arc<dyn AssetReader>>,
     /// Keyed by obj and mtl override; `None` is a file that failed, already warned about.
     objs: Mutex<BTreeMap<(String, Option<String>), Option<Arc<ObjModel>>>>,
+    /// What registered loaders add ([`crate::model_loaders`]).
+    loaders: Option<Arc<dyn LoaderGeometry>>,
+    /// A registered loader's quads, keyed by the loader data they were asked for.
+    loader_quads: Mutex<BTreeMap<(String, usize), Arc<[LoaderQuad]>>>,
+    /// Models whose unknown loader was already logged.
+    unknown_loaders: Mutex<BTreeSet<String>>,
 }
 /// What a model's loader adds to its own elements.
 #[derive(Clone, Debug)]
@@ -40,6 +47,8 @@ pub enum ResolvedLoader {
         /// Objects the model chain's `visibility` hides.
         hidden: BTreeSet<String>,
     },
+    /// The quads a registered loader's mod answered.
+    Registered(Arc<[LoaderQuad]>),
 }
 #[derive(Clone, Debug)]
 pub struct ResolvedCuboidModel {
@@ -139,7 +148,15 @@ impl ModelLibrary {
             missing,
             assets: None,
             objs: Mutex::default(),
+            loaders: None,
+            loader_quads: Mutex::default(),
+            unknown_loaders: Mutex::default(),
         })
+    }
+    /// What answers the models whose `loader` a mod registered.
+    pub fn with_loaders(mut self, loaders: Arc<dyn LoaderGeometry>) -> Self {
+        self.loaders = Some(loaders);
+        self
     }
     /// Where `neoforge:obj` models find their files.
     pub fn with_assets(mut self, assets: Arc<dyn AssetReader>) -> Self {
@@ -168,6 +185,9 @@ impl ModelLibrary {
             missing: Arc::clone(&self.missing),
             assets: self.assets.clone(),
             objs: Mutex::default(),
+            loaders: self.loaders.clone(),
+            loader_quads: Mutex::default(),
+            unknown_loaders: Mutex::default(),
         })
     }
     /// Follow the complete parent chain. A missing resource uses the built-in
@@ -332,7 +352,23 @@ impl ModelLibrary {
                         .collect(),
                 })
             }
-            Some(Loader::Unknown(_)) | None => None,
+            Some(Loader::Registered { kind, config }) => Some(ResolvedLoader::Registered(
+                self.loader_quads(&names[0], kind, config),
+            )),
+            Some(Loader::Unknown(kind)) => {
+                let mut logged = self
+                    .unknown_loaders
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if logged.insert(names[0].clone()) {
+                    log::error!(
+                        "model {}: unknown loader {kind}; only its elements are drawn",
+                        names[0]
+                    );
+                }
+                None
+            }
+            None => None,
         };
         let mut textures = BTreeMap::<String, Material>::new();
         let mut unresolved_textures = BTreeSet::<String>::new();
@@ -380,6 +416,29 @@ impl ModelLibrary {
             generated,
             loader,
         })
+    }
+    /// A registered loader's quads for `config`, asked once per library.
+    fn loader_quads(
+        &self,
+        model: &str,
+        kind: &str,
+        config: &Arc<serde_json::Value>,
+    ) -> Arc<[LoaderQuad]> {
+        let key = (model.to_owned(), Arc::as_ptr(config) as usize);
+        let cache = self.loader_quads.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(found) = cache.get(&key) {
+            return Arc::clone(found);
+        }
+        drop(cache);
+        let quads: Arc<[LoaderQuad]> = match &self.loaders {
+            Some(loaders) => loaders.quads(kind, model, config).into(),
+            None => Arc::new([]),
+        };
+        self.loader_quads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, Arc::clone(&quads));
+        quads
     }
     /// Parse an obj and its materials once; a failure warns once and yields no geometry.
     fn load_obj(&self, label: &str, model: &str, mtl: Option<&str>) -> Option<Arc<ObjModel>> {

@@ -8,6 +8,8 @@ use horizon_core::{
     geometry::{Aabb, Vec3 as Vec3d, trig::Mth},
     jmath::pow,
 };
+use horizon_items::kinetic_weapon::UseDuration;
+pub use horizon_items::kinetic_weapon::UseTiming;
 use std::f32::consts::PI;
 
 /// `KineticWeapon.Condition`.
@@ -47,6 +49,23 @@ pub struct Kinetic {
     /// jab.
     pub attack_ticks: i32,
     pub attack_sound: &'static str,
+}
+
+impl From<&Kinetic> for UseTiming {
+    fn from(k: &Kinetic) -> Self {
+        Self {
+            delay_ticks: k.delay_ticks,
+            dismount_conditions: Some(UseDuration {
+                max_duration_ticks: k.dismount.max_duration_ticks,
+            }),
+            knockback_conditions: Some(UseDuration {
+                max_duration_ticks: k.knockback.max_duration_ticks,
+            }),
+            damage_conditions: Some(UseDuration {
+                max_duration_ticks: k.damage.max_duration_ticks,
+            }),
+        }
+    }
 }
 
 /// `AttackRange` of a spear: the reach of its stabs.
@@ -146,7 +165,13 @@ pub const HIT_FEEDBACK_TICKS: i64 = 10;
 
 /// `Mth.clamp` on floats (a NaN stays one).
 fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
-    if v < lo { lo } else { v.min(hi) }
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
 /// `SpearAnimations.progress`.
 fn progress(time: f32, start: f32, end: f32) -> f32 {
@@ -233,13 +258,14 @@ struct UseParams {
     sway_fast: f32,
 }
 impl UseParams {
-    fn of(k: &Kinetic, time: f32) -> Self {
+    fn of(k: &UseTiming, time: f32) -> Self {
         let finish_raising = k.delay_ticks;
-        let finish_swaying = k.dismount.max_duration_ticks + finish_raising;
-        let start_swaying = finish_swaying - 20;
-        let finish_lowering = k.knockback.max_duration_ticks + finish_raising;
-        let start_lowering = finish_lowering - 40;
-        let finish_raising_back = k.damage.max_duration_ticks + finish_raising;
+        let duration = |c: Option<UseDuration>| c.map_or(0, |c| c.max_duration_ticks);
+        let finish_swaying = duration(k.dismount_conditions).wrapping_add(finish_raising);
+        let start_swaying = finish_swaying.wrapping_sub(20);
+        let finish_lowering = duration(k.knockback_conditions).wrapping_add(finish_raising);
+        let start_lowering = finish_lowering.wrapping_sub(40);
+        let finish_raising_back = duration(k.damage_conditions).wrapping_add(finish_raising);
         let raise = progress(time, 0.0, finish_raising as f32);
         let sway = progress(time, start_swaying as f32, finish_swaying as f32);
         let lower = out_cubic(in_out_elastic(progress(
@@ -249,7 +275,7 @@ impl UseParams {
         )));
         let raise_back = progress(
             time,
-            (finish_raising_back - 5) as f32,
+            finish_raising_back.wrapping_sub(5) as f32,
             finish_raising_back as f32,
         );
         let sway_intensity = 2.0 * out_circ(sway) - 2.0 * in_circ(raise_back);
@@ -282,7 +308,7 @@ fn rotate_around(rotation: Mat4, about: Vec3) -> Mat4 {
 
 /// `SpearAnimations.firstPersonUse`, after the hand's own
 /// `translate(invert * 0.56, -0.52, -0.72)`.
-pub fn first_person_use(k: &Kinetic, ticks_since_hit: f32, time_held: f32, right: bool) -> Mat4 {
+pub fn first_person_use(k: &UseTiming, ticks_since_hit: f32, time_held: f32, right: bool) -> Mat4 {
     let u = UseParams::of(k, time_held);
     let invert = if right { 1.0 } else { -1.0 };
     let degrees = |d: f32| d.to_radians();
@@ -330,7 +356,7 @@ pub fn third_person_arm(
     x = degrees * clamp(180.0 / PI * x, -120.0, 30.0);
     let mut z = 0.0;
     if ticks_using > 0.0 {
-        let u = UseParams::of(k, ticks_using);
+        let u = UseParams::of(&UseTiming::from(k), ticks_using);
         y += -invert * u.sway_fast * degrees * u.sway_intensity;
         z = -invert * u.sway_slow * degrees * u.sway_intensity * 0.5;
         x += degrees
@@ -358,7 +384,7 @@ pub fn third_person_use_item(
     }
     let attack = in_quad(progress(swing, 0.05, 0.2));
     let retract = in_out_expo(progress(swing, 0.4, 1.0));
-    let u = UseParams::of(k, time_held);
+    let u = UseParams::of(&UseTiming::from(k), time_held);
     let invert = if right { 1.0 } else { -1.0 };
     let raise_modified = 1.0 - out_back(1.0 - u.raise);
     let hit = hit_feedback(ticks_since_hit);
@@ -479,6 +505,193 @@ pub fn hits_in_reach(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_kinetic_components_drive_the_first_person_pose() {
+        use crate::{first_person::ItemPose, items::ItemStack};
+        use horizon_assets::item_model::ItemModels;
+        use horizon_core::nbt::Tag;
+        use serde_json::json;
+        use std::{collections::BTreeMap, sync::Arc};
+
+        let kinetic = json!({
+            "delay_ticks": 20,
+            "dismount_conditions": {"max_duration_ticks": 200, "min_speed": 14.0},
+            "knockback_conditions": {"max_duration_ticks": 400, "min_speed": 5.1},
+            "damage_conditions": {"max_duration_ticks": 600, "min_relative_speed": 4.6},
+            "forward_movement": 0.38
+        });
+        let models = ItemModels {
+            prototypes: Arc::new(BTreeMap::from([
+                (
+                    "minecraft:iron_spear".into(),
+                    BTreeMap::from([("minecraft:kinetic_weapon".into(), kinetic.clone())]),
+                ),
+                (
+                    "test:lance".into(),
+                    BTreeMap::from([("minecraft:kinetic_weapon".into(), kinetic)]),
+                ),
+            ])),
+            ..Default::default()
+        };
+        let read = |stack: &ItemStack| {
+            let prototype = models
+                .prototypes
+                .get(&*stack.item)
+                .and_then(|c| c.get("minecraft:kinetic_weapon"))
+                .and_then(UseTiming::from_json);
+            UseTiming::of_stack(stack, prototype)
+        };
+        let mut spear = ItemStack::new("minecraft:iron_spear", 1);
+        let timing = read(&spear).unwrap();
+        // Half raised, before any condition expires. These are the resulting
+        // vanilla first-person matrix columns, not a name-based spear preset.
+        for left in [false, true] {
+            let pose = crate::first_person::item_pose(
+                left,
+                0.8,
+                0.0,
+                ItemPose::Spear {
+                    timing,
+                    time_held: 10.0,
+                    ticks_since_hit: 100.0,
+                },
+            );
+            let expected = Mat4::from_cols_array(&[
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.843_391_4,
+                -0.537_299_63,
+                0.0,
+                0.0,
+                0.537_299_63,
+                0.843_391_4,
+                0.0,
+                if left { -0.635 } else { 0.635 },
+                -0.541_839_1,
+                -0.616_270_07,
+                1.0,
+            ]);
+            assert!(pose.abs_diff_eq(expected, 1e-5));
+        }
+        let lance = read(&ItemStack::new("test:lance", 1)).unwrap();
+        assert_eq!(UseParams::of(&lance, 210.0).sway, 0.5);
+        assert_eq!(UseParams::of(&lance, 420.0).lower, 0.875);
+        assert_eq!(UseParams::of(&lance, 617.5).raise_back, 0.5);
+        assert!(
+            first_person_use(&lance, 100.0, 410.0, true)
+                .abs_diff_eq(first_person_use(&timing, 100.0, 410.0, true), 1e-6)
+        );
+
+        spear.data_mut().set_other(
+            "minecraft:kinetic_weapon",
+            Some(Tag::compound([("delay_ticks", Tag::Int(40))])),
+        );
+        // Saved/command decode and later mutations keep the raw full component
+        // and its typed timing together through the same owning boundary.
+        let saved = crate::item_data::components_tag(0, spear.data()).unwrap();
+        let (_, extra) = crate::item_data::decode_components(Some(&saved));
+        spear.extra = extra;
+        assert_eq!(
+            spear.data().unwrap().other("minecraft:kinetic_weapon"),
+            saved.get("minecraft:kinetic_weapon")
+        );
+        let patched = read(&spear).unwrap();
+        assert_eq!(UseParams::of(&patched, 10.0).raise, 0.25);
+        // A replacement component does not inherit the prototype's conditions.
+        assert!(patched.dismount_conditions.is_none());
+        assert!(patched.knockback_conditions.is_none());
+        assert!(patched.damage_conditions.is_none());
+        spear.data_mut().set_other(
+            "minecraft:kinetic_weapon",
+            Some(Tag::String("invalid".into())),
+        );
+        assert!(read(&spear).is_none()); // An invalid replacement is not a prototype fallback.
+        assert!(
+            !first_person_use(&patched, 100.0, 10.0, true)
+                .abs_diff_eq(first_person_use(&timing, 100.0, 10.0, true), 1e-3)
+        );
+
+        spear.data_mut().set_other("minecraft:kinetic_weapon", None);
+        spear.data_mut().set_other(
+            "!minecraft:kinetic_weapon",
+            Some(Tag::Compound(Default::default())),
+        );
+        assert!(read(&spear).is_none());
+        let mut stick = ItemStack::new("minecraft:stick", 1);
+        assert!(read(&stick).is_none());
+        stick.data_mut().set_other(
+            "minecraft:kinetic_weapon",
+            Some(Tag::Compound(Default::default())),
+        );
+        let defaulted = read(&stick).unwrap();
+        assert_eq!(defaulted.delay_ticks, 0);
+        assert!(defaulted.dismount_conditions.is_none());
+        assert!(defaulted.knockback_conditions.is_none());
+        assert!(defaulted.damage_conditions.is_none());
+        // Java Mth.clamp preserves NaN when zero delay meets zero held time.
+        assert!(UseParams::of(&defaulted, 0.0).raise.is_nan());
+        assert!(!first_person_use(&defaulted, 100.0, 0.0, true).is_finite());
+        assert!(first_person_use(&defaulted, 100.0, 1.0, true).is_finite());
+    }
+
+    #[test]
+    fn kinetic_numeric_codecs_normalize_before_rendering() {
+        use serde_json::json;
+        for (value, ticks) in [
+            (json!(40.0), 40),
+            (json!(40.75), 40),
+            (json!(-0.5), 0),
+            (json!(4_294_967_336_i64), 40),
+            (json!(4_294_967_336.75), 40),
+        ] {
+            let timing = UseTiming::from_json(&json!({
+                "delay_ticks": value,
+                "damage_conditions": {"max_duration_ticks": value}
+            }))
+            .unwrap();
+            assert_eq!(timing.delay_ticks, ticks);
+            assert_eq!(timing.damage_conditions.unwrap().max_duration_ticks, ticks);
+        }
+        for value in [json!(-1), json!("40"), json!(true), json!(2_147_483_648.0)] {
+            assert!(UseTiming::from_json(&json!({"delay_ticks": value})).is_none());
+        }
+        assert_eq!(
+            UseTiming::from_json(&json!({"delay_ticks": null, "damage_conditions": null})),
+            UseTiming::from_json(&json!({}))
+        );
+        let mut stack = crate::items::ItemStack::new("minecraft:stick", 1);
+        for (number, ticks) in [
+            (horizon_core::nbt::Tag::Double(40.75f64.to_bits()), 40),
+            (horizon_core::nbt::Tag::Float(f32::NAN.to_bits()), 0),
+        ] {
+            stack.data_mut().set_other(
+                "minecraft:kinetic_weapon",
+                Some(horizon_core::nbt::Tag::compound([("delay_ticks", number)])),
+            );
+            assert_eq!(
+                UseTiming::of_stack(&stack, None).unwrap().delay_ticks,
+                ticks
+            );
+        }
+    }
+
+    #[test]
+    fn kinetic_pose_timing_uses_java_integer_arithmetic() {
+        let components = horizon_assets::item_model::Components::from([(
+            "minecraft:kinetic_weapon".into(),
+            serde_json::json!({
+                "delay_ticks": 2_147_483_647,
+                "dismount_conditions": {"max_duration_ticks": 2_147_483_647}
+            }),
+        )]);
+        let timing = UseTiming::from_json(&components["minecraft:kinetic_weapon"]).unwrap();
+        // finishSwayingTick wraps to -2, startSwayingTick to -22.
+        assert_eq!(UseParams::of(&timing, 10.0).sway, 1.0);
+    }
 
     #[test]
     fn the_jab_starts_and_ends_at_rest() {

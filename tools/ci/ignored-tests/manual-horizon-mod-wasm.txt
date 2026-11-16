@@ -1,0 +1,17 @@
+# horizon-mod-wasm's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-mod-wasm block_entity_ticks by-hand manual # measurement; requires a built fixture and shared std
+horizon-mod-wasm compiled_guest_capability_registration_order_and_proxy_metadata by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm compiled_guest_proxy_false_then_true_refuses_registration by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm compiled_guest_proxy_true_then_false_refuses_registration by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm compiled_guest_strict_math_matches_literal_jdk_vectors by-hand manual # requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree
+horizon-mod-wasm dump_members by-hand manual # needs HORIZON_WASM_STD or HORIZON_WASM_FIXTURE_RAW; prints a member's sections
+horizon-mod-wasm empty_subscribed_listener by-hand manual # measurement; requires a built fixture and shared std
+horizon-mod-wasm generated_mixed_outputs_cross_real_guest_boundary by-hand manual # needs locally built HORIZON_WASM_MIXED_OUTPUT_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm module_cache::tests::measure_child_compile by-hand manual # local child measurement; set HORIZON_CACHE_BENCH_WASM
+horizon-mod-wasm module_cache::tests::measure_compile_and_cached_load by-hand manual # local timing measurement; set HORIZON_CACHE_BENCH_WASM
+horizon-mod-wasm module_cache::tests::measure_serialized_sizes by-hand manual # local size measurement; set HORIZON_CACHE_SIZE_MODULES
+horizon-mod-wasm real_guest_point_is_refused_without_staging by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm real_member by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm real_member_self_refusal by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
+horizon-mod-wasm real_wasm_command_listener_receives_ordered_selector_handles by-hand manual # requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree
+horizon-mod-wasm runtime::runtime_tests::guest_input_pool_stays_flat_for_100k_no_import_calls by-hand manual # requires shared std and the real noop fixture

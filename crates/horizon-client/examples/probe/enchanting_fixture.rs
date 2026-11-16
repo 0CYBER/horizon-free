@@ -18,8 +18,9 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: enchanting_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::tags_only(root, &PackOverlay::NONE)?;
-    let e = Enchantments::load(root);
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::tags_only(root, &PackOverlay::NONE, &defaults)?;
+    let e = Enchantments::load(root, &defaults)?;
     let mut out = String::new();
     for line in input.lines() {
         let f: Vec<&str> = line.split(' ').collect();

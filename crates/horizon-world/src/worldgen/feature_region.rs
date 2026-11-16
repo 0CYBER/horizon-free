@@ -410,7 +410,7 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
         self.request_tick(
             TickKind::Fluid,
             position,
-            TickTypeId(fluid.index() as u32),
+            TickTypeId(fluid.tick_id()),
             delay,
         )
         .map_err(Into::into)

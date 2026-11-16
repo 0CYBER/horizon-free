@@ -1,0 +1,11 @@
+[package]
+name = "widget-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+horizon-mod-api = { path = "../../../../crates/horizon-mod-api" }
+
+# A mod is its own project, not a member of the game's workspace.
+[workspace]

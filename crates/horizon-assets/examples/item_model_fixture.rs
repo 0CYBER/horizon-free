@@ -2,7 +2,7 @@
 //! `tools/test_item_model_parity.py`.
 use horizon_assets::{
     animation::AnimationMetadata,
-    item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model},
+    item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model, bake_sprite_layer},
     item_model::*,
     math::Mat4,
     model::{CuboidModel, Direction},
@@ -132,7 +132,7 @@ struct Env {
     grass: Vec<i32>,
     local_time: String,
     bundle_weight: bool,
-    prototypes: BTreeMap<String, Components>,
+    prototypes: std::sync::Arc<BTreeMap<String, Components>>,
 }
 impl ItemEnv for Env {
     fn grass_color(&self, temperature: f64, downfall: f64) -> i32 {
@@ -178,7 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let raw: BTreeMap<String, Components> = serde_json::from_slice(&fs::read(prototypes_path)?)?;
     let mut models = ItemModels {
-        prototypes: raw,
+        prototypes: std::sync::Arc::new(raw),
         ..Default::default()
     };
     writeln!(
@@ -269,8 +269,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prototypes: models.prototypes.clone(),
     };
     let mut baked_cache: BTreeMap<String, BakedItemModel> = BTreeMap::new();
-    let mut bake = |name: &str| -> BakedItemModel {
-        baked_cache
+    let bake = |cache: &mut BTreeMap<String, BakedItemModel>, name: &str| -> BakedItemModel {
+        cache
             .entry(name.to_owned())
             .or_insert_with(|| {
                 bake_item_model(&library, &sprites, name)
@@ -324,15 +324,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut layers = Vec::new();
         for layer in &resolved.layers {
             let (kind, baked, extra) = match &layer.content {
-                LayerContent::Model { model } => ("model", bake(model), json!({})),
-                LayerContent::Missing => ("model", bake(MISSING_MODEL), json!({})),
+                LayerContent::Model { model } => {
+                    ("model", bake(&mut baked_cache, model), json!({}))
+                }
+                LayerContent::Sprite { sprite, mask } => {
+                    let key = format!("\0{sprite}\0{}", mask.as_deref().unwrap_or_default());
+                    let baked = baked_cache
+                        .entry(key)
+                        .or_insert_with(|| {
+                            bake_sprite_layer(&library, &sprites, sprite, mask.as_deref())
+                                .expect("sprite layer bakes")
+                        })
+                        .clone();
+                    ("sprite", baked, json!({"sprite":sprite,"mask":mask}))
+                }
+                LayerContent::Missing => {
+                    ("model", bake(&mut baked_cache, MISSING_MODEL), json!({}))
+                }
+                LayerContent::Parts(_) => {
+                    unreachable!("the fixture's host answers no special model renderer")
+                }
                 LayerContent::Special {
                     base,
                     model,
                     argument,
                 } => (
                     "special",
-                    bake(base),
+                    bake(&mut baked_cache, base),
                     json!({"special":model.to_json(),"argument":argument}),
                 ),
             };

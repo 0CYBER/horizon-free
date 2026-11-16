@@ -616,6 +616,7 @@ mod tests {
     /// `expand` does, to the bit, after the vertices before them.
     #[test]
     fn the_shader_writes_what_the_cpu_reference_computes() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter: skipped");
             return;

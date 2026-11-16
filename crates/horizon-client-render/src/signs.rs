@@ -3,7 +3,7 @@
 //! `back_text` NBT layout.
 pub use crate::chunk::block_entity::{SavedLine, SignData, SignText};
 use crate::{scoreboard, text::Text};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `getBooleanOr(key, false)` and `Codec.BOOL`: any numeric tag's nonzero byte.
 fn nbt_flag(tag: &Tag, key: &str) -> bool {
@@ -141,7 +141,7 @@ impl SignText {
         // Signs are drawn every frame: a line read as plain text (most of them) skips the
         // NBT -> JSON -> component round trip. Its click event does not change the drawing.
         if self.saved[i].is_none() {
-            return Text::literal(self.lines[i].as_str());
+            return Text::untrusted(self.lines[i].as_str());
         }
         scoreboard::comp_text(&scoreboard::tag_to_json(&self.message(i)))
     }
@@ -435,8 +435,8 @@ mod tests {
     fn run_colors(text: &SignText, line: usize) -> Vec<(String, Option<u32>)> {
         text.line_text(line)
             .spans
-            .into_iter()
-            .map(|s| (s.text, s.style.color))
+            .iter()
+            .map(|s| (s.text.clone(), s.style.color))
             .collect()
     }
     #[test]
@@ -553,6 +553,14 @@ mod tests {
         assert_eq!(
             editor_sprite("hanging_signs", "ruby:elm"),
             "ruby:gui/hanging_signs/elm"
+        );
+        assert_eq!(
+            editor_sprite("signs", "farmersdelight:canvas"),
+            "farmersdelight:gui/signs/canvas"
+        );
+        assert_eq!(
+            editor_sprite("hanging_signs", "farmersdelight:canvas"),
+            "farmersdelight:gui/hanging_signs/canvas"
         );
         assert_eq!(SignText::default().dark_color(), 0);
         let red = SignText {

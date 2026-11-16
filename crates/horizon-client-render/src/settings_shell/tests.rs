@@ -110,14 +110,25 @@ fn middle_of(shell: &mut Shell<Probe>, row: u32, size: (f32, f32)) -> (f32, f32)
 }
 
 fn atlas() -> HudAtlas {
-    HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        "/nonexistent/horizon-test-assets".into(),
+    ))
+    .unwrap()
 }
 
 /// What one frame asks of a screen: a draw, then the stick's scroll, an arrow key and the wheel
 /// away from any row, at the size it was drawn at.
 fn frame(shell: &mut Shell<Probe>, s: &mut Settings, atlas: &HudAtlas) -> (f32, f32) {
-    let mut batch = HudBatch::new([1708, 960]);
-    shell.draw(s, &mut batch, atlas, (0.0, 0.0), false, None);
+    let mut batch = HudBatch::scratch([1708, 960]);
+    shell.draw_test_frame(
+        s,
+        &mut batch,
+        atlas,
+        (0.0, 0.0),
+        false,
+        None,
+        &mut |_, _| {},
+    );
     let size = (batch.width, batch.height);
     shell.scroll(s, size, -1.0);
     shell.key(s, K::ArrowDown, None, false, size);
@@ -240,10 +251,10 @@ fn the_strip_says_why_a_greyed_row_cant_be_used() {
     let atlas = atlas();
     let s = Settings::default();
     let mut shell = Shell::<Probe>::default();
-    let mut batch = HudBatch::new([1708, 960]);
+    let mut batch = HudBatch::scratch([1708, 960]);
     let size = (batch.width, batch.height);
     let strip = |batch: &mut HudBatch, shell: &mut Shell<Probe>, at| {
-        shell.draw(&s, batch, &atlas, at, false, None);
+        shell.draw_test_frame(&s, batch, &atlas, at, false, None, &mut |_, _| {});
         crate::widgets::end_frame(crate::widgets::generation() + 1);
         let dock = Columns::of(size.0, size.1).dock;
         let labelled = crate::widgets::last_labelled();
@@ -410,8 +421,16 @@ fn a_drawn_choice_tells_the_pad_its_arrows_step_it() {
     let atlas = atlas();
     let s = Settings::default();
     let mut shell = Shell::<Probe>::default();
-    let mut batch = HudBatch::new([1708, 960]);
-    shell.draw(&s, &mut batch, &atlas, (0.0, 0.0), false, None);
+    let mut batch = HudBatch::scratch([1708, 960]);
+    shell.draw_test_frame(
+        &s,
+        &mut batch,
+        &atlas,
+        (0.0, 0.0),
+        false,
+        None,
+        &mut |_, _| {},
+    );
     crate::widgets::end_frame(u64::MAX);
     let view = shell.view(&s, (batch.width, batch.height));
     let rect_of = |id| {
@@ -607,8 +626,16 @@ const SHORT_WINDOW: [u32; 2] = [854, 480];
 
 /// One frame of `shell` in a window of `window`; the GUI size it was drawn at.
 fn drawn<S: Screen + Default>(shell: &mut Shell<S>, s: &Settings, window: [u32; 2]) -> (f32, f32) {
-    let mut batch = HudBatch::new(window);
-    shell.draw(s, &mut batch, &atlas(), (0.0, 0.0), false, None);
+    let mut batch = HudBatch::scratch(window);
+    shell.draw_test_frame(
+        s,
+        &mut batch,
+        &atlas(),
+        (0.0, 0.0),
+        false,
+        None,
+        &mut |_, _| {},
+    );
     crate::widgets::end_frame(crate::widgets::generation() + 1);
     (batch.width, batch.height)
 }

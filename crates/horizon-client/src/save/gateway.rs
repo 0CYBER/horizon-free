@@ -134,7 +134,7 @@ mod tests {
         (dir, save)
     }
     fn root() -> NamedTag {
-        NamedTag { name: "".into(), tag: horizon_world::nbt::parse_snbt(&format!(
+        NamedTag { name: "".into(), tag: horizon_core::nbt::parse_snbt(&format!(
             "{{DataVersion:{DATA_VERSION},xPos:0,zPos:0,Status:\"minecraft:full\",opaque:\"keep\",sections:[{{Y:4b,block_states:{{palette:[{{id:\"minecraft:end_gateway\"}}]}}}}],block_entities:[{{id:\"minecraft:end_gateway\",x:2,y:75,z:2,Age:321L,exit_portal:[I;9,80,9],ExactTeleport:0b,other:\"keep\"}}]}}"
         )).unwrap().0 }
     }

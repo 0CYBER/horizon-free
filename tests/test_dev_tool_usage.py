@@ -52,7 +52,11 @@ class PadGlyphsTests(MissingArgumentTests):
 class FetchDxcTests(MissingArgumentTests):
     def test_a_flag_is_not_a_folder(self):
         # It used to download Microsoft's 22 MB archive into ./--help.
-        self.assert_asked_for_arguments("ci/fetch_dxc.py", "--help")
+        result, left = run("ci/fetch_dxc.py", "--help")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(result.stderr.strip(), "--help is not a folder")
+        self.assertEqual(left, [], "fetch_dxc wrote files into a flag directory")
 
 
 class CommandFixtureTests(MissingArgumentTests):

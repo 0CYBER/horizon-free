@@ -14,7 +14,11 @@ use std::io::Write;
 
 pub fn main() {
     let args: Vec<String> = crate::args().collect();
-    let mut engine = SoundEngine::new(SoundRegistry::load(std::path::Path::new(&args[1])));
+    let mut engine = SoundEngine::new(SoundRegistry::load(
+        &horizon_assets::resource_source::ResourceSource::directory(std::path::PathBuf::from(
+            &args[1],
+        )),
+    ));
     engine.listening = true;
     let mut backend = Fake::default();
     let mut ctx = TickContext::default();

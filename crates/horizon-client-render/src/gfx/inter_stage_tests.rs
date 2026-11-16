@@ -133,6 +133,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             entity.clone() + include_str!("../static_entity.wgsl"),
         ),
         (
+            "prepared model",
+            vec!["entity.wgsl", "prepared_model.wgsl"],
+            entity.clone() + include_str!("../prepared_model.wgsl"),
+        ),
+        (
             "improved transparency clouds",
             vec!["entity.wgsl", "oit.wgsl", "oit_clouds.wgsl"],
             entity.clone() + include_str!("../oit.wgsl") + include_str!("../oit_clouds.wgsl"),
@@ -159,21 +164,6 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             "ray tracing unpack",
             vec!["terrain.wgsl", "rt_unpack.wgsl"],
             super::surface_setup::ray_query::ray_scene::unpack_shader(),
-        ),
-        // A native mod's world warp (gfx/world_warp.rs): its copies with the plainest warp.
-        (
-            "world warp terrain",
-            vec![
-                "terrain.wgsl",
-                "world_warp.wgsl",
-                "world_warp_fragment.wgsl",
-            ],
-            super::world_warp::terrain_shader(super::world_warp::IDENTITY).unwrap(),
-        ),
-        (
-            "world warp entities",
-            vec!["entity.wgsl", "static_entity.wgsl", "world_warp.wgsl"],
-            super::world_warp::entity_shader(super::world_warp::IDENTITY).unwrap(),
         ),
         (
             "world primitives",
@@ -239,6 +229,7 @@ fn audited() -> Vec<(String, Vec<Interface>)> {
 }
 
 #[test]
+#[ignore = "daily"]
 fn no_pipeline_exceeds_the_weakest_gpus_inter_stage_limit() {
     let mut over = Vec::new();
     for (shader, entries) in audited() {

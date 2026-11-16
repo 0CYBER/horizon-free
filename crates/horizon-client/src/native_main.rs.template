@@ -1,0 +1,13 @@
+//! Fixed prebuilt entry point shared by both native mod routes.
+#![forbid(unsafe_code)]
+#[used]
+static HOLDER_CAPABILITY: [u8; horizon_mod_package::holder::CAPABILITY.len()] =
+    horizon_mod_package::holder::CAPABILITY;
+#[used]
+static GAME_IDENTITY: [u8; horizon_mod_package::game_identity::MARK.len()] =
+    horizon_mod_package::game_identity::MARK;
+fn main() {
+    std::hint::black_box(&HOLDER_CAPABILITY);
+    std::hint::black_box(&GAME_IDENTITY);
+    horizon_mod_host::main();
+}

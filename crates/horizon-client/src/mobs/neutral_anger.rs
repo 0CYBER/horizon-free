@@ -81,15 +81,40 @@ pub fn stop(m: &mut Mob) {
 /// One tick of a mob: a `NeutralMob`'s countdown resumes from its end time
 /// before, and the end time is settled after.
 pub fn around_tick(m: &mut Mob, game_time: i64, tick: impl FnOnce(&mut Mob) -> bool) -> bool {
-    let neutral = persistent_anger(m.species());
-    if neutral {
+    before_tick(m, game_time);
+    let kept = tick(m);
+    after_tick(m, game_time);
+    kept
+}
+
+/// The pausable counterpart of `around_tick`: do not settle at a consumption
+/// pause; the resumed segment completes the same tick.
+pub(super) fn tick_until_consumption(
+    m: &mut Mob,
+    w: &super::MobWorld,
+    level: &mut super::DamageLevel<'_>,
+    events: &mut Vec<super::MobEvent>,
+) -> super::ai::TickProgress {
+    before_tick(m, w.game_time);
+    let progress = super::ai::tick_until_consumption(m, w, level, events);
+    if matches!(progress, super::ai::TickProgress::Complete(_)) {
+        after_tick(m, w.game_time);
+    }
+    progress
+}
+
+/// Start either a complete tick or the first segment of a pausable tick.
+pub(super) fn before_tick(m: &mut Mob, game_time: i64) {
+    if persistent_anger(m.species()) {
         resume_anger(m, game_time);
     }
-    let kept = tick(m);
-    if neutral {
+}
+
+/// Settle only after the complete AI tick, including any resumed segment.
+pub(super) fn after_tick(m: &mut Mob, game_time: i64) {
+    if persistent_anger(m.species()) {
         settle_anger_end(m, game_time);
     }
-    kept
 }
 
 #[cfg(test)]

@@ -50,7 +50,11 @@ mod tests {
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
-        let render = assets.reload(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.clone(),
+            ))
+            .unwrap();
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let fluids = crate::motion::FluidResources::new(&assets, &facts).unwrap();
         let collision = crate::collisions::load(&root, assets.registry).unwrap();
@@ -86,5 +90,74 @@ mod tests {
         }
         assert!((item.position.y - 9.0).abs() < 1.0e-6, "rests on the box");
         assert!(!inside(&item, &ghast), "resting on top is not inside");
+    }
+
+    /// `Entity.move` returns on noPhysics before the stuck multiplier
+    /// (vanilla's order, `entity_move.rs`): a no-physics move goes straight
+    /// through and leaves a pending cobweb multiplier and the fallen velocity
+    /// alone; the next move with physics consumes the multiplier, scaling the
+    /// move and stopping the velocity.
+    #[test]
+    fn a_no_physics_move_keeps_the_stuck_multiplier_pending() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.clone(),
+            ))
+            .unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let collision = crate::collisions::load(&root, assets.registry).unwrap();
+        let world = World::test_scene(&assets, &render, 3).unwrap();
+        let context = crate::test_resources::server_loop_context();
+        let mut item = falling_item(20.5, 40.0, 20.5, 1.0, 0.0, 0.0);
+        item.id = 2;
+        item.stuck = Vec3::new(0.5, 0.5, 0.5);
+        let moved = |item: &mut ItemEntity, no_physics: bool| {
+            item.tick_move_before_block_effects(
+                &world,
+                &facts,
+                &collision,
+                no_physics,
+                None,
+                (0.0, 0.0),
+                &[],
+                None,
+                None,
+                context,
+            )
+        };
+        // Straight through the blocks, and the multiplier stays pending with
+        // the velocity it was left with (gravity's -0.04 aside, applied
+        // before the move in both orders).
+        let _ = moved(&mut item, true);
+        assert_eq!(item.position.x, 21.5, "no physics: straight through");
+        assert_eq!(
+            item.stuck,
+            Vec3::new(0.5, 0.5, 0.5),
+            "no physics: the multiplier stays pending"
+        );
+        assert_eq!(
+            item.velocity.x, 1.0,
+            "no physics: the velocity is untouched"
+        );
+        assert_eq!(
+            item.velocity.z, 0.0,
+            "no physics: the velocity is untouched"
+        );
+        // The next move with physics consumes it: half the wanted move, and
+        // the multiplier and the velocity reset.
+        let _ = moved(&mut item, false);
+        assert_eq!(
+            item.stuck,
+            Vec3::ZERO,
+            "physics: the multiplier is consumed"
+        );
+        assert_eq!(item.velocity, Vec3::ZERO, "physics: the velocity stops");
     }
 }

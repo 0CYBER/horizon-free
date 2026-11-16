@@ -30,7 +30,7 @@ on:
       - 'crates/horizon-bench/**'
       - 'crates/horizon-friends/**'
       - 'crates/horizon-mcp/**'
-      - 'crates/horizon-mods/**'
+      - 'crates/horizon-mod-package/**'
       - 'crates/horizon-port-pack/**'
       - 'crates/horizon-prepare/**'
       - 'crates/horizon-release-sign/**'
@@ -81,6 +81,7 @@ jobs:
         # Off main every run is a dry run (a launcher branch's push only builds).
         run: echo "dry_run=${{ github.ref != 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}" >> "$GITHUB_OUTPUT"
       - id: decide
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
@@ -88,6 +89,8 @@ jobs:
           HEAD_SHA: ${{ (github.event_name == 'push' || steps.mode.outputs.dry_run == 'true') && github.sha || '' }}
           FORCE: ${{ inputs.force && 'yes' || '' }}
         run: |
+          # Never turn a failed release decision into a successful tee/summary step.
+          set -euo pipefail
           python3 tools/release_train.py decide --kind launcher ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
           echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
           tag=$(jq -r '.tag' decision.json)
@@ -400,7 +403,7 @@ jobs:
           EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
         run: |
           key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
-          cargo run --locked --quiet -p horizon-release-sign -- verify --tag "$TAG" --publishing "${key[@]}" dist
+          cargo run --locked --quiet -p horizon-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "$TAG" --publishing "${key[@]}" dist
       # Never marked latest: Horizon's own releases stay the repository's latest.
       - name: The Windows ARM64 launcher, if it built
         # Its build may fail without holding the release (continue-on-error): the release then has no ARM64

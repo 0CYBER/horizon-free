@@ -1,0 +1,2 @@
+horizon-client game::native_entity_riding::tests::a_player_gets_off_where_the_query_says lib daily resources
+horizon-client game::native_entity_riding::tests::a_mob_gets_off_where_the_query_says lib daily resources

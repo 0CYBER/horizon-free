@@ -1,4 +1,4 @@
-use horizon_world::{nbt::Tag, snbt_text::to_snbt};
+use {horizon_core::nbt::Tag, horizon_world::snbt_text::to_snbt};
 
 #[test]
 fn supplementary_keys_keep_java_utf16_order() {

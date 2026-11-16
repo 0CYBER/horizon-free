@@ -515,7 +515,7 @@ impl Facts {
         let mut decl = json!({"template": template});
         // A block item whose block has another name (seeds): its `BlockItem.getBlock`.
         if let Some(block) = &item.block {
-            decl["place_block"] = json!(block);
+            decl["block"] = json!(block);
         }
         if item.max_stack_size != 64 {
             decl["max_stack_size"] = json!(item.max_stack_size);

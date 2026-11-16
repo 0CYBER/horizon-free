@@ -21,16 +21,31 @@ pub fn main() -> horizon_client::Result<()> {
     let usage = "usage: recipe_book_view_fixture RESOURCES CASES OUTPUT";
     let root = Path::new(args.get(1).ok_or(usage)?);
     let cases = fs::read_to_string(args.get(2).ok_or(usage)?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let index = RecipeIndex::load(root, &PackOverlay::NONE);
     let mut book = Book::build(&recipes, &items);
     book.set_display_ids(&index);
     let max = |s: &horizon_client::items::ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
-    let names = horizon_client::creative::Names::load(root);
+    let names = horizon_client::creative::Names::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
+    );
     let translate = |k: &str| names.get(k).map(str::to_owned);
     let tooltip = |s: &horizon_client::items::ItemStack| {
-        horizon_client::item_tooltip::lines(s, items.get(&s.item), &items.enchantments, &translate)
+        horizon_client::item_tooltip::lines(
+            s,
+            items.get(&s.item),
+            &horizon_client::item_tooltip::NoAttributeListener,
+            &items.enchantments,
+            &translate,
+            &|_| None,
+        )
     };
     let mut out = String::new();
     for line in cases.lines() {

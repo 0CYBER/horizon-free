@@ -17,9 +17,14 @@ pub enum Category {
 #[derive(Clone, Copy, Debug)]
 pub struct EffectDef {
     pub id: &'static str,
+    /// Position in the process-owned effect registry, resolved when an instance is created.
+    pub index: usize,
     pub color: u32,
     pub category: Category,
     pub instant: bool,
+    /// `IMobEffectExtension.getSortOrder`: where the effect sits in the HUD and inventory
+    /// lists. The colour, unless a content mod declared an order.
+    pub sort_order: i32,
 }
 /// The colours resource packs give effects (Polytone's `effect.<id>`), by the table's id.
 static PACK_COLORS: RwLock<Option<HashMap<String, u32>>> = RwLock::new(None);
@@ -37,87 +42,96 @@ impl EffectDef {
             .map_or(self.color, |c| c & 0xFF_FFFF)
     }
 }
-const fn fx(id: &'static str, color: u32, category: Category) -> EffectDef {
+const fn fx(index: usize, id: &'static str, color: u32, category: Category) -> EffectDef {
     EffectDef {
+        index,
         id,
         color,
         category,
         instant: false,
+        sort_order: color as i32,
     }
 }
 use Category::{Beneficial as B, Harmful as H, Neutral as N};
 /// `MobEffects` in registration order.
 pub const EFFECTS: &[EffectDef] = &[
-    fx("speed", 3402751, B),
-    fx("slowness", 9154528, H),
-    fx("haste", 14270531, B),
-    fx("mining_fatigue", 4866583, H),
-    fx("strength", 16762624, B),
+    fx(0, "speed", 3402751, B),
+    fx(1, "slowness", 9154528, H),
+    fx(2, "haste", 14270531, B),
+    fx(3, "mining_fatigue", 4866583, H),
+    fx(4, "strength", 16762624, B),
     EffectDef {
-        id: "instant_health",
-        color: 16262179,
-        category: B,
         instant: true,
+        ..fx(5, "instant_health", 16262179, B)
     },
     EffectDef {
-        id: "instant_damage",
-        color: 11101546,
-        category: H,
         instant: true,
+        ..fx(6, "instant_damage", 11101546, H)
     },
-    fx("jump_boost", 16646020, B),
-    fx("nausea", 5578058, H),
-    fx("regeneration", 13458603, B),
-    fx("resistance", 9520880, B),
-    fx("fire_resistance", 16750848, B),
-    fx("water_breathing", 10017472, B),
-    fx("invisibility", 16185078, B),
-    fx("blindness", 2039587, H),
-    fx("night_vision", 12779366, B),
-    fx("hunger", 5797459, H),
-    fx("weakness", 4738376, H),
-    fx("poison", 8889187, H),
-    fx("wither", 7561558, H),
-    fx("health_boost", 16284963, B),
-    fx("absorption", 2445989, B),
+    fx(7, "jump_boost", 16646020, B),
+    fx(8, "nausea", 5578058, H),
+    fx(9, "regeneration", 13458603, B),
+    fx(10, "resistance", 9520880, B),
+    fx(11, "fire_resistance", 16750848, B),
+    fx(12, "water_breathing", 10017472, B),
+    fx(13, "invisibility", 16185078, B),
+    fx(14, "blindness", 2039587, H),
+    fx(15, "night_vision", 12779366, B),
+    fx(16, "hunger", 5797459, H),
+    fx(17, "weakness", 4738376, H),
+    fx(18, "poison", 8889187, H),
+    fx(19, "wither", 7561558, H),
+    fx(20, "health_boost", 16284963, B),
+    fx(21, "absorption", 2445989, B),
     EffectDef {
-        id: "saturation",
-        color: 16262179,
-        category: B,
         instant: true,
+        ..fx(22, "saturation", 16262179, B)
     },
-    fx("glowing", 9740385, N),
-    fx("levitation", 13565951, H),
-    fx("luck", 5882118, B),
-    fx("unluck", 12624973, H),
-    fx("slow_falling", 15978425, B),
-    fx("conduit_power", 1950417, B),
-    fx("dolphins_grace", 8954814, B),
-    fx("bad_omen", 745784, N),
-    fx("hero_of_the_village", 4521796, B),
-    fx("darkness", 2696993, H),
-    fx("trial_omen", 1484454, N),
-    fx("raid_omen", 14565464, N),
-    fx("wind_charged", 12438015, H),
-    fx("weaving", 7891290, H),
-    fx("oozing", 10092451, H),
-    fx("infested", 9214860, H),
-    fx("breath_of_the_nautilus", 65518, B),
+    fx(23, "glowing", 9740385, N),
+    fx(24, "levitation", 13565951, H),
+    fx(25, "luck", 5882118, B),
+    fx(26, "unluck", 12624973, H),
+    fx(27, "slow_falling", 15978425, B),
+    fx(28, "conduit_power", 1950417, B),
+    fx(29, "dolphins_grace", 8954814, B),
+    fx(30, "bad_omen", 745784, N),
+    fx(31, "hero_of_the_village", 4521796, B),
+    fx(32, "darkness", 2696993, H),
+    fx(33, "trial_omen", 1484454, N),
+    fx(34, "raid_omen", 14565464, N),
+    fx(35, "wind_charged", 12438015, H),
+    fx(36, "weaving", 7891290, H),
+    fx(37, "oozing", 10092451, H),
+    fx(38, "infested", 9214860, H),
+    fx(39, "breath_of_the_nautilus", 65518, B),
 ];
 /// The effects content mods declare, registered after vanilla's.
 static MOD_EFFECTS: OnceLock<Vec<EffectDef>> = OnceLock::new();
 /// Registers the content mods' effects, `<ns>:<path>` ids in registry order.
 /// The list is set once per process: false when it already was, and the
 /// effects stay those of the first call until the game restarts.
-pub fn register_mod_effects(effects: impl IntoIterator<Item = (String, u32, Category)>) -> bool {
+/// Each comes with its declared sort order, none for its colour.
+pub fn register_mod_effects(
+    effects: impl IntoIterator<Item = (String, u32, Category, Option<i32>)>,
+) -> bool {
     if MOD_EFFECTS.get().is_some() {
         return false;
     }
     let defs: Vec<EffectDef> = effects
         .into_iter()
-        .map(|(id, color, category)| {
+        .enumerate()
+        .map(|(index, (id, color, category, sort_order))| {
             debug_assert!(id.contains(':'), "{id} has no namespace");
-            fx(Box::leak(id.into_boxed_str()), color, category)
+            let def = fx(
+                EFFECTS.len() + index,
+                Box::leak(id.into_boxed_str()),
+                color,
+                category,
+            );
+            EffectDef {
+                sort_order: sort_order.unwrap_or(def.sort_order),
+                ..def
+            }
         })
         .collect();
     MOD_EFFECTS.set(defs).is_ok()
@@ -343,6 +357,14 @@ pub fn effects_color<'a>(effects: impl Iterator<Item = (&'a str, i32)>) -> u32 {
         _ => BASE_POTION_COLOR,
     }
 }
+/// Borrow an effect by its completed engine registry index.
+pub fn effect_by_index(index: usize) -> Option<&'static EffectDef> {
+    if index < EFFECTS.len() {
+        EFFECTS.get(index)
+    } else {
+        mod_effects().get(index - EFFECTS.len())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,28 +397,37 @@ mod tests {
     /// The only test that registers: the registry is set once per process.
     #[test]
     fn mod_effects_follow_vanilla_once_registered() {
-        assert!(register_mod_effects([(
-            "ruby:glow".to_owned(),
-            0xFF0000,
-            Category::Neutral
-        )]));
+        assert!(register_mod_effects([
+            ("ruby:glow".to_owned(), 0xFF0000, Category::Neutral, None),
+            (
+                "ruby:first".to_owned(),
+                0x0000FF,
+                Category::Neutral,
+                Some(-5)
+            ),
+        ]));
         assert!(!register_mod_effects([(
             "ruby:late".to_owned(),
             1,
-            Category::Harmful
+            Category::Harmful,
+            None
         )]));
         let glow = effect("ruby:glow").unwrap();
         assert_eq!(
             (glow.color, glow.category, glow.instant),
             (0xFF0000, Category::Neutral, false)
         );
+        // The HUD and inventory sort by this: the colour unless the mod declared an order.
+        assert_eq!(glow.sort_order, 0xFF0000);
+        assert_eq!(effect("ruby:first").unwrap().sort_order, -5);
+        assert_eq!(effect("speed").unwrap().sort_order, 3402751);
         assert!(effect("glow").is_none() && effect("ruby:late").is_none());
         assert!(is_mod_effect(glow.id) && !is_mod_effect("speed"));
         assert!(!is_mod_effect(namespaced("speed")));
         assert_eq!(namespaced(glow.id), "ruby:glow");
         assert_eq!(effect("minecraft:speed").unwrap().id, "speed");
         let ids: Vec<_> = all_effects().map(|e| e.id).collect();
-        assert_eq!(ids.len(), EFFECTS.len() + 1);
-        assert_eq!(ids.last(), Some(&"ruby:glow"));
+        assert_eq!(ids.len(), EFFECTS.len() + 2);
+        assert_eq!(ids.last(), Some(&"ruby:first"));
     }
 }

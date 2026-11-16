@@ -2,7 +2,7 @@
 //! decodes from a `show_dialog` packet, the values its inputs hold, and the
 //! click event an action makes of them (`Action.createAction`).
 use crate::text::Text;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use serde_json::{Value, json};
 
 /// `CommonDialogData` and the type's own fields.
@@ -530,7 +530,7 @@ pub fn number_string(v: f32) -> String {
     if v == (v as i32) as f32 {
         (v as i32).to_string()
     } else {
-        crate::snbt::java_float(v)
+        horizon_core::java_number::float_to_string(v)
     }
 }
 

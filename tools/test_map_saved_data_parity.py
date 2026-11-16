@@ -47,8 +47,8 @@ def main():
     tested_sources = base.source_hashes([
         Path(__file__), source,
         lab.ROOT / "mods/horizon/src/test/java/dev/horizonlab/parity/ParityData.java",
-        lab.ROOT / "crates/horizon-client/src/game/maps.rs",
-        lab.ROOT / "crates/horizon-client/src/game/maps/save_tests.rs",
+        lab.ROOT / "crates/horizon-client/src/game/blocks/maps/mod.rs",
+        lab.ROOT / "crates/horizon-client/src/game/blocks/maps/save_tests.rs",
         lab.ROOT / "crates/horizon-client/Cargo.toml",
         lab.ROOT / "Cargo.toml", lab.ROOT / "Cargo.lock"])
     classes = out / "classes"

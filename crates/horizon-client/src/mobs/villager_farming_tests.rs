@@ -31,17 +31,21 @@ fn resources() -> &'static std::path::Path {
         }
         files.push((
             "data/minecraft/tags/item/villager_plantable_seeds.json".into(),
-            r#"{"replace":true,"values":["fieldtest:grain","fieldtest:roots","minecraft:stick"]}"#.into(),
+            r#"{"replace":true,"values":["fieldtest:grain","fieldtest:roots","fieldtest:seeds","minecraft:stick"]}"#.into(),
+        ));
+        files.push((
+            "data/fieldtest/horizon/item/seeds.json".into(),
+            r#"{"template":"minecraft:wheat_seeds","block":"fieldtest:grain"}"#.into(),
         ));
         for (name, text) in files {
             let path = dir.join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, text).unwrap();
         }
-        let package = horizon_mods::Package::read(&dir).unwrap();
-        let content = horizon_mods::Content::read(&dir, &package.manifest).unwrap();
+        let package = horizon_mod_package::Package::read(&dir).unwrap();
+        let content = horizon_mod_package::Content::read(&dir, &package.manifest).unwrap();
         let out = scratch.join("resources");
-        crate::mod_content::build(&base, &[ContentMod { id: "fieldtest".into(), content }], &out)
+        crate::mod_content::build(&base, std::path::Path::new(""), &[ContentMod { id: "fieldtest".into(), content, jars: Vec::new() }], &out, &horizon_mod_package::enabled::EnabledMods::new([("fieldtest".into(), mod_api::Side::Both)]))
             .unwrap();
         out
     })
@@ -54,7 +58,11 @@ fn farmer(types: &super::super::MobTypes) -> Mob {
         Vec3::new(0.5, 1.0, 0.5),
         0.0,
     );
-    super::super::villager::set_profession(&mut m, 5);
+    super::super::villager::set_profession(
+        &mut m,
+        horizon_client::mobs::villager::profession_table(),
+        5,
+    );
     m
 }
 
@@ -83,7 +91,7 @@ fn put(
 }
 
 #[test]
-#[ignore = "full content root: tools/test_villager_farming_parity.py runs it"]
+#[ignore = "daily"]
 fn mod_farmland_is_a_secondary_site_and_farming_target() {
     assert!(super::super::world::with_resource_test_world(
         resources(),
@@ -100,11 +108,12 @@ fn mod_farmland_is_a_secondary_site_and_farming_target() {
                 mem(&mut m).secondary_job_site.value(),
                 Some(vec![[0, 0, 0]])
             );
-            let mut lr = crate::mobs::world::level_random(11);
+            let mut test_level = crate::health::TestLevel::new(11);
+            let level = &mut test_level.level();
             let mut events = Vec::new();
             let mut cx = Bx {
                 w,
-                lr: &mut lr,
+                level,
                 events: &mut events,
                 now: 1000,
                 refresh: false,
@@ -121,7 +130,7 @@ fn mod_farmland_is_a_secondary_site_and_farming_target() {
 }
 
 #[test]
-#[ignore = "full content root: tools/test_villager_farming_parity.py runs it"]
+#[ignore = "daily"]
 fn mod_crops_are_harvested_only_at_their_vanilla_templates_max_age() {
     assert!(super::super::world::with_resource_test_world(
         resources(),
@@ -152,7 +161,8 @@ fn mod_crops_are_harvested_only_at_their_vanilla_templates_max_age() {
         },
         |w, types| {
             let mut m = farmer(types);
-            let mut lr = crate::mobs::world::level_random(12);
+            let mut test_level = crate::health::TestLevel::new(12);
+            let level = &mut test_level.level();
             let mut events = Vec::new();
             for (x, ripe) in [
                 (0, false),
@@ -167,7 +177,7 @@ fn mod_crops_are_harvested_only_at_their_vanilla_templates_max_age() {
                     &mut m,
                     &mut Bx {
                         w,
-                        lr: &mut lr,
+                        level,
                         events: &mut events,
                         now: 1000,
                         refresh: false,
@@ -176,14 +186,56 @@ fn mod_crops_are_harvested_only_at_their_vanilla_templates_max_age() {
                     &mut Some([x, 1, 0]),
                     &mut Vec::new(),
                 );
-                assert_eq!(events.iter().any(|e| matches!(e, MobEvent::BreakBlock { pos, drop: true } if *pos == [x, 1, 0])), ripe, "x={x}");
+                // `destroyBlock(pos, true, villager)`: named, and no `LivingDestroyBlockEvent`.
+                assert_eq!(events.iter().any(|e| matches!(e, MobEvent::BreakBlock { pos, drop: true, by: None, breaker: Some(_) } if *pos == [x, 1, 0])), ripe, "x={x}");
             }
         }
     ));
 }
 
 #[test]
-#[ignore = "full content root: tools/test_villager_farming_parity.py runs it"]
+#[ignore = "daily"]
+fn farmer_plants_a_declared_items_block() {
+    assert!(super::super::world::with_resource_test_world(
+        resources(),
+        &[],
+        true,
+        true,
+        |world, reg| put(world, 0, 0, reg.default_state("fieldtest:soil").unwrap()),
+        |w, types| {
+            let mut m = farmer(types);
+            super::super::villager::ext_mut(&mut m).inventory =
+                vec![ItemStack::new("fieldtest:seeds", 2)];
+            let mut test_level = crate::health::TestLevel::new(13);
+            let level = &mut test_level.level();
+            let mut events = Vec::new();
+            harvest_tick(
+                &mut m,
+                &mut Bx {
+                    w,
+                    level,
+                    events: &mut events,
+                    now: 1000,
+                    refresh: false,
+                },
+                &mut 0,
+                &mut Some([0, 1, 0]),
+                &mut Vec::new(),
+            );
+            let expected = w.registry.default_state("fieldtest:grain").unwrap();
+            assert!(events.iter().any(
+                |e| matches!(e, MobEvent::SetBlock { pos: [0, 1, 0], state } if *state == expected)
+            ));
+            assert_eq!(
+                super::super::villager::ext(&m).unwrap().inventory[0].count,
+                1
+            );
+        }
+    ));
+}
+
+#[test]
+#[ignore = "daily"]
 fn farming_uses_the_first_tagged_block_item_and_consumes_one_seed() {
     assert!(super::super::world::with_resource_test_world(
         resources(),
@@ -205,13 +257,14 @@ fn farming_uses_the_first_tagged_block_item_and_consumes_one_seed() {
                 ItemStack::new("fieldtest:roots", 1),
                 ItemStack::new("fieldtest:grain", 2),
             ];
-            let mut lr = crate::mobs::world::level_random(13);
+            let mut test_level = crate::health::TestLevel::new(13);
+            let level = &mut test_level.level();
             let mut events = Vec::new();
             harvest_tick(
                 &mut m,
                 &mut Bx {
                     w,
-                    lr: &mut lr,
+                    level,
                     events: &mut events,
                     now: 1000,
                     refresh: false,
@@ -246,7 +299,7 @@ fn farming_uses_the_first_tagged_block_item_and_consumes_one_seed() {
                 &mut m,
                 &mut Bx {
                     w,
-                    lr: &mut lr,
+                    level,
                     events: &mut events,
                     now: 1001,
                     refresh: false,
@@ -325,6 +378,7 @@ fn vanilla_farming_classification_matches_the_oracle() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn planting_posts_block_place_with_villager_and_crop_state() {
     let ran = super::super::world::with_built_test_world(
         &[],
@@ -340,13 +394,13 @@ fn planting_posts_block_place_with_villager_and_crop_state() {
             let mut m = farmer(types);
             super::super::villager::ext_mut(&mut m).inventory =
                 vec![ItemStack::new("minecraft:wheat_seeds", 1)];
-            let mut lr = crate::mobs::world::level_random(13);
+            let mut test_level = crate::health::TestLevel::new(13);
             let mut events = Vec::new();
             harvest_tick(
                 &mut m,
                 &mut Bx {
                     w,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                     now: 1000,
                     refresh: false,
@@ -375,5 +429,5 @@ fn planting_posts_block_place_with_villager_and_crop_state() {
         },
     );
     // Without the vanilla data under .local/horizon-client the world cannot be built: the test has nothing to check.
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

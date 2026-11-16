@@ -21,7 +21,7 @@ Offer a version only when this build loads it:
 | Kind | Loads when | From `content` |
 | --- | --- | --- |
 | Content mod (`.hmod`) | its manifest `api` is listed | `mod.api` |
-| Native mod (`.hnmod`) | the game is rebuilt with it, and its `hooks` is at most this level | `native_mod.hooks`, `native_mod.rebuild` |
+| Native mod (`.hmod`) | the game is rebuilt with it for this exact build | `native_mod.exact_build`, `native_mod.rebuild` |
 | Horizon shader pack (`.hshader`) | its manifest's `schema` and `api` are listed | `shader.schema`, `shader.api` |
 | Resource pack | always; outside `format` it is marked too old or too new, as vanilla marks it | `resourcepack.format` |
 | Data pack | the same | `datapack.format` |
@@ -36,7 +36,7 @@ starts and writes them when the player changes a setting.
 | Kind | File | Folder | On and off |
 | --- | --- | --- | --- |
 | Content mod | `<id>.hmod`, or a folder with `horizon-mod.toml` | `horizon-mods/` | `horizon-mods.txt`: a `mod.<id>:true` line turns it on. A mod without one is off |
-| Native mod | `<id>.hnmod` | `horizon-native-mods/` | runs only in a game built with it: `mod.<id>:true` chooses it for the next build, `mod.<id>:false` turns a built one off |
+| Native mod | `<id>.hmod` with `[native]` in `horizon-mod.toml` | `horizon-mods/` | runs only in a game built with it: `mod.<id>:true` chooses it for the next build, `mod.<id>:false` turns a built one off |
 | Shader pack | a `.hshader` or a folder with `horizon-shaders.toml`; a `shaders/`-format `.zip` or folder | `shaderpacks/` | `horizon-graphics.txt`: `pickedShaderPack:<file or folder name>`, empty for none. A pack's options are in `shaderpacks/<name>.txt` |
 | Resource pack | a `.zip` or a folder with `pack.mcmeta` | `resourcepacks/` | `options.txt`: `resourcePacks:["vanilla","file/<name>"]`, lowest priority first, as vanilla's |
 | Data pack | a `.zip` or a folder with `pack.mcmeta` and `data/` | `saves/<world>/datapacks/` | `saves/<world>/datapacks.json`: `{"enabled": [...], "disabled": [...]}`, each `file/<name>` (or `vanilla`). A pack in neither list is on |
@@ -53,7 +53,7 @@ starts and writes them when the player changes a setting.
 
 ## Before installing a file
 
-The checks `horizon_mods::index::check_file` makes, which [mod-index.md](mod-index.md#before-a-file-is-installed)
+The checks `horizon_mod_package::index::check_file` makes, which [mod-index.md](mod-index.md#before-a-file-is-installed)
 specifies. A launcher that installs from the index makes the same ones:
 
 1. **Where it comes from.** An `https://` address of the index's shape: a registry release

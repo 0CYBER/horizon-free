@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared vanilla resources"]
+#[ignore = "daily"]
 fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {
     use horizon_world::loot::PackOverlay;
     let prepared = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -44,7 +44,7 @@ fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {
 }
 
 #[test]
-#[ignore = "requires prepared vanilla resources"]
+#[ignore = "daily"]
 fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/horizon-client")
@@ -56,7 +56,7 @@ fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
     fs::create_dir_all(pack.join("data/demo/damage_type")).unwrap();
     fs::write(
         pack.join("pack.mcmeta"),
-        r#"{"pack":{"description":""},"features":{"enabled":["minecraft:trade_rebalance"]}}"#,
+        r#"{"pack":{"description":"test","pack_format":121},"features":{"enabled":["minecraft:trade_rebalance"]}}"#,
     )
     .unwrap();
     fs::write(
@@ -80,7 +80,7 @@ fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
         let files: Vec<_> = store.files.into_iter().collect();
         horizon_world::damage_source::Catalog::load(
             &root,
-            &horizon_world::loot::PackOverlay { files: &files },
+            &horizon_world::loot::PackOverlay::new(&files),
         )
         .unwrap()
     };
@@ -96,7 +96,7 @@ fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
 
 /// Ordinary player hurt, using a custom source and a frozen-registry tag reload.
 #[test]
-#[ignore = "requires prepared vanilla resources"]
+#[ignore = "daily"]
 fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
     use horizon_world::loot::PackOverlay;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -111,7 +111,7 @@ fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
     ];
     let open = resources
         .health
-        .with_packs(&root, &PackOverlay { files: &files }, false)
+        .with_packs(&root, &PackOverlay::new(&files), false)
         .unwrap();
     let id = open.damage.id("demo:heated_air").unwrap();
     let player = || {
@@ -125,14 +125,23 @@ fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
         p
     };
     let rules = HealthRules::default();
+    let mut test_level = TestLevel::new(0);
     let mut armored = player();
-    assert!(armored.hurt(&open, rules, id, 4.0).unwrap());
+    assert!(
+        armored
+            .hurt(&mut test_level.level(), &open, rules, id, 4.0)
+            .unwrap()
+    );
     assert_eq!(armored.health.health(), 16.0);
     assert_eq!(armored.health.food.exhaustion, 0.25);
     assert_eq!(armored.hurt_log.last().unwrap().source, "demo:heated_air");
     let mut resistant = player();
     resistant.status.fire_resistance = true;
-    assert!(!resistant.hurt(&open, rules, id, 4.0).unwrap());
+    assert!(
+        !resistant
+            .hurt(&mut test_level.level(), &open, rules, id, 4.0)
+            .unwrap()
+    );
     assert_eq!(resistant.health.health(), 20.0);
     let mut item_rules = crate::enchant::Enchantments::default();
     item_rules.bind_damage_catalog(&open.damage);
@@ -142,7 +151,11 @@ fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
     assert_eq!(reload.damage.id("demo:heated_air"), Some(id));
     let mut after = player();
     after.status.fire_resistance = true;
-    assert!(after.hurt(&reload, rules, id, 4.0).unwrap());
+    assert!(
+        after
+            .hurt(&mut test_level.level(), &reload, rules, id, 4.0)
+            .unwrap()
+    );
     assert!(
         after.health.health() > 16.0 && after.health.health() < 20.0,
         "the same source now encounters armor and ignores fire resistance"

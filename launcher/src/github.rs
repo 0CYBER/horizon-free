@@ -19,7 +19,7 @@ use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const API: &str = "https://api.github.com";
+pub(crate) const API: &str = "https://api.github.com";
 /// Kira's read-only mirror of Horizon's release reads. `HORIZON_GITHUB_MIRROR` replaces it (an
 /// empty value turns it off).
 pub const MIRROR: &str = "https://mcp.playhorizon.dev/github/public";
@@ -42,8 +42,14 @@ pub(crate) enum Answer {
     Failed(String),
 }
 
-/// GitHub's JSON for `url` (`https://api.github.com/...`). A 404 is the error `<url> answered 404`.
+/// GitHub's JSON for a required resource. Missing resources are reported as errors.
 pub fn json(url: &str) -> Result<serde_json::Value, String> {
+    json_optional(url)?.ok_or_else(|| format!("{url} answered 404"))
+}
+
+/// GitHub's JSON when the resource may not exist, such as a repository's latest release.
+/// A 404 is None, distinct from a connection or rate-limit failure.
+pub fn json_optional(url: &str) -> Result<Option<serde_json::Value>, String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -57,13 +63,13 @@ pub(crate) fn json_with(
     now: u64,
     github: impl Fn(&str, Option<&str>) -> Answer,
     mirror: impl Fn(&str) -> Answer,
-) -> Result<serde_json::Value, String> {
+) -> Result<Option<serde_json::Value>, String> {
     let file = cache.join(cache_name(url));
     let kept = read_kept(&file, url);
     if let Some(k) = kept.as_ref() {
         // A copy saved "later" than now (the clock was set back) is not trusted as fresh.
         if now >= k.saved && now - k.saved < FRESH_SECS {
-            return Ok(k.body.clone());
+            return Ok(Some(k.body.clone()));
         }
     }
     let etag = kept
@@ -73,17 +79,17 @@ pub(crate) fn json_with(
     let why = match github(url, etag) {
         Answer::Fresh(body, etag) => {
             write_kept(&file, url, etag.as_deref().unwrap_or(""), &body, now);
-            return Ok(body);
+            return Ok(Some(body));
         }
         Answer::NotModified => match kept {
             Some(k) => {
                 write_kept(&file, url, &k.etag, &k.body, now);
-                return Ok(k.body);
+                return Ok(Some(k.body));
             }
             // A 304 to a request that had no ETag: can't happen, but don't trust it.
             None => "GitHub answered 304 without a saved copy".to_owned(),
         },
-        Answer::NotFound => return Err(format!("{url} answered 404")),
+        Answer::NotFound => return Ok(None),
         Answer::RateLimited => RATE_LIMITED.to_owned(),
         Answer::Failed(e) => e,
     };
@@ -91,9 +97,9 @@ pub(crate) fn json_with(
         Some(m) => match mirror(&m) {
             Answer::Fresh(body, _) => {
                 write_kept(&file, url, "", &body, now);
-                return Ok(body);
+                return Ok(Some(body));
             }
-            Answer::NotFound => return Err(format!("{url} answered 404")),
+            Answer::NotFound => return Ok(None),
             Answer::RateLimited => Some("too many requests from this network".to_owned()),
             Answer::Failed(e) => Some(e),
             Answer::NotModified => Some("an unexpected 304".to_owned()),
@@ -101,7 +107,7 @@ pub(crate) fn json_with(
         None => None,
     };
     if let Some(k) = kept {
-        return Ok(k.body);
+        return Ok(Some(k.body));
     }
     Err(match from_mirror {
         Some(m) => format!(

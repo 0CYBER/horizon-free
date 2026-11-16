@@ -930,7 +930,7 @@ fn debug_tag_queries_decode_as_their_packets() {
             tag: Tag::End
         })
     );
-    let mut items = horizon_world::nbt::Compound::new();
+    let mut items = horizon_core::nbt::Compound::new();
     items.insert("Lock".into(), Tag::String("key".into()));
     round_trip(
         Clientbound::TagQuery(TagQuery {

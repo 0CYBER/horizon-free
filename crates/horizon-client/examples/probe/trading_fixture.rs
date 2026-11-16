@@ -12,9 +12,9 @@ use horizon_client::{
     merchant::{self, Event, MerchantOffer, Session, TradeContext, TradeEnv, Trader, Trades},
     random_sequences::RandomSequences,
 };
+use horizon_core::nbt::Tag;
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_world::loot::PackOverlay;
-use horizon_world::nbt::Tag;
 use std::{collections::HashMap, fmt::Write as _, fs, path::Path};
 
 const PLAYER: [i32; 4] = [0, 0x1234, 0, 0x5678];
@@ -162,7 +162,7 @@ impl World<'_> {
         let (profession, variant) = (format!("minecraft:{}", p[0]), format!("minecraft:{}", p[1]));
         let max: i32 = p[2].parse().unwrap_or(1);
         for level in 1..=max {
-            let set = Trades::set_for(&profession, level);
+            let set = self.trades.set_for(&profession, level);
             if self.trades.sets.contains_key(&set) {
                 self.add_set(&mut offers, &set, &variant, origin);
             }
@@ -238,13 +238,19 @@ pub fn main() -> horizon_client::Result<()> {
     let root = Path::new(args.get(1).ok_or(usage)?);
     let input = fs::read_to_string(args.get(2).ok_or(usage)?)?;
     let vanilla = fs::read_to_string(args.get(3).ok_or(usage)?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let enchantments = Enchantments::load(root);
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let enchantments = Enchantments::load(root, &defaults)?;
     let names = horizon_client::creative::Names::default();
     let trades = Trades::load(root, &PackOverlay::NONE);
-    let recipes = horizon_client::crafting::Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let recipes = horizon_client::crafting::Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
-    let banners = horizon_client::banner::Banners::load(root);
+    let banners = horizon_client::banner::Banners::load(root, &defaults);
     let station_recipes = horizon_client::stations::StationRecipes::default();
     let types: HashMap<_, _> = horizon_client::mobs::MobTypes::load(root)?
         .types
@@ -343,7 +349,7 @@ pub fn main() -> horizon_client::Result<()> {
             }
             "nbt" => {
                 let text = snbt.get(name).ok_or("missing vanilla snbt")?;
-                let (tag, _) = horizon_world::nbt::parse_snbt(text)?;
+                let (tag, _) = horizon_core::nbt::parse_snbt(text)?;
                 let id = if kv["v"] == "wt" {
                     "minecraft:wandering_trader"
                 } else {
@@ -357,7 +363,7 @@ pub fn main() -> horizon_client::Result<()> {
                     entity_nbt::mob_from_nbt(&tag, &types, 1, None).ok_or("unreadable villager")?;
                 let back = entity_nbt::mob_to_nbt(&mob, [0; 4], None, None, |_| None);
                 writeln!(out, "{name} snbt {text}")?;
-                let mut kept = horizon_world::nbt::Compound::new();
+                let mut kept = horizon_core::nbt::Compound::new();
                 for key in [
                     "Offers",
                     "Xp",
@@ -378,6 +384,12 @@ pub fn main() -> horizon_client::Result<()> {
                     maps: None,
                 };
                 let env = Env {
+                    crafting_remainder: None,
+                    player: None,
+                    player_entity_id: None,
+                    loop_context: &crate::test_resources::loop_context(
+                        horizon_world::native_load_context::LoopSide::Server,
+                    ),
                     items: &items,
                     recipes: &recipes,
                     brewing: &brewing,
@@ -388,7 +400,9 @@ pub fn main() -> horizon_client::Result<()> {
                     trade: Some(&env_trade),
                     maps: None,
                     limited_crafting: false,
+                    can_equip: None,
                     known_recipes: None,
+                    slot_rules: None,
                 };
                 trade(&mut out, name, &kv, &mut world, &env, origin)?;
             }

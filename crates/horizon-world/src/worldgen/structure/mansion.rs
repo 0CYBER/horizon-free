@@ -1,14 +1,17 @@
 //! Woodland mansions (WoodlandMansionStructure, WoodlandMansionPieces).
-use super::{
-    BoundingBox, Mirror, Rotation, StructureResources,
-    legacy::{
-        HORIZONTAL, PieceContext, Result, TemplateHandler, TemplatePiece, clockwise,
-        counter_clockwise, create_chest, direction_name, offset, opposite,
-    },
-    processor::ProcessorList,
-};
 use horizon_core::{geometry::Direction, random::RandomSource};
 use std::sync::Arc;
+use {
+    super::{
+        Mirror, Rotation, StructureResources,
+        legacy::{
+            HORIZONTAL, PieceContext, Result, TemplateHandler, TemplatePiece, clockwise,
+            counter_clockwise, create_chest, direction_name, offset, opposite,
+        },
+        processor::ProcessorList,
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
 
 const CORRIDOR_FLAG: i32 = 8_388_608;
 const STAIRS_FLAG: i32 = 4_194_304;

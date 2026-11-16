@@ -35,6 +35,7 @@ EXEMPT = {
     "test_item_use_order_parity.py": "starts servers through test_server_knockback_parity.run_side; its Server uses game_environment",
     "test_bed_explosion_parity.py": "starts servers through test_server_knockback_parity.run_side; its Server uses game_environment",
     "port_harness.py": "ports Java code, starts no game",
+    "native_dylib_probe.py": "builds the game's executable to read its imports; runs only probe fixtures, never the game",
     "profile_client_e2e.py": "starts its games through agent_control_e2e.scratch, which uses game_env",
 }
 
@@ -86,22 +87,61 @@ class GameEnvTests(unittest.TestCase):
 
 
 class SpawnerTests(unittest.TestCase):
-    def test_every_script_that_starts_the_game_uses_game_env(self):
-        offenders = []
+    @classmethod
+    def setUpClass(cls):
+        # Keep immutable detector results, not the corpus's large ASTs. A new
+        # suite reparses every file; there is no process-global cache of edits.
+        scripts = []
         for path in sorted(TOOLS.rglob("*.py")):
             if path.name in EXEMPT:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            if SPAWN_MARKERS & set(constants(tree)) and not uses_game_env(tree):
+            starts_game = bool(SPAWN_MARKERS & set(constants(tree)))
+            scripts.append((path, starts_game, uses_game_env(tree), sets_audio_by_hand(tree)))
+        cls.scripts = tuple(scripts)
+
+    def test_every_script_that_starts_the_game_uses_game_env(self):
+        offenders = []
+        for path, starts_game, game_env, _ in self.scripts:
+            if starts_game and not game_env:
                 offenders.append(str(path.relative_to(lab.ROOT)))
         self.assertEqual(offenders, [], "these start the game without lab.game_env (HORIZON_HOME falls back to a "
                                         "real player's folder); use it, or list the script in EXEMPT")
 
     def test_nobody_sets_the_audio_switch_by_hand(self):
-        offenders = [str(path.relative_to(lab.ROOT)) for path in sorted(TOOLS.rglob("*.py"))
-                     if path.name not in EXEMPT
-                     and sets_audio_by_hand(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))]
+        offenders = [str(path.relative_to(lab.ROOT)) for path, _, _, audio_by_hand in self.scripts
+                     if audio_by_hand]
         self.assertEqual(offenders, [], "set it through lab.game_env, which also gives the game scratch folders")
+
+
+class SpawnerDetectorTests(unittest.TestCase):
+    def test_snapshot_checks_both_rules_and_refreshes_between_suites(self):
+        class FixtureSpawnerTests(SpawnerTests):
+            pass
+
+        with tempfile.TemporaryDirectory(dir=lab.ROOT) as temp:
+            tools = Path(temp)
+            script = tools / "nested" / "spawn.py"
+            script.parent.mkdir()
+            # Exercise the real file scanner, not mocked detector results. Each
+            # suite includes setUpClass and must see the latest file contents.
+            cases = (
+                ("lab.game_env(); run('horizon-ctl')", set()),
+                ("run('horizon-ctl')", {"test_every_script_that_starts_the_game_uses_game_env"}),
+                ("lab.game_env(); env['HORIZON_NO_AUDIO'] = '1'",
+                 {"test_nobody_sets_the_audio_switch_by_hand"}),
+                ("lab.game_env(); run('horizon-ctl')", set()),
+            )
+            # An exempt file still stays exempt, including in subdirectories.
+            (script.parent / "lab.py").write_text("run('horizon-ctl')", encoding="utf-8")
+            with mock.patch(__name__ + ".TOOLS", tools):
+                for source, expected in cases:
+                    script.write_text(source, encoding="utf-8")
+                    result = unittest.TestResult()
+                    unittest.defaultTestLoader.loadTestsFromTestCase(FixtureSpawnerTests).run(result)
+                    self.assertEqual(result.errors, [])
+                    self.assertEqual(result.testsRun, 2)
+                    self.assertEqual({test._testMethodName for test, _ in result.failures}, expected)
 
 
 if __name__ == "__main__":

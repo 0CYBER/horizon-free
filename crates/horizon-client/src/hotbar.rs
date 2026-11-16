@@ -2,7 +2,7 @@
 //! `Hotbar`): nine saved rows of nine stacks, read through the `HOTBAR`
 //! data fixers when the file is from an older version.
 use crate::{items::ItemStack, save};
-use horizon_world::nbt::{JavaString, Tag};
+use horizon_core::nbt::{JavaString, Tag};
 use std::path::Path;
 
 /// `HotbarManager.NUM_HOTBAR_GROUPS`.

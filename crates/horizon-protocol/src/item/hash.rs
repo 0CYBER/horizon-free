@@ -75,7 +75,7 @@ fn pick(table: &[&str], id: i32) -> Option<HashCode> {
         .map(|n| string(n))
 }
 /// `ComponentSerialization.CODEC`.
-fn text(tag: &horizon_world::nbt::Tag) -> HashCode {
+fn text(tag: &horizon_core::nbt::Tag) -> HashCode {
     HashOps::from_nbt(tag, &TEXT_BOOLS)
 }
 /// `Filterable.codec`: the full record (`Codec.withAlternative` encodes with
@@ -472,7 +472,7 @@ impl Hashed {
 mod tests {
     use super::*;
     use crate::item::{Component as C, WrittenBook, component as k};
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     /// Ids for the tests, by registry (the position in the table is the id).
     struct Table;

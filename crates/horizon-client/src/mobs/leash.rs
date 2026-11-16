@@ -4,7 +4,7 @@
 //! while the rope is slack).
 use super::{Mob, MobEvent, MobWorld, Species, Who};
 use horizon_core::geometry::Vec3;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `Leashable.LEASH_ELASTIC_DIST`.
 pub const ELASTIC: f64 = 6.0;
@@ -102,7 +102,7 @@ pub fn knot_state(pos: [i32; 3]) -> HolderState {
 pub fn holder_state(w: &MobWorld, holder: Holder) -> Option<HolderState> {
     match holder {
         Holder::Player => {
-            let p = w.player.as_ref()?;
+            let p = w.selected_player()?;
             let size = p.bounds.max_position().subtract(p.bounds.min_position());
             Some(HolderState {
                 position: p.position,
@@ -383,7 +383,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // Leashable.tickLeash: a holder that cannot interact with the level (dead
     // or spectating, `Entity.canInteractWithLevel`) drops the lead.
     if holder == Holder::Player
-        && let Some(p) = w.player.as_ref()
+        && let Some(p) = w.selected_player()
         && m.extra.leash_player.is_none_or(|u| p.uuid == u)
         && (p.spectator || !p.alive)
     {
@@ -399,7 +399,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         holder != Holder::Player
             || m.extra
                 .leash_player
-                .is_none_or(|u| w.player.as_ref().is_some_and(|p| p.uuid == u))
+                .is_none_or(|u| w.selected_player().is_some_and(|p| p.uuid == u))
     });
     let Some(state) = state else {
         // The holder is gone: the lead drops.
@@ -499,8 +499,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // Leashable.angularFriction: the block under the mob's movement decides
     // the ground friction, whatever the lead's shape; the product is a float.
     let friction = if m.on_ground {
-        let [x, y, z] = m.on_pos(0.500_001);
-        w.facts.get(w.world.block(x, y, z)).friction * 0.91_f32
+        m.friction_at(w, m.on_pos(0.500_001)) * 0.91_f32
     } else if m.is_in_liquid() {
         0.8_f32
     } else {
@@ -773,7 +772,7 @@ mod tests {
                     );
                     if kind != "cow" {
                         mob.extra.age = if kind == "baby" { -24000 } else { 0 };
-                        super::super::happy_ghast::ensure_setup(&mut mob);
+                        super::super::happy_ghast::ensure_setup(&mut mob, None);
                     }
                     mob.on_ground = false;
                     mob.ai.nav.path = Some(Path {
@@ -821,6 +820,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn mob_tick_selects_quad_only_when_both_live_ends_support_it() {
         let ran = crate::mobs::world::with_test_world(&[], |world, types| {
             for (kind, holder_kind, quad) in [
@@ -839,7 +839,7 @@ mod tests {
                 };
                 let mut mob = new(1, kind, Vec3::new(-7.5, 100.0, -4.5), 90.0);
                 let holder = new(2, holder_kind, Vec3::new(0.5, 104.0, 0.5), 30.0);
-                let others = [holder.seen(None)];
+                let others = [holder.seen(None, &crate::items::Items::empty())];
                 let mut w = world.clone();
                 w.others = &others;
                 mob.extra.leash = Some(Holder::Mob(holder.id));
@@ -875,6 +875,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_players_leash_does_not_pull_toward_a_different_player() {
         crate::mobs::world::with_test_world(&[], |world, types| {
             let mut w = world.clone();
@@ -928,6 +929,7 @@ mod tests {
     /// rope hangs at a share of the eye height, and the copper golem's on the
     /// centre instead of the default `bbWidth / 2` in front.
     #[test]
+    #[ignore = "daily"]
     fn a_golem_or_a_fox_hangs_its_lead_where_vanilla_does() {
         let _ = crate::mobs::world::with_test_world(&[], |_, types| {
             for (kind, factor, forwards) in [
@@ -956,6 +958,7 @@ mod tests {
     /// happy ghast's rope at the origin, against the default eye-height
     /// height the fallthrough gave them.
     #[test]
+    #[ignore = "daily"]
     fn a_pig_a_rabbit_a_parrot_an_ocelot_and_a_ghast_hang_their_lead_where_vanilla_does() {
         let _ = crate::mobs::world::with_test_world(&[], |_, types| {
             for (kind, factor) in [
@@ -990,6 +993,7 @@ mod tests {
     /// aggravated nautilus, one holding an `ANGRY_AT` or an `ATTACK_TARGET`
     /// memory, cannot be put on a lead.
     #[test]
+    #[ignore = "daily"]
     fn an_aggravated_nautilus_cannot_be_leashed() {
         let ran = crate::mobs::world::with_test_world(&[], |_, types| {
             let new = |kind: &str| {
@@ -1019,7 +1023,7 @@ mod tests {
             ridden.extra.rider = Some(2);
             assert!(can_be_leashed(&ridden), "a plain nautilus has no check");
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `CamelHusk.canBeLeashed` is `!isMobControlled()` and
@@ -1027,6 +1031,7 @@ mod tests {
     /// riderless husk and a wild zombie horse take a lead even though both are
     /// in the monster category, and a mob on a husk's back refuses it.
     #[test]
+    #[ignore = "daily"]
     fn a_camel_husk_takes_a_lead_until_a_mob_rides_it() {
         let ran = crate::mobs::world::with_test_world(&[], |_, types| {
             let new = |kind: &str| {
@@ -1051,7 +1056,7 @@ mod tests {
             wild.extra.rider = Some(2);
             assert!(!can_be_leashed(&wild), "a mob rides the wild horse");
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     #[test]
@@ -1158,6 +1163,7 @@ mod tests {
         assert!((following[0] - still[0] * 0.3_f32 as f64).abs() < 1e-9);
     }
     #[test]
+    #[ignore = "daily"]
     fn a_leads_spin_uses_the_friction_of_the_block_under_the_mob() {
         // Leashable.angularFriction on the ground is
         // `getBlockState(getBlockPosBelowThatAffectsMyMovement()).getBlock()
@@ -1230,6 +1236,7 @@ mod tests {
     /// half of `getBbHeight`, on the cube's centre rather than the default
     /// `bbWidth / 2` in front.
     #[test]
+    #[ignore = "daily"]
     fn a_sulfur_cube_is_leashed_by_its_block_and_hangs_at_its_middle() {
         // `with_test_world` answers false when the prepared data is absent, and
         // the edits are inside the closure, so a skip needs no early return.
@@ -1244,7 +1251,7 @@ mod tests {
             };
             let empty = new();
             let mut full = new();
-            full.extra.body = Some("minecraft:stone".into());
+            full.extra.set_body(Some("minecraft:stone".into()));
             for m in [&empty, &full] {
                 let o = leash_offset(m);
                 let h = f64::from(m.height() / 2.0);

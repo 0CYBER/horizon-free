@@ -11,7 +11,8 @@ fn pig(types: &crate::mobs::MobTypes, no_ai: bool, immune: bool, fire: i32) -> M
     mob.ai.goals = GoalSelector::default();
     mob.ai.targets = GoalSelector::default();
     mob.fire_ticks = fire;
-    mob.random.set_seed(1);
+    mob.random =
+        horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(1));
     mob
 }
 
@@ -31,7 +32,12 @@ fn step(mob: &mut Mob, w: &MobWorld, environment: &str) -> (f32, i32, usize) {
     mob.velocity = Vec3::ZERO;
     assert_eq!(in_rain(mob, &scene), scene.raining);
     let mut events = Vec::new();
-    assert!(tick(mob, &scene, &mut level_random(2), &mut events));
+    assert!(tick(
+        mob,
+        &scene,
+        &mut crate::health::TestLevel::new(2).level(),
+        &mut events
+    ));
     let sounds = events
         .iter()
         .filter(|event| matches!(event, MobEvent::Sound("entity.generic.extinguish_fire", ..)))
@@ -40,7 +46,7 @@ fn step(mob: &mut Mob, w: &MobWorld, environment: &str) -> (f32, i32, usize) {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn wet_fire_damage_and_extinguishing_follow_the_full_mob_tick() {
     let root = std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES");
     assert!(crate::mobs::world::with_resource_test_world(
@@ -49,7 +55,10 @@ fn wet_fire_damage_and_extinguishing_follow_the_full_mob_tick() {
         true,
         true,
         |world, registry| {
-            let biomes = crate::biome::Biomes::load(std::path::Path::new(&root)).unwrap();
+            let biomes = crate::biome::Biomes::load(
+                &horizon_assets::resource_source::ResourceRoot::directory(root.clone().into()),
+            )
+            .unwrap();
             let plains = biomes.id("minecraft:plains");
             let mut chunk = crate::chunk::Chunk::empty(0, 0);
             for section in &mut chunk.sections {
@@ -163,7 +172,12 @@ fn wet_fire_damage_and_extinguishing_follow_the_full_mob_tick() {
                     mob.previous = mob.position;
                     assert!(in_rain(&mob, &rain));
                     let mut events = Vec::new();
-                    let was_on_fire = base_tick(&mut mob, &rain, &mut events);
+                    let was_on_fire = base_tick(
+                        &mut mob,
+                        &rain,
+                        &mut crate::health::TestLevel::new(0).level(),
+                        &mut events,
+                    );
                     assert_eq!(was_on_fire, fire > 1);
                     let mut expected_random = mob.random.clone();
                     let sounds = usize::from(fire > 1);

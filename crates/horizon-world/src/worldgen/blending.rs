@@ -434,7 +434,7 @@ pub struct SavedStart {
     /// The union of the pieces' `BB`: `[min x, min y, min z, max x, max y, max z]`.
     pub bounds: Option<[i32; 6]>,
     /// The start's `Children`, as saved.
-    pub pieces: Vec<crate::nbt::Tag>,
+    pub pieces: Vec<horizon_core::nbt::Tag>,
 }
 
 /// `Blender.BlendingOutput`.

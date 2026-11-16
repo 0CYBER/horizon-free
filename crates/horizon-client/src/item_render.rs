@@ -6,12 +6,17 @@
 //! and the special model renderers submit, in pose space. A sink then draws
 //! them: [`gui`] into the HUD batch with the GUI item lighting, [`WorldSink`]
 //! into entity vertices with the level's lighting.
+use horizon_assets::resource_source::{ResourceRoot, ResourceSource};
 pub mod cit;
 mod glint_atlas;
 #[cfg(test)]
 mod glint_tests;
 pub mod gui;
 mod special;
+#[cfg(test)]
+mod special_parts_tests;
+#[cfg(test)]
+mod tint_tests;
 
 use crate::{
     block_entity_render::{ModelPart, diffuse},
@@ -21,21 +26,19 @@ use crate::{
 use glam::{Mat3, Mat4, Vec3};
 use horizon_assets::{
     animation::AnimationMetadata,
-    item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model},
+    item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model, bake_sprite_layer},
     item_model::{
-        ClientItem, Components, Context, DisplayContext, FoilType, ItemEnv, ItemModels,
-        LayerContent, LevelState, OwnerState, SpecialModel, StackView,
+        ClientItem, Context, DisplayContext, FoilType, ItemEnv, ItemModels, LayerContent,
+        LevelState, OwnerState, PreparedParts, SpecialModel, StackView,
     },
     model::Direction,
     palette::PalettedPermutations,
     resolve::{MISSING_MODEL, ModelLibrary},
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
-    fs,
-    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -543,7 +546,7 @@ fn submit_quads(
 /// The alpha masks of item and block sprites, read from the texture files
 /// (every unique animation frame) and the items atlas's palette sprites.
 struct FileSprites {
-    root: PathBuf,
+    root: ResourceSource,
     permutations: Vec<PalettedPermutations>,
     cache: Mutex<HashMap<String, Option<SpriteMask>>>,
     /// Sprites with a pixel that is neither fully transparent nor opaque
@@ -579,11 +582,12 @@ impl FileSprites {
             known(self).unwrap_or(false)
         })
     }
-    fn png(&self, sprite: &str, directory: &str) -> PathBuf {
-        crate::atlas_sources::texture_path(&self.root, sprite, directory)
+    fn png(&self, sprite: &str, directory: &str) -> String {
+        crate::atlas_sources::texture_resource(sprite, directory)
     }
     fn image(&self, sprite: &str, directory: &str) -> Option<(usize, usize, Vec<u32>)> {
-        let (w, h, rgba) = crate::hud::decode(&self.png(sprite, directory)).ok()?;
+        let (w, h, rgba) =
+            crate::hud::decode_bytes(&self.root.read(&self.png(sprite, directory)).ok()?).ok()?;
         Some((w as usize, h as usize, argb_pixels(&rgba)))
     }
     fn load(&self, sprite: &str) -> Option<SpriteMask> {
@@ -604,12 +608,13 @@ impl FileSprites {
             cache.insert(sprite.to_owned(), translucent);
         }
         let alpha: Vec<u8> = argb.iter().map(|p| (p >> 24) as u8).collect();
-        let animation =
-            horizon_core::prepared_files::read_to_string(&png.with_extension("png.mcmeta"))
-                .ok()
-                .and_then(|m| serde_json::from_str::<Value>(&m).ok())
-                .and_then(|m| m.get("animation").map(Value::to_string))
-                .and_then(|a| AnimationMetadata::from_json(&a).ok());
+        let animation = self
+            .root
+            .read_to_string(&format!("{png}.mcmeta"))
+            .ok()
+            .and_then(|m| serde_json::from_str::<Value>(&m).ok())
+            .and_then(|m| m.get("animation").map(Value::to_string))
+            .and_then(|a| AnimationMetadata::from_json(&a).ok());
         let (w, h) = match &animation {
             Some(a) => {
                 let [w, h] = a.frame_size(iw as i32, ih as i32);
@@ -667,8 +672,11 @@ pub struct ItemRenderer {
     /// GUI items already drawn: the HUD vertices of a static item at a GUI position
     /// (`gui::draw`), which are the same every frame it stays there.
     pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<[crate::hud::HudVertex]>>>,
-    /// Entity model layers of the special renderers.
+    /// Entity model layers of the special renderers, with the head of each skull type a native
+    /// mod registered, under its kind.
     parts: HashMap<String, ModelPart>,
+    /// The default texture of each skull type a native mod registered (`SKIN_BY_TYPE`).
+    skull_textures: HashMap<&'static str, &'static str>,
     /// `colormap/grass.png` as ARGB.
     grass: Vec<i32>,
     /// `minecraft:item` registry ids (`Item.getId`).
@@ -680,29 +688,28 @@ pub struct ItemRenderer {
 }
 
 /// Every `items/**/*.json` client item definition, by identifier. Through
-/// `json_folder`: from the prepared data file when the root has one.
-fn load_definitions(root: &Path) -> BTreeMap<String, ClientItem> {
+/// Resolved resource names preserve nested item identifiers.
+fn load_definitions(root: &ResourceSource) -> BTreeMap<String, ClientItem> {
     let mut out = BTreeMap::new();
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return out;
-    };
-    for ns in namespaces.flatten() {
-        let Ok(folder) = horizon_world::json_folder::read(&ns.path().join("items")) else {
-            continue;
-        };
-        let namespace = ns.file_name().to_string_lossy().into_owned();
-        for file in &folder.files {
-            let Some(text) = file.bytes().ok().and_then(|b| std::str::from_utf8(b).ok()) else {
+    for namespace in root.namespaces("assets") {
+        let prefix = format!("assets/{namespace}/items/");
+        for name in root.list(&prefix) {
+            let Some(id) = name
+                .strip_prefix(&prefix)
+                .and_then(|name| name.strip_suffix(".json"))
+            else {
                 continue;
             };
-            match ClientItem::from_json(text) {
+            let Ok(text) = root.read_to_string(&name) else {
+                continue;
+            };
+            match ClientItem::from_json(&text) {
                 Ok(item) => {
-                    out.insert(format!("{namespace}:{}", file.name), item);
+                    out.insert(format!("{namespace}:{id}"), item);
                 }
-                Err(e) => log::warn!(
-                    "Horizon: item definition {namespace}:{} not loaded: {e}",
-                    file.name
-                ),
+                Err(error) => {
+                    log::warn!("Horizon: item definition {namespace}:{id} not loaded: {error}")
+                }
             }
         }
     }
@@ -731,53 +738,55 @@ impl ItemRenderer {
 
     /// Load item definitions, item prototypes (`items.json`), every model,
     /// the special renderers' entity models and the grass colormap.
-    pub fn load(root: &Path) -> crate::Result<Self> {
+    pub fn load(
+        root: &ResourceRoot,
+        item_data: &horizon_world::item_defaults::ItemData,
+    ) -> crate::Result<Self> {
         Self::load_with_library(
             root,
-            crate::model_library::ParsedModels::load(root).into_item_library(),
+            crate::model_library::ParsedModels::load(root.source()).into_item_library(),
+            item_data,
         )
     }
     /// Reuse the immutable models prepared with the block resources at `root`.
     /// Defer item-only validation failures until after item definitions are loaded.
     pub fn load_with_library(
-        root: &Path,
+        root: &ResourceRoot,
         library: std::result::Result<Arc<ModelLibrary>, String>,
+        item_data: &horizon_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, true, None)
-    }
-    /// Reuse the parsed entity-model document from the shared startup batch.
-    pub fn load_with_library_and_entity_models(
-        root: &Path,
-        library: std::result::Result<Arc<ModelLibrary>, String>,
-        document: &crate::mobs::EntityModelDocument,
-    ) -> crate::Result<Self> {
-        Self::load_tables(root, library, true, Some(document))
+        Self::load_tables(root, library, true, item_data, None)
     }
     /// What a dedicated server reads: the item prototypes (the stacks'
     /// default components) and ids, without the client item definitions,
     /// the special renderers' entity models and the grass colormap, which
     /// only drawing reads (1.4 MB and ~1,500 files).
     pub fn load_for_server(
-        root: &Path,
+        root: &ResourceRoot,
         library: std::result::Result<Arc<ModelLibrary>, String>,
+        item_data: &horizon_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, false, None)
+        Self::load_tables(root, library, false, item_data, None)
+    }
+    pub fn load_with_library_and_entity_models(
+        root: &horizon_assets::resource_source::ResourceRoot,
+        library: std::result::Result<Arc<ModelLibrary>, String>,
+        document: &crate::mobs::EntityModelDocument,
+        item_data: &horizon_world::item_defaults::ItemData,
+    ) -> crate::Result<Self> {
+        Self::load_tables(root, library, true, item_data, Some(document))
     }
     fn load_tables(
-        root: &Path,
+        root: &ResourceRoot,
         library: std::result::Result<Arc<ModelLibrary>, String>,
         drawn: bool,
+        item_data: &horizon_world::item_defaults::ItemData,
         entity_models: Option<&crate::mobs::EntityModelDocument>,
     ) -> crate::Result<Self> {
-        let prototypes: BTreeMap<String, Components> = horizon_world::item_defaults::shared(root)?
-            .iter()
-            .map(|(item, components)| {
-                Ok((item.clone(), serde::Deserialize::deserialize(components)?))
-            })
-            .collect::<serde_json::Result<_>>()?;
+        let prototypes = Arc::clone(item_data.prototypes()?);
         let models = ItemModels {
             definitions: if drawn {
-                load_definitions(root)
+                load_definitions(root.source())
             } else {
                 BTreeMap::new()
             },
@@ -786,30 +795,43 @@ impl ItemRenderer {
         // CIT models and glint textures only affect drawing. A server still
         // needs item prototypes and ids, but never these resource-pack assets.
         let (library, cit) = if drawn {
-            cit::load(root, library?)
+            cit::load(root.source(), library?)
         } else {
             (library?, None)
         };
         let permutations = PalettedPermutations::from_atlas(
-            &fs::read_to_string(root.join("assets/minecraft/atlases/items.json"))
+            &root
+                .source()
+                .read_to_string("assets/minecraft/atlases/items.json")
                 .unwrap_or_default(),
         );
-        let parts = if drawn {
+        let mut parts = if drawn {
             entity_models.map_or_else(
-                || special::load_parts(root),
+                || special::load_parts(root.prepared()),
                 special::load_parts_from_document,
             )
         } else {
             HashMap::new()
         };
+        // Mod skull types, resolved once here so a head draws as a vanilla one does.
+        let mut skull_textures = HashMap::new();
+        if drawn {
+            for (kind, part, texture) in crate::skull_models::all() {
+                parts.insert(kind.to_owned(), part.clone());
+                skull_textures.insert(kind, texture);
+            }
+        }
         let grass = if drawn {
-            crate::hud::decode(&root.join("assets/minecraft/textures/colormap/grass.png"))
+            root.source()
+                .read("assets/minecraft/textures/colormap/grass.png")
+                .map_err(Into::into)
+                .and_then(|bytes| crate::hud::decode_bytes(&bytes))
                 .map(|(_, _, rgba)| argb_pixels(&rgba).into_iter().map(|p| p as i32).collect())
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
-        let item_ids = horizon_protocol::registry::Builtin::find(root)
+        let item_ids = horizon_protocol::registry::Builtin::find(root.prepared())
             .and_then(|p| horizon_protocol::registry::Builtin::load(&p).ok())
             .and_then(|b| {
                 let ids = b.get("minecraft:item")?;
@@ -827,7 +849,7 @@ impl ItemRenderer {
             models,
             library,
             sprites: FileSprites {
-                root: root.to_path_buf(),
+                root: root.source().clone(),
                 permutations,
                 cache: Mutex::default(),
                 translucent: Mutex::default(),
@@ -836,18 +858,30 @@ impl ItemRenderer {
             extents: Mutex::default(),
             gui_drawn: Mutex::default(),
             parts,
+            skull_textures,
             grass,
             cit,
         })
     }
     /// `ModelBakery` item baking, cached per model.
     pub fn bake(&self, model: &str) -> Arc<BakedItemModel> {
+        self.baked_with(model, || {
+            bake_item_model(&self.library, &self.sprites, model)
+        })
+    }
+    /// A layer baked from something other than a model id, such as an extruded sprite,
+    /// cached under `key` (which no model id can equal: identifiers hold no NUL).
+    fn baked_with(
+        &self,
+        key: &str,
+        bake: impl FnOnce() -> std::result::Result<BakedItemModel, horizon_assets::DecodeError>,
+    ) -> Arc<BakedItemModel> {
         if let Ok(cache) = self.baked.lock()
-            && let Some(hit) = cache.get(model)
+            && let Some(hit) = cache.get(key)
         {
             return hit.clone();
         }
-        let baked = bake_item_model(&self.library, &self.sprites, model)
+        let baked = bake()
             .or_else(|_| bake_item_model(&self.library, &self.sprites, MISSING_MODEL))
             .map(Arc::new)
             .unwrap_or_else(|_| {
@@ -862,7 +896,7 @@ impl ItemRenderer {
                 })
             });
         if let Ok(mut cache) = self.baked.lock() {
-            cache.insert(model.to_owned(), baked.clone());
+            cache.insert(key.to_owned(), baked.clone());
         }
         baked
     }
@@ -891,6 +925,72 @@ impl ItemRenderer {
             cache.insert(key, out.clone());
         }
         out
+    }
+    /// A special model renderer's answer `parts` for a model node of `base`, prepared to draw:
+    /// `base` and each part's model baked, once, when the answer is accepted, so a draw looks
+    /// nothing up by name. A part naming a model the packs don't have refuses them all, and the
+    /// layer draws the missing model.
+    pub fn prepare_parts(
+        &self,
+        base: &str,
+        parts: &[horizon_assets::item_model::SpecialPart],
+    ) -> PreparedParts {
+        let part = |model: &str, tints, pose| {
+            let geometry = self.bake(model);
+            PreparedPart {
+                extents: self.quad_extents(model, &geometry),
+                geometry,
+                tints,
+                pose,
+            }
+        };
+        let parts = match parts.iter().find(|p| !self.library.resolves(&p.model)) {
+            Some(unknown) => {
+                warn_unknown_part_once(&unknown.model);
+                vec![part(
+                    MISSING_MODEL,
+                    Vec::new(),
+                    horizon_assets::math::Mat4::IDENTITY,
+                )]
+            }
+            None => parts
+                .iter()
+                .map(|p| part(&p.model, p.tints.clone(), p.pose))
+                .collect(),
+        };
+        PreparedParts(Arc::new(PreparedSpecial {
+            base: self.bake(base),
+            parts,
+        }))
+    }
+    /// The layers of a prepared answer (`LayerContent::Parts`), one for each part: the part's own
+    /// model's quads, posed under the layer's transform, with the base model's display transform,
+    /// particle and GUI light.
+    fn push_parts(
+        &self,
+        layers: &mut Vec<LayerRender>,
+        display: DisplayContext,
+        (foil, transform): (FoilType, horizon_assets::math::Mat4),
+        prepared: &PreparedParts,
+    ) {
+        let Some(prepared) = prepared.0.downcast_ref::<PreparedSpecial>() else {
+            // Only `prepare_parts` makes them.
+            return;
+        };
+        let base = &prepared.base;
+        for part in &prepared.parts {
+            // Under `applyTransform`'s half-block offset, so a part's pose is about the model's
+            // corner, as its elements are.
+            layers.push(LayerRender {
+                geometry: LayerGeometry::Quads(part.geometry.clone()),
+                tints: part.tints.clone(),
+                foil,
+                matrix: glam_matrix(&base.layer_matrix(display, &transform.mul(&part.pose))),
+                uses_block_light: base.uses_block_light,
+                particle: sprite_name(&base.particle.sprite).to_owned(),
+                extents: part.extents.clone(),
+            });
+        }
     }
     /// `ItemModelResolver.updateForTopItem`.
     pub fn resolve(
@@ -926,50 +1026,66 @@ impl ItemRenderer {
         };
         let resolved = self.models.resolve(stack, &ctx, env);
         let mut animated = false;
-        let layers = resolved
-            .layers
-            .into_iter()
-            .map(|layer| {
-                let (geometry, baked, extents) = match layer.content {
-                    LayerContent::Model { model } => {
-                        let (baked, extents) = rule
-                            .and_then(|rule| self.cit_layer(rule, &model))
-                            .unwrap_or_else(|| {
-                                let baked = self.bake(&model);
-                                let extents = self.quad_extents(&model, &baked);
-                                (baked, extents)
-                            });
-                        (LayerGeometry::Quads(baked.clone()), baked, extents)
-                    }
-                    LayerContent::Missing => {
-                        let baked = self.bake(MISSING_MODEL);
-                        let extents = self.quad_extents(MISSING_MODEL, &baked);
-                        (LayerGeometry::Quads(baked.clone()), baked, extents)
-                    }
-                    LayerContent::Special {
-                        base,
-                        model,
-                        argument,
-                    } => {
-                        let baked = self.bake(&base);
-                        let extents = self.special_extents(&model);
-                        (LayerGeometry::Special { model, argument }, baked, extents)
-                    }
-                };
-                if layer.foil != FoilType::None {
+        let mut layers = Vec::with_capacity(resolved.layers.len());
+        for layer in resolved.layers {
+            let (geometry, baked, extents) = match layer.content {
+                LayerContent::Model { model } => {
+                    let (baked, extents) = rule
+                        .and_then(|rule| self.cit_layer(rule, &model))
+                        .unwrap_or_else(|| {
+                            let baked = self.bake(&model);
+                            let extents = self.quad_extents(&model, &baked);
+                            (baked, extents)
+                        });
+                    (LayerGeometry::Quads(baked.clone()), baked, extents)
+                }
+                LayerContent::Sprite { sprite, mask } => {
+                    let key = sprite_layer_key(&sprite, mask.as_deref());
+                    let baked = self.baked_with(&key, || {
+                        bake_sprite_layer(&self.library, &self.sprites, &sprite, mask.as_deref())
+                    });
+                    let extents = self.quad_extents(&key, &baked);
+                    (LayerGeometry::Quads(baked.clone()), baked, extents)
+                }
+                LayerContent::Missing => {
+                    let baked = self.bake(MISSING_MODEL);
+                    let extents = self.quad_extents(MISSING_MODEL, &baked);
+                    (LayerGeometry::Quads(baked.clone()), baked, extents)
+                }
+                LayerContent::Special {
+                    base,
+                    model,
+                    argument,
+                } => {
+                    let baked = self.bake(&base);
+                    let extents = self.special_extents(&model);
+                    (LayerGeometry::Special { model, argument }, baked, extents)
+                }
+                LayerContent::Parts(prepared) => {
+                    // What a mod drew may change with every draw, so no GUI item is kept.
                     animated = true;
+                    self.push_parts(
+                        &mut layers,
+                        display,
+                        (layer.foil, layer.transform),
+                        &prepared,
+                    );
+                    continue;
                 }
-                LayerRender {
-                    geometry,
-                    tints: layer.tints,
-                    foil: layer.foil,
-                    matrix: glam_matrix(&baked.layer_matrix(display, &layer.transform)),
-                    uses_block_light: baked.uses_block_light,
-                    particle: sprite_name(&baked.particle.sprite).to_owned(),
-                    extents,
-                }
-            })
-            .collect();
+            };
+            if layer.foil != FoilType::None {
+                animated = true;
+            }
+            layers.push(LayerRender {
+                geometry,
+                tints: layer.tints,
+                foil: layer.foil,
+                matrix: glam_matrix(&baked.layer_matrix(display, &layer.transform)),
+                uses_block_light: baked.uses_block_light,
+                particle: sprite_name(&baked.particle.sprite).to_owned(),
+                extents,
+            });
+        }
         ItemRenderState {
             display,
             layers,
@@ -1011,6 +1127,10 @@ impl ItemRenderer {
         self.parts.get(key)
     }
 }
+/// A cache key for an extruded sprite layer: `\0` keeps it out of model ids' space.
+fn sprite_layer_key(sprite: &str, mask: Option<&str>) -> String {
+    format!("\0{sprite}\0{}", mask.unwrap_or_default())
+}
 /// `CuboidItemModelWrapper.computeExtents`: the distinct quad corners.
 fn corners(baked: &BakedItemModel) -> Vec<Vec3> {
     let mut out: Vec<Vec3> = Vec::new();
@@ -1023,6 +1143,32 @@ fn corners(baked: &BakedItemModel) -> Vec<Vec3> {
         }
     }
     out
+}
+/// A special model renderer's answer as [`ItemRenderer::prepare_parts`] baked it.
+struct PreparedSpecial {
+    /// The model node's `base`: its display transforms, particle and GUI light.
+    base: Arc<BakedItemModel>,
+    parts: Vec<PreparedPart>,
+}
+struct PreparedPart {
+    geometry: Arc<BakedItemModel>,
+    extents: Arc<Vec<Vec3>>,
+    tints: Vec<i32>,
+    pose: horizon_assets::math::Mat4,
+}
+/// Says once per model id that a mod's special model renderer drew a model the packs don't have.
+fn warn_unknown_part_once(model: &str) {
+    static SEEN: Mutex<std::collections::BTreeSet<String>> =
+        Mutex::new(std::collections::BTreeSet::new());
+    if SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(model.to_owned())
+    {
+        log::warn!(
+            "Horizon: a special model renderer drew the model {model}, which no pack has; the item draws the missing model"
+        );
+    }
 }
 /// A `horizon-assets` (row-major, JOML-exact) matrix as glam's.
 pub fn glam_matrix(m: &horizon_assets::math::Mat4) -> Mat4 {
@@ -1242,6 +1388,189 @@ pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_world::native_load_context::DataLoadOrigin;
+    use std::fs;
+
+    /// Item definitions are read again on every load: a node of a registered type keeps its
+    /// `models` as the packs now give them, and a definition with a type no mod registered isn't
+    /// loaded, so its item draws the missing model.
+    #[test]
+    fn a_registered_item_model_type_is_read_again_on_each_load() {
+        use horizon_assets::resource_source::Resource;
+        horizon_assets::item_model::register_item_models(vec!["loadtest:cell".into()]);
+        let source = |full: &str| {
+            let cell = format!(
+                r#"{{"model":{{"type":"loadtest:cell","models":{{"full":{{"type":"minecraft:model","model":"{full}"}}}}}}}}"#
+            );
+            ResourceSource::indexed(BTreeMap::from([
+                (
+                    "assets/loadtest/items/cell.json".to_owned(),
+                    Resource::bytes(cell.into_bytes()),
+                ),
+                (
+                    "assets/loadtest/items/other.json".to_owned(),
+                    Resource::bytes(br#"{"model":{"type":"loadtest:unregistered"}}"#.to_vec()),
+                ),
+            ]))
+        };
+        let models = |full: &str| {
+            let loaded = load_definitions(&source(full));
+            assert!(!loaded.contains_key("loadtest:other"));
+            let mut models = Vec::new();
+            loaded["loadtest:cell"].model.dependencies(&mut models);
+            models
+        };
+        assert_eq!(models("loadtest:item/a"), ["loadtest:item/a"]);
+        assert_eq!(models("loadtest:item/b"), ["loadtest:item/b"]);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn archive_item_models_use_real_prepared_tables_without_unpacking() -> crate::Result<()> {
+        use horizon_assets::resource_source::Resource;
+        use std::io::Write;
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let prepared = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").ok_or("resources required")?,
+        );
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+                "horizon-real-item-source-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos()
+            )));
+        fs::create_dir(&scratch.0)?;
+        let mut image = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut image, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()?
+                .write_image_data(&[20, 30, 40, 255])?;
+        }
+        let jar = scratch.0.join("items.jar");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&jar)?);
+        for (name, bytes) in [
+            ("assets/archive_item_smoke/models/item/panel.json", br#"{"parent":"minecraft:item/generated","textures":{"layer0":"archive_item_smoke:item/panel"}}"#.as_slice()),
+            ("assets/archive_item_smoke/items/panel.json", br#"{"model":{"type":"minecraft:model","model":"archive_item_smoke:item/panel"}}"#.as_slice()),
+            ("assets/archive_item_smoke/textures/item/panel.png", image.as_slice()),
+            ("entity-models.json", b"invalid archive table".as_slice()),
+            ("items.json", b"invalid archive table".as_slice()),
+        ] {
+            writer.start_file(name, zip::write::SimpleFileOptions::default())?;
+            writer.write_all(bytes)?;
+        }
+        writer.finish()?;
+        let base = ResourceSource::directory(prepared.clone());
+        let mut files: BTreeMap<_, _> = base
+            .list("assets/")
+            .into_iter()
+            .map(|name| (name.clone(), Resource::file(base.clone(), name)))
+            .collect();
+        let archive = ResourceSource::archive(&jar)?;
+        for name in archive.list("") {
+            files.insert(name.clone(), Resource::file(archive.clone(), name));
+        }
+        let root = ResourceRoot::new(
+            prepared.clone(),
+            scratch.0.join("cache"),
+            ResourceSource::indexed(files),
+        );
+        let data = crate::test_resources::item_data(
+            &prepared,
+            horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+        )?;
+        let renderer = ItemRenderer::load(&root, &data)?;
+        assert!(
+            renderer
+                .models
+                .definitions
+                .contains_key("archive_item_smoke:panel")
+        );
+        assert!(
+            !renderer.parts.is_empty(),
+            "prepared entity models stay separate from archive entries"
+        );
+        let model = renderer.bake("archive_item_smoke:item/panel");
+        assert!(!model.quads.is_empty());
+        assert_eq!(model.particle.sprite, "archive_item_smoke:item/panel");
+        assert!(!prepared.join("assets/archive_item_smoke").exists());
+        assert!(!scratch.0.join("assets").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn archive_item_definitions_masks_and_glint_need_no_extracted_files() {
+        use std::io::Write;
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[1, 2, 3, 0, 4, 5, 6, 128])
+                .unwrap();
+        }
+        let folder = std::env::temp_dir().join(format!(
+            "horizon-item-source-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&folder).unwrap();
+        let jar = folder.join("items.jar");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&jar).unwrap());
+        for (name, bytes) in [
+            ("assets/example/textures/item/mask.png", png.as_slice()),
+            (
+                "assets/example/textures/item/mask.png.mcmeta",
+                br#"{"animation":{"width":1,"height":1,"frames":[0,1]}}"#.as_slice(),
+            ),
+            (
+                "assets/example/items/nested/mask.json",
+                br#"{"model":{"type":"minecraft:empty"}}"#.as_slice(),
+            ),
+            (
+                "assets/minecraft/atlases/items.json",
+                br#"{"sources":[{"type":"minecraft:single","resource":"example:item/mask"}]}"#
+                    .as_slice(),
+            ),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        let source = ResourceSource::archive(&jar).unwrap();
+        fs::remove_file(&jar).unwrap();
+        assert!(load_definitions(&source).contains_key("example:nested/mask"));
+        let sprites = FileSprites {
+            root: source.clone(),
+            permutations: Vec::new(),
+            cache: Mutex::default(),
+            translucent: Mutex::default(),
+        };
+        let mask = sprites.mask("example:item/mask").unwrap();
+        assert_eq!((mask.width, mask.height), (1, 1));
+        assert_eq!(mask.frames, vec![vec![true], vec![false]]);
+        assert!(sprites.translucent("example:item/mask"));
+        let atlas = glint_atlas::load(&source, 1, 1024).unwrap();
+        assert!(atlas.contains_key("example:item/mask"));
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 0);
+        fs::remove_dir(&folder).unwrap();
+    }
 
     #[test]
     fn custom_model_flags_select_their_model_after_stack_nbt_decoding() {
@@ -1263,7 +1592,7 @@ mod tests {
             let view = stack_view(&stack);
             for index in 0..3 {
                 let mut models = ItemModels::default();
-                models.prototypes.insert(
+                Arc::make_mut(&mut models.prototypes).insert(
                     "minecraft:diamond".into(),
                     BTreeMap::from([(
                         "minecraft:item_model".into(),
@@ -1417,20 +1746,43 @@ mod tests {
         let model = root.join("assets/horizon/models/INVALID.json");
         fs::create_dir_all(model.parent().unwrap())?;
         fs::write(model, "{}")?;
-        let library = crate::model_library::ParsedModels::load(&root).into_item_library();
+        let library = crate::model_library::ParsedModels::load(
+            &crate::resource_source::ResourceSource::directory(root.clone()),
+        )
+        .into_item_library();
         assert!(library.is_err());
         fs::write(root.join("items.json"), "{")?;
         let load = || {
-            ItemRenderer::load_with_library(&root, library.clone())
+            crate::test_resources::item_data(&root, DataLoadOrigin::ClientPreload)
+                .and_then(|data| {
+                    ItemRenderer::load_with_library(
+                        &horizon_assets::resource_source::ResourceRoot::directory(
+                            root.to_path_buf(),
+                        ),
+                        library.clone(),
+                        &data,
+                    )
+                })
                 .err()
                 .unwrap()
                 .to_string()
         };
         let broken_items = load();
+        fs::write(root.join("items.json"), r#"{"horizon:bad":false}"#)?;
+        let data = crate::test_resources::item_data(&root, DataLoadOrigin::ClientPreload)?;
+        let broken_components = ItemRenderer::load_with_library(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            library.clone(),
+            &data,
+        )
+        .err()
+        .unwrap()
+        .to_string();
         fs::write(root.join("items.json"), "{}")?;
         let bad_model = load();
         let _ = fs::remove_dir_all(&root);
         assert!(!broken_items.starts_with("item models:"));
+        assert!(!broken_components.starts_with("item models:"));
         assert!(bad_model.starts_with("item models:"));
         Ok(())
     }
@@ -1448,7 +1800,7 @@ mod tests {
         let empty = r#"{"model":{"type":"minecraft:empty"}}"#;
         fs::write(definitions.join("top.json"), empty)?;
         fs::write(definitions.join("postman/head.json"), empty)?;
-        let loaded = load_definitions(&root);
+        let loaded = load_definitions(&ResourceSource::directory(root.clone()));
         let _ = fs::remove_dir_all(&root);
         assert!(loaded.contains_key("horizon:top"));
         assert!(loaded.contains_key("horizon:postman/head"));
@@ -1473,9 +1825,21 @@ mod tests {
         let cit = root.join("assets/minecraft/optifine");
         fs::create_dir_all(&cit)?;
         fs::write(cit.join("cit.properties"), "useGlint=false\n")?;
-        let library = crate::model_library::ParsedModels::load(&root).into_item_library();
-        let client = ItemRenderer::load_with_library(&root, library.clone())?;
-        let server = ItemRenderer::load_for_server(&root, library)?;
+        let library = crate::model_library::ParsedModels::load(
+            &crate::resource_source::ResourceSource::directory(root.clone()),
+        )
+        .into_item_library();
+        let data = crate::test_resources::item_data(&root, DataLoadOrigin::ClientPreload)?;
+        let client = ItemRenderer::load_with_library(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            library.clone(),
+            &data,
+        )?;
+        let server = ItemRenderer::load_for_server(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            library,
+            &data,
+        )?;
         let _ = fs::remove_dir_all(&root);
         assert!(client.models.definitions.contains_key("horizon:top"));
         assert!(server.models.definitions.is_empty());
@@ -1518,7 +1882,7 @@ mod tests {
             .unwrap(),
         );
         for default in [false, true] {
-            models.prototypes.insert(
+            Arc::make_mut(&mut models.prototypes).insert(
                 "minecraft:diamond".into(),
                 BTreeMap::from([
                     (
@@ -1549,7 +1913,7 @@ mod tests {
                 (stack.damage, stack.extra) = crate::item_data::decode_components(Some(
                     &Tag::compound([("minecraft:enchantment_glint_override", tag)]),
                 ));
-                assert_eq!(stack.has_foil(default), flag);
+                assert_eq!(stack.has_foil(Some(default)), flag);
                 let view = stack_view(&stack);
                 assert_eq!(
                     view.patch["minecraft:enchantment_glint_override"],
@@ -1625,7 +1989,12 @@ mod tests {
             eprintln!("no prepared resources: skipped");
             return;
         }
-        let r = ItemRenderer::load(&root).unwrap();
+        let data = crate::test_resources::item_data(&root, DataLoadOrigin::ClientPreload).unwrap();
+        let r = ItemRenderer::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            &data,
+        )
+        .unwrap();
         let resolve = |id: &str| {
             let view = StackView::new(id, 1);
             r.resolve(&view, DisplayContext::Ground, None, None, 7, &NoEnv)

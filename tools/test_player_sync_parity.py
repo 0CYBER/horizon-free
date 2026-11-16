@@ -68,7 +68,7 @@ def main():
         "relative-delta/rotate-delta combination. World simulation, connection "
         "scheduling and live anticheat behaviour are outside this harness.",
         sources=[lab.ROOT / "crates/horizon-client/src/player_sync.rs",
-                 lab.ROOT / "crates/horizon-client/src/game/remote.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/network/remote/mod.rs",
                  lab.ROOT / "crates/horizon-client/src/net.rs"])
 
 

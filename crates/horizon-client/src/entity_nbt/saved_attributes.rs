@@ -88,7 +88,7 @@ mod saved_attribute_modifier_tests {
         let snbt = format!(
             r#"{{id:"minecraft:zombie",Pos:[0.5d,64d,0.5d],{extra}attributes:{attributes}}}"#
         );
-        let tag = horizon_world::nbt::parse_snbt(&snbt).unwrap().0;
+        let tag = horizon_core::nbt::parse_snbt(&snbt).unwrap().0;
         mob_from_nbt(&tag, &types(), 1, None).unwrap()
     }
     #[test]
@@ -185,7 +185,7 @@ mod saved_attribute_modifier_tests {
         let snbt = format!(
             r#"{{id:"minecraft:zombie",Pos:[0.5d,64d,0.5d],IsBaby:0b,attributes:{saved}}}"#
         );
-        let raw = horizon_world::nbt::parse_snbt(&snbt).unwrap().0;
+        let raw = horizon_core::nbt::parse_snbt(&snbt).unwrap().0;
         let m = mob_from_nbt(&raw, &types(), 1, None).unwrap();
         let out = mob_to_nbt(&m, [1, 0, 0, 1], Some(&raw), None, |_| None);
         let Some(Tag::List(list)) = out.get("attributes") else {

@@ -137,7 +137,7 @@ if most of the work moves to parallel phases.
 
 ### 3.1 One server, in this repo
 
-Single player runs on the server thread (`game/integrated.rs`, since #1514), so the integrated server, LAN
+Single player runs on the server thread (`game/world/integrated.rs`, since arismoko/horizon#1514), so the integrated server, LAN
 hosts and `--dedicated` share every line of server code: the tick, the levels, the hub, the entity tracker,
 saving. A separate server repo would fork that code or pin it across repos, and either way two copies would
 drift. Gameplay is about 420 000 lines (`game/` 133 k, `mobs/` 62 k, `lan/` 15 k, the flat lib 90 k, and
@@ -145,12 +145,12 @@ drift. Gameplay is about 420 000 lines (`game/` 133 k, `mobs/` 62 k, `lan/` 15 k
 
 | Part | Where | Shared by |
 |---|---|---|
-| Parallel tick (section 4) | `game/levels.rs`, `game/integrated.rs`, `game/dedicated.rs`, and the scheduler as a new module beside them | integrated server, LAN, dedicated |
+| Parallel tick (section 4) | `game/world/levels.rs`, `game/world/integrated.rs`, `game/interface/dedicated/mod.rs`, and the scheduler as a new module beside them | integrated server, LAN, dedicated |
 | Network front (5) | the hub, `lan/` (`conn.rs`, `hub.rs`, `chunks.rs`, `tracking.rs`); framing in `horizon-protocol` | LAN, Play with Friends, dedicated, the integrated server's memory connection where it applies |
-| Saving and light off the tick thread (5.5) | `game/saving.rs`, `save.rs`, `horizon-world` | everyone |
+| Saving and light off the tick thread (5.5) | `game/world/saving.rs`, `save.rs`, `horizon-world` | everyone |
 | Fast path (8) | `horizon-protocol` (the `horizon:hello` payloads), `lan/conn.rs` (server), `net.rs` and `game/remote*.rs` (client) | every Horizon client against every Horizon server |
 | Operations (9.2) | `crates/horizon-server` (supervisor, panel, control API, MCP), `crates/horizon-server-files` | dedicated |
-| Plugin API (W9) | `crates/horizon-mods` and the server hooks from #3706 and #3878 | integrated server, LAN, dedicated |
+| Plugin API (W9) | `crates/horizon-mod-package` and the server hooks from arismoko/horizon#3706 and arismoko/horizon#3878 | integrated server, LAN, dedicated |
 | Bench (W0) | `tools/server_bench.py`, `crates/horizon-bots`, `benchmarks/` | — |
 
 What changes for single player: it gets the exact parallel phases (4.1, 4.2 `tick = "vanilla"`), the cheaper
@@ -182,7 +182,7 @@ connections). Inside a level it ticks in a fixed order:
 6. entities, in list order;
 7. block entities, in list order.
 
-Horizon follows the same order (`game/levels.rs` `tick_server`, which swaps each level into the one `Game`).
+Horizon follows the same order (`game/world/levels.rs` `tick_server`, which swaps each level into the one `Game`).
 
 ### 4.1 Levels in parallel (exact)
 
@@ -292,7 +292,7 @@ per server start and sent as prepared frames. The first chunks around the spawn 
 ### 5.4 Entity tracking as deltas
 
 - Today the tracker rebuilds each tracked entity's state per tick (`lan/entity.rs` `Entities::tick`,
-  `game/lan.rs` `mob_meta` ~3 % of the tick thread).
+  `game/network/lan/mod.rs` `mob_meta` ~3 % of the tick thread).
 - Instead, the engine writes a change log as it changes an entity (position, rotation, metadata index, equipment,
   passengers). The tracker turns each changed entity into packets once, and sends them to every player who
   sees it.

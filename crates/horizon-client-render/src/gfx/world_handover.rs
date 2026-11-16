@@ -44,7 +44,6 @@ impl Renderer {
             index_quads,
             packed_on,
             packed_quads,
-            hold,
             lods,
             lod_cull_free,
             lod_cull_next,

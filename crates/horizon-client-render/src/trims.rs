@@ -5,9 +5,12 @@
 //! at the same index of the material's palette (`textures/palettes/trim/*`),
 //! unless the equipment asset's `trim_overrides` pick another texture or
 //! palette (iron armour with an iron trim uses `trim/iron_darker`).
+use crate::resource_source::ResourceSource;
 use horizon_assets::palette::apply_palette;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::path::Path;
 
 /// Runtime trim slots and the completed ordered requests for their current atlas.
 /// A frame with more requests than slots keeps the same final residents as the
@@ -29,7 +32,7 @@ impl TrimSlots {
     pub fn prepare(
         &mut self,
         wanted: Vec<TrimTexture>,
-        root: &Path,
+        root: &ResourceSource,
         atlas: &mut crate::hud::HudAtlas,
         patches: &mut Vec<crate::font::Patch>,
     ) {
@@ -118,13 +121,10 @@ fn qualified(id: &str) -> String {
 }
 
 /// `assets/<namespace>/<folder>/<path><suffix>` of an identifier.
-fn asset_path(root: &Path, folder: &str, id: &str, suffix: &str) -> std::path::PathBuf {
+fn asset_path(folder: &str, id: &str, suffix: &str) -> String {
     let id = qualified(id);
     let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", &id));
-    root.join("assets")
-        .join(namespace)
-        .join(folder)
-        .join(format!("{path}{suffix}"))
+    format!("assets/{namespace}/{folder}/{path}{suffix}")
 }
 
 /// `EquipmentClientInfo.TrimOverride`: when the trim matches (`when`'s
@@ -171,35 +171,31 @@ pub struct TrimRegistry {
 }
 impl TrimRegistry {
     /// Every `data/<namespace>/trim_pattern` and `trim_material` entry.
-    pub fn load(root: &Path) -> Self {
+    pub fn load(root: &ResourceSource) -> Self {
         let mut out = Self::default();
-        let Ok(namespaces) = fs::read_dir(root.join("data")) else {
-            return out;
-        };
-        for ns in namespaces.flatten() {
-            let namespace = ns.file_name().to_string_lossy().into_owned();
-            for (folder, key, map) in [
-                ("trim_pattern", "asset_id", &mut out.patterns),
-                ("trim_material", "palette_id", &mut out.materials),
-            ] {
-                let Ok(files) = fs::read_dir(ns.path().join(folder)) else {
+        for (folder, key, map) in [
+            ("trim_pattern", "asset_id", &mut out.patterns),
+            ("trim_material", "palette_id", &mut out.materials),
+        ] {
+            for file in root.list_under("data", &[folder]) {
+                let Some((namespace, name)) = file
+                    .strip_prefix("data/")
+                    .and_then(|name| name.split_once(&format!("/{folder}/")))
+                else {
                     continue;
                 };
-                for f in files.flatten() {
-                    let path = f.path();
-                    if path.extension().is_none_or(|e| e != "json") {
-                        continue;
-                    }
-                    let Some(value) = fs::read(&path)
-                        .ok()
-                        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-                    else {
-                        continue;
-                    };
-                    if let Some(v) = value.get(key).and_then(Value::as_str) {
-                        let name = path.file_stem().unwrap_or_default().to_string_lossy();
-                        map.insert(format!("{namespace}:{name}"), qualified(v));
-                    }
+                let Some(name) = name.strip_suffix(".json") else {
+                    continue;
+                };
+                let Some(value) = root
+                    .read(&file)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                else {
+                    continue;
+                };
+                if let Some(value) = value.get(key).and_then(Value::as_str) {
+                    map.insert(format!("{namespace}:{name}"), qualified(value));
                 }
             }
         }
@@ -266,13 +262,14 @@ impl TrimTexture {
     /// palette's colours swapped for the target palette's (`PaletteMapping`;
     /// unchanged when a palette is missing or the sizes differ). None when
     /// the texture itself is missing.
-    pub fn generate(&self, root: &Path) -> Option<Image> {
-        let path = asset_path(root, "textures", &self.texture, ".png");
-        let (w, h, pixels) = crate::hud::decode(&path).ok()?;
+    pub fn generate(&self, root: &ResourceSource) -> Option<Image> {
+        let path = asset_path("textures", &self.texture, ".png");
+        let (w, h, pixels) = crate::hud::decode_bytes(&root.read(&path).ok()?).ok()?;
         let Some(palette) = &self.palette else {
             return Some((w, h, pixels));
         };
-        let base = horizon_core::prepared_files::read(&path.with_extension("png.mcmeta"))
+        let base = root
+            .read(&format!("{path}.mcmeta"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
             .and_then(|m| {
@@ -282,8 +279,9 @@ impl TrimTexture {
                     .map(str::to_owned)
             });
         let load = |id: &str| {
-            crate::hud::decode(&asset_path(root, "textures/palettes", id, ".png"))
+            root.read(&asset_path("textures/palettes", id, ".png"))
                 .ok()
+                .and_then(|bytes| crate::hud::decode_bytes(&bytes).ok())
                 .map(|(_, _, p)| argb(&p))
         };
         let mut mapped = argb(&pixels);
@@ -312,35 +310,21 @@ fn argb(rgba: &[u8]) -> Vec<u32> {
 
 /// The largest trim texture of the resources (the size of the atlas's trim
 /// slots), at least vanilla's 64x32.
-pub fn slot_size(root: &Path) -> (u32, u32) {
+pub fn slot_size(root: &ResourceSource) -> (u32, u32) {
     let mut size = (64, 32);
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return size;
-    };
-    for ns in namespaces.flatten() {
-        let Ok(layers) = fs::read_dir(ns.path().join("textures/trims/entity")) else {
-            continue;
-        };
-        for layer in layers.flatten() {
-            for f in fs::read_dir(layer.path()).into_iter().flatten().flatten() {
-                let path = f.path();
-                if path.extension().is_some_and(|e| e == "png")
-                    && let Some((w, h)) = png_size(&path)
-                {
-                    size = (size.0.max(w.min(512)), size.1.max(h.min(512)));
-                }
-            }
+    for file in root.list_under("assets", &["textures/trims/entity"]) {
+        if file.ends_with(".png")
+            && let Some((w, h)) = png_size(root, &file)
+        {
+            size = (size.0.max(w.min(512)), size.1.max(h.min(512)));
         }
     }
     size
 }
 
 /// The width and height in a PNG's IHDR chunk.
-fn png_size(path: &Path) -> Option<(u32, u32)> {
-    let head: [u8; 24] = horizon_core::prepared_files::read_head(path, 24)
-        .ok()?
-        .try_into()
-        .ok()?;
+fn png_size(source: &ResourceSource, path: &str) -> Option<(u32, u32)> {
+    let head: [u8; 24] = source.read_head(path, 24).ok()?.try_into().ok()?;
     let be = |i: usize| u32::from_be_bytes(head[i..i + 4].try_into().unwrap());
     (&head[12..16] == b"IHDR").then(|| (be(16), be(20)))
 }
@@ -418,7 +402,7 @@ mod tests {
         if !root.join("assets/minecraft/textures/trims").is_dir() {
             return;
         }
-        let registry = TrimRegistry::load(&root);
+        let registry = TrimRegistry::load(&ResourceSource::directory(root.clone()));
         let t = TrimTexture::resolve(
             &registry,
             &[],
@@ -427,13 +411,17 @@ mod tests {
             "humanoid",
         )
         .unwrap();
-        let (w, h, gold) = t.generate(&root).unwrap();
+        let (w, h, gold) = t
+            .generate(&ResourceSource::directory(root.clone()))
+            .unwrap();
         assert_eq!((w, h), (64, 32));
         let plain = TrimTexture {
             palette: None,
             ..t.clone()
         };
-        let (_, _, grey) = plain.generate(&root).unwrap();
+        let (_, _, grey) = plain
+            .generate(&ResourceSource::directory(root.clone()))
+            .unwrap();
         // Every opaque pixel of the grey pattern takes a gold palette colour.
         let gold_palette = argb(
             &crate::hud::decode(&root.join("assets/minecraft/textures/palettes/trim/gold.png"))
@@ -449,6 +437,9 @@ mod tests {
             }
         }
         assert!(opaque > 0);
-        assert_eq!(slot_size(&root), (64, 32));
+        assert_eq!(
+            slot_size(&ResourceSource::directory(root.clone())),
+            (64, 32)
+        );
     }
 }

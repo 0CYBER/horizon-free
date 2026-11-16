@@ -2,6 +2,31 @@
 
 How parity work is run, checked and merged. What is ported and where it is checked: [Rust rewrite status](rust-parity.md).
 
+## Datafix downloads and author self-checks
+
+Datafix generation owns a private writable root, defaulting to checkout `.local/datafix`.
+`HORIZON_DATAFIX_ROOT` overrides it (relative values resolve from the invoking working directory).
+Minecraft input symlinks never select this output root. The tool refuses shared vanilla
+roots and their ancestors, escaping default symlinks, escaping descendant symlinks, file roots and unwritable
+ancestors before downloads, world generation or `generate.lock` creation. Choose a new private
+directory on refusal; never change permissions on shared fixtures to bypass the guard.
+
+Author `pr_ready` excludes datafix by default and prints one opt-in reminder. To explicitly
+allow it among the affected harnesses, use a private directory. Local opt-in preflights the
+root conservatively even when affected dependencies are unknown, and passes its validated
+absolute path into subprocesses so a working-directory change cannot reinterpret it:
+
+```sh
+HORIZON_DATAFIX_ROOT="$PWD/.local/datafix-private" python3 tools/pr_ready.py --datafix
+```
+
+Direct `tools/parity.py datafix` is also an explicit harness run and may download jars and
+runtimes, launch servers and generate worlds. Metadata for cold Linux 1.8.9 alone lists
+8,320,755 bytes for the server jar plus 235,129,362 bytes for the pinned legacy runtime:
+243,450,117 bytes before JSON metadata and generated worlds. Other versions/runtimes add
+more; cached payload can be zero. No runtime measurement is available for this repair.
+Fork issue arismoko/horizon#3027 tracks whether CI runs datafix.
+
 ## Running the vanilla harnesses
 
 Same-machine fixtures created with `lab.game_env` use `HORIZON_TEST_LOOPBACK=1`: Horizon
@@ -195,7 +220,7 @@ the same path as normal single player. `python3 tools/test_friends.py --client
 target/fast/horizon-client --relay target/fast/horizon-relay --baseline` covers
 plain LAN, direct invitations, a local relay and ended invitations in that mode.
 Run Linux games under `xvfb-run -a` when no display is available. Each
-process gets scratch game, launcher, XDG data and config homes; telemetry, audio
+process gets scratch game, launcher, XDG data and config homes; audio
 and launcher self-update are disabled.
 
 `lan_integration` and `friends_integration` register these suites with `parity.py`.

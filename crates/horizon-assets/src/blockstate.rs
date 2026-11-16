@@ -1,6 +1,9 @@
 //! Pinned blockstate resource definitions, before registry binding and baking.
 pub mod bind;
 pub mod choice;
+#[cfg(test)]
+#[path = "blockstate_tests.rs"]
+mod tests;
 use crate::json::*;
 use serde::{
     Deserializer,
@@ -73,12 +76,47 @@ fn ordered_object(raw: &RawValue) -> Result<Vec<(String, &RawValue)>> {
     }
     Ok(serde_json::Deserializer::from_str(raw.get()).deserialize_map(Ordered)?)
 }
+/// The key of a blockstate file whose states a mod's definition type picks (NeoForge's
+/// `CustomBlockModelDefinition`, registered through `RegisterBlockStateModels`).
+pub const DEFINITION_TYPE: &str = "neoforge:definition_type";
+/// A blockstate file as it reads: vanilla's variants and multipart, or a definition of a type
+/// named by [`DEFINITION_TYPE`], which the mod that registered the type decodes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BlockStateFile {
+    Vanilla(BlockStateDefinition),
+    Typed {
+        /// The definition type, `<namespace>:<path>`.
+        kind: String,
+        /// The file's whole JSON object, for the type's own decoding.
+        config: serde_json::Value,
+    },
+}
+impl BlockStateFile {
+    /// Reads a blockstate file. A file without [`DEFINITION_TYPE`] costs one key lookup more
+    /// than [`BlockStateDefinition::from_json`]; one with it is kept whole for its type.
+    pub fn from_json(text: &str) -> Result<Self> {
+        let raw = root(text)?;
+        let fields = object(raw)?;
+        let Some(kind) = fields.get(DEFINITION_TYPE) else {
+            return BlockStateDefinition::from_fields(&fields).map(Self::Vanilla);
+        };
+        Ok(Self::Typed {
+            kind: identifier(&string(kind)?)?,
+            config: serde_json::from_str(raw.get())?,
+        })
+    }
+}
+fn root(text: &str) -> Result<&RawValue> {
+    let raw: &RawValue = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))?;
+    validate_number_tokens(raw)?;
+    Ok(raw)
+}
 impl BlockStateDefinition {
     pub fn from_json(text: &str) -> Result<Self> {
-        let raw: &RawValue = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))?;
-        validate_number_tokens(raw)?;
-        let fields = object(raw)?;
-        let variants = optional(&fields, "variants")
+        Self::from_fields(&object(root(text)?)?)
+    }
+    fn from_fields(fields: &Object<'_>) -> Result<Self> {
+        let variants = optional(fields, "variants")
             .map(|v| {
                 let values = ordered_object(v)?;
                 if values.is_empty() {
@@ -90,7 +128,7 @@ impl BlockStateDefinition {
                     .collect::<Result<Vec<_>>>()
             })
             .transpose()?;
-        let multipart = optional(&fields, "multipart")
+        let multipart = optional(fields, "multipart")
             .map(|v| {
                 let values = array(v)?;
                 if values.is_empty() {
@@ -120,6 +158,15 @@ impl BlockStateDefinition {
     }
 }
 impl Variant {
+    /// A variant a mod's definition type picks: `model` read as a variant's `model` is, and
+    /// `turns` quarter turns about X, Y and Z, taken modulo four.
+    pub fn new(model: &str, turns: [u8; 3], uv_lock: bool) -> Result<Self> {
+        Ok(Self {
+            model: identifier(model)?,
+            rotations: turns.map(|turn| turn % 4),
+            uv_lock,
+        })
+    }
     fn decode(raw: &RawValue) -> Result<Self> {
         let fields = object(raw)?;
         let mut rotations = [0; 3];

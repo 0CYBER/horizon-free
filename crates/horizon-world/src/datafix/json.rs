@@ -2,7 +2,7 @@
 //! lenient mode, `GsonHelper.toStableString`, and `JsonOps.convertTo` into NBT.
 //! Strings stay UTF-16 like Java's; numbers keep their literal like Gson's
 //! `LazilyParsedNumber`.
-use crate::nbt::{Compound, JavaString, Tag};
+use horizon_core::nbt::{Compound, JavaString, Tag};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Json {
@@ -545,8 +545,8 @@ pub fn from_nbt(tag: &Tag) -> Json {
         Tag::Short(v) => Json::Num(v.to_string()),
         Tag::Int(v) => Json::Num(v.to_string()),
         Tag::Long(v) => Json::Num(v.to_string()),
-        Tag::Float(v) => Json::Num(java_float_string(f32::from_bits(*v))),
-        Tag::Double(v) => Json::Num(java_double_string(f64::from_bits(*v))),
+        Tag::Float(v) => Json::Num(float_to_string(f32::from_bits(*v))),
+        Tag::Double(v) => Json::Num(double_to_string(f64::from_bits(*v))),
         Tag::ByteArray(v) => Json::Arr(
             v.iter()
                 .map(|b| Json::Num((*b as i8).to_string()))
@@ -560,55 +560,7 @@ pub fn from_nbt(tag: &Tag) -> Json {
     }
 }
 
-/// Java `Double.toString`.
-pub fn java_double_string(d: f64) -> String {
-    java_fp_string(d, format!("{d:e}"))
-}
-/// Java `Float.toString`.
-pub fn java_float_string(f: f32) -> String {
-    java_fp_string(f64::from(f), format!("{f:e}"))
-}
-fn java_fp_string(d: f64, sci: String) -> String {
-    if d.is_nan() {
-        return "NaN".into();
-    }
-    if d.is_infinite() {
-        return if d > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if d == 0.0 {
-        return if d.is_sign_negative() { "-0.0" } else { "0.0" }.into();
-    }
-    // `sci` is Rust's shortest round-trip form: d.ddde<exp>.
-    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
-    let exp: i32 = exp.parse().unwrap_or(0);
-    let negative = mantissa.starts_with('-');
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let sign = if negative { "-" } else { "" };
-    let a = d.abs();
-    if (1e-3..1e7).contains(&a) {
-        if exp >= 0 {
-            let e = exp as usize;
-            let (int, frac) = if digits.len() > e + 1 {
-                (digits[..=e].to_string(), digits[e + 1..].to_string())
-            } else {
-                (format!("{digits:0<width$}", width = e + 1), String::new())
-            };
-            let frac = if frac.is_empty() { "0".into() } else { frac };
-            format!("{sign}{int}.{frac}")
-        } else {
-            let zeros = "0".repeat((-exp - 1) as usize);
-            format!("{sign}0.{zeros}{digits}")
-        }
-    } else {
-        if digits.len() == 1 {
-            // Select the nearest two-digit decimal, rather than padding the
-            // one-digit round-trip form; Java can choose a different exponent.
-            return format!("{d:.1e}").replace('e', "E");
-        }
-        let (first, rest) = digits.split_at(1);
-        format!("{sign}{first}.{rest}E{exp}")
-    }
-}
+use horizon_core::java_number::{double_to_string, float_to_string};
 
 /// A string value as a JSON text component (`{"text": s}`), stable string.
 pub fn text_component_json(text: &[u16]) -> Vec<u16> {
@@ -691,19 +643,19 @@ mod tests {
     }
     #[test]
     fn java_floating_point_strings() {
-        assert_eq!(java_float_string(f32::from_bits(1)), "1.4E-45");
-        assert_eq!(java_float_string(f32::from_bits(0x8000_0007)), "-9.8E-45");
-        assert_eq!(java_double_string(f64::from_bits(1)), "4.9E-324");
+        assert_eq!(float_to_string(f32::from_bits(1)), "1.4E-45");
+        assert_eq!(float_to_string(f32::from_bits(0x8000_0007)), "-9.8E-45");
+        assert_eq!(double_to_string(f64::from_bits(1)), "4.9E-324");
         assert_eq!(
-            java_double_string(f64::from_bits(0x8000_0000_0000_0002)),
+            double_to_string(f64::from_bits(0x8000_0000_0000_0002)),
             "-9.9E-324"
         );
-        assert_eq!(java_double_string(1.0), "1.0");
-        assert_eq!(java_double_string(0.001), "0.001");
-        assert_eq!(java_double_string(1e7), "1.0E7");
-        assert_eq!(java_double_string(123456.789), "123456.789");
-        assert_eq!(java_double_string(1e-4), "1.0E-4");
-        assert_eq!(java_float_string(0.1), "0.1");
-        assert_eq!(java_float_string(1.5e10), "1.5E10");
+        assert_eq!(double_to_string(1.0), "1.0");
+        assert_eq!(double_to_string(0.001), "0.001");
+        assert_eq!(double_to_string(1e7), "1.0E7");
+        assert_eq!(double_to_string(123456.789), "123456.789");
+        assert_eq!(double_to_string(1e-4), "1.0E-4");
+        assert_eq!(float_to_string(0.1), "0.1");
+        assert_eq!(float_to_string(1.5e10), "1.5E10");
     }
 }

@@ -123,6 +123,7 @@ fn legacy_size_3d_has_ivec3_result() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn modern_size_controls_keep_the_same_results() {
     for dimension in [1, 2, 3] {
         for prefix in ["", "i", "u"] {

@@ -1,0 +1,1 @@
+horizon-client game::native_menu_slot_kinds::tests::live_menu_validation_and_creative lib daily resources

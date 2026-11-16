@@ -109,7 +109,7 @@ def main():
                ROOT / 'crates/horizon-client/examples/probe/trident_probe.rs',
                ROOT / 'crates/horizon-client/examples/probe/main.rs',
                ROOT / 'crates/horizon-client/src/arrows.rs',
-               ROOT / 'crates/horizon-client/src/game/trident.rs']
+               ROOT / 'crates/horizon-client/src/game/items/trident.rs']
     tested = base.source_hashes(sources)
     cases = fixtures()
     (build / 'inputs.txt').write_text(''.join(json.dumps(row, separators=(',', ':')) + '\n'

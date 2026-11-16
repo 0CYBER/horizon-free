@@ -3,15 +3,15 @@
 //! and `NetherPortalBlock.createDimensionTransition`.
 use super::{Behaviours, LevelAccess, Sim, Ticks};
 use crate::fluid::FluidKind;
-use crate::{
-    java_hash_map::{JavaHashMap, JavaKey},
-    registry::BlockStateId,
-};
 use horizon_core::{
     geometry::{Aabb, Axis, Direction, ShapeOp, Vec3, VoxelShape},
     position::BlockPos,
 };
 use std::cmp::Ordering;
+use {
+    crate::registry::BlockStateId,
+    horizon_core::java_hash_map::{JavaHashMap, JavaKey},
+};
 
 /// `BlockUtil.FoundRectangle`: the low corner and the sizes along the two axes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

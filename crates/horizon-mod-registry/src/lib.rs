@@ -1,5 +1,5 @@
 //! `horizon-mod-registry`: the submission form's service at
-//! `playhorizon.dev/api/mods/*` (docs/api/mod-index.md). A creator signs in
+//! `playhorizon.dev/api/mods/*` (docs/modding/src/reference/registry-index.md). A creator signs in
 //! with GitHub, sends a file and its page; the service runs the file's own
 //! checks, uploads it to the registry's `staging` release and opens a pull
 //! request with the entry. Reviewers decide; merging publishes. Signed-in
@@ -24,7 +24,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use github::GitHub;
 use hmac::{Hmac, Mac};
-use horizon_mods::index::{
+use horizon_platform::mod_package::index::{
     self, Kind,
     registry::{self, Entry, EntryVersion, Sources},
 };
@@ -933,6 +933,7 @@ pub fn publish(
     let sha256 = index::sha256_file(file).map_err(bad)?;
     let extension = kind.extension().unwrap_or("zip");
     let version = EntryVersion {
+        native_binaries: Vec::new(),
         version: form.version.trim().to_owned(),
         published: date(now()),
         game: form.game.trim().to_owned(),
@@ -946,8 +947,6 @@ pub fn publish(
     if is_new {
         page::check_new(form, images).map_err(bad)?;
     }
-    let turns_native =
-        kind == Kind::NativeMod && existing.as_ref().is_some_and(|(e, _)| e.kind == Kind::Mod);
     // An owner update: an owner's new version and nothing else of the entry
     // changes (key and owners included).
     let mut owner_update = false;
@@ -996,19 +995,7 @@ pub fn publish(
                     ),
                 ));
             }
-            // A mod may turn native once, never back (`registry::review`,
-            // docs/native-mods.md): its `.hmod` versions stay published.
-            if entry.kind != kind {
-                if (&entry.kind, &kind) != (&Kind::Mod, &Kind::NativeMod) {
-                    return Err(bad(format!(
-                        "{} is a {}, not a {}: a project's kind never changes (only a mod may turn native-mod, once)",
-                        form.id,
-                        entry.kind.name(),
-                        kind.name()
-                    )));
-                }
-                entry.kind = kind.clone();
-            }
+            index::registry::check_kind(&form.id, &entry.kind, &kind).map_err(bad)?;
             if entry.versions.iter().any(|v| v.version == version.version) {
                 return Err(Refusal::new(
                     StatusCode::CONFLICT,
@@ -1037,13 +1024,15 @@ pub fn publish(
             let (mut a, mut b) = (entry.clone(), before);
             a.versions.clear();
             b.versions.clear();
-            // A mod turning native is reviewed by hand, never an owner update.
             // Only an owner known by ID publishes on their own: a login match alone
             // could be someone who claimed the login after a rename.
             owner_update = matched == Ownership::ById
                 && a == b
                 && images.is_empty()
-                && !turns_native
+                && form
+                    .screenshots
+                    .as_ref()
+                    .is_none_or(|screenshots| screenshots == &entry.screenshots)
                 && (entry.key.is_none() || version.signature.is_some())
                 && version
                     .version
@@ -1133,6 +1122,7 @@ pub fn publish(
     let v = &project.versions[0];
     let capabilities: Vec<String> = v
         .capabilities
+        .known()
         .iter()
         .map(|c| format!("- may {}", c.describe()))
         .collect();
@@ -1154,13 +1144,7 @@ pub fn publish(
             .map_or(config.public_url.as_str(), |(_, host)| host),
         id = form.id,
         kind = kind.name(),
-        new = if is_new {
-            "new"
-        } else if turns_native {
-            "update: turns native, its `.hmod` versions stay published"
-        } else {
-            "update"
-        },
+        new = if is_new { "new" } else { "update" },
         version = v.version,
         game = v.game,
         file = v.file.name,

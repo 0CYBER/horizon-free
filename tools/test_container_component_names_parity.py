@@ -36,8 +36,11 @@ def disk(world,out):
     payload={'region':str(actual[0]),'region_sha256':digest(actual[0]),'block_entities':selected}
     out.write_text(json.dumps(payload,indent=2)+'\n');return payload
 
-def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--reference-only',action='store_true');ap.add_argument('--reference-dir',type=Path);ap.add_argument('--binary',type=Path);ap.add_argument('--work-dir',type=Path,required=True);ap.add_argument('--strict-all',action='store_true');ap.add_argument('--original-strict',action='store_true');ap.add_argument('--summarize-only',action='store_true');ap.add_argument('--overlay-restart',action='store_true');args=ap.parse_args()
+def main(argv=None):
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--reference-only',action='store_true');ap.add_argument('--reference-dir',type=Path);ap.add_argument('--binary',type=Path);ap.add_argument('--work-dir',type=Path);ap.add_argument('--strict-all',action='store_true');ap.add_argument('--original-strict',action='store_true');ap.add_argument('--summarize-only',action='store_true');ap.add_argument('--overlay-restart',action='store_true');args=ap.parse_args(argv)
+    if not (args.reference_only or args.reference_dir or args.summarize_only):
+        return both(args)
+    assert args.work_dir,'--work-dir is required with --reference-only, --reference-dir or --summarize-only'
     global PROGRAMS
     if args.overlay_restart:PROGRAMS=overlay_restart_programs()
     out=args.work_dir.resolve()
@@ -97,6 +100,20 @@ def main():
         (out/'sealed-java-classes.json').write_text(json.dumps(sealed,indent=2)+'\n');print('Fresh official Java admitted both stages:',sum(len(records(o)) for _,o in PROGRAMS));return 0
     assert digest(binary)==seal
     return summarize(out,ref,seal,args.strict_all,args.original_strict)
+
+def both(args):
+    """tools/parity.py runs every harness with no arguments: the fresh Java reference into <run>/java, then Horizon
+    (built when --binary is omitted) into <run>/native against it, in a new run folder under .local/ by default."""
+    run=(args.work_dir or runner.lab.LOCAL/'container-component-names'/f"{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}-{os.getpid()}").resolve()
+    if args.binary:binary=args.binary.resolve(strict=True)
+    else:
+        subprocess.run(['cargo','build','--profile','fast','-p','horizon-game','--bin','horizon-client'],cwd=runner.lab.ROOT,check=True)
+        metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=runner.lab.ROOT,text=True))
+        binary=Path(metadata['target_directory'])/'fast'/('horizon-client.exe' if os.name=='nt' else 'horizon-client')
+    shared=['--overlay-restart'] if args.overlay_restart else []
+    main(['--reference-only','--work-dir',str(run/'java'),*shared])
+    return main(['--work-dir',str(run/'native'),'--reference-dir',str(run/'java'),'--binary',str(binary),*shared,
+                 *(['--strict-all'] if args.strict_all else []),*(['--original-strict'] if args.original_strict else [])])
 
 def summarize(out,ref,seal,strict_all=False,original_strict=False):
     disk_results=[]

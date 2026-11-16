@@ -377,7 +377,7 @@ mod tests {
     fn legacy_server_data_updates_and_resets_secure_chat_enforcement() {
         use crate::buf::Codec;
         use crate::packets::play;
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         let s = Session::new(ServerVersion::V1_20_3);
         s.set_reading(State::Play);
         let data = play::ServerData {

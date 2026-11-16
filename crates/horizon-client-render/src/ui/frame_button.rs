@@ -86,7 +86,10 @@ mod tests {
         // Widget state is thread-local: leave the test runner's frame alone.
         std::thread::spawn(|| {
             let mut atlas =
-                HudAtlas::build(std::path::Path::new("/nonexistent/frame-button-assets")).unwrap();
+                HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+                    std::path::PathBuf::from("/nonexistent/frame-button-assets"),
+                ))
+                .unwrap();
             for (key, u0, size) in [
                 ("gui/realms/upload", 0.1, 56),
                 ("gui/sprites/widget/slot_frame", 0.5, 60),
@@ -122,7 +125,7 @@ mod tests {
                 widgets::begin_screen(|| widgets::ScreenInfo::new("frame", "Frame test"));
                 widgets::record_as("Earlier", earlier, true, Kind::Button);
                 widgets::target_as(earlier, Kind::Button);
-                let mut batch = HudBatch::new([320, 240]);
+                let mut batch = HudBatch::scratch([320, 240]);
                 draw(
                     &mut batch,
                     &atlas,
@@ -188,7 +191,7 @@ mod tests {
                 } else {
                     label.clone().with_color(0x00A0_A0A0)
                 };
-                let mut expected = HudBatch::new([320, 240]);
+                let mut expected = HudBatch::scratch([320, 240]);
                 expected.text_styled(
                     &atlas,
                     &expected_label,

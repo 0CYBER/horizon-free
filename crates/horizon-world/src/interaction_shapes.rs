@@ -1,12 +1,14 @@
 //! Complete registry-bound interaction shapes for ray-face overrides.
-use crate::{
-    collision::CachedCollisionRegistry,
-    compression::invalid,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-};
 use horizon_core::geometry::VoxelShape;
 use std::io;
+use {
+    crate::{
+        collision::CachedCollisionRegistry,
+        compression::invalid,
+        registry::{BlockRegistry, BlockStateId},
+    },
+    horizon_core::nbt::Tag,
+};
 /// The pinned implementation audit establishes that every interaction shape is
 /// static per state. The import retains native alias/canonical shape identity.
 pub struct InteractionShapes<'r> {

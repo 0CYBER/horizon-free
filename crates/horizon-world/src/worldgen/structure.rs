@@ -9,6 +9,7 @@ pub mod jigsaw;
 pub mod legacy;
 pub mod mansion;
 pub mod mineshaft;
+pub mod mod_types;
 pub mod monument;
 pub mod nether_fossil;
 pub mod ocean_ruin;
@@ -24,10 +25,6 @@ pub mod stronghold;
 pub mod template;
 pub mod temple;
 
-use crate::{
-    nbt::Limits,
-    registry::{BlockRegistry, BlockStateId},
-};
 use horizon_core::geometry::Direction;
 use processor::ProcessorList;
 use std::{
@@ -36,7 +33,13 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, OnceLock, RwLock},
 };
+pub mod block_entity_transform;
+
 pub use template::{BlockInfo, EntityInfo, JigsawInfo, StructureTemplate, save_nbt};
+use {
+    crate::registry::{BlockRegistry, BlockStateId},
+    horizon_core::nbt::Limits,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rotation {
@@ -114,67 +117,6 @@ impl Mirror {
             Self::LeftRight => "LEFT_RIGHT",
             Self::FrontBack => "FRONT_BACK",
         }
-    }
-}
-
-/// Inclusive integer box (vanilla BoundingBox).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BoundingBox {
-    pub min: [i32; 3],
-    pub max: [i32; 3],
-}
-impl BoundingBox {
-    pub fn new(min: [i32; 3], max: [i32; 3]) -> Self {
-        Self { min, max }
-    }
-    pub fn from_corners(a: [i32; 3], b: [i32; 3]) -> Self {
-        Self {
-            min: std::array::from_fn(|i| a[i].min(b[i])),
-            max: std::array::from_fn(|i| a[i].max(b[i])),
-        }
-    }
-    pub fn moved(self, d: [i32; 3]) -> Self {
-        Self {
-            min: std::array::from_fn(|i| self.min[i] + d[i]),
-            max: std::array::from_fn(|i| self.max[i] + d[i]),
-        }
-    }
-    pub fn is_inside(&self, p: [i32; 3]) -> bool {
-        (0..3).all(|i| p[i] >= self.min[i] && p[i] <= self.max[i])
-    }
-    pub fn intersects(&self, other: &Self) -> bool {
-        (0..3).all(|i| self.max[i] >= other.min[i] && self.min[i] <= other.max[i])
-    }
-    pub fn encapsulate(&mut self, other: &Self) {
-        for i in 0..3 {
-            self.min[i] = self.min[i].min(other.min[i]);
-            self.max[i] = self.max[i].max(other.max[i]);
-        }
-    }
-    pub fn inflated(self, xz: i32, y: i32) -> Self {
-        Self {
-            min: [self.min[0] - xz, self.min[1] - y, self.min[2] - xz],
-            max: [self.max[0] + xz, self.max[1] + y, self.max[2] + xz],
-        }
-    }
-    pub fn span(&self) -> [i32; 3] {
-        std::array::from_fn(|i| self.max[i] - self.min[i] + 1)
-    }
-    pub fn center(&self) -> [i32; 3] {
-        std::array::from_fn(|i| self.min[i] + (self.max[i] - self.min[i] + 1) / 2)
-    }
-    pub fn corners(&self) -> [[i32; 3]; 8] {
-        let (a, b) = (self.min, self.max);
-        [
-            [a[0], a[1], a[2]],
-            [a[0], a[1], b[2]],
-            [a[0], b[1], a[2]],
-            [a[0], b[1], b[2]],
-            [b[0], a[1], a[2]],
-            [b[0], a[1], b[2]],
-            [b[0], b[1], a[2]],
-            [b[0], b[1], b[2]],
-        ]
     }
 }
 
@@ -263,6 +205,18 @@ impl StateTransforms {
                 .map_or(state, |t| BlockStateId(t[r as usize - 1])),
         }
     }
+    /// `BlockState.rotate(level, pos, rotation)` as a template places `state`, already
+    /// mirrored, at `pos` (NeoForge's `IBlockExtension.rotate`): this table's turned state, or
+    /// another state of the block its parts answer (`rotate`). Every template placement turns
+    /// its states through here.
+    pub fn rotate_at(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        rotation: Rotation,
+    ) -> BlockStateId {
+        crate::native_worldgen_hooks::rotate(state, pos, rotation, self.rotate(state, rotation))
+    }
     pub fn mirror(&self, state: BlockStateId, mirror: Mirror) -> BlockStateId {
         match mirror {
             Mirror::None => state,
@@ -296,7 +250,7 @@ struct TemplateStore {
     dir: PathBuf,
     loaded: RwLock<HashMap<String, Arc<StructureTemplate>>>,
     /// Data packs' template files, which win over the prepared ones.
-    pack_templates: BTreeMap<String, Arc<[u8]>>,
+    pack_templates: BTreeMap<String, horizon_assets::resource_source::Resource>,
 }
 impl TemplateStore {
     fn get(&self, id: &str) -> Arc<StructureTemplate> {
@@ -306,7 +260,7 @@ impl TemplateStore {
         let (namespace, path) = id.split_once(':').unwrap();
         let file = self.dir.join(namespace).join(format!("{path}.nbt"));
         let bytes = match self.pack_templates.get(id) {
-            Some(bytes) => Some(bytes.to_vec()),
+            Some(resource) => resource.read().ok(),
             None => horizon_core::prepared_files::read(&file).ok(),
         };
         let loaded = bytes.and_then(|bytes| {
@@ -458,17 +412,33 @@ impl StructureResources {
                 .collect(),
         }
     }
-    /// These resources with data packs' template files over the prepared ones.
-    pub fn with_pack_templates(mut self, templates: BTreeMap<String, Arc<[u8]>>) -> Self {
-        // A fresh store: templates loaded before would come from the old files.
+    pub fn with_templates(
+        mut self,
+        resources: BTreeMap<String, horizon_assets::resource_source::Resource>,
+    ) -> Self {
         self.templates = Arc::new(TemplateStore {
             registry: self.registry,
             transforms: self.transforms.clone(),
             dir: self.templates.dir.clone(),
             loaded: RwLock::new(HashMap::new()),
-            pack_templates: templates,
+            pack_templates: resources,
         });
         self
+    }
+    /// In-memory template resources, retaining the same cache invalidation
+    /// as folder and archive sources.
+    pub fn with_pack_templates(self, templates: BTreeMap<String, Arc<[u8]>>) -> Self {
+        self.with_templates(
+            templates
+                .into_iter()
+                .map(|(id, bytes)| {
+                    (
+                        id,
+                        horizon_assets::resource_source::Resource::bytes(bytes.to_vec()),
+                    )
+                })
+                .collect(),
+        )
     }
     /// StructureTemplateManager.getOrCreate; missing templates are empty.
     pub fn template(&self, id: &str) -> Option<Arc<StructureTemplate>> {

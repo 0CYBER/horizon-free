@@ -6,7 +6,7 @@ use crate::{
     packet,
     packets::login::Property,
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 packet!(PlayerInfoRemove { uuids: Vec<u128> => List<Uuid> });
 /// One ClientboundPlayerInfoUpdatePacket entry; fields are set for the

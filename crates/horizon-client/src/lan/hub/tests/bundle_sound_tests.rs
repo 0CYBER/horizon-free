@@ -10,11 +10,13 @@ impl Rules for ItemRules {
     fn items(&self) -> &Items {
         &self.0
     }
+    fn enchantments(&self) -> &crate::enchant::Enchantments {
+        static ENCHANTMENTS: std::sync::LazyLock<crate::enchant::Enchantments> =
+            std::sync::LazyLock::new(crate::enchant::tests::sample);
+        &ENCHANTMENTS
+    }
     fn max_stack(&self, item: &str) -> u32 {
         self.0.get(item).map_or(64, |i| i.max_stack)
-    }
-    fn armor_index(&self, _: &str) -> Option<usize> {
-        None
     }
 }
 
@@ -38,6 +40,7 @@ fn rules() -> Option<ItemRules> {
         &registry,
         &facts,
         &horizon_world::loot::PackOverlay::NONE,
+        &horizon_world::item_defaults::read(&root).ok()?,
     )
     .ok()
     .map(ItemRules)
@@ -78,7 +81,6 @@ fn a_guests_bundle_click_sounds_for_the_others_near_but_not_for_them() {
             latency: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
             address: "127.0.0.1:25566".parse().unwrap(),
             expected: false,
-            configured: Default::default(),
         },
         2,
         [2.5, 64.0, 0.5],
@@ -99,8 +101,10 @@ fn a_guests_bundle_click_sounds_for_the_others_near_but_not_for_them() {
     };
     // Bob left-clicks four stone onto the bundle in his first hotbar slot
     // (inventory menu slot 36): `overrideOtherStackedOnMe` inserts them.
-    hub.guests[0].inventory[0] = Some(ItemStack::new("minecraft:bundle", 1));
-    hub.guests[0].carried = Some(ItemStack::new("minecraft:stone", 4));
+    hub.guests.update(0, |g| {
+        g.inventory[0] = Some(ItemStack::new("minecraft:bundle", 1));
+        g.carried = Some(ItemStack::new("minecraft:stone", 4));
+    });
     while bob_rx.try_recv().is_ok() {}
     hub.container_click(1, &click(36, 0), &mut world, &rules);
     assert_eq!(hub.guests[0].carried, None, "the bundle took the stone");

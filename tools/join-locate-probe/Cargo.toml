@@ -1,0 +1,36 @@
+[package]
+name = "join-locate-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# What the production sources this probe imports reach directly: join_seq.rs (horizon-core's
+# hashing, the mod API's dimension vocabulary, horizon-mod-runtime's attachment lifetimes) and
+# the residency table's own `log::error!`.
+horizon-core = { path = "../../crates/horizon-core" }
+horizon-mod-runtime = { path = "../../crates/horizon-mod-runtime" }
+mod_api = { package = "horizon-mod-vocab", path = "../../crates/horizon-mod-vocab" }
+log = "0.4"
+
+[features]
+# The residency journal observation horizon-client-lib turns on for these same sources. The
+# probe's tests reach it through `cfg(test)`; the name is declared so the plain build's
+# `unexpected_cfgs` check accepts it.
+test-residency-observer = []
+
+[profile.fast]
+inherits = "release"
+opt-level = 2
+lto = false
+
+# The production sources this probe imports are checked under the main workspace's lint policy
+# (Cargo.toml [workspace.lints.clippy]): ports mirror vanilla's Java signatures, index loops and
+# nested generic types one to one so they can be checked against the decompiled sources.
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"

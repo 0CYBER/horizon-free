@@ -25,8 +25,14 @@ pub fn main() -> horizon_client::Result<()> {
         .find_map(|line| line.strip_prefix("#resources "))
         .map(std::path::PathBuf::from)
         .ok_or("no #resources line")?;
-    let items = Items::catalog(&root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(&root, &items, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(&root)?;
+    let items = Items::catalog(&root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        &root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let providers = Providers::load(&root);
     let mut out = String::new();
     for (n, line) in input
@@ -62,14 +68,29 @@ pub fn main() -> horizon_client::Result<()> {
         let mut drops = Vec::new();
         for t in 0..ticks {
             if t as i32 == change_at {
-                furnace.set_input(&recipes, new_input.clone());
+                furnace.set_input(
+                    crate::test_resources::server_loop_context(),
+                    &recipes,
+                    new_input.clone(),
+                );
             }
-            if let Some(lit) = furnace.tick(&recipes, &items, &providers, &mut drops) {
+            if let Some(lit) = furnace.tick(
+                crate::test_resources::server_loop_context(),
+                &recipes,
+                &items,
+                &providers,
+                &mut drops,
+                &|s| horizon_client::crafting::CraftingRemainder::crafting_remainder(&items, s),
+            ) {
                 lit_state = lit;
             }
         }
         if change_at == ticks as i32 {
-            furnace.set_input(&recipes, new_input.clone());
+            furnace.set_input(
+                crate::test_resources::server_loop_context(),
+                &recipes,
+                new_input.clone(),
+            );
         }
         write!(out, "{n} kind={} ", f[1])?;
         for i in 0..3 {

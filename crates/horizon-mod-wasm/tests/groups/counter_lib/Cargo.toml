@@ -1,0 +1,10 @@
+[package]
+name = "counter-lib"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+horizon-mod-api = { path = "../../../../horizon-mod-api" }
+
+[workspace]

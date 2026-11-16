@@ -1964,6 +1964,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn requests_send_the_session_cookie_only_and_errors_never_hold_the_token() {
         let (base, server) = serve_once(
             "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm=\"Realms\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -1995,6 +1996,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_refused_connection_names_no_header() {
         // A port nothing listens on: the transport error.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -2010,6 +2012,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn busy_answers_ask_for_a_retry_after_their_delay() {
         let (base, server) = serve_once(
             "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 3\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -2024,6 +2027,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_join_answer_reads_vanillas_field_names() {
         let (base, server) = serve_once(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"address\":\"1.2.3.4:25565\",\"resourcePackUrl\":\"https://x.test/p.zip\",\"resourcePackHash\":\"abc\",\"sessionRegionData\":null}",
@@ -2090,6 +2094,7 @@ mod tests {
 
     /// `notificationsSeen`/`notificationsDismiss`: a JSON array of the UUIDs.
     #[test]
+    #[ignore = "daily"]
     fn a_notification_answer_posts_its_uuids() {
         let answer = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         let (base, server) = serve_request(answer);
@@ -2195,6 +2200,7 @@ mod tests {
     /// `RealmsClient.updateConfiguration`'s request as gson writes `RealmsConfigurationDto`:
     /// the slot under `options`, the preference as its id and the region as its `nameId`.
     #[test]
+    #[ignore = "daily"]
     fn a_configuration_update_posts_the_vanilla_dto() {
         let (base, server) =
             serve_once("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -2274,6 +2280,7 @@ mod tests {
         );
     }
     #[test]
+    #[ignore = "daily"]
     fn the_tier_configuration_names_both_ranges_and_their_default() {
         let body = r#"{"renderDistance":{"min":2,"max":16,"defaultValue":8,"current":12},"simDistance":{"min":3,"max":12,"defaultValue":6,"current":null}}"#;
         let answer: &'static str = Box::leak(
@@ -2309,6 +2316,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_distance_update_puts_its_value_into_the_path() {
         for (realm, distance, path) in [
             (
@@ -2396,6 +2404,7 @@ mod tests {
     /// `RealmsClient.op`/`deop`: the `ops` endpoint, not the world one (a POST to
     /// `worlds/{id}/{uuid}` answers 404).
     #[test]
+    #[ignore = "daily"]
     fn player_permissions_go_to_the_ops_endpoint() {
         let uuid = "1b7b6c60-dd98-4748-a5e9-4bb21feaffc1";
         let (base, server) =
@@ -2419,6 +2428,7 @@ mod tests {
     /// `RealmsClient.invite`/`uninvite`: the `invites` endpoint, the `{"name": ...}` body,
     /// and the answered Realm's `players` (not the answer itself as a player list).
     #[test]
+    #[ignore = "daily"]
     fn invites_go_to_the_invites_endpoint() {
         let body = r#"{"id":7,"name":"Friends","players":[{"name":"Alex","uuid":"01234567-89ab-cdef-0123-456789abcdef","operator":false,"accepted":false,"online":false}]}"#;
         let answer: &'static str = Box::leak(
@@ -2495,6 +2505,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_reset_posts_the_template_with_no_seed() {
         let (base, server) =
             serve_request("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntrue");
@@ -2513,6 +2524,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn world_templates_are_asked_for_by_page_and_world_type() {
         let body = r#"{"templates":[{"id":"42","name":"Skyblock","version":"1.21","author":"Mojang","recommendedPlayers":"1-4","type":"MINIGAME"}],"page":2,"size":10,"total":11}"#;
         let answer: &'static str = Box::leak(
@@ -2615,6 +2627,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_minigame_switch_puts_the_template_in_the_path() {
         let (base, server) =
             serve_once("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntrue");
@@ -2641,6 +2654,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_compatibility_answer_is_one_of_three_exact_names() {
         for (body, expected) in [
             ("COMPATIBLE", Ok(CompatibleVersion::Compatible)),
@@ -2671,6 +2685,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn parental_consent_reads_like_javas_parse_boolean() {
         // `Boolean.parseBoolean`: "true" in any case, nothing else (not even padded).
         for (body, expected) in [
@@ -2694,6 +2709,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_availability_calls_fail_like_any_other_request() {
         // `RealmsClient.execute`: a 401 is `AuthenticationError`, whose code is 401.
         let (base, server) = serve_once(

@@ -7,8 +7,9 @@ use crate::{
     hud::{Blend, EndPortalFill, HudAtlas, HudBatch},
     text::{self, Style, Text},
 };
+use horizon_assets::resource_source::ResourceSource;
 use horizon_core::random::{LegacyRandom, RandomSource};
-use std::{collections::HashSet, path::Path};
+use std::collections::HashSet;
 
 /// `WinScreen.OBFUSCATE_TOKEN`: `§f§k§a§b` marks where the poem hides a name.
 const OBFUSCATE_TOKEN: &str = "\u{a7}f\u{a7}k\u{a7}a\u{a7}b";
@@ -58,7 +59,7 @@ pub struct WinScreen {
 impl WinScreen {
     /// `WinScreen.<init>` and `init`: the poem (`texts/end.txt`) when `poem`,
     /// the credits (`texts/credits.json`), then `texts/postcredits.txt`.
-    pub fn new(poem: bool, root: &Path, player: &str, font: &Font) -> Self {
+    pub fn new(poem: bool, root: &ResourceSource, player: &str, font: &Font) -> Self {
         let speed = if poem { 0.5 } else { 0.75 };
         let mut screen = Self {
             poem,
@@ -74,8 +75,8 @@ impl WinScreen {
             narration: String::new(),
         };
         let mut narrated = Vec::new();
-        let texts = root.join("assets/minecraft/texts");
-        let read = |name: &str| match std::fs::read_to_string(texts.join(name)) {
+        let read = |name: &str| match root.read_to_string(&format!("assets/minecraft/texts/{name}"))
+        {
             Ok(s) => Some(s),
             Err(e) => {
                 log::error!("Couldn't load credits from file minecraft:texts/{name}: {e}");
@@ -232,16 +233,11 @@ impl WinScreen {
         self.scroll = scroll;
         self.scroll_speed = 0.0;
     }
-    /// `extractRenderState` after a frame of `delta_ticks` game ticks:
-    /// `extractBackground`, the vignette, then the logo and the lines
-    /// scrolled up. The poem's End portal background samples `end_portal`;
-    /// the credits draw the scrolling menu background (over the blurred
-    /// panorama on the title screen).
-    pub fn draw(
-        &mut self,
+    /// The poem's End portal or scrolling credits background and vignette.
+    pub fn draw_background(
+        &self,
         batch: &mut HudBatch,
         atlas: &HudAtlas,
-        delta_ticks: f32,
         end_portal: EndPortalFill,
     ) {
         let (w, h) = (batch.width, batch.height);
@@ -259,6 +255,11 @@ impl WinScreen {
             batch.rect_uv(0.0, 0.0, w, h, r, u32::MAX);
             batch.blend_since(start, Blend::Vignette);
         }
+    }
+
+    /// Advance by `delta_ticks`, then draw the rolling logo and text.
+    pub fn draw_contents(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, delta_ticks: f32) {
+        let (w, h) = (batch.width, batch.height);
         self.scroll = (self.scroll + delta_ticks * self.scroll_speed).max(0.0);
         let logo_x = (w / 2.0).floor() - 128.0;
         let logo_y = h + 50.0;
@@ -326,25 +327,28 @@ impl WinScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     /// A resource root with only the credits texts: every glyph is the
     /// missing one, 6 pixels wide.
     fn screen(poem: bool, end: &str, credits: &str, post: &str) -> WinScreen {
-        // One directory per call: tests run in parallel, and two of them with
-        // the same arguments used to remove each other's files.
-        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("horizon-win-screen-{}-{n}", std::process::id()));
-        let texts = root.join("assets/minecraft/texts");
-        std::fs::create_dir_all(&texts).unwrap();
-        std::fs::write(texts.join("end.txt"), end).unwrap();
-        std::fs::write(texts.join("credits.json"), credits).unwrap();
-        std::fs::write(texts.join("postcredits.txt"), post).unwrap();
-        let atlas = HudAtlas::fonts(&root).unwrap();
-        let screen = WinScreen::new(poem, &root, "Steve", &atlas.font);
-        let _ = std::fs::remove_dir_all(&root);
-        screen
+        use horizon_assets::resource_source::Resource;
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "assets/minecraft/texts/end.txt".into(),
+                Resource::bytes(end.as_bytes().to_vec()),
+            ),
+            (
+                "assets/minecraft/texts/credits.json".into(),
+                Resource::bytes(credits.as_bytes().to_vec()),
+            ),
+            (
+                "assets/minecraft/texts/postcredits.txt".into(),
+                Resource::bytes(post.as_bytes().to_vec()),
+            ),
+        ]));
+        let atlas = HudAtlas::fonts(&source).unwrap();
+        WinScreen::new(poem, &source, "Steve", &atlas.font)
     }
     const CREDITS: &str = r#"[{"section":"Studio","disciplines":[
         {"discipline":"","titles":[{"title":"Head","names":["Ada","Bo"]}]},
@@ -473,18 +477,24 @@ mod tests {
     #[test]
     fn the_screen_ends_once_everything_rolled_past() {
         let mut s = screen(false, "", CREDITS, "");
-        let atlas = HudAtlas::fonts(Path::new("/nonexistent")).unwrap();
-        let mut batch = HudBatch::new([640, 480]);
+        let atlas = HudAtlas::fonts(&horizon_assets::resource_source::ResourceSource::directory(
+            (Path::new("/nonexistent")).to_owned(),
+        ))
+        .unwrap();
+        let mut batch = HudBatch::scratch([640, 480]);
         let h = batch.height;
         let end = (s.total_scroll_length as f32 + 2.0 * h + 24.0) / 0.75;
-        s.draw(&mut batch, &atlas, end - 1.0, EndPortalFill::default());
+        s.draw_background(&mut batch, &atlas, EndPortalFill::default());
+        s.draw_contents(&mut batch, &atlas, end - 1.0);
         assert!(!s.finished(h));
         // Scrolling back never goes above the start.
         s.key(Key::Up, true);
-        s.draw(&mut batch, &atlas, end * 2.0, EndPortalFill::default());
+        s.draw_background(&mut batch, &atlas, EndPortalFill::default());
+        s.draw_contents(&mut batch, &atlas, end * 2.0);
         assert_eq!(s.scroll(), 0.0);
         s.key(Key::Up, false);
-        s.draw(&mut batch, &atlas, end + 1.0, EndPortalFill::default());
+        s.draw_background(&mut batch, &atlas, EndPortalFill::default());
+        s.draw_contents(&mut batch, &atlas, end + 1.0);
         assert!(s.finished(h));
     }
 }

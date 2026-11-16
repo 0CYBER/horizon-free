@@ -1,12 +1,12 @@
 extern crate horizon_client_lib as horizon_client;
 use horizon_client::{item_sync, items::ItemStack, lan::guest::stack_to_network};
+use horizon_core::nbt::Tag;
 use horizon_items::item_nbt::{item_from_nbt, item_to_nbt};
 use horizon_protocol::{
     buf::{Codec, Reader, Writer},
     item::{DelimitedSlot, Hashed, Slot, Stack, Template, component, custom},
     registry::{Builtin, Dynamic, Ids, SyncedNames},
 };
-use horizon_world::nbt::Tag;
 
 const FIRST_CUSTOM_ID: i32 = 122;
 

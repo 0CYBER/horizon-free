@@ -1,21 +1,25 @@
-use horizon_world::{
-    component_patch::Prototype,
-    inventory_use::{
-        ActiveStack, DurationServices, InventoryUse, StartServices, UseServices, UseView,
-        flags_updated,
-    },
-    item_stack_refs::{ItemStacks, StackRef},
-    item_use_lifecycle::{self, UseState},
-    living_use_flags,
-    player_equipment::InteractionHand,
-    player_inventory::{EntityEquipment, EquipmentSlot, PlayerInventory},
-    synced_values::{DataValue, SyncedValues},
-};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::equipment_slot::EquipmentSlot,
+    horizon_world::{
+        component_patch::Prototype,
+        inventory_use::{
+            ActiveStack, DurationServices, InventoryUse, StartServices, UseServices, UseView,
+            flags_updated,
+        },
+        item_stack_refs::{ItemStacks, StackRef},
+        item_use_lifecycle,
+        item_use_lifecycle::UseState,
+        living_use_flags,
+        player_equipment::InteractionHand,
+        player_inventory::{EntityEquipment, PlayerInventory},
+        synced_values::{DataValue, SyncedValues},
+    },
 };
 type Stack = StackRef<usize, u8, bool>;
 type State = ActiveStack<usize, u8, bool>;

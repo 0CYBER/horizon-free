@@ -629,7 +629,7 @@ pub fn server_tick_update(
         if awake && host.spawning_monsters() {
             // getNearestPlayer(pos, 32, false): no spectators.
             let (x, y, z) = (f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
-            let near = w.player.as_ref().is_some_and(|p| {
+            let near = w.selected_player().is_some_and(|p| {
                 !p.spectator
                     && (p.position.x - x).powi(2)
                         + (p.position.y - y).powi(2)
@@ -646,7 +646,7 @@ pub fn server_tick_update(
         // playerIsStuckInYou reads the creaking's NEAREST_PLAYERS.
         let stuck = host.mob_mut(id).is_some_and(|m| {
             let listed = super::monster_brain::nearest_players(m).contains(&super::Who::Player);
-            let eye = w.player.as_ref().filter(|_| listed).map(|p| p.eye);
+            let eye = w.selected_player().filter(|_| listed).map(|p| p.eye);
             creaking::player_is_stuck(m, eye)
         });
         if !active && !persistent || distance_to_creaking(heart, pos, host) > TOO_FAR || stuck {

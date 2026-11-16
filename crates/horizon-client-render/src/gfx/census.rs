@@ -85,14 +85,6 @@ impl Renderer {
                 self.sections.values().map(used).sum(),
             ),
             (
-                "held_section_vertices",
-                self.hold
-                    .sections()
-                    .filter_map(|held| held.gpu.as_ref())
-                    .map(used)
-                    .sum(),
-            ),
-            (
                 "far_tile_vertices",
                 self.lods.values().map(|tile| used(&tile.mesh)).sum(),
             ),

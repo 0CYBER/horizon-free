@@ -14,6 +14,7 @@ fn weighted_lists_reject_invalid_totals_and_bound_entry_allocations() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn branching_provider_decoders_share_a_total_node_budget() {
     for height in [false, true] {
         let leaf = if height { r#"{"absolute":0}"# } else { "0" };

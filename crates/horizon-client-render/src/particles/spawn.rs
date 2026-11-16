@@ -1,5 +1,4 @@
-//! Where particles come into the engine: a server's particle packet and a single particle made
-//! where the game asks for one.
+//! Particle creation and server particle-event admission.
 use super::*;
 
 impl ParticleEngine {
@@ -48,7 +47,7 @@ impl ParticleEngine {
             {
                 let id = match &options.mod_particle {
                     Some(name) => name.clone(),
-                    None => format!("minecraft:{}", options.ty.name()),
+                    None => format!("minecraft:{}", options.ty.name()).into(),
                 };
                 polytone::modify(registry, &id, options.source.as_deref(), &mut particle);
             }
@@ -60,14 +59,23 @@ impl ParticleEngine {
                 && self
                     .particles
                     .iter()
-                    .chain(self.pending.iter())
+                    .chain(self.pending.iter().filter_map(PendingParticle::ordinary))
                     .filter(|q| q.ty == ParticleType::SporeBlossomAir)
                     .count()
                     >= SPORE_BLOSSOM_LIMIT
             {
                 return;
             }
-            self.pending.push(particle);
+            self.pending.push(PendingParticle::Ordinary(particle));
         }
+    }
+}
+
+/// `Mth.nextDouble(random, min, max)`.
+pub(super) fn next_double_between(random: &mut impl RandomSource, min: f64, max: f64) -> f64 {
+    if min >= max {
+        min
+    } else {
+        random.next_double() * (max - min) + min
     }
 }

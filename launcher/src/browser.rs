@@ -5,7 +5,7 @@
 //! Offered: Java mods (Fabric, NeoForge, Forge), whose content Horizon ports and whose jar is
 //! checked before install ([`java`]), modpacks (imported and ported), resource packs
 //! (`resourcepacks/`) and data packs (into a world, [`installed::install_datapack`]). Java code
-//! itself doesn't run in Horizon (docs/mods.md).
+//! itself doesn't run in Horizon (docs/modding/src/how-to/content-mods.md).
 pub mod curseforge;
 pub mod details;
 pub mod download;
@@ -14,10 +14,9 @@ pub mod images;
 pub mod installed;
 pub mod java;
 pub mod java_instance;
-pub mod lock;
 pub mod modrinth;
 
-pub use lock::{lock_home, try_lock_home, HomeLockGuard};
+pub use horizon_platform::mod_package::install_lock::{lock_home, try_lock_home, HomeLockGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -150,11 +149,17 @@ pub struct Project {
     /// The Minecraft versions its files list, and the loaders (`fabric`, `neoforge`, `minecraft`...).
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
+    /// Why no version of it can be installed here, when its source says so (a registry project
+    /// whose versions for this game were taken down or made for the earlier mod system).
+    pub blocked: Option<String>,
 }
 
 impl Project {
     pub fn support(&self) -> Support {
-        support(self.kind, &self.game_versions, &self.loaders)
+        match &self.blocked {
+            Some(why) => Support::No(why.clone()),
+            None => support(self.kind, &self.game_versions, &self.loaders),
+        }
     }
 
     /// The project as a data pack, for a search of data packs or an install into a world;

@@ -182,6 +182,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn angular_sector_matches_all_triangle_search() {
         for alpha in [0.0011f32, 0.05, 0.6, 1.0] {
             for z in [-0.2f32, 0.3] {

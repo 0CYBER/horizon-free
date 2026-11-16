@@ -1,15 +1,16 @@
 //! Audio occlusion, attenuation and mixing benchmark.
 //! Run with: `cargo run --profile fast -p horizon-client-render --example audio_bench`
+use horizon_client_render::resource_source::ResourceSource;
 use horizon_client_render::{
     audio::Audio,
     sound_engine::{MobSound, SoundInstance, Sounds, TickContext},
 };
-use std::{path::Path, time::Instant};
+use std::time::Instant;
 
 fn main() {
     println!("=== Horizon Audio Attenuation & Mixing Benchmark ===");
 
-    let mut audio = Audio::silent(Path::new("/nonexistent"));
+    let mut audio = Audio::silent(&ResourceSource::indexed(Default::default()));
     audio.engine.loaded = true;
     audio.backend_live_for_bench();
     audio.record_heard = false;

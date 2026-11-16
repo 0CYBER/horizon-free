@@ -174,10 +174,8 @@ pub struct GhostView {
 /// What the recipe book shows.
 pub struct Screen<'a> {
     pub book: BookType,
-    /// GUI size and `widthTooNarrow`.
-    pub width: i32,
-    pub height: i32,
-    pub narrow: bool,
+    /// Absolute book corner, shared with input. Overlay and ghost coordinates stay absolute.
+    pub origin: (i32, i32),
     pub mouse: (i32, i32),
     /// `slotSelectTime.currentIndex()`.
     pub index: usize,
@@ -200,8 +198,7 @@ pub struct Screen<'a> {
 impl Screen<'_> {
     /// `RecipeBookComponent.getXOrigin` and `getYOrigin`.
     pub fn origin(&self) -> (i32, i32) {
-        let offset = if self.narrow { 0 } else { 86 };
-        ((self.width - 147) / 2 - offset, (self.height - 166) / 2)
+        self.origin
     }
     fn hovered(&self, x: i32, y: i32, w: i32, h: i32) -> bool {
         let (mx, my) = self.mouse;
@@ -241,9 +238,8 @@ pub fn draw(s: &Screen) -> Vec<Drawn> {
     );
     search_box(s, xo + 25, yo + 13, &mut put);
     // updateTabs.
-    let offset = if s.narrow { 0 } else { 86 };
-    let tab_x = (s.width - 147) / 2 - offset - 30;
-    let tab_y = (s.height - 166) / 2 + 3;
+    let tab_x = xo - 30;
+    let tab_y = yo + 3;
     for (n, tab) in s.tabs.iter().enumerate() {
         let (x, y) = (tab_x, tab_y + 27 * n as i32);
         let mut pose = IDENTITY;
@@ -680,12 +676,26 @@ fn overlay(s: &Screen, o: &OverlayView, put: &mut impl FnMut(Call, [f32; 6])) {
         );
         put(sprite_call(&id, bx, by, 24, 24), IDENTITY);
         let (gx, gy) = ((bx + 2) as f32, (by + 2) as f32);
+        // Vanilla's three cells occupy 20 pixels (two 7-pixel steps and
+        // a 6-pixel item). Larger custom grids share those same inner bounds.
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (0.0_f32, 0.0_f32, 2.0_f32, 2.0_f32);
+        for (cx, cy, _) in &r.cells {
+            min_x = min_x.min(*cx as f32);
+            min_y = min_y.min(*cy as f32);
+            max_x = max_x.max(*cx as f32);
+            max_y = max_y.max(*cy as f32);
+        }
+        let fit = (20.0 / ((max_x - min_x) * 7.0 + 6.0)).min(20.0 / ((max_y - min_y) * 7.0 + 6.0));
         for (cx, cy, items) in &r.cells {
             let pose = translate(
                 scale(
-                    translate(IDENTITY, gx + (3 + cx * 7) as f32, gy + (3 + cy * 7) as f32),
-                    0.375,
-                    0.375,
+                    translate(
+                        IDENTITY,
+                        gx + (3.0 + (*cx as f32 - min_x) * 7.0) * fit,
+                        gy + (3.0 + (*cy as f32 - min_y) * 7.0) * fit,
+                    ),
+                    0.375 * fit,
+                    0.375 * fit,
                 ),
                 -8.0,
                 -8.0,
@@ -706,11 +716,13 @@ fn overlay(s: &Screen, o: &OverlayView, put: &mut impl FnMut(Call, [f32; 6])) {
 /// The ingredient cells a recipe shows in the overlay
 /// (`OverlayCraftingRecipeButton` / `OverlaySmeltingRecipeButton.calculateIngredientsPositions`).
 pub fn overlay_cells(book: &Book, entry: &Entry) -> Vec<(i32, i32, Vec<ItemStack>)> {
-    let stacks = |ingredient| -> Vec<ItemStack> {
-        book.items_of(ingredient)
-            .iter()
-            .map(|i| ItemStack::new(i, 1))
-            .collect()
+    let stacks = |ingredient: &crate::crafting::Ingredient| -> Vec<ItemStack> {
+        ingredient.shown.clone().unwrap_or_else(|| {
+            book.items_of(ingredient)
+                .iter()
+                .map(|i| ItemStack::new(i, 1))
+                .collect()
+        })
     };
     let mut out = Vec::new();
     match &entry.display {
@@ -732,3 +744,7 @@ pub fn overlay_cells(book: &Book, entry: &Entry) -> Vec<(i32, i32, Vec<ItemStack
     out.retain(|c| !c.2.is_empty());
     out
 }
+
+#[cfg(test)]
+#[path = "recipe_book_screen/overlay_tests.rs"]
+mod overlay_tests;

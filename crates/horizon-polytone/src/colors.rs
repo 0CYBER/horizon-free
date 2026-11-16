@@ -4,7 +4,6 @@
 //! number or a hex string.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use serde_json::Value as Json;
 
@@ -70,36 +69,18 @@ impl FluidFogs {
     /// Every `assets/<namespace>/polytone/fluid_modifiers/**.json` under a pack overlay root that
     /// sets a fog field and targets `minecraft:water` or `minecraft:lava` (still or flowing). A
     /// colormap id or an expression isn't read (a warning names it).
-    pub fn read(root: &Path) -> Self {
+    pub fn from_files(files: impl IntoIterator<Item = (String, String)>) -> Self {
         let mut fogs = Self::default();
-        for namespace in std::fs::read_dir(root.join("assets"))
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            let mut stack = vec![namespace.path().join("polytone/fluid_modifiers")];
-            while let Some(dir) = stack.pop() {
-                for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else if path.extension().is_some_and(|e| e == "json") {
-                        fogs.add(root, &path);
-                    }
-                }
-            }
+        for (relative, text) in files {
+            fogs.add(&relative, &text);
         }
         fogs
     }
 
-    fn add(&mut self, root: &Path, path: &Path) {
-        let Ok(text) = std::fs::read_to_string(path) else {
+    fn add(&mut self, relative: &str, text: &str) {
+        let Ok(json) = serde_json::from_str::<Json>(text) else {
             return;
         };
-        let Ok(json) = serde_json::from_str::<Json>(&text) else {
-            return;
-        };
-        let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
         let number = |key: &str| match json.get(key) {
             None => Some(1.0),
             Some(Json::Number(n)) => n.as_f64().map(|v| v as f32),
@@ -133,7 +114,7 @@ impl FluidFogs {
         {
             return;
         }
-        let implicit = crate::implicit_id(&relative, "fluid_modifiers");
+        let implicit = crate::implicit_id(relative, "fluid_modifiers");
         let Ok(targets) = crate::Targets::parse(json.get("targets"), implicit.as_deref()) else {
             return;
         };
@@ -158,31 +139,22 @@ pub struct PackColors {
 }
 
 impl PackColors {
-    /// The colours of every namespace's file under a pack overlay root (`colors.json` over
-    /// `color.properties` in the same namespace).
-    pub fn read(root: &Path) -> Self {
+    /// Parse each namespace's properties and JSON in overlay order. JSON overrides
+    /// properties within the same namespace; resource lookup belongs to the caller.
+    pub fn from_files(files: impl IntoIterator<Item = (Option<String>, Option<String>)>) -> Self {
         let mut colors = Self::default();
-        let mut namespaces: Vec<_> = std::fs::read_dir(root.join("assets"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        namespaces.sort();
-        for namespace in namespaces {
-            let polytone = namespace.join("polytone");
-            if let Ok(text) = std::fs::read_to_string(polytone.join("color.properties")) {
+        for (properties, json) in files {
+            if let Some(text) = properties {
                 colors.add_properties(&text);
             }
-            if let Ok(text) = std::fs::read_to_string(polytone.join("colors.json")) {
+            if let Some(text) = json {
                 match serde_json::from_str::<Json>(&text) {
                     Ok(json) => colors.add_json("", &json),
-                    Err(e) => log::warn!("{}: {e}", polytone.join("colors.json").display()),
+                    Err(e) => log::warn!("Polytone colors.json: {e}"),
                 }
             }
         }
         colors.env = colors.environment();
-        colors.fluid_fog = FluidFogs::read(root);
         colors
     }
 
@@ -478,17 +450,11 @@ mod tests {
 
     #[test]
     fn fluid_modifiers_give_water_and_lava_their_fog() {
-        let root = std::env::temp_dir().join(format!("fluid-fog-{}", std::process::id()));
-        let dir = root.join("assets/minecraft/polytone/fluid_modifiers");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("water.json"),
-            r#"{"targets": ["minecraft:water", "minecraft:flowing_water"], "fog_colormap": "ff0000", "fog_radius": 0.3}"#,
-        )
-        .unwrap();
-        std::fs::write(dir.join("lava.json"), r#"{"fog_fade": "0"}"#).unwrap();
-        std::fs::write(dir.join("honey.json"), r#"{"colormap": "foliage_color"}"#).unwrap();
-        let fogs = FluidFogs::read(&root);
+        let fogs = FluidFogs::from_files([
+            ("assets/minecraft/polytone/fluid_modifiers/water.json".into(), r#"{"targets": ["minecraft:water", "minecraft:flowing_water"], "fog_colormap": "ff0000", "fog_radius": 0.3}"#.into()),
+            ("assets/minecraft/polytone/fluid_modifiers/lava.json".into(), r#"{"fog_fade": "0"}"#.into()),
+            ("assets/minecraft/polytone/fluid_modifiers/honey.json".into(), r#"{"colormap": "foliage_color"}"#.into()),
+        ]);
         let fog = |color, radius, fade| {
             Some(FluidFog {
                 color,
@@ -498,7 +464,6 @@ mod tests {
         };
         assert_eq!(fogs.water, fog(Some(0xff0000), 0.3, 1.0));
         assert_eq!(fogs.lava, fog(None, 1.0, 0.0));
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

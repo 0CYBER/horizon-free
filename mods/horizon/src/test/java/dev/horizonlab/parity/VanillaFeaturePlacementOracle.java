@@ -29,13 +29,13 @@ public final class VanillaFeaturePlacementOracle {
                     catch(IllegalArgumentException error){valid=false;}
                 }
                 if(!valid)out.println("decode error");else {
-                    out.println("decode ok");int[] count={0};int fail=f.get("fail").getAsInt();boolean draw=f.get("draw").getAsBoolean();int mode=f.get("result").getAsInt();
+                    out.println("decode ok");int[] count={0};int fail=f.get("fail").getAsInt();boolean draw=f.get("draw").getAsBoolean();int mode=f.get("result").getAsInt();int bound=f.get("draw_bound").getAsInt();
                     var feature=new Feature() {
                         public com.mojang.serialization.MapCodec<? extends Feature> codec(){return com.mojang.serialization.MapCodec.unit(this);}
                         public boolean place(WorldGenLevel level,ChunkGenerator generator,RandomSource rng,BlockPos p) {
                             if(count[0]++==fail)throw new Stop();
                             out.println("feature "+p.getX()+" "+p.getY()+" "+p.getZ());
-                            long value=p.getX()+p.getY()+p.getZ();if(draw){value=rng.nextLong();out.println("consumer "+value);}
+                            long value=p.getX()+p.getY()+p.getZ();if(draw){value=bound>0?rng.nextInt(bound):rng.nextLong();out.println("consumer "+value);}
                             boolean result=mode==1||(mode==2&&(value&1)==0);out.println("result "+result);return result;
                         }
                     };

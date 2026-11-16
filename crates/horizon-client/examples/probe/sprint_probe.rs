@@ -17,7 +17,7 @@ fn keys(mask: u64) -> Keys {
         jump: mask & 16 != 0,
         shift: mask & 32 != 0,
         sprint: mask & 64 != 0,
-        analog: None,
+        ..Keys::default()
     }
 }
 pub fn main() -> Result<()> {

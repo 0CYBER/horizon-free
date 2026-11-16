@@ -31,7 +31,9 @@ fn a_guest_hovering_in_cave_air_is_kicked_for_flying() {
         &[],
         &[],
     );
-    hub.guests[0].position = [0.5, 64.0, 0.5];
+    hub.guests.update(0, |g| {
+        g.position = [0.5, 64.0, 0.5];
+    });
     // The body's box (0.6 wide, 1.8 tall at 64) covers (0, 63..=65, 0): a cave's air.
     let mut world = World::new(air, 0);
     let mut chunk = crate::chunk::Chunk::empty(0, 0);
@@ -70,7 +72,15 @@ fn a_guest_hovering_in_cave_air_is_kicked_for_flying() {
         border: &border,
         streaming: None,
     };
-    hub.position_change(0, [0.5, 64.0, 0.5], (0.0, 0.0), 0, &ctx, &mut events);
+    hub.position_change(
+        0,
+        [0.5, 64.0, 0.5],
+        (0.0, 0.0),
+        0,
+        Hearing::Heard,
+        &ctx,
+        &mut events,
+    );
     assert!(hub.guests[0].client_is_floating);
     // getMaximumFlyingTicks(0.08) is 80: the 81st tick is the one that kicks.
     for _ in 0..80 {

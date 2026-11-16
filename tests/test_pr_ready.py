@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import datetime
 import io
 import json
@@ -19,7 +21,7 @@ PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/hor
 LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"horizon-client": {"horizon-core"}}
 MODS = ""
-CLIPPY = pr_ready.CI_CLIPPY + " && " + pr_ready.CI_CLIPPY_SERVER
+CLIPPY = f'status=0\n{pr_ready.CI_CLIPPY} || status=$?\n{pr_ready.CI_CLIPPY_SERVER} || status=$?\nexit "$status"'
 # The bash on PATH: Windows' CreateProcess looks in System32 before PATH, so a bare "bash" there is WSL's
 # (#5383), which has none of the host's paths; WSL from the Microsoft Store puts its bash on PATH as an app alias in
 # WindowsApps instead (#16860). Git Bash on PATH runs the launcher's snippets as on Linux.
@@ -30,6 +32,10 @@ POSIX_BASH = BASH is not None and not (
 
 def args(host="local", quick=False, harnesses=False):
     return argparse.Namespace(host=host, quick=quick, harnesses=harnesses)
+
+
+# The fake cargo: `cargo metadata` answers an empty workspace, anything else prints its arguments.
+FAKE_CARGO = '#!/bin/sh\nif [ "$1" = metadata ]; then echo \'{"workspace_members": []}\'; else printf \'%s\\n\' "$@"; fi\n'
 
 
 class GitChangedPathsTests(unittest.TestCase):
@@ -58,6 +64,51 @@ class GitChangedPathsTests(unittest.TestCase):
     def commit(self):
         self.git("add", ".")
         self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base")
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX symlinks and FIFO")
+    def test_revision_snapshot_never_reads_symlink_targets_or_nonregular_files(self):
+        self.write("tracked.txt", "base\n")
+        self.commit()
+        (self.root / "dangling").symlink_to("absent")
+        (self.root / "directory-link").symlink_to(self.root, target_is_directory=True)
+        os.mkfifo(self.root / "pipe")
+        actual_git = pr_ready.git
+        def git(*arguments):
+            if arguments[0] == "ls-files":
+                # Git may omit nonregular files; exercise the refusal even if listed.
+                return "dangling\0directory-link\0pipe\0"
+            return actual_git(*arguments)
+        with mock.patch.object(pr_ready, "git", side_effect=git), \
+                mock.patch.object(Path, "open", side_effect=AssertionError("must not read untracked objects")):
+            before = pr_ready.revision_state()
+            self.assertTrue(before[1])
+            self.assertIn("absent", before[2])
+            self.assertIn("pipe", before[2])
+            (self.root / "dangling").unlink()
+            (self.root / "dangling").symlink_to("another-absent")
+            after = pr_ready.revision_state()
+        self.assertNotEqual(before, after)
+
+    def test_self_check_header_identifies_commit_and_dirty_state(self):
+        self.write("tracked.txt", "base\n")
+        self.write(".gitignore", "ignored-output/\n")
+        self.commit()
+        head = self.git("rev-parse", "HEAD").strip()
+        def header():
+            return pr_ready.block(args(), "HEAD", head, [], {}, [], "skip-release", 0,
+                                  pr_ready.revision_state()).splitlines()[0]
+        self.assertIn(f"commit `{head}`", header())
+        self.assertIn("host `", header())
+        self.assertNotIn(" dirty", header())
+        self.write("ignored-output/log.txt", "ignored\n")
+        self.assertNotIn(" dirty", header())
+        self.write("untracked.txt", "new\n")
+        self.assertIn(f"commit `{head}` dirty", header())
+        (self.root / "untracked.txt").unlink()
+        self.write("tracked.txt", "edited\n")
+        self.assertIn(" dirty", header())
+        self.git("add", "tracked.txt")
+        self.assertIn(" dirty", header())
 
     def test_unicode_paths_select_checks_and_keep_line_counts(self):
         tracked = "crates/horizon-core/src/caf\u00e9 edit.rs"
@@ -97,6 +148,74 @@ class GitChangedPathsTests(unittest.TestCase):
 
 
 class PrReadyTests(unittest.TestCase):
+    @unittest.skipUnless(POSIX_BASH and os.name != "nt", "executes the POSIX self-check")
+    def test_cold_clippy_hint_precedes_the_step_and_respects_sccache(self):
+        for wrapper in (None, "", "other-wrapper", "sccache", "/opt/bin/sccache", "sccache.exe"):
+            with self.subTest(wrapper=wrapper):
+                env = dict(os.environ)
+                env.pop("RUSTC_WRAPPER", None)
+                if wrapper is not None:
+                    env["RUSTC_WRAPPER"] = wrapper
+                steps = [pr_ready.Step(name, "printf 'ran\\n'")
+                         for name in ("clippy", "registry clippy", "launcher clippy")]
+                with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stderr(io.StringIO()) as log:
+                    pr_ready.run_script(steps, "local", verbose=False)
+                self.assertEqual([(step.status, step.output.strip()) for step in steps], [("pass", "ran")] * 3)
+                expected = wrapper in (None, "", "other-wrapper")
+                self.assertEqual(log.getvalue().count(pr_ready.CLIPPY_CACHE_HINT), int(expected))
+                if expected:
+                    self.assertLess(log.getvalue().index(pr_ready.CLIPPY_CACHE_HINT), log.getvalue().index("  clippy..."))
+        step = pr_ready.Step("tests", "printf 'ran\\n'")
+        with mock.patch.dict(os.environ, {"RUSTC_WRAPPER": ""}), contextlib.redirect_stderr(io.StringIO()) as log:
+            pr_ready.run_script([step], "local", verbose=False)
+        self.assertNotIn(pr_ready.CLIPPY_CACHE_HINT, log.getvalue())
+
+    def test_data_backed_summary_with_and_without_prepared_data(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pr_ready, "ROOT", Path(directory) / "checkout/repo"), \
+                mock.patch.object(pr_ready, "git", side_effect=lambda *args: "a" * 40 if args[0] == "rev-parse" else ""), \
+                mock.patch.dict(os.environ):
+            os.environ.pop("HORIZON_TEST_RESOURCES", None)
+            step = pr_ready.Step("content root tests", summary=pr_ready.tests_passed)
+            step.output = "test result: ok. 3 passed; 0 failed; 0 ignored"
+            step.status = "pass"
+            step.detail = pr_ready.tests_passed(step.output)
+            def render():
+                return pr_ready.block(args(), "origin/main", "abcdef123", [], {}, [step], "skip-release", 0,
+                                      ("a" * 40, "", ""))
+            self.assertIn("data-backed tests not run: no prepared data here", render())
+            prepared = pr_ready.ROOT / ".local/horizon-client/26.3"
+            prepared.mkdir(parents=True)
+            self.assertIn("data-backed tests not run: no prepared data here", render())
+            (prepared / "gameplay-facts.json").write_text("{}")
+            self.assertIn("data-backed tests: horizon-client-lib mod_content::tests:: (--ignored): 3 passed", render())
+            override = Path(directory) / "override"
+            override.mkdir()
+            os.environ["HORIZON_TEST_RESOURCES"] = str(override)
+            self.assertIn("data-backed tests not run: no prepared data here", render())
+            (override / "gameplay-facts.json").write_text("{}")
+            (prepared / "gameplay-facts.json").unlink()
+            self.assertIn("data-backed tests: horizon-client-lib mod_content::tests:: (--ignored): 3 passed", render())
+            step.status, step.detail = "skip", "content root untouched"
+            self.assertIn("data-backed tests not run: content root untouched", render())
+
+    def test_windows_runner_gives_a_leading_variable_to_the_environment(self):
+        step = pr_ready.Step(
+            "dispatch tests tests",
+            "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} cargo test --manifest-path a/Cargo.toml --locked",
+        )
+        with mock.patch.object(pr_ready.subprocess, "Popen") as popen, \
+                mock.patch.object(pr_ready, "finish"), mock.patch.dict(os.environ):
+            os.environ.pop("CARGO_BUILD_JOBS", None)
+            popen.return_value.__enter__.return_value.stdout = []
+            popen.return_value.__enter__.return_value.wait.return_value = 0
+            popen.return_value.__enter__.return_value.returncode = 0
+            pr_ready.run_windows([step], False)
+        self.assertEqual(popen.call_args.args[0],
+                         ["cargo", "test", "--manifest-path", "a/Cargo.toml", "--locked"])
+        self.assertEqual(popen.call_args.kwargs["env"]["CARGO_BUILD_JOBS"], "4")
+        self.assertEqual(step.status, "pass")
+
     def test_paths_map_to_the_crates_that_own_them(self):
         self.assertEqual(pr_ready.touched_crates({"crates/horizon-core/src/jmath.rs", "crates/horizon-client/build.rs",
                                                   "xtask/src/main.rs", "tools/parity.py"}, PACKAGES),
@@ -115,8 +234,8 @@ class PrReadyTests(unittest.TestCase):
                      "examples/probe/main.rs", "tests/lan_bot.rs"]:
             self.assertEqual(pr_ready.touched_crates({f"crates/horizon-client/{path}"}, packages),
                              ["horizon-client-lib"])
-        for path in ["src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs", "src/game/combat.rs",
-                     "tests/launch_api.rs", "Cargo.toml", "build.rs"]:
+        for path in ["src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs", "src/game/items/combat.rs",
+                     "tests/it/mod_api_hooks.rs", "Cargo.toml", "build.rs"]:
             self.assertEqual(pr_ready.touched_crates({f"crates/horizon-client/{path}"}, packages),
                              ["horizon-client"])
 
@@ -131,7 +250,7 @@ class PrReadyTests(unittest.TestCase):
         self.assertTrue(pr_ready.launcher_rust("tools/ci/rust_changes.py"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-prepare/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-theme/src/lib.rs"))
-        self.assertTrue(pr_ready.launcher_rust("crates/horizon-telemetry/src/lib.rs"))
+        self.assertTrue(pr_ready.launcher_rust("crates/horizon-system/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-mod-api-gen/src/injection.rs"))
         self.assertFalse(pr_ready.launcher_rust("launcher/links.json"))
         self.assertFalse(pr_ready.launcher_rust("launcher/README.md"))
@@ -154,11 +273,40 @@ class PrReadyTests(unittest.TestCase):
             return {step.name: step for step in steps}["content root tests"]
         self.assertEqual(content_step("crates/horizon-client/src/game.rs").skip, "content root untouched")
         for path in ["crates/horizon-client/src/mod_content.rs", "crates/horizon-client/src/mod_content_tests.rs",
-                     "crates/horizon-mods/src/content.rs", "crates/horizon-assets/src/lib.rs", "Cargo.lock"]:
+                     "crates/horizon-mod-package/src/content.rs", "crates/horizon-assets/src/lib.rs", "Cargo.lock"]:
             with self.subTest(path=path):
                 step = content_step(path)
                 self.assertIsNone(step.skip)
                 self.assertEqual(step.command, pr_ready.CONTENT_ROOT_TESTS)
+
+    def test_dispatch_and_registry_suites_run_when_their_inputs_change(self):
+        def suite_steps(path):
+            with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+            return {step.name: step for step in steps}
+        for path in ["crates/horizon-mod-api-gen/src/lib.rs",
+                     "crates/horizon-mod-api-gen/dispatch-tests/src/lib.rs",
+                     "crates/horizon-mod-api-macros/src/lib.rs",
+                     "crates/horizon-mod-vocab/src/lib.rs",
+                     "crates/horizon-mod-vocab/src/parts/mod.rs",
+                     "crates/horizon-mod-vocab/src/hooks/block.rs"]:
+            with self.subTest(path=path):
+                by_name = suite_steps(path)
+                for name in ("dispatch tests clippy", "dispatch tests tests"):
+                    self.assertIsNone(by_name[name].skip)
+                self.assertIn("crates/horizon-mod-api-gen/dispatch-tests/Cargo.toml",
+                              by_name["dispatch tests clippy"].command)
+                self.assertIn("--test-threads=4", by_name["dispatch tests tests"].command)
+                self.assertEqual(by_name["mod registry tests clippy"].skip, "mod registry untouched")
+        for path in ["crates/horizon-mod-registry/src/main.rs", "crates/horizon-mod-registry/Cargo.toml"]:
+            with self.subTest(path=path):
+                by_name = suite_steps(path)
+                for name in ("mod registry tests clippy", "mod registry tests tests"):
+                    self.assertIsNone(by_name[name].skip)
+                self.assertEqual(by_name["dispatch tests clippy"].skip, "dispatch surface untouched")
+        by_name = suite_steps("crates/horizon-core/src/lib.rs")
+        self.assertEqual(by_name["dispatch tests clippy"].skip, "dispatch surface untouched")
+        self.assertEqual(by_name["mod registry tests tests"].skip, "mod registry untouched")
 
     def test_shared_rust_configuration_keeps_workspace_coverage(self):
         for path in sorted(pr_ready.ROOT_RUST | {".cargo/config.toml", "crates/unknown/src/lib.rs"}):
@@ -170,23 +318,48 @@ class PrReadyTests(unittest.TestCase):
                                  "cargo test --locked --workspace" + MODS + " --tests")
                 self.assertEqual(by_name["doc tests"].command, "cargo test --locked --workspace --doc")
 
+    def test_holder_actor_is_built_before_applicable_tests(self):
+        packages = {**PACKAGES, "horizon-mod-package": "crates/horizon-mod-package"}
+        for path in ("Cargo.lock", "crates/unknown/src/lib.rs",
+                     "crates/horizon-mod-package/src/holder.rs", "launcher/src/main.rs"):
+            with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages,
+                                      LIBRARIES, DEPENDENCIES)
+                by_name = {step.name: step for step in steps}
+                actor = by_name["holder actor"]
+                self.assertIsNone(actor.skip)
+                self.assertEqual(actor.command, "cargo build --locked -p horizon-mod-package "
+                                 "--features runtime-process --example holder_actor")
+                # No cd, target-dir or profile override: actor() finds the sibling
+                # examples directory in the root test target, including CARGO_TARGET_DIR.
+                self.assertLess(steps.index(actor), next(i for i, step in enumerate(steps)
+                                if step.name.startswith("tests")))
+                self.assertLess(steps.index(actor), steps.index(by_name["launcher tests"]))
+        for path in ("README.md", "crates/horizon-core/src/lib.rs"):
+            with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages,
+                                      LIBRARIES, DEPENDENCIES)
+                self.assertEqual(next(step for step in steps if step.name == "holder actor").skip,
+                                 "holder tests untouched")
+
     def test_tests_get_the_features_ci_s_workspace_run_gives_them(self):
         self.assertEqual(pr_ready.mod_features(["horizon-world"]), "")
         self.assertEqual(pr_ready.mod_features(["horizon-client"]), "")
-        self.assertEqual(pr_ready.mod_features(["horizon-mods"]),
-                         " --features horizon-mods/index")
+        self.assertEqual(pr_ready.mod_features(["horizon-mod-package"]),
+                         " --features horizon-mod-package/index")
         self.assertEqual(pr_ready.mod_features(None), MODS)
 
     def test_mod_api_data_inputs_build_and_test_the_consuming_crates(self):
         packages = {**PACKAGES, "horizon-client-render": "crates/horizon-client-render",
                     "horizon-mod-api-gen": "crates/horizon-mod-api-gen"}
-        for path in ("native-hooks.json", "tools/native-hook-fragments/player.json"):
+        for path in ("crates/horizon-mod-vocab/src/hooks/player.rs",):
             with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages,
                                       LIBRARIES | {"horizon-client-render", "horizon-mod-api-gen"}, DEPENDENCIES)
                 by_name = {step.name: step for step in steps}
                 self.assertIsNone(by_name["clippy"].skip)
                 self.assertIsNone(by_name["rustfmt"].skip)
+                self.assertEqual(by_name["rustfmt"].command, "python3 tools/ci/format_scan.py")
                 tests = next(step for step in steps if step.name.startswith("tests:"))
                 self.assertIsNone(tests.skip)
                 self.assertEqual(tests.command, "cargo test --locked -p horizon-client -p horizon-client-render "
@@ -278,7 +451,8 @@ class PrReadyTests(unittest.TestCase):
                                         ("Darwin", True, []), ("Linux", False, [])):
             with self.subTest(uname=uname, metal=metal):
                 self.assertEqual(self.launcher_step_arguments(command, uname, metal),
-                                 ["clippy", "--all-targets", "--locked", *features, "--", "-D", "warnings"])
+                                 ["clippy", "--keep-going", "--all-targets", "--locked", *features,
+                                  "--message-format=json-diagnostic-rendered-ansi", "--", "--cap-lints=warn"])
 
     @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
     def test_the_launcher_tests_step_runs_them_in_a_scratch_home_that_goes_afterwards(self):
@@ -320,7 +494,7 @@ class PrReadyTests(unittest.TestCase):
                     mock.patch.dict(os.environ, {"ProgramData": public}):
                 self.assertEqual(pr_ready.launcher_test_base(), base or temp)
 
-    def launcher_step_arguments(self, command, uname, metal, cargo="#!/bin/sh\nprintf '%s\\n' \"$@\"\n", fakes=None):
+    def launcher_step_arguments(self, command, uname, metal, cargo=FAKE_CARGO, fakes=None):
         """Run a launcher step's shell snippet with fake uname, xcrun, pkg-config and cargo; what the fake
         cargo receives is the snippet's observable behaviour."""
         with tempfile.TemporaryDirectory() as fake_bin:
@@ -512,15 +686,54 @@ class PrReadyTests(unittest.TestCase):
     def test_affected_harnesses_come_from_the_parity_runner(self):
         found = {"food": "tools/test_food_parity.py", "datafix#1": "tools/test_datafix_parity.py",
                  "datafix#2": "tools/test_datafix_parity.py"}
-        with mock.patch.object(pr_ready.parity, "harnesses", return_value=found), \
-                mock.patch.object(pr_ready.parity, "load_state", return_value={"harnesses": {
-                    "food": {"dependencies": ["crates/horizon-world/src/food.rs"]},
-                    "datafix#1": {"dependencies": ["crates/horizon-world/src/datafix.rs"]},
-                    "datafix#2": {"dependencies": ["crates/horizon-world/src/datafix.rs"]}}}), \
-                mock.patch.object(pr_ready.parity, "ROOT", pr_ready.parity.Path(".")):
-            self.assertEqual(pr_ready.affected_here({"crates/horizon-world/src/datafix.rs"}), ["datafix"])
-            self.assertEqual(pr_ready.affected_here({"README.md"}), [])
-            self.assertEqual(pr_ready.affected_here({"Cargo.lock"}), ["food", "datafix"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Exercise the real selector/SourceGraph on the records' tiny workspace, not
+            # every crate in this checkout. All three selection cases share this input.
+            (root / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/horizon-world"]\n')
+            crate = root / "crates/horizon-world"
+            (crate / "src").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text(
+                '[package]\nname = "horizon-world"\nversion = "0.0.0"\n')
+            (crate / "src/lib.rs").write_text('pub mod food;\npub mod datafix;\n')
+            for module in ("food", "datafix"):
+                (crate / f"src/{module}.rs").write_text('pub fn run() {}\n')
+            found = {name: str(root / script) for name, script in found.items()}
+            with mock.patch.object(pr_ready.parity, "harnesses", return_value=found), \
+                    mock.patch.object(pr_ready.parity, "load_state", return_value={"harnesses": {
+                        "food": {"dependencies": ["crates/horizon-world/src/food.rs"]},
+                        "datafix#1": {"dependencies": ["crates/horizon-world/src/datafix.rs"]},
+                        "datafix#2": {"dependencies": ["crates/horizon-world/src/datafix.rs"]}}}), \
+                    mock.patch.object(pr_ready.parity, "ROOT", root), \
+                    mock.patch.object(pr_ready.parity, "SHARED", root / "cache"), \
+                    mock.patch.object(pr_ready.parity, "STATE_DIR", root / "cache"):
+                self.assertEqual(pr_ready.affected_here({"crates/horizon-world/src/datafix.rs"}), ["datafix"])
+                self.assertEqual(pr_ready.affected_here({"README.md"}), [])
+                self.assertEqual(pr_ready.affected_here({"Cargo.lock"}), ["food", "datafix"])
+
+    def test_actual_sources_place_food_probe_and_select_reached_source(self):
+        # Parse the checkout's actual manifest, probe and reached implementation,
+        # not another synthetic Rust program. A narrow root avoids rebuilding the
+        # whole-workspace graph whose cost this test-only change removes.
+        parity = pr_ready.parity
+        probe = "crates/horizon-world/examples/probe/food_fixture.rs"
+        source = "crates/horizon-world/src/food.rs"
+        dependencies = {
+            "crates/horizon-world/examples/probe/main.rs", probe,
+            "crates/horizon-world/src/lib.rs", source,
+        }
+        artifacts = [("example", "probe", None, ["-p", "horizon-world"])]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in dependencies | {"crates/horizon-world/Cargo.toml"}:
+                destination = root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(pr_ready.ROOT / path, destination)
+            graph = parity.parity_reach.SourceGraph(root, parity.rust_code)
+            entries = graph.entries(artifacts, dependencies)
+            self.assertIn(probe, entries or (), "the actual probe must be placed, not fallback-selected")
+            self.assertIn(source, graph.reachable(entries, dependencies),
+                          "the actual food probe must reach its food implementation")
 
     def test_harnesses_are_listed_when_they_cannot_run(self):
         changed = {"crates/horizon-world/src/food.rs"}

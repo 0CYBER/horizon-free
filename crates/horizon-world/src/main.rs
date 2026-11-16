@@ -1,16 +1,18 @@
 use horizon_core::position::BlockPos;
-use horizon_world::{
-    chunk::{BlockState, ChunkData},
-    compression::Compression,
-    nbt::{self, Limits},
-    region::{ChunkRecord, RegionFile, RegionWriter},
-};
 use std::{
     collections::BTreeMap,
     error::Error,
     fs::{File, OpenOptions},
     io::{Read, Write},
     path::Path,
+};
+use {
+    horizon_core::{nbt, nbt::Limits},
+    horizon_world::{
+        chunk::{BlockState, ChunkData},
+        compression::Compression,
+        region::{ChunkRecord, RegionFile, RegionWriter},
+    },
 };
 
 fn codec(name: &str) -> Result<Compression, Box<dyn Error>> {

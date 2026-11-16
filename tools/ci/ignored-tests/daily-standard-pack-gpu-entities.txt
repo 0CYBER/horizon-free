@@ -1,0 +1,2 @@
+# Asset-free pixel assertions run on the daily GPU hosts, under with_xvfb.py (arismoko/horizon#4641).
+horizon-client-render standard_pack_gpu_entities test:standard_pack_gpu_entities daily game-boot

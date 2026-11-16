@@ -77,6 +77,7 @@ fn atlas(gpu: &Fixture) -> wgpu::TextureView {
 
 #[test]
 fn the_atlas_blends_its_two_nearest_levels() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     // The pack reads no lightmap: any texture serves.
     let lightmap = atlas(&gpu);

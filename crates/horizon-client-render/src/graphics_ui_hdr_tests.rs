@@ -436,7 +436,10 @@ fn undo_never_restores_a_held_hdr_start() {
 /// 1080p window at scale 4 is wider): a longer one would end in "…".
 #[test]
 fn the_calibrate_descriptions_fit_the_strip() {
-    let atlas = crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
+    let atlas = crate::hud::HudAtlas::build(
+        &horizon_assets::resource_source::ResourceSource::directory("/nonexistent".into()),
+    )
+    .unwrap();
     let mut guessed = offering(true, Some(true));
     guessed.reported = guessed.reported.map(|r| crate::graphics::Reported {
         peak_guessed: true,

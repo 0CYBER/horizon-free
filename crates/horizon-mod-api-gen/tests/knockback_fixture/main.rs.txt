@@ -1,0 +1,41 @@
+fn main() {
+    let hit = Damage { attacker: None, from: None };
+    // The old point fixture doubled power at each entry (fourfold at the short
+    // entry, twofold at the full entry). Those heads no longer exist. Supply the
+    // same final strength through the surviving living hook instead.
+    for (full, scale, cancel, expected_x, expected_y) in [
+        (false, 4.0, false, -0.8, 0.4),
+        (true, 2.0, false, -0.4, 0.4),
+        (false, 4.0, true, 0.0, 0.0),
+        (true, 2.0, true, 0.0, 0.0),
+        (false, 1.0, false, -0.2, 0.2),
+    ] {
+        let mut heard = 0;
+        let mut level = DamageLevel { heard: &mut heard, scale, cancel };
+        let mut mob = Mob::new();
+        if full {
+            mob.knockback_full(&mut level, 0.2, 1.0, 0.0, &hit, 3.0, true);
+        } else {
+            mob.knockback(&mut level, 0.2, 1.0, 0.0, &hit, 3.0);
+        }
+        assert_eq!((mob.velocity.x, mob.velocity.y, mob.velocity.z), (expected_x, expected_y, 0.0));
+        assert_eq!(mob.needs_sync, !cancel);
+        assert_eq!(*level.heard, 1, "mob must delegate exactly one push, including vetoed pushes");
+
+        let mut game = Game {
+            player: Some(motion::PlayerMotion {
+                velocity: Vec3::default(), ground: Ground { on_ground: true }, entity_id: 1,
+            }),
+            level,
+        };
+        let attack = Attack { attacker: 0 };
+        if full {
+            game.knock_back_player_full(0.2, 1.0, 0.0, HurtSource("test"), &attack, 3.0, true);
+        } else {
+            game.knock_back_player(0.2, 1.0, 0.0, HurtSource("test"), &attack, 3.0);
+        }
+        let velocity = game.player.as_ref().unwrap().velocity;
+        assert_eq!((velocity.x, velocity.y, velocity.z), (expected_x, expected_y, 0.0));
+        assert_eq!(*game.level.heard, 2, "player must delegate exactly one push, including vetoed pushes");
+    }
+}

@@ -856,7 +856,10 @@ mod tests {
 
     #[test]
     fn atlas_reload_regenerates_text_and_corners_at_the_same_address() {
-        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            (Path::new("/nonexistent/horizon-test-assets")).to_owned(),
+        ))
+        .unwrap();
         reset_atlas();
         let draw = |cache: &mut Cache| {
             let glyph = cache
@@ -905,7 +908,7 @@ mod tests {
     fn the_boot_screen_centres_the_wordmark_and_left_aligns_the_console() {
         reset_atlas();
         let atlas = HudAtlas::boot();
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::scratch([1280, 720]);
         draw_boot(&atlas, &mut batch, &[]);
         // The first quad is the pure black backdrop over the frame's panorama.
         let (w, h) = (batch.width, batch.height);
@@ -918,7 +921,7 @@ mod tests {
             "the glyphs are queued for the atlas"
         );
 
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::scratch([1280, 720]);
         wordmark(&atlas, &mut batch);
         let (min, max) = batch
             .vertices
@@ -932,7 +935,7 @@ mod tests {
         assert!(((min + max) / 2.0 - batch.width / 2.0).abs() < 1.0);
 
         let long = "[12:34:56] [Render thread/INFO]: Horizon: resources loaded in 1.0s; 1240 block states, 1500 items, 62 biomes; 8 worker threads".to_owned();
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::scratch([1280, 720]);
         draw_boot_log(&atlas, &mut batch, &[long]);
         let (min, max) = batch
             .vertices
@@ -945,7 +948,7 @@ mod tests {
             "a too wide line is cut to half the screen"
         );
 
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::scratch([1280, 720]);
         let ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
         let lines = wrapping_lines(
             &ui,
@@ -970,7 +973,7 @@ mod tests {
             "the wrap keeps every word"
         );
 
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::scratch([1280, 720]);
         draw_boot_log(&atlas, &mut batch, &[]);
         assert!(batch.vertices.is_empty() && batch.patches.is_empty());
         reset_atlas();
@@ -978,7 +981,13 @@ mod tests {
 
     /// The quads' top-left corners and UVs `text_line` draws for `text`.
     fn drawn(atlas: &HudAtlas, text: &str) -> (f32, Vec<([f32; 2], [f32; 2])>) {
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::new(
+            [1280, 720],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
         let mut ui = Ui::new(atlas, &mut batch, (0.0, 0.0));
         let w = ui.text_line(Face::Medium, body(), 20.0, 10.0, 10.0, color::text(), text);
         let quads = batch
@@ -1022,7 +1031,10 @@ mod tests {
             .unwrap();
         std::fs::write(tex.join("a.png"), png).unwrap();
         reset_atlas();
-        let atlas = HudAtlas::build(&root).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            root.clone(),
+        ))
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
         let a = atlas.font.glyph('a');
         let uv = a.rect.map(|r| [r.u0, r.v0]).expect("the pack draws a");
@@ -1079,7 +1091,10 @@ mod tests {
             .unwrap();
         std::fs::write(tex.join("a.png"), png).unwrap();
         reset_atlas();
-        let atlas = HudAtlas::build(&root).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            root.clone(),
+        ))
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
         atlas
     }
@@ -1105,7 +1120,13 @@ mod tests {
     fn text_fitted_in_the_packs_font_stays_inside_its_room() {
         let atlas = one_glyph_pack("fit");
         without_fonts(&atlas);
-        let mut batch = HudBatch::new([1040, 700]);
+        let mut batch = HudBatch::new(
+            [1040, 700],
+            crate::hud::GuiScale {
+                requested: 1,
+                unicode: false,
+            },
+        );
         let ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
         assert_eq!(ui.density, 1.0);
         let (face, size, label) = (Face::Medium, 13.0, "aaaa");
@@ -1125,7 +1146,13 @@ mod tests {
             "the next whole scale down: 1"
         );
         // Drawn there, every glyph lies between the room's edges.
-        let mut batch = HudBatch::new([1040, 700]);
+        let mut batch = HudBatch::new(
+            [1040, 700],
+            crate::hud::GuiScale {
+                requested: 1,
+                unicode: false,
+            },
+        );
         let mut ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
         let (x, density) = (10.0, ui.density);
         ui.text_line(face, fit, 20.0, x, 10.0, u32::MAX, label);
@@ -1170,7 +1197,10 @@ mod tests {
             .unwrap();
         std::fs::write(tex.join("icon.png"), png).unwrap();
         reset_atlas();
-        let atlas = HudAtlas::build(&root).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            root.clone(),
+        ))
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
         let icon = atlas.font.glyph('\u{e238}');
         let uv = icon
@@ -1186,7 +1216,13 @@ mod tests {
         // Alone it is drawn as the pack draws it: 8 GUI pixels wide, advance 9.
         let (w, quads) = drawn(&atlas, "\u{e238}");
         assert_eq!(quads.len(), 1);
-        let mut batch = HudBatch::new([1280, 720]);
+        let mut batch = HudBatch::new(
+            [1280, 720],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
         let ui = Ui::new(&atlas, &mut batch, (0.0, 0.0));
         assert!(
             (w * ui.density / ui.scale - icon.advance).abs() < 0.01,

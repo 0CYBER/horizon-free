@@ -218,6 +218,8 @@ enum ModKind {
   MOD_KIND_CONTENT = 1;
   // A native code mod.
   MOD_KIND_NATIVE = 2;
+  // A wasm code mod (the fork supports the same mod API on both targets).
+  MOD_KIND_WASM = 3;
 }
 
 message Mod {

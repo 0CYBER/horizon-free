@@ -409,8 +409,8 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
 
 impl PortalProps {
     /// `RuinedPortalPiece`'s `VerticalPlacement` and `Properties` tags.
-    pub fn save(&self) -> [(&'static str, crate::nbt::Tag); 2] {
-        use crate::nbt::Tag;
+    pub fn save(&self) -> [(&'static str, horizon_core::nbt::Tag); 2] {
+        use horizon_core::nbt::Tag;
         let flag = |b: bool| Tag::Byte(i8::from(b));
         [
             (

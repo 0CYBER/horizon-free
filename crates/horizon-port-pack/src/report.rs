@@ -136,11 +136,13 @@ fn not_yet(tier: &str) -> &'static str {
     match tier {
         "data" => "data tier: carry-over only, no agent; its jar is not here yet (fetch gets it)",
         "logic" => {
-            "needs mod API 0.3: behaviour callbacks (use, place, break, ticks) and server events"
+            "needs native logic: behaviour callbacks (use, place, break, ticks) and server events"
         }
-        "machines" => "needs mod API 0.4: block entities, menus, capabilities and mod networking",
+        "machines" => {
+            "needs native machine code: block entities, menus, capabilities and mod networking"
+        }
         "deep" => {
-            "needs mod API 0.5: entities, custom renderers and models, dimensions, new vanilla hooks"
+            "needs a deep native port: entities, custom renderers and models, dimensions, new vanilla hooks"
         }
         "client" => "needs the client interfaces (keys, target, inventory-read, ui, render)",
         _ => "not classified",
@@ -688,7 +690,7 @@ mod tests {
         );
         assert_eq!(by["lib"].status, Status::NotNeeded);
         assert_eq!(by["machine"].status, Status::NotYet);
-        assert!(by["machine"].reason.contains("0.4"));
+        assert!(by["machine"].reason.contains("native machine code"));
         assert!(by["addon"].reason.starts_with("after the mods it joins"));
         assert!(
             by["addon"].reason.ends_with("waits on machine"),
@@ -771,10 +773,8 @@ mod tests {
     }
 
     fn carried_harness_row(harness: Option<&str>) -> Row {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let work = std::env::temp_dir().join(format!(
             "horizon-report-verdict-{}-{nonce}",
             std::process::id()

@@ -895,6 +895,7 @@ mod tests {
     /// Two arrays of 2x2 sprites, one layer split; each layer a colour of its own.
     #[test]
     fn layers_land_in_their_cells() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -1020,6 +1021,7 @@ mod tests {
     /// by 8 atlas. Each sprite has its own pixels, and its padding repeats its edge.
     #[test]
     fn stitched_sprites_keep_their_own_size_and_padding() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -1217,16 +1219,19 @@ mod tests {
 
     #[test]
     fn stitched_material_maps_share_colour_rectangles() {
+        let _gpu = crate::gfx::test_gpu::lock();
         material_fixture(false);
     }
 
     #[test]
     fn animated_stitched_material_updates_only_its_rectangle() {
+        let _gpu = crate::gfx::test_gpu::lock();
         material_fixture(true);
     }
 
     #[test]
     fn terrain_inputs_respects_separate_ao() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

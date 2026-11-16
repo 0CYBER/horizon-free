@@ -3,7 +3,7 @@ BellBlock.useWithoutItem	port	crates/horizon-world/src/level/interact.rs::Sim::u
 BellBlock.isProperHit	inline	crates/horizon-world/src/level/redstone.rs::Sim::bell_hit	Proper-hit test is folded into bell_hit.
 BellBlock.getVoxelShape	skip:data		Shape precomputed from the extracted block shapes (level/data.rs).
 BellBlock.getStateForPlacement	port	crates/horizon-world/src/level/place.rs::Sim::placement_class	Class::Bell arm picks attachment and facing.
-BellBlock.onExplosionHit	port	crates/horizon-client/src/game/wind.rs::Game::wind_trigger_block	the bell has its own arm: attemptToRing with no direction, so it rings toward its facing, powered or not; the other trigger blocks take the Up-face use. TNT does not reach this (canTriggerBlocks is false).
+BellBlock.onExplosionHit	port	crates/horizon-client/src/game/interface/wind.rs::Game::wind_trigger_block	the bell has its own arm: attemptToRing with no direction, so it rings toward its facing, powered or not; the other trigger blocks take the Up-face use. TNT does not reach this (canTriggerBlocks is false).
 BellBlock.getConnectedDirection	port	crates/horizon-world/src/level/survive.rs::Sim::bell_connected_direction	Same floor/ceiling/wall mapping.
 BellBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
 BellBlock.rotate	skip:data		Rotation is a precomputed table from extracted data (worldgen/structure.rs rotate).
@@ -26,8 +26,8 @@ Block.box	skip:data		Shape builder; Horizon reads precomputed shapes from extrac
 Block.boxes	skip:data		Shape array builder; shapes come from extracted data.
 Block.cube	skip:data		Shape builder; shapes come from extracted data.
 Block.boxZ	skip:data		Shape builder; shapes come from extracted data.
-Block.dropFromLootTable	inline	crates/horizon-client/src/game/spill.rs::GameLevel::drop_interact_loot	gap: minor: returns nothing, where vanilla returns whether anything dropped; folded into the interact-loot drop.
-Block.popExperience	port	crates/horizon-client/src/game/item_entities.rs::Game::spawn_orbs	gap: minor: popExperience checks the block_drops rule, and the ore XP in break_block_as_player does not.
+Block.dropFromLootTable	inline	crates/horizon-client/src/game/blocks/spill.rs::GameLevel::drop_interact_loot	gap: minor: returns nothing, where vanilla returns whether anything dropped; folded into the interact-loot drop.
+Block.popExperience	port	crates/horizon-client/src/game.rs::Game::spawn_orbs	gap: minor: popExperience checks the block_drops rule, and the ore XP in break_block_as_player does not.
 Block.fallOn	port	crates/horizon-world/src/block_landing.rs::BlockLandingRegistry::fall_on	Default and hay rules apply fall damage with the block's reduction.
 Block.getShapeForEachState	skip:java		Shape lookup cache over the state table; Horizon precomputes shapes per state.
 Block.tryDropExperience	inline	crates/horizon-client/src/game.rs::Game::break_block_as_player	Sampled block XP and pop folded into the break path; silk touch zeroes it as in vanilla (hard-coded check).
@@ -49,7 +49,7 @@ BubbleColumnBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim
 BubbleColumnBlock.pickupBlock	port	crates/horizon-world/src/level/fluids.rs::Sim::pickup_block	ticked in #3516; `BubbleColumnBlock.pickupBlock` is cited at crates/horizon-world/src/level/fluids.rs:318 (in a comment, so `where` names the enclosing fn)
 ButtonBlock.makeShapes	skip:data		Shape precomputed from the extracted block shapes (level/data.rs).
 ButtonBlock.useWithoutItem	port	crates/horizon-world/src/level/interact.rs::Sim::use_without_item	Class::Button arm presses it, or consumes when already pressed.
-ButtonBlock.onExplosionHit	port	crates/horizon-client/src/game/wind.rs::Game::wind_trigger_block	Wind charge bursts use the button like a player use; TNT does not reach it.
+ButtonBlock.onExplosionHit	port	crates/horizon-client/src/game/interface/wind.rs::Game::wind_trigger_block	Wind charge bursts use the button like a player use; TNT does not reach it.
 ButtonBlock.playSound	port	crates/horizon-world/src/level/redstone.rs::Sim::button_press	Press sound; the release sound is in button_check_pressed.
 ButtonBlock.affectNeighborsAfterRemoval	port	crates/horizon-world/src/level/hooks.rs::Sim::affect_neighbors_after_removal	Button and lever arm updates neighbours when powered and not moved.
 ButtonBlock.getDirectSignal	port	crates/horizon-world/src/level/redstone.rs::Sim::state_direct_signal	Strong power read from the per-state facts.
@@ -66,7 +66,7 @@ CampfireBlock.onProjectileHit	port	crates/horizon-client/src/arrows.rs::Ticker::
 CampfireBlock.getFluidState	port	crates/horizon-world/src/level/mod.rs::Behaviours::fluid	Waterlogged fluid is read from per-state facts.
 CampfireBlock.rotate	skip:data		Rotation is a precomputed table from extracted data.
 CampfireBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
-CampfireBlock.getTicker	port	crates/horizon-client/src/game/campfire.rs::Game::tick_campfire	Cooking tick when lit, cooldown tick when unlit.
+CampfireBlock.getTicker	port	crates/horizon-client/src/game/blocks/campfire.rs::Game::tick_campfire	Cooking tick when lit, cooldown tick when unlit.
 CandleBlock.useItemOn	port	crates/horizon-world/src/level/interact.rs::Sim::use_item_on	empty hand with mayBuild on a lit candle: unlit, wick smoke (the clicking client draws it), block.candle.extinguish and block_change; AbstractCandleBlock.extinguish is Sim::extinguish_candle
 CandleBlock.canBeReplaced	port	crates/horizon-world/src/level/place.rs::Sim::can_be_replaced	Adding a candle to a candle with fewer than four is allowed.
 CandleBlock.getStateForPlacement	port	crates/horizon-world/src/level/place.rs::Sim::placement_class	Class::Candle arm cycles the candle count when placed on a candle.
@@ -78,14 +78,14 @@ CandleCakeBlock.useItemOn	port	crates/horizon-world/src/level/interact.rs::Sim::
 CandleCakeBlock.useWithoutItem	port	crates/horizon-world/src/level/interact.rs::Sim::use_without_item	CandleCake arm eats the cake and drops the candle.
 CandleCakeBlock.candleHit	inline	crates/horizon-world/src/level/interact.rs::Sim::use_item_on	the hit.y - pos.y > 0.5 test inside the CandleCakeBlock.useItemOn arm, which now snuffs the candle
 CandleCakeBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::update_shape_class	Candle cake drops to air when unsupported below.
-CarvedPumpkinBlock.getWeatherStateFromPattern	inline	crates/horizon-client/src/game/golems.rs::Game::try_spawn_copper_golem	Weathering comes from the copper block below; waxed blocks count as unwaxed.
-CarvedPumpkinBlock.getOrCreateSnowGolemBase	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::SNOW_GOLEM_BASE (a space where the head goes), matched by BlockPattern::find; the lazy pattern cache is not needed.
-CarvedPumpkinBlock.getOrCreateSnowGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::SNOW_GOLEM_FULL, a pumpkin head on the snow column.
-CarvedPumpkinBlock.getOrCreateIronGolemBase	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::IRON_GOLEM_BASE, air beside the arms and body under the head.
-CarvedPumpkinBlock.getOrCreateIronGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::find_golem	the pattern is block_pattern::IRON_GOLEM_FULL, with its air cells.
-CarvedPumpkinBlock.getOrCreateCopperGolemBase	port	crates/horizon-client/src/game/golems.rs::Game::copper_golem_base	Copper block under the head.
-CarvedPumpkinBlock.getOrCreateCopperGolemFull	inline	crates/horizon-client/src/game/golems.rs::Game::try_spawn_copper_golem	Copper golem spawn with the pumpkin head; the head check is in is_golem_head.
-CarvedPumpkinBlock.replaceCopperBlockWithChest	inline	crates/horizon-client/src/game/golems.rs::Game::try_spawn_copper_golem	Copper block becomes its chest with flag 2 through copper_chest_from_block.
+CarvedPumpkinBlock.getWeatherStateFromPattern	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::try_spawn_copper_golem	Weathering comes from the copper block below; waxed blocks count as unwaxed.
+CarvedPumpkinBlock.getOrCreateSnowGolemBase	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::find_golem	the pattern is block_pattern::SNOW_GOLEM_BASE (a space where the head goes), matched by BlockPattern::find; the lazy pattern cache is not needed.
+CarvedPumpkinBlock.getOrCreateSnowGolemFull	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::find_golem	the pattern is block_pattern::SNOW_GOLEM_FULL, a pumpkin head on the snow column.
+CarvedPumpkinBlock.getOrCreateIronGolemBase	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::find_golem	the pattern is block_pattern::IRON_GOLEM_BASE, air beside the arms and body under the head.
+CarvedPumpkinBlock.getOrCreateIronGolemFull	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::find_golem	the pattern is block_pattern::IRON_GOLEM_FULL, with its air cells.
+CarvedPumpkinBlock.getOrCreateCopperGolemBase	port	crates/horizon-client/src/game/mobs/golems.rs::Game::copper_golem_base	Copper block under the head.
+CarvedPumpkinBlock.getOrCreateCopperGolemFull	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::try_spawn_copper_golem	Copper golem spawn with the pumpkin head; the head check is in is_golem_head.
+CarvedPumpkinBlock.replaceCopperBlockWithChest	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::try_spawn_copper_golem	Copper block becomes its chest with flag 2 through copper_chest_from_block.
 CauldronBlock.shouldHandlePrecipitation	inline	crates/horizon-world/src/level/tick.rs::Sim::precipitation_tick	The 5 percent rain and 10 percent snow chances are inside the precipitation tick.
 CauldronBlock.handlePrecipitation	port	crates/horizon-world/src/level/tick.rs::Sim::precipitation_tick	Rain fills to water cauldron, snow to powder snow cauldron.
 CauldronBlock.receiveStalactiteDrip	port	crates/horizon-world/src/level/speleothem.rs::Sim::cauldron_tick	Water and lava drips fill the cauldron with level events 1047 and 1046.
@@ -95,10 +95,10 @@ ChainBlock.createBlockStateDefinition	skip:data		Block state properties come fro
 ChainBlock.getFluidState	port	crates/horizon-world/src/level/mod.rs::Behaviours::fluid	Waterlogged fluid is read from per-state facts.
 ChangeOverTimeBlock.getNextState	port	crates/horizon-world/src/level/tick.rs::Sim::copper_change_over_time	Counts weathering neighbours within 4 and rolls the chance, 0.75 for unaffected.
 ChangeOverTimeBlock.isSameAgeingType	inline	crates/horizon-world/src/level/tick.rs::Sim::copper_change_over_time	Same weathering family is the WeatheringCopper check in the neighbour loop.
-ChiseledBookShelfBlock.useItemOn	port	crates/horizon-client/src/game/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Holding a book inserts it into the hit slot.
-ChiseledBookShelfBlock.useWithoutItem	port	crates/horizon-client/src/game/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Empty hand takes the book out of the hit slot.
-ChiseledBookShelfBlock.addBook	inline	crates/horizon-client/src/game/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Used stat, insert sound (enchanted variant), slot update folded in.
-ChiseledBookShelfBlock.removeBook	inline	crates/horizon-client/src/game/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Pickup sound, book given or dropped, block_change event folded in.
+ChiseledBookShelfBlock.useItemOn	port	crates/horizon-client/src/game/blocks/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Holding a book inserts it into the hit slot.
+ChiseledBookShelfBlock.useWithoutItem	port	crates/horizon-client/src/game/blocks/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Empty hand takes the book out of the hit slot.
+ChiseledBookShelfBlock.addBook	inline	crates/horizon-client/src/game/blocks/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Used stat, insert sound (enchanted variant), slot update folded in.
+ChiseledBookShelfBlock.removeBook	inline	crates/horizon-client/src/game/blocks/chiseled_bookshelf.rs::Game::use_chiseled_bookshelf	Pickup sound, book given or dropped, block_change event folded in.
 ChiseledBookShelfBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
 ChiseledBookShelfBlock.rotate	skip:data		Rotation is a precomputed table from extracted data.
 ChorusFlowerBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	Destroys the flower when it cannot survive.
@@ -110,13 +110,13 @@ ChorusFlowerBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim
 ChorusFlowerBlock.canSurvive	port	crates/horizon-world/src/level/survive.rs::Sim::can_survive_class	Needs a chorus plant or support tag below, or a single plant neighbour in the air.
 ChorusFlowerBlock.generatePlant	port	crates/horizon-world/src/worldgen/chorus_plant.rs::ChorusPlantFeature::place	Connects the base plant and grows the tree.
 ChorusFlowerBlock.growTreeRecursive	port	crates/horizon-world/src/worldgen/chorus_plant.rs::ChorusPlantFeature::grow	Random height, stems and flowers at the tips.
-ChorusFlowerBlock.onProjectileHit	port	crates/horizon-client/src/game/creatures.rs::Game::projectile_breaks_block	an impact projectile breaks and drops the flower under the mayBreak rules
+ChorusFlowerBlock.onProjectileHit	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::projectile_breaks_block	an impact projectile breaks and drops the flower under the mayBreak rules
 ChorusPlantBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::update_shape_class	Class::ChorusPlant arm updates the side connection and schedules the survival check.
 ChorusPlantBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	Destroys the plant when it cannot survive.
 ChorusPlantBlock.canSurvive	port	crates/horizon-world/src/level/survive.rs::Sim::can_survive_class	Plant or support tag below, or a plant neighbour with support under it.
 ChorusPlantBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
-CommandBlock.neighborChanged	port	crates/horizon-client/src/game/command_blocks.rs::set_powered	Stores the redstone power and marks the condition when it turns on.
-CommandBlock.getAnalogOutputSignal	port	crates/horizon-client/src/game/command_blocks.rs::analog_signal	Success count of the command block.
+CommandBlock.neighborChanged	port	crates/horizon-client/src/game/administration/command_blocks.rs::set_powered	Stores the redstone power and marks the condition when it turns on.
+CommandBlock.getAnalogOutputSignal	port	crates/horizon-client/src/game/administration/command_blocks.rs::analog_signal	Success count of the command block.
 CommandBlock.rotate	skip:data		Rotation is a precomputed table from extracted data.
 CommandBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
 ComparatorBlock.getOutputSignal	port	crates/horizon-world/src/level/redstone.rs::Sim::comparator_output	Stored output signal of the comparator.
@@ -129,13 +129,13 @@ ComparatorBlock.triggerEvent	skip:other		No effect: vanilla BlockEntity.triggerE
 ComparatorBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
 ComposterBlock.onPlace	port	crates/horizon-world/src/level/hooks.rs::Sim::on_place	A full composter schedules its ready tick in 20 ticks.
 ComposterBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	Full composter becomes ready (level 8) with the ready sound.
-ComposterBlock.getContainer	port	crates/horizon-client/src/game/machines.rs::Containers::view	Composter level picks the input, output or empty view.
-ComposterBlock.InputContainer.getSlotsForFace	port	crates/horizon-client/src/game/machines.rs::View::slots_for_face	Up face, slot 0 while the level is under 7.
-ComposterBlock.InputContainer.canPlaceItemThroughFace	port	crates/horizon-client/src/game/composter.rs::Game::composter_container_insert	Only from above, below level 7, and compostable.
-ComposterBlock.InputContainer.setChanged	port	crates/horizon-client/src/game/composter.rs::Game::composter_container_insert	Composts the item at once through addLayer.
-ComposterBlock.OutputContainer.getSlotsForFace	port	crates/horizon-client/src/game/machines.rs::View::slots_for_face	Down face, slot 0 at level 8.
+ComposterBlock.getContainer	port	crates/horizon-client/src/game/blocks/machines/mod.rs::Containers::view	Composter level picks the input, output or empty view.
+ComposterBlock.InputContainer.getSlotsForFace	port	crates/horizon-client/src/game/blocks/machines/mod.rs::View::slots_for_face_iter	Up face, slot 0 while the level is under 7.
+ComposterBlock.InputContainer.canPlaceItemThroughFace	port	crates/horizon-client/src/game/blocks/composter.rs::Game::composter_container_insert	Only from above, below level 7, and compostable.
+ComposterBlock.InputContainer.setChanged	port	crates/horizon-client/src/game/blocks/composter.rs::Game::composter_container_insert	Composts the item at once through addLayer.
+ComposterBlock.OutputContainer.getSlotsForFace	port	crates/horizon-client/src/game/blocks/machines/mod.rs::View::slots_for_face_iter	Down face, slot 0 at level 8.
 ComposterBlock.OutputContainer.setChanged	port	crates/horizon-world/src/level/interact.rs::Behaviours::composter_empty	Empties the composter to level 0.
-ChestBlock.getBlockType	port	crates/horizon-client/src/game/storage.rs::Game::chest_partner	Partner half and right-half flag give the single, first or second combine type.
+ChestBlock.getBlockType	port	crates/horizon-client/src/game/world/storage.rs::Game::chest_partner	Partner half and right-half flag give the single, first or second combine type.
 ChestBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::update_shape_class	Class::Chest arm joins or splits a double chest with the neighbour.
 ChestBlock.getShape	skip:data		Outline shape per state comes from extracted block shapes.
 ChestBlock.getStateForPlacement	port	crates/horizon-world/src/level/place.rs::Sim::placement_class	Class::Chest arm sets facing, double type and waterlogged.
@@ -144,8 +144,8 @@ ChestBlock.getFluidState	port	crates/horizon-world/src/level/mod.rs::Behaviours:
 ChestBlock.candidatePartnerFacing	port	crates/horizon-world/src/level/place.rs::Sim::chest_candidate_partner_facing	Facing of a single chest on the side, when it can connect.
 ChestBlock.useWithoutItem	port	crates/horizon-client/src/game.rs::Game::open_menu	Opens the chest menu, with the open stat and piglin anger.
 ChestBlock.getTicker	port	crates/horizon-client-render/src/block_entity_anim.rs::ticker	Client-side lid animation ticker.
-ChestBlock.isCatSittingOnChest	port	crates/horizon-client/src/game/storage.rs::Game::chest_blocked_at	A sitting cat above blocks the chest.
+ChestBlock.isCatSittingOnChest	port	crates/horizon-client/src/game/world/storage.rs::Game::chest_blocked_at	A sitting cat above blocks the chest.
 ChestBlock.rotate	skip:data		Rotation is a precomputed table from extracted data.
 ChestBlock.createBlockStateDefinition	skip:data		Block state properties come from extracted data.
-ComparatorBlockEntity.saveAdditional	port	crates/horizon-client/src/game/commands/data.rs::Game::comparator_data	Command NBT reads the live LevelTicks comparator output; gap: major: chunk save/reopen and components are not bridged here.
-ComparatorBlockEntity.loadAdditional	port	crates/horizon-client/src/game/commands/data.rs::Game::set_data_of	Command NBT uses the existing canonical getIntOr codec and updates the live LevelTicks output; gap: major: chunk loading and components are not bridged here.
+ComparatorBlockEntity.saveAdditional	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::comparator_data	Command NBT reads the live LevelTicks comparator output; gap: major: chunk save/reopen and components are not bridged here.
+ComparatorBlockEntity.loadAdditional	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::set_data_of	Command NBT uses the existing canonical getIntOr codec and updates the live LevelTicks output; gap: major: chunk loading and components are not bridged here.

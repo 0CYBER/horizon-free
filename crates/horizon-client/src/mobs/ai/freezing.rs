@@ -19,7 +19,7 @@ pub(crate) fn in_powder_snow(m: &Mob, w: &MobWorld) -> bool {
 
 /// `LivingEntity.canFreeze`: not a `#freeze_immune_entity_types` mob and no
 /// worn piece in `#freeze_immune_wearables`.
-pub(crate) fn can_freeze(m: &Mob, w: &MobWorld) -> bool {
+pub fn can_freeze(m: &Mob, w: &MobWorld) -> bool {
     // Skeleton.canFreeze: a skeleton never freezes, so powder snow builds no
     // frozen ticks on it and deals it no freeze damage. Only `Skeleton`
     // overrides it: the bogged, parched and wither skeleton extend
@@ -43,13 +43,22 @@ pub(crate) fn can_freeze(m: &Mob, w: &MobWorld) -> bool {
         .and_then(|i| i.item_tags.get("minecraft:freeze_immune_wearables"));
     // A wolf's armor (its body slot) is `#freeze_immune_wearables`.
     ![
-        &m.extra.body,
-        &m.extra.head,
-        &m.extra.chest,
-        &m.extra.legs,
-        &m.extra.feet,
+        m.extra.body_id(),
+        m.extra.head_id(),
+        m.extra.slot_id(horizon_items::equipment::CHEST),
+        m.extra.slot_id(horizon_items::equipment::LEGS),
+        m.extra.slot_id(horizon_items::equipment::FEET),
     ]
     .into_iter()
     .flatten()
-    .any(|item| immune.is_some_and(|t| t.contains(&**item)))
+    .any(|item| immune.is_some_and(|t| t.contains(item)))
+}
+
+/// The player's HEAD item belongs to vanilla's gaze disguise tag.
+pub fn wears_gaze_disguise(head: Option<&str>, w: &MobWorld) -> bool {
+    head.is_some_and(|item| {
+        w.items
+            .and_then(|items| items.item_tags.get("minecraft:gaze_disguise_equipment"))
+            .is_some_and(|tag| tag.contains(item))
+    })
 }

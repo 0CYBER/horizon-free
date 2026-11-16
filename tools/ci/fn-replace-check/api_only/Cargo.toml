@@ -1,0 +1,9 @@
+[package]
+name = "fnr-api-only"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
+horizon-mod-points = { path = ".horizon/sdk/api/crates/horizon-mod-points" }

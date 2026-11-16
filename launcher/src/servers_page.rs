@@ -17,6 +17,21 @@ mod glass_server_dialog;
 #[path = "glass_servers.rs"]
 mod glass_servers;
 use glass_servers::glass_setting_row;
+#[path = "servers_format.rs"]
+mod servers_format;
+use servers_format::{backup_label, bytes, uptime};
+
+/// One consent boundary for every launcher-managed start/restart route.
+fn run_managed_server(
+    tx: &std::sync::mpsc::Sender<backend::Msg>,
+    dir: &Path,
+    args: &[&str],
+    log: &dyn Fn(String),
+) -> Result<(), Problem> {
+    crate::jar_launch::with_consent(tx, |permission| {
+        servers::run_managed(dir, args, log, permission)
+    })
+}
 
 /// The servers this launcher started in this session, stopped when it closes unless they run as a
 /// service (`stop_on_quit`).
@@ -64,35 +79,12 @@ pub(super) enum Field {
     AccentHex,
     /// The Shop's gift recipient (`wardrobe_page/shop/basket.rs`).
     ShopGift,
-}
-
-impl Field {
-    const ALL: [Field; 24] = [
-        Field::Name,
-        Field::Seed,
-        Field::Players,
-        Field::Command,
-        Field::AddPlayer,
-        Field::Motd,
-        Field::Port,
-        Field::Token,
-        Field::Email,
-        Field::InstanceName,
-        Field::InstanceGroup,
-        Field::InstanceVersion,
-        Field::InstanceModsFilter,
-        Field::ServerName,
-        Field::ServerAddress,
-        Field::ConsoleSearch,
-        Field::PreLaunch,
-        Field::Wrapper,
-        Field::LaunchEnv,
-        Field::PostExit,
-        Field::MemoryLimit,
-        Field::DeleteServer,
-        Field::AccentHex,
-        Field::ShopGift,
-    ];
+    /// The Wardrobe's search through what the player owns (`wardrobe_page.rs`).
+    WardrobeSearch,
+    /// A Java instance's own JVM arguments and window size (the instance sheet's Launch).
+    JavaArgs,
+    WindowWidth,
+    WindowHeight,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -343,9 +335,11 @@ impl Servers {
         if let Some(h) = self.focus_soon.take().and_then(|f| self.focus.get(&f)) {
             window.focus(h, cx);
         }
-        self.focused = Field::ALL
-            .into_iter()
-            .find(|f| self.focus.get(f).is_some_and(|h| h.is_focused(window)));
+        self.focused = self
+            .focus
+            .iter()
+            .find(|(_, h)| h.is_focused(window))
+            .map(|(f, _)| *f);
         if self.focused.is_some() && self.focused != self.selected {
             self.selected = None;
         }
@@ -404,48 +398,6 @@ fn own_name(accounts: &Accounts) -> Option<String> {
     accounts.selected().map(|a| a.name.clone())
 }
 
-fn bytes(n: u64) -> String {
-    match n {
-        0..1_000_000 => format!("{} kB", n.div_ceil(1000)),
-        1_000_000..1_000_000_000 => format!("{:.1} MB", n as f64 / 1e6),
-        _ => format!("{:.2} GB", n as f64 / 1e9),
-    }
-}
-
-/// A backup's date and kind from its name (`2026-10-19_11-28-57-manual.zip`, UTC), for people.
-fn backup_label(b: &Backup) -> (String, String) {
-    let stem = b.name.trim_end_matches(".zip");
-    let (when, kind) = match stem.get(..19) {
-        Some(when) if stem.len() > 20 => (when, &stem[20..]),
-        _ => return (stem.to_string(), String::new()),
-    };
-    let (date, time) = when.split_once('_').unwrap_or((when, ""));
-    let label = format!("{date} {} UTC", time.replace('-', ":"));
-    let kind = match kind {
-        "auto" => "Automatic".to_string(),
-        "manual" => "Made by hand".to_string(),
-        "before-update" => "Before an update".to_string(),
-        // horizon-server writes the tag with dashes (before-v2026-10-19-10).
-        k if k.starts_with("before-v")
-            && k[8..].chars().all(|c| c.is_ascii_digit() || c == '-') =>
-        {
-            format!("Before updating to {}", k[7..].replace('-', "."))
-        }
-        k if k.starts_with("before-") => format!("Before updating to {}", &k[7..]),
-        k => k.to_string(),
-    };
-    (label, kind)
-}
-
-fn uptime(secs: u64) -> String {
-    match secs {
-        0..60 => format!("{secs} s"),
-        60..3600 => format!("{} min", secs / 60),
-        3600..86_400 => format!("{} h {:02} min", secs / 3600, secs / 60 % 60),
-        _ => format!("{} d {} h", secs / 86_400, secs / 3600 % 24),
-    }
-}
-
 impl Launcher {
     // ----- Background work ------------------------------------------------------------------
 
@@ -487,9 +439,19 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        let tx = self.tx.clone();
         self.server_job(label.to_string(), move |log| {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            servers::run_streamed(&dir, &args, log).map(|_| String::new())
+            let result = match args.first().copied() {
+                Some("start" | "restart") => {
+                    if args[0] == "start" {
+                        log(tr("A new world takes a minute the first time").into());
+                    }
+                    run_managed_server(&tx, &dir, &args, log)
+                }
+                _ => servers::run_streamed(&dir, &args, log),
+            };
+            result.map(|_| String::new())
         });
     }
 
@@ -844,6 +806,7 @@ impl Launcher {
         };
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
+        let tx = self.tx.clone();
         self.server_job("Starting", move |log| {
             if let Some(api) = servers::Api::open(&dir) {
                 if let Ok(status) = api.call("GET", "/api/v1/status", None) {
@@ -855,7 +818,7 @@ impl Launcher {
                 }
             }
             log("A new world takes a minute the first time".into());
-            servers::run_streamed(&dir, &["start"], log).map(|_| String::new())
+            run_managed_server(&tx, &dir, &["start"], log).map(|_| String::new())
         });
     }
 
@@ -879,6 +842,7 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        let tx = self.tx.clone();
         self.server_job("Restarting", move |log| {
             // The running server's API first; when it can't be reached or refuses, the CLI,
             // whose error is the job's.
@@ -887,7 +851,7 @@ impl Launcher {
             if via_api {
                 return Ok(String::new());
             }
-            servers::run_streamed(&dir, &["restart"], log).map(|_| String::new())
+            run_managed_server(&tx, &dir, &["restart"], log).map(|_| String::new())
         });
     }
 
@@ -1089,6 +1053,7 @@ impl Launcher {
                         f,
                         Field::InstanceModsFilter
                             | Field::ConsoleSearch
+                            | Field::WardrobeSearch
                             | Field::Motd
                             | Field::Port
                             | Field::Token
@@ -1145,6 +1110,7 @@ impl Launcher {
                             f,
                             Field::InstanceModsFilter
                                 | Field::ConsoleSearch
+                                | Field::WardrobeSearch
                                 | Field::AccentHex
                                 | Field::Motd
                                 | Field::Port
@@ -1278,6 +1244,10 @@ impl Launcher {
             | Field::InstanceVersion
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
+            | Field::WardrobeSearch
+            | Field::JavaArgs
+            | Field::WindowWidth
+            | Field::WindowHeight
             | Field::DeleteServer
             | Field::AccentHex => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {
@@ -1464,7 +1434,7 @@ impl Launcher {
         if self.servers.list.is_empty() {
             return page
                 .child(centered(
-                    tr("No server yet. Create one: it takes a few seconds, and with the defaults (tick the EULA, press Create) you get a friends-only survival world."),
+                    tr("No server yet. Create one: it takes a few seconds, and with the defaults (accept Minecraft's terms, press Create) you get a friends-only survival world."),
                     &t,
                 ))
                 .children(partner);
@@ -3254,7 +3224,7 @@ impl Launcher {
                     .child(tr("Create a server")),
             )
             .child(text(theme::CAPTION).text_color(t.muted).child(tr(
-                "Everything has a default: tick the EULA and Create makes a friends-only survival \
+                "Everything has a default: accept Minecraft's terms and Create makes a friends-only survival \
                 world. You can change all of it later, from the server's Settings tab.",
             )))
             .child(row(
@@ -3425,6 +3395,65 @@ fn setting_name(key: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_start_and_restart_require_consent_before_running_the_supervisor() {
+        const CHILD: &str = "HORIZON_MANAGED_CONSENT_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "servers_page::tests::managed_start_and_restart_require_consent_before_running_the_supervisor", "--nocapture"])
+                .env(CHILD, "1")
+                .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+                .env("HORIZON_HOME", root.path().join("cache"))
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = servers::runtime_root().join("current");
+        std::fs::create_dir_all(&bin).unwrap();
+        let supervisor = bin.join("horizon-server");
+        std::fs::write(&supervisor, "#!/bin/sh\nprintf ran > \"$2/ran\"\n").unwrap();
+        std::fs::set_permissions(&supervisor, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(bin.join("horizon-engine"), "never executed").unwrap();
+        std::fs::write(root.path().join("horizon-resources.json"), "{}").unwrap();
+        let config = format!(
+            "[engine]\nresources = {:?}\n",
+            root.path().to_str().unwrap()
+        );
+        std::fs::write(root.path().join("server.toml"), config).unwrap();
+        let package = root
+            .path()
+            .join(horizon_platform::mod_package::mod_list::DIR)
+            .join("needs_jar");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("horizon-mod.toml"), format!(
+            "id='needs_jar'\nname='Needs jar'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n[[jar]]\nid='fixture'\nversion='1'\nsha512='{}'\n", "a".repeat(128)
+        )).unwrap();
+        std::fs::write(
+            root.path()
+                .join(horizon_platform::mod_package::mod_list::FILE),
+            "mod.needs_jar:true\n",
+        )
+        .unwrap();
+        for action in ["start", "restart"] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let dir = root.path().to_path_buf();
+            let job = std::thread::spawn(move || run_managed_server(&tx, &dir, &[action], &|_| {}));
+            let message = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            let backend::Msg::JarConsent { jars, reply } = message else {
+                panic!("expected jar consent")
+            };
+            assert_eq!(jars.len(), 1);
+            assert_eq!(jars[0].id(), "fixture");
+            reply.send(false).unwrap();
+            assert!(job.join().unwrap().is_err());
+            assert!(!root.path().join("ran").exists());
+        }
+    }
 
     #[test]
     fn backups_read_for_people() {

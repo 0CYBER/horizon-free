@@ -28,7 +28,7 @@ def main():
         sources=[lab.ROOT / 'tools/test_held_item_stack_parity.py',
                  lab.ROOT / 'crates/horizon-client/src/mobs/render.rs',
                  lab.ROOT / 'crates/horizon-client/src/mobs.rs',
-                 lab.ROOT / 'crates/horizon-client/src/game/mob_blocks.rs'], expected_lines=100)
+                 lab.ROOT / 'crates/horizon-client/src/game/mobs/mob_blocks.rs'], expected_lines=100)
 
 
 if __name__ == '__main__':

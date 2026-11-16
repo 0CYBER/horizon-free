@@ -1,6 +1,6 @@
 //! Quiet commands: a client mod's batch of commands that a Horizon server runs
 //! as the player who sent them, at that player's own permission level, with
-//! no feedback in the chat (docs/mods.md, `command.run-quiet`).
+//! no feedback in the chat (docs/modding/src/how-to/content-mods.md, `command.run-quiet`).
 //!
 //! The server announces it understands them with an empty [`CHANNEL`] payload
 //! in the configuration phase (a vanilla client ignores it); a client that

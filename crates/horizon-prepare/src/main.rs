@@ -209,11 +209,15 @@ fn main() -> ExitCode {
     }
     if check {
         if options.import || options.server_jar.is_some() {
-            eprintln!("horizon-prepare: error: --check prepares nothing; leave out --prepare and --server-jar");
+            eprintln!(
+                "horizon-prepare: error: --check prepares nothing; leave out --prepare and --server-jar"
+            );
             return ExitCode::from(2);
         }
         if json || complete {
-            eprintln!("horizon-prepare: error: --progress and --complete apply to preparing; leave them out with --check");
+            eprintln!(
+                "horizon-prepare: error: --progress and --complete apply to preparing; leave them out with --check"
+            );
             return ExitCode::from(2);
         }
         return check_resources(&options);

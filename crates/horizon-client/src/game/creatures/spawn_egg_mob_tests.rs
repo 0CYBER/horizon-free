@@ -12,7 +12,7 @@ use horizon_client::mobs::{Mob, Species, Who};
 use horizon_client::motion::PlayerMotion;
 use horizon_core::geometry::Vec3;
 use horizon_core::position::ChunkPos;
-use horizon_core::random::{EntityRandom, LegacyRandom, RandomSource};
+use horizon_core::random::{LegacyRandom, RandomSource};
 use std::sync::Arc;
 
 fn game() -> Game<'static> {
@@ -22,13 +22,14 @@ fn game() -> Game<'static> {
     );
     let settings = Settings::default();
     let loaded = load_resources(
-        root.clone(),
+        horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+        Vec::new(),
         None,
         &root,
         &settings,
         std::time::Instant::now(),
         false,
-        true,
+        crate::game::execution_role::ExecutionRole::IntegratedServer,
         &Progress::new(),
         &mut |_, _| unreachable!(),
     )
@@ -43,7 +44,9 @@ fn game() -> Game<'static> {
         loaded.gui.unwrap(),
         options,
         settings,
-        Audio::silent(&root),
+        Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+            root.to_path_buf(),
+        )),
         None,
     )
     .unwrap();
@@ -86,7 +89,7 @@ fn posted() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_egg_used_on_a_mob_posts_entity_interact() {
     let mut game = game();
     watch();
@@ -118,7 +121,7 @@ fn an_egg_used_on_a_mob_posts_entity_interact() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mooshroom_egg_child_rolls_the_colour_flip() {
     let mut game = game();
     // `MushroomCow.getBreedOffspring(level, this)` on the egg path: the mate is
@@ -133,7 +136,7 @@ fn a_mooshroom_egg_child_rolls_the_colour_flip() {
     for (seed, parent) in [(flip, 0), (flip, 1), (keep, 0), (keep, 1)] {
         spawn(&mut game, "minecraft:mooshroom", 9, [2.5, 64.0, 2.5]);
         game.mobs[0].extra.variant = parent;
-        game.mobs[0].random = EntityRandom::own(LegacyRandom::new(seed));
+        game.mobs[0].random = horizon_core::random::EntityRandom::own(LegacyRandom::new(seed));
         game.inventory[0] = Some(ItemStack::new("minecraft:mooshroom_spawn_egg", 1));
         assert!(game.interact_mob(target(9)).unwrap());
         let child = game

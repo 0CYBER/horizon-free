@@ -1,4 +1,5 @@
-//! The player's ambient sound handlers: `BiomeAmbientSoundsHandler` (biome
+//! The client's ambient effects: cached block enchant-particle answers and ambient sound handlers.
+//! `BiomeAmbientSoundsHandler` (biome
 //! loops with 40-tick cross-fades, random additions, cave mood) driven by the
 //! `minecraft:audio/ambient_sounds` attribute, `UnderwaterAmbientSoundHandler`
 //! and `LocalPlayer.updateIsUnderwater` (enter/exit sounds and the
@@ -156,8 +157,10 @@ pub fn bubble_column_in(bb: [f64; 6], state: impl Fn([i32; 3]) -> Option<bool>) 
     }
     None
 }
-/// The local player's ambient sound handlers.
+/// Per-game ambient effects: block-particle answers and the local player's ambient sound handlers.
 pub struct Ambience {
+    /// Snapshot of this client's enchanting power, independent of shared resource tables.
+    pub enchant_power: crate::animate_tick::EnchantPower,
     /// The client level's random.
     pub random: LegacyRandom,
     /// `BiomeAmbientSoundsHandler.loopSounds` (insertion order).
@@ -184,6 +187,7 @@ impl Ambience {
     }
     pub fn new(seed: i64) -> Self {
         Self {
+            enchant_power: Default::default(),
             random: LegacyRandom::new(seed),
             loops: Vec::new(),
             previous_loop: None,

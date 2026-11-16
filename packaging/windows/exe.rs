@@ -5,6 +5,9 @@
 //! manifest (`crates/horizon-client/windows-segment-heap.manifest`, the package's
 //! `windows-segment-heap` feature) is embedded in the same resource compilation.
 
+#[path = "../executable_link.rs"]
+pub mod executable_link;
+
 /// The resources and the stack size of the executable `bin` of the package being built; nothing
 /// for other targets than Windows.
 pub fn resources(bin: &str) {
@@ -15,19 +18,28 @@ pub fn resources(bin: &str) {
     let target_os =
         std::env::var("CARGO_CFG_TARGET_OS").expect("Cargo must provide the build target OS");
     println!("cargo:rerun-if-changed={}", ico.display());
-    // The game's main thread gets 8 MB of stack on Windows as on macOS and Linux (Windows gives 1
-    // MB): splitscreen builds a joining player's `Game`, ~67 KB, deep in the event loop.
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir
+            .join("../../packaging/executable_link.rs")
+            .display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir
+            .join("../horizon-guest-stack/src/guest_stack_constants.rs")
+            .display()
+    );
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    for arg in executable_link::arguments(&target_os, &target_env) {
+        println!("cargo:rustc-link-arg-bin={bin}={arg}");
+    }
     if target_os == "windows" {
         println!("cargo:rerun-if-env-changed=WINDRES");
         println!("cargo:rerun-if-env-changed=AR");
         println!("cargo:rerun-if-env-changed=RC_PATH");
         let target_env = std::env::var("CARGO_CFG_TARGET_ENV")
             .expect("Cargo must provide the target environment");
-        let arg = match target_env.as_str() {
-            "msvc" => "/STACK:8388608",
-            _ => "-Wl,--stack,8388608",
-        };
-        println!("cargo:rustc-link-arg-bin={bin}={arg}");
         let (resource_manifest_dir, resource_icon) = match resource_path(&manifest_dir, &target_env)
             .and_then(|dir| Ok((dir, resource_path(&ico, &target_env)?)))
         {

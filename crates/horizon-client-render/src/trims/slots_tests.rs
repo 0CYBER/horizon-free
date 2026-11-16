@@ -1,6 +1,6 @@
 use super::*;
 use crate::hud::{HudAtlas, Rect, TRIM_SLOTS};
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 struct Fixture(PathBuf);
 
@@ -24,7 +24,9 @@ impl Fixture {
     }
 
     fn write(&self, id: u8, width: u32) {
-        let path = asset_path(&self.0, "textures", &self.texture(id).texture, ".png");
+        let path = self
+            .0
+            .join(asset_path("textures", &self.texture(id).texture, ".png"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut encoder = png::Encoder::new(fs::File::create(path).unwrap(), width, 1);
         encoder.set_color(png::ColorType::Rgba);
@@ -37,7 +39,7 @@ impl Fixture {
     }
 
     fn atlas(&self) -> HudAtlas {
-        let mut atlas = HudAtlas::fonts(&self.0).unwrap();
+        let mut atlas = HudAtlas::fonts(&ResourceSource::directory(self.0.clone())).unwrap();
         atlas.width = TRIM_SLOTS as u32 * 2;
         atlas.height = 1;
         atlas.pixels = vec![0; atlas.width as usize * 4];
@@ -91,7 +93,12 @@ fn overflow_keeps_the_rendered_pixels_without_reuploading_each_frame() {
     let mut atlas = fixture.atlas();
     let mut slots = TrimSlots::default();
     let mut patches = Vec::new();
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     upload(&mut atlas, &mut patches);
     // The original sequential 32-slot pass finishes with requests 1..=32.
     assert_eq!(color(&atlas, &wanted[0]), None);
@@ -102,7 +109,12 @@ fn overflow_keeps_the_rendered_pixels_without_reuploading_each_frame() {
         );
     }
     for _ in 0..3 {
-        slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+        slots.prepare(
+            wanted.clone(),
+            &ResourceSource::directory(fixture.0.clone()),
+            &mut atlas,
+            &mut patches,
+        );
         assert!(
             patches.is_empty(),
             "unchanged overflow must not upload again"
@@ -124,15 +136,30 @@ fn changing_request_order_or_equipment_changes_the_resident_images() {
     let mut atlas = fixture.atlas();
     let mut slots = TrimSlots::default();
     let mut patches = Vec::new();
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     upload(&mut atlas, &mut patches);
     wanted.rotate_left(1);
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     upload(&mut atlas, &mut patches);
     assert_eq!(color(&atlas, &fixture.texture(1)), None);
     assert_eq!(color(&atlas, &fixture.texture(0)), Some([0, 255, 42, 255]));
     wanted = vec![fixture.texture(33), fixture.texture(2)];
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     upload(&mut atlas, &mut patches);
     assert_eq!(color(&atlas, &wanted[0]), Some([33, 222, 42, 255]));
     assert_eq!(color(&atlas, &wanted[1]), Some([2, 253, 42, 255]));
@@ -146,18 +173,33 @@ fn an_atlas_rebuild_uploads_the_same_requests_again() {
     let mut slots = TrimSlots::default();
     let mut patches = Vec::new();
     let mut atlas = fixture.atlas();
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     upload(&mut atlas, &mut patches);
     atlas = fixture.atlas();
     fixture.write(7, 1);
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     assert_eq!(patches.len(), 1);
     assert_eq!(patches[0].width, 1, "reload must decode the new image");
     upload(&mut atlas, &mut patches);
     assert_eq!(color(&atlas, &wanted[0]), Some([7, 248, 42, 255]));
     atlas.pixels.fill(0);
     slots.forget();
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     assert_eq!(
         patches.len(),
         1,
@@ -166,7 +208,12 @@ fn an_atlas_rebuild_uploads_the_same_requests_again() {
     upload(&mut atlas, &mut patches);
     assert_eq!(color(&atlas, &wanted[0]), Some([7, 248, 42, 255]));
     atlas.sprites.remove(&wanted[0].sprite());
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     assert_eq!(patches.len(), 1, "an erased sprite must be restored too");
     upload(&mut atlas, &mut patches);
     assert_eq!(color(&atlas, &wanted[0]), Some([7, 248, 42, 255]));
@@ -179,13 +226,28 @@ fn missing_or_oversized_images_are_retried_when_they_become_available() {
     let mut atlas = fixture.atlas();
     let mut slots = TrimSlots::default();
     let mut patches = Vec::new();
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     assert_eq!(color(&atlas, &wanted[0]), None);
     fixture.write(9, 3);
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     assert!(patches.is_empty());
     fixture.write(9, 2);
-    slots.prepare(wanted.clone(), &fixture.0, &mut atlas, &mut patches);
+    slots.prepare(
+        wanted.clone(),
+        &ResourceSource::directory(fixture.0.clone()),
+        &mut atlas,
+        &mut patches,
+    );
     assert_eq!(patches.len(), 1);
     upload(&mut atlas, &mut patches);
     assert_eq!(color(&atlas, &wanted[0]), Some([9, 246, 42, 255]));

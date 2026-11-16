@@ -1,68 +1,16 @@
 //! The engine: the game itself, run headless (`horizon-client --dedicated`, crates/horizon-client
-//! game/dedicated.rs). It reads the vanilla files the supervisor writes, takes console commands on stdin and
+//! game/interface/dedicated/mod.rs). It reads the vanilla files the supervisor writes, takes console commands on stdin and
 //! logs on stdout.
 
-use crate::config::{Config, Entities};
+use horizon_server_launch::config::Entities;
+use std::process::Command;
 use std::{
     io::{BufRead, BufReader, Write},
     net::{Ipv4Addr, TcpStream},
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    path::Path,
+    process::{Child, Stdio},
     time::Duration,
 };
-
-/// The game's program names, most specific first: the server build (the game without sound or
-/// controllers, so it needs neither ALSA nor udev on Linux; `horizon-server-linux-x86_64.tar.gz` holds it),
-/// else the full game.
-const PROGRAMS: [&str; 2] = ["horizon-engine", "horizon-client"];
-
-fn exe(name: &str) -> String {
-    format!("{name}{}", std::env::consts::EXE_SUFFIX)
-}
-
-/// The game program: `engine.path`, else one installed beside `horizon-server` (in the release in use when
-/// it was installed by the installers), else one on the PATH.
-pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
-    program_in(config, dir, crate::update::Install::find().as_ref())
-}
-
-/// [`program`], for the install `install`.
-pub fn program_in(
-    config: &Config,
-    dir: &Path,
-    install: Option<&crate::update::Install>,
-) -> Result<PathBuf, String> {
-    if !config.engine.path.is_empty() {
-        let path = dir.join(&config.engine.path);
-        return path
-            .is_file()
-            .then_some(path)
-            .ok_or_else(|| format!("engine.path {} is not a file", config.engine.path));
-    }
-    // Installed: the release `current` points at now, so a switch applies at the next start.
-    let beside = install.map(crate::update::Install::programs).or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(Path::to_path_buf))
-    });
-    let path_dirs = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .unwrap_or_default();
-    PROGRAMS
-        .iter()
-        .flat_map(|name| {
-            beside
-                .iter()
-                .chain(&path_dirs)
-                .map(move |d| d.join(exe(name)))
-        })
-        .find(|p| p.is_file())
-        .ok_or_else(|| {
-            "the game program (horizon-client) is neither beside horizon-server nor on the PATH: \
-             install it there, or set engine.path in server.toml"
-                .into()
-        })
-}
 
 /// Checks that the game program starts at all: `--help` loads no game files, so it fails only when the
 /// system can't load the program, as on a Linux without the ALSA and udev libraries the full game links
@@ -112,47 +60,6 @@ fn start_failure(program: &Path, code: Option<i32>, stderr: &str) -> String {
         );
     }
     text
-}
-
-/// The Minecraft version this server is pinned to; prepared game files must be stamped with it.
-pub const GAME_VERSION: &str = horizon_platform::version::VERSION_ID;
-
-/// Where the prepared game files may be, in the order they are tried.
-pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) -> Vec<PathBuf> {
-    if !config.engine.resources.is_empty() {
-        return vec![dir.join(&config.engine.resources)];
-    }
-    let version = GAME_VERSION;
-    let mut out = vec![dir.join("resources")];
-    // A release folder or a checkout: .local/horizon-client/<version> beside the program or above it.
-    if let Some(program) = program {
-        for ancestor in program.ancestors().skip(1).take(4) {
-            out.push(ancestor.join(".local/horizon-client").join(version));
-        }
-    }
-    out
-}
-
-/// The prepared game files: a folder holding the manifest every `horizon-prepare` run writes
-/// (`asset-index.json` comes only with the optional sounds, which a server doesn't need).
-pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<PathBuf, String> {
-    let candidates = resource_candidates(config, dir, program);
-    candidates
-        .iter()
-        .find(|d| d.join("horizon-resources.json").is_file())
-        .cloned()
-        .ok_or_else(|| {
-            let tried: Vec<String> = candidates
-                .iter()
-                .map(|d| format!("  {}", d.display()))
-                .collect();
-            format!(
-                "no prepared game files. Horizon reads them from your own copy of Minecraft 26.3:\n\
-                 prepare them with `horizon-prepare --prepare --server-jar PATH` (or the launcher) and copy \
-                 the folder to resources/ here, or set engine.resources in server.toml. Looked in:\n{}",
-                tried.join("\n")
-            )
-        })
 }
 
 /// The files `horizon-prepare` derives from the game and the engine reads at start (docs/hosting.md: a folder
@@ -264,41 +171,9 @@ fn command(
     entities: &Entities,
     transfers: Option<&str>,
 ) -> std::io::Result<Command> {
-    // The game runs in the server folder, so a folder given relative to ours (`--dir srv`) would put its
-    // control endpoint in `srv/srv/.horizon`, which doesn't exist.
-    let dir = std::path::absolute(dir)?;
-    let resources = std::path::absolute(resources)?;
-    let mut command = Command::new(program);
-    command
-        .arg("--resources")
-        .arg(resources)
-        .arg("--control-socket")
-        .arg(control_path(&dir));
-    // `[transfer]` on: a proxy's hand-over requests on that endpoint (docs/server.md).
-    if let Some(transfers) = transfers {
-        command.arg("--transfers").arg(transfers);
-    }
-    command
-        .args(["--dedicated", "--nogui"])
-        .current_dir(&dir)
-        .env("HORIZON_NO_AUDIO", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // The terminal's Ctrl-C reaches the supervisor alone, which then stops the game cleanly.
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(
-        &mut command,
-        windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
-            | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
-    );
-    // `[engine] low_memory`: mimalloc then keeps transparent huge pages off. Mostly empty huge pages cost
-    // 60 MB idle and 190 MB at 20 players, and save ~1 % of tick time (docs/hosting.md).
-    if low_memory {
-        command.env("MIMALLOC_ALLOW_THP", "0");
-    }
+    let mut command = horizon_server_launch::command_with_transfers(
+        program, resources, dir, low_memory, transfers,
+    )?;
     // `[engine] parallel_tick`: the game's switch, for a host that cannot set its environment. Off leaves
     // the variable alone, so one the operator set still works.
     if parallel_tick {
@@ -331,11 +206,6 @@ fn command(
     Ok(command)
 }
 
-/// The game's control endpoint in a server folder (`--control-socket`): TCP on 127.0.0.1 with a token, on every OS.
-pub fn control_path(dir: &Path) -> PathBuf {
-    dir.join(".horizon/engine.json")
-}
-
 /// How long a [`Control`] waits for each reply.
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -347,7 +217,7 @@ pub struct Control {
 
 impl Control {
     pub fn connect(dir: &Path) -> std::io::Result<Self> {
-        let text = std::fs::read_to_string(control_path(dir))?;
+        let text = std::fs::read_to_string(horizon_server_launch::control_path(dir))?;
         let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "not a control endpoint");
         let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| bad())?;
         let port = v["port"]
@@ -399,8 +269,9 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use std::path::PathBuf;
     #[test]
+    #[ignore = "daily"]
     fn a_request_with_a_line_break_is_refused_unsent() {
         let dir = std::env::temp_dir().join(format!("horizon-control-line-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -408,7 +279,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::fs::write(
-            control_path(&dir),
+            horizon_server_launch::control_path(&dir),
             format!("{{\"port\": {port}, \"token\": \"t\"}}"),
         )
         .unwrap();
@@ -570,36 +441,6 @@ mod tests {
         assert!(at < on.iter().position(|a| a == "--dedicated").unwrap());
     }
 
-    #[test]
-    fn resources_are_searched_in_order() {
-        let mut config = Config::default();
-        let dir = Path::new("/srv/mc");
-        let program = Path::new("/opt/horizon/target/release/horizon-client");
-        let found = resource_candidates(&config, dir, Some(program));
-        assert_eq!(found[0], Path::new("/srv/mc/resources"));
-        assert!(found.contains(&PathBuf::from("/opt/horizon/.local/horizon-client/26.3")));
-        config.engine.resources = "/data/res".into();
-        assert_eq!(
-            resource_candidates(&config, dir, Some(program)),
-            [PathBuf::from("/data/res")]
-        );
-    }
-
-    #[test]
-    fn resources_prepared_without_sounds_are_found() {
-        let root = std::env::temp_dir().join(format!("horizon-server-res-{}", std::process::id()));
-        let prepared = root.join(".local/horizon-client/26.3");
-        std::fs::create_dir_all(&prepared).unwrap();
-        let program = root.join("horizon-client");
-        let config = Config::default();
-        let server = root.join("server");
-        assert!(resources(&config, &server, Some(&program)).is_err());
-        // What `horizon-prepare` writes on every run; no asset index without `horizon-prepare sounds`.
-        std::fs::write(prepared.join("horizon-resources.json"), "{}").unwrap();
-        assert_eq!(resources(&config, &server, Some(&program)), Ok(prepared));
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
     /// A folder as `horizon-prepare` leaves it, as far as `check_prepared` looks.
     fn prepared_folder(name: &str) -> PathBuf {
         let root =
@@ -710,6 +551,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn a_relative_folder_reaches_the_game_whole() {
         use std::os::unix::fs::PermissionsExt;
         // Relative to this process's folder (the crate's, under cargo test), as `--dir srv` gives it.
@@ -770,6 +612,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn the_check_runs_the_program() {
         use std::os::unix::fs::PermissionsExt;
         let root =

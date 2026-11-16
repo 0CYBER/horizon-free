@@ -7,7 +7,7 @@ InteractWithDoor.create	inline	crates/horizon-client/src/mobs/animal_brain.rs::B
 InteractWithDoor.areOtherMobsComingThroughDoor	inline	crates/horizon-client/src/mobs/villager_brain.rs::close_doors	villagers within 2 blocks of the door whose path has the door as previous or next node
 InteractWithDoor.isMobComingThroughDoor	inline	crates/horizon-client/src/mobs/villager_brain.rs::close_doors	read from the other villager's Seen.path_nodes
 InteractWithDoor.isDoorTooFarAway	inline	crates/horizon-client/src/mobs/villager_brain.rs::close_doors	3 block test; no dimension compare needed
-InteractWithDoor.rememberDoorToClose	port	crates/horizon-client/src/mobs/villager_brain.rs::remember_door	
+InteractWithDoor.rememberDoorToClose	port	crates/horizon-client/src/mobs/villager_brain.rs::remember_door
 JumpOnBed.checkExtraStartConditions	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	baby with a nearest bed remembered
 JumpOnBed.start	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	target bed, 100 ticks to reach it, 3 to 6 jumps from the level random
 JumpOnBed.stop	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::do_stop	resets bed, time left, jumps and cooldown
@@ -31,7 +31,7 @@ LongJumpToRandomPos.pickCandidate	inline	crates/horizon-client/src/mobs/frog.rs:
 LongJumpToRandomPos.getJumpCandidate	inline	crates/horizon-client/src/mobs/frog.rs::LongJump::draw	goal stand-in for the frog and goat brains (#3946; no tick parity: the probe has no frog or goat brain)
 LongJumpToRandomPos.isAcceptableLandingPosition	inline	crates/horizon-client/src/mobs/frog.rs::acceptable_landing	goal stand-in for the frog and goat brains (#3946; no tick parity: the probe has no frog or goat brain)
 LongJumpToRandomPos.calculateOptimalJumpVector	inline	crates/horizon-client/src/mobs/frog.rs::optimal_jump_vector	goal stand-in for the frog and goat brains (#3946; no tick parity: the probe has no frog or goat brain)
-LookAndFollowTradingPlayerSink.followPlayer	port	crates/horizon-client/src/mobs/villager_brain.rs::follow_trading_player	
+LookAndFollowTradingPlayerSink.followPlayer	port	crates/horizon-client/src/mobs/villager_brain.rs::follow_trading_player
 LookAtTargetSink.canStillUse	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::tick_or_stop	the look target must still be visible; the sniffer, warden and breeze brains have the same arm
 LookAtTargetSink.tick	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::tick_or_stop	look_at the target position
 MeleeAttack.create	inline	crates/horizon-client/src/mobs/monster_brain.rs::B::try_start	creaking arm (target in reach and visible, attack cooldown); the warden and axolotl brains have their own; gap: minor: piglins, piglin brutes, hoglins and zoglins attack through the MeleeAttack goal in goals.rs, whose chase and cooldown rhythm differ from the brain behaviour
@@ -62,7 +62,7 @@ SetEntityLookTargetSometimes.Ticker.tickDownAndCheck	inline	crates/horizon-clien
 SetLookAndInteract.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	SetLookAndInteract arm: nearest visible player within 4 blocks becomes interaction and look target
 SetWalkTargetAwayFrom.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	WalkAwayFrom arm (nearest hostile and last attacker within 6 blocks, away 16 and 7, ten tries); piglins and hoglins use AvoidEntity and repellent goals
 SetWalkTargetFromAttackTargetIfTargetOutOfReach.create	inline	crates/horizon-client/src/mobs/monster_brain.rs::B::try_start	SetWalkTargetFromAttackTarget arm (the warden and axolotl brains have the same); piglins and hoglins chase with the MeleeAttack goal
-SetWalkTargetFromBlockMemory.create	port	crates/horizon-client/src/mobs/villager_brain.rs::walk_to_block_memory	
+SetWalkTargetFromBlockMemory.create	port	crates/horizon-client/src/mobs/villager_brain.rs::walk_to_block_memory
 SetWalkTargetFromLookTarget.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	WalkToLookTarget arm; the sniffer, ghastling and breeze brains have the same
 ShowTradesToPlayer.canStillUse	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::tick_or_stop	ShowTrades arm: still near the player, look time left and an interaction target
 ShowTradesToPlayer.start	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	looks at the player, look time 40
@@ -111,32 +111,32 @@ TradeWithVillager.figureOutWhatIAmWillingToTrade	inline	crates/horizon-client/sr
 TransportItemsBetweenContainers.start	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::try_start	sets below_surface (setCanPathToTargetsBelowSurface); the not-leashed start test is in the same fn
 TransportItemsBetweenContainers.canStillUse	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::tick_or_stop	no cooldown, not panicking, not leashed
 TransportItemsBetweenContainers.onTravelToTarget	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::tick	the Travelling branch: queue within 3 blocks when another golem has the chest, interact within range, else walk
-TransportItemsBetweenContainers.walkTowardsTarget	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::walk_towards	
+TransportItemsBetweenContainers.walkTowardsTarget	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::walk_towards
 TransportItemsBetweenContainers.startOnReachedTargetInteraction	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::tick	reached_interaction picks the interaction state, then the state becomes Interacting
 TransportItemsBetweenContainers.onTargetInteraction	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::on_reached	look at the chest, stop in place, open the chest on tick 1, sound on tick 9, close on tick 60
 TransportItemsBetweenContainers.doReachedTargetInteraction	port	crates/horizon-client/src/mobs/transport_items.rs::reached_interaction	the dispatch on empty hand and chest contents; the 60 tick call is in on_reached
-TransportItemsBetweenContainers.getTransportTarget	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::find_target	
+TransportItemsBetweenContainers.getTransportTarget	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::find_target
 TransportItemsBetweenContainers.isTargetValidToPick	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::find_target	search box, container, wanted block and not visited
 TransportItemsBetweenContainers.isContainerLocked	missing		minor: a chest's lock is not stored or checked (only set by commands)
 TransportItemsBetweenContainers.getPositionToReachTargetFrom	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::valid_travelling_path	path end or the golem's own position, raised by half its height
 TransportItemsBetweenContainers.getConnectedTargets	port	crates/horizon-client/src/mobs/transport_items.rs::connected	the other half of a double chest
 TransportItemsBetweenContainers.getTargetSearchArea	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::find_target	box of 32 across and 8 up and down (1 and 1 on a mount)
 TransportItemsBetweenContainers.isPositionAlreadyVisited	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::find_target	either half in the visited or unreachable memory
-TransportItemsBetweenContainers.setVisitedBlockPos	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::set_visited	
-TransportItemsBetweenContainers.markVisitedBlockPosAsUnreachable	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::mark_unreachable	
+TransportItemsBetweenContainers.setVisitedBlockPos	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::set_visited
+TransportItemsBetweenContainers.markVisitedBlockPosAsUnreachable	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::mark_unreachable
 TransportItemsBetweenContainers.isWantedBlock	port	crates/horizon-client/src/mobs/transport_items.rs::wanted	copper chests with an empty hand, chests and trapped chests when carrying
-TransportItemsBetweenContainers.isWithinTargetDistance	port	crates/horizon-client/src/mobs/transport_items.rs::within	
+TransportItemsBetweenContainers.isWithinTargetDistance	port	crates/horizon-client/src/mobs/transport_items.rs::within
 TransportItemsBetweenContainers.targetIsReachableFromPosition	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::valid_travelling_path	reach and a clear line to a side of the chest
-TransportItemsBetweenContainers.canSeeAnyTargetSide	port	crates/horizon-client/src/mobs/transport_items.rs::sees_a_side	
-TransportItemsBetweenContainers.matchesLeavingItemsRequirement	port	crates/horizon-client/src/mobs/transport_items.rs::leaving_ok	
+TransportItemsBetweenContainers.canSeeAnyTargetSide	port	crates/horizon-client/src/mobs/transport_items.rs::sees_a_side
+TransportItemsBetweenContainers.matchesLeavingItemsRequirement	port	crates/horizon-client/src/mobs/transport_items.rs::leaving_ok
 TransportItemsBetweenContainers.hasItemMatchingHandItem	inline	crates/horizon-client/src/mobs/transport_items.rs::leaving_ok	same item id in any slot
-TransportItemsBetweenContainers.pickUpItems	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::pick_up	
-TransportItemsBetweenContainers.putDownItem	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::put_down	
+TransportItemsBetweenContainers.pickUpItems	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::pick_up
+TransportItemsBetweenContainers.putDownItem	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::put_down
 TransportItemsBetweenContainers.pickupItemFromContainer	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::pick_up	up to 16 of the first non-empty slot
 TransportItemsBetweenContainers.addItemsToContainer	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::put_down	fills an empty slot or tops up a matching stack, slot by slot
-TransportItemsBetweenContainers.stopTargetingCurrentTarget	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::stop_targeting	
-TransportItemsBetweenContainers.clearMemoriesAfterMatchingTargetFound	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::clear_memories	
-TransportItemsBetweenContainers.enterCooldownAfterNoMatchingTargetFound	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::enter_cooldown	
+TransportItemsBetweenContainers.stopTargetingCurrentTarget	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::stop_targeting
+TransportItemsBetweenContainers.clearMemoriesAfterMatchingTargetFound	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::clear_memories
+TransportItemsBetweenContainers.enterCooldownAfterNoMatchingTargetFound	port	crates/horizon-client/src/mobs/transport_items.rs::Transport::enter_cooldown
 TransportItemsBetweenContainers.TransportItemTarget.tryCreatePossibleTarget	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::find_target	the target is built from container() when a chest has one
 TransportItemsBetweenContainers.TransportItemTarget.getBlockEntityContainer	port	crates/horizon-client/src/mobs/transport_items.rs::container	gap: minor: a cat sitting on the chest does not block it, only a redstone conductor above does
 TriggerGate.triggerGate	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	TriggerGate arm: shuffle by weight, then each trigger until one fires; the piglin's idle gate is part of its goals

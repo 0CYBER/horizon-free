@@ -1,19 +1,19 @@
-ListOperation.Insert.apply	port	crates/horizon-client/src/game/commands/items.rs::list_operation	gap: minor: an offset past the end is clamped and a result over 256 entries is cut; vanilla returns the original list
-ListOperation.ReplaceSection.apply	port	crates/horizon-client/src/game/commands/items.rs::list_operation	gap: minor: an offset past the end is clamped and a result over 256 entries is cut; vanilla returns the original list
+ListOperation.Insert.apply	port	crates/horizon-client/src/game/administration/commands/items.rs::list_operation	gap: minor: an offset past the end is clamped and a result over 256 entries is cut; vanilla returns the original list
+ListOperation.ReplaceSection.apply	port	crates/horizon-client/src/game/administration/commands/items.rs::list_operation	gap: minor: an offset past the end is clamped and a result over 256 entries is cut; vanilla returns the original list
 ListOperation.StandAlone.codec	skip:java		codec
 SetNameFunction.getReferencedContextParams	skip:other		loot table validation only: the context params a function reads; no runtime effect
 SetNameFunction.createResolver	missing		minor: a set_name with an entity target keeps its raw text; vanilla resolves selectors and scores against the entity (loot.rs:1230 notes no table uses it)
 SetNameFunction.setName	skip:data		datagen builder for loot tables; Horizon reads the loot JSON
 SetNameFunction.Target.component	port	crates/horizon-world/src/loot.rs::Context::run	target becomes the component id minecraft:custom_name or minecraft:item_name
-ContextFloatProvider.getFloat	port	crates/horizon-client/src/game/commands/compute.rs::Game::provider_float	gap: minor: the 0.0 fallback for a non-finite result or arithmetic error is not applied; Game::cmd_compute rejects non-finite values instead
-ContextFloatProvider.getFloatOrThrow	port	crates/horizon-client/src/game/commands/compute.rs::Game::provider_float	the non-finite throw is in Game::cmd_compute (compute.rs:119)
-floats/Power.getFloatUnsafe	port	crates/horizon-client/src/game/commands/compute.rs::Game::provider_float	the "pow" arm; 0 to the power of 0 gives NaN as in vanilla
-ResolvableFloat.Reference.get	port	crates/horizon-client/src/game/commands/compute.rs::Game::provider_float	gap: minor: a missing registry entry gives 0.0, not the caller's default
-ContextIntProvider.floatToIntSafe	inline	crates/horizon-client/src/game/commands/compute.rs::Game::provider_int	the "from_float" arm rejects non-finite values and out-of-range results
-ContextIntProvider.longToIntSafe	inline	crates/horizon-client/src/game/commands/compute.rs::Game::provider_int	the long_to_int closure inside provider_int
-ints/Power.getIntUnsafe	port	crates/horizon-client/src/game/commands/compute.rs::Game::provider_int	the "pow" arm uses checked_pow; 0 to the power of 0 and negative exponents are errors
-ResolvableInt.Reference.get	port	crates/horizon-client/src/game/commands/compute.rs::Game::provider_int	gap: minor: a missing registry entry gives 0, not the caller's default
-AABB.of	inline	crates/horizon-world/src/worldgen/structure.rs::BoundingBox::intersects	the max+1 edge is folded into the inclusive compare; the 0.25 deflate and shape joins in JigsawPlacement are not reproduced
+ContextFloatProvider.getFloat	port	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_float	gap: minor: the 0.0 fallback for a non-finite result or arithmetic error is not applied; Game::cmd_compute rejects non-finite values instead
+ContextFloatProvider.getFloatOrThrow	port	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_float	the non-finite throw is in Game::cmd_compute (compute.rs:119)
+floats/Power.getFloatUnsafe	port	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_float	the "pow" arm; 0 to the power of 0 gives NaN as in vanilla
+ResolvableFloat.Reference.get	port	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_float	gap: minor: a missing registry entry gives 0.0, not the caller's default
+ContextIntProvider.floatToIntSafe	inline	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_int	the "from_float" arm rejects non-finite values and out-of-range results
+ContextIntProvider.longToIntSafe	inline	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_int	the long_to_int closure inside provider_int
+ints/Power.getIntUnsafe	port	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_int	the "pow" arm uses checked_pow; 0 to the power of 0 and negative exponents are errors
+ResolvableInt.Reference.get	port	crates/horizon-client/src/game/administration/commands/compute.rs::Game::provider_int	gap: minor: a missing registry entry gives 0, not the caller's default
+AABB.of	inline	crates/horizon-core/src/bounding_box.rs::BoundingBox::intersects	the max+1 edge is folded into the inclusive compare; the 0.25 deflate and shape joins in JigsawPlacement are not reproduced
 AABB.unitCubeFromLowerCorner	port	crates/horizon-core/src/geometry/mod.rs::Aabb::unit_cube	-
 AABB.encapsulatingFullBlocks	port	crates/horizon-core/src/geometry/mod.rs::Aabb::encapsulating_blocks	-
 AABB.setMinX	port	crates/horizon-core/src/geometry/mod.rs::Aabb::with_min	-
@@ -82,9 +82,9 @@ PlayerTeam.pack	port	crates/horizon-client-core/src/scoreboard.rs::Scoreboard::p
 PlayerTeam.setPlayerPrefix	port	crates/horizon-client/src/scoreboard_cmd.rs::team_modify	the team.modify prefix path; the null-to-empty rule is not repeated here
 PlayerTeam.setPlayerSuffix	port	crates/horizon-client/src/scoreboard_cmd.rs::team_modify	the team.modify suffix path
 PlayerTeam.packOptions	port	crates/horizon-client/src/lan/scoreboard.rs::View::of	the friendly fire and see-invisible flags as the team options byte
-PlayerTeam.unpackOptions	port	crates/horizon-client/src/game/remote.rs::Game::remote_team	the two option bits are read from the team packet
+PlayerTeam.unpackOptions	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_team	the two option bits are read from the team packet
 ScoreHolder.getFeedbackDisplayName	port	crates/horizon-client/src/scoreboard_cmd.rs::Holder::named	gap: minor: the hover with the scoreboard name is set where a holder is built from an entity, not here
-ScoreHolder.forNameOnly	port	crates/horizon-client/src/scoreboard_cmd.rs::Holder::named	gap: minor: "*" is not a wildcard holder; game/scoreboard.rs maps it to the player name
+ScoreHolder.forNameOnly	port	crates/horizon-client/src/scoreboard_cmd.rs::Holder::named	gap: minor: "*" is not a wildcard holder; game/interface/scoreboard/mod.rs maps it to the player name
 Scoreboard.getOrCreatePlayerScore	port	crates/horizon-client-core/src/scoreboard.rs::Scoreboard::score_mut	gap: minor: the read-only criteria check is in scoreboard_cmd.rs, not here
 Scoreboard.getPlayerScoreInfo	port	crates/horizon-client-core/src/scoreboard.rs::Scoreboard::score	-
 Scoreboard.listPlayerScores	port	crates/horizon-client-core/src/scoreboard.rs::Scoreboard::list_scores	-

@@ -58,7 +58,9 @@ pub fn main() -> Result<()> {
     let [root, inputs, output] = args.as_slice() else {
         return Err("usage: tab_list_fixture RESOURCES INPUTS OUTPUT".into());
     };
-    let atlas = HudAtlas::build(root)?;
+    let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        root.to_path_buf(),
+    ))?;
     lang::set(lang::Language::load(&[root], "en_us"));
     let font = &atlas.font;
     let mut out = BufWriter::new(fs::File::create(output)?);
@@ -171,7 +173,6 @@ pub fn main() -> Result<()> {
                     gui_ticks: f["tick"].as_i64().unwrap_or(0),
                     background,
                     upside_down: &up,
-                    // Vanilla draws no mark.
                     mark: &|_| None,
                 };
                 for d in list.layout(&inputs, font) {

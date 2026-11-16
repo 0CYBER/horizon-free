@@ -1,6 +1,6 @@
 use super::{loaded_motion, position, rotation};
 use horizon_core::geometry::Vec3;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `Entity.load` for a record with a saved position: clamp coordinates before
 /// rebuilding the box. Reject invalid positions; motion over 10 resets.

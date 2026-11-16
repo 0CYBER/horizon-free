@@ -14,6 +14,10 @@
 //! watches it (`EnderDragonFight.tick`: level 24 of both kinds on the arena,
 //! so its island ticks out to 7 chunks whatever the watcher's simulation
 //! distance), and drops it when the last watcher goes.
+//! A viewed area (arismoko/horizon#3716, `lan::viewed_levels`) is a ticket of its own, never a
+//! player's: a `Loaded` one is `PLAYER_LOADING` alone, `FULL` (33) over its
+//! square and no simulation; a `Ticking` one is `PLAYER_SIMULATION` too,
+//! entity ticking (31) over its square, rising by one a ring outward.
 //! Levels rise by one per chunk away from a ticket (`ChunkTracker`) and each
 //! chunk takes the lowest. The loading level gives the chunk's
 //! `FullChunkStatus` (`ChunkLevel.fullStatus`: 31 entity ticking, 32 block
@@ -36,20 +40,26 @@ use std::sync::Arc;
 /// `ChunkLevel`'s levels.
 pub const ENTITY_TICKING: u8 = 31;
 pub const BLOCK_TICKING: u8 = 32;
-/// What a chunk with no ticket near it has (`FULL` and above count as none).
-const NONE: (u8, u8) = (BLOCK_TICKING + 1, BLOCK_TICKING + 1);
+/// `ChunkLevel.FULL_CHUNK_LEVEL`: loaded, and no longer ticking.
+pub const FULL: u8 = BLOCK_TICKING + 1;
+/// The level of a chunk no ticket keeps `FULL` or better: unloaded as far as
+/// the tickets go. Horizon keeps no level for the statuses below `FULL`, so
+/// every level past it is this one.
+pub const UNLOADED: u8 = FULL + 1;
+/// What a chunk with no ticket near it has.
+const NONE: (u8, u8) = (UNLOADED, UNLOADED);
 
 /// `TicketType.PORTAL`'s timeout, in ticks.
 const PORTAL_TIMEOUT: i64 = 300;
 /// `Entity.placePortalTicket`'s radius: the ticket's level is `FULL` (33)
 /// minus it.
 const PORTAL_RADIUS: i32 = 3;
-const PORTAL_LEVEL: i32 = BLOCK_TICKING as i32 + 1 - PORTAL_RADIUS;
+const PORTAL_LEVEL: i32 = FULL as i32 - PORTAL_RADIUS;
 /// `EnderDragonFight.tick`'s radius on the arena it holds a ticket on:
 /// `addTicketWithRadius(TicketType.DRAGON, new ChunkPos(0, 0), 9)`, whose level
 /// is `FULL` (33) minus the radius.
 const ARENA_RADIUS: i32 = 9;
-const ARENA_LEVEL: i32 = BLOCK_TICKING as i32 + 1 - ARENA_RADIUS;
+const ARENA_LEVEL: i32 = FULL as i32 - ARENA_RADIUS;
 
 /// The tickets of one level: where its players are, its forced chunks, its
 /// portal tickets, the dragon fight's arena while a player watches it, and the
@@ -64,8 +74,39 @@ pub struct Sources {
     /// its boss bar has a watcher (`EnderDragonFight.tick`), `None` once none
     /// has (its `removeTicketWithRadius`).
     pub dragon: Option<(i32, i32)>,
+    /// The viewed areas' tickets (arismoko/horizon#3716): never in `players` or `forced`.
+    pub viewed: Vec<ViewedTicket>,
     pub view_distance: i32,
     pub simulation_distance: i32,
+}
+
+/// A viewed area's ticket: the chunks within `radius` of `center`, loaded only, or ticking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ViewedTicket {
+    pub center: (i32, i32),
+    pub radius: i32,
+    pub ticking: bool,
+}
+
+impl ViewedTicket {
+    /// How far from its centre it lowers a level: a `Ticking` area's block-ticking ring, and its
+    /// `FULL` ring while the changes are recorded, past its square.
+    fn reach(&self, recording: bool) -> i32 {
+        if self.ticking {
+            self.radius + 1 + i32::from(recording)
+        } else {
+            self.radius
+        }
+    }
+    /// The (loading, simulation) level it gives a chunk `d` chunks (Chebyshev) from its centre.
+    fn level(&self, d: i32) -> (i32, i32) {
+        if self.ticking {
+            let level = i32::from(ENTITY_TICKING) + (d - self.radius).max(0);
+            (level, level)
+        } else {
+            (i32::from(FULL), i32::from(UNLOADED))
+        }
+    }
 }
 
 /// Each chunk's (loading, simulation) level, for the chunks where either is
@@ -118,6 +159,95 @@ impl Map {
             Self::Tiled(map) => map.get(x, z),
         }
     }
+    /// Each chunk whose loading level is `FULL` or better, with that level.
+    fn for_each_loaded(&self, mut visit: impl FnMut(i32, i32, u8)) {
+        match self {
+            Self::Grid {
+                x0,
+                z0,
+                width,
+                cells,
+                ..
+            } => {
+                for (i, &(loading, _)) in cells.iter().enumerate() {
+                    if loading < UNLOADED {
+                        let (dx, dz) = (i as u32 % width, i as u32 / width);
+                        visit(
+                            x0.wrapping_add(dx as i32),
+                            z0.wrapping_add(dz as i32),
+                            loading,
+                        );
+                    }
+                }
+            }
+            #[cfg(test)]
+            Self::Sparse(map) => {
+                for (&(x, z), &(loading, _)) in map {
+                    if loading < UNLOADED {
+                        visit(x, z, loading);
+                    }
+                }
+            }
+            Self::Tiled(Tiled(tiles)) => {
+                for (&(tx, tz), tile) in tiles {
+                    for (i, &(loading, _)) in tile.iter().enumerate() {
+                        if loading < UNLOADED {
+                            visit(
+                                tx * 16 + (i as i32 & 15),
+                                tz * 16 + (i as i32 >> 4),
+                                loading,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A chunk's ticket level changing (`ChunkTicketLevelUpdatedEvent`), on
+/// `ChunkLevel`'s scale: `ENTITY_TICKING` and lower tick, `BLOCK_TICKING`
+/// runs blocks only, `FULL` is loaded and still, and `UNLOADED` is where no
+/// ticket reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelChange {
+    /// Chunk coordinates.
+    pub chunk: (i32, i32),
+    pub old: u8,
+    pub new: u8,
+}
+
+/// The chunks whose loading level differs between two maps (`None`: no
+/// tickets, every chunk unloaded), by chunk.
+fn level_changes(old: Option<&Map>, new: Option<&Map>) -> Vec<LevelChange> {
+    let level = |map: Option<&Map>, x, z| map.map_or(UNLOADED, |m| m.get(x, z).0);
+    let mut changes = Vec::new();
+    if let Some(old) = old {
+        old.for_each_loaded(|x, z, was| {
+            let now = level(new, x, z);
+            if now != was {
+                changes.push(LevelChange {
+                    chunk: (x, z),
+                    old: was,
+                    new: now,
+                });
+            }
+        });
+    }
+    if let Some(new) = new {
+        new.for_each_loaded(|x, z, now| {
+            // A chunk the old map held was compared above.
+            if level(old, x, z) == UNLOADED {
+                changes.push(LevelChange {
+                    chunk: (x, z),
+                    old: UNLOADED,
+                    new: now,
+                });
+            }
+        });
+    }
+    changes.sort_unstable_by_key(|change| change.chunk);
+    changes
 }
 
 type Tile = Box<[(u8, u8); 256]>;
@@ -127,27 +257,35 @@ type Tile = Box<[(u8, u8); 256]>;
 struct Tiled(FxHashMap<(i32, i32), Tile>);
 impl Tiled {
     /// The same levels as the grid, for tickets too far apart for one.
-    fn new(s: &Sources) -> Self {
+    fn new(s: &Sources, recording: bool) -> Self {
         let mut map = Self(FxHashMap::default());
-        let (view, sim, reach) = reach(s);
+        let (view, sim, reach) = reach(s, recording);
         for &p in &s.players {
             map.add(p, reach, i32::from(ENTITY_TICKING), view, sim);
         }
         for &p in &s.forced {
             map.add(
                 p,
-                1,
+                1 + i32::from(recording),
                 i32::from(ENTITY_TICKING),
                 0,
                 i32::from(ENTITY_TICKING),
             );
         }
         for &(p, level) in &s.portal {
-            map.add(p, ticket_radius(level), level, 0, level);
+            map.add(p, ticket_radius(level, recording), level, 0, level);
         }
         if let Some(arena) = s.dragon {
-            // The same for the ring at the ticket's own radius.
-            map.add(arena, ARENA_RADIUS - 1, ARENA_LEVEL, 0, ARENA_LEVEL);
+            map.add(
+                arena,
+                ARENA_RADIUS - i32::from(!recording),
+                ARENA_LEVEL,
+                0,
+                ARENA_LEVEL,
+            );
+        }
+        for t in &s.viewed {
+            map.add_with(t.center, t.reach(recording), |d| t.level(d));
         }
         map
     }
@@ -158,7 +296,12 @@ impl Tiled {
     }
     /// Lower each cell to the minimum of its level and the source plus distance;
     /// loading stays flat within the view distance.
-    fn add(&mut self, (px, pz): (i32, i32), r: i32, loading: i32, flat: i32, sim: i32) {
+    fn add(&mut self, p: (i32, i32), r: i32, loading: i32, flat: i32, sim: i32) {
+        self.add_with(p, r, |d| (loading + (d - flat).max(0), sim + d));
+    }
+    /// Lower each cell within `r` of `(px, pz)` to the minimum of its levels and `level` at its
+    /// distance.
+    fn add_with(&mut self, (px, pz): (i32, i32), r: i32, level: impl Fn(i32) -> (i32, i32)) {
         let (x0, z0, x1, z1) = (px - r, pz - r, px + r, pz + r);
         for tz in z0 >> 4..=z1 >> 4 {
             for tx in x0 >> 4..=x1 >> 4 {
@@ -169,11 +312,10 @@ impl Tiled {
                 let (bx, bz) = (tx * 16, tz * 16);
                 for z in z0.max(bz)..=z1.min(bz + 15) {
                     for x in x0.max(bx)..=x1.min(bx + 15) {
-                        let d = (x - px).abs().max((z - pz).abs());
+                        let (loading, sim) = level((x - px).abs().max((z - pz).abs()));
                         let e = &mut tile[((z - bz) * 16 + (x - bx)) as usize];
-                        e.0 =
-                            e.0.min((loading + (d - flat).max(0)).min(i32::from(NONE.0)) as u8);
-                        e.1 = e.1.min((sim + d).min(i32::from(NONE.1)) as u8);
+                        e.0 = e.0.min(loading.min(i32::from(NONE.0)) as u8);
+                        e.1 = e.1.min(sim.min(i32::from(NONE.1)) as u8);
                     }
                 }
             }
@@ -252,6 +394,11 @@ pub struct ChunkTickets {
     sources: Option<Sources>,
     levels: Levels,
     portal: Vec<PortalTicket>,
+    /// Whether [`Self::update`] keeps the level changes it makes.
+    recording: bool,
+    /// The level changes since the game last took them, in the order the
+    /// updates made them.
+    changes: Vec<LevelChange>,
 }
 
 impl ChunkTickets {
@@ -270,6 +417,7 @@ impl ChunkTickets {
             && next.players == old.players
             && next.forced == old.forced
             && next.dragon == old.dragon
+            && next.viewed == old.viewed
             && self.portal_matches(old)
         {
             return;
@@ -278,21 +426,27 @@ impl ChunkTickets {
             s.players.sort_unstable();
             s.players.dedup();
             s.forced.sort_unstable();
+            s.viewed.sort_unstable();
             s.portal = self.portal.iter().map(|t| (t.chunk, t.level)).collect();
             s.portal.sort_unstable();
         }
         if sources == self.sources {
             return;
         }
-        self.levels = match sources.as_ref() {
+        let levels = match sources.as_ref() {
             Some(s) => {
-                let map = Some(Arc::new(compute(s)));
+                let map = Some(Arc::new(compute(s, self.recording)));
                 // Tickets with no random tick of their own still get a box, an
                 // empty one: `None` is for a game with no tickets at all.
                 Levels(map, Some(random_bounds(s).unwrap_or((1, 1, 0, 0))))
             }
             None => Levels(None, None),
         };
+        if self.recording {
+            self.changes
+                .extend(level_changes(self.levels.0.as_deref(), levels.0.as_deref()));
+        }
+        self.levels = levels;
         self.sources = sources;
     }
 
@@ -303,6 +457,29 @@ impl ChunkTickets {
                     .iter()
                     .any(|ticket| (ticket.chunk, ticket.level) == *chunk)
             })
+    }
+    /// Keep (or stop keeping) each chunk's level changes, for a
+    /// `chunk_ticket_level_updated` listener. With `false`, updates omit the
+    /// extra FULL ring and the change scan. Switching modes rebuilds the
+    /// baseline without emitting changes; unchanged modes do no work.
+    pub fn record_changes(&mut self, on: bool) {
+        if self.recording != on {
+            if let Some(s) = &self.sources {
+                self.levels.0 = Some(Arc::new(compute(s, on)));
+            }
+            self.recording = on;
+        }
+        if !on {
+            self.changes.clear();
+        }
+    }
+    /// The level changes kept since the last call, in order: each update's by
+    /// chunk, one entry for each update that changed the chunk, so that one
+    /// chunk's entries chain from the old level of the first to the new of
+    /// the last. A game with no tickets (`update(None)`) holds every chunk
+    /// unloaded.
+    pub fn take_changes(&mut self) -> Vec<LevelChange> {
+        std::mem::take(&mut self.changes)
     }
     pub fn levels(&self) -> Levels {
         self.levels.clone()
@@ -357,10 +534,10 @@ impl ChunkTickets {
     }
 }
 
-/// How far a ticket of `level` reaches with levels of `BLOCK_TICKING` or
-/// lower: one more a chunk away, and `FULL` (33) and above count as none.
-fn ticket_radius(level: i32) -> i32 {
-    (i32::from(BLOCK_TICKING) - level).max(0)
+/// How far a ticket of `level` reaches with levels of `FULL` or
+/// lower: one more a chunk away; levels above `FULL` count as unloaded.
+fn ticket_radius(level: i32, recording: bool) -> i32 {
+    (i32::from(BLOCK_TICKING) + i32::from(recording) - level).max(0)
 }
 
 /// The box that holds every chunk `random_ticking` can answer for: a player's
@@ -381,7 +558,13 @@ fn random_bounds(s: &Sources) -> Option<(i32, i32, i32, i32)> {
                 .filter(|&&(_, level)| level <= i32::from(ENTITY_TICKING))
                 .map(|&(p, level)| (p, i32::from(ENTITY_TICKING) - level)),
         )
-        .chain(s.dragon.map(|arena| (arena, ARENA_RADIUS)));
+        .chain(s.dragon.map(|arena| (arena, ARENA_RADIUS)))
+        .chain(
+            s.viewed
+                .iter()
+                .filter(|t| t.ticking)
+                .map(|t| (t.center, t.radius)),
+        );
     boxes.fold(None, |b, ((x, z), r)| {
         let (lo_x, lo_z, hi_x, hi_z) = (x - r, z - r, x + r, z + r);
         Some(match b {
@@ -392,25 +575,31 @@ fn random_bounds(s: &Sources) -> Option<(i32, i32, i32, i32)> {
 }
 
 /// How far a player's tickets reach, and the simulation ticket's level.
-fn reach(s: &Sources) -> (i32, i32, i32) {
+fn reach(s: &Sources, recording: bool) -> (i32, i32, i32) {
     let view = s.view_distance.clamp(0, 32);
     let simulation = s.simulation_distance.clamp(0, 32);
     // PLAYER_LOADING within the view distance, PLAYER_SIMULATION at the
     // player's chunk (`getPlayerTicketLevel`: never below 0).
     let player_sim = (i32::from(ENTITY_TICKING) - simulation).max(0);
-    let reach = (view + 1).max(i32::from(BLOCK_TICKING) - player_sim);
+    let reach = (view + 1 + i32::from(recording))
+        .max(i32::from(BLOCK_TICKING) + i32::from(recording) - player_sim);
     (view, player_sim, reach)
 }
 
-fn compute(s: &Sources) -> Map {
-    let (view, player_sim, reach) = reach(s);
+fn compute(s: &Sources, recording: bool) -> Map {
+    let (view, player_sim, reach) = reach(s, recording);
     let boxes = s
         .players
         .iter()
         .map(|&p| (p, reach))
-        .chain(s.forced.iter().map(|&f| (f, 1)))
-        .chain(s.portal.iter().map(|&(p, level)| (p, ticket_radius(level))))
-        .chain(s.dragon.map(|arena| (arena, ARENA_RADIUS)));
+        .chain(s.forced.iter().map(|&f| (f, 1 + i32::from(recording))))
+        .chain(
+            s.portal
+                .iter()
+                .map(|&(p, level)| (p, ticket_radius(level, recording))),
+        )
+        .chain(s.dragon.map(|arena| (arena, ARENA_RADIUS)))
+        .chain(s.viewed.iter().map(|t| (t.center, t.reach(recording))));
     let Some((x0, z0, x1, z1)) = boxes.fold(None, |b, ((x, z), r)| {
         let (lo_x, lo_z, hi_x, hi_z) = (
             i64::from(x) - i64::from(r),
@@ -427,7 +616,7 @@ fn compute(s: &Sources) -> Map {
     };
     let (width, depth) = ((x1 - x0 + 1) as u64, (z1 - z0 + 1) as u64);
     if width * depth > GRID_CELLS {
-        return Map::Tiled(Tiled::new(s));
+        return Map::Tiled(Tiled::new(s, recording));
     }
     let (x0, z0, width, depth) = (x0 as i32, z0 as i32, width as u32, depth as u32);
     let mut cells = vec![NONE; (width * depth) as usize].into_boxed_slice();
@@ -451,15 +640,15 @@ fn compute(s: &Sources) -> Map {
         }
     }
     for &(fx, fz) in &s.forced {
-        for dz in -1i32..=1 {
-            for dx in -1i32..=1 {
+        for dz in -(1 + i32::from(recording))..=1 + i32::from(recording) {
+            for dx in -(1 + i32::from(recording))..=1 + i32::from(recording) {
                 let level = i32::from(ENTITY_TICKING) + dx.abs().max(dz.abs());
                 lower(fx + dx, fz + dz, level, level);
             }
         }
     }
     for &((cx, cz), base) in &s.portal {
-        let r = ticket_radius(base);
+        let r = ticket_radius(base, recording);
         for dz in -r..=r {
             for dx in -r..=r {
                 let level = base + dx.abs().max(dz.abs());
@@ -475,6 +664,15 @@ fn compute(s: &Sources) -> Map {
             }
         }
     }
+    for t in &s.viewed {
+        let ((cx, cz), r) = (t.center, t.reach(recording));
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let (loading, sim) = t.level(dx.abs().max(dz.abs()));
+                lower(cx + dx, cz + dz, loading, sim);
+            }
+        }
+    }
     Map::Grid {
         x0,
         z0,
@@ -487,7 +685,8 @@ fn compute(s: &Sources) -> Map {
 /// The old per-chunk map: the reference the grid and tiles are tested against.
 #[cfg(test)]
 fn compute_sparse(s: &Sources) -> FxHashMap<(i32, i32), (u8, u8)> {
-    let (view, player_sim, reach) = reach(s);
+    let recording = true;
+    let (view, player_sim, reach) = reach(s, recording);
     let mut levels: FxHashMap<(i32, i32), (u8, u8)> = FxHashMap::default();
     let mut lower = |key, loading: i32, sim: i32| {
         let e = levels.entry(key).or_insert(NONE);
@@ -507,15 +706,15 @@ fn compute_sparse(s: &Sources) -> FxHashMap<(i32, i32), (u8, u8)> {
         }
     }
     for &(fx, fz) in &s.forced {
-        for dz in -1i32..=1 {
-            for dx in -1i32..=1 {
+        for dz in -(1 + i32::from(recording))..=1 + i32::from(recording) {
+            for dx in -(1 + i32::from(recording))..=1 + i32::from(recording) {
                 let level = i32::from(ENTITY_TICKING) + dx.abs().max(dz.abs());
                 lower((fx + dx, fz + dz), level, level);
             }
         }
     }
     for &((cx, cz), base) in &s.portal {
-        let r = ticket_radius(base);
+        let r = ticket_radius(base, recording);
         for dz in -r..=r {
             for dx in -r..=r {
                 let level = base + dx.abs().max(dz.abs());
@@ -531,12 +730,148 @@ fn compute_sparse(s: &Sources) -> FxHashMap<(i32, i32), (u8, u8)> {
             }
         }
     }
+    for t in &s.viewed {
+        let ((cx, cz), r) = (t.center, t.reach(recording));
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let (loading, sim) = t.level(dx.abs().max(dz.abs()));
+                lower((cx + dx, cz + dz), loading, sim);
+            }
+        }
+    }
     levels.retain(|_, l| *l != NONE);
     levels
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recording_controls_reach_and_baseline() {
+        for (sources, off_cells, on_cells, edge) in [
+            (
+                Sources {
+                    players: vec![(0, 0)],
+                    view_distance: 32,
+                    ..Sources::default()
+                },
+                4489,
+                4761,
+                34,
+            ),
+            (
+                Sources {
+                    forced: vec![(0, 0)],
+                    ..Sources::default()
+                },
+                9,
+                25,
+                2,
+            ),
+            (
+                Sources {
+                    portal: vec![((0, 0), 30)],
+                    ..Sources::default()
+                },
+                25,
+                49,
+                3,
+            ),
+        ] {
+            for recording in [false, true] {
+                let map = compute(&sources, recording);
+                let Map::Grid { ref cells, .. } = map else {
+                    panic!("expected grid")
+                };
+                assert_eq!(cells.len(), if recording { on_cells } else { off_cells });
+                assert_eq!(map.get(edge, 0).0, if recording { FULL } else { UNLOADED });
+                if !recording {
+                    assert!(cells.iter().all(|&(loading, _)| loading <= BLOCK_TICKING));
+                }
+                let tiled = Tiled::new(&sources, recording);
+                for z in -36..=36 {
+                    for x in -36..=36 {
+                        assert_eq!(map.get(x, z), tiled.get(x, z));
+                    }
+                }
+            }
+        }
+        let boundary = Sources {
+            forced: vec![(14, 14)],
+            ..Sources::default()
+        };
+        assert_eq!(Tiled::new(&boundary, false).0.len(), 1);
+        assert_eq!(Tiled::new(&boundary, true).0.len(), 4);
+        let mut tickets = ChunkTickets::default();
+        let sources = Some(Sources {
+            forced: vec![(15, 15)],
+            ..Sources::default()
+        });
+        tickets.update(sources.clone());
+        assert_eq!(tickets.levels.0.as_ref().unwrap().get(17, 15).0, UNLOADED);
+        tickets.record_changes(true);
+        assert_eq!(tickets.levels.0.as_ref().unwrap().get(17, 15).0, FULL);
+        tickets.update(sources.clone());
+        assert!(tickets.take_changes().is_empty());
+        tickets.record_changes(false);
+        assert_eq!(tickets.levels.0.as_ref().unwrap().get(17, 15).0, UNLOADED);
+        tickets.update(sources);
+        assert!(tickets.take_changes().is_empty());
+        tickets.record_changes(true);
+        tickets.update(Some(Sources {
+            forced: vec![(16, 15)],
+            ..Sources::default()
+        }));
+        assert_eq!(tickets.levels.0.as_ref().unwrap().get(18, 15).0, FULL);
+        assert!(
+            tickets
+                .take_changes()
+                .iter()
+                .any(|c| c.chunk == (18, 15) && c.new == FULL)
+        );
+    }
+
+    #[test]
+    fn recording_preserves_ticking_predicates() {
+        for view in [2, 4, 8, 16, 32] {
+            for sim in [2, 4, 8, 16, 32] {
+                for combo in 0..5 {
+                    let s = Sources {
+                        players: vec![(0, 0)],
+                        forced: if combo >= 1 { vec![(50, 0)] } else { vec![] },
+                        portal: if combo >= 2 {
+                            vec![((0, 50), 30)]
+                        } else {
+                            vec![]
+                        },
+                        dragon: (combo >= 3).then_some((50, 50)),
+                        viewed: Vec::new(),
+                        view_distance: view,
+                        simulation_distance: sim,
+                    };
+                    let a = Levels(Some(Arc::new(compute(&s, false))), random_bounds(&s));
+                    let b = Levels(Some(Arc::new(compute(&s, true))), random_bounds(&s));
+                    assert_eq!(a.random_tick_bounds(), b.random_tick_bounds());
+                    for z in -36..=60 {
+                        for x in -36..=60 {
+                            for predicate in [
+                                Levels::entity_ticking,
+                                Levels::in_entity_ticking_range,
+                                Levels::block_ticking,
+                                Levels::random_ticking,
+                                Levels::loaded_entity_ticking,
+                                Levels::loaded_ticking,
+                            ] {
+                                assert_eq!(predicate(&a, x, z), predicate(&b, x, z));
+                            }
+                        }
+                    }
+                    assert!(a.entity_ticking(0, 0));
+                    assert!(!a.entity_ticking(100, 100));
+                }
+            }
+        }
+    }
+
     use super::*;
 
     fn levels(players: &[(i32, i32)], forced: &[(i32, i32)], view: i32, sim: i32) -> Levels {
@@ -546,10 +881,55 @@ mod tests {
             forced: forced.to_vec(),
             portal: Vec::new(),
             dragon: None,
+            viewed: Vec::new(),
             view_distance: view,
             simulation_distance: sim,
         }));
         t.levels()
+    }
+
+    /// A viewed `Ticking` area entity-ticks its square and block-ticks the ring past it; a
+    /// `Loaded` one is loaded and ticks nothing. Neither is a player's or a forced chunk's
+    /// ticket, and the grid and the tiles agree.
+    #[test]
+    fn viewed_areas_tick_by_their_mode_only() {
+        let s = Sources {
+            viewed: vec![
+                ViewedTicket {
+                    center: (0, 0),
+                    radius: 2,
+                    ticking: true,
+                },
+                ViewedTicket {
+                    center: (100, 0),
+                    radius: 2,
+                    ticking: false,
+                },
+            ],
+            ..Sources::default()
+        };
+        let mut t = ChunkTickets::default();
+        t.update(Some(s.clone()));
+        let l = t.levels();
+        assert!(l.entity_ticking(2, -2) && l.random_ticking(-2, 2));
+        assert!(!l.entity_ticking(3, 0) && l.block_ticking(3, 3) && !l.random_ticking(3, 0));
+        assert!(!l.block_ticking(4, 0));
+        assert!(l.loaded_ticking(3, 3) && !l.loaded_ticking(4, 4));
+        for (x, z) in [(100, 0), (102, 2), (98, -2)] {
+            assert!(!l.block_ticking(x, z) && !l.entity_ticking(x, z), "{x} {z}");
+            assert_eq!(l.get(x, z), Some((FULL, UNLOADED)));
+        }
+        assert_eq!(l.get(103, 0), Some(NONE));
+        assert!(s.players.is_empty() && s.forced.is_empty());
+        for recording in [false, true] {
+            let tiled = Map::Tiled(Tiled::new(&s, recording));
+            let grid = compute(&s, recording);
+            for z in -6..=6 {
+                for x in -6..=106 {
+                    assert_eq!(tiled.get(x, z), grid.get(x, z), "{x} {z} {recording}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -616,6 +996,7 @@ mod tests {
                 forced: Vec::new(),
                 portal: Vec::new(),
                 dragon,
+                viewed: Vec::new(),
                 view_distance: 12,
                 simulation_distance: 2,
             })
@@ -648,6 +1029,7 @@ mod tests {
                 forced: Vec::new(),
                 portal: Vec::new(),
                 dragon: None,
+                viewed: Vec::new(),
                 view_distance: 2,
                 simulation_distance: 2,
             })
@@ -667,6 +1049,7 @@ mod tests {
 
     /// The grid answers as the map does, everywhere around the tickets.
     #[test]
+    #[ignore = "daily"]
     fn grid_matches_the_map() {
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: i32| {
@@ -689,13 +1072,14 @@ mod tests {
                 portal: Vec::new(),
                 // Tiled maps hold the arena too.
                 dragon: (case % 3 == 0).then(|| (next(spread), next(spread))),
+                viewed: Vec::new(),
                 view_distance: 2 + next(12).abs(),
                 simulation_distance: 2 + next(12).abs(),
             };
-            let Map::Grid { .. } = compute(&s) else {
+            let Map::Grid { .. } = compute(&s, true) else {
                 panic!("case {case} fell back to the map");
             };
-            let (grid, map) = (compute(&s), Map::Sparse(compute_sparse(&s)));
+            let (grid, map) = (compute(&s, true), Map::Sparse(compute_sparse(&s)));
             let r = spread + 50;
             for z in -r..=r {
                 for x in -r..=r {
@@ -738,6 +1122,7 @@ mod tests {
                 forced: vec![(-30, 17)],
                 portal: Vec::new(),
                 dragon: Some((0, 0)),
+                viewed: Vec::new(),
                 view_distance: 4,
                 simulation_distance: 12,
             })
@@ -780,6 +1165,204 @@ mod tests {
         assert!(!l.block_ticking(41, 0));
     }
 
+    fn one_player(chunk: (i32, i32), view: i32, simulation: i32) -> Option<Sources> {
+        Some(Sources {
+            players: vec![chunk],
+            forced: Vec::new(),
+            portal: Vec::new(),
+            dragon: None,
+            viewed: Vec::new(),
+            view_distance: view,
+            simulation_distance: simulation,
+        })
+    }
+
+    fn change(chunk: (i32, i32), old: u8, new: u8) -> LevelChange {
+        LevelChange { chunk, old, new }
+    }
+
+    /// A player's loading level is 31 (entity ticking) out to the view
+    /// distance, then one more a chunk: 32 block ticking, 33 full, and
+    /// nothing past it. Chunk (5, 0) of a player with view 4 changes level
+    /// four times as the player moves in one tick (several updates of the
+    /// tickets): the entries chain, each `old` the last `new`, and a level the
+    /// chunk keeps through an update has no entry.
+    #[test]
+    fn several_changes_to_one_chunk_chain_old_to_new() {
+        let mut t = ChunkTickets::default();
+        t.record_changes(true);
+        let chunk = (5, 0);
+        t.update(one_player((0, 0), 4, 4));
+        assert!(t.take_changes().contains(&change(chunk, UNLOADED, 32)));
+        // 2 away, 4 away (still 31), 6 away, 5 away, 10 away.
+        for at in [(3, 0), (9, 0), (-1, 0), (0, 0), (-5, 0)] {
+            t.update(one_player(at, 4, 4));
+        }
+        let chain: Vec<_> = t
+            .take_changes()
+            .into_iter()
+            .filter(|c| c.chunk == chunk)
+            .collect();
+        assert_eq!(
+            chain,
+            [
+                change(chunk, 32, 31),
+                change(chunk, 31, 33),
+                change(chunk, 33, 32),
+                change(chunk, 32, UNLOADED),
+            ]
+        );
+    }
+
+    #[test]
+    fn full_and_unloaded_stay_apart_from_the_ticking_levels() {
+        let mut t = ChunkTickets::default();
+        t.record_changes(true);
+        t.update(one_player((0, 0), 4, 4));
+        let _ = t.take_changes();
+        // View 4: 6 away is level 33 (full: loaded, not ticking), 7 away is
+        // past it. A player a chunk nearer turns 7 into 33 and 6 into 32.
+        t.update(one_player((1, 0), 4, 4));
+        let nearer = t.take_changes();
+        assert!(nearer.contains(&change((7, 0), UNLOADED, 33)));
+        assert!(nearer.contains(&change((6, 0), 33, 32)));
+        // Two chunks away from there, a full chunk is unloaded in one step
+        // from 33, and a block-ticking one from 32: nothing is clamped to
+        // the ticking range.
+        t.update(one_player((-1, 0), 4, 4));
+        let away = t.take_changes();
+        assert!(away.contains(&change((7, 0), 33, UNLOADED)));
+        assert!(away.contains(&change((6, 0), 32, UNLOADED)));
+        assert!(away.contains(&change((5, 0), 31, 33)));
+    }
+
+    #[test]
+    fn unchanged_levels_report_nothing() {
+        let mut t = ChunkTickets::default();
+        t.record_changes(true);
+        t.update(one_player((0, 0), 4, 4));
+        let _ = t.take_changes();
+        t.update(one_player((0, 0), 4, 4));
+        assert!(t.take_changes().is_empty());
+        // A simulation distance changes the simulation track, not a loading
+        // level.
+        t.update(one_player((0, 0), 4, 2));
+        assert!(t.take_changes().is_empty());
+        // One chunk over: the chunks both positions keep at 31 are not told.
+        t.update(one_player((1, 0), 4, 2));
+        let moved = t.take_changes();
+        assert!(moved.iter().all(|c| c.old != c.new));
+        assert!(
+            !moved
+                .iter()
+                .any(|c| (-3..=4).contains(&c.chunk.0) && (-4..=4).contains(&c.chunk.1))
+        );
+        assert!(moved.contains(&change((-5, 0), 32, 33)));
+        assert!(moved.contains(&change((-6, 0), 33, UNLOADED)));
+    }
+
+    #[test]
+    fn nothing_is_kept_unless_asked() {
+        let mut t = ChunkTickets::default();
+        t.update(one_player((0, 0), 4, 4));
+        t.update(one_player((40, 0), 4, 4));
+        assert!(t.take_changes().is_empty());
+        assert_eq!(
+            t.changes.capacity(),
+            0,
+            "an update with no listener allocated"
+        );
+        t.record_changes(true);
+        t.update(one_player((0, 0), 4, 4));
+        t.record_changes(false);
+        assert!(t.take_changes().is_empty());
+    }
+
+    /// An update tells its chunks by position; tickets that were not there
+    /// load every chunk they keep, from unloaded, and no tickets (`None`)
+    /// unload them all.
+    #[test]
+    fn a_first_update_loads_every_chunk_and_none_unloads_them() {
+        let mut t = ChunkTickets::default();
+        t.record_changes(true);
+        t.update(Some(Sources {
+            players: Vec::new(),
+            forced: vec![(10, 10)],
+            portal: Vec::new(),
+            dragon: None,
+            viewed: Vec::new(),
+            view_distance: 2,
+            simulation_distance: 2,
+        }));
+        let loaded = t.take_changes();
+        // A forced chunk is 31, 32 a ring out and 33 two rings out: 5x5.
+        assert_eq!(loaded.len(), 25);
+        assert_eq!(loaded[0], change((8, 8), UNLOADED, 33));
+        assert_eq!(loaded[12], change((10, 10), UNLOADED, 31));
+        assert_eq!(loaded[24], change((12, 12), UNLOADED, 33));
+        assert!(loaded.windows(2).all(|w| w[0].chunk < w[1].chunk));
+        t.update(None);
+        let unloaded = t.take_changes();
+        assert_eq!(unloaded.len(), 25);
+        assert!(unloaded.iter().all(|c| c.new == UNLOADED));
+        assert_eq!(unloaded[12], change((10, 10), 31, UNLOADED));
+    }
+
+    /// The changes between two sets of tickets are the chunks whose loading
+    /// level differs in the per-chunk reference map, however the levels are
+    /// stored (grid, map, tiles) and wherever the tickets are.
+    #[test]
+    fn changes_are_the_chunks_whose_reference_level_differs() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |n: i32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % (2 * n as u64 + 1)) as i32 - n
+        };
+        for case in 0..80 {
+            let spread = [4, 25, 3000][case % 3];
+            let mut sources = || Sources {
+                players: (0..1 + case % 6)
+                    .map(|_| (next(spread), next(spread)))
+                    .collect(),
+                forced: (0..case % 3)
+                    .map(|_| (next(spread), next(spread)))
+                    .collect(),
+                portal: (0..case % 2)
+                    .map(|_| ((next(spread), next(spread)), PORTAL_LEVEL))
+                    .collect(),
+                dragon: (case % 4 == 0).then(|| (next(spread), next(spread))),
+                viewed: Vec::new(),
+                view_distance: 2 + next(8).abs(),
+                simulation_distance: 2 + next(8).abs(),
+            };
+            let (a, b) = (sources(), sources());
+            let (old, new) = (compute_sparse(&a), compute_sparse(&b));
+            let mut expected = Vec::new();
+            for &key in old.keys().chain(new.keys()) {
+                let was = old.get(&key).map_or(UNLOADED, |l| l.0);
+                let now = new.get(&key).map_or(UNLOADED, |l| l.0);
+                if was != now {
+                    expected.push(change(key, was, now));
+                }
+            }
+            expected.sort_unstable_by_key(|c| c.chunk);
+            expected.dedup();
+            let stored: [(Map, Map); 3] = [
+                (compute(&a, true), compute(&b, true)),
+                (Map::Sparse(old), Map::Sparse(new)),
+                (
+                    Map::Tiled(Tiled::new(&a, true)),
+                    Map::Tiled(Tiled::new(&b, true)),
+                ),
+            ];
+            for (old, new) in &stored {
+                assert_eq!(level_changes(Some(old), Some(new)), expected, "case {case}");
+            }
+        }
+    }
+
     /// cargo test --release -p horizon-client-lib --lib ticket_levels::tests::levels_cost -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -808,6 +1391,7 @@ mod tests {
                 forced: Vec::new(),
                 portal: Vec::new(),
                 dragon: None,
+                viewed: Vec::new(),
                 view_distance: distance,
                 simulation_distance: distance,
             };
@@ -819,7 +1403,7 @@ mod tests {
             let map_build = t.elapsed().as_secs_f64() * 1e3 / rounds as f64;
             let t = std::time::Instant::now();
             for _ in 0..rounds {
-                std::hint::black_box(compute(std::hint::black_box(&s)));
+                std::hint::black_box(compute(std::hint::black_box(&s), true));
             }
             let selected_build = t.elapsed().as_secs_f64() * 1e3 / rounds as f64;
             let mut tickets = ChunkTickets::default();
@@ -834,11 +1418,11 @@ mod tests {
             let moving = t.elapsed().as_secs_f64() * 1e3 / rounds as f64;
             println!("one player moving: {moving:.3} ms/update");
             // A tick's questions: every chunk within 12 of every player.
-            let (map, selected) = (Map::Sparse(compute_sparse(&s)), compute(&s));
-            let tiled = Map::Tiled(Tiled::new(&s));
+            let (map, selected) = (Map::Sparse(compute_sparse(&s)), compute(&s, true));
+            let tiled = Map::Tiled(Tiled::new(&s, true));
             let t = std::time::Instant::now();
             for _ in 0..rounds {
-                std::hint::black_box(Tiled::new(std::hint::black_box(&s)));
+                std::hint::black_box(Tiled::new(std::hint::black_box(&s), true));
             }
             let tiled_build = t.elapsed().as_secs_f64() * 1e3 / rounds as f64;
             let ask = |m: &Map| {
@@ -872,6 +1456,7 @@ mod tests {
 mod tiled_tests {
     use super::*;
     #[test]
+    #[ignore = "daily"]
     fn tiles_match_scalar_levels_with_overlaps_and_portals() {
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: i32| {
@@ -894,11 +1479,12 @@ mod tiled_tests {
                     .chain([((16, -16), PORTAL_LEVEL)])
                     .collect(),
                 dragon: (case % 4 == 0).then(|| (next(100), next(100))),
+                viewed: Vec::new(),
                 view_distance: [0, 2, 10, 32][case % 4],
                 simulation_distance: [32, 10, 2, 0][(case / 4) % 4],
             };
             let expected = compute_sparse(&s);
-            let tiled = Tiled::new(&s);
+            let tiled = Tiled::new(&s, true);
             for (&(x, z), &want) in &expected {
                 assert_eq!(tiled.get(x, z), want, "case {case}, {x}, {z}");
             }
