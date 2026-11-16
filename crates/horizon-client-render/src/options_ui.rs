@@ -5506,24 +5506,40 @@ mod tests {
     }
 
     /// Typing goes to the Mods search box once a click focuses it; the one match is selected,
-    /// so Homepage opens Minecraft's link.
+    /// so Homepage opens that installed mod's declared link without product-global state.
     #[test]
     fn the_mods_search_takes_the_typing_after_a_click() {
         let atlas = atlas();
         let mut s = Settings::default();
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "search_fixture".into(),
+            title: "Search fixture".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: None,
+        });
+        s.mods.info.insert(
+            "search_fixture".into(),
+            crate::mod_list::ModInfo {
+                name: "Search fixture".into(),
+                homepage: Some("https://example.org/search".into()),
+                ..Default::default()
+            },
+        );
         let mut ui = OptionsUi::default();
         let size = (480.0, 240.0);
         ui.show(Page::Mods);
         assert!(!ui.typing());
         ui.click(&mut s, &atlas, 60.0, 16.0, size, [480, 240], false, false);
         assert!(ui.typing());
-        ui.type_text(&atlas, "mine");
+        ui.type_text(&atlas, "fixture");
         let events = ui.click(&mut s, &atlas, 229.0, 192.0, size, [480, 240], false, false);
         assert_eq!(
             events,
             vec![
                 Event::ButtonClick,
-                Event::OpenLink("https://minecraft.net".into())
+                Event::OpenLink("https://example.org/search".into())
             ]
         );
         assert!(!ui.typing());
