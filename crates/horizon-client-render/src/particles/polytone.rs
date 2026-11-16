@@ -130,7 +130,8 @@ fn json_files(
     root: &horizon_assets::resource_source::ResourceSource,
     dir: &Path,
 ) -> Vec<(String, Json)> {
-    root.list(&dir.to_string_lossy())
+    // Resource names use `/`; a `PathBuf` join puts a `\` in on Windows, which lists nothing.
+    root.list(&dir.to_string_lossy().replace('\\', "/"))
         .into_iter()
         .filter(|p| p.ends_with(".json"))
         .filter_map(|p| {
