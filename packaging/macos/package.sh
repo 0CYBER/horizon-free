@@ -48,8 +48,14 @@ else
   codesign --force --options runtime --timestamp ${keychain[@]+"${keychain[@]}"} --sign "$identity" "$app"
 fi
 codesign --verify --strict --verbose=2 "$app"
-# Still starts under the hardened runtime.
-"$app/Contents/MacOS/horizon-launcher" --version
+# Still starts under the hardened runtime, where this host can run it: a cross-built app
+# (arm64 built on an Intel host, which GitHub's arm64 runners' lack of capacity forced)
+# can't start here, and its architecture was checked above.
+if [[ "$(uname -m)" == "$cpu" ]]; then
+  "$app/Contents/MacOS/horizon-launcher" --version
+else
+  echo "cross-built $cpu app on $(uname -m): not started here, the lipo check above stands"
+fi
 notarize=$([[ "$identity" != "-" && -n "${MACOS_NOTARY_PROFILE:-}" ]] && echo yes || true)
 # The app first, so the zip and the .dmg both carry it stapled.
 [[ -z "$notarize" ]] || "$here/notarize.sh" "$app"

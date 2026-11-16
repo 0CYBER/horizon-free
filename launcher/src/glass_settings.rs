@@ -666,8 +666,10 @@ impl Launcher {
             ));
         let network = section(5).child(self.proxy_row(n, cx));
         let game = section(4)
-            .child(self.game_architecture_row(n, cx))
-            .child(self.game_args_row(n + 1, cx))
+            .child(self.game_folder_row(n, cx))
+            .child(self.minecraft_folder_row(n + 1, cx))
+            .child(self.game_architecture_row(n + 2, cx))
+            .child(self.game_args_row(n + 3, cx))
             .child(self.mods_auto_update_row(cx));
         let ai = section(8)
             .child(self.no_ai_row(n, cx))
@@ -714,7 +716,8 @@ impl Launcher {
                     Some(b.menu_entry.into_any_element()),
                     &t,
                 ))
-            });
+            })
+            .children(self.dev_options_section(cx));
         vec![
             launcher,
             appearance,

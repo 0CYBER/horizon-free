@@ -24,6 +24,7 @@ mod console;
 mod console_page;
 mod cull;
 mod datapacks_page;
+mod dev_options;
 mod developer_play;
 mod export_page;
 mod frame;
@@ -87,6 +88,7 @@ mod servers_page;
 mod setup_page;
 mod shell;
 mod shortcut_page;
+mod skin_page;
 mod specimen;
 mod sticky;
 mod switch_page;
@@ -397,6 +399,15 @@ struct Launcher {
     /// The selected account's own answer on it from its last Wardrobe visit, kept on disk (a
     /// preview the service grants it, its claim).
     shop_kept: Option<horizon_launcher::wardrobe::Claim>,
+    /// Horizon-free: Settings > Account's skin panel for an offline name (`skin_page.rs`).
+    skin: Option<skin_page::SkinPanel>,
+    /// Horizon-free: clicks on the sidebar's launcher version, and whether they revealed the
+    /// developer options (`dev_options`) for this run.
+    dev_clicks: u8,
+    dev_options: bool,
+    /// Horizon-free: the name the game made up for an offline player (`horizon-player.txt`), for
+    /// the top bar.
+    offline_name: Option<String>,
     /// Work the look out again on the next frame (a launcher theme put on or taken off).
     restyle: bool,
     /// Why the last picture for Home's background was refused.
@@ -871,3 +882,19 @@ mod tests {
 }
 
 mod native_build;
+
+/// Horizon-free: the name the game made up for a player without an account, once it has run
+/// (`horizon-player.txt`).
+fn offline_name() -> Option<String> {
+    player_name(&std::fs::read_to_string(backend::game_home().join("horizon-player.txt")).ok()?)
+}
+
+/// The name in `horizon-player.txt`: the game writes `name:Player12345` (horizon-client's
+/// offline_name.rs).
+fn player_name(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("name:"))
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
+}
