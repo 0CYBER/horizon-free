@@ -151,7 +151,7 @@ mod tests {
     /// target's file under its condition; it has no default file, and none is needed.
     #[test]
     fn per_target_module_paths_are_followed_and_need_no_default_file() {
-        let dir = std::env::temp_dir().join(format!("points-cfg-attr-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("source-cfg-attr-{}", std::process::id()));
         let src = dir.join("src");
         std::fs::create_dir_all(src.join("control")).unwrap();
         std::fs::write(
