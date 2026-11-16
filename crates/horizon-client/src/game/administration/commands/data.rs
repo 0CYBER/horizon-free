@@ -564,7 +564,7 @@ impl Game<'_> {
                     .position(|o| o.id == id)
                     .ok_or_else(stale)?;
                 let slot = &self.others[i];
-                let mut new = Self::other_from_nbt(&tag, id, &slot.kind).ok_or_else(stale)?;
+                let mut new = Self::other_from_nbt(&mut tag, id, &slot.kind).ok_or_else(stale)?;
                 new.join = slot.join;
                 let is_display = matches!(
                     slot.kind.as_str(),
