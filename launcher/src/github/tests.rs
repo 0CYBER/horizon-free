@@ -12,6 +12,7 @@ const T0: u64 = 1_800_000_000;
 const LATER: u64 = T0 + FRESH_SECS;
 
 const RELEASES: &str = "https://api.github.com/repos/horizon-rust/horizon/releases?per_page=100";
+const FORK_RELEASES: &str = "https://api.github.com/repos/arismoko/horizon/releases?per_page=100";
 
 fn list(tag: &str) -> serde_json::Value {
     serde_json::json!([{ "tag_name": tag }])
@@ -45,7 +46,7 @@ fn mirror_serves_only_horizons_repository() {
         None
     );
     for url in [
-        "https://api.github.com/repos/horizon-rust/horizon/releases",
+        "https://api.github.com/repos/arismoko/horizon/releases",
         "https://api.github.com/repos/horizon-rust/horizon-extra/releases",
     ] {
         assert_eq!(mirror_url_with(url, base), None);
@@ -61,17 +62,24 @@ fn mirror_serves_only_horizons_repository() {
 fn a_saved_upstream_list_cannot_answer_a_fork_check() {
     let cache = scratch("repository-scope");
     json_with(
-        "https://api.github.com/repos/horizon-rust/horizon/releases?per_page=100",
+        RELEASES,
         &cache,
         T0,
         |_, _| Answer::Fresh(list("upstream"), None),
         no_mirror,
     )
     .unwrap();
-    let absent = json_with(RELEASES, &cache, T0, |_, _| Answer::NotFound, no_mirror).unwrap();
+    let absent = json_with(
+        FORK_RELEASES,
+        &cache,
+        T0,
+        |_, _| Answer::NotFound,
+        no_mirror,
+    )
+    .unwrap();
     assert_eq!(absent, None);
     let error = json_with(
-        RELEASES,
+        FORK_RELEASES,
         &cache,
         T0,
         |_, _| Answer::Failed("offline".into()),
