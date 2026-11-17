@@ -145,11 +145,16 @@ class ProcessTreeTests(unittest.TestCase):
             process_tree.start_build_server()
         starter = process_tree.BUILD_SERVERS.pop()
         self.addCleanup(process_tree._release, starter)
+        written = ""
         for _ in range(600):
-            if (directory / "server.txt").exists() and (directory / "server.txt").read_text():
+            try:
+                written = (directory / "server.txt").read_text()
+            except OSError:  # not there yet, or Set-Content still holds it open (PermissionError, #17172)
+                pass
+            if written:
                 break
             threading.Event().wait(0.05)
-        pid, idle = (directory / "server.txt").read_text().split()
+        pid, idle = written.split()
         self.assertEqual(idle, "0")  # it never idles out, so no harness's build restarts it in its own job
         server = kernel32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
         self.assertTrue(server)
