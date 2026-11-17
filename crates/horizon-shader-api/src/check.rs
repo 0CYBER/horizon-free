@@ -391,10 +391,15 @@ fn check_entry(
         ));
     }
     let options = &pack.manifest.options;
-    problems.extend(translate(&module, &info, options, file, (2, 2)));
+    // The stages the game joins to a shader of its own that declares overrides.
+    let joined = matches!(
+        kind,
+        StageKind::Material | StageKind::Vertex | StageKind::Entity
+    );
+    problems.extend(translate(&module, &info, joined, options, file, (2, 2)));
     if let (Some((module, info, _)), true) = (&scene, problems.is_empty()) {
         // Metal has ray queries from 2.4.
-        problems.extend(translate(module, info, options, file, (2, 4)));
+        problems.extend(translate(module, info, joined, options, file, (2, 4)));
     }
     if !problems.is_empty() {
         return Err(problems);
@@ -955,16 +960,71 @@ fn option_sets(options: &[PackOption]) -> [(&'static str, Vec<(String, f64)>); 3
     ]
 }
 
+/// `module` with an override of Horizon's own that every entry point reads, and its validation.
+///
+/// naga's override step leaves a module without overrides as it is, and re-evaluates every
+/// function of one with them. The game joins a material, vertex or entity stage to its own
+/// shader, whose overrides (the fog, the coverage) make every such module one with them; naga 30
+/// refuses some valid WGSL in that re-evaluation (gfx-rs/wgpu#7793, #9002), which a stage without
+/// options of its own would otherwise meet only in the game.
+fn overridden(module: &naga::Module) -> (naga::Module, ModuleInfo) {
+    let mut module = module.clone();
+    let ty = module.types.insert(
+        naga::Type {
+            name: None,
+            inner: naga::TypeInner::Scalar(naga::Scalar::BOOL),
+        },
+        naga::Span::UNDEFINED,
+    );
+    let init = module.global_expressions.append(
+        naga::Expression::Literal(naga::Literal::Bool(false)),
+        naga::Span::UNDEFINED,
+    );
+    let probe = module.overrides.append(
+        naga::Override {
+            name: Some("horizon_check_override".to_owned()),
+            id: None,
+            ty,
+            init: Some(init),
+        },
+        naga::Span::UNDEFINED,
+    );
+    for e in &mut module.entry_points {
+        let function = &mut e.function;
+        let condition = function
+            .expressions
+            .append(naga::Expression::Override(probe), naga::Span::UNDEFINED);
+        let body = std::mem::take(&mut function.body);
+        function.body.push(
+            naga::Statement::If {
+                condition,
+                accept: naga::Block::new(),
+                reject: naga::Block::new(),
+            },
+            naga::Span::UNDEFINED,
+        );
+        function.body.extend_block(body);
+    }
+    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+        .validate(&module)
+        .expect("a valid module with one more override read is valid");
+    (module, info)
+}
+
 /// Translates every entry point for Vulkan (SPIR-V), Metal and DirectX 12
 /// (HLSL) with each option set, as wgpu does when it builds the pipelines; Metal's shading
-/// language at the version `metal`.
+/// language at the version `metal`. A stage the game has `joined` to its own shader is taken with
+/// an override of Horizon's, as that shader gives it.
 fn translate(
     module: &naga::Module,
     info: &ModuleInfo,
+    joined: bool,
     options: &[PackOption],
     file: &str,
     metal: (u8, u8),
 ) -> Vec<Problem> {
+    let probed = joined.then(|| overridden(module));
+    let (module, info) = probed.as_ref().map_or((module, info), |p| (&p.0, &p.1));
     let present: HashSet<&str> = module
         .overrides
         .iter()
@@ -995,7 +1055,15 @@ fn translate(
             let (m, i) = match processed {
                 Ok(p) => p,
                 Err(err) => {
-                    problems.push(fail("the override step", err.to_string()));
+                    // naga's reason is the last of the chain: "Function ... is invalid" alone
+                    // says nothing a pack's author can act on.
+                    let mut message = err.to_string();
+                    let mut source = std::error::Error::source(&err);
+                    while let Some(s) = source {
+                        message += &format!(": {s}");
+                        source = s.source();
+                    }
+                    problems.push(fail("the override step", message));
                     return problems;
                 }
             };
