@@ -90,7 +90,9 @@ waits on the GPU for an image the compositor still holds. Its GL backend also re
 the context's sampled textures and samplers per shader stage (usually 32 on desktop GL,
 where WebGL2's minimum 16 was reported before), so a pipeline layout the driver accepts is
 not refused. Its GL backend copies depth and stencil textures with a framebuffer blit, where
-`glCopyTexSubImage` read only colour and left the copy empty. It is licensed under MIT or
+`glCopyTexSubImage` read only colour and left the copy empty. Its DirectX 12 backend leaves out
+an adapter that offers neither `IDXGIAdapter4` nor `IDXGIAdapter3`, where an `unwrap` ended the
+program. It is licensed under MIT or
 Apache-2.0; both licenses are in that folder
 (`LICENSE.MIT`, `LICENSE.APACHE`).
 

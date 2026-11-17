@@ -101,8 +101,13 @@ pub fn enumerate_adapters(factory: DxgiFactory) -> Vec<DxgiAdapter> {
         if let Ok(adapter4) = adapter1.cast::<Dxgi::IDXGIAdapter4>() {
             adapters.push(DxgiAdapter::Adapter4(adapter4));
         } else {
-            let adapter3 = adapter1.cast::<Dxgi::IDXGIAdapter3>().unwrap();
-            adapters.push(DxgiAdapter::Adapter3(adapter3));
+            // Horizon: an adapter can offer neither interface (#18056), and upstream's `unwrap`
+            // ended the game there. This backend keeps its adapters as `IDXGIAdapter3` or newer,
+            // so that one is left out and the next graphics API is tried.
+            match adapter1.cast::<Dxgi::IDXGIAdapter3>() {
+                Ok(adapter3) => adapters.push(DxgiAdapter::Adapter3(adapter3)),
+                Err(e) => log::warn!("Skipping a DXGI adapter without IDXGIAdapter3: {e}"),
+            }
         }
     }
 
