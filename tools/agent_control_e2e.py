@@ -56,10 +56,10 @@ POSITIONAL = {
     'goto': ['x', 'y', 'z'], 'break': ['x', 'y', 'z'], 'place': ['x', 'y', 'z'], 'block': ['x', 'y', 'z'],
     'find_block': ['block', 'radius'], 'entities': ['radius', 'type'], 'click_slot': ['slot'],
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
-    'command': ['command'], 'look_at_block': ['x', 'y', 'z'], 'click': ['id'], 'set': ['id', 'value'],
+    'command': ['command'], 'look_at_block': ['x', 'y', 'z', 'face'], 'click': ['id'], 'set': ['id', 'value'],
     'give': ['item', 'count'], 'options_get': ['keys'], 'options_set': ['key', 'value'],
     'record_start': ['name'], 'record_replay': ['name'], 'repro_export': ['name', 'path'],
-    'turn': ['dyaw', 'dpitch'], 'interact': ['x', 'y', 'z'],
+    'turn': ['dyaw', 'dpitch'], 'interact': ['x', 'y', 'z', 'face'],
     'wait_for': ['condition', 'value'], 'open': ['world', 'seed', 'mode'], 'select': ['slot'],
     'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
     'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
@@ -106,11 +106,14 @@ class Cli:
         cmd = tool.replace('_', '-')
         positional = [str(args.pop(k)) for k in POSITIONAL.get(tool, []) if k in args]
         options = []
+        # commands.rs declares flag names with hyphens (no-world, in-place, keep-world); Python
+        # kwargs use underscores, so translate them before building --flag words. A boolean flag
+        # is a bare `--flag`; the BARE names are positional bool opts and stay bare words.
         for k, v in args.items():
             if v is True:
-                options.append(k if k in BARE.get(tool, []) else '--' + k)
+                options.append(k if k in BARE.get(tool, []) else '--' + k.replace('_', '-'))
             elif v is not False and v is not None:
-                options += ['--' + k, str(v)]
+                options += ['--' + k.replace('_', '-'), str(v)]
         # Options first: free text (type, command) runs to the end of the line.
         words = [cmd] + (options + positional if tool in ('type', 'command') else positional + options)
         if tool == 'screenshot':
@@ -1135,7 +1138,8 @@ def run(mode, ctl, out, resources, which='survival'):
         summary = SCENARIOS[which](driver, out)
         print(f'[{mode}] PASS in {time.time() - started:.0f} s: {summary}')
         return True
-    except (Failed, AssertionError, StopIteration) as e:
+    except (Failed, AssertionError, StopIteration, json.JSONDecodeError, IndexError,
+            subprocess.TimeoutExpired) as e:
         print(f'[{mode}] FAIL: {e!r}')
         log_file = socket.with_suffix('.log')
         if log_file.exists():
@@ -1143,12 +1147,19 @@ def run(mode, ctl, out, resources, which='survival'):
         return False
     finally:
         try:
-            driver('quit')
-        except Exception:
-            pass
-        driver.close()
-        time.sleep(2)
-        shutil.rmtree(work, ignore_errors=True)
+            try:
+                driver('quit')
+            except Exception:
+                pass
+            try:
+                driver.close()
+            except Exception:
+                pass
+        finally:
+            # Cleanup must run even if a shutdown call raises, and a shutdown failure must not
+            # replace the scenario's result (Mcp.close can raise TimeoutExpired on stdin EOF).
+            time.sleep(2)
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
