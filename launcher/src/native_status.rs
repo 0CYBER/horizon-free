@@ -140,13 +140,17 @@ pub fn horizon_label(version: &str) -> String {
 
 /// Enabled wasm packages that need the patchable engine, never native compilation.
 pub fn wasm_points(home: &Path) -> Vec<horizon_platform::mod_package::index::native::Bundle> {
-    use std::io::Read;
+    use horizon_platform::mod_package::manifest::{Package, WASM};
+    use std::io::{BufReader, Read};
     wasm_hmods(home)
         .into_iter()
         .filter_map(|path| {
             let file = fs::File::open(&path).ok()?;
-            let mut zip = zip::ZipArchive::new(file).ok()?;
-            let package = horizon_platform::mod_package::Package::read_zip(&mut zip).ok()?;
+            let mut zip = zip::ZipArchive::new(BufReader::new(file)).ok()?;
+            // Home also asks for this status. Packages without a wasm module cannot
+            // contribute listeners, so avoid opening and validating every resource entry.
+            zip.index_for_name(WASM)?;
+            let package = Package::read_zip(&mut zip).ok()?;
             if package.manifest.wasm.is_none()
                 || package.manifest.inject.is_empty()
                 || !java::is_enabled(home, &package.manifest.id)
