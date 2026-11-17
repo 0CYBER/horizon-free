@@ -90,8 +90,8 @@ TITLE_ALIASES = {"fix": "bug", "feat": "feature"}  # Conventional Commits' words
 AREA_LABELS = {label for label, _, _ in AREAS}
 # Size: (label, the most counted lines it takes, its colour). XL is over the 3000 lines of CONTRIBUTING.md's limit,
 # though this count also has the moved lines and inline tests that pr_ready leaves out.
-SIZES = [("size: XS", 50, "ededed"), ("size: S", 150, "d4d4d4"), ("size: M", 500, "bbbbbb"),
-         ("size: L", 3000, "9e9e9e"), ("size: XL", None, "808080")]
+SIZES = [("size: XS", 50, "0e8a16"), ("size: S", 150, "5ebd3e"), ("size: M", 500, "fbca04"),
+         ("size: L", 3000, "fe7d37"), ("size: XL", None, "b60205")]
 SIZE_LABELS = {label for label, _, _ in SIZES}
 
 
