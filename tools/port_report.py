@@ -148,6 +148,16 @@ def blocking_items(diff, mapping, pinned_facts, root, regen=None):
         items.append(item(1, "report-format", f"blocks.json format: {', '.join(diff['blocks']['format'])}",
                           files=files_containing("blocks.json", root),
                           details={"fields": diff["blocks"]["format"]}))
+    # Block state IDs are the chunk palette and the network protocol: a shift is a blocking change
+    # even when no block was added, removed or given a different property.
+    if diff["blocks"].get("state_ids_shifted"):
+        first = diff["blocks"].get("first_shifted")
+        items.append(item(1, "block-ids",
+                          f"Block state IDs: {diff['blocks']['state_ids_shifted']} blocks shifted"
+                          + (f" (first: {first})" if first else ""),
+                          files=files_containing("blocks.json", root),
+                          details={"shifted": diff["blocks"]["state_ids_shifted"], "first": first,
+                                   "state_count": diff["blocks"].get("state_count")}))
     if regen is None:
         for output, command, stale in GENERATORS:
             if stale(diff):
@@ -282,7 +292,9 @@ def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT, regen=
         entry["id"] = number
     clean = [kind for kind in ("packets", "commands") if not diff[kind]]
     clean += [kind for kind in ("blocks", "items") if not (diff[kind]["added"] or diff[kind]["removed"]
-                                                            or diff[kind]["changed"])]
+                                                            or diff[kind]["changed"]
+                                                            or diff[kind].get("state_ids_shifted")
+                                                            or diff[kind].get("format"))]
     classes = diff["classes"]
     return {
         "old": old, "new": new,

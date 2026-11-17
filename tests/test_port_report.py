@@ -92,6 +92,22 @@ class PortReportTests(unittest.TestCase):
         self.assertIn("1 pass, 1 whose oracle no longer compiles, 2 fail; 2 newly failing, 1 failing on 26.2 too", text)
         self.assertIn("- javac: `VanillaBlockExporter.java:9: cannot find symbol: class Foo`", text)
 
+    def test_shifted_block_state_ids_are_blocking_even_with_no_block_changes(self):
+        data = diff()
+        data["blocks"] = {"added": [], "removed": [], "changed": {}, "format": [],
+                          "state_count": [1000, 1000], "state_ids_shifted": 7,
+                          "first_shifted": "minecraft:stone"}
+        with mock.patch.object(report, "files_containing", return_value=["crates/w/src/blocks.rs"]):
+            items = report.blocking_items(data, mapping(), {"id": "26.3", "protocol_version": "777", "world_version": "5023"}, ROOT)
+        [shifted] = [i for i in items if i["kind"] == "block-ids"]
+        self.assertEqual(shifted["details"]["shifted"], 7)
+        self.assertEqual(shifted["details"]["first"], "minecraft:stone")
+        with mock.patch.object(report, "version_sites", return_value=[]), \
+                mock.patch.object(report, "files_naming", return_value=[]), \
+                mock.patch.object(report, "files_containing", return_value=[]):
+            built = report.build(data, mapping(), "26.2", "26.3", {"id": "26.3"})
+        self.assertNotIn("blocks", built["clean"])
+
     def test_regen_results_replace_the_stale_tables(self):
         regen = {"new": "26.3", "candidate": "/ports/26.3", "commit": "0123456789abcdef", "generators": {
             "packet_ids": {"status": "regenerated", "outputs": ["crates/horizon-protocol/src/ids.rs"],
