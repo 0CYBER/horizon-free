@@ -9,6 +9,7 @@
 use horizon_shader_api::{Frame as FrameInputs, manifest::Shadow as Settings, stages::GROUP};
 use horizon_shaders::Shadow;
 
+use super::external::ShadowDraws;
 use super::native_material::TerrainShape;
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
 
@@ -748,34 +749,6 @@ impl NativeShadow {
             displaced,
         })
     }
-}
-
-/// What the renderer hands the shadow passes each frame.
-pub struct ShadowDraws<'a> {
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    pub timing: Option<&'a mut super::pack_timing::PassTiming>,
-    /// What the light sees, when the frame asked for a shadow view.
-    pub lists: Option<ShadowLists<'a>>,
-}
-
-/// The renderer's lists of what the light sees, and what they draw from.
-pub struct ShadowLists<'a> {
-    /// The world's group 0.
-    pub group: &'a wgpu::BindGroup,
-    pub sections: super::SectionLists<'a>,
-    /// The frame draws its terrain flat (`sections.flat`'s shadow calls).
-    pub flat_frame: bool,
-    pub instances: &'a wgpu::Buffer,
-    pub indirect: &'a wgpu::Buffer,
-    /// The light's first draw, its solid draws and its translucent draws after them.
-    pub draws: [u32; 3],
-    /// The entities' group 0 and vertices: `entity_quads` from the start, then
-    /// `shadow_only_quads` before the GPU-posed outlines at `outline_base`.
-    pub entity_group: &'a wgpu::BindGroup,
-    pub entity_vertices: &'a wgpu::Buffer,
-    pub entity_quads: u32,
-    pub shadow_only_quads: u32,
-    pub outline_base: u32,
 }
 
 impl super::native_pack::NativePack {

@@ -1,5 +1,5 @@
 //! The world pass after culling, and the renderer's GPU pass timing switches and readings.
-use super::{Renderer, native_pack, pack_post, pack_timing};
+use super::{Renderer, external, pack_post, pack_timing};
 
 pub(super) fn world_pass_after_culling<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
@@ -85,7 +85,7 @@ impl Renderer {
             .as_mut()
             .map(pack_timing::PassTiming::take_frames)
             .unwrap_or_default();
-        let pack = match Self::pass_timer(&mut self.pack_post, &mut self.native) {
+        let pack = match Self::pass_timer(&mut self.pack_post, &mut self.external) {
             Some(Some(t)) => t.take_frames(),
             _ => Vec::new(),
         };
@@ -94,7 +94,7 @@ impl Renderer {
     /// The running shader pack's timer, of either kind, follows `set_pass_timing`,
     /// `set_pass_timing_gap` and `set_keep_timed_frames`, before the world passes.
     pub(super) fn set_up_pack_timing(&mut self) {
-        match (&mut self.pack_post, &mut self.native) {
+        match (&mut self.pack_post, &mut self.external) {
             (Some((_, Some(post))), _) => {
                 let timer = &mut post.timing;
                 if timer.is_some() != self.pass_timing {
@@ -108,7 +108,7 @@ impl Renderer {
                     t.keep_frames(self.keep_timed_frames);
                 }
             }
-            (_, Some(native)) => native.set_up_timing(native_pack::TimingSetup {
+            (_, Some(native)) => native.set_up_timing(external::TimingSetup {
                 device: &self.device,
                 queue: &self.queue,
                 on: self.pass_timing,
@@ -120,7 +120,7 @@ impl Renderer {
     }
     /// The running shader pack's timer, of either kind: the frame it timed was submitted.
     pub(super) fn pack_timing_submitted(&mut self) {
-        match (&mut self.pack_post, &mut self.native) {
+        match (&mut self.pack_post, &mut self.external) {
             (Some((_, Some(post))), _) => {
                 if let Some(timer) = &mut post.timing {
                     timer.submitted(&self.queue);
@@ -133,20 +133,20 @@ impl Renderer {
     /// The running shader pack's timer, of either kind.
     pub(super) fn pass_timer<'a>(
         pack: &'a mut Option<(i32, Option<pack_post::PackPost>)>,
-        native: &'a mut Option<native_pack::NativePack>,
+        native: &'a mut Option<Box<dyn external::ExternalPipeline>>,
     ) -> Option<&'a mut Option<pack_timing::PassTiming>> {
         match (pack, native) {
             (Some((_, Some(post))), _) => Some(&mut post.timing),
-            (_, Some(native)) => Some(&mut native.timing),
+            (_, Some(native)) => native.timer(),
             _ => None,
         }
     }
     /// Each pass of the running shader pack with its median GPU time in milliseconds, while
     /// they are timed (`set_pass_timing`).
     pub fn shader_pass_times(&self) -> Vec<(String, f32)> {
-        let timer = match (&self.pack_post, &self.native) {
+        let timer = match (&self.pack_post, &self.external) {
             (Some((_, Some(post))), _) => post.timing.as_ref(),
-            (_, Some(native)) => native.timing.as_ref(),
+            (_, Some(native)) => native.timing(),
             _ => None,
         };
         timer
@@ -182,9 +182,9 @@ impl Renderer {
             .as_ref()
             .map(pack_timing::PassTiming::readings)
             .filter(|r| !r.is_empty());
-        let pack = match (&self.pack_post, &self.native) {
+        let pack = match (&self.pack_post, &self.external) {
             (Some((_, Some(post))), _) => post.timing.as_ref(),
-            (_, Some(native)) => native.timing.as_ref(),
+            (_, Some(native)) => native.timing(),
             _ => None,
         }
         .map(pack_timing::PassTiming::readings)

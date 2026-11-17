@@ -328,7 +328,7 @@ fn flat_vertices<'a>(
 /// The world's section lists and the arena pages they draw from, borrowed apart from the rest
 /// of the renderer: a shader pack's shadow passes draw the light's lists through them.
 #[derive(Clone, Copy)]
-pub(super) struct SectionLists<'a> {
+pub struct SectionLists<'a> {
     draws: &'a [[u32; 5]],
     pages: &'a [(u32, Option<u32>)],
     arena: &'a arena::Arena,
@@ -470,6 +470,7 @@ use frame_policy::{frame_configuration, hand_depth_store, horizon_tone_curve, ov
 mod lod;
 pub mod mod_pipelines;
 pub mod native_entity;
+mod native_executor;
 mod native_material;
 mod native_pack;
 mod native_post;
@@ -1713,9 +1714,9 @@ pub struct Renderer {
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// A `shaders/` pack whose pipelines build on a thread of their own (`load_shader_pack`).
     pack_loading: Option<PackLoading>,
-    /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
-    native: Option<native_pack::NativePack>,
-    /// What it does in the renderer's place, kept from its install on (`replace_native`).
+    /// The manifest of the Horizon pack `external` runs, as the game reads it.
+    pack_metadata: Option<native_pack::Metadata>,
+    /// What `external` does in the renderer's place, kept from its install on (`replace_executor`).
     executor: Option<external::Capabilities>,
     /// Time the shader pack's passes on the GPU (F3, or a capture made with `--gpu`).
     pass_timing: bool,
@@ -4514,7 +4515,7 @@ impl Renderer {
             hdr_driver,
             pack_post: None,
             pack_loading: None,
-            native: None,
+            pack_metadata: None,
             executor: None,
             pass_timing: false,
             pass_detail: false,
@@ -5012,18 +5013,18 @@ impl Renderer {
     }
     /// Whether the running native pack gives any block a `[[lights]]` colour.
     pub fn has_light_colors(&self) -> bool {
-        self.native
+        self.pack_metadata
             .as_ref()
-            .is_some_and(|native| !native.light_colors.is_empty())
+            .is_some_and(|pack| !pack.light_colors.is_empty())
     }
     /// The running native pack's `[[lights]]` colour of the block `name`.
     pub fn light_color(&self, name: &str) -> Option<[f32; 3]> {
-        let native = self.native.as_ref()?;
-        horizon_shader_api::manifest::light_color(&native.light_colors, name)
+        let pack = self.pack_metadata.as_ref()?;
+        horizon_shader_api::manifest::light_color(&pack.light_colors, name)
     }
     /// The running native pack's `[[particle_lights]]`.
     pub fn particle_lights(&self) -> Option<&[horizon_shader_api::manifest::ParticleLight]> {
-        self.native.as_ref().map(|n| n.particle_lights.as_slice())
+        (self.pack_metadata.as_ref()).map(|n| n.particle_lights.as_slice())
     }
     /// Whether one of Horizon's own packs with `[shadow]` draws, whose shadow pass takes the
     /// frame's `shadow_only` quads.
@@ -6243,13 +6244,18 @@ impl Renderer {
         });
         self.pack_post = Some((dimension, post));
         if self.pack_post.as_ref().is_some_and(|p| p.1.is_some()) {
-            self.replace_native(None);
+            self.replace_executor(None);
         }
         Ok(report)
     }
-    /// Sets the external shader pipeline world frames call (`external`), or none.
-    pub fn set_external_pipeline(&mut self, pipeline: Option<Box<dyn external::ExternalPipeline>>) {
-        self.external = pipeline;
+    /// Sets the external shader pipeline world frames call (`external`), or none. Why it was
+    /// refused, if it was (`ExternalPipeline::take_over`): then the one that ran keeps running,
+    /// unless it can't.
+    pub fn set_external_pipeline(
+        &mut self,
+        pipeline: Option<Box<dyn external::ExternalPipeline>>,
+    ) -> Option<String> {
+        self.replace_executor(pipeline)
     }
     /// Makes the running shader pack, of either kind, forget what it kept from earlier frames:
     /// the next frame draws as a freshly loaded pack's first. Nothing to do without a pack.
@@ -6263,10 +6269,6 @@ impl Renderer {
         if let Some((_, Some(post))) = &mut self.pack_post {
             post.reset_history(&self.device);
         }
-        if let Some(native) = &mut self.native {
-            native.frame.reset_history();
-            native.post.reset_history();
-        }
     }
     /// The running shader pack's kind: `iris` (a `shaders/` pack) or `native` (one of
     /// Horizon's own).
@@ -6279,7 +6281,7 @@ impl Renderer {
     }
     /// The running Horizon pack's name, from its manifest.
     pub fn native_pack_name(&self) -> Option<&str> {
-        self.native.as_ref().map(|pack| pack.name.as_str())
+        self.pack_metadata.as_ref().map(|pack| pack.name.as_str())
     }
     /// `screenshot-sequence`: waits (30 seconds at most) for the frame just drawn to finish on
     /// the GPU, and takes the centre depth a `shaders/` pack copied in it, which its next frame
@@ -6442,7 +6444,7 @@ impl Renderer {
     pub fn drop_shader_packs(&mut self) {
         self.pack_loading = None;
         self.pack_post = None;
-        self.replace_native(None);
+        self.replace_executor(None);
         self.pack_atlas = None;
         self.separate_ao = false;
     }
@@ -6483,7 +6485,7 @@ impl Renderer {
             );
         }
         let Some((report, constants, sprite_tags, sprite_materials, lights)) = pack else {
-            self.replace_native(None);
+            self.replace_executor(None);
             return Ok(Vec::new());
         };
         let terrain = native_material::TerrainShape {
@@ -6500,6 +6502,7 @@ impl Renderer {
             weather_groups: [&self.weather.entity_layout, &self.weather.time_layout],
             pbr: self.pbr_maps.as_ref().and_then(|arrays| arrays.first()),
         };
+        let metadata = native_pack::Metadata::of(&report);
         let (pack, labels) = native_pack::NativePack::new(
             &self.device,
             &self.queue,
@@ -6508,9 +6511,10 @@ impl Renderer {
             &constants,
             lights,
         )?;
-        if let Some(refused) = self.replace_native(Some(pack)) {
+        if let Some(refused) = self.replace_executor(Some(Box::new(pack))) {
             return Err(refused);
         }
+        self.pack_metadata = Some(metadata);
         self.pack_post = None;
         self.pack_atlas = None;
         self.pack_material_atlases = None;
@@ -7508,10 +7512,6 @@ impl Renderer {
             .filter(|_| !frame.title)
             .and_then(|p| p.shadow_view(frame))
             .or_else(|| {
-                // One of Horizon's own packs with `[shadow]` uses the same lists.
-                (self.native.as_ref().filter(|_| !frame.title)?).shadow_request(frame)
-            })
-            .or_else(|| {
                 self.external
                     .as_ref()
                     .filter(|_| !frame.title)?
@@ -7818,21 +7818,21 @@ impl Renderer {
         }
         // `[displacement]`: the visible sections' solid quads, nearest first, for its grid to
         // take those it reaches.
-        if let Some(n) = &mut self.native {
-            let sections = visible.iter().filter(|_| !frame.title).filter_map(|v| {
+        if let Some(n) = &mut self.external {
+            let mut sections = visible.iter().filter(|_| !frame.title).filter_map(|v| {
                 let s = self.sections.get(v.slot);
-                (s.solid > 0).then(|| displace::Near {
+                (s.solid > 0).then(|| external::Near {
                     buffer: self.arena.buffer(s.page),
                     base: s.solid_base(),
                     quads: s.solid,
                     origin: v.origin,
                 })
             });
-            n.prepare_displacement(native_material::DisplacementPrepare {
+            n.prepare_displacement(external::DisplacementPrepare {
                 device: &self.device,
                 queue: &self.queue,
                 encoder: &mut encoder,
-                sections,
+                sections: &mut sections,
                 view_proj,
             });
         }
@@ -9115,9 +9115,9 @@ impl Renderer {
         // pass of its own, so that it has a time of its own.
         let mut native_sky_pass = false;
         if !frame.title
-            && let Some(native) = &mut self.native
+            && let Some(native) = &mut self.external
         {
-            native_sky_pass = native.start_frame(native_pack::FrameStart {
+            native_sky_pass = native.start_frame(external::FrameStart {
                 device: &self.device,
                 queue: &self.queue,
                 frame,
@@ -9135,9 +9135,9 @@ impl Renderer {
         }
         // One of Horizon's own packs: its shadow passes, from the shadow camera's lists.
         if !frame.title
-            && let Some(native) = &mut self.native
+            && let Some(native) = &mut self.external
         {
-            let lists = shadow_view.is_some().then(|| native_shadow::ShadowLists {
+            let lists = shadow_view.is_some().then(|| external::ShadowLists {
                 group: &self.group,
                 sections: SectionLists {
                     draws: &self.draws,
@@ -9159,7 +9159,7 @@ impl Renderer {
                 shadow_only_quads,
                 outline_base,
             });
-            native.draw_shadow(native_shadow::ShadowDraws {
+            native.draw_shadow(external::ShadowDraws {
                 encoder: &mut encoder,
                 timing: self.own_timing.as_mut(),
                 lists,
@@ -9167,8 +9167,8 @@ impl Renderer {
             let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
             native.before_world(&self.device, &mut encoder, scene.as_ref());
         }
-        if native_sky_pass && let Some(native) = &mut self.native {
-            native.draw_sky_pass(native_sky::SkyPass {
+        if native_sky_pass && let Some(native) = &mut self.external {
+            native.draw_sky_pass(external::SkyPass {
                 device: &self.device,
                 encoder: &mut encoder,
                 target: (world_view, self.output.frame.format),
@@ -9292,8 +9292,8 @@ impl Renderer {
         }
         // One of Horizon's own packs: the mirror its material reads, and its copies of the world
         // before translucent terrain and its surface target, the size of this frame's targets.
-        if let Some(native) = &mut self.native {
-            native.prepare_world_targets(native_pack::WorldTargets {
+        if let Some(native) = &mut self.external {
+            native.prepare_world_targets(external::WorldTargets {
                 device: &self.device,
                 encoder: &mut encoder,
                 reflection,
@@ -9308,9 +9308,9 @@ impl Renderer {
         laps.lap("r_mirror");
         // One of Horizon's own packs with a material stage, or an entity stage: terrain draws with
         // its layers, and the entities with its pipelines, which read the pack's frame at group 3.
-        let native = self.native.as_ref().filter(|_| !frame.title);
-        let material = native.and_then(native_pack::NativePack::terrain_layers);
-        let entity_stage = native.and_then(|n| n.entities());
+        let native = (self.external.as_deref()).filter(|_| !frame.title);
+        let material = native.and_then(|n| n.terrain_layers());
+        let entity_stage = native.and_then(|n| n.entity_layers());
         // Without HDR output, the solid shaders without its lighting (`SolidPipeline`).
         let hdr = self.hdr.is_some();
         let solid_pipeline = material.map_or(self.solid.get(hdr), |m| m.solid);
@@ -9402,7 +9402,7 @@ impl Renderer {
                     && frame.skybox
                     && !pack_draws_sky
                     && !native_sky_pass
-                    && self.native.as_ref().is_some_and(|n| n.draw_sky(&mut pass));
+                    && (self.external.as_ref()).is_some_and(|n| n.draw_sky(&mut pass));
                 if native_sky {
                     // The sky binds the frame's own group; a material stage that traces draws
                     // with the scene's.
@@ -9806,14 +9806,14 @@ impl Renderer {
             }
             // `[displacement]`'s grid over the flat quads it took over, writing its depth.
             if let Some(n) = self
-                .native
+                .external
                 .as_ref()
                 .filter(|_| !frame.title && !pack_draws_terrain)
-                && let Some(grid) = material.and_then(|m| n.displaced_grid(m))
+                && let Some(m) = material.filter(|m| m.displaced.is_some())
             {
                 pass.stage(self.own_timing.as_mut(), "displacement");
                 pass.set_bind_group(0, &self.group, &[]);
-                grid.draw(&mut pass);
+                n.draw_displaced(&mut pass, m);
             }
             if surface.is_some() {
                 drop(pass);
@@ -9830,7 +9830,7 @@ impl Renderer {
             }
             if static_entity_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "static block entities");
-                native_entity::set_pipeline(
+                external::set_entity_pipeline(
                     &mut pass,
                     entity_stage,
                     &self.static_entity_pipeline,
@@ -9859,7 +9859,12 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             if entity_quads > 0 || !self.prepared_draws.is_empty() {
                 pass.stage(self.own_timing.as_mut(), "entities");
-                native_entity::set_pipeline(&mut pass, entity_stage, &self.entity_pipeline, false);
+                external::set_entity_pipeline(
+                    &mut pass,
+                    entity_stage,
+                    &self.entity_pipeline,
+                    false,
+                );
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 if self.prepared_draws.is_empty() {
@@ -10079,11 +10084,11 @@ impl Renderer {
                 && oit.is_none()
                 && !(flat_frame && self.flat.is_some());
             if (reads_opaque || per_section)
-                && let Some(native) = &self.native
+                && let Some(native) = &self.external
             {
                 drop(pass);
                 if reads_opaque {
-                    native.copy_opaque(native_material::OpaqueCopy {
+                    native.copy_opaque(external::OpaqueCopy {
                         device: &self.device,
                         encoder: &mut encoder,
                         depth: world_depth.texture(),
@@ -10380,7 +10385,7 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             if !pack_draws_weather && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "weather");
-                let native = self.native.as_ref().filter(|_| !frame.title);
+                let native = self.external.as_ref().filter(|_| !frame.title);
                 if !native
                     .is_some_and(|n| n.draw_weather(&mut pass, &self.weather, &self.entity_group))
                 {
@@ -10566,9 +10571,9 @@ impl Renderer {
             self.pack_post = Some((dimension, Some(post)));
         } else if let Some((color, depth)) = &scaled
             && native_post
-            && let Some(native) = &mut self.native
+            && let Some(native) = &mut self.external
         {
-            native.run_post(native_pack::WorldPost {
+            native.run_post(external::WorldPost {
                 device: &self.device,
                 encoder: &mut encoder,
                 world: (color, depth),

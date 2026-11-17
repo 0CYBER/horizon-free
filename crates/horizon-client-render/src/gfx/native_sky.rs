@@ -8,6 +8,7 @@
 
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
+use super::external::SkyPass;
 use super::native_post::kept::StageReads;
 use super::native_post::{NativeFrame, present_constants};
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
@@ -179,19 +180,6 @@ impl NativeSky {
         let kept = self.kept.as_ref().and_then(|k| k.group(parity));
         kept.unwrap_or(&frame.group)
     }
-}
-
-/// What the renderer hands the pack for its sky's pass of its own (`NativePack::draw_sky_pass`).
-pub struct SkyPass<'a> {
-    pub device: &'a wgpu::Device,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The world's colour and depth, and the colour's format.
-    pub target: super::timing::Target<'a>,
-    pub depth: &'a wgpu::TextureView,
-    /// The world's clear colour.
-    pub clear: wgpu::Color,
-    /// The terrain's group 0.
-    pub globals: &'a wgpu::BindGroup,
 }
 
 impl super::native_pack::NativePack {

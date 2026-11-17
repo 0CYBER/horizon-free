@@ -688,7 +688,10 @@ fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
     let world = World::new(&device);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut pack = pack(&device, &queue, &scene, &manifest, &files);
-    assert!(pack.traces_entities(), "the passes read the entity layer");
+    assert!(
+        pack.capabilities().ray_entities,
+        "the passes read the entity layer"
+    );
     let traced = layer.traced(&scene);
     for n in 1..=2 {
         let got = frame((&device, &queue, &world), &mut pack, n, Some(&traced));

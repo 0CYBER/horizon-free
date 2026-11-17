@@ -5,22 +5,17 @@ use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
-use super::external::Capabilities;
+use super::external::{Capabilities, FrameStart, TimingSetup, WorldPost, WorldTargets};
 use super::native_entity::NativeEntity;
 use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::kept::StageReads;
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
-use super::output::EffectiveOutput;
 use super::pack_timing::PassTiming;
 use super::rt::scene::{RayScene, Traced};
-use super::{Frame, SectionKey};
-use crate::fast_hash::FxHashMap;
 
 pub struct NativePack {
-    /// The manifest's `name`.
-    pub name: String,
     pub frame: NativeFrame,
     pub sky: Option<NativeSky>,
     pub material: Option<NativeMaterial>,
@@ -37,16 +32,33 @@ pub struct NativePack {
     pub shadow: Option<NativeShadow>,
     /// `[displacement]`'s grid, while it is on and the resource packs have height maps.
     pub displacement: Option<Displacement>,
+    /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
+    pub timing: Option<PassTiming>,
+    /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_executor`).
+    pub traces: bool,
+    /// With kept resources, what lets a rebuild keep them (`carry`).
+    kept: Option<super::native_post::kept::Signature>,
+}
+
+/// What the game reads of the running pack's manifest beside its executor
+/// (`Renderer::native_pack_name`, `light_color`, `particle_lights`).
+pub struct Metadata {
+    /// The manifest's `name`.
+    pub name: String,
     /// `[[particle_lights]]`.
     pub particle_lights: Vec<horizon_shader_api::manifest::ParticleLight>,
     /// `[[lights]]`, for the colour of held and dropped items' light.
     pub light_colors: Vec<horizon_shader_api::manifest::LightColor>,
-    /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
-    pub timing: Option<PassTiming>,
-    /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
-    pub traces: bool,
-    /// With kept resources, what lets a rebuild keep them (`carry`).
-    kept: Option<super::native_post::kept::Signature>,
+}
+
+impl Metadata {
+    pub fn of(report: &Report) -> Self {
+        Self {
+            name: report.manifest.name.clone(),
+            particle_lights: report.manifest.particle_lights.clone(),
+            light_colors: report.manifest.lights.clone(),
+        }
+    }
 }
 
 /// Whether the option `id` (a bool, or a number above 0) is on, or there is none to ask.
@@ -483,9 +495,6 @@ impl NativePack {
         labels.extend(weather_label);
         labels.extend(post.labels().into_iter().map(str::to_owned));
         let pack = Self {
-            name: report.manifest.name.clone(),
-            particle_lights: report.manifest.particle_lights.clone(),
-            light_colors: report.manifest.lights.clone(),
             traces: report.manifest.ray_tracing.is_some(),
             kept,
             frame,
@@ -604,7 +613,7 @@ impl NativePack {
     }
 
     /// What the pack does in the renderer's place, fixed while it runs: the renderer keeps it
-    /// from the pack's install on (`replace_native`).
+    /// from the pack's install on (`replace_executor`).
     pub fn capabilities(&self) -> Capabilities {
         Capabilities {
             shadow: self.shadow.is_some(),
@@ -619,6 +628,8 @@ impl NativePack {
             hides_stars: self.sky.is_some() && !self.vanilla_stars,
             tone_curve: self.post.tonemaps(),
             ray_scene: self.traces,
+            entities: self.entity.is_some(),
+            ray_entities: self.traces_entities(),
         }
     }
 
@@ -643,60 +654,6 @@ impl NativePack {
             timer.submitted(queue);
         }
     }
-}
-
-/// What the renderer hands the pack's post stage (`NativePack::run_post`).
-pub struct WorldPost<'a> {
-    pub device: &'a wgpu::Device,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The world's scaled target (colour, depth), of `size`.
-    pub world: (&'a wgpu::TextureView, &'a wgpu::TextureView),
-    /// The window's frame, which the last pass draws.
-    pub screen: &'a wgpu::TextureView,
-    pub size: [u32; 2],
-    /// The ray scene and the camera, when the game traces rays.
-    pub scene: Option<(&'a RayScene, glam::DVec3)>,
-}
-
-/// The renderer's pass timing settings (`NativePack::set_up_timing`).
-pub struct TimingSetup<'a> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    /// `set_pass_timing`, `set_pass_timing_gap` and `set_keep_timed_frames`.
-    pub on: bool,
-    pub gap: std::time::Duration,
-    pub keep_frames: bool,
-}
-
-/// What the renderer hands the pack before its world passes (`NativePack::start_frame`).
-pub struct FrameStart<'a> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    pub frame: &'a Frame<'a>,
-    /// The world's size this frame: the scaled target's, else the window's.
-    pub size: [u32; 2],
-    /// This frame's output, whose display values a 0.2 pack reads.
-    pub output: &'a EffectiveOutput,
-    /// The light sources the section meshes list, and their revision (`BlockLight::update`).
-    pub lights: &'a FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
-    pub light_revision: u64,
-    /// The sky is open this frame.
-    pub sky_visible: bool,
-    /// The ray scene, when the game traces rays (`NativePack::write`).
-    pub scene: Option<&'a RayScene>,
-}
-
-/// What the renderer hands the pack after the water mirror (`NativePack::prepare_world_targets`).
-pub struct WorldTargets<'a> {
-    pub device: &'a wgpu::Device,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The water mirror's colour, when one was drawn this frame.
-    pub reflection: Option<wgpu::TextureView>,
-    pub title: bool,
-    /// The world's depth, and its colour where it can be copied (the scaled target, not the
-    /// window's own).
-    pub depth: &'a wgpu::Texture,
-    pub color: Option<&'a wgpu::Texture>,
 }
 
 #[cfg(test)]

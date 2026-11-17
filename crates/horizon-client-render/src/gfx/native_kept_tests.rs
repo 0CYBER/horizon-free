@@ -1169,6 +1169,68 @@ fn a_pack_s_own_frames_run_its_before_world_pass() {
     through_pack(manifest, &files, &[0.25, 0.5, 0.75]);
 }
 
+/// A pack without the video memory for its kept resources (`NO_ROOM`) is refused through the
+/// hook the renderer installs every pipeline with (`ExternalPipeline::take_over`, from
+/// `Renderer::replace_executor`), which says why: the pack that ran keeps running, its store
+/// made again, unless there is no room for that either.
+#[test]
+fn a_pack_without_room_is_refused_through_the_pipeline_hook() {
+    use crate::gfx::external::{ExternalPipeline, Refused};
+    use crate::gfx::native_pack::{NativePack, tests};
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let (globals, empty) = tests::terrain_layouts(&device);
+    let terrain = tests::terrain_shape(&globals, &empty);
+    // Two packs that keep the same buffer, its pass at another stage: no rebuild of the other,
+    // so neither carries the other's store.
+    let pack = |(manifest, files): (&str, [(&str, &str); 2])| {
+        let manifest = format!("{manifest}[tonemap]\nfile = \"t.wgsl\"\n");
+        let report = report(&manifest, &[&files[..], &[("t.wgsl", IDENTITY)]].concat());
+        let built = NativePack::new(&device, &queue, &terrain, report, &[], Default::default());
+        Box::new(built.unwrap().0)
+    };
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut running: Box<dyn ExternalPipeline> = pack(SUMMING);
+    running.take_over(&device, None, [4, 4]).unwrap();
+    let held = |p: &mut Box<dyn ExternalPipeline>| {
+        let p = (p.as_mut() as &mut dyn std::any::Any).downcast_mut::<NativePack>();
+        p.and_then(|p| p.post.kept.as_ref()).map(|k| k.held.len())
+    };
+    assert_eq!(held(&mut running), Some(1));
+    let mut other: Box<dyn ExternalPipeline> = pack(BEFORE_SUMMING);
+    NO_ROOM.set(1);
+    let refused = other.take_over(&device, Some(running.as_mut()), [4, 4]);
+    let why = "its kept resources (1 MiB) don't fit in video memory (no room (test))";
+    let still = Refused {
+        why: why.into(),
+        old_runs: true,
+    };
+    assert_eq!(refused, Err(still));
+    assert_eq!(held(&mut running), Some(1));
+    assert_eq!(held(&mut other), Some(0));
+    // Without room for either store, the running pack can't keep running.
+    NO_ROOM.set(2);
+    let refused = other.take_over(&device, Some(running.as_mut()), [4, 4]);
+    assert!(
+        matches!(
+            refused,
+            Err(Refused {
+                old_runs: false,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    // With room, it takes over.
+    other
+        .take_over(&device, Some(running.as_mut()), [4, 4])
+        .unwrap();
+    assert_eq!(held(&mut other), Some(1));
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+}
+
 /// A `[[before_world]]` pass writes this frame's version of an R-relative kept texture (adding
 /// to `_previous`), after the frame's swap, and the post pass shows it in the same frame. Its
 /// `"pixels"` dispatch and `input.size` are R (blue: R's width / 16), and it reads the frame:
@@ -1391,7 +1453,7 @@ fn a_pack_without_kept_resources_makes_the_layouts_and_groups_it_made_before() {
     assert_eq!(before, [[3, 0, 1], [0, 6, 0], [0, 0, 0]]);
 }
 
-/// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it
+/// #16011 item 4: a pack's kept resources are made at install (`replace_executor`), not while it
 /// builds, so one that fails to build makes none; a reload destroys the old store before it
 /// makes the new one, and a carried store stays; a pack whose kept formats the device can't make
 /// is refused while it builds, and the running store stays. Counted with

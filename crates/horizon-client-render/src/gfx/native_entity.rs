@@ -15,6 +15,7 @@
 
 use horizon_shader_api::{Fog, check::CheckedStage, stages::GROUP};
 
+use super::external::EntityLayers;
 use super::native_post::kept::StageReads;
 use super::native_post::{NativeFrame, present_constants};
 
@@ -447,30 +448,24 @@ impl NativeEntity {
     }
 }
 
-/// Sets the pipeline of the entity stream's ordinary quads, or of the `retained` block
-/// entities: the `stage`'s with the pack's frame at its group, else Horizon's `own`.
-pub(super) fn set_pipeline(
-    pass: &mut wgpu::RenderPass<'_>,
-    stage: Option<(&NativeEntity, &wgpu::BindGroup)>,
-    own: &wgpu::RenderPipeline,
-    retained: bool,
-) {
-    let Some((stage, frame)) = stage else {
-        return pass.set_pipeline(own);
-    };
-    pass.set_pipeline(if retained {
-        &stage.retained
-    } else {
-        &stage.entities
-    });
-    pass.set_bind_group(GROUP, frame, &[]);
+impl super::native_pack::NativePack {
+    /// The layers the entities draw with this frame, with an entity stage, and the group 3
+    /// they read (`entities`: the frame's, or this frame's version of its kept resources).
+    pub fn entity_layers(&self) -> Option<EntityLayers<'_>> {
+        let (stage, frame) = self.entities()?;
+        Some(EntityLayers {
+            entities: &stage.entities,
+            retained: &stage.retained,
+            frame,
+        })
+    }
 }
 
 impl super::Renderer {
     /// Whether a pack's `[entity]` stage draws this renderer's entities: the game then names
     /// the runs of them it lights (`take_entity_runs`).
     pub fn draws_entity_stage(&self) -> bool {
-        self.native.as_ref().is_some_and(|n| n.entity.is_some())
+        self.executor.is_some_and(|c| c.entities)
     }
 
     /// Whether the game names the runs of its entities (`take_entity_runs`): a pack's `[entity]`

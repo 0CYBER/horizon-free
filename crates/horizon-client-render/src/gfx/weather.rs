@@ -1,7 +1,7 @@
 //! Weather's unsplit quads, using the entity atlas/lightmap resources.
 use crate::weather::{Time, Vertex};
 
-pub(super) struct Weather {
+pub struct Weather {
     pipeline: wgpu::RenderPipeline,
     /// The layouts of groups 0 (the entities') and 1 (the fall clock), for a native pack's
     /// weather pipeline.

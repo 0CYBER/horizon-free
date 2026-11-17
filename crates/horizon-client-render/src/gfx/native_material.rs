@@ -10,7 +10,8 @@
 
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
-use super::displace::{Displacement, MAX_SECTIONS, Near};
+use super::displace::{Displacement, MAX_SECTIONS};
+use super::external::{DisplacementPrepare, Near, OpaqueCopy, TerrainLayers};
 use super::native_post::kept::StageReads;
 use super::native_post::trace::{TerrainTrace, Traced};
 use super::native_post::{NativeFrame, NativePost, present_constants};
@@ -760,44 +761,6 @@ pub(in crate::gfx) fn test_shader(source: &str) -> String {
     shader_source(source, &[], &[], (false, false), false)
 }
 
-/// The pack's terrain layers, which the renderer's terrain passes draw in place of its own
-/// (`NativePack::terrain_layers`).
-#[derive(Clone, Copy)]
-pub struct TerrainLayers<'a> {
-    /// The solid layer (with the cutout test) and the translucent one, for the instanced draws.
-    pub solid: &'a wgpu::RenderPipeline,
-    pub translucent: &'a wgpu::RenderPipeline,
-    /// The solid and translucent layers for the flat draws, where those run.
-    pub flat: Option<&'a (wgpu::RenderPipeline, wgpu::RenderPipeline)>,
-    /// `[displacement]`'s grid of the solid terrain near the camera (gfx/displace.rs).
-    pub displaced: Option<&'a wgpu::RenderPipeline>,
-    /// The solid layers' second target, which they write beside the world's colour.
-    pub surface: Option<&'a wgpu::TextureView>,
-    /// The layers read the world before translucent terrain: the renderer stops there for
-    /// `NativePack::copy_opaque`.
-    pub reads_opaque: bool,
-    /// What the layers read beside the terrain's groups (`bind`).
-    frame: &'a wgpu::BindGroup,
-}
-
-impl TerrainLayers<'_> {
-    /// Binds what the layers read beside the terrain's groups, in each pass that draws them.
-    pub fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_bind_group(GROUP, self.frame, &[]);
-    }
-}
-
-/// What the renderer hands the pack where its world pass stops before translucent terrain
-/// (`NativePack::copy_opaque`).
-pub struct OpaqueCopy<'a> {
-    pub device: &'a wgpu::Device,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The world's depth, and its colour where it can be copied (the scaled target, not the
-    /// window's own).
-    pub depth: &'a wgpu::Texture,
-    pub color: Option<&'a wgpu::TextureView>,
-}
-
 impl super::native_pack::NativePack {
     /// The material stage's terrain layers; none without one.
     pub fn terrain_layers(&self) -> Option<TerrainLayers<'_>> {
@@ -808,7 +771,7 @@ impl super::native_pack::NativePack {
             solid: &pipelines.solid,
             translucent: &pipelines.translucent,
             flat: pipelines.flat.as_ref(),
-            displaced: pipelines.displaced.as_ref(),
+            displaced: (pipelines.displaced.as_ref()).filter(|_| self.displacement.is_some()),
             surface: m.writes_surface.then_some(&self.frame.surface_view),
             reads_opaque: self.frame.reads_opaque,
             frame,
@@ -869,17 +832,6 @@ impl super::native_pack::NativePack {
             layers,
         })
     }
-}
-
-/// What the renderer hands `[displacement]` once a frame, after the visibility walk
-/// (`NativePack::prepare_displacement`).
-pub struct DisplacementPrepare<'a, I> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The visible sections with solid quads, nearest first.
-    pub sections: I,
-    pub view_proj: glam::Mat4,
 }
 
 /// `[displacement]`'s grid of the solid terrain near the camera and the layer that draws it
