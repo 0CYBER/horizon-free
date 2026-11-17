@@ -206,6 +206,16 @@ fn push_all(gz: &[u8]) -> Result<(), MergeError> {
     merger.finish()
 }
 
+fn merged_part(inflated: &[u8]) -> Result<Vec<u8>, MergeError> {
+    let mut merger = PartMerger::new();
+    let mut raw = Vec::new();
+    for slice in gzip(inflated).chunks(32 * 1024) {
+        raw.extend(merger.push(slice)?);
+    }
+    merger.finish()?;
+    Ok(raw)
+}
+
 fn server_mark_of(padding: usize) -> Vec<u8> {
     Capture {
         marks: vec![Mark {
@@ -286,6 +296,37 @@ fn a_part_holding_another_sides_field_is_refused() {
         );
     }
     assert!(push_all(&written(server_fields())).is_ok());
+}
+
+#[test]
+fn the_last_duplicate_side_field_decides_which_side_wrote_a_field() {
+    for (first, last, accepted) in [
+        (Side::Client, Side::Server, true),
+        (Side::Server, Side::Client, false),
+    ] {
+        let mark = Mark {
+            side: first as i32,
+            t: 1.0,
+            name: "duplicate-side".into(),
+        };
+        let encoded = mark.encode_to_vec();
+        let mut nested = vec![0x08, first as u8, 0x08, last as u8];
+        nested.extend_from_slice(&encoded[2..]);
+        let mut inflated = vec![0x08, 0x01, 0x3a, nested.len() as u8];
+        inflated.extend_from_slice(&nested);
+
+        let result = merged_part(&inflated);
+        assert_eq!(result.is_ok(), accepted, "first={first:?}, last={last:?}");
+        if accepted {
+            let capture = Capture::decode(result.unwrap().as_slice()).unwrap();
+            assert_eq!(capture.marks[0].side(), Side::Server);
+        } else {
+            assert!(matches!(
+                result.unwrap_err(),
+                MergeError::NotServerSide { field: 7 }
+            ));
+        }
+    }
 }
 
 #[test]

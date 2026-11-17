@@ -188,13 +188,14 @@ fn side_of(field: &[u8]) -> Option<u64> {
     let (_, tag_len) = varint(field).ok()??;
     let (_, len_len) = varint(&field[tag_len..]).ok()??;
     let mut rest = &field[tag_len + len_len..];
+    let mut side = None;
     while let Some((tag, n)) = varint(rest).ok()? {
         rest = &rest[n..];
         let skip = match tag & 7 {
             0 => {
                 let (value, n) = varint(rest).ok()??;
                 if tag == SIDE_TAG {
-                    return Some(value);
+                    side = Some(value);
                 }
                 n
             }
@@ -208,7 +209,7 @@ fn side_of(field: &[u8]) -> Option<u64> {
         };
         rest = rest.get(skip..)?;
     }
-    None
+    side
 }
 
 fn is_stop(field: &[u8]) -> bool {
