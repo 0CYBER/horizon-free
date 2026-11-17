@@ -1214,11 +1214,7 @@ impl Game<'_> {
         &self,
         sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> bool {
-        self.world.chunks.iter().any(|(&key, chunk)| {
-            !sections
-                .get(key, chunk, |v| self.is_portal_state(v))
-                .is_empty()
-        })
+        sections.any(&self.world.chunks, |v| self.is_portal_state(v))
     }
     /// A nether or End portal state, by its id in a palette.
     fn is_portal_state(&self, v: u32) -> bool {

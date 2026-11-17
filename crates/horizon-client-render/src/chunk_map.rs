@@ -62,7 +62,18 @@ pub struct ChunkMap {
     /// included) are resident; absent when none is. `surrounded` asks one
     /// map instead of nine every tick, for every ticking chunk.
     near: FxHashMap<Key, u8>,
+    /// Which map this is, for the consumers of `touched_since` (a replaced or swapped map).
+    identity: u64,
+    /// The columns a writer was handed, inserted or removed, in order: a consumer that keeps a
+    /// per-column answer re-reads only these (`touched_since`).
+    touched: VecDeque<Key>,
+    /// The sequence number of `touched[0]`.
+    touched_base: u64,
+    /// The sequence number from which every column may have changed (`values_mut`, `clear`).
+    touched_all: u64,
 }
+/// The columns `ChunkMap::touched_since` remembers; an older cursor rebuilds.
+const MAX_TOUCHED: usize = 8192;
 impl Default for ChunkMap {
     fn default() -> Self {
         let revision = next_revision();
@@ -74,6 +85,10 @@ impl Default for ChunkMap {
             fresh: FxHashSet::default(),
             attachment_observer: None,
             near: FxHashMap::default(),
+            identity: next_revision(),
+            touched: VecDeque::new(),
+            touched_base: 0,
+            touched_all: 0,
         }
     }
 }
@@ -140,6 +155,36 @@ impl ChunkMap {
     pub fn membership_revision(&self) -> u64 {
         self.revision
     }
+    /// The map's identity and the sequence number the next touch takes: a consumer that
+    /// has read every column now keeps them for `touched_since`.
+    pub fn touch_cursor(&self) -> (u64, u64) {
+        (self.identity, self.touched_base + self.touched.len() as u64)
+    }
+    /// The columns touched (handed out mutably, inserted, removed) since `cursor`, a
+    /// `touch_cursor` of this map; `None` when everything may have changed since (another
+    /// map, `values_mut`, `clear`, or a cursor older than what is kept): read it all again.
+    /// A column not listed is the one the consumer read last.
+    pub fn touched_since(&self, cursor: (u64, u64)) -> Option<impl Iterator<Item = &Key> + '_> {
+        let (identity, seq) = cursor;
+        if identity != self.identity || seq < self.touched_all || seq < self.touched_base {
+            return None;
+        }
+        Some(self.touched.iter().skip((seq - self.touched_base) as usize))
+    }
+    fn touch(&mut self, key: Key) {
+        if self.touched.len() >= MAX_TOUCHED {
+            self.touched.pop_front();
+            self.touched_base += 1;
+        }
+        self.touched.push_back(key);
+    }
+    fn touch_all(&mut self) {
+        // One more than the entries dropped: the cursor moves even for a consumer that had
+        // read every entry (its sequence number is then the old end of the log).
+        self.touched_base += self.touched.len() as u64 + 1;
+        self.touched.clear();
+        self.touched_all = self.touched_base;
+    }
     fn record_delta(&mut self, delta: ChunkMembershipDelta) {
         if self.recent_deltas.len() >= MAX_RECENT_DELTAS
             && let Some((evicted, _)) = self.recent_deltas.pop_front()
@@ -188,6 +233,7 @@ impl ChunkMap {
         Some(slice.copied())
     }
     pub fn insert(&mut self, key: Key, mut chunk: Arc<Chunk>) -> Option<Arc<Chunk>> {
+        self.touch(key);
         let limits = chunk
             .saved
             .as_ref()
@@ -231,6 +277,7 @@ impl ChunkMap {
         previous
     }
     pub fn remove(&mut self, key: &Key) -> Option<Arc<Chunk>> {
+        self.touch(*key);
         self.fresh.remove(key);
         let previous = self.columns.remove(key);
         if previous.is_some() {
@@ -253,6 +300,7 @@ impl ChunkMap {
         previous
     }
     pub fn clear(&mut self) {
+        self.touch_all();
         if !self.columns.is_empty() {
             self.unload_attachments();
             self.columns.clear();
@@ -291,9 +339,11 @@ impl ChunkMap {
         self.fresh.remove(key);
     }
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut Arc<Chunk>> {
+        self.touch(*key);
         self.columns.get_mut(key)
     }
     pub fn values_mut(&mut self) -> ValuesMut<'_, Key, Arc<Chunk>> {
+        self.touch_all();
         self.columns.values_mut()
     }
 }
