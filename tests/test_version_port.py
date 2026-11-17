@@ -147,6 +147,14 @@ class GcTests(unittest.TestCase):
         self.assertEqual(port.to_remove(entries, "26.3", {"26.1"}),
                          [".datagen-x", "26.2", "diff-26.2-26.3"])
 
+    def test_dot_prefixed_scratch_does_not_steal_a_keep_slot(self):
+        # A fresh scratch folder that looks like a version (it has prepared.json) must not take one
+        # of the two "newest others" slots: 26.1 is the second-newest real version and must survive.
+        entries = [("26.3", 100, True), (".tmp-datagen", 300, True), ("26.2", 200, True), ("26.1", 50, True)]
+        self.assertEqual(port.to_remove(entries, "26.3", set()), [".tmp-datagen"])
+        # Control: with no scratch entry, nothing is removed.
+        self.assertEqual(port.to_remove([e for e in entries if not e[0].startswith(".")], "26.3", set()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

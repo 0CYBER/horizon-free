@@ -677,7 +677,8 @@ def port(args):
 def to_remove(entries, pin, keep):
     """Version store entries to delete: every version but the pinned one, --keep and the newest two others;
     diffs whose versions are gone; scratch folders. entries: [(name, mtime, is_version)]."""
-    versions = sorted(((m, n) for n, m, is_version in entries if is_version and n not in keep | {pin}), reverse=True)
+    versions = sorted(((m, n) for n, m, is_version in entries
+                       if is_version and not n.startswith('.') and n not in keep | {pin}), reverse=True)
     kept = keep | {pin} | {n for _, n in versions[:2]}
     remove = []
     for name, _, is_version in entries:
