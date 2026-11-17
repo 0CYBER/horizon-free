@@ -1020,7 +1020,10 @@ pub fn resources(
     for (name, bytes) in merged {
         index.insert(name, Resource::bytes(bytes));
     }
-    Ok(ResourceSource::indexed(index))
+    // The overlay remembers the layer it resolved over: what a file a pack
+    // replaces shadows (the atlas falls back to it when a pack texture cannot
+    // be decoded, #15523).
+    Ok(ResourceSource::layered(index, base))
 }
 
 fn merged_resources(

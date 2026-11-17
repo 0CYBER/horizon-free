@@ -63,7 +63,9 @@ enum Storage {
         source: ResourceSource,
         prefix: String,
     },
-    Index(BTreeMap<String, Resource>),
+    /// Resolved files, and the layer they were resolved over: what a file the
+    /// index replaces shadows.
+    Index(BTreeMap<String, Resource>, Option<ResourceSource>),
 }
 
 /// A winning resource keeps its source alive; merged resources keep only their
@@ -116,7 +118,7 @@ impl std::fmt::Debug for ResourceSource {
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(_) => "Archive",
             Storage::Prefix { .. } => "Prefix",
-            Storage::Index(_) => "Index",
+            Storage::Index(..) => "Index",
         };
         f.debug_tuple("ResourceSource").field(&kind).finish()
     }
@@ -178,8 +180,11 @@ impl ResourceRoot {
             .into_iter()
             .map(|name| (name.clone(), Resource::file(source.clone(), name)))
             .collect();
+        // The generated layer sits over the same resolved files, whose own
+        // underlay stays what a file they replace shadows.
+        let underlay = source.underlay().unwrap_or(source).clone();
         files.extend(textures);
-        root.source = ResourceSource::indexed(files);
+        root.source = ResourceSource::layered(files, underlay);
         root.runtime_block_sprites = block_sprites;
         self
     }
@@ -311,7 +316,7 @@ impl ResourceSource {
             Storage::Archive(archive) => {
                 collect(archive.names().filter(|name| stays_inside(name)), top)
             }
-            Storage::Index(files) => collect(files.keys().map(String::as_str), top),
+            Storage::Index(files, _) => collect(files.keys().map(String::as_str), top),
             _ => collect(
                 self.list(&format!("{top}/")).iter().map(String::as_str),
                 top,
@@ -319,7 +324,21 @@ impl ResourceSource {
         }
     }
     pub fn indexed(files: BTreeMap<String, Resource>) -> Self {
-        Self(Arc::new(Storage::Index(files)))
+        Self(Arc::new(Storage::Index(files, None)))
+    }
+    /// An index of the files `base` was resolved into layers above (`packs::
+    /// resources`): `underlay` names the layer a file the index replaces
+    /// shadows, for a reader that cannot decode the winning one.
+    pub fn layered(files: BTreeMap<String, Resource>, base: ResourceSource) -> Self {
+        Self(Arc::new(Storage::Index(files, Some(base))))
+    }
+    /// The layer this index was resolved over, when a caller said: the source
+    /// of every file the index replaces. None for an index of one layer.
+    pub fn underlay(&self) -> Option<&Self> {
+        match self.0.as_ref() {
+            Storage::Index(_, base) => base.as_ref(),
+            _ => None,
+        }
     }
     pub fn directory(root: PathBuf) -> Self {
         Self(Arc::new(Storage::Directory(root)))
@@ -365,7 +384,7 @@ impl ResourceSource {
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(archive) => archive.read(name),
             Storage::Prefix { source, prefix } => source.read(&format!("{prefix}{name}")),
-            Storage::Index(files) => files
+            Storage::Index(files, _) => files
                 .get(name)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?
                 .read(),
@@ -382,7 +401,7 @@ impl ResourceSource {
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(_) => None,
             Storage::Prefix { source, prefix } => source.folder_of(&format!("{prefix}{name}")),
-            Storage::Index(files) => match &files.get(name)?.0 {
+            Storage::Index(files, _) => match &files.get(name)?.0 {
                 ResourceStorage::File { source, name } => source.folder_of(name),
                 ResourceStorage::Bytes(_) => None,
             },
@@ -407,7 +426,7 @@ impl ResourceSource {
             Storage::Prefix { source, prefix } => {
                 source.copy_to(&format!("{prefix}{name}"), out, budget)
             }
-            Storage::Index(files) => match &files
+            Storage::Index(files, _) => match &files
                 .get(name)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?
                 .0
@@ -441,7 +460,7 @@ impl ResourceSource {
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(archive) => archive.read_head(name, max),
             Storage::Prefix { source, prefix } => source.read_head(&format!("{prefix}{name}"), max),
-            Storage::Index(files) => match &files
+            Storage::Index(files, _) => match &files
                 .get(name)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?
                 .0
@@ -470,7 +489,7 @@ impl ResourceSource {
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(archive) => archive.contains(name),
             Storage::Prefix { source, prefix } => source.contains(&format!("{prefix}{name}")),
-            Storage::Index(files) => files.contains_key(name),
+            Storage::Index(files, _) => files.contains_key(name),
         }
     }
     /// Read only when the complete resource fits the limit. Bounds actual bytes
@@ -491,7 +510,7 @@ impl ResourceSource {
             Storage::Prefix { source, prefix } => {
                 return source.read_limited(&format!("{prefix}{name}"), max);
             }
-            Storage::Index(files) => match &files
+            Storage::Index(files, _) => match &files
                 .get(name)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?
                 .0
@@ -547,7 +566,7 @@ impl ResourceSource {
                 .into_iter()
                 .filter_map(|name| name.strip_prefix(base).map(str::to_owned))
                 .collect(),
-            Storage::Index(files) => files
+            Storage::Index(files, _) => files
                 .range(prefix.to_owned()..)
                 .map_while(|(name, _)| name.starts_with(prefix).then(|| name.clone()))
                 .collect(),
@@ -635,7 +654,7 @@ impl ResourceSource {
             Storage::Prefix { source, prefix } => {
                 source.file_fingerprint(&format!("{prefix}{name}"), archives)
             }
-            Storage::Index(files) => match &files.get(name)?.0 {
+            Storage::Index(files, _) => match &files.get(name)?.0 {
                 ResourceStorage::File { source, name } => source.file_fingerprint(name, archives),
                 ResourceStorage::Bytes(bytes) => {
                     let mut hash = DefaultHasher::new();
