@@ -756,14 +756,24 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                     })
                     .collect(),
             ),
-            // PotionContents' NBT: the potion by name and the custom colour.
-            Component::Potion { potion, color, .. } => {
+            // PotionContents' NBT: the potion by name, the custom colour,
+            // custom effects and custom name.
+            Component::Potion {
+                potion,
+                color,
+                rest,
+            } => {
                 let potion = potion.and_then(|id| builtin.get("minecraft:potion")?.name(id));
+                let (effects, name) = potion_effects_and_name(rest, builtin);
                 Tag::compound(
                     potion
                         .map(|name| ("potion", Tag::String(name.into())))
                         .into_iter()
-                        .chain(color.map(|c| ("custom_color", Tag::Int(c)))),
+                        .chain(color.map(|c| ("custom_color", Tag::Int(c))))
+                        .chain(
+                            (!effects.is_empty()).then_some(("custom_effects", Tag::List(effects))),
+                        )
+                        .chain(name.map(|n| ("custom_name", Tag::String(n.as_str().into())))),
                 )
             }
             // ItemStackTemplate.CODEC: id, count and components.
@@ -1173,6 +1183,21 @@ fn consume_effect_tag(r: &mut Reader, builtin: &Builtin, depth: u32) -> Option<T
         _ => return None,
     }
     Some(Tag::compound(fields))
+}
+
+/// `PotionContents`' custom effects and optional custom name, from the bytes
+/// `Component::Potion` keeps after the colour. Nothing when they don't parse.
+fn potion_effects_and_name(rest: &[u8], builtin: &Builtin) -> (Vec<Tag>, Option<String>) {
+    let mut r = Reader::new(rest);
+    let parsed = (!rest.is_empty()).then(|| {
+        let n = r.count(r.remaining()).ok()?;
+        let effects = (0..n)
+            .map(|_| mob_effect_tag(&mut r, builtin, 0))
+            .collect::<Option<Vec<_>>>()?;
+        let name = r.bool().ok()?.then(|| r.string(32767).ok()).flatten();
+        Some((effects, name))
+    });
+    parsed.flatten().unwrap_or_default()
 }
 
 /// `MobEffectInstance.CODEC`: the effect's identifier and its details.
@@ -1910,6 +1935,82 @@ mod tests {
             ),
         };
         assert!(emerald.test(&ItemStack::new("minecraft:emerald", 2)));
+    }
+
+    /// A potion with no type, a colour, a name and a custom effect keeps all
+    /// of them across the wire (`PotionContents.STREAM_CODEC`), so the client
+    /// colours the bottle from the effect and lists it.
+    #[test]
+    fn custom_potion_contents_survive_the_wire() {
+        use horizon_protocol::buf::{Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); component::POTION_CONTENTS as usize + 1];
+        components[component::POTION_CONTENTS as usize] = "minecraft:potion_contents".into();
+        let items = ["minecraft:air", "minecraft:potion"];
+        let names = |names: &[&str]| Ids::from_names(names.iter().map(|s| s.to_string()).collect());
+        let builtin = Builtin {
+            registries: [
+                ("minecraft:item".to_owned(), names(&items)),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+                (
+                    "minecraft:mob_effect".to_owned(),
+                    names(&["minecraft:speed", "minecraft:slowness"]),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic::default();
+        let effect = Tag::compound([
+            ("id", Tag::String("minecraft:slowness".into())),
+            ("amplifier", Tag::Int(2)),
+            ("duration", Tag::Int(600)),
+            ("ambient", Tag::Byte(1)),
+            ("show_particles", Tag::Byte(0)),
+            (
+                "hidden_effect",
+                Tag::compound([("amplifier", Tag::Int(1)), ("duration", Tag::Int(100))]),
+            ),
+        ]);
+        let mut potion = ItemStack::new("minecraft:potion", 1);
+        potion.data_mut().potion_extra = vec![
+            ("custom_color".into(), Tag::Int(0x00FF_8800)),
+            ("custom_effects".into(), Tag::List(vec![effect])),
+            ("custom_name".into(), Tag::String("tea".into())),
+        ];
+        let wire = crate::lan::guest::stack_to_network(
+            |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+            |registry, name| builtin.get(registry)?.id(name),
+            &Some(potion),
+        );
+        let mut w = Writer::new();
+        Slot::write(&wire, &mut w);
+        let wire = Slot::read(&mut Reader::new(&w.data)).unwrap().unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        assert_eq!(back.potion(), None);
+        assert_eq!(
+            back.custom_potion_effects(),
+            [("minecraft:slowness".to_owned(), 600, 2)]
+        );
+        let instances = crate::brewing::contents_instances(&back);
+        assert_eq!(instances.len(), 1);
+        assert!(instances[0].ambient && !instances[0].visible);
+        let extra = |key: &str| {
+            back.data()
+                .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == key))
+                .map(|(_, v)| v.clone())
+        };
+        let Some(Tag::List(effects)) = extra("custom_effects") else {
+            panic!("no custom effects");
+        };
+        // The icon follows the particles when the saved effect has no flag.
+        assert_eq!(effects[0].get("show_icon"), Some(&Tag::Byte(0)));
+        let hidden = effects[0].get("hidden_effect").unwrap();
+        assert_eq!(hidden.get("duration"), Some(&Tag::Int(100)));
+        assert_eq!(extra("custom_color"), Some(Tag::Int(0x00FF_8800)));
+        assert_eq!(extra("custom_name"), Some(Tag::String("tea".into())));
     }
 
     /// A bundle's contents cross the wire, so a server's client can draw

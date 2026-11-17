@@ -1675,6 +1675,84 @@ fn trim_component(
         (material, pattern) => Component::TrimDirect { material, pattern },
     })
 }
+/// `PotionContents.STREAM_CODEC`: the potion's `minecraft:potion` id, the custom
+/// colour, and the custom effects and name as the bytes the component keeps.
+fn potion_contents(
+    d: &crate::item_data::StackData,
+    synced_id: &dyn Fn(&str, &str) -> Option<i32>,
+) -> Option<horizon_protocol::item::Component> {
+    use horizon_core::nbt::Tag;
+    let extra = |key: &str| {
+        d.potion_extra
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    };
+    let potion = d.potion.as_deref().and_then(|potion| {
+        synced_id(
+            "minecraft:potion",
+            &horizon_world::datafix::dynamic::namespaced(potion),
+        )
+    });
+    let color = crate::save::number(extra("custom_color")).map(|c| c as i32);
+    let effects: Vec<_> = match extra("custom_effects") {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|e| {
+                let name = crate::save::text(e.get("id"))?;
+                let id = synced_id(
+                    "minecraft:mob_effect",
+                    &horizon_world::datafix::dynamic::namespaced(&name),
+                )?;
+                Some((id, e))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let name = crate::save::text(extra("custom_name"));
+    if potion.is_none() && color.is_none() && effects.is_empty() && name.is_none() {
+        return None;
+    }
+    let mut rest = horizon_protocol::buf::Writer::new();
+    if !effects.is_empty() || name.is_some() {
+        rest.varint(effects.len() as i32);
+        for (id, effect) in effects {
+            rest.varint(id);
+            write_effect_details(effect, &mut rest);
+        }
+        rest.bool(name.is_some());
+        if let Some(name) = &name {
+            rest.string(name);
+        }
+    }
+    Some(horizon_protocol::item::Component::Potion {
+        potion,
+        color,
+        rest: rest.data,
+    })
+}
+/// `MobEffectInstance.Details.STREAM_CODEC` of a saved effect, as
+/// `MobEffectInstance.CODEC` defaults it: the icon follows the particles, and
+/// the hidden effect nests the same fields.
+fn write_effect_details(effect: &horizon_core::nbt::Tag, w: &mut horizon_protocol::buf::Writer) {
+    let flag =
+        |key: &str, default: bool| crate::save::number(effect.get(key)).map_or(default, |v| v != 0);
+    let visible = flag("show_particles", true);
+    w.varint(
+        crate::save::number(effect.get("amplifier"))
+            .unwrap_or(0)
+            .clamp(0, 255) as i32,
+    );
+    w.varint(crate::save::number(effect.get("duration")).unwrap_or(0) as i32);
+    w.bool(flag("ambient", false));
+    w.bool(visible);
+    w.bool(flag("show_icon", visible));
+    let hidden = effect.get("hidden_effect");
+    w.bool(hidden.is_some());
+    if let Some(hidden) = hidden {
+        write_effect_details(hidden, w);
+    }
+}
 /// Convert a borrowed item template with the same component codecs as inventory slots.
 pub(super) fn network_stack(
     item_id: &dyn Fn(&str) -> i32,
@@ -1990,21 +2068,12 @@ pub(super) fn network_stack(
                 horizon_protocol::item::Component::LodestoneTracker { target, tracked },
             ));
         }
-        // PotionContents: the potion by its `minecraft:potion` id.
-        if let Some(id) = (d.potion.as_deref()).and_then(|potion| {
-            synced_id(
-                "minecraft:potion",
-                &horizon_world::datafix::dynamic::namespaced(potion),
-            )
-        }) {
-            stack.added.push((
-                horizon_protocol::item::component::POTION_CONTENTS,
-                horizon_protocol::item::Component::Potion {
-                    potion: Some(id),
-                    color: None,
-                    rest: Vec::new(),
-                },
-            ));
+        // PotionContents: the potion by its `minecraft:potion` id, the custom
+        // colour, custom effects and custom name.
+        if let Some(contents) = potion_contents(d, synced_id) {
+            stack
+                .added
+                .push((horizon_protocol::item::component::POTION_CONTENTS, contents));
         }
         // SuspiciousStewEffects: each effect by its `minecraft:mob_effect` id.
         if !d.stew_effects.is_empty() {
@@ -2639,6 +2708,70 @@ mod tests {
                 potion: Some(14),
                 color: None,
                 rest: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn custom_potion_contents_reach_the_client() {
+        use horizon_protocol::buf::Writer;
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:mob_effect", "minecraft:speed") => Some(1),
+            _ => None,
+        };
+        let send = |potion: &ItemStack| {
+            stack_to_network(|_| 7, synced_id, &Some(potion.clone()))
+                .unwrap()
+                .component(component::POTION_CONTENTS)
+                .cloned()
+        };
+        let mut potion = ItemStack::new("minecraft:potion", 1);
+        assert_eq!(send(&potion), None);
+        // Only a colour: no type, no effects.
+        potion.data_mut().potion_extra = vec![("custom_color".into(), Tag::Int(0x00FF_8800))];
+        assert_eq!(
+            send(&potion),
+            Some(Component::Potion {
+                potion: None,
+                color: Some(0x00FF_8800),
+                rest: Vec::new(),
+            })
+        );
+        // A colour, a speed II effect for 600 ticks (the default particles and
+        // icon), an effect the connection has no id for, and a name: with no type.
+        let effect = |id: &str| {
+            Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("amplifier", Tag::Byte(1)),
+                ("duration", Tag::Int(600)),
+            ])
+        };
+        potion.data_mut().potion_extra = vec![
+            ("custom_color".into(), Tag::Int(0x00FF_8800)),
+            (
+                "custom_effects".into(),
+                Tag::List(vec![effect("minecraft:speed"), effect("minecraft:unknown")]),
+            ),
+            ("custom_name".into(), Tag::String("Tea".into())),
+        ];
+        // `PotionContents.STREAM_CODEC`: the effects (id, amplifier, duration,
+        // ambient, particles, icon, no hidden effect) then the optional name.
+        let mut tail = Writer::new();
+        tail.varint(1);
+        for v in [1, 1, 600] {
+            tail.varint(v);
+        }
+        for b in [false, true, true, false] {
+            tail.bool(b);
+        }
+        tail.bool(true);
+        tail.string("Tea");
+        assert_eq!(
+            send(&potion),
+            Some(Component::Potion {
+                potion: None,
+                color: Some(0x00FF_8800),
+                rest: tail.data,
             })
         );
     }
