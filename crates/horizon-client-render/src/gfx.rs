@@ -2436,14 +2436,14 @@ impl Renderer {
             &device,
             Some(&layout),
             &shader,
-            config.format.remove_srgb_suffix(),
+            (frame_format, linear_light),
             &sprite_constants,
         );
         let terrain_model_pipelines = terrain_model::pipelines(
             &device,
             Some(&layout),
             &shader,
-            config.format.remove_srgb_suffix(),
+            (frame_format, linear_light),
             &sprite_constants,
         );
         let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];

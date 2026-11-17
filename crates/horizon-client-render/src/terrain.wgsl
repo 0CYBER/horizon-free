@@ -850,7 +850,7 @@ struct NativeFluidOut {
 @fragment fn fs_native_fluid(in: NativeFluidOut) -> @location(0) vec4<f32> {
     // The source translucent shader has no alpha discard; transparent texels write depth too.
     let color = sprite_grad(in.uv, in.sprite, dpdx(in.uv), dpdy(in.uv)) * in.color;
-    return apply_fog(color, in.spherical, in.cylindrical);
+    return frame_stored(apply_fog(color, in.spherical, in.cylindrical));
 }
 
 // Native terrain models retain floating-point transformed normals. Fullbright still receives
@@ -890,7 +890,7 @@ struct NativeModelOut {
         color = vec4(color.rgb * shade, color.a);
     }
     let finished = apply_fog(color, in.spherical, in.cylindrical);
-    return vec4(finished.rgb, select(finished.a, 1.0, HDR_WRITE_LIGHT));
+    return frame_stored(vec4(finished.rgb, select(finished.a, 1.0, HDR_WRITE_LIGHT)));
 }
 
 // Sky (SkyRenderer): the 10-vertex sky disc fan at y = 16 (radius 512) in
