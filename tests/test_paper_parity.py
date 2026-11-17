@@ -139,6 +139,18 @@ class PaperParityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r'horizon: hotbar.*row 3: expected.*7, 3.*got.*missing'):
                 compare()
 
+    def test_bare_string_palette_entry_is_a_block_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            region = out / 'paper/world/dimensions/minecraft/overworld/region/r.0.0.mca'
+            region.parent.mkdir(parents=True)
+            payload = parity.zlib.compress(b'fixture')
+            region.write_bytes(b'\x00\x00\x02\x01' + bytes(8188)
+                               + (len(payload) + 1).to_bytes(4, 'big') + b'\x02' + payload)
+            chunk = {'sections': [{'Y': -4, 'block_states': {'palette': ['minecraft:farmland']}}]}
+            with patch.object(parity, '_nbt', return_value=chunk):
+                self.assertEqual(parity.final_blocks(out, 'paper', [[0, -64, 0]]), ['minecraft:farmland'])
+
     def test_combined_report_keeps_every_case_and_propagates_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

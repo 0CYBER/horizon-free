@@ -117,8 +117,11 @@ def final_blocks(out, side, positions):
         i, per = (y % 16) * 256 + z * 16 + x, 64 // bits
         entry = palette[(blocks['data'][i // per] >> (i % per * bits)) & ((1 << bits) - 1)
                         if 'data' in blocks else 0]
-        name = entry.get('id', entry.get('Name', entry.get('')))
-        props = entry.get('properties', entry.get('Properties', {}))
+        if isinstance(entry, str):  # 26.3's compact palette: a one-state palette is the state name itself
+            name, props = entry, {}
+        else:
+            name = entry.get('id', entry.get('Name', entry.get('')))
+            props = entry.get('properties', entry.get('Properties', {}))
         result.append(name + (f"[moisture={props['moisture']}]" if 'moisture' in props else ''))
     return result
 
