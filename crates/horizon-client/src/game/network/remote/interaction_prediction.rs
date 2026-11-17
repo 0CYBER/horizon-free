@@ -452,6 +452,16 @@ impl Game<'_> {
                 });
                 self.with_hand(hand, Game::swing_arm);
                 return true;
+            } else if item_used
+                && held
+                    .as_ref()
+                    .is_some_and(|s| &*s.item == "minecraft:end_crystal")
+            {
+                // EndCrystalItem.useOn consumes the click whether it fits or fails.
+                if self.end_crystal_fits(&hit) {
+                    self.with_hand(hand, Game::swing_arm);
+                }
+                return true;
             } else if let Some(stack) = held.as_ref().filter(|_| item_used)
                 && (self.with_hand(hand, |g| g.predict_item_on_block(stack, &hit))
                     || self.predict_map_on_banner(stack, &hit))
