@@ -380,11 +380,15 @@ fn an_always_killing_source_breaks_the_stand_on_the_first_hit() {
         horizon_client::lang::isolate_publication(horizon_client::lang::Language::of("en_us", []));
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
-    summon(&mut game, "");
+    summon(&mut game, r#",CustomName:"Bob""#);
     // minecraft:arrow is in #always_kills_armor_stands.
     assert!(game.run_command(&format!("damage {STAND} 1 minecraft:arrow")));
     assert!(!game.run_command(&format!("execute if entity {STAND}")));
     assert_eq!(items(&mut game), "Test passed. Count: 1");
+    // brokenByPlayer: the stand item carries the stand's name.
+    assert!(game.run_command(
+        r#"execute if entity @e[type=item,nbt={Item:{id:"minecraft:armor_stand",components:{"minecraft:custom_name":"Bob"}}}]"#
+    ));
 }
 
 #[test]
