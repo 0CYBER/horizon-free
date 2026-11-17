@@ -1043,7 +1043,10 @@ impl Manifest {
         }
         let mut textures: Vec<PackTexture> = Vec::new();
         for t in raw.textures {
-            if !pack_identifier(&t.id) || textures.iter().any(|o| o.id == t.id) {
+            // The id is declared in every stage's prelude: a word WGSL reserves would be refused
+            // there, at a line of the prelude rather than of the pack.
+            let reserved = naga::keywords::wgsl::RESERVED.contains(&t.id.as_str());
+            if !pack_identifier(&t.id) || reserved || textures.iter().any(|o| o.id == t.id) {
                 return Err(err(format!(
                     "texture id {:?} is not a WGSL identifier, or is declared twice",
                     t.id

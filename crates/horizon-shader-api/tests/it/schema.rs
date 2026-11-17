@@ -592,6 +592,11 @@ fn a_pack_texture_is_declared_for_every_stage_and_decoded() {
     };
     refused(&texture.replace("noise.png", "noise.jpg"), ".png");
     refused(&format!("{texture}{texture}"), "declared twice");
+    // A word WGSL reserves: refused in the manifest, not at a line of the stages' prelude.
+    refused(
+        &texture.replace("\"noise\"", "\"from\""),
+        "texture id \"from\"",
+    );
     refused(&texture.replace("clamp", "mirror"), "repeat or clamp");
     refused(
         &format!("{texture}filter = \"cubic\"\n"),
