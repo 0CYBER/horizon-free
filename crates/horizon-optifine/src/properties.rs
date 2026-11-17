@@ -6,6 +6,8 @@
 //! Shader packs have their own reader (`horizon_shaders::properties`): theirs runs `#define`
 //! and `#if` directives and reads no escapes.
 
+use std::iter::from_fn;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Properties {
     /// In file order; each key once.
@@ -33,9 +35,9 @@ impl Properties {
         let mut out = Self::default();
         // Each key's place in `entries`, so a file of many keys reads in linear time.
         let mut index = std::collections::HashMap::<String, usize>::new();
-        let mut lines = text.lines();
+        let mut lines = natural_lines(text);
         while let Some(first) = lines.next() {
-            let first = first.trim_start();
+            let first = first.trim_start_matches([' ', '\t', '\x0c']);
             if first.is_empty() || first.starts_with('#') || first.starts_with('!') {
                 continue;
             }
@@ -43,12 +45,15 @@ impl Properties {
             while ends_in_continuation(&line) {
                 line.pop();
                 match lines.next() {
-                    Some(next) => line.push_str(next.trim_start()),
+                    Some(next) => line.push_str(next.trim_start_matches([' ', '\t', '\x0c'])),
                     None => break,
                 }
             }
             let (key, value) = split(&line);
-            let (key, value) = (unescape(key), unescape(value).trim().to_owned());
+            let (key, value) = (
+                unescape(key),
+                unescape(value).trim_matches(|c| c <= '\u{20}').to_owned(),
+            );
             match index.get(&key) {
                 Some(&i) => out.entries[i].1 = value,
                 None => {
@@ -78,6 +83,43 @@ impl Properties {
 /// An odd number of trailing backslashes.
 fn ends_in_continuation(line: &str) -> bool {
     line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
+}
+
+fn natural_lines(mut text: &str) -> impl Iterator<Item = &str> {
+    from_fn(move || {
+        if text.is_empty() {
+            return None;
+        }
+        let bytes = text.as_bytes();
+        let end = bytes.len();
+        let mut pos = 0;
+        while pos < end {
+            let b = bytes[pos];
+            if b == b'\r' && pos + 1 < end && bytes[pos + 1] == b'\n' {
+                // CRLF
+                let line = &text[..pos];
+                text = &text[pos + 2..];
+                return Some(line);
+            }
+            if b == b'\r' {
+                // Bare CR
+                let line = &text[..pos];
+                text = &text[pos + 1..];
+                return Some(line);
+            }
+            if b == b'\n' {
+                // LF
+                let line = &text[..pos];
+                text = &text[pos + 1..];
+                return Some(line);
+            }
+            pos += 1;
+        }
+        // Remainder to end
+        let line = text;
+        text = "";
+        Some(line)
+    })
 }
 
 fn unescaped_equals(line: &str) -> Option<usize> {
@@ -205,5 +247,49 @@ mod tests {
         let p = Properties::parse("texture.bow_pulling_0=a\ntexture.bow_pulling_1=b\nitems=bow\n");
         let got: Vec<_> = p.with_prefix("texture.").collect();
         assert_eq!(got, [("bow_pulling_0", "a"), ("bow_pulling_1", "b")]);
+    }
+
+    #[test]
+    fn natural_lines_and_java_whitespace() {
+        let cases: &[(&str, &[(&str, &str)])] = &[
+            (
+                "first=one\nsecond=two\n",
+                &[("first", "one"), ("second", "two")],
+            ),
+            (
+                "first=one\r\nsecond=two\r\n",
+                &[("first", "one"), ("second", "two")],
+            ),
+            (
+                "first=one\rsecond=two\r",
+                &[("first", "one"), ("second", "two")],
+            ),
+            ("key=x\\\r\n\u{00a0}y\n", &[("key", "x\u{00a0}y")]),
+            ("\u{00a0}key=value\n", &[("\u{00a0}key", "value")]),
+            (
+                "key=\u{00a0}value\u{00a0}\n",
+                &[("key", "\u{00a0}value\u{00a0}")],
+            ),
+            ("key=\\u0010value\\u001f\n", &[("key", "value")]),
+            ("\u{10}key=value\n", &[("\u{10}key", "value")]),
+            (
+                "key=x\\ \r\nnext=value\n",
+                &[("key", "x"), ("next", "value")],
+            ),
+        ];
+        for &(input, expected) in cases {
+            for parse in [
+                Properties::parse as fn(&str) -> Properties,
+                Properties::parse_equals_first,
+            ] {
+                let properties = parse(input);
+                let got: Vec<_> = properties
+                    .entries
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str()))
+                    .collect();
+                assert_eq!(got, expected, "input={input:?}");
+            }
+        }
     }
 }
