@@ -89,6 +89,7 @@ impl Launcher {
                 Msg::OfficialPlayers(players) => self.official_players = players,
                 Msg::JavaGame(id, home, cmd) => {
                     self.starting_client = None;
+                    self.starting_instance = None;
                     let spawned = cmd.and_then(|(cmd, vars)| {
                         self.client_vars = vars;
                         backend::spawn(Job::Client, cmd, self.tx.clone())
@@ -116,6 +117,7 @@ impl Launcher {
                 Msg::JarConsent { jars, reply } => jar_launch::consent(window, jars, reply, cx),
                 Msg::JarClient { run, prepared } => {
                     self.starting_client = None;
+                    self.starting_instance = None;
                     match *prepared {
                         Ok(cmd) => {
                             self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());

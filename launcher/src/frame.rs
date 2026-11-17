@@ -12,6 +12,33 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// What a sidebar row says of its instance's game.
+#[derive(Debug, PartialEq)]
+pub(crate) enum RowPhase {
+    Running,
+    Starting,
+}
+
+/// The instances whose games run: the one `client_run` names, while its game (`client`) runs.
+pub(crate) fn running_ids(client: bool, run: Option<&(String, Instant)>) -> Vec<&str> {
+    run.filter(|_| client)
+        .map(|(id, _)| id.as_str())
+        .into_iter()
+        .collect()
+}
+
+/// The state line of the row of instance `id`, from the instances whose games run and the one a
+/// start is under way for: only the row of that instance says so, whatever is selected.
+pub(crate) fn row_phase(id: &str, running: &[&str], starting: Option<&str>) -> Option<RowPhase> {
+    if running.contains(&id) {
+        Some(RowPhase::Running)
+    } else if starting == Some(id) {
+        Some(RowPhase::Starting)
+    } else {
+        None
+    }
+}
+
 /// The rail's distance from the window's edges (`m-3.5`).
 pub const MARGIN: f32 = 14.;
 
@@ -186,14 +213,12 @@ impl Launcher {
     /// A sidebar row's state line and its dot (the mockup's `statusOf`), from what the launcher
     /// knows of the instance.
     fn row_state(&self, i: &Instance) -> (Tone, String) {
-        let running =
-            self.client.is_some() && self.selected_instance().is_some_and(|s| s.id == i.id);
-        if running {
+        let running = running_ids(self.client.is_some(), self.client_run.as_ref());
+        let phase = row_phase(&i.id, &running, self.starting_instance.as_deref());
+        if phase == Some(RowPhase::Running) {
             return (Tone::Live, tr("Running").into());
         }
-        let starting = self.starting_client.is_some()
-            && self.selected_instance().is_some_and(|s| s.id == i.id);
-        if starting {
+        if phase == Some(RowPhase::Starting) {
             return (Tone::Busy, tr("Starting").into());
         }
         match i.kind {

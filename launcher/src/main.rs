@@ -455,6 +455,7 @@ struct Launcher {
     /// The game is waiting for its session (a token renewal), or a Java instance for its files
     /// and Java (`start_java`), before it starts.
     starting_client: Option<String>,
+    /// The instance that start is for, whatever is selected by the time it ends.
     starting_instance: Option<String>,
     /// Play was pressed on a version not prepared yet: it starts once this preparation ends well.
     play_when_prepared: Option<(String, String)>,
@@ -818,6 +819,32 @@ mod tests {
         assert!(!starts_now(true, true, false), "prepared again under way");
         assert!(!starts_now(false, false, false), "not prepared");
         assert!(!starts_now(true, false, true), "already running");
+    }
+
+    /// A sidebar row says Running or Starting for the instance that was started, not for
+    /// whichever one is selected (#16186).
+    #[test]
+    fn a_row_shows_the_game_of_its_own_instance_only() {
+        use super::frame::{row_phase, running_ids, RowPhase};
+        assert_eq!(row_phase("a", &["a"], None), Some(RowPhase::Running));
+        assert_eq!(row_phase("b", &["a"], None), None, "B is only selected");
+        assert_eq!(row_phase("a", &[], Some("a")), Some(RowPhase::Starting));
+        assert_eq!(row_phase("b", &[], Some("a")), None);
+        assert_eq!(row_phase("a", &[], None), None, "nothing runs");
+        // Several games: one runs while another starts.
+        assert_eq!(row_phase("a", &["a"], Some("b")), Some(RowPhase::Running));
+        assert_eq!(row_phase("b", &["a"], Some("b")), Some(RowPhase::Starting));
+        assert_eq!(row_phase("b", &["a", "b"], None), Some(RowPhase::Running));
+        // The started instance deleted (ids don't change on a rename): no row has its game.
+        assert_eq!(row_phase("c", &["a"], Some("b")), None);
+        // The ids come from the run's own instance, and only while its game runs.
+        let run = ("a".to_string(), std::time::Instant::now());
+        assert_eq!(running_ids(true, Some(&run)), ["a"]);
+        assert!(running_ids(false, Some(&run)).is_empty());
+        assert!(
+            running_ids(true, None).is_empty(),
+            "a pack with no instance"
+        );
     }
 
     #[test]

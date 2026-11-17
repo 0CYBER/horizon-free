@@ -122,6 +122,7 @@ impl Launcher {
     fn play_pack(&mut self, work: PathBuf) {
         // The pack's instance plays its own version, if it has one.
         let pack = self.instances.list.iter().find(|i| i.work == work);
+        let pack_id = pack.map(|i| i.id.clone());
         let Some(tag) = pack
             .and_then(|i| self.version_of(i))
             .or_else(|| self.launcher_version())
@@ -133,7 +134,7 @@ impl Launcher {
             return;
         }
         self.starting_pack = Some(work);
-        self.start_client(tag, None);
+        self.start_client(tag, pack_id);
     }
 
     /// Looks for other launchers' modpacks on a thread: their folders can be slow to read.
