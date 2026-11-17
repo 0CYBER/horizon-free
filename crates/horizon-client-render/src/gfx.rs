@@ -13,7 +13,12 @@ use crate::{
 #[cfg(any(test, feature = "test-support"))]
 use glam::Vec4;
 use glam::{DVec3, Mat4, Vec3};
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 // RenderPipelines.CRUMBLING: dst * src + src * dst, alpha replaced.
@@ -11350,6 +11355,125 @@ mod frame_policy_tests;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    /// #16769: a graphics driver that never answers the device search must end the
+    /// start with a message, not hold it on the boot screen forever.
+    #[test]
+    fn an_unanswered_device_search_fires_the_watchdog() {
+        let (fired, fired_back) = std::sync::mpsc::channel();
+        let searched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let _armed = super::arm_search_watchdog(
+            Duration::from_millis(20),
+            Duration::from_millis(0),
+            searched,
+            || {},
+            move || {
+                let _ = fired.send(());
+            },
+        );
+        fired_back
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the watchdog fired at the timeout");
+    }
+
+    /// The disarm itself proves it: the watchdog thread is joined, not slept past.
+    #[test]
+    fn a_disarmed_watchdog_does_not_fire() {
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let also = fired.clone();
+        let searched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (disarm, watchdog) = super::arm_search_watchdog(
+            Duration::from_millis(20),
+            Duration::from_millis(0),
+            searched,
+            || {},
+            move || {
+                also.store(true, std::sync::atomic::Ordering::Relaxed);
+            },
+        );
+        disarm.send(()).expect("the watchdog was there to disarm");
+        watchdog
+            .expect("the watchdog thread started")
+            .join()
+            .expect("the watchdog thread ends on its disarm");
+        assert!(
+            !fired.load(std::sync::atomic::Ordering::Relaxed),
+            "a finished search is not reported as a hung driver"
+        );
+    }
+
+    /// A search that answers inside the grace window was slow, not hung: it must not end
+    /// the start it had just finished (#16769).
+    #[test]
+    fn a_search_that_answers_inside_the_grace_runs_on() {
+        let (timeout_tx, timeout_rx) = std::sync::mpsc::channel();
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let also = fired.clone();
+        let searched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (disarm, watchdog) = super::arm_search_watchdog(
+            Duration::from_millis(20),
+            Duration::from_millis(400),
+            searched.clone(),
+            move || {
+                timeout_tx.send(()).unwrap();
+            },
+            move || {
+                also.store(true, std::sync::atomic::Ordering::Relaxed);
+            },
+        );
+        // Past the timeout, inside the grace: this is the window the grace exists for.
+        timeout_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("timeout reported before grace");
+        assert!(!fired.load(std::sync::atomic::Ordering::Relaxed));
+        searched.store(true, std::sync::atomic::Ordering::Release);
+        drop(disarm);
+        watchdog
+            .expect("the watchdog thread started")
+            .join()
+            .expect("the watchdog thread ends");
+        assert!(
+            !fired.load(std::sync::atomic::Ordering::Relaxed),
+            "a slow search that answered is not a hung driver"
+        );
+    }
+
+    #[test]
+    fn the_timeout_message_names_the_stuck_api_and_the_remedy() {
+        let message = super::device_search_timed_out(Duration::from_secs(30));
+        assert!(message.contains("Horizon renderer:"), "{message}");
+        assert!(message.contains("HORIZON_GRAPHICS_API"), "{message}");
+    }
+
+    /// A machine whose driver is slow but alive can be talked out of the default.
+    #[test]
+    fn the_timeout_can_be_raised_and_ignores_what_is_not_a_positive_whole_number() {
+        use super::parse_device_open_timeout;
+        use std::time::Duration;
+        assert_eq!(
+            parse_device_open_timeout(Some("90")),
+            Duration::from_secs(90)
+        );
+        assert_eq!(
+            parse_device_open_timeout(Some(" 45 ")),
+            Duration::from_secs(45)
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("-5"),
+            Some("30s"),
+            Some("soon"),
+        ] {
+            assert_eq!(
+                parse_device_open_timeout(bad),
+                super::DEVICE_OPEN_TIMEOUT,
+                "{bad:?} keeps the default"
+            );
+        }
+    }
+
     #[test]
     fn taa_culling_covers_jittered_view_edges_but_still_rejects_behind_the_camera() {
         use super::*;

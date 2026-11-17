@@ -239,6 +239,29 @@ pub(crate) fn draws_frame(format: wgpu::TextureFormatFeatures) -> bool {
 /// float, so values over 1 survive from the world to the tonemap and the HDR pass.
 pub(crate) const LINEAR_FRAME: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// How long choosing a GPU may take before the game gives up: a driver that stopped
+/// answering inside Vulkan's instance creation, DXGI's adapter enumeration or device
+/// creation would hold the event loop on the boot screen forever without this (#16769).
+/// The search is adapter enumeration, seconds even on a slow machine; shader compilation,
+/// which can take minutes on an old GPU, comes after it, so a search this long means the
+/// driver hung, not that it is still working. `HORIZON_DEVICE_OPEN_TIMEOUT` (seconds) raises
+/// it for a machine whose driver is slow but alive.
+pub(super) const DEVICE_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the timeout's message has before it ends the game: the boot screen repaints the
+/// log's last lines, and a search that finishes in this window was slow, not hung.
+const DEVICE_OPEN_GRACE: Duration = Duration::from_secs(1);
+/// `HORIZON_DEVICE_OPEN_TIMEOUT` in seconds when it is a positive whole number, else
+/// `DEVICE_OPEN_TIMEOUT`.
+fn device_open_timeout() -> Duration {
+    parse_device_open_timeout(std::env::var("HORIZON_DEVICE_OPEN_TIMEOUT").ok().as_deref())
+}
+pub(super) fn parse_device_open_timeout(seconds: Option<&str>) -> Duration {
+    seconds
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|&seconds| seconds > 0)
+        .map_or(DEVICE_OPEN_TIMEOUT, Duration::from_secs)
+}
+
 /// Opens a device on the first of `backend_order`'s backends that gives one.
 /// Offscreen rendering needs no surface, so it can use a GPU the window's
 /// display cannot present from (a headless compositor).
@@ -249,15 +272,51 @@ pub(super) async fn open_device(
     needs: surface_setup::DeviceNeeds,
 ) -> Result<Opened> {
     let wgpu_backend = std::env::var_os("WGPU_BACKEND").is_some();
-    let mut first = None;
-    for (order, allow_cpu) in device_search(
+    // A search that hangs does so inside the driver, where nothing in this process can
+    // interrupt it: the search stays on this thread (a window's surface can only be made
+    // on it), and a watchdog ends the start instead of leaving the boot screen forever.
+    let timeout = device_open_timeout();
+    let searched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (disarm, _watchdog) = arm_search_watchdog(
+        timeout,
+        DEVICE_OPEN_GRACE,
+        searched.clone(),
+        move || {
+            log::error!("{}", device_search_timed_out(timeout));
+            log::logger().flush();
+        },
+        move || {
+            let message = device_search_timed_out(timeout);
+            // The panic hook reports and ends the game (a start stuck inside a driver call
+            // never dies on its own). The watchdog's thread name takes the hook's worker-thread
+            // path: a crash report, then exit code 101.
+            panic!("{message}");
+        },
+    );
+    let opened = open_device_search(window.clone(), offscreen, wgpu_backend, api, needs).await;
+    searched.store(true, std::sync::atomic::Ordering::Release);
+    drop(disarm);
+    opened
+}
+/// `open_device`'s tries in turn, each a set of backends and whether a software adapter
+/// (WARP, llvmpipe) is allowed.
+async fn open_device_search(
+    window: Arc<Window>,
+    offscreen: bool,
+    wgpu_backend: bool,
+    api: GraphicsApi,
+    needs: surface_setup::DeviceNeeds,
+) -> Result<Opened> {
+    let tries = device_search(
         api.with_env(),
         std::env::consts::OS,
         // The machine's: the x64 build emulated on a Windows ARM64 PC has its GPU too (#7513).
         horizon_system::machine_arch(),
         wgpu_backend,
-    ) {
-        match open_device_with(window, offscreen, &order, needs, allow_cpu).await {
+    );
+    let mut first = None;
+    for (order, allow_cpu) in tries {
+        match open_device_with(&window, offscreen, &order, needs, allow_cpu).await {
             Ok(opened) => {
                 if let Some(first) = &first {
                     log::warn!(
@@ -277,6 +336,51 @@ pub(super) async fn open_device(
         }
     }
     Err(first.unwrap_or_else(|| NO_GPU_DRIVER.into()))
+}
+/// Arms the device search's watchdog (#16769): the search blocks inside the graphics
+/// driver, where nothing in this process can interrupt it, so when it outlives its timeout
+/// the driver hung and waiting longer cannot end. It waits one `grace` more for the log's
+/// line to reach the boot screen and for `searched`, which the start sets when the search
+/// returns: one that answers inside that window was slow, not hung, and runs on. `on_timeout`
+/// reports the timeout; `on_fire` ends the game if the search is still stuck. A sent value or the sender's drop disarms it, as a finished
+/// or failed search does.
+pub(super) fn arm_search_watchdog(
+    timeout: Duration,
+    grace: Duration,
+    searched: Arc<std::sync::atomic::AtomicBool>,
+    on_timeout: impl FnOnce() + Send + 'static,
+    on_fire: impl FnOnce() + Send + 'static,
+) -> (
+    std::sync::mpsc::Sender<()>,
+    Option<std::thread::JoinHandle<()>>,
+) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let handle = std::thread::Builder::new()
+        .name("horizon-worker-gpu-watchdog".into())
+        .spawn(move || {
+            if receiver.recv_timeout(timeout) != Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                return;
+            }
+            on_timeout();
+            std::thread::sleep(grace);
+            if !searched.load(std::sync::atomic::Ordering::Acquire) {
+                on_fire();
+            }
+        })
+        .ok();
+    (sender, handle)
+}
+/// What the player is told when the graphics driver stops answering while the game is
+/// picking a GPU: the start can't continue, and waiting longer only keeps the boot screen
+/// up (#16769).
+pub(super) fn device_search_timed_out(waited: Duration) -> String {
+    format!(
+        "Horizon could not get a graphics device: the graphics driver stopped answering while \
+         the game was picking a GPU ({waited:?}). The last \"Horizon renderer:\" line in the \
+         log names the graphics API it was asking. Update your GPU driver and start again; to \
+         try another API meanwhile, set graphicsApi to opengl, dx12 or vulkan in options.txt, \
+         or start the game with HORIZON_GRAPHICS_API=opengl (or dx12, or vulkan)"
+    )
 }
 /// The tries `open_device` makes, in turn: the chosen API's backends (`backend_order`) on a
 /// real GPU; when the player chose one API, the other backends `Auto` would try, on a real
@@ -318,6 +422,11 @@ async fn open_device_with(
         let name = backends_name(backends);
         if attempt > 0 {
             log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));
+        } else {
+            // The search's first driver call is this backend's own, and a hanging driver
+            // blocks inside it: with nothing after this line, the log names the backend
+            // whose driver hung (#16769).
+            startup_step(format_args!("asking {name} for a graphics device"));
         }
         match open_with_retry(backends, window, offscreen, needs, allow_cpu).await {
             Ok(opened) => return Ok(opened),
