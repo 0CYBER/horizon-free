@@ -742,6 +742,7 @@
   "How textures are sampled: sharper at a slant with Anisotropic.": "How textures are sampled: sharper at a slant with Anisotropic.",
   "How far Anisotropic filtering goes. Higher is sharper at a slant.": "How far Anisotropic filtering goes. Higher is sharper at a slant.",
   "Only with Anisotropic texture filtering.": "Only with Anisotropic texture filtering.",
+  "Only with the default resource pack.": "Only with the default resource pack.",
   "Shader Packs...": "Shader Packs...",
   "Picks a shader pack, Horizon's or a shaders/ folder one, and sets its options.": "Picks a shader pack, Horizon's or a shaders/ folder one, and sets its options.",
   "Reuses the pack shadow map when sun, view and world match. Off by default.": "Reuses the pack shadow map when sun, view and world match. Off by default.",

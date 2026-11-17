@@ -493,6 +493,7 @@
   "How textures are sampled: sharper at a slant with Anisotropic.": "Как сэмплируются текстуры: с анизотропной фильтрацией резче под углом.",
   "How far Anisotropic filtering goes. Higher is sharper at a slant.": "Как далеко работает анизотропная фильтрация. Больше — резче под углом.",
   "Only with Anisotropic texture filtering.": "Только с анизотропной фильтрацией текстур.",
+  "Only with the default resource pack.": "Только со стандартным ресурс-паком.",
   "Picks a shader pack, Horizon's or a shaders/ folder one, and sets its options.": "Выбирает набор шейдеров Horizon или из папки shaders/ и задаёт его настройки.",
   "Reuses the pack shadow map when sun, view and world match. Off by default.": "Повторно использует карту теней набора, когда солнце, вид и мир совпадают. По умолчанию выключено.",
   "Find BlueMap": "Искать BlueMap",

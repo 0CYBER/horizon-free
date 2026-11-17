@@ -595,6 +595,7 @@
   "How textures are sampled: sharper at a slant with Anisotropic.": "Wie Texturen abgetastet werden: mit Anisotrop schärfer im schrägen Blick.",
   "How far Anisotropic filtering goes. Higher is sharper at a slant.": "Wie weit der anisotrope Filter geht. Höher ist schärfer im schrägen Blick.",
   "Only with Anisotropic texture filtering.": "Nur mit anisotropem Texturfilter.",
+  "Only with the default resource pack.": "Nur mit dem Standard-Ressourcenpaket.",
   "Shader Packs...": "Shader-Pakete …",
   "Picks a shader pack, Horizon's or a shaders/ folder one, and sets its options.": "Wählt ein Shader-Paket, eines von Horizon oder einen shaders/-Ordner, und stellt seine Optionen ein.",
   "Reuses the pack shadow map when sun, view and world match. Off by default.": "Verwendet die Schattenkarte des Pakets erneut, wenn Sonne, Blick und Welt gleich bleiben. Standardmäßig aus.",

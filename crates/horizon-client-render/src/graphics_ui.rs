@@ -1218,6 +1218,9 @@ impl Item {
             Item::Vanilla(Opt::MaxAnisotropy) if s.file.int("textureFiltering") != 2 => {
                 Some("Only with Anisotropic texture filtering.")
             }
+            Item::Horizon(H::LeafCulling) if !s.horizon.vanilla_models(&s.resource_packs) => {
+                Some("Only with the default resource pack.")
+            }
             _ => None,
         }
     }
@@ -1302,7 +1305,7 @@ impl Item {
         self.touched(s);
     }
     pub fn cycle(self, s: &mut Settings, back: bool, framebuffer: [i32; 2], out: &EffectiveOutput) {
-        if !self.available() {
+        if !self.available() || self.blocked(s, out).is_some() {
             return;
         }
         match self {
@@ -2759,6 +2762,31 @@ mod tests {
         );
         assert_eq!(s.horizon.leaf_culling, LeafCullingMode::Hidden);
         assert_eq!(s.horizon.preset, Preset::Custom);
+
+        // A custom resource pack blocks leaf culling and explains why.
+        s.resource_packs = vec!["vanilla".into(), "faithful.zip".into()];
+        assert_eq!(
+            item.blocked(&s, &NONE),
+            Some("Only with the default resource pack.")
+        );
+        let before_mode = s.horizon.leaf_culling;
+        item.cycle(&mut s, false, FB, &NONE);
+        assert_eq!(s.horizon.leaf_culling, before_mode);
+        let screen_row = GraphicsScreen::default()
+            .sheets(&s)
+            .into_iter()
+            .flat_map(|sh| sh.groups)
+            .flat_map(|g| g.rows)
+            .find(|row| row.id == item)
+            .unwrap();
+        assert!(!screen_row.live);
+        assert_eq!(
+            screen_row.why.as_deref(),
+            Some("Only with the default resource pack.")
+        );
+
+        s.resource_packs = vec!["vanilla".into()];
+        assert_eq!(item.blocked(&s, &NONE), None);
     }
 
     #[test]
@@ -2925,6 +2953,7 @@ mod tests {
                 "No settings match.",
                 "Undo",
                 "Done",
+                "Only with the default resource pack.",
             ] {
                 lang::get(text);
             }
