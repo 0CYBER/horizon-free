@@ -80,18 +80,18 @@ pub fn ensure(version: &Path) -> io::Result<PathBuf> {
             fs::hard_link(&from, &to)?;
         }
     }
-    // Native builds read both companions beside current_exe(), including on a reused bundle.
-    let (from, to) = (
-        version.join("native-mods.json"),
-        programs.join("native-mods.json"),
-    );
-    match fs::metadata(&from) {
-        Ok(_) if !same_file(&from, &to) => {
-            replace_link(&to, |temp| fs::hard_link(fs::canonicalize(&from)?, temp))?;
+    // Native and wasm builds read their companions beside current_exe(), including on a reused
+    // bundle.
+    for name in ["native-mods.json", "horizon-wasm-std.wasm"] {
+        let (from, to) = (version.join(name), programs.join(name));
+        match fs::metadata(&from) {
+            Ok(_) if !same_file(&from, &to) => {
+                replace_link(&to, |temp| fs::hard_link(fs::canonicalize(&from)?, temp))?;
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => remove_if_present(&to)?,
+            Err(e) => return Err(e),
         }
-        Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::NotFound => remove_if_present(&to)?,
-        Err(e) => return Err(e),
     }
     for name in ["native-data", "native-content", "horizon-native-mods"] {
         sync_native_directory(version, &programs, name)?;
@@ -255,6 +255,40 @@ mod tests {
         assert_eq!(fs::read(&program).unwrap(), b"unchanged signed game");
 
         fs::remove_file(&receipt).unwrap();
+        ensure(&version).unwrap();
+        assert!(!bundled.exists());
+        fs::remove_dir_all(version).unwrap();
+    }
+
+    #[test]
+    fn wasm_std_is_linked_into_bundle_follows_atomic_replace_and_is_removed_when_absent() {
+        let version = native_version("wasm-std");
+        let wasm_std = version.join("horizon-wasm-std.wasm");
+        let first = b"\0asm\x01\0\0\0first";
+        let second = b"\0asm\x01\0\0\0second";
+        fs::write(&wasm_std, first).unwrap();
+
+        let program = ensure(&version).unwrap();
+        let bundled = program.with_file_name("horizon-wasm-std.wasm");
+        assert_eq!(
+            bundled,
+            version.join("Horizon.app/Contents/MacOS/horizon-wasm-std.wasm")
+        );
+        assert!(same_file(&wasm_std, &bundled));
+        assert_eq!(fs::read(&bundled).unwrap(), first);
+
+        // Keep a hardlink to the old inode to verify atomic replacement updates the bundle's link.
+        fs::hard_link(&wasm_std, version.join("old-wasm-std")).unwrap();
+        fs::write(version.join("replacement"), second).unwrap();
+        fs::rename(version.join("replacement"), &wasm_std).unwrap();
+
+        ensure(&version).unwrap();
+        assert!(same_file(&wasm_std, &bundled));
+        assert!(!same_file(&version.join("old-wasm-std"), &bundled));
+        assert_eq!(fs::read(&bundled).unwrap(), second);
+        assert_eq!(fs::read(version.join("old-wasm-std")).unwrap(), first);
+
+        fs::remove_file(&wasm_std).unwrap();
         ensure(&version).unwrap();
         assert!(!bundled.exists());
         fs::remove_dir_all(version).unwrap();
