@@ -26,6 +26,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Sparse like the other bots on these runners: their checkout stays in the work folder, and a full
+          # checkout after a sparse one keeps only the sparse one's paths (#17524).
+          sparse-checkout: |
+            tools/ci/mojang_republish.py
+            research-lock.json
+          sparse-checkout-cone-mode: false
       - name: Check the manifest
         env:
           GH_TOKEN: ${{ github.token }}
