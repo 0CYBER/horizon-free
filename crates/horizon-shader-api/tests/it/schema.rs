@@ -766,7 +766,7 @@ const SMALLEST: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\na
 
 #[test]
 fn the_frame_tonemap_and_entity_keys_are_read() {
-    use horizon_shader_api::{Blend, Coverage, Primaries};
+    use horizon_shader_api::{Blend, Coverage, Fog, Primaries};
     let m = Manifest::parse(SMALLEST).unwrap();
     assert_eq!((m.blend, m.tonemap.is_none()), (Blend::Gamma, true));
     assert_eq!(m.primaries, Primaries::Bt709);
@@ -807,6 +807,12 @@ fn the_frame_tonemap_and_entity_keys_are_read() {
         coverage(&section("e", "engine")),
         (Coverage::Engine, Coverage::Engine)
     );
+    // Horizon fogs what the stages draw unless the pack says it does.
+    assert_eq!(Manifest::parse(&both).unwrap().fog, Fog::Engine);
+    let own = format!("{both}[frame]\nfog = \"pack\"\n");
+    assert_eq!(Manifest::parse(&own).unwrap().fog, Fog::Pack);
+    let engine = format!("{both}[frame]\nfog = \"engine\"\n");
+    assert_eq!(Manifest::parse(&engine).unwrap().fog, Fog::Engine);
     let tonemap = format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
@@ -858,6 +864,16 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         (
             format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\ncoverage = \"pack\"\n"),
             "`coverage` is a key of [material] and [entity] only",
+        ),
+        (
+            format!("{SMALLEST}[frame]\nfog = \"none\"\n"),
+            "frame.fog \"none\": engine or pack",
+        ),
+        (
+            format!(
+                "{SMALLEST}[material]\nfile = \"m.wgsl\"\nfog = false\n[frame]\nfog = \"pack\"\n"
+            ),
+            "[material] fog and [frame] fog both set: keep [frame] fog",
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),

@@ -54,6 +54,17 @@ impl Coverage {
     }
 }
 
+/// `[frame] fog`: who fogs what the pack's stages draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fog {
+    /// Horizon mixes vanilla's fog over the material and entity stages' results.
+    #[default]
+    Engine,
+    /// The pack fogs them itself: Horizon skips its fog there, and every stage's prelude has
+    /// `vanilla_fog` and the frame's `fog_environment` and `fog_render`.
+    Pack,
+}
+
 impl Primaries {
     /// `Frame.luminance`: the weights that give a colour's luminance in these primaries.
     pub const fn luminance(self) -> [f32; 3] {
@@ -117,6 +128,8 @@ pub struct Manifest {
     pub material_coverage: Coverage,
     /// `[entity] coverage`.
     pub entity_coverage: Coverage,
+    /// `[frame] fog`.
+    pub fog: Fog,
     pub options: Vec<PackOption>,
     /// How the settings page lays the options out; the first page is the one it opens on.
     /// Empty: one page with every option.
@@ -592,6 +605,7 @@ struct RawOption {
 struct RawFrame {
     blend: Option<String>,
     primaries: Option<String>,
+    fog: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -770,6 +784,19 @@ impl Manifest {
         };
         let material_coverage = Coverage::parse(raw.material.as_ref(), "material").map_err(err)?;
         let entity_coverage = Coverage::parse(raw.entity.as_ref(), "entity").map_err(err)?;
+        let fog = match raw.frame.as_ref().and_then(|f| f.fog.as_deref()) {
+            None | Some("engine") => Fog::Engine,
+            Some("pack") => Fog::Pack,
+            Some(f) => return Err(err(format!("frame.fog {f:?}: engine or pack"))),
+        };
+        if raw.frame.as_ref().is_some_and(|f| f.fog.is_some())
+            && raw.material.as_ref().is_some_and(|m| m.fog.is_some())
+        {
+            return Err(err(
+                "[material] fog and [frame] fog both set: keep [frame] fog, which covers every stage"
+                    .into(),
+            ));
+        }
         let id_ok = (1..=64).contains(&raw.id.len())
             && raw
                 .id
@@ -1237,6 +1264,7 @@ impl Manifest {
             primaries,
             material_coverage,
             entity_coverage,
+            fog,
             options,
             pages,
             tags: raw.tags,

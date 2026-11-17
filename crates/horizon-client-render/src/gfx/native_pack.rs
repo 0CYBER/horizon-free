@@ -398,8 +398,8 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Entity)
             .map(|stage| {
                 let groups = [terrain.entities, terrain.retained_entities];
-                let coverage = report.manifest.entity_coverage;
-                NativeEntity::new(device, format, groups, &frame, stage, constants, coverage)
+                let manifest = &report.manifest;
+                NativeEntity::new(device, format, groups, &frame, stage, constants, manifest)
             })
             .transpose()?;
         // The decode and the tonemap run without a chain too.

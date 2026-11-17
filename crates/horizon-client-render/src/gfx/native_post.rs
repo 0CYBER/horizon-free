@@ -1580,6 +1580,8 @@ pub fn frame_inputs(
         ),
         None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
     };
+    // The two terms terrain.wgsl's `apply_fog` takes the larger of, as the renderer has them.
+    let (_, fog) = super::fog_uniform(frame);
     let pack = &frame.pack;
     let level = |l: i32| l as f32 / 15.0;
     let m = |m: Mat4| m.to_cols_array_2d();
@@ -1667,6 +1669,8 @@ pub fn frame_inputs(
         view_epoch: 0,
         world_epoch: 0,
         reset_reasons: 0,
+        fog_environment: [fog[0], fog[1]],
+        fog_render: [fog[2], fog[3]],
         padding: [0; 2],
     }
 }

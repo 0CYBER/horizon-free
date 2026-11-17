@@ -389,11 +389,12 @@ pub struct NativeShadow {
     pub displaced: Option<wgpu::RenderPipeline>,
 }
 
-/// The entity draw's shader.
+/// The entity draw's shader. Like the terrain's (`shader_source`), it declares `Frame` without
+/// the fields only a `[frame] fog = "pack"` prelude has.
 fn entity_source() -> String {
     format!(
         "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{ENTITY_ENTRIES}",
-        FrameInputs::WGSL.wgsl(),
+        FrameInputs::declared_wgsl(true, true, false),
         horizon_shader_api::stages::SHADOW_HELPERS,
     )
 }
@@ -509,7 +510,7 @@ fn shader_source(
         (None, None) => (
             format!(
                 "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{UNTAKEN}",
-                FrameInputs::WGSL.wgsl(),
+                FrameInputs::declared_wgsl(true, true, false),
                 horizon_shader_api::stages::SHADOW_HELPERS,
             ),
             super::native_material::DISPLACE_VANILLA,
@@ -885,6 +886,21 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&text)));
         }
+    }
+
+    /// The shadow shaders declare the frame as before `[frame] fog`, whose fields no shadow
+    /// reads: the SHA-256 of `Frame` then, so every pack's shadow pass is the same WGSL.
+    #[test]
+    fn the_shadow_shaders_declare_the_frame_as_before() {
+        use sha2::{Digest, Sha256};
+        let frame = FrameInputs::declared_wgsl(true, true, false);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&frame)),
+            "9218b8f0da2c1af28ace7bc402e44701448011acee478c9cef34277b2ab5e034"
+        );
+        assert!(entity_source().starts_with(&frame));
+        let solid = shader_source(&shadow_solid(&[], &[7]), None, &[], None);
+        assert!(solid.starts_with(&frame));
     }
 
     #[test]

@@ -239,6 +239,15 @@ uniform! {
         /// Why an epoch changed this frame: the prelude's `REASON_*` bits ("Kept resources"); 0
         /// when neither did. Only a pack with `[[resource]]` has this field.
         reset_reasons: u32,
+        /// Where the fog of where the camera is starts and where it is full (x, y), in blocks
+        /// along the straight line from the camera: the dimension's and the biome's, thickened by
+        /// rain, or that of water, lava, powder snow, blindness, darkness or a boss. Only a pack
+        /// with `[frame] fog = "pack"` has this field.
+        fog_environment: [f32; 2],
+        /// Where the render distance's fog starts and where it is full (x, y), in blocks along the
+        /// larger of the horizontal distance and the height difference from the camera. Only a
+        /// pack with `[frame] fog = "pack"` has this field.
+        fog_render: [f32; 2],
         @pad padding: [u32; 2],
     }
 }
@@ -248,41 +257,47 @@ impl Frame {
     /// the layout before `luminance`, so no other field moves with or without them.
     pub const RAY_FIELDS: std::ops::Range<usize> = 55..57;
 
-    /// Where `view_epoch`, `world_epoch` and `reset_reasons` are among the fields: the last,
-    /// so a pack without `[[resource]]` declares a prefix and no other field moves.
+    /// Where `view_epoch`, `world_epoch` and `reset_reasons` are among the fields: after
+    /// `luminance`, so a pack without `[[resource]]` declares a prefix and no other field moves.
     pub const KEPT_FIELDS: std::ops::Range<usize> = 58..61;
 
-    /// The fields without `RAY_FIELDS`: what a pack without `[ray_tracing]` declares, less
-    /// `KEPT_FIELDS` without `[[resource]]`.
-    const UNTRACED: [Field; 59] = {
-        let all = Self::WGSL.fields;
-        let mut out = [all[0]; 59];
-        let (mut from, mut to) = (0, 0);
-        while from < all.len() {
-            if from < Self::RAY_FIELDS.start || from >= Self::RAY_FIELDS.end {
-                out[to] = all[from];
-                to += 1;
-            }
-            from += 1;
-        }
-        out
-    };
+    /// Where `fog_environment` and `fog_render` are among the fields: the last, after the
+    /// epochs, so that no field before them moves.
+    pub const FOG_FIELDS: std::ops::Range<usize> = 61..63;
 
-    /// `Frame` as the prelude declares it, for a pack that asks for the scene
-    /// (`[ray_tracing]`) or not, and that keeps resources (`[[resource]]`) or not.
-    pub fn declared(ray_tracing: bool, kept: bool) -> Struct {
-        let fields: &'static [Field] = match ray_tracing {
-            false => &Self::UNTRACED,
-            true => Self::WGSL.fields,
+    /// The fields the prelude declares, for a pack that asks for the scene (`[ray_tracing]`)
+    /// or not, keeps resources (`[[resource]]`) or not, and fogs its stages itself
+    /// (`[frame] fog = "pack"`) or not.
+    pub fn declared(ray_tracing: bool, kept: bool, fog: bool) -> Vec<Field> {
+        let skipped = |i: usize| {
+            (!ray_tracing && Self::RAY_FIELDS.contains(&i))
+                || (!kept && Self::KEPT_FIELDS.contains(&i))
+                || (!fog && Self::FOG_FIELDS.contains(&i))
         };
-        let fields = match kept {
-            false => &fields[..fields.len() - Self::KEPT_FIELDS.len()],
-            true => fields,
-        };
-        Struct {
-            fields,
-            ..Self::WGSL
+        let fields = Self::WGSL.fields.iter().enumerate();
+        fields
+            .filter(|&(i, _)| !skipped(i))
+            .map(|(_, f)| *f)
+            .collect()
+    }
+
+    /// `declared` as WGSL. Without `[[resource]]` the fog's fields would follow `luminance`
+    /// where the epochs are: there `luminance` keeps the epochs' bytes (`@size`), so they stay
+    /// at the offsets the uploaded struct has.
+    pub fn declared_wgsl(ray_tracing: bool, kept: bool, fog: bool) -> String {
+        let mut out = format!("struct {} {{\n", Self::WGSL.name);
+        for f in Self::declared(ray_tracing, kept, fog) {
+            let luminance = f.name == Self::WGSL.fields[Self::KEPT_FIELDS.start - 1].name;
+            if luminance && fog && !kept {
+                let epochs = Self::OFFSETS[Self::FOG_FIELDS.start]
+                    - Self::OFFSETS[Self::KEPT_FIELDS.start - 1];
+                out += &format!("    @size({epochs}) ");
+            } else {
+                out += "    ";
+            }
+            out += &format!("{}: {},\n", f.name, f.ty);
         }
+        out + "}\n"
     }
 }
 
@@ -346,7 +361,7 @@ pub const SURFACE: Struct = Struct {
     name: "Surface",
     doc: "What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; \
           Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
-          unless `[material] coverage = \"pack\"`) and fog.",
+          unless `[material] coverage = \"pack\"`) and fog (unless `[frame] fog = \"pack\"`).",
     fields: fields! {
         color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha translucent terrain's opacity, and what the alpha test reads under `[material] coverage = \"pack\"`.",
     },
@@ -492,38 +507,53 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 61);
+        assert_eq!(wgsl.fields.len(), 63);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
-        // `luminance` is a `vec3`, on the next 16 bytes, the epochs after it to the end of the
-        // next 16.
+        // `luminance` is a `vec3`, on the next 16 bytes, the epochs after it, then the fog's
+        // two pairs, to the end of the next 16.
         let size = std::mem::size_of::<Frame>();
-        assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 4 * 16);
+        assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 5 * 16);
         assert_eq!(
             Frame::OFFSETS[57..],
-            [size - 32, size - 20, size - 16, size - 12]
+            [
+                size - 48,
+                size - 36,
+                size - 32,
+                size - 28,
+                size - 24,
+                size - 16
+            ]
         );
         // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
-        // `[[resource]]` pack's.
-        let names = |s: Struct| s.fields.iter().map(|f| f.name).collect::<Vec<_>>();
-        let traced = names(Frame::declared(true, false));
+        // `[[resource]]` pack's, the fog's only a `[frame] fog = "pack"` pack's.
+        let names = |s: Vec<Field>| s.iter().map(|f| f.name).collect::<Vec<_>>();
+        let traced = names(Frame::declared(true, false, false));
         assert_eq!(
             traced[Frame::RAY_FIELDS],
             ["has_ray_tracing", "ray_distance"]
         );
         assert_eq!(traced.last(), Some(&"luminance"));
-        let untraced = names(Frame::declared(false, false));
+        let untraced = names(Frame::declared(false, false, false));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
         assert_eq!(untraced.last(), Some(&"luminance"));
         let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
+        let fog = ["fog_environment", "fog_render"];
         for ray_tracing in [false, true] {
-            let kept = names(Frame::declared(ray_tracing, true));
+            let kept = names(Frame::declared(ray_tracing, true, false));
             assert_eq!(kept[kept.len() - 3..], epochs);
+            let fogged = names(Frame::declared(ray_tracing, false, true));
+            assert_eq!(fogged[fogged.len() - 3..], ["luminance", fog[0], fog[1]]);
         }
-        assert_eq!(names(Frame::WGSL)[Frame::KEPT_FIELDS], epochs);
-        assert!(
-            wgsl.wgsl()
-                .contains("    camera_position: vec3<f32>,\n    time: f32,\n")
+        assert_eq!(
+            names(Frame::WGSL.fields.to_vec())[Frame::KEPT_FIELDS],
+            epochs
         );
+        assert_eq!(names(Frame::WGSL.fields.to_vec())[Frame::FOG_FIELDS], fog);
+        assert!(wgsl.wgsl().contains(
+            "    camera_position: vec3<f32>,
+    time: f32,
+"
+        ));
     }
 }

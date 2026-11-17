@@ -193,23 +193,11 @@ fn the_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
     );
 }
 
-/// The `Frame` struct the sky prelude declares (for a pack with `[ray_tracing]` or
-/// without; with `kept`, as one with `[[resource]]` has it), as (name, offset) and its span.
-fn frame_layout(ray_tracing: bool, kept: bool) -> (Vec<(String, usize)>, usize) {
-    let tracing = if ray_tracing {
-        Tracing::Stub
-    } else {
-        Tracing::None
-    };
-    // The prelude is the pack's (`tests/names.rs` has a kept one's): the struct alone here.
-    let text = match kept {
-        true => Frame::declared(ray_tracing, true).wgsl(),
-        false => {
-            let prelude = StageKind::Sky.prelude_traced(tracing);
-            format!("{prelude}{}", vanilla(StageKind::Sky))
-        }
-    };
-    let module = validate(&text);
+/// The `Frame` struct a prelude declares, for a pack with `[ray_tracing]` or without, with
+/// `[[resource]]` or without, and with `[frame] fog = "pack"` or without, as (name, offset) and
+/// its span.
+fn frame_layout(ray_tracing: bool, kept: bool, fog: bool) -> (Vec<(String, usize)>, usize) {
+    let module = validate(&Frame::declared_wgsl(ray_tracing, kept, fog));
     let (_, ty) = module
         .types
         .iter()
@@ -234,25 +222,42 @@ fn the_frame_s_wgsl_layout_is_the_uploaded_struct_s() {
         .map(|(f, &o)| (f.name.to_owned(), o))
         .collect();
     let size = std::mem::size_of::<Frame>();
-    let (wgsl, span) = frame_layout(true, true);
-    assert_eq!(span, size);
-    assert_eq!(wgsl, rust);
-    // Without `[ray_tracing]` the scene's two fields are a gap: the others stay where they are.
-    let (wgsl, span) = frame_layout(false, true);
-    assert_eq!(span, size);
-    let mut untraced = rust.clone();
-    untraced.drain(Frame::RAY_FIELDS);
-    assert_eq!(wgsl, untraced);
-    // Without `[[resource]]` the struct ends before the epochs, a prefix of the same buffer.
-    let unkept = Frame::KEPT_FIELDS.len();
-    let (wgsl, span) = frame_layout(true, false);
-    assert_eq!(
-        (span, wgsl),
-        (size - 16, rust[..rust.len() - unkept].to_vec())
-    );
-    let (wgsl, span) = frame_layout(false, false);
-    let untraced = &untraced[..untraced.len() - unkept];
-    assert_eq!((span, wgsl), (size - 16, untraced.to_vec()));
+    // Every field a pack may declare sits where the uploaded struct has it, whichever of the
+    // keys bringing fields it sets: a field it doesn't declare is a gap, or the end.
+    for ray_tracing in [false, true] {
+        for kept in [false, true] {
+            for fog in [false, true] {
+                let mut want = rust.clone();
+                let left = |range: std::ops::Range<usize>, on: bool| (!on).then_some(range);
+                for range in [
+                    left(Frame::FOG_FIELDS, fog),
+                    left(Frame::KEPT_FIELDS, kept),
+                    left(Frame::RAY_FIELDS, ray_tracing),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    want.drain(range);
+                }
+                let (wgsl, span) = frame_layout(ray_tracing, kept, fog);
+                assert_eq!(
+                    wgsl, want,
+                    "ray tracing {ray_tracing}, kept {kept}, fog {fog}"
+                );
+                // Without the fog's fields the struct ends before them, a prefix of the buffer;
+                // without the epochs either, before those.
+                let end = match (kept, fog) {
+                    (_, true) => size,
+                    (true, false) => size - 16,
+                    (false, false) => size - 32,
+                };
+                assert_eq!(
+                    span, end,
+                    "ray tracing {ray_tracing}, kept {kept}, fog {fog}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

@@ -521,6 +521,49 @@ mod world_views;
 /// The world pass again after occlusion culling's test: it loads both
 /// targets (phase 2 draws over phase 1, reading the test's results).
 /// `LevelRenderer.addSkyPass`: fluids and camera effects block the sky pass.
+/// The fog colour and distances of the renderer's `Globals` (`fog_color`; `fog`: the
+/// environment's start and end, the render distance's start and end): what terrain.wgsl's
+/// `apply_fog` mixes, and what a shader pack that fogs its stages itself reads
+/// (`Frame.fog_environment`, `fog_render`).
+pub(crate) fn fog_uniform(frame: &Frame) -> ([f32; 4], [f32; 4]) {
+    if let Some(f) = frame.fog {
+        (
+            f.color,
+            [
+                f.environmental_start,
+                f.environmental_end,
+                f.render_distance_start,
+                f.render_distance_end,
+            ],
+        )
+    } else if frame.underwater {
+        (
+            [
+                frame.water_fog[0],
+                frame.water_fog[1],
+                frame.water_fog[2],
+                1.0,
+            ],
+            [-8.0, 96.0, -8.0, 96.0],
+        )
+    } else {
+        let d = frame.distance;
+        (
+            [
+                frame.sky.fog_color[0],
+                frame.sky.fog_color[1],
+                frame.sky.fog_color[2],
+                1.0,
+            ],
+            // FogRenderer: render-distance fog starts at max(d - 16, 0)... d.
+            {
+                let (start, end) = frame.environment_fog.unwrap_or((f32::MAX, f32::MAX));
+                [start, end, (d - d.min(64.0) * 0.25).max(0.0), d]
+            },
+        )
+    }
+}
+
 fn sky_open(frame: &Frame) -> bool {
     !frame.sky_blocked
 }
@@ -7796,42 +7839,7 @@ impl Renderer {
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
-        let (fog_color, fog) = if let Some(f) = frame.fog {
-            (
-                f.color,
-                [
-                    f.environmental_start,
-                    f.environmental_end,
-                    f.render_distance_start,
-                    f.render_distance_end,
-                ],
-            )
-        } else if frame.underwater {
-            (
-                [
-                    frame.water_fog[0],
-                    frame.water_fog[1],
-                    frame.water_fog[2],
-                    1.0,
-                ],
-                [-8.0, 96.0, -8.0, 96.0],
-            )
-        } else {
-            let d = frame.distance;
-            (
-                [
-                    frame.sky.fog_color[0],
-                    frame.sky.fog_color[1],
-                    frame.sky.fog_color[2],
-                    1.0,
-                ],
-                // FogRenderer: render-distance fog starts at max(d - 16, 0)... d.
-                {
-                    let (start, end) = frame.environment_fog.unwrap_or((f32::MAX, f32::MAX));
-                    [start, end, (d - d.min(64.0) * 0.25).max(0.0), d]
-                },
-            )
-        };
+        let (fog_color, fog) = fog_uniform(frame);
         let globals = Globals {
             view_proj: jittered.to_cols_array_2d(),
             fog_color,

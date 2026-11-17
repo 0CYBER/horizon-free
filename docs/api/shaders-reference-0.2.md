@@ -68,6 +68,30 @@ It needs `blend = "linear"`, since a change of primaries is only right in linear
 space the pack's colours are in, and `frame.luminance` holds that space's luminance weights: compute luminance as
 `dot(color, frame.luminance)` and it is right in either. `"bt2020"` passes the check; the game doesn't serve it yet.
 
+## `[frame] fog`
+
+`fog = "engine"` (the default): Horizon mixes vanilla's fog over what the material and entity stages return. With
+`fog = "pack"` the pack fogs what its stages draw: Horizon skips its fog there, and scales the enchantment glint it
+adds after `entity` by `1 - vanilla_fog(position)`, as vanilla's fog over it would. What Horizon draws itself keeps
+vanilla's fog: items, particles, clouds, the sun and moon, the hand, block outlines, beams, the water mirror's terrain,
+and the fade of newly loaded terrain toward `frame.fog_color`. The sky, weather and post stages get no fog from Horizon
+either way. A pack with the key also has, in every stage, `frame.fog_environment` and `frame.fog_render` (below) and:
+
+- `fn vanilla_fog(position: vec3<f32>) -> f32`: how much of `frame.fog_color` vanilla mixes over a surface at the
+  camera-relative `position`, 0..1, under water, lava, powder snow, blindness and darkness too: the larger of
+  the environment's fog along `length(position)` and the render distance's along
+  `max(length(position.xz), abs(position.y))`, each 0 before its start, 1 from its end and linear between. With the
+  Fog option off it is 0, except under water, lava, powder snow, those effects and a boss's fog.
+
+Vanilla mixes in its gamma, under either `[frame] blend`:
+`pow(mix(pow(c, vec3(1.0 / 2.2)), pow(frame.fog_color, vec3(1.0 / 2.2)), vanilla_fog(input.position)), vec3(2.2))` on
+the lit rgb, alpha kept. Horizon's own takes the distance at each corner and interpolates it, `vanilla_fog` at each
+point, so a pack's copy may round a step apart on large faces. Mixing the linear values instead is fog as light
+scatters, a little denser in the middle tones. A post pass fogs what the stages don't draw from `scene_depth`
+(`vanilla_fog(view_position(uv, depth))`), and traced hits from `hit.position`, which Horizon never fogs.
+`[material] fog = false`, from before, turns off the material's fog alone and brings none of these names; a manifest
+sets one of the two keys.
+
 A stage is a function your WGSL defines, with the signature below; Horizon puts the prelude (these structs, the
 resources and helpers) before your files and calls the function from its own pass. Your files declare no
 bindings and no entry points, and no names starting with `horizon_`.
@@ -185,7 +209,7 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 
 ### `Surface`
 
-What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; Horizon then applies the alpha test (cutout and translucent; on the texture's alpha unless `[material] coverage = "pack"`) and fog.
+What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; Horizon then applies the alpha test (cutout and translucent; on the texture's alpha unless `[material] coverage = "pack"`) and fog (unless `[frame] fog = "pack"`).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -573,8 +597,8 @@ One point of the surface of an entity, a block entity, an item or a particle, fo
 linear light, 0 or more and unbounded; its alpha read only under `[entity] coverage = "pack"`), so a pack writes
 its lighting once and calls it from both stages. Around it Horizon keeps vanilla's order: the alpha test (on the
 texture and the layer's opacity, or under `"pack"` on the returned alpha), then the enchantment glint added on top,
-then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
-for new names holds for the stage as for the others.
+then fog (the pack's own under `[frame] fog = "pack"`). A pack without `[entity]` is drawn as before, and sees
+none of this stage's names; the rule for new names holds for the stage as for the others.
 
 **What the game draws through the stage so far: entities and block entities** (`kind` 0 and 1). Until a later
 release brings them in, Horizon lights the rest itself, exactly as without the stage: dropped and framed items and
@@ -696,6 +720,8 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 | `view_epoch` | `u32` | 796 | Changes when the pack's `keep = "view"` resources are cleared, to zeros (`reset_reasons` says why), and is never 0. Only a pack with `[[resource]]` has this field. |
 | `world_epoch` | `u32` | 800 | The same for its `keep = "world"` resources. `view_epoch` changes with it: what clears the world's clears the view's too. Only a pack with `[[resource]]` has this field. |
 | `reset_reasons` | `u32` | 804 | Why an epoch changed this frame: the prelude's `REASON_*` bits ("Kept resources"); 0 when neither did. Only a pack with `[[resource]]` has this field. |
+| `fog_environment` | `vec2<f32>` | 808 | Where the fog of where the camera is starts and where it is full (x, y), in blocks along the straight line from the camera: the dimension's and the biome's, thickened by rain, or that of water, lava, powder snow, blindness, darkness or a boss. Only a pack with `[frame] fog = "pack"` has this field. |
+| `fog_render` | `vec2<f32>` | 816 | Where the render distance's fog starts and where it is full (x, y), in blocks along the larger of the horizontal distance and the height difference from the camera. Only a pack with `[frame] fog = "pack"` has this field. |
 
 ## Anti-aliasing
 

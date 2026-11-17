@@ -513,6 +513,20 @@ fn the_entity_fixture_passes() {
     assert_eq!(kinds, [StageKind::Sky, StageKind::Entity]);
 }
 
+/// The fixture of a pack that fogs its stages itself, as vanilla does.
+#[test]
+fn the_own_fog_fixture_passes() {
+    let pack = Pack::read(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/samples/own-fog"
+    )))
+    .unwrap();
+    let report = check(&pack).unwrap();
+    let kinds: Vec<_> = report.stages.iter().map(|s| s.kind).collect();
+    assert_eq!(kinds, [StageKind::Material, StageKind::Entity]);
+    assert!(!report.material_fog);
+}
+
 /// A pack of the entity stage alone.
 fn entity_pack(entity: &str) -> Result<horizon_shader_api::Report, Vec<Problem>> {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\

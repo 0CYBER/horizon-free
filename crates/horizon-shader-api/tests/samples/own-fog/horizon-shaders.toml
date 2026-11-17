@@ -1,0 +1,21 @@
+# A pack that fogs its own stages (`[frame] fog = "pack"`) as vanilla does, through
+# `vanilla_fog`: `tests/check.rs` checks it. Without its `[frame]` table, and with `fogged`
+# returning its colour, Horizon fogs the same light, so the two differ only by who mixed the fog.
+schema = 1
+id = "own_fog"
+name = "Own fog"
+version = "1.0.0"
+api = "0.2"
+description = "Vanilla's light and fog, with the fog mixed by the pack."
+authors = ["Horizon"]
+license = "MIT"
+shared = ["fog.wgsl"]
+
+[material]
+file = "material.wgsl"
+
+[entity]
+file = "entity.wgsl"
+
+[frame]
+fog = "pack"

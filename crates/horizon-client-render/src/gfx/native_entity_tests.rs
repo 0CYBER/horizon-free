@@ -15,15 +15,25 @@ fn entity(input: EntityInput) -> Surface {
 
 /// A pack's entity shader whose stage is `entity`.
 pub fn shader(entity: &str) -> String {
+    shader_with(entity, "")
+}
+
+/// `shader` for a manifest that ends with `more`.
+fn shader_with(entity: &str, more: &str) -> String {
     use horizon_shader_api::{MANIFEST, Pack, check};
     let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
-        [entity]\nfile = \"entity.wgsl\"\n";
-    let files = [(MANIFEST, manifest), ("entity.wgsl", entity)]
+        [entity]\nfile = \"entity.wgsl\"\n"
+        .to_owned()
+        + more;
+    let files = [(MANIFEST, &*manifest), ("entity.wgsl", entity)]
         .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
         .into();
     let report = check(&Pack::from_files(files).unwrap()).unwrap();
-    shader_source(&report.stages[0].source)
+    shader_source(&report.stages[0].source, report.manifest.fog)
 }
+
+/// A stage that fogs its own surfaces, as vanilla would, under `[frame] fog = "pack"`.
+const OWN_FOG: &str = "[frame]\nfog = \"pack\"\n";
 
 /// Every name a pack's code could take that Horizon's entity shaders or the entries around
 /// the stage have had, in any case: a pack's own are checked only against lowercase `horizon_`.
@@ -77,8 +87,9 @@ fn the_renderers_names_are_reserved() {
 /// pipelines' entries, whatever names the pack's own code takes: Horizon's are prefixed.
 #[test]
 fn the_packs_entity_shader_validates() {
-    for entity in [VANILLA.to_owned(), OWN_NAMES.to_owned() + VANILLA] {
-        let source = shader(&entity);
+    let entities = [VANILLA.to_owned(), OWN_NAMES.to_owned() + VANILLA];
+    for (entity, more) in entities.iter().flat_map(|e| [(e, ""), (e, OWN_FOG)]) {
+        let source = shader_with(entity, more);
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
@@ -96,6 +107,28 @@ fn the_packs_entity_shader_validates() {
             assert!(entries.contains(&entry), "{entry} in {entries:?}");
         }
     }
+}
+
+/// What Horizon writes around the stage of a pack that leaves fog to it, after its prefixed
+/// entity.wgsl (which changes with the engine): the SHA-256 it had before `[frame] fog`, so
+/// such a pack's entity shader is the same WGSL. Under the key only the glint's fade differs.
+#[test]
+fn the_entries_around_a_stage_horizon_fogs_are_unchanged() {
+    use sha2::{Digest, Sha256};
+    let entries = |more| {
+        let source = shader_with(VANILLA, more).replace('\r', "");
+        let at = source.find("const horizon_entity_kind_shift").unwrap();
+        source[at..].to_owned()
+    };
+    let engine = entries("");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&engine)),
+        "7d86c6ceaae8c0b0625105a16c3b0ea43d3ce34c8edb6d1afdbb8f78059d6f76"
+    );
+    assert!(!engine.contains("vanilla_fog"));
+    let own = entries(OWN_FOG);
+    assert!(own.contains("    let f = vanilla_fog(position);\n"));
+    assert!(!own.contains("horizon_vanilla_globals.fog"));
 }
 
 /// The kind is written above every bit the entity shaders read of a layer (the overlay, the
