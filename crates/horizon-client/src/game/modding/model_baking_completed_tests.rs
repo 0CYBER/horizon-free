@@ -99,7 +99,7 @@ fn a_client_mod_hears_model_baking_completed_once_per_load_and_keeps_its_handles
     with_mods(mods, || {
         with_client_game(|game| {
             // The first load, as `run` fires them before `client_setup`.
-            game.publish_initial_client_models();
+            game.publish_initial_client_models().unwrap();
             let first = {
                 let kept = kept.lock().unwrap();
                 assert_eq!(
@@ -175,7 +175,7 @@ fn standalone_forms_resolve_as_one_model_and_republish_after_resource_reload() {
     let (kept, mods) = keeper();
     with_mods(mods, || {
         with_client_game(|game| {
-            game.publish_initial_client_models();
+            game.publish_initial_client_models().unwrap();
             let [Ok(turned), Ok(assembly), Err(ModelError::UnknownModel)] =
                 kept.lock().unwrap().forms[0]
             else {

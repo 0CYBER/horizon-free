@@ -599,7 +599,7 @@ impl Game<'_> {
         self.build_screen();
     }
 
-    pub(super) fn join_world_rest(&mut self) -> Result<()> {
+    pub(in crate::game) fn join_world_rest(&mut self) -> Result<()> {
         if self.rest_loader.is_some() {
             let waited = Instant::now();
             log::info!("Horizon: waiting for world resources");
