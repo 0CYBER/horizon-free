@@ -234,6 +234,16 @@ pub fn max_damage(items: &Items, stack: &ItemStack) -> i32 {
 fn damage_value(items: &Items, stack: &ItemStack) -> i32 {
     (stack.damage.min(i32::MAX as u32) as i32).clamp(0, max_damage(items, stack).max(0))
 }
+/// The `item.durability` line of an advanced tooltip (`ItemStack.addDetailsToTooltip`):
+/// `getMaxDamage - getDamageValue` and `getMaxDamage` of a damaged stack, from
+/// the stack's own `max_damage` rather than its item's.
+pub fn durability(items: &Items, stack: &ItemStack) -> Option<(i32, i32)> {
+    let damage = damage_value(items, stack);
+    (is_damageable(items, stack) && damage > 0).then(|| {
+        let max = max_damage(items, stack);
+        (max - damage, max)
+    })
+}
 /// `ItemStack.setDamageValue`: stored clamped to `[0, max_damage]`.
 fn set_damage_value(items: &Items, stack: &mut ItemStack, damage: i32) {
     stack.damage = damage.clamp(0, max_damage(items, stack).max(0)) as u32;
@@ -2008,6 +2018,38 @@ mod tests {
             grindstone_result(context(), &e, &items, Some(&zero), Some(&zero.clone())).unwrap();
         assert_eq!(out.count, 2);
         assert!(!out.has_any_enchantments());
+    }
+
+    /// `/give @s minecraft:diamond_sword[max_damage=800,damage=300]` lists
+    /// 500 / 800, not the sword's own 1261 / 1561.
+    #[test]
+    fn the_durability_line_uses_the_stacks_max_damage() {
+        let root = std::env::temp_dir().join(format!("horizon-durability-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{"minecraft:diamond_sword":{"minecraft:max_stack_size":1,"minecraft:max_damage":1561,"minecraft:damage":0}}"#,
+        )
+        .unwrap();
+        let items = Items::catalog(
+            &root,
+            &PackOverlay::NONE,
+            &horizon_world::item_defaults::read(&root).unwrap(),
+        )
+        .unwrap();
+        let give = |components: &str| {
+            let snbt =
+                format!(r#"{{id:"minecraft:diamond_sword",count:1,components:{components}}}"#);
+            item_data::parse_stack(&snbt).unwrap().unwrap()
+        };
+        let patched = give(r#"{"minecraft:max_damage":800,"minecraft:damage":300}"#);
+        assert_eq!(durability(&items, &patched), Some((500, 800)));
+        let plain = give(r#"{"minecraft:damage":300}"#);
+        assert_eq!(durability(&items, &plain), Some((1261, 1561)));
+        // Not damaged, or unbreakable: no line.
+        assert_eq!(durability(&items, &give("{}")), None);
+        let unbreakable = give(r#"{"minecraft:damage":300,"minecraft:unbreakable":{}}"#);
+        assert_eq!(durability(&items, &unbreakable), None);
     }
 
     /// `ItemStack.isDamageableItem` asks for the DAMAGE component too, so a
