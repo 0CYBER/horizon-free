@@ -1034,19 +1034,24 @@ impl PendingContainerLoot {
         horizon_client_core::identifier::normalize_id(&id.to_string_lossy())
             .expect("validated loot table")
     }
+    /// The seed as `getLongOr` reads it: `DoubleTag.longValue` floors, the others narrow.
     pub fn seed_value(&self) -> Option<i64> {
-        horizon_client_core::nbt_value::number(self.seed.as_ref())
+        match &self.seed {
+            Some(Tag::Double(bits)) => Some(f64::from_bits(*bits).floor() as i64),
+            seed => horizon_client_core::nbt_value::number(seed.as_ref()),
+        }
     }
     /// Overlay pending metadata without manufacturing an Items list. The table is written as the
     /// identifier it reads as (`RandomizableContainer.trySaveLootTable`,
     /// `ContainerEntity.addChestVehicleSaveData`): an empty string is `minecraft:`.
+    /// Both write the seed only when it is not 0.
     pub fn write_tags(&self, map: &mut Compound) {
         map.insert(
             "LootTable".into(),
             Tag::String(self.table_id().as_str().into()),
         );
         map.remove(&"LootTableSeed".into());
-        if let Some(seed) = &self.seed {
+        if let Some(seed) = self.seed.as_ref().filter(|_| self.seed_value() != Some(0)) {
             map.insert("LootTableSeed".into(), seed.clone());
         }
         map.remove(&"Items".into());

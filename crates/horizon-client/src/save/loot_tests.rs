@@ -132,7 +132,15 @@ fn emptied_opened_loot_stays_empty_after_chunk_save_and_reload() {
 fn unopened_loot_tags_round_trip_exactly() {
     let (registry, biomes) = fixture();
     let pos = (1, 64, 2);
-    for seed in [Some(Tag::Long(37)), None, Some(Tag::Long(0))] {
+    // (seed read, seed saved): trySaveLootTable leaves out a seed that reads as 0, and
+    // DoubleTag.longValue floors -0.5 to -1.
+    let minus_half = Tag::Double((-0.5_f64).to_bits());
+    for (seed, saved) in [
+        (Some(Tag::Long(37)), Some(Tag::Long(37))),
+        (None, None),
+        (Some(Tag::Long(0)), None),
+        (Some(minus_half.clone()), Some(minus_half)),
+    ] {
         let pending = PendingContainerLoot {
             table: string("minecraft:chests/simple_dungeon"),
             seed,
@@ -152,7 +160,10 @@ fn unopened_loot_tags_round_trip_exactly() {
             )
             .unwrap()
         };
-        let bytes = expected(&pending);
+        let bytes = expected(&PendingContainerLoot {
+            table: pending.table.clone(),
+            seed: saved,
+        });
         let mut chunk = Chunk::empty(0, 0);
         chunk.set(1, 64, 2, 1);
         chunk
