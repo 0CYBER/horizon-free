@@ -492,9 +492,11 @@ impl StructureState {
     /// (`StructureStart.loadStaticStart`) so that the neighbours place the parts that cross
     /// into them and the beardifier shapes the terrain around them. A jigsaw start (villages,
     /// outposts, bastions, ancient cities, trial chambers, trail ruins) is loaded from its
-    /// saved pieces (`PoolPiece::from_saved`); a start whose pieces read their own tags (the
-    /// mineshaft, fortress and stronghold families and the swamp hut) loads them the same way
-    /// (`saved_legacy::read`). Another structure's pieces have no loader yet:
+    /// saved pieces (`PoolPiece::from_saved`); a template piece (shipwrecks, ocean ruins,
+    /// ruined portals, igloos, mansions, nether fossils and end cities) loads through
+    /// `saved_templates::read`, and a piece that reads its own tags (the mineshaft, fortress
+    /// and stronghold families and the swamp hut) through `saved_legacy::read`.
+    /// A piece of another type has no loader yet:
     /// it is the start this generator makes in the chunk when that one has the same name and the
     /// same pieces' box (the same layout from the same seed), else the name and box alone (found
     /// by `/locate` and maps, but not placed).
@@ -514,7 +516,7 @@ impl StructureState {
                     && let Some(pieces) = start
                         .pieces
                         .iter()
-                        .map(|piece| self.saved_piece(piece, def))
+                        .map(|piece| Self::saved_piece(piece, def, &self.resources, &self.bindings))
                         .collect::<Option<Vec<_>>>()
                 {
                     return Some(Arc::new(StructureStart::new(index, def, chunk, pieces)));
@@ -567,19 +569,29 @@ impl StructureState {
         Arc::new(starts)
     }
     /// A saved `minecraft:jigsaw` piece, or `None` for any other piece or one that does not decode.
-    fn saved_pool_piece(&self, piece: &horizon_core::nbt::Tag) -> Option<Piece> {
+    fn saved_pool_piece(
+        piece: &horizon_core::nbt::Tag,
+        resources: &StructureResources,
+        bindings: &FeatureBlockBindings<'_>,
+    ) -> Option<Piece> {
         saved_piece_id(piece)?;
-        PoolPiece::from_saved(&tag_json(piece), &self.resources, &self.bindings)
+        PoolPiece::from_saved(&tag_json(piece), resources, bindings)
             .ok()
             .map(Piece::Pool)
     }
     /// A saved piece, as `StructureStart.loadStaticStart` loads it: a jigsaw
-    /// piece from `PoolPiece::from_saved`, a vanilla legacy piece that reads its
-    /// own tags from `saved_legacy::read`, a mod type's piece from its
-    /// `load_piece` (the `StructurePieceType` is the loader), none otherwise.
-    /// `None` leaves the whole start to the fallback above.
-    fn saved_piece(&self, piece: &horizon_core::nbt::Tag, def: &StructureDef) -> Option<Piece> {
-        if let Some(pool) = self.saved_pool_piece(piece) {
+    /// piece from `PoolPiece::from_saved`, a template piece from
+    /// `saved_templates::read`, a vanilla legacy piece that reads its own tags
+    /// from `saved_legacy::read`, a mod type's piece from its `load_piece` (the
+    /// `StructurePieceType` is the loader), none otherwise. `None` leaves the
+    /// whole start to the fallback above.
+    fn saved_piece(
+        piece: &horizon_core::nbt::Tag,
+        def: &StructureDef,
+        resources: &StructureResources,
+        bindings: &FeatureBlockBindings<'_>,
+    ) -> Option<Piece> {
+        if let Some(pool) = Self::saved_pool_piece(piece, resources, bindings) {
             return Some(pool);
         }
         let horizon_core::nbt::Tag::Compound(map) = piece else {
@@ -590,13 +602,18 @@ impl StructureState {
             _ => return None,
         };
         let vanilla = id.strip_prefix("minecraft:").unwrap_or(&id);
+        if let Some(legacy) =
+            super::structure::saved_templates::read(vanilla, piece, resources, bindings)
+        {
+            return Some(Piece::Legacy(legacy));
+        }
         if let Some(legacy) = super::structure::saved_legacy::read(vanilla, piece, def) {
             return Some(Piece::Legacy(legacy));
         }
         let types = super::structure::mod_types::mod_structure_types();
         types
             .get(&*id)?
-            .load_piece(self.resources.registry, map)
+            .load_piece(resources.registry, map)
             .map(Piece::Legacy)
     }
     pub(super) fn set_saved_starts(&self, source: Arc<super::generator::SavedStructureStarts>) {
@@ -1233,6 +1250,133 @@ mod tests {
             );
         }
         assert!(read(&Tag::compound([("id", Tag::String("INVALID".into()))])).is_none());
+    }
+
+    /// A template piece a save wrote (the shipwreck and ocean ruin families write
+    /// these) loads an old chunk's start with the same `saved_templates::read`
+    /// a newly loaded start uses, instead of leaving the whole start to the
+    /// generator's rebuild.
+    #[test]
+    fn an_old_chunks_saved_template_pieces_load_with_their_state() {
+        use crate::{
+            registry::BlockRegistry,
+            worldgen::structure::{
+                Rotation, StateTransforms,
+                legacy::LegacyPiece,
+                ocean_ruin::{self, OceanRuinConfig},
+                simple::shipwreck_piece,
+                start::StructureKind,
+            },
+        };
+        use horizon_core::{density::TerrainAdjustment, nbt::Tag, random::XoroshiroRandom};
+        let names = [
+            "minecraft:air",
+            "minecraft:cave_air",
+            "minecraft:void_air",
+            "minecraft:structure_block",
+            "minecraft:sand",
+            "minecraft:suspicious_sand",
+            "minecraft:gravel",
+            "minecraft:suspicious_gravel",
+        ];
+        let registry = Box::leak(Box::new(
+            BlockRegistry::from_nbt(&Tag::compound([
+                ("DataVersion", Tag::Int(crate::DATA_VERSION)),
+                (
+                    "states",
+                    Tag::List(
+                        names
+                            .iter()
+                            .map(|n| Tag::compound([("id", Tag::String((*n).into()))]))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "defaults",
+                    Tag::Compound(
+                        names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, n)| ((*n).into(), Tag::Int(i as i32)))
+                            .collect(),
+                    ),
+                ),
+            ]))
+            .unwrap(),
+        ));
+        let resources = StructureResources::new(
+            registry,
+            StateTransforms::default(),
+            std::path::Path::new("unused"),
+            BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let bindings = FeatureBlockBindings::new(registry, BTreeSet::new()).unwrap();
+        let def = |name: &str, kind| StructureDef {
+            name: name.into(),
+            kind,
+            biomes: BTreeSet::new(),
+            step: 0,
+            terrain: TerrainAdjustment::None,
+            enhanced_terrain: None,
+        };
+        let mut random = XoroshiroRandom::new(1234);
+        let wreck = shipwreck_piece(
+            &resources,
+            [16, 60, 32],
+            Rotation::Clockwise90,
+            &mut random,
+            true,
+        )
+        .expect("a beached shipwreck");
+        let tag = Tag::Compound(wreck.save().expect("a savable shipwreck"));
+        let loaded = StructureState::saved_piece(
+            &tag,
+            &def(
+                "minecraft:shipwreck",
+                StructureKind::Shipwreck { beached: true },
+            ),
+            &resources,
+            &bindings,
+        )
+        .expect("the saved shipwreck loads instead of regenerating");
+        assert_eq!(loaded.save(), wreck.save());
+        assert_eq!(
+            format!("{loaded:?}"),
+            format!("{:?}", Piece::Legacy(Box::new(wreck)))
+        );
+
+        let config = OceanRuinConfig {
+            warm: true,
+            large_probability: 0.0,
+            cluster_probability: 0.0,
+        };
+        let ruin = ocean_ruin::pieces(
+            &resources,
+            &bindings,
+            [40, 45, 32],
+            Rotation::None,
+            &mut random,
+            &config,
+        )
+        .expect("a warm ocean ruin")
+        .remove(0);
+        let tag = Tag::Compound(ruin.save().expect("a savable ocean ruin"));
+        let loaded = StructureState::saved_piece(
+            &tag,
+            &def(
+                "minecraft:ocean_ruin",
+                StructureKind::OceanRuin {
+                    warm: true,
+                    large: 0.0,
+                    cluster: 0.0,
+                },
+            ),
+            &resources,
+            &bindings,
+        )
+        .expect("the saved ocean ruin loads instead of regenerating");
+        assert_eq!(loaded.save(), ruin.save());
     }
 
     /// `PiecesContainer.load` reads a piece whose id is one of the four names an

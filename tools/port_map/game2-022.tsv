@@ -1,5 +1,5 @@
 OceanRuinPieces.OceanRuinPiece.makeSettings	port	crates/horizon-world/src/worldgen/structure/ocean_ruin.rs::processors	block_rot, block_ignore and the suspicious sand/gravel rule; rotation set by TemplatePiece
-OceanRuinPieces.OceanRuinPiece.create	missing		minor: no reader for saved ocean ruin pieces; Horizon writes piece NBT but never reads it back
+OceanRuinPieces.OceanRuinPiece.create	port	crates/horizon-world/src/worldgen/structure/saved_templates.rs::read	BiomeType, Integrity and IsLarge rebuild the saved template piece; old chunks read it through StructureState::saved_piece
 OceanRuinPieces.OceanRuinPiece.addAdditionalSaveData	port	crates/horizon-world/src/worldgen/structure/simple.rs::TemplatePiece::saved	Rot, Integrity, BiomeType, IsLarge
 OceanRuinPieces.OceanRuinPiece.handleDataMarker	inline	crates/horizon-world/src/worldgen/structure/ocean_ruin.rs::post_process	chest and drowned markers handled in post_process
 OceanRuinPieces.OceanRuinPiece.getHeight	inline	crates/horizon-world/src/worldgen/structure/ocean_ruin.rs::post_process	footprint height search done inline
