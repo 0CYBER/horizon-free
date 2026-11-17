@@ -1,0 +1,128 @@
+name: PR vouch
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  push:
+    branches: [main]
+    paths:
+      - .github/VOUCHED.td
+      - .github/workflows/pr-vouch.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, '/recheck-vouch'))
+    # Serialize sweeps with single-PR updates and keep queued sweeps from being replaced.
+    concurrency:
+      group: pr-vouch
+      queue: max
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # The trust list comes from the default branch API. No pull request code is loaded.
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const { repo, eventName, payload } = context;
+            if (eventName === "issue_comment" &&
+                !payload.comment.body.split(/\r?\n/).some((line) => line.trim() === "/recheck-vouch")) {
+              return;
+            }
+
+            let pulls;
+            if (eventName === "push") {
+              pulls = await github.paginate(github.rest.pulls.list, { ...repo, state: "open", per_page: 100 });
+            } else {
+              const pull_number = (payload.pull_request ?? payload.issue).number;
+              const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number });
+              pulls = pull.state === "open" ? [pull] : [];
+            }
+            if (!pulls.length) return;
+
+            const { data: file } = await github.rest.repos.getContent({
+              ...repo,
+              path: ".github/VOUCHED.td",
+              ref: payload.repository.default_branch,
+            });
+            const listed = new Map();
+            for (const line of Buffer.from(file.content, "base64").toString("utf8").split("\n")) {
+              const match = /^(-?)github:(\S+)/.exec(line.trim());
+              if (!match) continue;
+              const login = match[2].toLowerCase();
+              const status = match[1] ? "denounced" : "trusted";
+              if (listed.has(login) && listed.get(login) !== status) {
+                throw new Error(`Conflicting vouch entries for ${login}`);
+              }
+              listed.set(login, status);
+            }
+
+            const statuses = new Map();
+            async function statusFor(user) {
+              if (!user) return "unvouched";
+              const login = user.login.toLowerCase();
+              if (!statuses.has(login)) {
+                let status = listed.get(login) ?? "unvouched";
+                if (status !== "trusted") {
+                  const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username: login });
+                  if (["admin", "write"].includes(data.permission)) status = "trusted";
+                }
+                statuses.set(login, status);
+              }
+              return statuses.get(login);
+            }
+
+            const labels = [
+              { name: "vouch:trusted", color: "1f883d", description: "Author has write access or is vouched for." },
+              { name: "vouch:unvouched", color: "fbca04", description: "Author has yet to be vouched for." },
+              { name: "vouch:denounced", color: "d1242f", description: "Author is denounced in the vouch list." },
+            ];
+            const existing = await github.paginate(github.rest.issues.listLabelsForRepo, { ...repo, per_page: 100 });
+            const labelIds = new Map(existing.map(({ name, node_id }) => [name, node_id]));
+            for (const label of labels) {
+              if (labelIds.has(label.name)) continue;
+              try {
+                const { data } = await github.rest.issues.createLabel({ ...repo, ...label });
+                labelIds.set(label.name, data.node_id);
+              } catch (error) {
+                if (error.status !== 422) throw error;
+                // Another run may have created it since we listed the labels.
+                const { data } = await github.rest.issues.getLabel({ ...repo, name: label.name });
+                labelIds.set(label.name, data.node_id);
+              }
+            }
+
+            const changes = [];
+            for (const pull of pulls) {
+              const next = `vouch:${await statusFor(pull.user)}`;
+              const current = new Set(pull.labels.map(({ name }) => name));
+              const add = !current.has(next);
+              const remove = labels.filter(({ name }) => name !== next && current.has(name));
+              if (!add && !remove.length) continue;
+
+              // Scope each mutation to vouch labels so concurrent size or triage labels survive.
+              const target = JSON.stringify(pull.node_id);
+              if (add) {
+                const ids = JSON.stringify([labelIds.get(next)]);
+                changes.push(`add${pull.number}: addLabelsToLabelable(input: { labelableId: ${target}, labelIds: ${ids} }) { clientMutationId }`);
+              }
+              if (remove.length) {
+                const ids = JSON.stringify(remove.map(({ name }) => labelIds.get(name)));
+                changes.push(`remove${pull.number}: removeLabelsFromLabelable(input: { labelableId: ${target}, labelIds: ${ids} }) { clientMutationId }`);
+              }
+            }
+
+            // Batch independent mutations to keep the initial sweep under GitHub's request limits.
+            const batchSize = 25;
+            for (let start = 0; start < changes.length; start += batchSize) {
+              if (start) await new Promise((resolve) => setTimeout(resolve, 1000));
+              await github.graphql(`mutation { ${changes.slice(start, start + batchSize).join("\n")} }`);
+            }
+            core.info(`Checked ${pulls.length} open PRs and applied ${changes.length} label updates.`);
