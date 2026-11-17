@@ -137,7 +137,7 @@ python3 tools/pr_ready.py                  # the self-check: fmt, clippy -D warn
 python3 tools/pr_ready.py --harnesses      # also the affected harnesses (by default only when you change a harness, oracle, probe or the runner, as in CI)
 cargo test -p horizon-client -p horizon-client-lib --lib --bins --tests   # skips the examples (pr_ready does this); `--doc` separately
 cargo test -p horizon-client-lib --lib mod_content::tests:: -- --ignored   # the slow content-root tests, #[ignore]d; pr_ready runs them when mod content, assets, blocks or items change
-cargo build --profile fast -p horizon-client        # optimized, quick to link: use it to play or run lan_e2e
+cargo build --profile fast -p horizon-game          # optimized, quick to link: use it to play or run lan_e2e
 python3 tools/parity.py --changed origin/main       # the harnesses your branch can affect (CI's parity job)
 python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cover these files, without running them
 python3 tools/parity.py mob_ai sculk       # named harnesses
@@ -251,7 +251,7 @@ When you change how the server and its clients talk (packets, tracking, guests, 
 it there. Other gameplay fixes are covered by their own harness and CI's parity job:
 
 ```sh
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
+cargo run --profile fast -p horizon-game -- --resources .local/horizon-client/26.3 --world T                 # server thread
 python3 tools/lan_e2e.py --check <name>                  # host on its server thread, guest is a server client
 python3 tools/parity.py dedicated_server server_entities server_player_damage
 ```

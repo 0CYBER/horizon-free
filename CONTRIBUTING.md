@@ -28,7 +28,7 @@ the registry, and their docs ([mods](docs/mods.md), [native mods](docs/native-mo
 
   ```sh
   cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
-  cargo run --release -p horizon-client
+  cargo run --release -p horizon-game
   ```
 
 - **Launcher:** its own Cargo workspace in `launcher/` (`cd launcher && cargo run`; on NixOS, `nix-shell` first).
