@@ -400,7 +400,7 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 ## Kept resources and compute passes
 
 - `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
-  (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
+  (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`, `r32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
   (screen history) or `"world"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in
   blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer
   has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.
@@ -442,8 +442,8 @@ A pass's prelude declares the resources it lists, the pack's resource i at bindi
 3 and its `_previous` at 65 + 2i: a buffer `var<storage, read_write> x: array<element>` where written,
 `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture
 `texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for
-`rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read
-with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
+`rgba32uint` and `r32uint`, which only a compute pass writes). An `r32float`, `rgba32float`, `rgba32uint` or
+`r32uint` texture is read with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
 
 `[[before_world]]` resources (bind group 3):
 

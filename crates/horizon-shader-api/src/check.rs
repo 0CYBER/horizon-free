@@ -495,7 +495,7 @@ fn undeclared(mut problems: Vec<Problem>, m: &crate::Manifest, kind: StageKind) 
 }
 
 /// Where a pass samples or gathers a 32-bit kept texture (`r32float`, `rgba32float`; an
-/// `rgba32uint` one, `texture_2d<u32>`, can't be sampled at all), this
+/// integer one, `rgba32uint` or `r32uint`, is `texture_2d<u32>` and can't be sampled at all), this
 /// frame's or `_previous`, itself or through a function's argument: the API reads them with
 /// `textureLoad` only, unfiltered, which every device does.
 fn sampled_data(

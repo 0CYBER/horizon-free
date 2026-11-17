@@ -971,6 +971,38 @@ fn a_compute_pass_writes_an_rgba32uint_texture_a_post_pass_loads() {
     computes(manifest, &files, &frames);
 }
 
+/// A compute pass writes an `r32uint` kept texture (adding 3 to `_previous` in every channel),
+/// which a post pass loads: red the count / 8, green the second channel, which `r32uint` doesn't
+/// keep (it reads 0). A reset clears it. Run with `WGPU_BACKEND=vulkan` and
+/// `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_compute_pass_writes_an_r32uint_texture_a_post_pass_loads() {
+    let manifest = "[[resource]]\nname = \"ints\"\nformat = \"r32uint\"\nsize = [4, 4]\n\
+                    keep = \"view\"\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+                    dispatch = [4, 4, 1]\nworkgroup = [4, 4, 1]\nreads = [\"ints_previous\"]\n\
+                    writes = [\"ints\"]\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"ints\"]\n";
+    let files = [
+        (
+            "c.wgsl",
+            "fn compute(input: ComputeInput) {\n    \
+             let last = textureLoad(ints_previous, input.cell.xy, 0);\n    \
+             textureStore(ints, input.cell.xy, last + vec4<u32>(3u));\n}\n",
+        ),
+        (
+            "l.wgsl",
+            "fn post(input: PostInput) -> vec4<f32> {\n    \
+             let n = textureLoad(ints, vec2<i32>(input.pixel), 0);\n    \
+             return vec4<f32>(vec2<f32>(n.xy) * 0.125, 0.0, 1.0);\n}\n",
+        ),
+    ];
+    let frames = [
+        ([1, 1], [4, 4], [0.375, 0.0, 0.0]),
+        ([1, 1], [4, 4], [0.75, 0.0, 0.0]),
+        ([2, 1], [4, 4], [0.375, 0.0, 0.0]),
+    ];
+    computes(manifest, &files, &frames);
+}
+
 /// The pack of `manifest` (with the identity tone curve) and `files` through the renderer's own
 /// path: built by `NativePack::new` and installed, each frame's inputs written by
 /// `NativePack::write`, which hands the kept store its frame (`kept_frame`), its

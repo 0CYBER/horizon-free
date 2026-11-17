@@ -821,6 +821,7 @@ fn format(format: Format) -> wgpu::TextureFormat {
         Format::R32Float => wgpu::TextureFormat::R32Float,
         Format::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
         Format::Rgba32Uint => wgpu::TextureFormat::Rgba32Uint,
+        Format::R32Uint => wgpu::TextureFormat::R32Uint,
     }
 }
 
@@ -970,8 +971,8 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
 
 /// The layout entries of `bindings` (`kept_bindings`) for `visibility`: a buffer read-only
 /// where the pass doesn't write it, a written texture write-only storage, a read one filterable
-/// only as `rgba16float` (the 32-bit ones are read with `textureLoad`), `rgba32uint` read as
-/// `u32`.
+/// only as `rgba16float` (the 32-bit ones are read with `textureLoad`), the integer ones
+/// (`rgba32uint`, `r32uint`) read as `u32`.
 pub(super) fn layout_entries(
     kept: &Kept,
     bindings: &[KeptBinding],
@@ -995,7 +996,7 @@ pub(super) fn layout_entries(
                     },
                     _ => wgpu::BindingType::Texture {
                         sample_type: match f {
-                            Format::Rgba32Uint => wgpu::TextureSampleType::Uint,
+                            f if f.is_uint() => wgpu::TextureSampleType::Uint,
                             f => wgpu::TextureSampleType::Float {
                                 filterable: f == Format::Rgba16Float,
                             },
