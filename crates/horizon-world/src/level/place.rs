@@ -374,8 +374,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let horizontal = ctx.horizontal_direction();
         Some(match class {
             Class::AbstractBed => {
+                // `AbstractBedBlock.getStateForPlacement`: the head half must be
+                // replaceable and inside the world border.
                 let relative = rel(pos, horizontal);
-                if self.can_be_replaced(self.state(relative), ctx) {
+                if self.can_be_replaced(self.state(relative), ctx)
+                    && self.level.within_world_border(relative)
+                {
                     Some(table.set_dir(default, p.facing, horizontal))
                 } else {
                     None

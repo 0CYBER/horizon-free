@@ -3,6 +3,10 @@
 use super::*;
 use horizon_core::geometry::border::BorderGeometry;
 
+// A sibling file: `tests.rs` is over the line limit, so it is declared here.
+#[path = "bed_border.rs"]
+mod bed_border;
+
 /// `DragonEggBlock.teleport` only picks a position inside the border
 /// (`WorldBorder.isWithinBounds`): while the border holds none of the cells
 /// the egg may pick, it stays where it is, with no level event and no block
