@@ -20,9 +20,12 @@ pub(super) fn progress(label: String) -> impl Fn(f32) {
 }
 
 /// Keep detailed terminal updates, but only the first and completed download updates in logs.
+/// Neither repeats the line it showed last: a download reports every chunk it reads while its line
+/// says a whole percent or megabyte, so the same line came once per chunk (#16848).
 pub(super) fn native_progress(tty: bool) -> impl Fn(native_mods::Step) -> Option<String> {
     use native_mods::Step;
     let previous = std::cell::RefCell::new(None);
+    let shown = std::cell::RefCell::new(None::<String>);
     move |step| {
         let show = tty
             || match (&step, previous.borrow().as_ref()) {
@@ -39,7 +42,12 @@ pub(super) fn native_progress(tty: bool) -> impl Fn(native_mods::Step) -> Option
                 }
                 _ => true,
             };
-        let label = show.then(|| step.label());
+        let label = show
+            .then(|| step.label())
+            .filter(|label| shown.borrow().as_ref() != Some(label));
+        if let Some(label) = &label {
+            *shown.borrow_mut() = Some(label.clone());
+        }
         *previous.borrow_mut() = Some(step);
         label
     }
@@ -77,17 +85,18 @@ mod tests {
     #[test]
     fn native_progress_keeps_detailed_terminal_downloads() {
         let progress = native_progress(true);
+        // Each percent once: chunks that don't move it said the same line again (#16848).
         for (done, percent) in [
-            (0.0, 0),
-            (0.97, 97),
-            (0.971, 97),
-            (0.974, 97),
-            (0.98, 98),
-            (1.0, 100),
+            (0.0, Some(0)),
+            (0.97, Some(97)),
+            (0.971, None),
+            (0.974, None),
+            (0.98, Some(98)),
+            (1.0, Some(100)),
         ] {
             assert_eq!(
                 progress(native_mods::Step::Rust(done)),
-                Some(format!(
+                percent.map(|percent| format!(
                     "Downloading Rust {} (once): {percent}%",
                     horizon_launcher::rust_toolchain::VERSION
                 ))
@@ -102,6 +111,29 @@ mod tests {
             assert_eq!(
                 progress(step),
                 Some(format!("Getting the mod tools for sdk: {done} of 100 MB"))
+            );
+        }
+    }
+
+    /// #16848: a line that says what the last one said isn't said again, in a terminal or a log.
+    #[test]
+    fn native_progress_says_a_line_once() {
+        use native_mods::Step;
+        let compile = || Step::Compile {
+            done: 460,
+            total: Some(469),
+            name: "horizon-official".into(),
+            profile: Default::default(),
+        };
+        for tty in [true, false] {
+            let labels: Vec<_> = [compile(), compile(), Step::Install, compile()]
+                .into_iter()
+                .filter_map(native_progress(tty))
+                .collect();
+            assert_eq!(
+                labels,
+                [compile().label(), Step::Install.label(), compile().label()],
+                "tty: {tty}"
             );
         }
     }
