@@ -25,6 +25,8 @@ def area(path):
         return f"game/{m.group(1)}"
     if path == "crates/horizon-client/src/game.rs":
         return "game.rs"
+    if path.startswith("crates/horizon-client/src/game/"):
+        return "game"
     if path.startswith("crates/horizon-client/"):
         return "client (non-game)"
     return path.split("/")[1]
