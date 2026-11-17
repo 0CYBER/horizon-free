@@ -148,7 +148,7 @@ fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let descriptor = wgpu::DeviceDescriptor {
         required_features: features,
         required_limits: adapter.limits(),
-        experimental_features: super::super::experimental(features),
+        experimental_features: crate::gfx::rt::query::experimental(features),
         ..Default::default()
     };
     pollster::block_on(adapter.request_device(&descriptor)).ok()
@@ -375,7 +375,7 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
     };
     let mut entities = Entities::new(&device, &stream);
     assert!(!entities.fit(&device, &stream));
-    let indices = super::super::quad_indices(&device, 5);
+    let indices = crate::gfx::rt::query::quad_indices(&device, 5);
     let mut tlas = create_tlas(&device, 1);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     tlas[0] = Some(wgpu::TlasInstance::new(
@@ -432,7 +432,7 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
     assert_eq!(got[6], [5.0, 1.0, 1.0, 1.0]);
 }
 
-/// Rays at the stream's quad and at two retained sections' (`ray_retained.rs`).
+/// Rays at the stream's quad and at two retained sections' (`retained.rs`).
 const RETAINED_PROBE: &str = "
 @group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 5>;
 @compute @workgroup_size(1) fn probe() {
@@ -509,7 +509,7 @@ fn rays_reach_retained_block_entities_through_their_sections() {
     };
     let mut entities = Entities::new(&device, &stream);
     entities.fit(&device, &stream);
-    let indices = super::super::quad_indices(&device, 4);
+    let indices = crate::gfx::rt::query::quad_indices(&device, 4);
     let (store, layers) = (empty(&device, 24), empty(&device, 8));
     // Builds the frame's sections (`update`, `builds`), the stream's instance and theirs after
     // it, and runs the probe.

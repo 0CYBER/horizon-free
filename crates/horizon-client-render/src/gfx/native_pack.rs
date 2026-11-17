@@ -14,7 +14,7 @@ use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
 use super::output::EffectiveOutput;
 use super::pack_timing::PassTiming;
-use super::surface_setup::ray_query::ray_scene::{RayScene, Traced};
+use super::rt::scene::{RayScene, Traced};
 use super::{Frame, SectionKey};
 use crate::fast_hash::FxHashMap;
 
@@ -457,7 +457,7 @@ impl NativePack {
         let traced = |m: &NativeMaterial| m.scene.is_some();
         let wanted = |s: &horizon_shader_api::check::CheckedStage| s.scene_source.is_some();
         let refused = others.iter().any(wanted)
-            && super::surface_setup::ray_query::on(device)
+            && super::rt::query::on(device)
             && !material.as_ref().is_some_and(traced);
         let computes = post.computes_trace();
         if (!scenes.is_empty() || computes) && !refused {

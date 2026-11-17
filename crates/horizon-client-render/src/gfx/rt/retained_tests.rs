@@ -1,6 +1,6 @@
 //! Which retained sections the entity layer builds a BLAS for, and when it builds one again or
 //! drops it; which of their quads it takes; and its store's cap. The hit lookup on the GPU is in
-//! ray_entity_tests.rs.
+//! entity_tests.rs.
 
 use super::*;
 

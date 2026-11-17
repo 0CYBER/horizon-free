@@ -5,11 +5,11 @@
 //!
 //! Each frame the solid quads of the sections around the camera are written out of the arena
 //! into one buffer as vertices (copied, or from the compact layout's records by ray tracing's
-//! unpacking, `ray_scene::unpack_page`), a compute pass picks the ones the grid draws (opaque, with relief, within
+//! unpacking, `rt::scene::unpack_page`), a compute pass picks the ones the grid draws (opaque, with relief, within
 //! the distance, facing the eye and in view) into an indirect draw, and the material's
 //! displaced pipeline draws one instance a quad.
 
-use super::surface_setup::ray_query::ray_scene::{RtJob, unpack_page, unpack_pipeline};
+use super::rt::scene::{RtJob, unpack_page, unpack_pipeline};
 use crate::mesher::TerrainVertex;
 
 /// The solid quads the grid can draw a frame, and the sections they come from.

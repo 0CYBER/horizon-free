@@ -48,7 +48,7 @@ pub fn open_vulkan_device(
 }
 
 /// wgpu's opt-in to its `EXPERIMENTAL_*` features, which the crates that forbid unsafe code
-/// can't give: hardware ray queries (`gfx/ray_query.rs`) and hardware mesh shaders
+/// can't give: hardware ray queries (`gfx/rt/query.rs`) and hardware mesh shaders
 /// (`gfx/mesh_shader.rs`), asked for only when the player turns them on.
 pub fn experimental_features() -> wgpu::ExperimentalFeatures {
     // Safety: wgpu warns that its experimental features may have bugs that reach undefined

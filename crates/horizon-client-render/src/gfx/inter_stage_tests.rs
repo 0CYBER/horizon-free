@@ -159,11 +159,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             vec!["terrain.wgsl", "visbuffer.wgsl"],
             super::terrain_shader() + include_str!("../visbuffer.wgsl"),
         ),
-        // Ray tracing's unpacking of sections into its store (gfx/ray_scene.rs's `Unpacker`).
+        // Ray tracing's unpacking of sections into its store (gfx/rt/scene.rs's `Unpacker`).
         (
             "ray tracing unpack",
             vec!["terrain.wgsl", "rt_unpack.wgsl"],
-            super::surface_setup::ray_query::ray_scene::unpack_shader(),
+            super::rt::scene::unpack_shader(),
         ),
         (
             "world primitives",

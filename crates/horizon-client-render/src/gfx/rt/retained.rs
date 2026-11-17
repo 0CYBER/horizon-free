@@ -306,5 +306,5 @@ impl Retained {
 }
 
 #[cfg(test)]
-#[path = "ray_retained_tests.rs"]
+#[path = "retained_tests.rs"]
 mod tests;

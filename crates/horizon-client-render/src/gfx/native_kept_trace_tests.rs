@@ -45,7 +45,7 @@ pub(super) struct Scene {
 
 impl Scene {
     pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, z: f32, generation: u64) -> Self {
-        use crate::gfx::surface_setup::ray_query::{blas_input, quad_indices};
+        use crate::gfx::rt::query::{blas_input, quad_indices};
         let corners = [
             [-8.0, -8.0, z],
             [8.0, -8.0, z],
@@ -632,7 +632,7 @@ impl EntityLayer {
 
     /// `scene` as a frame with this layer traces it.
     fn traced<'a>(&'a self, scene: &'a Scene) -> Traced<'a> {
-        use crate::gfx::surface_setup::ray_query::ray_scene::TracedEntities;
+        use crate::gfx::rt::scene::TracedEntities;
         Traced {
             entities: Some(TracedEntities {
                 vertices: self.vertices.as_entire_buffer_binding(),
@@ -650,7 +650,7 @@ impl EntityLayer {
 /// A pack whose `[[before_world]]`, compute and post passes trace with `RAY_ENTITY` in the mask
 /// and read `RayHit::entity`: every pass's layout has the entity layer's bindings beside its kept
 /// ones, compute and fragment alike, and each finds the terrain quad (not an entity), with no
-/// validation error. The layer's own hits are #16254's (`ray_entity_tests`), the same WGSL.
+/// validation error. The layer's own hits are #16254's (`rt/entity_tests.rs`), the same WGSL.
 #[test]
 fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
     let Some((_, device, queue)) = ray_device() else {

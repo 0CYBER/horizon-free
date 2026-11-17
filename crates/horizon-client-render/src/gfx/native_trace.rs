@@ -3,7 +3,7 @@
 //! each compute or `[[before_world]]` pass that calls a trace function, and the terrain's
 //! pipelines of a material stage that does, are built a second time from what the check made
 //! against the scene (`CheckedStage::scene`, `scene_source`), and their group 3 also holds the
-//! TLAS, the store of the sections' vertices (gfx/ray_scene.rs), the block sprites and the
+//! TLAS, the store of the sections' vertices (gfx/rt/scene.rs), the block sprites and the
 //! pack's material id and tags of each sprite layer, which the prelude's `trace` reads. Those
 //! run in frames that have a scene; in the others, and on a device that can't hold the
 //! bindings, the ones whose `trace` misses run, as on a device without ray queries. A pack whose
@@ -20,7 +20,7 @@ use horizon_shader_api::stages::{
 use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
 use super::kept::Reads;
 use super::{NativeFrame, NativePost, post_pipeline};
-pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::Traced;
+pub(in crate::gfx) use crate::gfx::rt::scene::Traced;
 
 /// What the scene's passes are built against besides the scene: the terrain's sprites and the
 /// pack's tables of them.
@@ -270,7 +270,7 @@ fn with_scene<T>(
     build: impl FnOnce(&[wgpu::BindGroupLayout]) -> Result<T, String>,
 ) -> Option<(Vec<wgpu::BindGroupLayout>, T, Rays)> {
     // Without ray queries there is no scene (`ray_query` said so if they were asked for).
-    if !crate::gfx::surface_setup::ray_query::on(device) {
+    if !crate::gfx::rt::query::on(device) {
         return None;
     }
     let groups: Vec<_> = (groups.into_iter())

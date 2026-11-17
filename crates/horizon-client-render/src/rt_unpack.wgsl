@@ -1,4 +1,4 @@
-// Appended to terrain.wgsl (gfx/ray_scene.rs's `Unpacker`): the solid quads of sections
+// Appended to terrain.wgsl (gfx/rt/scene.rs's `Unpacker`): the solid quads of sections
 // about to get a BLAS, written into their slots of the ray tracing scene's store as plain
 // vertices (`TerrainVertex`, six words each), so ray tracing keeps the section arena in its
 // compact layout. `section_corner` reads a corner exactly as the solid draws do, from a record

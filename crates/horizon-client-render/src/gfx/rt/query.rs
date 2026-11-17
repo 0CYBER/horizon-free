@@ -4,10 +4,6 @@
 //! either the device is opened exactly as before. Every build has it: it is a render capability
 //! for shader packs (spec #15624), not a Horizon extra.
 
-/// The terrain's acceleration structures (step 2).
-#[path = "ray_scene.rs"]
-pub(in crate::gfx) mod ray_scene;
-
 /// The ray query feature.
 const RAY_QUERY: wgpu::Features = wgpu::Features::EXPERIMENTAL_RAY_QUERY;
 
@@ -27,7 +23,7 @@ pub(in crate::gfx) fn blas_input(device: &wgpu::Device) -> wgpu::BufferUsages {
 }
 
 /// What the arena's vertex pages need on top of their own usage: the unpack pass reads every
-/// section with a BLAS from them (`ray_scene`). Nothing without ray queries, so the off path's
+/// section with a BLAS from them (`scene`). Nothing without ray queries, so the off path's
 /// pages are main's.
 pub(in crate::gfx) fn arena_input(device: &wgpu::Device) -> wgpu::BufferUsages {
     if on(device) {
@@ -92,7 +88,7 @@ pub(in crate::gfx) fn wanted(switch: Switch, traces: bool) -> bool {
 
 /// The features to request on `adapter`: ray queries, when wanted and offered. `traces`: the
 /// shader pack picked at startup declares `[ray_tracing]` (the device can't add them later).
-pub(super) fn features(adapter: &wgpu::Adapter, traces: bool) -> wgpu::Features {
+pub(in crate::gfx) fn features(adapter: &wgpu::Adapter, traces: bool) -> wgpu::Features {
     let wanted = wanted(switch(), traces);
     let features = pick(wanted, adapter.features());
     if wanted {
@@ -115,7 +111,7 @@ pub(super) fn features(adapter: &wgpu::Adapter, traces: bool) -> wgpu::Features 
     features
 }
 
-fn pick(requested: bool, offered: wgpu::Features) -> wgpu::Features {
+pub(super) fn pick(requested: bool, offered: wgpu::Features) -> wgpu::Features {
     if requested {
         offered & RAY_QUERY
     } else {

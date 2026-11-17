@@ -1,7 +1,7 @@
 //! Stable entity material grouping with renderer-owned, reusable CPU scratch.
 use super::Vertex;
 use super::native_entity::EntityRuns;
-use super::surface_setup::ray_query::ray_scene::GEOMETRIES;
+use super::rt::scene::GEOMETRIES;
 use horizon_shader_api::stages::RAY_ENTITY_QUAD;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
@@ -163,7 +163,7 @@ pub(super) struct EntityBatch {
     /// layer: the runs of the next `update`'s entities that they take.
     pub(super) kinds: EntityRuns,
     /// The ordinary quads, the improved transparency ones and the ray-only ones in `combined`,
-    /// as (first quad, quads): the entity layer's geometries (gfx/ray_scene.rs).
+    /// as (first quad, quads): the entity layer's geometries (gfx/rt/scene.rs).
     pub(super) ray_ranges: [(u32, u32); GEOMETRIES],
     /// The entities the camera doesn't draw within the ray scene's reach, which the game moved
     /// out of the stream (`Renderer::take_ray_only`), and their runs: what `ray_only_quads`

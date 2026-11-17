@@ -1,5 +1,5 @@
 //! The terrain as acceleration structures, with ray tracing on (#13780 step 2, after the #1180
-//! spike; `ray_query`): within `reach` chunks of the camera one BLAS per section's solid quads
+//! spike; `query`): within `reach` chunks of the camera one BLAS per section's solid quads
 //! and one per its translucent quads (`Layer`), compacted once built, and one TLAS of them,
 //! built again only when a BLAS changes or the camera enters another chunk column (its instances
 //! sit relative to that column). A shader pack's `trace` reads them (`traced`,
@@ -34,7 +34,7 @@
 //! built again every frame, after the stream's upload, so the TLAS is too. Its third geometry is
 //! the entities the camera doesn't draw (step 2): the game moves them out of what the camera
 //! draws (`Renderer::take_ray_only`), and the batch puts them where no pass draws from. The
-//! block entities the renderer keeps on the GPU have a BLAS a section (step 3, `ray_retained.rs`),
+//! block entities the renderer keeps on the GPU have a BLAS a section (step 3, `retained.rs`),
 //! their instances after the stream's.
 
 use glam::DVec3;
@@ -79,7 +79,7 @@ impl Renderer {
 
     /// Runs `pack` from now on (none: no Horizon pack). The scene follows it: a pack that
     /// declares `[ray_tracing]` keeps the scene there is, or gets one built from the sections
-    /// resident now; another pack, or none, drops it (`ray_query::wanted`: with
+    /// resident now; another pack, or none, drops it (`query::wanted`: with
     /// `HORIZON_RAY_TRACING=1` every pack keeps one). Called before the pack's first frame, so
     /// the scene is there when it gathers what it traces. A rebuild of the pack that runs keeps
     /// its kept resources (`NativePack::carry`); else they go before the new pack's are made.
@@ -113,7 +113,7 @@ impl Renderer {
         follow(
             &mut self.ray_scene,
             &self.device,
-            super::wanted(super::switch(), traces),
+            super::query::wanted(super::query::switch(), traces),
         );
         self.native = pack;
         self.executor = capabilities;
@@ -495,10 +495,10 @@ pub(in crate::gfx) struct TracedEntities<'a> {
 }
 
 impl RayScene {
-    /// The scene, when the device has ray queries (`ray_query`) and video memory for the first
+    /// The scene, when the device has ray queries (`query`) and video memory for the first
     /// TLAS and store.
     pub(in crate::gfx) fn new(device: &wgpu::Device) -> Option<Self> {
-        if !super::on(device) {
+        if !super::query::on(device) {
             return None;
         }
         let reach = std::env::var("HORIZON_RT_CHUNKS")
@@ -533,7 +533,7 @@ impl RayScene {
     /// The scene a renderer starts with: one only when `HORIZON_RAY_TRACING=1` asks for it with
     /// any pack or none; otherwise the pack that loads brings it (`Renderer::replace_native`).
     pub(in crate::gfx) fn forced(device: &wgpu::Device) -> Option<Self> {
-        super::wanted(super::switch(), false)
+        super::query::wanted(super::query::switch(), false)
             .then(|| Self::new(device))
             .flatten()
     }
@@ -1143,7 +1143,7 @@ pub(in crate::gfx) fn unpack_page(
 /// terrain.wgsl with the unpacking entry point after it, which reads sections as its solid
 /// draws do (`section_corner`).
 pub(in crate::gfx) fn unpack_shader() -> String {
-    crate::gfx::terrain_shader() + include_str!("../rt_unpack.wgsl")
+    crate::gfx::terrain_shader() + include_str!("../../rt_unpack.wgsl")
 }
 
 fn store_buffer(device: &wgpu::Device, vertices: u64) -> Option<wgpu::Buffer> {
@@ -1233,7 +1233,7 @@ fn build_entries<'a>(
 /// Where each part's vertices sit in the store: first fit over the free ranges, which merge
 /// with their neighbours when freed. A store with no range to fit grows, up to `most` and as far
 /// as video memory lets it. The retained block entities' store keeps its sections by their key
-/// (`ray_retained.rs`).
+/// (`retained.rs`).
 struct Slots<K = Part> {
     taken: FxHashMap<K, (u64, u64)>,
     /// Free (first vertex, vertices), in order, none touching another.
@@ -1367,11 +1367,11 @@ fn instance_origin(key: SectionKey, min_y: i32, anchor: (i32, i32)) -> [f32; 3] 
     ]
 }
 
-#[path = "ray_retained.rs"]
+#[path = "retained.rs"]
 mod retained;
 
 #[cfg(test)]
-#[path = "ray_entity_tests.rs"]
+#[path = "entity_tests.rs"]
 mod entity_tests;
 
 #[cfg(test)]
@@ -1659,10 +1659,10 @@ mod tests {
         else {
             return;
         };
-        assert!(!super::super::on(&device));
+        assert!(!super::super::query::on(&device));
         assert!(RayScene::new(&device).is_none());
-        assert!(super::super::blas_input(&device).is_empty());
-        assert!(super::super::arena_input(&device).is_empty());
+        assert!(super::super::query::blas_input(&device).is_empty());
+        assert!(super::super::query::arena_input(&device).is_empty());
     }
 
     /// Spec #16011 item 5: the scene follows the pack that loads. A pack with `[ray_tracing]`
@@ -1670,7 +1670,7 @@ mod tests {
     /// starts afresh from the sections resident then. `HORIZON_RAY_TRACING=1` keeps one without.
     #[test]
     fn the_scene_follows_a_pack_that_traces() {
-        use super::super::{Switch, experimental, pick, wanted};
+        use super::super::query::{Switch, experimental, pick, wanted};
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

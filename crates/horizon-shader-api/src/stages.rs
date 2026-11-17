@@ -685,7 +685,7 @@ fn hit_specular_map(hit: RayHit) -> vec4<f32> {
 ";
 
 /// `trace_layers` and `trace_any_layers` through the scene the renderer binds
-/// (gfx/ray_scene.rs): a hit is a triangle of a quad in the store, read as terrain.wgsl reads
+/// (gfx/rt/scene.rs): a hit is a triangle of a quad in the store, read as terrain.wgsl reads
 /// the mesher's vertices, or for a pack that names `RAY_ENTITY` one of the entity stream's
 /// (`RAY_ENTITY_SCENE`). `layered`.
 const RAY_SCENE: &str = "\
