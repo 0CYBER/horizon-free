@@ -170,6 +170,10 @@ def state_substitutes(old_blocks, new_blocks):
             continue
         candidates = [s for s in new_blocks[found]["states"]
                       if (found, tuple(sorted(s.get("properties", {}).items()))) in old_states]
+        # The substitute block can exist in both versions with disjoint state properties, leaving no
+        # candidate state to carry the mapping. That is a normal "no counterpart" case: keep NONE.
+        if not candidates:
+            continue
         for state in block["states"]:
             props = state.get("properties", {})
             best = max(candidates, key=lambda c: (sum(props.get(k) == v for k, v in c.get("properties", {}).items()),
