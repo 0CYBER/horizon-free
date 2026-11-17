@@ -855,8 +855,7 @@ runtime or new dependency. Server-sent events can replace the polling later if a
     seconds and lost otherwise, as the monitor clears its flag whatever it did; and `server/status`, the
     heartbeat: every `status-heartbeat-interval` seconds (none at 0, the first after as many) the status
     `server/status` answers, up or not, to whoever is connected;
-  - planned: the rest of `serversettings/*` and the world-upgrade notifications (after `WorldUpgrader`'s server
-    side).
+  - planned: world-upgrade notifications, after the server-side `WorldUpgrader` exists.
 
 ## 9. Benchmark plan (bots against vanilla and Paper)
 

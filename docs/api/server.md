@@ -106,9 +106,9 @@ answer; those fields now live only under `provenance`.
 
 - **Mods on a dedicated server**: turn on and off, and their settings, once native mods can be built for the
   server ([content mods](../modding/src/how-to/content-mods.md), [native mods](../modding/src/how-to/native-mods/11-multiplayer.md)).
-- **Vanilla's management protocol**: `serversettings/*` (the live settings not yet done) and the world
-  upgrade's notifications (the others are sent). The methods answer
-  an internal error saying so; a kick's translatable message is sent as its key.
+- **Vanilla's management protocol**: the world upgrade's notifications are not yet sent (the other
+  advertised methods, including `serversettings/*`, are implemented). A kick's translatable message is
+  sent as its key.
 - **Compatibility tests**: golden replies for the remaining endpoint groups (the lifecycle replies are pinned),
   and a `server.toml` from each release line.
 
@@ -128,6 +128,8 @@ answer; those fields now live only under `provenance`.
   supervisor.
 - Vanilla's management protocol (`management-server-*`): the WebSocket, its authentication, `rpc.discover`,
   `players`, `players/kick`, `server/{status,save,stop,system_message}`, and the four lists' getters.
+- Vanilla's management protocol's live settings (`serversettings/*`), including changes persisted to
+  `server.properties` where vanilla persists them.
 - The management protocol's TLS (on by default, as in vanilla): a PKCS12 keystore, or a self-signed one generated
   in `.horizon/` when none is set.
 - The management protocol's `allowlist/{add,remove,set,clear}` and `bans/{add,remove,set,clear}`.
