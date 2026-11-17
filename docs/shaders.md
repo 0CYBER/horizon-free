@@ -453,6 +453,12 @@ stage draws in a pass of its own (it shares the world's pass otherwise), so its 
 material stage runs inside terrain's own draws, so it has no time of its own: compare the frame's GPU time with and
 without the pack.
 
+With F3 shut, offscreen or from a script, `horizon-ctl gpu-passes on` times the same passes: `horizon-ctl bench 5`
+then replies with `shader_passes`, the pack's passes by the names F3 shows, beside `gpu_passes`, Horizon's own, and
+with `gpu`, the whole frame's percentiles (`gpu_ms`, every frame, with `bench 5 raw`; `gpu-passes off` stops it).
+`horizon-client --benchmark` records them as `shader_pass.<scene>.<pass>_ms`, and `horizon-ctl profile client start
+--gpu` into a capture (`horizon-perf query gpu`).
+
 ## Next
 
 An overlay showing what each pass draws (F3 already shows what each costs), and items, particles and the
