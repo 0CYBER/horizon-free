@@ -195,10 +195,11 @@ jobs:
       - name: Lint the server build
         if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
         run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
-      # Only main's passing run records its commit; pull requests restore it and never save it.
+      # Every run that may save the cache records its commit (save-if above: any event on main, a run started by
+      # hand included): a cache saved without it pins nothing, and pull requests then recheck every crate.
+      # Pull requests restore it and never save it.
       - name: Record the commit this lint cache was checked at
-        if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.environment == 'github-hosted'
+        if: github.ref == 'refs/heads/main' && runner.environment == 'github-hosted'
         run: |
           mkdir -p .ci-built
           git rev-parse HEAD > .ci-built/sha
@@ -230,11 +231,15 @@ jobs:
               libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      # cache-bin: false: this step's save deletes the binaries ~/.cargo/bin held when it started, cargo among them.
+      # The lint cache above saves after it (post steps run in reverse), found no cargo, listed no crates and saved
+      # an empty target/ that every pull request then restored (main's run 43786916028, #17145's push).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           workspaces: launcher
           shared-key: launcher
+          cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check the launcher's formatting, lint and tests
         if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false'
@@ -388,7 +393,7 @@ jobs:
       # What main's cache holds is a build of this commit: pull requests compare their files against it.
       - name: Record the commit this build is of
         if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          github.ref == 'refs/heads/main' &&
           steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         run: mkdir -p .ci-built && git rev-parse HEAD > .ci-built/sha
       - name: What sccache reused
