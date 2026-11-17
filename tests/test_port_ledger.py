@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import struct
@@ -7,10 +8,14 @@ import tempfile
 import unittest
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from test_class_index import Pool
+try:
+    from .test_class_index import Pool
+except ImportError:  # unittest discover -s tests imports this module at top level
+    from test_class_index import Pool
 from tools import port_ledger
 
 SCRIPT = Path(port_ledger.__file__).resolve()
@@ -217,6 +222,88 @@ class PortLedgerCliTests(unittest.TestCase):
             helped = self.run_cli(tmp, "where", "--help")
             self.assertEqual(helped.returncode, 0, helped.stderr)
             self.assertIn("--json", helped.stdout)
+
+
+class PortLedgerFixTests(unittest.TestCase):
+    """Pure-Python regressions: inherited methods, untracked ports, lost methods and dotted names."""
+
+    @staticmethod
+    def ledger(classes=None, methods=None):
+        return {
+            "classes": classes or {}, "methods": methods or {}, "fns": {}, "gaps": [],
+            "ported": {}, "mapped": {}, "mentioned": {}, "named": {}, "linked": {},
+            "structural": {}, "inferred": {}, "skipped": {}, "absent": {}, "homes": {},
+            "harness": {}, "callers": {}, "class_cites": {}, "file_class_cites": {},
+        }
+
+    @staticmethod
+    def method(cls, name):
+        return {"class": cls, "name": name, "file": cls + ".java",
+                "lines": [[10, 20]], "callees": [], "client": False, "size": 20}
+
+    def test_where_finds_method_declared_on_a_supertype(self):
+        parent, middle, child = ("net/minecraft/test/" + n for n in ("Parent", "Middle", "Child"))
+        led = self.ledger(
+            classes={child: {"file": "Child.java", "extends": [middle]},
+                     middle: {"file": "Middle.java", "extends": [parent]},
+                     parent: {"file": "Parent.java", "extends": []}},
+            methods={parent + "#inherited": self.method(parent, "inherited"),
+                     parent + "#deep": self.method(parent, "deep")},
+        )
+        for query, want in (("Child.inherited", "Parent.inherited"), ("Child.deep", "Parent.deep")):
+            with self.subTest(query=query), redirect_stdout(io.StringIO()) as out:
+                port_ledger.cmd_where(led, query, True)
+            self.assertEqual([v["vanilla"] for v in json.loads(out.getvalue())], [want])
+
+    def test_match_classes_and_class_cmd_accept_dotted_fqns(self):
+        outer = "net/minecraft/world/level/block/DispenserBlock"
+        inner = outer + "$DispenseBehavior"
+        led = self.ledger(
+            classes={outer: {"file": "DispenserBlock.java"}, inner: {"file": "DispenserBlock.java"}},
+            methods={outer + "#dispenseFrom": self.method(outer, "dispenseFrom")},
+        )
+        for query in ("DispenserBlock", outer.replace("/", "."), outer):
+            with self.subTest(query=query):
+                self.assertEqual(port_ledger.match_classes(led, query), [outer])
+        self.assertEqual(port_ledger.match_classes(led, inner.replace("/", ".").replace("$", ".")), [inner])
+        with redirect_stdout(io.StringIO()) as out:
+            port_ledger.cmd_class(led, outer.replace("/", "."), True)
+        self.assertEqual(json.loads(out.getvalue())[0]["class"], "DispenserBlock")
+
+    def test_map_check_accepts_dotted_fqn(self):
+        cls = "net/minecraft/world/level/block/DispenserBlock"
+        led = self.ledger(classes={cls: {"file": "DispenserBlock.java"}})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "verdicts.tsv"
+            path.write_text("net.minecraft.world.level.block.DispenserBlock\tmissing\t\n", encoding="utf-8")
+            with redirect_stdout(io.StringIO()) as out:
+                port_ledger.cmd_map_check(led, [str(path)])
+        self.assertIn("no problems", out.getvalue())
+
+    def test_changed_ranges_includes_untracked_rust_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rust = root / "crates" / "newport.rs"
+            rust.parent.mkdir(parents=True)
+            rust.write_text("fn newport() {}\nfn second() {}\n", encoding="utf-8")
+            replies = [subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                       subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                       subprocess.CompletedProcess([], 0, stdout="crates/newport.rs\n", stderr="")]
+            with mock.patch.object(port_ledger, "ROOT", root), \
+                    mock.patch.object(port_ledger.subprocess, "run", side_effect=replies) as run:
+                mb, ranges = port_ledger.changed_ranges("main")
+            self.assertEqual(mb, "base")
+            self.assertEqual(ranges["crates/newport.rs"], [(1, 2)])
+            self.assertEqual([c.args[0][:2] for c in run.call_args_list],
+                             [["git", "merge-base"], ["git", "diff"], ["git", "ls-files"]])
+
+    def test_diff_ledgers_reports_removed_method(self):
+        cls, k = "a/b/C", "a/b/C#m"
+        old = self.ledger(classes={cls: {"file": "C.java"}}, methods={k: self.method(cls, "m")})
+        old["ported"][k] = {}
+        result = port_ledger.diff_ledgers(old, self.ledger())
+        self.assertEqual(result["lost"], ["C.m: ported -> missing"])
+        self.assertEqual(result["newly found"], [])
 
 
 if __name__ == "__main__":

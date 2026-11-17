@@ -2088,20 +2088,48 @@ def port_of(led, k):
     return [i["fn"] for i in led["inferred"].get(k, [])[:1]]
 
 
+def class_name_forms(query):
+    """Spellings a class query can take: internal (net/minecraft/.../Outer$Inner), dotted FQN
+    (net.minecraft...Outer.Inner) and simple (Outer). Dots can be package or inner-class separators,
+    so build the mixed spelling too: once a capitalised class segment appears, later dots are '$'."""
+    parts = query.replace("/", ".").split(".")
+    nested, in_class = parts[0], False
+    for part in parts[1:]:
+        nested += ("$" if in_class else "/") + part
+        if part[:1].isupper():
+            in_class = True
+    return {query, query.replace(".", "$"), query.replace(".", "/"), nested}
+
+
 def match_classes(led, query):
-    q = query.replace(".", "$")
-    return [p for p in led["classes"] if p.endswith("/" + q) or p == q or p.rsplit("/", 1)[-1] == q]
+    forms = class_name_forms(query)
+    return [p for p in led["classes"]
+            if any(p.endswith("/" + q) or p == q or p.rsplit("/", 1)[-1] == q for q in forms)]
+
+
+def class_and_supertypes(led, cp):
+    """A class and the classes/interfaces it extends, nearest first, without repeats (cycle-safe)."""
+    seen, queue = {cp}, [cp]
+    while queue:
+        p = queue.pop(0)
+        yield p
+        for sup in led["classes"].get(p, {}).get("extends", []):
+            if sup not in seen:
+                seen.add(sup)
+                queue.append(sup)
 
 
 def cmd_where(led, query, as_json):
     out = []
     if "." in query and query.split(".")[-1][:1].islower():
         cls_q, meth = query.rsplit(".", 1)
+        seen = set()
         for cp in match_classes(led, cls_q):
             # The method on the class or a supertype.
-            for p in [cp] + [x for x in led["classes"] if False]:
+            for p in class_and_supertypes(led, cp):
                 k = key(p, meth)
-                if k in led["methods"]:
+                if k in led["methods"] and k not in seen:
+                    seen.add(k)
                     out.append(method_view(led, k))
     else:
         for cp in match_classes(led, query):
@@ -2664,6 +2692,8 @@ def diff_ledgers(old, new):
             found.append(f"{short(new['methods'][k]['class'], new['methods'][k]['name'])}: {before} -> {st}")
         elif rank[st] > rank[before] and st in ("missing", "inferred") and before not in ("trivial",):
             lost.append(f"{short(new['methods'][k]['class'], new['methods'][k]['name'])}: {before} -> {st}")
+    for k in set(ost) - set(nst):
+        lost.append(f"{short(old['methods'][k]['class'], old['methods'][k]['name'])}: {ost[k]} -> missing")
     return {
         "gaps closed": [gap_text(old, og[k]) for k in sorted(set(og) - set(ng), key=lambda k: gap_rank(og[k]))],
         "gaps opened": [gap_text(new, ng[k]) for k in sorted(set(ng) - set(og), key=lambda k: gap_rank(ng[k]))],
@@ -2692,6 +2722,18 @@ def changed_ranges(base):
             m = re.search(r"\+(\d+)(?:,(\d+))?", line)
             start, n = int(m.group(1)), int(m.group(2) or 1)
             ranges[path].append((start, start + max(n, 1) - 1))
+    # A brand-new, untracked source file is uncommitted work too: cover the whole file so cmd_check
+    # sees every fn in it. Keep the same crates/launcher scope as the diff above.
+    new = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "*.rs"],
+                         cwd=ROOT, capture_output=True, text=True).stdout
+    for path in new.splitlines():
+        if not path.endswith(".rs") or not (path.startswith("crates/") or path.startswith("launcher/")):
+            continue
+        try:
+            count = len((ROOT / path).read_text(encoding="utf-8").splitlines())
+        except OSError:
+            continue
+        ranges[path].append((1, max(count, 1)))
     return mb.stdout.strip(), ranges
 
 
@@ -2899,8 +2941,7 @@ def cmd_map_check(led, paths):
                 continue
             head, _, last = name.rpartition(".")
             cls_q, meth = (head, last) if head and (last[:1].islower() or last.startswith("<")) else (name, None)
-            q = cls_q.replace(".", "$")
-            cands = [p for p in classes if p.endswith("/" + q) or p.rsplit("/", 1)[-1] == q]
+            cands = match_classes(led, cls_q)
             where_ok = True
             if verdict in ("port", "inline"):
                 file_, _, rest = where.partition("::")
