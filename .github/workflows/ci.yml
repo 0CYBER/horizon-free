@@ -49,7 +49,7 @@ jobs:
   # GitHub's runners take the other pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs
   # read), so both pools work at once. A fork's run starts only after a maintainer approves it, and its code runs on
   # an isolated runner user with no secret and a token that writes nothing. The repository variable SELF_HOSTED_CI
-  # moves this repository's own runs: `all` every job to ours, `light` (the desktop paused) or `off` every job to
+  # moves this repository's own runs: `all` every job to ours, `light` (the CI VPS down) or `off` every job to
   # GitHub's. A fork's pull request sees no repository variable, so no switch can move it off a machine that is off:
   # it waits there until the machine is back (runner-watch.yml opens an issue). On ours the build folder persists
   # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# A Horizon CI runner (labels self-hosted, Linux, X64, horizon-game and the host's name) on a Linux machine of the
-# maintainer's (NixOS: ludodesktop; Ubuntu: playhorizon, a partner's server), as a systemd user service
+# A Horizon CI runner (labels self-hosted, Linux, X64, horizon-game and the host's name) on a Linux machine
+# (playhorizon, a partner's Ubuntu server; NixOS works too), as a systemd user service
 # of the account that holds his Minecraft files, like the Mac mini's runners (docs/release-flow.md). Run it on that
 # machine, as that user:
 #
@@ -16,7 +16,7 @@
 # where it is installed, else Xvfb with Mesa's Vulkan drivers (from nixpkgs on NixOS, from the system elsewhere).
 # HORIZON_SHARED_SOURCE: the imported vanilla data (default ~/horizon-local/shared-local, else
 # ~/code/horizon/.local); RUNNER_JOBS: cargo jobs and harnesses at once (default a third of the threads, at most 8:
-# ludodesktop froze under ~7 cold cargo builds on 2026-10-14, and it is the maintainer's own machine).
+# the maintainer's desktop froze under ~7 cold cargo builds on 2026-10-14).
 # RUNNER_CPUS and RUNNER_MEMORY (GB): the slice's CPU quota and memory cap (default half the threads, two thirds of
 # the memory), for a machine that does nothing else. RUNNER_TOKEN: the registration (or, for uninstall, removal)
 # token, made with gh on another machine, where gh must not be logged in (a machine someone else also runs):
@@ -47,7 +47,7 @@ token() {
 # NixOS has no /bin/bash: the runner's scripts (again after each of its self-updates) get a portable one.
 fix_shebangs() { sed -i '1s|^#!/bin/bash|#!/usr/bin/env bash|' "$dir"/*.sh "$dir"/bin/*.sh; }
 
-# Other machines' parity runs can send harnesses here (tools/parity_hosts.json "desktop": parity.py --worker over
+# Other machines' parity runs can send harnesses here (tools/parity_hosts.json "playhorizon": parity.py --worker over
 # ssh, in horizon-ci.slice). Their vanilla data is the runner checkout's: parity-host/shared-local links to its
 # .local links, so it follows the preparation of the runner's last job.
 parity_host_links() {

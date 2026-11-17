@@ -74,7 +74,7 @@ class OwnRunnerTests(unittest.TestCase):
             # Both labels select a GitHub-hosted Ubuntu runner when our pools are disabled.
             self.assertRegex(value, r"\|\| 'ubuntu-(?:latest|24\.04)' \}\}$", where)
             if "checks" in pools:
-                # The desktop paused: every checks job back to GitHub, the bots stay.
+                # SELF_HOSTED_CI=light: every checks job back to GitHub, the bots stay.
                 self.assertIn("vars.SELF_HOSTED_CI != 'light'", value, where)
         self.assertGreaterEqual(count, 10)
 

@@ -7,18 +7,16 @@ we have to the max") every job that can runs on our own machines, and GitHub's p
 
 | Runner | Machine | Labels | Takes |
 | --- | --- | --- | --- |
-| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the whole merge queue, `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-checks-1`, `vps-checks-2` | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha` | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the whole merge queue, `mod-registry`, `telemetry-server`, `pack load bench` |
 | `vps-light-1`…`-8` | the CI VPS | `horizon-light` | The bots, as playhorizon's light runners below |
 | `playhorizon-light-1`…`-12` | playhorizon (partner's server, 8 vCPU) | `horizon-light`, `playhorizon-light` | The bots that run main's own scripts: `pr labels`, `overlap note`, `cancel-on-close`, `claim command`, `triage command`, `mojang republish`, `nightly build`'s `answer`, and `checks`' `parity-scope` |
 | `playhorizon-ci-1`, `playhorizon-ci-2` | playhorizon | `playhorizon-ci` | Nothing routed since 2026-11-03 (they took `checks` of this repository's own pull requests with the old `SELF_HOSTED_CI=all`) |
-| `playhorizon-horizon`, `ludodesktop-horizon`, `ludodesktop-parity-2` | playhorizon, ludodesktop | `horizon-game` | Parity ([release-flow.md](release-flow.md#the-parity-job)) |
+| `playhorizon-horizon` | playhorizon | `horizon-game` | Parity ([release-flow.md](release-flow.md#the-parity-job)) |
 | `ludovics-mac-mini*` | Mac mini | `horizon-game`, `horizon-parity-main`, `horizon-release`, `horizon-nightly` | Parity, parity-main, macOS builds, releases |
 
-The desktop's runners are declared in the maintainer's NixOS configuration (his private fleet repository,
-`nixos/ludodesktop/horizon-runner.nix`), not installed from here; playhorizon's by `tools/ci/checks-runners.sh`.
-Every persistent checkout (the desktop's `/var/lib/gha/<runner>/horizon`, playhorizon's, the Mac mini's) is kept small by
-[`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) before a job or while the runner is idle; the desktop runs its own copy
-from a `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook in the NixOS configuration.
+ludodesktop (the maintainer's desktop) runs no Horizon CI since 2026-11-17 (his decision): its runners were removed.
+playhorizon's runners are installed by `tools/ci/checks-runners.sh`. Every persistent checkout (playhorizon's, the Mac
+mini's) is kept small by [`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) before a job or while the runner is idle.
 
 ## What stays on GitHub, and why
 
@@ -33,9 +31,8 @@ from a `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook in the NixOS configuration.
   mini.
 - **Main's pushes, and eight of ten pull requests' `verify`** (number ending in 2–9): `checks` runs
   ~100 times an hour (2026-11-03: 21 pushes to main and 76 pull request runs an hour), each with `verify` (10–18
-  minutes of work on GitHub, 11–13 on a desktop runner with a cold build folder; the launcher's checks are one of its steps). Three
-  runners give ~180 runner-minutes an hour: about the fifth of the pull requests they take. Main's pushes also save
-  the Rust cache GitHub's runs of pull requests read. `SELF_HOSTED_CI=all` sends them all to ours.
+  minutes of work on GitHub; the launcher's checks are one of its steps). The CI VPS's two checks runners give ~120
+  runner-minutes an hour. Main's pushes also save the Rust cache GitHub's runs of pull requests read. `SELF_HOSTED_CI=all` sends them all to ours.
 
 ## The merge queue
 
@@ -62,7 +59,7 @@ for):
 | --- | --- | --- |
 | unset (default) | ours | `verify`: ours for pull requests ending in 0 or 1 (forks' included, see Forks) and for the whole merge queue, GitHub's for the other pull requests and main's pushes; the rest ours, forks' pull requests excepted |
 | `all` | ours | ours, every pull request |
-| `light` | ours | GitHub's: the desktop is paused |
+| `light` | ours | GitHub's |
 | `off` | GitHub's | GitHub's: everything back, in one switch |
 
 ```sh
@@ -70,13 +67,13 @@ gh variable set SELF_HOSTED_CI --body light --repo horizon-rust/horizon   # or a
 gh variable delete SELF_HOSTED_CI --repo horizon-rust/horizon             # the default
 ```
 
-Set `light` when the desktop is paused (the maintainer uses it), `off` when playhorizon is down or moves: the bots
-would wait for it. Back to the default when they return.
+It is `light` since 2026-11-17, when the desktop's runners were removed. Set `light` when the CI VPS is down, `off`
+when playhorizon is down or moves: the bots would wait for it. Back to the default when they return.
 
 ## Forks
 
 An approved fork's pull request whose number ends in 0 or 1 runs `verify` on our checks runners (the CI
-VPS, and the desktop when it is on), like this repository's own; the others run on GitHub's. Why: GitHub's pool of 20
+VPS), like this repository's own; the others run on GitHub's. Why: GitHub's pool of 20
 jobs was the only place fork pull requests waited (2026-11-15: 544 runs queued, fork pull requests waiting 7+ hours
 while the VPS's two checks runners sat idle). The jobs no longer check the head repository before they pick our runners.
 
@@ -90,7 +87,7 @@ those runs wait until they are back. `runner-watch.yml` opens an issue when no c
 A fork's pull request is code nobody here wrote. Its own copy of the workflows could name any of our labels, so only the
 checks runners may take it:
 
-1. The checks runners are an isolated system user on the desktop (`gha`: no sudo, no logins, no SSH keys, `/home`
+1. The checks runners are an isolated system user on the CI VPS (`gha`: no sudo, no logins, no SSH keys, `/home`
    invisible, the rest of the system read-only, no GPU or device), and their jobs' tokens write nothing and see no
    secret (`tests/test_ci_runners.py`).
 2. The light runners take main's own scripts only: the bots run on `pull_request_target`, `issue_comment`,
@@ -140,21 +137,6 @@ ssh ludovic@playhorizon 'bash ~/horizon-install/checks-runners.sh status'
   its own rustup home and its own build folder (`CARGO_TARGET_DIR`, outside the checkout). `CARGO_BUILD_JOBS=4`.
 - Python is the host's 3.13 (`ci-shared/bin/python3`); the apt packages the jobs need are installed by the script, so
   the jobs skip their `apt-get`, `setup-python` and Rust cache steps there (`runner.environment == 'github-hosted'`).
-
-## On the desktop
-
-`gha.slice` holds every runner there (parity and checks): CPU and I/O weight 20, 22 of the 24 threads (12 while the
-CPU is at 92 °C or more), memory 24 GB soft / 26 GB hard. Each checks runner has `CARGO_BUILD_JOBS=6`, its own
-build folder (`/var/lib/gha/checks-<n>/target`, kept between jobs, emptied past 30 GB before the runner starts), its
-own rustup and cargo homes, Python 3.13, gh (no login), the libraries the game and GPUI link against, and its own
-Xvfb with Mesa's software Vulkan. They run all the time; the maintainer pauses them when he uses the desktop:
-
-```sh
-ssh desktop 'sudo -n touch /var/lib/gha-control/pause && sudo -n systemctl stop gha-runners.target'   # pause
-ssh desktop 'sudo -n rm -f /var/lib/gha-control/pause && sudo -n systemctl start gha-runners.target' # resume
-```
-
-With the desktop paused, set `SELF_HOSTED_CI=light`, or `checks` waits for it.
 
 ## When our runners are offline
 

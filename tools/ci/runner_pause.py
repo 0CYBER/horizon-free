@@ -37,7 +37,7 @@ GPU_BUSY = int(os.environ.get("GPU_BUSY", 50))
 INTERVAL = int(os.environ.get("INTERVAL", 15))
 RESUME_AFTER = int(os.environ.get("RESUME_AFTER", 300))
 THROTTLE_CPUS = int(os.environ.get("THROTTLE_CPUS", 2))
-# Working, the slice gets half the threads: on all of them ludodesktop's CPU sits at 92 °C through a cargo build.
+# Working, the slice gets half the threads: on all of them the maintainer's desktop sat at 92 °C through a cargo build.
 NORMAL_CPUS = int(os.environ.get("NORMAL_CPUS", max(1, (os.cpu_count() or 2) // 2)))
 INPUT_PAUSE = int(os.environ.get("INPUT_PAUSE", 60))
 IDLE_AFTER = int(os.environ.get("IDLE_AFTER", 900))
@@ -119,7 +119,7 @@ def at_the_screen(input_idle):
 
 def too_hot():
     """The CPU package at TEMP_LIMIT °C or more (coretemp or k10temp), as the median of 5 readings over 2 s: under
-    load it jumps for a second at a time (to 96 °C on ludodesktop at a median of 68 °C), which is no reason to stop."""
+    load it jumps for a second at a time (to 96 °C on a 24-thread desktop at a median of 68 °C), which is no reason to stop."""
     for monitor in Path("/sys/class/hwmon").glob("hwmon*"):
         try:
             if (monitor / "name").read_text().strip() not in ("coretemp", "k10temp"):

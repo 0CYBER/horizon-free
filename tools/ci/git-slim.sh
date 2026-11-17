@@ -42,7 +42,7 @@ fi
 before=$(size_mb)
 before_kb=$(size_kb)
 packs=$(pack_count)
-# One pack at a time, a few threads: the runner's machine is shared (the desktop's CI slice, the Mac mini's builds).
+# One pack at a time, a few threads: the runner's machine is shared (playhorizon's CI slice, the Mac mini's builds).
 git_gc=(git -C "$dir" -c pack.threads="${GIT_SLIM_THREADS:-2}" -c gc.auto=0)
 if [ "$before_kb" -gt $(( max_mb * 1024 )) ]; then
   "${git_gc[@]}" gc --prune=now --quiet

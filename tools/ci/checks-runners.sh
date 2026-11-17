@@ -12,7 +12,7 @@
 #
 # Two kinds of runner, each a systemd user service in ~/.actions-runners/<name>:
 # - horizon-ci-<n> (label playhorizon-ci, CI_RUNNERS of them, default 2): this repository's own verify and launcher
-#   jobs (no workflow routes them here since 2026-11-03: the desktop's horizon-checks runners take them). Each has
+#   jobs (no workflow routes them here since 2026-11-03: the horizon-checks runners take them). Each has
 #   its own work folder, rustup home and cargo target folder (outside the checkout, so the checkout's clean leaves it),
 #   and they share one cargo home (registry and git sources).
 # - horizon-light-<n> (labels playhorizon-light and horizon-light, LIGHT_RUNNERS, default 12): the bots that run main's
