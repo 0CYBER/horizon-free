@@ -49,14 +49,19 @@ def _derived(value, field, binary, mode):
 
 
 def run(binary, resources, mode):
-    with tempfile.TemporaryFile(mode="w+t") as output:
+    # Drain both streams to seekable files, never to an undrained PIPE: a child
+    # that writes more than a pipe buffer to stderr would block forever while
+    # wait4 waits for it to exit. A temp file also keeps the stderr available
+    # for the failure diagnostic without a reader thread.
+    with tempfile.TemporaryFile(mode="w+t") as output, \
+            tempfile.TemporaryFile(mode="w+b") as errors:
         proc = subprocess.Popen([str(binary), str(resources), mode], stdout=output,
-                                stderr=subprocess.PIPE)
+                                stderr=errors)
         _, status, usage = os.wait4(proc.pid, 0)
         proc.returncode = os.waitstatus_to_exitcode(status)
-        _, stderr = proc.communicate()
         if proc.returncode:
-            raise RuntimeError(f"{binary} {mode}: {stderr.decode(errors='replace')}")
+            errors.seek(0)
+            raise RuntimeError(f"{binary} {mode}: " + errors.read().decode(errors="replace"))
         output.seek(0)
         fields = dict(line.rstrip().split("=", 1) for line in output if "=" in line)
     measurements = {
