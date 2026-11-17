@@ -37,6 +37,62 @@ impl Registry {
     }
 }
 
+/// The game's own command, as `snapshot` recorded it before wrappers: its program and
+/// arguments, with the working directory and environment of `command`.
+fn game_snapshot(command: &Command) -> std::io::Result<Option<Command>> {
+    let Some(encoded) = override_value(command, GAME).flatten() else {
+        return Ok(None);
+    };
+    let words: Vec<std::ffi::OsString> = serde_json::from_str(
+        encoded
+            .to_str()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?,
+    )
+    .map_err(std::io::Error::other)?;
+    let image = words
+        .first()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+    let mut game = Command::new(image);
+    game.args(&words[1..]);
+    if let Some(cwd) = command.get_current_dir() {
+        game.current_dir(cwd);
+    }
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => {
+                game.env(key, value);
+            }
+            None => {
+                game.env_remove(key);
+            }
+        }
+    }
+    Ok(Some(game))
+}
+
+/// Shared claims on every unit the game itself will lease when it starts from `executable`.
+/// Windows runs the game from a runtime slot with no holder: the game then only locks
+/// registered units, so the launcher registers (and holds) the ones it computes.
+#[cfg(windows)]
+pub(crate) fn game_units(command: &Command, executable: &Path) -> Result<Vec<Claim>, Error> {
+    let snapshot = game_snapshot(command)?;
+    let selection = horizon_platform::mod_package::selection::LaunchArguments::for_command(
+        snapshot.as_ref().unwrap_or(command),
+    )?;
+    let data = crate::backend::data_dir().canonicalize()?;
+    let cwd = std::path::absolute(command.get_current_dir().unwrap_or(Path::new(".")))?;
+    let units =
+        horizon_platform::mod_package::holder::lease_paths(executable, &selection, &data, &cwd)?;
+    let registry = Registry::open()?;
+    units
+        .into_iter()
+        .map(|(path, _)| {
+            let directory = Dir::open_ambient_dir(path, cap_std::ambient_authority())?;
+            registry.lock(&directory, LockMode::Shared)
+        })
+        .collect()
+}
+
 /// Launcher-owned primitives-in-use; this is not a standalone cleanup safety guarantee.
 pub(crate) fn shared(command: &Command) -> Result<Vec<Claim>, Error> {
     let logs = override_value(command, "HORIZON_HOME").map_or_else(
@@ -51,31 +107,7 @@ pub(crate) fn shared(command: &Command) -> Result<Vec<Claim>, Error> {
             program.is_absolute().then(|| program.parent()).flatten()
         });
     let mut paths = Vec::new();
-    if let Some(encoded) = override_value(command, GAME).flatten() {
-        let words: Vec<std::ffi::OsString> = serde_json::from_str(
-            encoded
-                .to_str()
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?,
-        )
-        .map_err(std::io::Error::other)?;
-        let image = words
-            .first()
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
-        let mut game = Command::new(image);
-        game.args(&words[1..]);
-        if let Some(cwd) = command.get_current_dir() {
-            game.current_dir(cwd);
-        }
-        for (key, value) in command.get_envs() {
-            match value {
-                Some(value) => {
-                    game.env(key, value);
-                }
-                None => {
-                    game.env_remove(key);
-                }
-            }
-        }
+    if let Some(game) = game_snapshot(command)? {
         let selection =
             horizon_platform::mod_package::selection::LaunchArguments::for_command(&game)?;
         paths.push(selection.context.game_dir);

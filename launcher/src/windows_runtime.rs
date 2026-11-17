@@ -68,6 +68,19 @@ fn prepare_in(cmd: &Command, root: &Path) -> io::Result<Option<Guard>> {
     stage(Path::new(source), slot).map(Some)
 }
 
+/// Shared claims on the units the staged game leases when it starts. It runs with no holder
+/// and only locks units already registered, so the slot, its parents and the game folder
+/// (new with the slot) must be registered by the launcher first, and held while it runs.
+pub(crate) fn leases(
+    cmd: &Command,
+) -> Result<Vec<crate::run_leases::Claim>, crate::native_cache::Error> {
+    let Some(slot) = value(cmd, SLOT) else {
+        return Ok(Vec::new());
+    };
+    let game = Path::new(slot).join("game").join(crate::backend::CLIENT);
+    crate::run_leases::game_units(cmd, &game)
+}
+
 fn plain_directory(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
     // A replaced runtime slot or game folder must never redirect cleanup to player data.
@@ -195,6 +208,89 @@ fn in_use_in(source: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_staged_game_finds_every_unit_it_leases_registered() {
+        use horizon_platform::mod_package::{
+            holder, locks::LockMode, runtime_leases::open_directory, runtime_leases::Registry,
+            selection::LaunchArguments,
+        };
+        // A version, a runtime slot and lease files: the child gets a launcher home of its own.
+        const ACTOR: &str = "HORIZON_STAGED_LEASES_TEST_ACTOR";
+        if std::env::var_os(ACTOR).is_none() {
+            let launcher_home = tempfile::tempdir().unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "windows_runtime::tests::the_staged_game_finds_every_unit_it_leases_registered",
+                    "--nocapture",
+                ])
+                .env(ACTOR, "1")
+                .env("HORIZON_LAUNCHER_HOME", launcher_home.path())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stdout}\n{stderr}");
+            assert!(
+                stdout.contains("test result: ok. 1 passed;"),
+                "exact-name child did not run one test:\n{stdout}\n{stderr}"
+            );
+            return;
+        }
+        let data = crate::backend::data_dir();
+        fs::create_dir_all(&data).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let version = format!("lease-slot-{}", std::process::id());
+        let source = crate::backend::version_dir(&version);
+        let resources = source.join(".local/horizon-client/26.3");
+        fs::create_dir_all(&resources).unwrap();
+        fs::copy(
+            Path::new(&std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe"),
+            source.join(crate::backend::CLIENT),
+        )
+        .unwrap();
+        fs::write(source.join(".installed"), b"").unwrap();
+        let mut game = Command::new(source.join(crate::backend::CLIENT));
+        game.current_dir(home.path())
+            .env("HORIZON_HOME", home.path())
+            .arg("--resources")
+            .arg(&resources);
+        crate::run_leases::mark(&mut game, &source);
+        // What Play does: the launch wrap, then the preparation of the final command.
+        let game = crate::launch::wrap(game, &crate::launch::Launch::default());
+        let (game, runtime) = crate::backend::prepare_command(game).unwrap();
+
+        // What the game does at start (`acquire_standalone`): lock each unit, creating none.
+        let data = data.canonicalize().unwrap();
+        let selection = LaunchArguments::for_command(&game).unwrap();
+        let units = holder::lease_paths(
+            Path::new(game.get_program()),
+            &selection,
+            &data,
+            game.get_current_dir().unwrap(),
+        )
+        .unwrap();
+        assert!(units.iter().any(|(unit, _)| unit.ends_with("game")));
+        assert!(units
+            .iter()
+            .any(|(unit, _)| unit.ends_with(".local/horizon-client/26.3")));
+        let registry = Registry::existing(&data).unwrap();
+        let missing: Vec<_> = units
+            .iter()
+            .filter(|(unit, _)| {
+                let directory = open_directory(unit).unwrap();
+                registry.lock(&directory, LockMode::Shared).is_err()
+            })
+            .map(|(unit, _)| unit.display().to_string())
+            .collect();
+        drop(runtime);
+        assert!(
+            missing.is_empty(),
+            "units the game cannot lease: {missing:?}"
+        );
+    }
 
     #[test]
     fn a_program_running_from_the_version_folder_keeps_it_in_use() {
