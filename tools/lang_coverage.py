@@ -180,11 +180,13 @@ def game_rows(directory: Path, codes: set[str],
                 changed.append({"key": key, "english": english[key], "value": entries[key]})
         same = [] if lang.code == "en_us" else sorted(
             key for key in set(entries) & set(english) if entries[key] == english[key])
+        # A blank value is a gap, not a translation (see `unreviewed`), so it never covers its key.
+        translated = sum(1 for key in english if entries.get(key, "").strip())
         rows.append({
             "code": lang.code,
             "path": shown(lang.path),
             "keys": len(entries),
-            "coverage": (len(english) - len(missing)) / len(english),
+            "coverage": translated / len(english),
             "missing": missing,
             "extra": extra,
             "placeholders": changed,

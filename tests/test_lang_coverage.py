@@ -37,7 +37,7 @@ class GameCoverageTests(unittest.TestCase):
         self.assertEqual(row["missing"], ["b"])
         self.assertEqual(row["extra"], ["d"])
         self.assertEqual(row["empty"], ["c"])
-        self.assertAlmostEqual(row["coverage"], 2 / 3)
+        self.assertAlmostEqual(row["coverage"], 1 / 3)  # `c` is blank, so it does not cover its key
         self.assertEqual(row["problem"], "")
 
     def test_a_value_equal_to_english_is_listed_but_never_for_the_reference(self):
