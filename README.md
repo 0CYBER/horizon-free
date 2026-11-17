@@ -65,6 +65,10 @@
 </p>
 
 <p align="center">
+  <a href="https://blacksmith.sh"><img src="docs/media/readme/blacksmith.png" alt="CI powered by Blacksmith" width="220"></a>
+</p>
+
+<p align="center">
   <a href="docs/native-client.md#run-from-a-checkout"><b>Build guide</b></a> ·
   <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
   <a href="GOVERNANCE.md"><b>Governance</b></a> ·
