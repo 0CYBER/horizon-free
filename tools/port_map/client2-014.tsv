@@ -91,7 +91,7 @@ NoticeWithLinkScreen.getNarrationMessage	inline	crates/horizon-client/src/title.
 OutOfMemoryScreen.init	missing		minor: unsure: no out-of-memory screen; Horizon does not handle allocation failures this way
 PauseScreen.added	skip:service		friend list listener on the pause screen (social)
 PauseScreen.init	port	crates/horizon-client/src/game/interface/screens.rs::pause_buttons	button layout; the title is drawn in draw_pause_menu
-PauseScreen.createPauseMenu	port	crates/horizon-client/src/game/interface/screens.rs::pause_buttons	gap: minor: no Mods button; the report bugs, feedback, friends and player reporting icons are all live (icon_active, screens.rs:144-151)
+PauseScreen.createPauseMenu	port	crates/horizon-client/src/game/interface/screens.rs::pause_buttons	gap: minor: no Mods button; report bugs and feedback stay live, friends follows the list, and player reporting is inactive when the integrated server has seen no player besides this one and then shows NO_PLAYERS_TO_REPORT_TOOLTIP (icon_active, screens.rs)
 PauseScreen.getCustomAdditions	port	crates/horizon-client/src/game/interface/screens.rs::Game::pause_screen_additions	the pause_screen_additions tag: one dialog, else minecraft:custom_options, else the server links row
 PauseScreen.addCustomDialogButtons	port	crates/horizon-client/src/game/interface/screens.rs::Game::pause_click	one full-width button in row 3 (id 14), labelled by computeExternalTitle; the server links fallback opens the links screen (id 11)
 PauseScreen.extractRenderState	port	crates/horizon-client/src/game/interface/screens.rs::Game::draw_pause_menu	gap: minor: no draft-report badge; the now-playing song on the pause menu is drawn by music.rs::Game::draw_music_toast, not here

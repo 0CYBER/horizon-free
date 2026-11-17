@@ -701,6 +701,10 @@ pub(super) struct Remote {
     /// (`AbstractClientPlayer.getPlayerInfo` keeps that `PlayerInfo`): its skin
     /// outlives the entry, which NPC plugins remove a moment after spawning.
     level_player_textures: HashMap<i32, horizon_client::skins::Textures>,
+    /// `ClientPacketListener.seenPlayers`: the player-info entries of the
+    /// players whose entity this connection has added. It outlives an entity's
+    /// removal and a dimension change, as vanilla's does.
+    seen_players: std::collections::HashSet<u128>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     pub(super) glowing: std::collections::HashSet<i32>,
@@ -1228,6 +1232,7 @@ impl Game<'_> {
             level_players: HashMap::new(),
             level_player_names: HashMap::new(),
             level_player_textures: HashMap::new(),
+            seen_players: std::collections::HashSet::new(),
             glowing: Default::default(),
             own_invisible: false,
             own_on_fire: false,
@@ -1469,6 +1474,7 @@ impl Game<'_> {
             level_players: HashMap::new(),
             level_player_names: HashMap::new(),
             level_player_textures: HashMap::new(),
+            seen_players: std::collections::HashSet::new(),
             glowing: Default::default(),
             own_invisible: false,
             own_on_fire: false,
@@ -3577,6 +3583,11 @@ impl Game<'_> {
                     r.level_player_textures.remove(&p.id);
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
+                        // ClientLevel.addEntity: a player entity whose
+                        // PlayerInfo the client holds is a seen player.
+                        if r.tab_players.contains_key(&p.uuid) {
+                            r.seen_players.insert(p.uuid);
+                        }
                         // createEntityFromPacket: the player takes the profile of its list entry.
                         match r.players.get(&p.uuid) {
                             Some(name) => r.level_player_names.insert(p.id, name.clone()),
@@ -10540,6 +10551,14 @@ impl Remote {
         }
         let uuid = *self.level_players.get(&id)?;
         Some((uuid, self.level_player_names.get(&id).map(String::as_str)))
+    }
+    /// `ClientPacketListener.getSeenPlayers`: the player-info entries of the
+    /// players this connection has seen, without this client's own profile.
+    pub(super) fn seen_players_other_than_self(&self) -> usize {
+        self.seen_players
+            .iter()
+            .filter(|id| **id != self.profile)
+            .count()
     }
     /// `PlayerInfo.getMessageValidator().updateAndValidate(message)` for `message.sender`.
     fn validate_chat(

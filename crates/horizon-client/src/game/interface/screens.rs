@@ -223,19 +223,40 @@ const ICON_LABELS: [&str; 4] = [
     "gui.friends.open",
     "menu.playerReporting",
 ];
+/// `PauseScreen.createPauseMenu`'s `NO_PLAYERS_TO_REPORT_TOOLTIP`.
+const NO_PLAYERS_TO_REPORT: &str = "menu.playerReporting.no_players";
+/// `PauseScreen.createPauseMenu`'s player reporting icon.
+const PLAYER_REPORTING: usize = 3;
 /// Whether an icon button is active: `reportBugsButton.active =
 /// !dataVersion().isSideSeries()` (26.3 is the `main` series), the feedback
-/// button always, friends when the friends list is shown.
-fn icon_active(icon: usize, friends: bool) -> bool {
+/// button always, friends when the friends list is shown, and player
+/// reporting only when the integrated server has a player besides us.
+fn icon_active(icon: usize, friends: bool, reporting: bool) -> bool {
     match icon {
-        0 | 1 | 3 => true,
+        0 | 1 => true,
         FRIENDS_ICON => friends,
+        PLAYER_REPORTING => reporting,
         _ => false,
     }
 }
-fn pause_icon_focus_ids(friends: bool) -> Vec<u8> {
+/// The icon's tooltip: `NO_PLAYERS_TO_REPORT_TOOLTIP` while player reporting
+/// has nobody to report, the button's own label otherwise.
+fn icon_label(icon: usize, active: bool) -> &'static str {
+    if icon == PLAYER_REPORTING && !active {
+        NO_PLAYERS_TO_REPORT
+    } else {
+        ICON_LABELS[icon]
+    }
+}
+/// `PauseScreen.createPauseMenu`: the integrated server's `seenPlayers`
+/// without this player decide whether player reporting is offered. A remote
+/// server, or a screen built before the player exists, leaves it live.
+fn reporting_active(integrated: bool, has_player: bool, others: usize) -> bool {
+    !integrated || !has_player || others > 0
+}
+fn pause_icon_focus_ids(friends: bool, reporting: bool) -> Vec<u8> {
     (0..4)
-        .filter(|&i| icon_active(i, friends))
+        .filter(|&i| icon_active(i, friends, reporting))
         .map(|i| if i == FRIENDS_ICON { 10 } else { 12 + i as u8 })
         .collect()
 }
@@ -350,6 +371,15 @@ impl Game<'_> {
     pub(super) fn external_server(&self) -> bool {
         self.remote.is_some() && self.integrated.is_none()
     }
+    /// `PauseScreen.createPauseMenu`: with no seen player besides ours, the
+    /// player reporting icon is inactive and says why on hover.
+    fn player_reporting_active(&self) -> bool {
+        let others = self
+            .remote
+            .as_ref()
+            .map_or(0, |r| r.seen_players_other_than_self());
+        reporting_active(self.integrated.is_some(), self.player.is_some(), others)
+    }
     /// What `PauseScreen.init` reads and this screen can see change while it
     /// is open: the connection, a server's links, the custom-additions dialog
     /// and the rows the registered pages add.
@@ -390,6 +420,7 @@ impl Game<'_> {
     }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
         let friends = self.friends_shown();
+        let reporting = self.player_reporting_active();
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -442,10 +473,11 @@ impl Game<'_> {
             }
         }
         for (i, &(x, y, sprite)) in layout.icons.iter().enumerate() {
-            let active = icon_active(i, friends);
+            let active = icon_active(i, friends, reporting);
             let is_focused = (self.pause_focus == Some(10) && i == FRIENDS_ICON)
                 || (self.pause_focus == Some(12 + i as u8));
-            let hover = active && (ui::hovered(self.cursor, x, y, 20.0, 20.0) || is_focused);
+            let hovered = ui::hovered(self.cursor, x, y, 20.0, 20.0);
+            let hover = active && (hovered || is_focused);
             // The icon has no label: name it for controller focus and the
             // control socket's widget tree.
             if i == FRIENDS_ICON {
@@ -476,7 +508,8 @@ impl Game<'_> {
                     widgets::Narratable::named(t("gui.friends.open.narration"), n.rect, active)
                         .hint(t("gui.friends.open.tooltip"))
                 } else {
-                    widgets::Narratable::button(t(key), n.rect, active).hint(t(key))
+                    widgets::Narratable::button(t(key), n.rect, active)
+                        .hint(t(icon_label(i, active)))
                 }
                 .hovered(hover);
             });
@@ -484,11 +517,13 @@ impl Game<'_> {
             // x + width / 2 - 15 / 2 in integer pixels, untinted even
             // when the button is inactive.
             batch.sprite_scaled(atlas, sprite, x + 3.0, y + 3.0, 15.0, 15.0, u32::MAX);
-            if hover {
+            // A disabled widget still shows its tooltip in vanilla; the
+            // reporting icon then says there is nobody to report.
+            if (hovered && (active || i == PLAYER_REPORTING)) || (is_focused && active) {
                 tooltip = Some(if i == FRIENDS_ICON {
                     Text::literal(super::friends::title())
                 } else {
-                    Text::translate(ICON_LABELS[i], &[])
+                    Text::translate(icon_label(i, active), &[])
                 });
             }
         }
@@ -524,8 +559,13 @@ impl Game<'_> {
             // ConfirmLinkScreen.confirmLink(this, CommonLinks...) on the pause screen.
             12 => self.confirm_trusted_link(BUGS_LINK, Screen::Paused),
             13 => self.confirm_trusted_link(feedback_link(), Screen::Paused),
-            // PauseScreen: `new SocialInteractionsScreen(this)`.
-            15 => self.open_social(true),
+            // PauseScreen: `new SocialInteractionsScreen(this)`. A stale
+            // focus does not press it once the seen players are gone.
+            15 => {
+                if self.player_reporting_active() {
+                    self.open_social(true);
+                }
+            }
             30 => self.open_split_settings(),
             id @ ADDED_PAGES.. => {
                 let page = usize::from(id - ADDED_PAGES);
@@ -579,6 +619,8 @@ impl Game<'_> {
                 &fallback
             }
         };
+        let reporting = self.player_reporting_active();
+        let friends_shown = self.friends_shown();
         let icons = layout.icons;
         let hit = layout
             .buttons
@@ -588,13 +630,14 @@ impl Game<'_> {
             .map(|b| b.4)
             .or_else(|| {
                 // The report bugs, feedback and player reporting icons (ids 12, 13 and 15).
-                [0, 1, 3]
+                [0, 1, PLAYER_REPORTING]
                     .into_iter()
+                    .filter(|&i| icon_active(i, friends_shown, reporting))
                     .find(|&i| ui::hovered(self.cursor, icons[i].0, icons[i].1, 20.0, 20.0))
                     .map(|i| 12 + i as u8)
             })
             .or_else(|| {
-                (self.friends_shown()
+                (friends_shown
                     && ui::hovered(
                         self.cursor,
                         icons[FRIENDS_ICON].0,
@@ -639,7 +682,8 @@ impl Game<'_> {
             .map(|b| b.4)
             .collect();
         let friends = self.friends_shown();
-        active_ids.extend(pause_icon_focus_ids(friends));
+        let reporting = self.player_reporting_active();
+        active_ids.extend(pause_icon_focus_ids(friends, reporting));
         if active_ids.is_empty() {
             return Ok(());
         }
@@ -684,8 +728,9 @@ impl Game<'_> {
                     .map(|b| (b.4, b.0, b.1, b.2))
                     .collect();
                 let friends = self.friends_shown();
+                let reporting = self.player_reporting_active();
                 for (i, &(x, y, _)) in icons.iter().enumerate() {
-                    if icon_active(i, friends) {
+                    if icon_active(i, friends, reporting) {
                         let id = if i == FRIENDS_ICON { 10 } else { 12 + i as u8 };
                         rects.push((id, x, y, 20.0));
                     }
@@ -1038,8 +1083,8 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ADDED_PAGES, SPLIT_SETTINGS, Screen, death_buttons, pause_buttons, pause_icon_focus_ids,
-        pause_icons,
+        ADDED_PAGES, PLAYER_REPORTING, SPLIT_SETTINGS, Screen, death_buttons, icon_label,
+        pause_buttons, pause_icon_focus_ids, pause_icons, reporting_active,
     };
 
     #[test]
@@ -1135,15 +1180,36 @@ mod tests {
     fn pause_icons_report_bugs_and_feedback_are_active_like_vanilla() {
         use super::{FRIENDS_ICON, icon_active};
         // PauseScreen.createPauseMenu: the bug and feedback buttons are live,
-        // friends follows its list, player reporting opens the social screen.
-        assert!(icon_active(0, false) && icon_active(1, false) && icon_active(3, false));
-        assert!(icon_active(FRIENDS_ICON, true) && !icon_active(FRIENDS_ICON, false));
+        // friends follows its list, player reporting follows the seen players.
+        assert!(icon_active(0, false, true) && icon_active(1, false, true));
+        assert!(icon_active(FRIENDS_ICON, true, false) && !icon_active(FRIENDS_ICON, false, false));
+        assert!(icon_active(PLAYER_REPORTING, false, true));
+        assert!(!icon_active(PLAYER_REPORTING, true, false));
     }
 
     #[test]
     fn pause_keyboard_focus_includes_the_active_icon_buttons() {
-        assert_eq!(pause_icon_focus_ids(false), [12, 13, 15]);
-        assert_eq!(pause_icon_focus_ids(true), [12, 13, 10, 15]);
+        assert_eq!(pause_icon_focus_ids(false, true), [12, 13, 15]);
+        assert_eq!(pause_icon_focus_ids(true, true), [12, 13, 10, 15]);
+        assert_eq!(pause_icon_focus_ids(true, false), [12, 13, 10]);
+    }
+
+    /// `PauseScreen.createPauseMenu`: player reporting is inactive when the
+    /// integrated server has seen nobody but this player, and its tooltip then
+    /// says `menu.playerReporting.no_players`.
+    #[test]
+    fn player_reporting_follows_the_seen_players() {
+        assert!(!reporting_active(true, true, 0));
+        assert!(reporting_active(true, true, 1));
+        // No player yet: createPauseMenu skips the check.
+        assert!(reporting_active(true, false, 0));
+        // A remote server: the seen players are not the integrated server's.
+        assert!(reporting_active(false, true, 0));
+        assert_eq!(
+            icon_label(PLAYER_REPORTING, false),
+            "menu.playerReporting.no_players"
+        );
+        assert_eq!(icon_label(PLAYER_REPORTING, true), "menu.playerReporting");
     }
 
     #[test]
