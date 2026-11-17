@@ -66,3 +66,38 @@ class LinuxImportsTests(unittest.TestCase):
                 for lib in ("libasound.so.2", "libudev.so.1"):
                     self.assertFalse(self.check_binary(loader, [lib], musl=musl, server=True))
                 self.assertFalse(self.check_binary(loader, [], musl=musl, runpath="/nix/store/libs"))
+
+
+class MalformedBinaryTests(unittest.TestCase):
+    def check_bytes(self, data, name="program"):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / name
+            path.write_bytes(data)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                verdict = check_imports.check(path)
+            return verdict, out.getvalue(), err.getvalue()
+
+    def test_malformed_pe_is_reported_not_raised(self):
+        # MZ magic but no PE signature: pe_imports raises ValueError("not a PE file").
+        verdict, out, err = self.check_bytes(b"MZ" + b"\0" * 128, "not-a-pe.exe")
+        self.assertFalse(verdict)
+        self.assertIn("not a PE file", err)
+        self.assertIn("not-a-pe.exe", err)
+
+    def test_malformed_elf_is_reported_not_raised(self):
+        # ELF magic but a header too short for the program-header fields.
+        verdict, out, err = self.check_bytes(b"\x7fELF\x02\x01\x01")
+        self.assertFalse(verdict)
+        self.assertIn("program", err)
+
+    def test_one_malformed_binary_does_not_abort_the_aggregate(self):
+        # main() builds all verdicts eagerly; one bad file must not stop the rest.
+        with tempfile.TemporaryDirectory() as folder:
+            bad = Path(folder) / "bad.exe"
+            bad.write_bytes(b"MZ" + b"\0" * 128)
+            good = Path(folder) / "good"
+            good.write_bytes(elf("/lib64/ld-linux-x86-64.so.2", []))
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                verdicts = [check_imports.check(p) for p in (bad, good)]
+        self.assertEqual(verdicts, [False, True])

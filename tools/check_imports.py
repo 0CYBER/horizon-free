@@ -122,24 +122,31 @@ def elf_needs(data):
 def check(path, server=False, musl=False):
     data = Path(path).read_bytes()
     problems = []
-    if data[:2] == b"MZ":
-        if musl:
-            problems.append("expected a musl ELF binary, got a Windows executable")
-        names = pe_imports(data)
-        problems += [f"imports {n}, which Windows does not ship" for n in names if not windows_allowed(n)]
-        summary = ", ".join(sorted(set(n.lower() for n in names)))
-    else:
-        interpreter, needed, runpath = elf_needs(data)
-        loader = MUSL_LOADER if musl else LINUX_LOADER
-        libraries = MUSL_SYSTEM if musl else LINUX_SYSTEM
-        # The desktop musl build must be dynamic: GPU and window libraries use dlopen.
-        if interpreter != loader and (musl or interpreter is not None):
-            problems.append(f"loader is {interpreter}, not {loader}")
-        problems += [f"needs {n}, which not every distribution has" for n in needed if n not in libraries]
-        if server:
-            problems += [f"needs {n}, which a server may not have" for n in needed if n in LINUX_DESKTOP_ONLY]
-        problems += [f"has a run path to {p}" for p in runpath if "/nix/store" in p]
-        summary = f"{interpreter}; " + ", ".join(needed)
+    try:
+        if data[:2] == b"MZ":
+            if musl:
+                problems.append("expected a musl ELF binary, got a Windows executable")
+            names = pe_imports(data)
+            problems += [f"imports {n}, which Windows does not ship" for n in names if not windows_allowed(n)]
+            summary = ", ".join(sorted(set(n.lower() for n in names)))
+        else:
+            interpreter, needed, runpath = elf_needs(data)
+            loader = MUSL_LOADER if musl else LINUX_LOADER
+            libraries = MUSL_SYSTEM if musl else LINUX_SYSTEM
+            # The desktop musl build must be dynamic: GPU and window libraries use dlopen.
+            if interpreter != loader and (musl or interpreter is not None):
+                problems.append(f"loader is {interpreter}, not {loader}")
+            problems += [f"needs {n}, which not every distribution has" for n in needed if n not in libraries]
+            if server:
+                problems += [f"needs {n}, which a server may not have" for n in needed if n in LINUX_DESKTOP_ONLY]
+            problems += [f"has a run path to {p}" for p in runpath if "/nix/store" in p]
+            summary = f"{interpreter}; " + ", ".join(needed)
+    except (ValueError, struct.error, UnicodeError, IndexError) as error:
+        # A file with a valid-looking magic but a broken structure is one bad
+        # binary, not a reason to abort the whole gate: report it as this file's
+        # problem and let main() finish aggregating the other binaries.
+        print(f"  {path} {error}", file=sys.stderr)
+        return False
     print(f"{path}: {summary}")
     for problem in problems:
         print(f"  {path} {problem}", file=sys.stderr)
