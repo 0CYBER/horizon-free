@@ -300,8 +300,18 @@ impl Cull {
     pub fn early(&self) -> bool {
         self.depth_test == DepthTest::Early
     }
-    /// `color` is the world pass's colour format.
-    pub fn new(device: &wgpu::Device, color: wgpu::TextureFormat, depth_test: DepthTest) -> Self {
+    /// `color` is the world pass's colour format. `None` where the device will not
+    /// make the pass, the error caught rather than raised (a raised error is
+    /// fatal): a driver can refuse it while `wgpu::Limits` promise the storage
+    /// blocks it binds, as Mesa's r600 OpenGL driver reports no vertex shader
+    /// storage blocks at all (#17994).
+    pub fn new(
+        device: &wgpu::Device,
+        color: wgpu::TextureFormat,
+        depth_test: DepthTest,
+    ) -> Option<Self> {
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
@@ -402,7 +412,12 @@ impl Cull {
             multiview_mask: None,
             cache: None,
         });
-        Self {
+        let internal = pollster::block_on(internal.pop());
+        if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
+            log::warn!("Horizon renderer: occlusion culling unavailable ({e})");
+            return None;
+        }
+        Some(Self {
             pipeline,
             layout,
             group: None,
@@ -444,7 +459,7 @@ impl Cull {
             hidden: ([0; 2], 1.0),
             always: false,
             min_sections: 0,
-        }
+        })
     }
 
     /// Start a frame: take in the results that came back, and tell whether
@@ -883,5 +898,56 @@ mod tests {
         info.driver_info = "Mesa 26.2.3-arch1.1".into();
         info.backend = wgpu::Backend::Vulkan;
         assert!(!is_nouveau(&info));
+    }
+
+    /// A device whose storage buffers cannot hold the pass's bindings gets no pass
+    /// rather than a panic (#17994). What it proves is the caught refusal and the
+    /// `None`, not the way r600 refused: the driver there links no pipeline at all
+    /// while its limits promise the bindings, which only a driver that refuses
+    /// reproduces.
+    #[test]
+    fn a_device_short_of_storage_buffers_gets_no_culling_pass() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+        // Where the device has the storage buffers the pass is made, so the
+        // refusal below is the shortfall and not something else on this machine.
+        // An adapter that refuses the pass with its own limits (the r600 case)
+        // leaves that half unproven instead of failing the test.
+        let (device, _queue) = crate::gfx::test_gpu::device(&adapter);
+        if Cull::new(
+            &device,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            DepthTest::InShader,
+        )
+        .is_none()
+        {
+            eprintln!("skipped: the adapter does not make the pass with its own limits");
+            return;
+        }
+        drop(device);
+        // The device is asked for two storage buffers per stage: the pass binds
+        // three to its fragment stage and two to its vertex stage, so its layout
+        // cannot be made.
+        let limits = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 2,
+            ..Default::default()
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: limits,
+                ..Default::default()
+            }))
+            .expect("the device with two storage buffers per stage");
+        assert!(
+            Cull::new(
+                &device,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                DepthTest::InShader
+            )
+            .is_none(),
+            "the pass is sidelined where the device is short of storage buffers"
+        );
     }
 }

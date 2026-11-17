@@ -4227,13 +4227,13 @@ impl Renderer {
                 Ok("shader") => cull::DepthTest::InShader,
                 _ => depth_test,
             })
-            .map(|depth_test| {
-                let mut cull = cull::Cull::new(&device, frame_format, depth_test);
+            .and_then(|depth_test| {
+                let mut cull = cull::Cull::new(&device, frame_format, depth_test)?;
                 cull.always = cull_env.as_deref() == Ok("all");
                 if !cull.always && adapter_info.backend == wgpu::Backend::Metal {
                     cull.min_sections = cull::TILED_MIN_SECTIONS;
                 }
-                cull
+                Some(cull)
             });
         let depth = Self::depth(&device, &config);
         let world_post = world_post::Post::new(&device, frame_format);
