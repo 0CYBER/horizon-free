@@ -12,6 +12,12 @@ file itself.
 A Nightly carries a copy of its build's `sdk.json` in its own signed sums. The launcher learns which build a game is
 from the copy in that game's release, and keeps the answer, so it is known offline afterwards.
 
+This describes the restored publication contract, not a claim that every main commit already has an SDK.
+Publication follows code-owner review and green checks/parity on the exact main SHA. A build without its signed,
+complete `sdk-<build id>` release is unavailable for native builds; the launcher does not rebuild the game to fill
+the gap. Maintainers can exercise the complete route without publishing with
+`gh workflow run prebuilt-game.yml --ref main` (dry run by default).
+
 ## Which slices a build needs
 
 The launcher fetches only the compiled slices the instance's mods need, decided once for the whole set of enabled

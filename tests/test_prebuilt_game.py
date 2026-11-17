@@ -740,3 +740,133 @@ class SmokeStartTests(unittest.TestCase):
                 environment = run.call_args.kwargs["env"]
                 for key in ("HORIZON_HOME", "HORIZON_LAUNCHER_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
                     self.assertTrue(Path(environment[key]).is_relative_to(root))
+
+
+class PublicationGateTests(unittest.TestCase):
+    def test_only_the_exact_green_main_sha_passes_all_publication_gates(self):
+        from tools import release_train as train
+        with patch.object(prebuilt_game, "head", return_value=COMMIT), \
+                patch.object(prebuilt_game, "run") as git, \
+                patch.object(train, "passed_on", return_value=True) as passed, \
+                patch.object(train, "open_blockers", return_value=[]), \
+                patch.dict(os.environ, {"RELEASES_PAUSED": ""}):
+            prebuilt_game.authorize(COMMIT)
+            self.assertEqual([call.args for call in passed.call_args_list],
+                             [("checks", COMMIT), ("parity-main", COMMIT)])
+            self.assertEqual(git.call_args.args[0],
+                             ["git", "merge-base", "--is-ancestor", COMMIT, "refs/remotes/origin/main"])
+            for sha in ("main", "c" * 7, "d" * 40):
+                with self.subTest(sha=sha), self.assertRaisesRegex(SystemExit, "full lowercase"):
+                    prebuilt_game.authorize(sha)
+            for denied in ("checks", "parity-main"):
+                with patch.object(train, "passed_on", side_effect=lambda workflow, _: workflow != denied), \
+                        self.assertRaisesRegex(SystemExit, denied):
+                    prebuilt_game.authorize(COMMIT)
+            with patch.dict(os.environ, {"RELEASES_PAUSED": "1"}), \
+                    self.assertRaisesRegex(SystemExit, "PAUSED"):
+                prebuilt_game.authorize(COMMIT)
+            with patch.object(train, "open_blockers", return_value=[42]), \
+                    self.assertRaisesRegex(SystemExit, "42"):
+                prebuilt_game.authorize(COMMIT)
+
+
+class PublicationInventoryTests(unittest.TestCase):
+    def test_real_slice_archives_bind_host_side_compiler_and_source_patch_bytes(self):
+        from tools.ci.nightly import SDK_ARCHIVES, SDK_LEGS
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, dist = root / "source", root / "dist"
+            source.mkdir()
+            dist.mkdir()
+            for name, text in {
+                    "Cargo.toml": "[patch.crates-io]\nfix={path='third_party/fix'}\n",
+                    "third_party/fix/Cargo.toml": "[package]\nname='fix'\nversion='0.1.0'\n",
+                    "third_party/fix/src/lib.rs": "pub fn fixed() {}\n",
+                    "tools/ci/rust-version": "1.99.1\n",
+                    "crates/horizon-mod-package/src/sdk/package-format": "6\n"}.items():
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
+            git("init", "-q")
+            git("add", ".")
+            git("-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-qm", "source fixture")
+            commit = git("rev-parse", "HEAD")
+            packages = {}
+            for target, suffix in SDK_LEGS:
+                out = root / f"{target}{suffix}"
+                out.mkdir()
+                patches = prebuilt_game.carry_patches(source, out)
+                for name in ("bin/program", "deps/metadata.rmeta"):
+                    (out / name).parent.mkdir(parents=True, exist_ok=True)
+                    (out / name).write_bytes(name.encode())
+                files = {path.relative_to(out).as_posix(): prebuilt_game.sha256(path)
+                         for path in out.rglob("*") if path.is_file()}
+                identity = {
+                    "commit": commit, "target": target, "side": "server" if suffix else "client",
+                    "profile": "release", "package_format": 6,
+                    "rustc": f"release: 1.99.1\nhost: {target}",
+                    "registry_patches": patches,
+                    "patch_files": {name: digest for name, digest in files.items() if name.startswith("patches/")},
+                    "files": files,
+                    "slices": {"runtime": [prebuilt_game.IDENTITY, "bin/program"], "api": ["deps/metadata.rmeta"]},
+                }
+                (out / prebuilt_game.IDENTITY).write_text(json.dumps(identity))
+                packages[target, suffix] = out
+            def repack(target, suffix):
+                out = packages[target, suffix]
+                identity = json.loads((out / prebuilt_game.IDENTITY).read_bytes())
+                for kind, names in prebuilt_game.archives(out, identity["slices"]).items():
+                    prebuilt_game.tar_xz(out, names, dist / f"{kind}-{target}{suffix}.tar.xz")
+            for target, suffix in SDK_LEGS:
+                repack(target, suffix)
+            for name in ("api-source.tar.xz", "build-data.tar.xz", "surface.json"):
+                (dist / name).write_bytes(name.encode())
+            def reindex():
+                index = {"build": {"commit": commit}, "package_format": 6, "toolchain": {"rust": "1.99.1"},
+                         "assets": {name: {"sha256": prebuilt_game.sha256(dist / name),
+                                          "size": (dist / name).stat().st_size} for name in SDK_ARCHIVES}}
+                (dist / "sdk.json").write_text(json.dumps(index))
+            target, suffix = SDK_LEGS[0]
+            out = packages[target, suffix]
+            original = (out / prebuilt_game.IDENTITY).read_bytes()
+            with patch.object(prebuilt_game, "ROOT", source):
+                reindex()
+                prebuilt_game.validate_release(dist, commit)
+                asset = dist / "surface.json"
+                asset.write_bytes(b"changed after indexing")
+                with self.assertRaisesRegex(SystemExit, "checksum mismatch"):
+                    prebuilt_game.validate_release(dist, commit)
+                reindex()
+                (dist / "extra").write_bytes(b"extra")
+                with self.assertRaisesRegex(SystemExit, "extra"):
+                    prebuilt_game.validate_release(dist, commit)
+                (dist / "extra").unlink()
+                absent = dist / "api-source.tar.xz"
+                contents = absent.read_bytes()
+                absent.unlink()
+                with self.assertRaisesRegex(SystemExit, "missing"):
+                    prebuilt_game.validate_release(dist, commit)
+                absent.write_bytes(contents)
+                for field, value in (("commit", "a" * 40), ("target", "aarch64-apple-darwin"),
+                                     ("side", "server"), ("rustc", "release: 1.99.0")):
+                    identity = json.loads(original)
+                    identity[field] = value
+                    (out / prebuilt_game.IDENTITY).write_text(json.dumps(identity))
+                    repack(target, suffix)
+                    reindex()
+                    with self.subTest(field=field), self.assertRaisesRegex(SystemExit, "wrong build"):
+                        prebuilt_game.validate_release(dist, commit)
+                (out / prebuilt_game.IDENTITY).write_bytes(original)
+                changed = out / "patches/fix/src/lib.rs"
+                changed.write_text("pub fn changed() {}\n")
+                identity = json.loads(original)
+                # Even a self-consistent compiler inventory cannot replace the committed patch bytes.
+                identity["files"]["patches/fix/src/lib.rs"] = prebuilt_game.sha256(changed)
+                (out / prebuilt_game.IDENTITY).write_text(json.dumps(identity))
+                repack(target, suffix)
+                reindex()
+                with self.assertRaisesRegex(SystemExit, "patch bytes"):
+                    prebuilt_game.validate_release(dist, commit)

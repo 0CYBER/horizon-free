@@ -131,14 +131,14 @@ def tracked_blobs(root: Path, commit: str, paths: tuple[str, ...] = ()):
     it has that is not committed. Links are left out, as the launcher's download leaves them out."""
     # `git archive` converts line endings as a checkout would (core.autocrlf, core.eol); both are turned off so the
     # bytes are the commit's on every runner.
-    process = subprocess.Popen(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar",
-                                commit, *(["--", *paths] if paths else [])],
-                               cwd=root, stdout=subprocess.PIPE)
-    with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
+    with subprocess.Popen(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar",
+                           commit, *(["--", *paths] if paths else [])],
+                          cwd=root, stdout=subprocess.PIPE) as process, process.stdout as stream, \
+            tarfile.open(fileobj=stream, mode="r|") as archive:
         for member in archive:
             if member.isfile():
                 yield member.name, archive.extractfile(member).read()
-    if process.wait() != 0:
+    if process.returncode != 0:
         sys.exit(f"git archive {commit} failed in {root}")
 
 
@@ -500,7 +500,7 @@ def carry_patches(staged: Path, out: Path) -> dict:
             shutil.copytree(source, destination, symlinks=True)
             if any(path.is_symlink() for path in destination.rglob("*")):
                 raise ValueError("copied game patch contains a symlink")
-            spec["path"] = str(destination.relative_to(out))
+            spec["path"] = destination.relative_to(out).as_posix()
     # This deliberately is not the game's buildable workspace manifest.
     lines = []
     for registry, entries in patches.items():
@@ -885,6 +885,104 @@ def index(dist: Path, nightly: str | None, previous: tuple[str, Path] | None = N
          *(["--previous", previous[0], str(previous[1])] if previous else [])], cwd=ROOT)
 
 
+def authorize(commit: str) -> None:
+    """Publication requires this exact main commit's successful required push runs, not a nearby green head."""
+    if __package__:
+        from . import release_train as train
+    else:
+        import release_train as train
+
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or head() != commit:
+        sys.exit("SDK publication requires the checkout's full lowercase commit SHA")
+    run(["git", "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"], cwd=ROOT)
+    for workflow in ("checks", "parity-main"):
+        if not train.passed_on(workflow, commit):
+            sys.exit(f"SDK publication refused: {workflow} has not passed on main at {commit}")
+    if os.environ.get("RELEASES_PAUSED") == "1":
+        sys.exit("SDK publication refused: RELEASES_PAUSED is set")
+    if blockers := train.open_blockers():
+        sys.exit(f"SDK publication refused: release-blocker issues {blockers} are open")
+
+
+def validate_release(dist: Path, commit: str) -> None:
+    """Check every compiled slice's exact identity and inventory before signing. Never execute archive contents."""
+    sys.path.insert(0, str(ROOT))
+    from tools.ci.nightly import SDK_ARCHIVES, SDK_LEGS
+
+    expected = set(SDK_ARCHIVES) | {"sdk.json"}
+    actual = {path.name for path in dist.iterdir()}
+    if actual != expected or any(not path.is_file() or path.is_symlink() for path in dist.iterdir()):
+        sys.exit(f"SDK assets differ: missing {sorted(expected - actual)}, extra {sorted(actual - expected)}")
+    index = json.loads((dist / "sdk.json").read_bytes())
+    rust = (ROOT / "tools/ci/rust-version").read_text().strip()
+    if (index.get("build", {}).get("commit") != commit or index.get("package_format") != package_format(ROOT)
+            or index.get("toolchain", {}).get("rust") != rust or set(index.get("assets", {})) != set(SDK_ARCHIVES)):
+        sys.exit("SDK index does not name this exact build, toolchain, package format and asset set")
+    for name, record in index["assets"].items():
+        path = dist / name
+        if record["size"] != path.stat().st_size or record["sha256"] != sha256(path):
+            sys.exit(f"SDK index checksum mismatch: {name}")
+    patches = tomllib.loads((ROOT / "Cargo.toml").read_text()).get("patch", {})
+    patch_paths = tuple(spec["path"] for entries in patches.values() for spec in entries.values())
+    patch_files = {}
+    for name, data in tracked_blobs(ROOT, commit, patch_paths) if patch_paths else ():
+        source = next(path for path in patch_paths if name.startswith(path.rstrip("/") + "/"))
+        patch_files[f"patches/{Path(source).name}/{name[len(source.rstrip('/')) + 1:]}"] = hashlib.sha256(data).hexdigest()
+    for entries in patches.values():
+        for spec in entries.values():
+            spec["path"] = f"patches/{Path(spec['path']).name}"
+    for target, suffix in SDK_LEGS:
+        files = {}
+        identity = None
+        by_slice = {}
+        manifest = None
+        for kind in ("runtime", "api", "engine"):
+            archive = dist / f"{kind}-{target}{suffix}.tar.xz"
+            by_slice[kind] = set()
+            with tarfile.open(archive, "r:xz") as tar:
+                for member in tar:
+                    name = member.name.removeprefix("./")
+                    if member.isdir():
+                        continue
+                    if (not member.isfile() or name in files or name.startswith("/") or ".." in Path(name).parts
+                            or "\\" in name or ":" in name):
+                        sys.exit(f"{archive.name}: unsafe or duplicate member {name}")
+                    by_slice[kind].add(name)
+                    stream = tar.extractfile(member)
+                    if name == IDENTITY:
+                        if kind != "runtime":
+                            sys.exit(f"{archive.name}: identity is not in the runtime slice")
+                        identity = json.load(stream)
+                        files[name] = None
+                    else:
+                        if name == "Cargo.toml":
+                            manifest = tomllib.loads(stream.read().decode())
+                            stream.seek(0)
+                        digest = hashlib.sha256()
+                        for chunk in iter(lambda: stream.read(1 << 20), b""):
+                            digest.update(chunk)
+                        files[name] = digest.hexdigest()
+        side = "server" if suffix else "client"
+        if (identity is None or identity.get("commit") != commit or identity.get("target") != target
+                or identity.get("side") != side or identity.get("profile") != PROFILE
+                or identity.get("package_format") != package_format(ROOT)
+                or f"release: {rust}" not in identity.get("rustc", "").splitlines()
+                or f"host: {target}" not in identity.get("rustc", "").splitlines()):
+            sys.exit(f"SDK {target}/{side}: wrong build, host, side, profile, layout or compiler")
+        if identity.get("registry_patches") != patches or identity.get("patch_files") != patch_files:
+            sys.exit(f"SDK {target}/{side}: registry patches differ from the exact source commit")
+        if manifest != ({"patch": patches} if patches else {}):
+            sys.exit(f"SDK {target}/{side}: resolution manifest differs from the exact registry patches")
+        for kind in ("runtime", "api"):
+            if by_slice[kind] != set(identity.get("slices", {}).get(kind, [])):
+                sys.exit(f"SDK {target}/{side}: {kind} slice membership differs from its identity")
+        if {name: digest for name, digest in files.items() if name != IDENTITY} != identity.get("files"):
+            sys.exit(f"SDK {target}/{side}: slice contents differ from their compiler/patch inventory")
+        if any(files.get(name) != digest for name, digest in patch_files.items()):
+            sys.exit(f"SDK {target}/{side}: patch bytes differ from the exact source commit")
+    print(f"SDK {commit}: complete exact-build assets, host/side/toolchain and patch inventories checked")
+
+
 # Windows refuses a DLL past 65,535 exported names at link time. `exports` warns past 80% of that and fails past 90%, so
 # a growing export list stops a package build with room left to cut it.
 EXPORT_LIMIT = 65_535
@@ -953,7 +1051,18 @@ def main() -> None:
     index_parser.add_argument("--nightly", help="the Nightly name that ships this build")
     index_parser.add_argument("--previous", nargs=2, metavar=("BUILD", "DIFF"),
                               help="the SDK published before this one, and the surface diff against it")
+    authorize_parser = commands.add_parser("authorize")
+    authorize_parser.add_argument("commit")
+    validate_parser = commands.add_parser("validate-release")
+    validate_parser.add_argument("dist", type=Path)
+    validate_parser.add_argument("commit")
     args = parser.parse_args()
+    if args.command == "authorize":
+        authorize(args.commit)
+        return
+    if args.command == "validate-release":
+        validate_release(args.dist.resolve(), args.commit)
+        return
     if args.command == "build":
         build(args.out.resolve(), args.server)
     elif args.command == "exports":

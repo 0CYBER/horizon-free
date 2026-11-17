@@ -5,6 +5,9 @@
 //! --bins -p horizon-prepare -p horizon-server), the exporters horizon-prepare compiles, its sources (the launcher compares
 //! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
 //! from their own copy. .github/workflows/release.yml makes the release folders with it.
+//! First build the shared wasm standard library beside the programs with
+//! `cargo run --locked -p cargo-horizon-mod -- wasm-std PROGRAM_FOLDER/horizon-wasm-std.wasm`.
+//! Both package routes require and copy it; preflight never silently omits it.
 //!
 //! `package-server ENGINE OUTDIR`: a server folder (docs/server.md): the server build of the game
 //! (`cargo build --release -p horizon-game --no-default-features`, without sound or controllers)
@@ -17,12 +20,11 @@
 //! into every size the platforms and the website use, and packs `packaging/icons/horizon.ico`
 //! and `horizon.icns`. `docs/media/brand/README.md` lists what goes where.
 //!
-//! `mixins-tool release | patch SOURCE | identity TARGET`: what
-//! `.github/workflows/prebuilt-mixins-tool.yml` needs to build the horizon-mixins tool the launcher
-//! downloads. `release` prints the release's tag, the pinned commit and its source archive as
-//! `name=value` lines; `patch` applies the carried patch to an unpacked source, with the applier
-//! the launcher uses for its own source build; `identity` prints the lines the launcher checks in
-//! the archive's `identity.txt`.
+//! `mixins-tool release | patch SOURCE | identity TARGET`: the pinned horizon-mixins tool's
+//! delivery contract. `release` prints its tag, pinned commit and source archive as `name=value`
+//! lines; `patch` applies the carried patch to an unpacked source with the same applier as the
+//! launcher's source build; `identity` prints the lines checked in a prebuilt's `identity.txt`.
+//! The unsigned prebuilt-tool publishing workflow is deliberately not enabled.
 //! `sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]`: writes `DIST/sdk.json`,
 //! the mod SDK's index, over the release assets in DIST (`tools/prebuilt_game.py index` calls it),
 //! then reads it back and checks every asset against it. `--previous` names the SDK published

@@ -167,10 +167,15 @@ class UntrustedBuildTests(unittest.TestCase):
 
     def test_an_untrusted_build_never_runs_on_the_release_runner(self):
         runs_on = [line for line in self.game.splitlines() if "runs-on:" in line]
-        self.assertEqual(len(runs_on), 2)
+        self.assertEqual(len(runs_on), 3)
+        # The host-independent wasm member is built on a credential-free hosted Linux runner.
+        hosted = [line for line in runs_on if line.strip() == "runs-on: ubuntu-22.04"]
+        self.assertEqual(len(hosted), 1)
         # The nightly's own runner: never the release runner, and never behind pull requests' parity queue.
         nightly_runner = "fromJSON('[\"self-hosted\", \"macOS\", \"horizon-nightly\"]')"
         for line in runs_on:
+            if line in hosted:
+                continue
             self.assertIn(f"inputs.trusted && vars.MAC_RUNNER || {nightly_runner}", line)
 
     def test_a_trusted_build_never_reads_the_shared_sccache(self):
@@ -278,7 +283,7 @@ class SdkPairTests(unittest.TestCase):
                 nightly.build_set(nightly.Ref("main", "a" * 40, T), [], [], "2026-11-11", True, False)
             push.assert_not_called()
 
-    def test_publication_checks_fresh_inventory_and_leaves_upstream_unchanged(self):
+    def test_publication_checks_fresh_inventory_for_the_current_repository(self):
         with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}), \
                 mock.patch.object(nightly, "ready_sdk_shas", side_effect=[{"a" * 40}, set()]) as inventory, \
                 mock.patch.object(nightly, "published_index") as index:
@@ -287,10 +292,12 @@ class SdkPairTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "publication refused"):
                 nightly.require_sdk("a" * 40)
             self.assertEqual(inventory.call_count, 2)
-        with mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "someone/horizon"}), \
-                mock.patch.object(nightly, "sdk_ready") as sdk:
+        with mock.patch.object(nightly.train, "REPO", "someone/horizon"), \
+                mock.patch.object(nightly, "sdk_ready", return_value=True) as sdk, \
+                mock.patch.object(nightly, "published_index") as index:
             nightly.require_sdk("a" * 40)
-            sdk.assert_not_called()
+            sdk.assert_called_once_with("a" * 40)
+            index.assert_called_once_with("a" * 40)
 
     def test_the_sdk_index_must_name_this_build_format_and_assets_and_match_its_sums(self):
         import hashlib

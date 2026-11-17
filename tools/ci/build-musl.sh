@@ -19,6 +19,7 @@ cargo build --release --locked --target "$target" \
 # The official game (horizon-client's with Horizon's own parts, docs/layers.md) is what players
 # get, under the game's name.
 cp -f "$bin/horizon-official" "$bin/horizon-client"
+cp wasm-std/horizon-wasm-std.wasm "$bin/horizon-wasm-std.wasm"
 
 set -- "$bin/horizon-client" "$bin/horizon-ctl" "$bin/horizon-prepare" "$bin/horizon-server"
 python3 tools/check_imports.py --musl "$@"

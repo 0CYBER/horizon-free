@@ -1,0 +1,108 @@
+name: prebuilt game build
+# Read-only hosted builders. No release credentials, trusted cache reads or shared cache writes.
+on:
+  workflow_call:
+    inputs:
+      commit:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: true
+    outputs:
+      needed:
+        value: ${{ jobs.fresh.outputs.needed }}
+permissions:
+  contents: read
+jobs:
+  fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      needed: ${{ steps.release.outputs.needed }}
+    steps:
+      - id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ inputs.commit }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [[ "$DRY_RUN" == true ]]; then
+            echo needed=true >> "$GITHUB_OUTPUT"
+          elif answer=$(gh api "repos/$GH_REPO/releases/tags/sdk-$COMMIT" --silent 2>&1); then
+            # The consumer job authenticates the existing signed index; existence alone is not trust.
+            echo needed=false >> "$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' <<< "$answer"; then
+            echo needed=true >> "$GITHUB_OUTPUT"
+          else
+            echo "$answer"; exit 1
+          fi
+  build:
+    needs: fresh
+    if: needs.fresh.outputs.needed == 'true'
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: linux-server
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            server: true
+          - name: windows
+            os: windows-latest
+            target: x86_64-pc-windows-gnu
+          - name: macos
+            os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.commit }}
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}-${{ matrix.target }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Exact compiler host
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustc -vV | grep -Fx "host: $TARGET"
+      - name: ALSA and udev headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+      - name: Build and collect
+        run: python tools/prebuilt_game.py build prebuilt ${{ matrix.server && '--server' || '' }}
+      - name: Two native starter mods link against the SDK alone
+        run: python tools/prebuilt_game.py smoke prebuilt
+      - name: The installed native game loads both mods
+        timeout-minutes: 10
+        run: python tools/prebuilt_game.py start prebuilt
+      - name: Windows export capacity
+        run: python tools/prebuilt_game.py exports prebuilt | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Pack exact-host slices
+        run: python tools/prebuilt_game.py pack prebuilt dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdk-leg-${{ matrix.name }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true

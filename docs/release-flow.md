@@ -206,19 +206,71 @@ flowchart LR
 
 ### Mod SDK
 
-The mod SDK of a Nightly is built inside `nightly build`, for the commit `pick` chose, and published with it:
+The mod SDK of a Nightly is built inside `nightly build`, for the exact main commit `pick` chose:
 
-1. `sdk` builds the commit's prebuilt SDK on every OS (`prebuilt-game-build.yml`; skipped when `sdk-<sha>` already
-   exists), next to the game's own build.
-2. Once the game is built, `sdk-publish` (`sdk-publish.yml`) gathers the legs' assets, signs them with the release
-   keys (the `release` environment, main only) and creates the pre-release `sdk-<sha>`. A dry run signs with a
-   throwaway key and publishes nothing.
-3. `sdk-index` reads that release's `sdk.json`, checked against its signed `SHA256SUMS`; `sign` puts it in the Nightly's
-   `SHA256SUMS`, and `publish` attaches it to the Nightly after `nightly.py require-sdk` has checked that the SDK
-   release is complete. The launcher reads the build id from it and builds native mods against `sdk-<sha>`.
+1. `sdk` builds the commit's prebuilt SDK on hosted runners (`prebuilt-game-build.yml`), next to the game's build.
+   All four legs must pass: Linux client and server, Windows GNU client and macOS ARM64 client. Each builds two
+   native starter mods against the SDK alone, starts their installed executable, and checks Windows export capacity.
+   A live run can reuse an existing SDK only after its complete inventory and signed index are authenticated.
+2. After the game build (including its smoke test), `sdk-publish.yml` gathers identical build data and surfaces,
+   builds the generated API source, writes `sdk.json`, and checks every slice's commit, host, side, compiler,
+   checksums and exact carried registry patches. Publication requires successful `checks` and `parity-main` push
+   runs on that exact main SHA, no open `release-blocker`, and `RELEASES_PAUSED` unset.
+3. Only the signing job uses the existing protected, main-only `release` environment. It checks out only the
+   signing script from the caller's trusted workflow revision, checks main ancestry again, and hashes the assets
+   without running them. The SDK signature names `sdk-<sha>`, not a game tag. No unsigned SDK is accepted.
+   Builders and index jobs have no signing/write credentials and use no shared build caches.
+4. A read-only verification job checks the signature and exact asset set, including dry runs. Only a live main
+   publication starts the separate write-authorized job, which rechecks the exact-main gates and creates the
+   immutable prerelease `sdk-<sha>` (never latest). It never overwrites an existing exact-build SDK.
+   `sdk-index` copies its authenticated `sdk.json` into both Nightly signatures and the Nightly release; publication
+   checks `require-sdk` again before rotation and before creating the Nightly.
 
-On this repository a Nightly is exactly main's commit (a pick of pull requests is refused): the SDK is built for a
-commit of main. `prebuilt-game.yml` is the hand dispatch of the same build and publish for main's head.
+`prebuilt-game.yml` is the same SDK build/publication route by hand. It defaults to a full dry run; branch runs are
+always dry. Dry runs rebuild all four legs, use a throwaway signing key, and publish no SDK tag or release. Nightly
+dry runs consume that run's validated index without requiring a published SDK.
+
+```sh
+gh workflow run prebuilt-game.yml --ref main                         # full dry run
+gh workflow run nightly-build.yml --ref main -f dry_run=true         # SDK + game dry run
+gh workflow run prebuilt-game.yml --ref main -f dry_run=false         # maintainer publication, after review/CI
+```
+
+These are publication machinery, not evidence that a candidate has shipped. Activate a candidate only after
+code-owner review, green exact-head CI and the real platform/native canaries. A Nightly predating this route may
+have no SDK; consumers must report that rather than rebuilding the game per mod.
+
+The game workflow also builds `horizon-wasm-std.wasm` once with the pinned Rust toolchain, `rust-src` and
+`wasm32-unknown-unknown`, without credentials or shared caches. Every client archive (including musl) and the Linux
+server archive take that same member beside the executable through xtask's required-input preflight.
+The dedicated executable is built from `horizon-game --no-default-features --bin horizon-client`.
+
+For `[[native.mixin]]`, delivery currently uses the existing pinned-source tool build when no matching prebuilt
+exists. Building that small tool once per pin/patch/platform does not rebuild any game crate. The former unsigned
+`prebuilt-mixins-tool.yml` publication route is not restored; checksums and identity alone are not release signatures.
+The launcher still supports matching existing prebuilts and the explicit `native-build --mixins-from-source` canary.
+
+For the candidate's native canaries, `SDK_BASE` must hold exactly one complete `sdk-<candidate SHA>` folder and
+`LAUNCHER` must be the matching launcher for the machine running the command. Use a fresh `SCRATCH` parent;
+the script creates isolated game/launcher/XDG homes and checks that the prebuilt game library's hash is unchanged.
+Dry-run SDKs additionally require a debug-assertions launcher with `HORIZON_SDK_TRUSTED_KEY` set to that run's
+throwaway public key; never pass production private signing material.
+
+```sh
+# Linux x86-64: runtime proof with prepared read-only RESOURCES, plus client build/link proof.
+FNR_SIDE=server FNR_TARGET=x86_64-unknown-linux-gnu FNR_MIXINS_FROM_SOURCE=1 \
+  tools/ci/fn_replace_check.sh "$LAUNCHER" "$SDK_BASE" "$SCRATCH/linux-server" "$RESOURCES"
+FNR_SIDE=client FNR_TARGET=x86_64-unknown-linux-gnu FNR_MIXINS_FROM_SOURCE=1 \
+  tools/ci/fn_replace_check.sh "$LAUNCHER" "$SDK_BASE" "$SCRATCH/linux-client"
+# On Windows x86-64 (Git Bash), then on macOS ARM64:
+FNR_SIDE=client FNR_TARGET=x86_64-pc-windows-gnu FNR_MIXINS_FROM_SOURCE=1 \
+  tools/ci/fn_replace_check.sh "$LAUNCHER" "$SDK_BASE" "$SCRATCH/windows-client"
+FNR_SIDE=client FNR_TARGET=aarch64-apple-darwin FNR_MIXINS_FROM_SOURCE=1 \
+  tools/ci/fn_replace_check.sh "$LAUNCHER" "$SDK_BASE" "$SCRATCH/macos-client"
+```
+
+The SDK producer's four hosted legs must also complete `prebuilt_game.py build`, `smoke`, `start`, `exports`
+and `pack` on their real hosts. A local source check does not substitute for these platform results.
 
 ### Daily run
 
@@ -433,7 +485,7 @@ The [Nightly workflow](../.github/workflows/nightly-build.yml) builds the SDK of
 ([`tools/ci/nightly.py`](../tools/ci/nightly.py)) before rotation and again before publication. A complete SDK means a
 published, non-draft `sdk-<40 lowercase hex SHA>` release holding every asset
 `nightly.py sdk-assets` names: `sdk.json`, `SHA256SUMS` signed for `sdk-<sha>` (`SHA256SUMS.sig`), `surface.json`,
-`build-data.tar.xz` and the `runtime`, `api` and `engine` slices of the four packages (Linux client, Linux server,
+`api-source.tar.xz`, `build-data.tar.xz` and the `runtime`, `api` and `engine` slices of the four packages (Linux client, Linux server,
 Windows GNU and macOS ARM64); its `sdk.json` must match those sums and name that build and this package format. The
 Nightly carries that `sdk.json` in its own signed sums. The SDK signature's message names `sdk-<sha>`, so it never
 passes for a game release, nor a game release's for an SDK (`horizon-release-sign`: `signed_digest`, `sdk_digest`).

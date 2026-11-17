@@ -247,7 +247,7 @@ SDK_ASSETS = SDK_ARCHIVES + (SDK_INDEX, "SHA256SUMS", "SHA256SUMS.sig")
 def ready_sdk_shas() -> set[str]:
     """Snapshot of the complete published `sdk-<sha>` releases; API failures fail closed."""
     releases = train.gh_json("api", "--paginate", "--slurp",
-                             f"repos/horizon-rust/horizon/releases?per_page=100")
+                             f"repos/{train.REPO}/releases?per_page=100")
     return {release["tag_name"].removeprefix("sdk-")
             for page in releases for release in page
             if not release["draft"] and re.fullmatch(r"sdk-[0-9a-f]{40}", release["tag_name"])
@@ -272,7 +272,7 @@ def signature_check(sha: str, folder: Path, names: list[str]) -> list[str]:
     """The command that checks sdk-<sha>'s SHA256SUMS signature in `folder` as the launcher does (horizon-release-sign,
     with this repository's keys and the tag the signature must name), and the bytes of `names` against it."""
     return ["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign", "--", "verify",
-            "--repository", "horizon-rust/horizon", "--tag", f"sdk-{sha}",
+            "--repository", train.REPO, "--tag", f"sdk-{sha}",
             *(argument for name in names for argument in ("--only", name)), str(folder)]
 
 
@@ -280,7 +280,7 @@ def released(sha: str, name: str) -> bytes:
     """The asset `name` of sdk-<sha>, once its SHA256SUMS signature is this repository's for `sdk-<sha>` and its bytes match
     them ([`signature_check`])."""
     with tempfile.TemporaryDirectory() as folder:
-        gh("release", "download", f"sdk-{sha}", "--repo", "horizon-rust/horizon", "--dir", folder,
+        gh("release", "download", f"sdk-{sha}", "--repo", train.REPO, "--dir", folder,
            "--pattern", name, "--pattern", "SHA256SUMS", "--pattern", "SHA256SUMS.sig")
         data = (Path(folder) / name).read_bytes()
         if not listed(name, data, (Path(folder) / "SHA256SUMS").read_text()):
@@ -329,10 +329,9 @@ def previous_sdk(sha: str) -> str:
 
 def require_sdk(sha: str) -> None:
     """Refuse before rotating/publishing Nightly if its SDK disappeared or its index is not this build's."""
-    if os.environ.get("GITHUB_REPOSITORY") == "horizon-rust/horizon":
-        if not sdk_ready(sha):
-            raise SystemExit(f"Nightly publication refused: {sha} has no complete published sdk-{sha} release")
-        published_index(sha)
+    if not sdk_ready(sha):
+        raise SystemExit(f"Nightly publication refused: {sha} has no complete published sdk-{sha} release")
+    published_index(sha)
 
 
 def green_base(repo: str, issue: str) -> Ref:

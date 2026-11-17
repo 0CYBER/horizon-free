@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
     "horizon-linux-x86_64.tar.gz", "horizon-windows-x64.zip", "horizon-macos-arm64.zip",
     "horizon-macos-x64.zip", "horizon-server-linux-x86_64.tar.gz", "horizon-source.tar.gz",
+    "sdk.json",
 }
 OPTIONAL = ("horizon-windows-arm64.zip", "horizon-linux-musl-x86_64.tar.gz")
 # The bash on PATH, as in test_pr_ready: Windows' CreateProcess looks in System32 before PATH, so a bare "bash"
@@ -89,8 +90,8 @@ gh() {
                     self.assertIn(f"::warning::{name} is missing", published.stdout)
 
     def test_sign_release_covers_sdk_archive_bytes_and_index(self):
-        # SDK publishing workflows are deferred, but the signing helper accepts SDK assets
-        # explicitly, just like game archives. Check that API without assuming a Nightly SDK job.
+        # Verify the signing helper's shared archive/index contract for both
+        # immutable exact-build SDK releases and their paired Nightly metadata.
         build = "c" * 40
         for tag, also_for in ((f"sdk-{build}", ""), ("nightly", "nightly-2026-11-04-0123456")):
             with self.subTest(tag=tag), tempfile.TemporaryDirectory() as folder:

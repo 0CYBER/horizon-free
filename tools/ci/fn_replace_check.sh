@@ -2,13 +2,13 @@
 # Function replacement end to end (fn-replace): native mods' `[[native.mixin]]` rows (and API-only mods) built by the
 # launcher's normal native build against a PREBUILT game, with no game rebuild, then run on a
 # dedicated server.
-#   [FNR_MODS="alpha beta"] [FNR_MOD_ROOT=DIR] [FNR_ROUTE=prebuilt|prebuilt-api] tools/ci/fn_replace_check.sh LAUNCHER SDK_BASE SCRATCH [RESOURCES]
+#   [FNR_MODS="alpha beta"] [FNR_MOD_ROOT=DIR] [FNR_ROUTE=prebuilt|prebuilt-api] [FNR_TARGET=HOST] tools/ci/fn_replace_check.sh LAUNCHER SDK_BASE SCRATCH [RESOURCES]
 # FNR_WASM_LAYOUT_PACKAGE=valid.hmod FNR_WASM_STD=std.wasm adds a wasm point-layout refusal check
 # to the with-RESOURCES server run (not the build/link-only CI mode):
 # its exported layout fingerprint is changed to zero, and its integrity hash is updated.
 # SDK_BASE is a folder holding one `sdk-<commit>/` release folder (the SDK's archives, `sdk.json`, `SHA256SUMS` and its
 # signature) of this checkout's HEAD: the launcher reads its SDK from there (HORIZON_SDK_BASE), checking the signature
-# as it does a release's. The daily run signs the SDK it builds with a throwaway key and passes the public key in
+# as it does a release's. A CI dry run signs its candidate SDK with a throwaway key and passes the public key in
 # HORIZON_SDK_TRUSTED_KEY, which only a launcher built with debug_assertions trusts (horizon_release_sign::sdk_keys_for);
 # a published release needs no key. With RESOURCES (a prepared `horizon-client/26.3` folder), the server starts, takes `/tick` commands
 # and stops; every mixin helper prints a line starting `fnr:`.
@@ -64,11 +64,15 @@ done
 # The game library (libhorizon_mod_host.so / .dylib, or horizon_mod_host.dll on Windows): its SHA-256 in the SDK's
 # runtime archive for this side, which the unpacked copy must still match once the mods are built.
 game_hash=$(python3 - "$release" "$side" <<'PYGAME'
-import hashlib, sys, tarfile
+import hashlib, os, sys, tarfile
 from pathlib import Path
 release, side = Path(sys.argv[1]), sys.argv[2]
 archives = [a for a in release.glob("runtime-*.tar.xz") if a.name.endswith("-server.tar.xz") == (side == "server")]
-assert len(archives) == 1, f"one runtime archive for the {side} side, found {[a.name for a in archives]}"
+target = os.environ.get("FNR_TARGET", "")
+if target:
+    suffix = "-server" if side == "server" else ""
+    archives = [a for a in archives if a.name == f"runtime-{target}{suffix}.tar.xz"]
+assert len(archives) == 1, f"one runtime archive for {target or 'the host'}/{side}, found {[a.name for a in archives]}; set FNR_TARGET when using a complete SDK"
 with tarfile.open(archives[0], "r:xz") as tar:
     names = [m for m in tar.getmembers() if m.isfile() and Path(m.name).name.endswith(("horizon_mod_host.so", "horizon_mod_host.dylib", "horizon_mod_host.dll"))]
     assert len(names) == 1, f"one game library, found {[m.name for m in names]}"
@@ -96,10 +100,13 @@ test -z "${built:-}" || exit "$built"
 # The launcher's plan for this build, an instance's or a server folder's export alike: the prebuilt game.
 grep -F 'Prebuilt game: only the mods compile' "$scratch/native-build.err"
 if [ "$side" = client ]; then
-  binary=$(find "$data/versions" -type f -name horizon-client | head -1)
+  binary=$(find "$data/versions" -type f \( -name horizon-client -o -name horizon-client.exe \) ! -path "$version/*" | head -1)
   test -n "$binary"
   cp -a "$(dirname "$binary")" "$scratch/engine"
-  cp "$scratch/engine/horizon-client" "$scratch/engine/horizon-engine"
+  case "$binary" in
+    *.exe) cp "$scratch/engine/horizon-client.exe" "$scratch/engine/horizon-engine.exe" ;;
+    *) cp "$scratch/engine/horizon-client" "$scratch/engine/horizon-engine" ;;
+  esac
 fi
 echo "native build: $(python3 -c "print(round($(date +%s.%N) - $started, 1))") s"
 test -x "$scratch/engine/horizon-engine" || test -x "$scratch/engine/horizon-engine.exe"

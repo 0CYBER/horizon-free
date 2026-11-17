@@ -147,8 +147,66 @@ jobs:
       developer_id: false
       trusted: false  # it can hold unreviewed pull requests: their own cache key, never saved, not the release runner
 
+  sdk:
+    needs: pick
+    if: needs.pick.outputs.build == 'true'
+    uses: ./.github/workflows/prebuilt-game-build.yml
+    with:
+      commit: ${{ needs.pick.outputs.sha }}
+      dry_run: ${{ needs.pick.outputs.dry_run == 'true' }}
+
+  sdk-publish:
+    needs: [pick, build, sdk]
+    if: needs.sdk.outputs.needed == 'true'
+    permissions:
+      contents: write
+      actions: read
+      issues: read
+    uses: ./.github/workflows/sdk-publish.yml
+    with:
+      commit: ${{ needs.pick.outputs.sha }}
+      publish: ${{ needs.pick.outputs.dry_run != 'true' && github.ref == 'refs/heads/main' }}
+    secrets: inherit
+
+  sdk-index:
+    needs: [pick, sdk, sdk-publish]
+    if: >-
+      always() && needs.pick.outputs.build == 'true' && needs.sdk.result == 'success' &&
+      (needs.sdk-publish.result == 'success' || needs.sdk-publish.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.pick.outputs.dry_run == 'true'
+        with:
+          name: sdk-release
+          path: sdk-dry-run
+      - name: The exact build's authenticated SDK index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          DRY_RUN: ${{ needs.pick.outputs.dry_run }}
+        run: |
+          mkdir -p sdk-index
+          if [[ "$DRY_RUN" == true ]]; then
+            # sdk-publish already verified the full dry-run release with its throwaway key.
+            cp sdk-dry-run/sdk.json sdk-index/sdk.json
+          else
+            python3 tools/ci/nightly.py require-sdk "$SHA"
+            python3 tools/ci/nightly.py sdk-index "$SHA" sdk-index/sdk.json
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdk-index
+          path: sdk-index/sdk.json
+          if-no-files-found: error
+          retention-days: 3
+
   sign:
-    needs: [pick, build]
+    needs: [pick, build, sdk-index]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The key's only job: main's sign_release.sh hashes the archives and signs with the runner's OpenSSL.
@@ -164,13 +222,17 @@ jobs:
           path: dist
           pattern: horizon-*
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-index
+          path: dist
       - name: Sign the checksums for the nightly channel (SHA256SUMS.sig) and for this build (SHA256SUMS.v2.sig)
         # SHA256SUMS.sig is for launchers from before v2 (signed for "nightly"); SHA256SUMS.v2.sig is signed for
         # nightly-<date>-<commit>, the version the release title names, which current launchers and servers
         # require (docs/security.md, "Nightly signatures"). The publish step titles the release from the same values.
         env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
+          RELEASE_SIGNING_KEY: ${{ needs.pick.outputs.dry_run != 'true' && secrets.RELEASE_SIGNING_KEY || '' }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ needs.pick.outputs.dry_run != 'true' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
           EPHEMERAL: ${{ needs.pick.outputs.dry_run == 'true' && 'yes' || '' }}
           ALSO_FOR: nightly-${{ needs.pick.outputs.date }}-${{ needs.pick.outputs.short }}
         run: |
@@ -182,7 +244,7 @@ jobs:
           bash tools/ci/sign_release.sh nightly dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
             ${arm64[@]+"${arm64[@]}"} ${musl[@]+"${musl[@]}"} \
             dist/horizon-macos-arm64.zip dist/horizon-macos-x64.zip dist/horizon-server-linux-x86_64.tar.gz \
-            dist/horizon-source.tar.gz
+            dist/horizon-source.tar.gz dist/sdk.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signature
@@ -197,7 +259,7 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: [pick, build, sign]
+    needs: [pick, build, sdk-index, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -211,6 +273,28 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          pattern: horizon-*
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: smoke-test.json
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-notes
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signature
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-index
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.pick.outputs.dry_run == 'true'
+        with:
+          name: ephemeral.pub
+          path: dist
       - name: The signatures, checked as launchers check them
         env:
           EPHEMERAL: ${{ needs.pick.outputs.dry_run == 'true' && 'yes' || '' }}
@@ -243,6 +327,7 @@ jobs:
           SOURCE_TAG: ${{ needs.pick.outputs.source_tag }}
         run: |
           set -euo pipefail
+          python3 tools/ci/nightly.py require-sdk "$SHA"
           python3 tools/ci/nightly.py rotate
           signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
           [[ -f dist/SHA256SUMS.v2.sig ]] && signature+=(dist/SHA256SUMS.v2.sig)
@@ -263,6 +348,7 @@ jobs:
           fi
           # A pre-release, never GitHub's latest: the latest stays the last vX.Y.Z, which launchers and servers from
           # before the Nightly-only switch keep (they don't read Nightlies).
+          python3 tools/ci/nightly.py require-sdk "$SHA"
           gh release create nightly --prerelease --latest=false --target "$SHA" \
             --title "Nightly $DATE · ${SHA:0:7}" --notes-file dist/nightly-notes.md \
             "dist/horizon-linux-x86_64.tar.gz#Game files the launcher installs (Nightly): Linux (horizon-linux-x86_64.tar.gz)" \
@@ -273,7 +359,7 @@ jobs:
             "dist/horizon-macos-x64.zip#Game files the launcher installs (Nightly): macOS on Intel (horizon-macos-x64.zip)" \
             "dist/horizon-server-linux-x86_64.tar.gz#Nightly dedicated server for Linux (horizon-server-linux-x86_64.tar.gz)" \
             "dist/horizon-source.tar.gz#Source of this Nightly, commit ${SHA:0:7} (horizon-source.tar.gz; kept for good as the tag $SOURCE_TAG)" \
-            dist/SHA256SUMS "${signature[@]}" dist/smoke-test.json
+            dist/sdk.json dist/SHA256SUMS "${signature[@]}" dist/smoke-test.json
           python3 tools/ci/nightly.py keep-source "$SHA" "$DATE"
           python3 tools/ci/nightly.py prune --days 7
       - name: Dry run, the nightly that would be published
@@ -284,7 +370,7 @@ jobs:
 
   answer:
     # Tells the thread that asked for this build how it ended. A conflict `pick` already explained there.
-    needs: [pick, build, sign, publish]
+    needs: [pick, build, sdk, sdk-publish, sdk-index, sign, publish]
     if: always() && inputs.issue != '' && needs.pick.result == 'success'
     # One comment, no checkout and no secret: one of our small runners (label horizon-light, docs/ci-runners.md).
     runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'blacksmith-2vcpu-ubuntu-2404' }}

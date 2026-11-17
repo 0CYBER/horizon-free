@@ -36,6 +36,33 @@ on:
 permissions:
   contents: read
 jobs:
+  wasm-std:
+    # One host-independent shared std member, built without credentials or shared caches.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - name: Build the shared wasm standard library
+        run: |
+          mkdir -p wasm-std
+          cargo run --locked -p cargo-horizon-mod -- wasm-std wasm-std/horizon-wasm-std.wasm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wasm-std
+          path: wasm-std/horizon-wasm-std.wasm
+          if-no-files-found: error
+          retention-days: 3
+
   exporters:
     # This runner holds the maintainer's own pinned Minecraft jars. Only our classes leave it. An untrusted build
     # goes to the Mac mini's nightly runner (macOS + horizon-nightly: ludovics-mac-mini-nightly, beside the one that
@@ -83,7 +110,7 @@ jobs:
           retention-days: 3
 
   build:
-    needs: exporters
+    needs: [exporters, wasm-std]
     name: build ${{ matrix.name }}
     # Windows ARM64 and musl are new: a failure never holds the other platforms' release (the signing job
     # needs this job, and a failed entry of it would fail it). The release steps leave the missing
@@ -158,9 +185,11 @@ jobs:
           # may end up in a release. target/ is rebuilt from scratch; .local/ is relinked by vanilla-data.sh, which
           # keeps its preparations outside the checkout.
           clean: true
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
         with:
-          toolchain: stable
+          toolchain: ${{ steps.rust.outputs.version }}
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: runner.environment == 'github-hosted' && !matrix.musl
@@ -174,11 +203,22 @@ jobs:
       - name: Build the official game, horizon-ctl, horizon-prepare and horizon-server
         if: ${{ !matrix.musl }}
         run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p horizon-official --bin horizon-official -p horizon-client-lib --bin horizon-ctl -p horizon-prepare --bin horizon-prepare -p horizon-server --bin horizon-server
+      - name: Windows x64 Polytone path regressions
+        if: runner.os == 'Windows' && matrix.pe_arch == 'x64'
+        run: |
+          cargo test --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p horizon-client-render --lib particles::polytone::tests::
       - name: The official game is the game players get, under its name
         # horizon-official: horizon-client's game with Horizon's own parts plugged in (docs/layers.md, "How a
         # Horizon crate plugs in"). Everything below, the launcher and players know it as horizon-client.
         if: ${{ !matrix.musl }}
         run: cp -f "$BIN/horizon-official${{ matrix.exe }}" "$BIN/horizon-client${{ matrix.exe }}"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wasm-std
+          path: wasm-std
+      - name: Install the shared wasm standard library beside the game
+        if: ${{ !matrix.musl }}
+        run: cp wasm-std/horizon-wasm-std.wasm "$BIN/horizon-wasm-std.wasm"
       - name: Every program the release folder takes was built
         if: ${{ !matrix.musl }}
         run: |
@@ -337,9 +377,8 @@ jobs:
         if: matrix.server_asset
         run: |
           set -euo pipefail
-          # After the client is packaged: target/release/horizon-client is rebuilt without the audio and
-          # controllers features, so it needs neither libasound nor libudev (minimal server images lack them).
-          cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
+          # The dedicated executable belongs to horizon-game, not the gameplay library.
+          cargo build --release --locked -p horizon-game --no-default-features --bin horizon-client
           cargo run --locked -p xtask -- package-server target/release/horizon-client "dist/${{ matrix.server_dir }}"
           folder="dist/${{ matrix.server_dir }}"
           python3 tools/check_imports.py --server "$folder/horizon-engine" "$folder/horizon-server" "$folder/horizon-prepare"
