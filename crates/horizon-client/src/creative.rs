@@ -909,6 +909,27 @@ impl Creative {
         self.scrolling = self.can_scroll(names);
         true
     }
+    /// `CreativeModeInventoryScreen.extractRenderState`: over the scrollbar the
+    /// cursor is the pointing hand, the vertical resize while it is held, and
+    /// not-allowed when there is nothing to scroll. `mouse` is relative to the
+    /// screen origin, like [`Self::inside_scrollbar`]; None away from the bar.
+    pub fn scrollbar_cursor(
+        &self,
+        mouse: (f32, f32),
+        names: &Names,
+    ) -> Option<crate::widgets::Cursor> {
+        use crate::widgets::Cursor;
+        if !self.inside_scrollbar(mouse.0, mouse.1) {
+            return None;
+        }
+        Some(if !self.can_scroll(names) {
+            Cursor::NotAllowed
+        } else if self.scrolling {
+            Cursor::ResizeNs
+        } else {
+            Cursor::PointingHand
+        })
+    }
     /// mouseDragged while the scrollbar is held, at a cursor height relative to
     /// the screen origin, wherever the cursor is (even off the track or the window).
     pub fn drag_scrollbar(&mut self, y: f32) -> bool {
@@ -1918,6 +1939,39 @@ mod tests {
         c.selected = 0;
         assert!(c.press_scrollbar(180.0, 60.0, &names));
         assert!(!c.scrolling);
+    }
+
+    #[test]
+    fn scrollbar_asks_for_the_cursor_its_state_calls_for() {
+        use crate::widgets::Cursor;
+        let names = Names {
+            map: HashMap::new(),
+        };
+        let mut c = creative(90);
+        c.selected = 1;
+        // Over the track: the hand. Beside it: no request at all.
+        assert_eq!(
+            c.scrollbar_cursor((180.0, 60.0), &names),
+            Some(Cursor::PointingHand)
+        );
+        assert_eq!(c.scrollbar_cursor((170.0, 60.0), &names), None);
+        // Held: the vertical resize, until it is released.
+        assert!(c.press_scrollbar(180.0, 60.0, &names));
+        assert_eq!(
+            c.scrollbar_cursor((180.0, 60.0), &names),
+            Some(Cursor::ResizeNs)
+        );
+        c.release();
+        assert_eq!(
+            c.scrollbar_cursor((180.0, 60.0), &names),
+            Some(Cursor::PointingHand)
+        );
+        // The inventory tab has nothing to scroll, so the bar is not allowed.
+        c.selected = 0;
+        assert_eq!(
+            c.scrollbar_cursor((180.0, 60.0), &names),
+            Some(Cursor::NotAllowed)
+        );
     }
 
     /// `CreativeModeInventoryScreen.selectTab`: the search box is focused on

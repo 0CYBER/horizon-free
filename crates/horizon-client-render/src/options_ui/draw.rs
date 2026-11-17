@@ -467,6 +467,17 @@ impl OptionsUi {
             ui::separators(batch, atlas, top, bottom, in_world);
             let sx = self.scrollbar_x(w);
             ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll);
+            // AbstractScrollArea.extractScrollbar: over a scrollable bar, the
+            // hand, or the vertical resize while it is dragged.
+            if ui::scrollbar_thumb(top, bottom, content, self.scroll).is_some()
+                && ui::hovered(cursor, sx, top, 6.0, bottom - top)
+            {
+                crate::widgets::request_cursor(if self.scrollbar_drag_y.is_some() {
+                    crate::widgets::Cursor::ResizeNs
+                } else {
+                    crate::widgets::Cursor::PointingHand
+                });
+            }
         }
         if self.page() == Page::Language {
             let mut search = self.language_search.clone();

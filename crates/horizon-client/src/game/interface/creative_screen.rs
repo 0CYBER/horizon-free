@@ -137,6 +137,14 @@ impl Game<'_> {
                 }
             }
         }
+        // The scrollbar comes after the tabs, so its request wins where they meet.
+        let scroll_mouse = (self.cursor.0 - ox, self.cursor.1 - oy);
+        if let Some(cursor) = self
+            .creative_screen
+            .scrollbar_cursor(scroll_mouse, &self.pack.names)
+        {
+            horizon_client::widgets::request_cursor(cursor);
+        }
         let background = if tab.search {
             "gui/container/creative_inventory/tab_item_search"
         } else if tab.inventory {
