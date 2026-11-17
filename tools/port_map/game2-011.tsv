@@ -122,9 +122,9 @@ BasePressurePlateBlock.getEntityCount	inline	crates/horizon-world/src/level/reds
 BaseRailBlock.isRail	port	crates/horizon-world/src/level/rails.rs::Sim::is_rail	rail test on a block state
 BaseRailBlock.getShape	skip:data		the rail box comes from the block data tables; rail_shape only reads the shape property
 BaseRailBlock.onPlace	port	crates/horizon-world/src/level/rails.rs::Sim::rail_place	the placed rail takes its shape and connections
-BaseRailBlock.neighborChanged	port	crates/horizon-world/src/level/rails.rs::Sim::rail_neighbor_changed	neighbour update of a rail
+BaseRailBlock.neighborChanged	port	crates/horizon-world/src/level/rails.rs::Sim::rail_neighbor_changed	neighbour update of a rail; a client returns before it (vanilla's !isClientSide)
 BaseRailBlock.shouldBeRemoved	inline	crates/horizon-world/src/level/rails.rs::Sim::rail_neighbor_changed	the rigid support check below and beside ascending rails is in the neighbour update
-BaseRailBlock.updateDir	port	crates/horizon-world/src/level/rails.rs::Sim::rail_update_dir	shape update for the rail's direction
+BaseRailBlock.updateDir	port	crates/horizon-world/src/level/rails.rs::Sim::rail_update_dir	shape update for the rail's direction; a client keeps the sent state (vanilla's updateDir returns on isClientSide)
 BaseRailBlock.affectNeighborsAfterRemoval	port	crates/horizon-world/src/level/hooks.rs::Sim::affect_neighbors_after_removal	rail arm updates neighbours after removal
 BaseRailBlock.getStateForPlacement	port	crates/horizon-world/src/level/place.rs::Sim::placement_class	BaseRail arm of placement
 BaseRailBlock.rotate	port	crates/horizon-world/src/worldgen/structure.rs::StateTransforms::rotate	rotation through the state transform table

@@ -1611,3 +1611,59 @@ fn leaves_count_their_distance_from_a_log_and_decay_only_at_seven() {
         );
     }
 }
+
+/// `BaseRailBlock.updateDir` and `BaseRailBlock.neighborChanged` return before
+/// touching the rail on a client: a client shows the shape and existence the
+/// server sent, and only the server bends, drops or powers a rail.
+#[test]
+fn a_client_neither_bends_nor_drops_a_rail_on_its_own() {
+    let mut server = world!();
+    server.floor(0, 5, "stone");
+    let server_rail = BlockPos::new(0, 1, 0);
+    server.set(server_rail, server.id("rail", &[("shape", "east_west")]));
+    server.set(
+        BlockPos::new(0, 1, 1),
+        server.id("rail", &[("shape", "north_south")]),
+    );
+    assert_eq!(
+        server.prop(server_rail, "shape"),
+        "north_south",
+        "the server bends the first rail"
+    );
+
+    let mut client = world!();
+    client.level.client_side = true;
+    client.floor(0, 5, "stone");
+    let client_rail = BlockPos::new(0, 1, 0);
+    client.set(client_rail, client.id("rail", &[("shape", "east_west")]));
+    client.set(
+        BlockPos::new(0, 1, 1),
+        client.id("rail", &[("shape", "north_south")]),
+    );
+    assert_eq!(
+        client.prop(client_rail, "shape"),
+        "east_west",
+        "the client keeps the shape it was sent"
+    );
+
+    // The server removes the support of a rail; a client that ran the server's
+    // neighbour rule would drop it, but vanilla's client only takes server
+    // writes.
+    let state = client.id("rail", &[("shape", "north_south")]);
+    client.set(client_rail, state);
+    client.set(BlockPos::new(0, 0, 0), client.b().air());
+    assert_eq!(
+        client.get(client_rail),
+        state,
+        "the client keeps the rail the server sent"
+    );
+
+    // The server does drop it without support.
+    server.set(server_rail, state);
+    server.set(BlockPos::new(0, 0, 0), server.b().air());
+    assert_eq!(
+        server.get(server_rail),
+        server.b().air(),
+        "the server drops an unsupported rail"
+    );
+}

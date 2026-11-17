@@ -355,6 +355,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         rail.state
     }
     fn rail_update_dir(&mut self, pos: BlockPos, state: BlockStateId, first: bool) -> BlockStateId {
+        // BaseRailBlock.updateDir: a client keeps the shape the server sent.
+        if self.level.is_client_side() {
+            return state;
+        }
         let current = RailShape::parse(self.rail_shape(state));
         let signal = self.has_neighbor_signal(pos);
         self.rail_place(pos, state, signal, first, current)
@@ -381,7 +385,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         moved: bool,
     ) {
         let b = self.b;
-        if !b.is_block(self.state(pos), b.block(state)) {
+        // BaseRailBlock.neighborChanged: only the server bends, drops or powers a rail.
+        if self.level.is_client_side() || !b.is_block(self.state(pos), b.block(state)) {
             return;
         }
         let shape = RailShape::parse(self.rail_shape(state));
