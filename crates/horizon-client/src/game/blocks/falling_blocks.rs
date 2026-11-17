@@ -296,11 +296,19 @@ impl Game<'_> {
             });
         }
         if on_ground {
-            return Ok(FallStep::Landed([
+            let at = [
                 f.position.x.floor() as i32,
                 f.position.y.floor() as i32,
                 f.position.z.floor() as i32,
-            ]));
+            ];
+            // On the ground the motion is multiplied by (0.7, -0.5, 0.7); in a
+            // moving piston's cell the place/drop/discard branch is skipped and
+            // the entity goes on to the air drag below.
+            let facts = self.res.facts();
+            if &*facts.get(self.world.block(at[0], at[1], at[2])).name != "minecraft:moving_piston" {
+                return Ok(FallStep::Landed(at));
+            }
+            f.velocity = f.velocity.multiply(Vec3::new(0.7, -0.5, 0.7));
         }
         // Entity.scale(getAirDrag()): 0.98F, widened before it scales motion.
         f.velocity = horizon_client::entity_rules::scale_air_drag(f.velocity);

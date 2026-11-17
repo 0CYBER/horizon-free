@@ -2504,8 +2504,7 @@ impl Game<'_> {
                             f64::from(-trig::cos(r)),
                         ));
                         let dot = dir.dot(aim) as f32;
-                        let angle = (f64::from(dot).acos() * 180.0
-                            / f64::from(std::f32::consts::PI))
+                        let angle = (f64::from(dot).acos() * f64::from(trig::RAD_TO_DEG))
                             as f32
                             + 0.5;
                         if angle < 0.0 || angle > 10.0 {
@@ -2513,7 +2512,7 @@ impl Game<'_> {
                             let (xd, zd) = (pp.x - head.x, pp.z - head.z);
                             let delta = wrap64(
                                 180.0
-                                    - trig::atan2(xd, zd) * 180.0 / f64::from(std::f32::consts::PI)
+                                    - trig::atan2(xd, zd) * f64::from(trig::RAD_TO_DEG)
                                     - f64::from(d.yaw),
                             )
                             .clamp(-100.0, 100.0);

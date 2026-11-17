@@ -698,6 +698,12 @@ impl Projectile {
             self.previous_yaw += rotation;
             self.needs_sync = true;
         }
+        // `ShulkerBullet.tick` turns the bullet (`rotateTowardsMovement(0.5F)`)
+        // after `hitTargetOrDeflectSelf`, so a deflection in its tick is
+        // followed by the turn, from the reversed motion.
+        if !by_attack && matches!(self.kind, ProjectileKind::ShulkerBullet { .. }) {
+            self.rotate_towards_movement(0.5);
+        }
         (self.owner, self.owner_uuid, self.guest) = owner;
         self.owner_vehicle = None;
         self.on_deflection(by_attack);
@@ -1137,6 +1143,15 @@ impl Projectile {
         self.pitch = self.previous_pitch + t * (x_rot - self.previous_pitch);
         self.yaw = self.previous_yaw + t * (y_rot - self.previous_yaw);
     }
+    /// `AbstractHurtingProjectile`: fireballs, wither skulls, dragon fireballs
+    /// and wind charges ease towards their motion with `rotateTowardsMovement`.
+    fn turns_like_hurting_projectile(&self) -> bool {
+        self.is_fireball()
+            || matches!(
+                self.kind,
+                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+            )
+    }
     /// The kinds whose tick turns them with `Projectile.updateRotation`: a
     /// `ThrowableProjectile` (the thrown kinds and the experience bottle) and
     /// llama spit.
@@ -1403,7 +1418,9 @@ impl Projectile {
             return (false, Hit::Block { pos, at, face });
         }
         self.position = to;
-        self.update_rotation();
+        // `ProjectileUtil.rotateTowardsMovement(this, 0.5F)` ends every tick,
+        // after the move and after a hit (`deflect` turns a deflected bullet).
+        self.rotate_towards_movement(0.5);
         if let Some(b) = target {
             let (dir, steps) = match self.kind {
                 ProjectileKind::ShulkerBullet { dir, steps, .. } => (dir, steps),
@@ -1777,6 +1794,13 @@ impl Projectile {
             self.left_owner = owner_box
                 .is_none_or(|b| !b.inflate(Vec3::new(1.0, 1.0, 1.0)).contains(self.position));
         }
+        // `AbstractHurtingProjectile.tick` turns the projectile
+        // (`rotateTowardsMovement(0.2F)`) before it handles a hit, so a hit
+        // that leaves it alive (a breeze's deflection, a dragon fireball's own
+        // dragon) still has the turn.
+        if impact && self.turns_like_hurting_projectile() && (best.is_some() || block.is_some()) {
+            self.rotate_towards_movement(0.2);
+        }
         // DragonFireball.onHit does nothing for its own owner (`ownedBy`): the
         // selected hit is not replaced by what lies behind it, nothing happens,
         // and the fireball keeps its motion. AbstractHurtingProjectile.tick
@@ -1845,12 +1869,7 @@ impl Projectile {
         self.position = to;
         // `AbstractHurtingProjectile.tick` (fireballs and wind charges) eases towards the motion
         // (`ProjectileUtil.rotateTowardsMovement`); the thrown kinds turned in `tick` above.
-        if self.is_fireball()
-            || matches!(
-                self.kind,
-                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
-            )
-        {
+        if self.turns_like_hurting_projectile() {
             self.rotate_towards_movement(0.2);
         } else if !self.turns_with_update_rotation() {
             self.update_rotation();

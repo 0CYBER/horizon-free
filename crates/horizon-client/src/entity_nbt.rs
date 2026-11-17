@@ -2727,12 +2727,13 @@ pub fn evoker_fangs_to_nbt(
     owner: Option<[i32; 4]>,
     uuid: [i32; 4],
     raw: Option<&Tag>,
+    live_motion: Option<Vec3>,
 ) -> Tag {
     let mut tag = Base {
         id: "minecraft:evoker_fangs",
         uuid,
         position,
-        motion: raw.map(motion).unwrap_or(Vec3::ZERO),
+        motion: live_motion.unwrap_or_else(|| raw.map(motion).unwrap_or(Vec3::ZERO)),
         rotation: [yaw, raw.map(rotation).unwrap_or([0.0; 2])[1]],
         on_ground: raw.is_some_and(|t| flag(t, "OnGround")),
         fall_distance: raw.map_or(0.0, |t| ground_from_nbt(t).1),
@@ -4445,7 +4446,7 @@ mod tests {
         .0;
         let at = super::Vec3::new(1.0, 200.0, 1.0);
         let fall = |raw: Option<&super::Tag>| match super::evoker_fangs_to_nbt(
-            at, 0.0, 99, None, [1; 4], raw,
+            at, 0.0, 99, None, [1; 4], raw, None,
         )
         .get("fall_distance")
         {

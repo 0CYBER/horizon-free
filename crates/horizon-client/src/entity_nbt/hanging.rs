@@ -25,7 +25,7 @@ pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             (lo[1] + hi[1]) / 2.0,
             (lo[2] + hi[2]) / 2.0,
         ),
-        motion: Vec3::ZERO,
+        motion: raw.map_or(Vec3::ZERO, loaded_motion),
         rotation: [f32::from(p.facing) * 90.0, loaded_pitch(raw)],
         // BlockAttachedEntity.tick never moves a painting (nor runs baseTick), so its
         // onGround and fallDistance stay the ones Entity.load read.

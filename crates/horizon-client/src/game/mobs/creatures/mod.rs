@@ -2109,7 +2109,18 @@ impl Game<'_> {
             a.spawn_velocity = Some(p.velocity);
             a.spawn_rot = Some((p.pitch, p.yaw));
         }
-        self.creatures.projectiles.push(p);
+        // A projectile that already has a join number (a bounced arrow put back
+        // after its hit) keeps its place in the tick order; a new one goes last.
+        if p.join.is_joined() {
+            let join = p.join;
+            let at = self
+                .creatures
+                .projectiles
+                .partition_point(|q| q.join < join);
+            self.creatures.projectiles.insert(at, p);
+        } else {
+            self.creatures.projectiles.push(p);
+        }
         self.native_projectile_launch(player, &name, id, kind);
         id
     }

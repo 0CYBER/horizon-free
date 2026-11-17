@@ -141,7 +141,12 @@ impl Game<'_> {
         let mut spawners = self.ominous_spawners.lift();
         #[cfg(test)]
         super::entity::taken_pass_tests::after_take(self);
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         spawners.retain_mut(|s| {
+            if !ticking(s.position[0].floor() as i32, s.position[2].floor() as i32) {
+                return true;
+            }
             s.tick_count += 1;
             let at = block(s.position);
             let center = at.map(|v| f64::from(v) + 0.5);

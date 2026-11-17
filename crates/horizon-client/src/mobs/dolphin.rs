@@ -264,9 +264,11 @@ impl Goal for Jump {
             // Mth.rotLerp(0.2, xRot, 0).
             m.head_pitch += 0.2 * super::living::wrap(0.0 - m.head_pitch);
         } else if v.length() > f64::from(1.0e-5f32) {
-            let horizontal = v.x.hypot(v.z);
-            m.head_pitch = ((-v.y).atan2(horizontal) * f64::from(180.0f32)
-                / f64::from(std::f32::consts::PI)) as f32;
+            // `Math.atan2(-vy, horizontalDistance) * 57.2957763671875`.
+            let horizontal = (v.x * v.x + v.z * v.z).sqrt();
+            m.head_pitch = (horizon_core::jmath::atan2(-v.y, horizontal)
+                * f64::from(horizon_core::geometry::trig::RAD_TO_DEG))
+                as f32;
         }
     }
 }

@@ -1278,8 +1278,9 @@ impl Goal for Pounce {
                 let y = v.y * bias;
                 let len = (horizontal * horizontal + y * y).sqrt();
                 if len > f64::from(1.0e-5f32) {
-                    let pitch = signum(-y) * jmath::acos(horizontal / len) * 180.0
-                        / f64::from(std::f32::consts::PI);
+                    let pitch = signum(-y)
+                        * jmath::acos(horizontal / len)
+                        * f64::from(horizon_core::geometry::trig::RAD_TO_DEG);
                     m.head_pitch = (pitch as f32 % 360.0).clamp(-90.0, 90.0);
                 }
             }
