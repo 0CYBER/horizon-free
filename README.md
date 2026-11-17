@@ -65,7 +65,7 @@
 </p>
 
 <p align="center">
-  <a href="https://blacksmith.sh"><img src="docs/media/readme/blacksmith.png" alt="CI powered by Blacksmith" width="220"></a>
+  <a href="https://blacksmith.sh"><img src="docs/media/readme/blacksmith.png" alt="CI powered by Blacksmith" width="280"></a>
 </p>
 
 <p align="center">
