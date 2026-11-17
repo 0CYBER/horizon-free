@@ -171,6 +171,11 @@ impl LegacyRandom {
         self.state
     }
 
+    /// The cached second `nextGaussian` value, if one is pending.
+    pub fn cached_gaussian(&self) -> Option<f64> {
+        self.gaussian
+    }
+
     /// A gated lane's first draw of an item waits for its turn and takes the shared state.
     #[inline]
     fn sync(&mut self) {

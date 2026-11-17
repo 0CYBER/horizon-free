@@ -1881,6 +1881,14 @@ impl Game<'_> {
         };
         let rest: Vec<&str> = words.collect();
         let lit = |s: &str| Text::literal(s.to_owned());
+        #[cfg(feature = "state-digest")]
+        if command == "digest-sync" {
+            match self.as_console_in_overworld(|g| g.state_digest_sync(&rest)) {
+                Ok(()) => log("INFO", "digest-sync done"),
+                Err(e) => log("WARN", &format!("digest-sync: {e}")),
+            }
+            return;
+        }
         match command {
             "stop" => {
                 self.console_reply(Text::translate("commands.stop.stopping", &[]));

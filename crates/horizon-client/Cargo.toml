@@ -134,6 +134,8 @@ upstream-parallel-mobs = []
 default = ["audio", "controllers", "horizon-extras"]
 # Scoped trait-mod installation for a mod's own tests.
 testing = []
+# Per-level-tick state digest for determinism checks (game/state_digest.rs).
+state-digest = []
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
 # Linux: the server build (`--no-default-features`, released as horizon-engine; docs/server.md).
 audio = ["horizon-client-render/audio", "horizon-client-lib/audio"]

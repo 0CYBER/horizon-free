@@ -481,6 +481,10 @@ impl LevelTicks {
     pub fn count(&self) -> usize {
         self.chunks.values().map(ChunkTicks::count).sum()
     }
+    /// Every unpacked queued tick, in no particular order.
+    pub fn all_queued(&self) -> impl Iterator<Item = &ScheduledTick> {
+        self.chunks.values().flat_map(|c| c.queued())
+    }
     pub fn begin_tick(
         &mut self,
         game_time: i64,
