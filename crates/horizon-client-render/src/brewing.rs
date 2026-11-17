@@ -149,22 +149,24 @@ pub fn contents_empty(stack: &ItemStack) -> bool {
                 })
         })
 }
-/// Roman amplifier suffix (`potion.potency.N`) and duration lines of a potion.
+/// Roman amplifier suffix (`potion.potency.N`) and duration lines of a potion's
+/// effects and the stack's custom ones (`PotionContents.getAllEffects`).
 pub fn tooltip(
-    potion: Option<&str>,
+    stack: &ItemStack,
     scale: f32,
     translate: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<(String, Category)> {
-    let Some(def) = potion.and_then(self::potion) else {
-        return vec![];
-    };
-    if def.effects.is_empty() {
+    let effects = contents_effects(stack);
+    if effects.is_empty() {
+        if stack.potion().and_then(self::potion).is_none() {
+            return vec![];
+        }
         return vec![(
             translate("effect.none").unwrap_or_else(|| "No Effects".into()),
             Category::Neutral,
         )];
     }
-    effect_lines(def.effects.iter().copied(), scale, translate)
+    effect_lines(effects, scale, translate)
 }
 /// `PotionContents.addPotionTooltip`'s line per effect: its name, potency and
 /// scaled duration, for (effect id, duration, amplifier) entries.
@@ -752,7 +754,8 @@ mod tests {
         assert_eq!(format_duration(1800), "01:30");
         assert_eq!(format_duration(72000), "01:00:00");
         assert_eq!(format_tick_duration(9600, 40.0), "04:00");
-        let t = tooltip(Some("minecraft:strong_poison"), 1.0, &|_| None);
+        let poison = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:strong_poison");
+        let t = tooltip(&poison, 1.0, &|_| None);
         assert_eq!(t[0].0, "poison II (00:21)");
         assert_eq!(POTIONS.len(), 46);
     }
@@ -905,7 +908,9 @@ mod tests {
         }
         let ru = crate::lang::Language::load(&[&root], "ru_ru");
         let translate = |key: &str| ru.get(key).map(str::to_owned);
-        let lines = tooltip(Some("minecraft:turtle_master"), 0.125, &translate);
+        let master =
+            ItemStack::new("minecraft:tipped_arrow", 1).with_potion("minecraft:turtle_master");
+        let lines = tooltip(&master, 0.125, &translate);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].0.starts_with("Замедление IV ("), "{lines:?}");
         assert!(lines[1].0.starts_with("Сопротивление III ("), "{lines:?}");
@@ -978,6 +983,42 @@ mod tests {
         assert_eq!(lines[0].0, "resistance (∞)");
         let lines = effect_lines([("minecraft:resistance", 15, 0)], 1.0, &translate);
         assert_eq!(lines[0].0, "resistance");
+    }
+    /// `PotionContents.addPotionTooltip` lists `getAllEffects`: the potion's
+    /// effects, then the custom ones, and a potion with only custom effects
+    /// is no "No Effects".
+    #[test]
+    fn the_tooltip_lists_custom_effects_too() {
+        use horizon_core::nbt::Tag;
+        let custom = |id: &str, duration: i32, amplifier: i32| {
+            Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("duration", Tag::Int(duration)),
+                ("amplifier", Tag::Int(amplifier)),
+            ])
+        };
+        let mut stack = ItemStack::new("minecraft:potion", 1);
+        assert!(tooltip(&stack, 1.0, &|_| None).is_empty());
+        stack.data_mut().potion_extra = vec![(
+            "custom_effects".into(),
+            Tag::List(vec![custom("minecraft:speed", 600, 1)]),
+        )];
+        let lines: Vec<_> = tooltip(&stack, 1.0, &|_| None)
+            .into_iter()
+            .map(|l| l.0)
+            .collect();
+        assert_eq!(lines, ["speed II (00:30)"]);
+        let stack = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:strong_poison");
+        let mut mixed = stack.clone();
+        mixed.data_mut().potion_extra = vec![(
+            "custom_effects".into(),
+            Tag::List(vec![custom("minecraft:glowing", 200, 0)]),
+        )];
+        let lines: Vec<_> = tooltip(&mixed, 1.0, &|_| None)
+            .into_iter()
+            .map(|l| l.0)
+            .collect();
+        assert_eq!(lines, ["poison II (00:21)", "glowing (00:10)"]);
     }
     #[test]
     fn custom_contents_color_and_empty_semantics() {

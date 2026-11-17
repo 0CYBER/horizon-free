@@ -941,13 +941,13 @@ pub fn potion_modifier_lines(
     if !is_potion_item(&stack.item) {
         return Vec::new();
     }
-    let effects = stack
-        .potion()
-        .and_then(crate::brewing::potion)
-        .into_iter()
-        .flat_map(|p| p.effects.iter())
-        .map(|(effect, _, amplifier)| (*effect, *amplifier));
-    effect_modifier_lines(effects, translate)
+    let effects = crate::brewing::contents_effects(stack);
+    effect_modifier_lines(
+        effects
+            .iter()
+            .map(|(effect, _, amplifier)| (*effect, *amplifier)),
+        translate,
+    )
 }
 
 /// `addPotionTooltip`'s attribute block for (effect id, amplifier) entries.
@@ -1246,7 +1246,7 @@ pub fn detail_lines(
             _ => 1.0,
         };
         lines.extend(
-            crate::brewing::tooltip(stack.potion(), scale, translate)
+            crate::brewing::tooltip(stack, scale, translate)
                 .into_iter()
                 .map(|l| l.0),
         );
@@ -1748,6 +1748,32 @@ mod tests {
             ]
         );
         assert!(lines(&ItemStack::new("minecraft:bowl", 1), true).is_empty());
+    }
+
+    /// `PotionContents.addPotionTooltip` collects the attribute modifiers of
+    /// every effect, the stack's custom ones included.
+    #[test]
+    fn a_custom_effects_attribute_modifier_is_listed() {
+        let translate = |key: &str| match key {
+            "potion.whenDrank" => Some("When Applied:".to_owned()),
+            "attribute.modifier.plus.0" => Some("+%s %s".to_owned()),
+            "attribute.name.attack_damage" => Some("Attack Damage".to_owned()),
+            _ => None,
+        };
+        let mut potion = ItemStack::new("minecraft:potion", 1);
+        assert!(potion_modifier_lines(&potion, &translate).is_empty());
+        potion.data_mut().potion_extra = vec![(
+            "custom_effects".into(),
+            Tag::List(vec![Tag::compound([
+                ("id", Tag::String("minecraft:strength".into())),
+                ("duration", Tag::Int(600)),
+            ])]),
+        )];
+        let lines: Vec<_> = potion_modifier_lines(&potion, &translate)
+            .into_iter()
+            .map(|l| l.0)
+            .collect();
+        assert_eq!(lines, ["", "When Applied:", "+3 Attack Damage"]);
     }
 
     #[test]

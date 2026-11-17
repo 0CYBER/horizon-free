@@ -1764,7 +1764,7 @@ impl Game<'_> {
             };
             // PotionContents.getPotionDescription: the effect names are
             // translatable, read in the selected language like every other line.
-            for (text, cat) in brewing::tooltip(stack.potion(), scale, &translate) {
+            for (text, cat) in brewing::tooltip(stack, scale, &translate) {
                 let c = match cat {
                     brewing::Category::Beneficial => rgba(85, 85, 255, 255),
                     brewing::Category::Harmful => rgba(255, 85, 85, 255),
