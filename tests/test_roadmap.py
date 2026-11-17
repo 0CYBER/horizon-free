@@ -174,6 +174,17 @@ class Rules(unittest.TestCase):
             self.assertIsNone(roadmap.dated(text), text)
         self.assertTrue(any("date" in p for p in self.problems(plain="Done in October.")))
 
+    def test_lowercase_may_is_a_verb_not_a_date(self):
+        # "may" is a modal verb; a month counts only when capitalised, and MONTHS omits May for that reason.
+        # A lowercase "may N" (verb + number) is ordinary prose, not a date or a deadline.
+        self.assertIsNone(roadmap.dated("This may 5 players join at once"))
+        self.assertIsNone(roadmap.dated("It may 5 land in pieces"))
+        # A capitalised "May 5" is still a real date and must be caught.
+        self.assertEqual(roadmap.dated("Shipped May 5 edition"), "May 5")
+        # The casing rule still holds for the other months.
+        self.assertIsNone(roadmap.dated("we march forward"))
+        self.assertEqual(roadmap.dated("Ready in March"), "March")
+
 
 class Render(unittest.TestCase):
     def test_sections_links_and_the_overview(self):

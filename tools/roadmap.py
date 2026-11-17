@@ -66,8 +66,11 @@ RESERVED_PREFIXES = ("h-", "tab-", "col-", "week-", "journal-")
 RELEASE = re.compile(r"(v\d[\w.]*|launcher@\d[\w.]*|launcher-v\d[\w.]*|website)$")
 MONTHS = ("January|February|March|April|June|July|August|September|October|November|December")
 # Kira's rule: no dates and no promises of when. "Coming soon" is the one allowed phrase.
+# May is left out of MONTHS because lowercase "may" is a verb ("it may land"); only a capitalised "May N"
+# is a date. The other alternatives stay case-insensitive, so the month-name alternatives match "march"
+# too and dated()'s casing check decides whether it is really a month or a verb.
 DATE = re.compile(
-    rf"\b(?:{MONTHS})\b|\bMay \d|(?<![#\w.])20\d\d(?!\w|\.\d)|\bQ[1-4]\b|\btomorrow\b|\btonight\b"
+    rf"\b(?:{MONTHS})\b|(?-i:\bMay \d)|(?<![#\w.])20\d\d(?!\w|\.\d)|\bQ[1-4]\b|\btomorrow\b|\btonight\b"
     r"|\b(?:next|this) (?:week|month|year)\b|\bin \d+ (?:days?|weeks?|months?)\b|\bby the end of\b",
     re.IGNORECASE)
 MONTH_CASE = re.compile(rf"\b(?:{MONTHS})\b")
