@@ -124,6 +124,7 @@ fn pick(requested: bool, offered: wgpu::Features) -> wgpu::Features {
 }
 
 /// The device's opt-in to `features`' experimental ones.
+#[allow(dead_code)]
 pub(super) fn experimental(features: wgpu::Features) -> wgpu::ExperimentalFeatures {
     if features.contains(RAY_QUERY) {
         horizon_hdr::experimental_features()

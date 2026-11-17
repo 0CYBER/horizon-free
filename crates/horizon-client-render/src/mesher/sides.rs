@@ -124,6 +124,21 @@ impl Sides {
         self.ends[13]
     }
 
+    /// Whether this sort grouped all opaque quads before cutout quads.
+    pub fn is_grouped(&self) -> bool {
+        self.grouped
+    }
+
+    /// Where the `n`th part ends (0..14).
+    pub fn part_end(&self, n: usize) -> u32 {
+        self.ends[n]
+    }
+
+    /// The plane threshold for bucket `b` (0..7).
+    pub fn bucket_plane(&self, b: usize) -> f32 {
+        self.planes[b]
+    }
+
     /// Calls `draw(first, count)` for each run of quads an eye at `eye`
     /// (relative to the mesh's origin) can see the front of, nearest the
     /// start first. Empty buckets do not break a run.

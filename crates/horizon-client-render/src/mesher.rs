@@ -8,6 +8,7 @@ pub use mod_api::client::mesher::TintSource;
 mod fluid;
 mod leaf_culling;
 mod lighting;
+pub mod meshlet;
 mod mod_geometry;
 mod mod_tint;
 pub mod packed;

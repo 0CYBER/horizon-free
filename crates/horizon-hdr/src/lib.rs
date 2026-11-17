@@ -48,11 +48,11 @@ pub fn open_vulkan_device(
 }
 
 /// wgpu's opt-in to its `EXPERIMENTAL_*` features, which the crates that forbid unsafe code
-/// can't give: hardware ray queries, asked for only when the player turns ray tracing on
-/// (`gfx/ray_query.rs` in horizon-client-render).
+/// can't give: hardware ray queries (`gfx/ray_query.rs`) and hardware mesh shaders
+/// (`gfx/mesh_shader.rs`), asked for only when the player turns them on.
 pub fn experimental_features() -> wgpu::ExperimentalFeatures {
     // Safety: wgpu warns that its experimental features may have bugs that reach undefined
-    // behaviour through safe calls. Horizon accepts that only on request, for ray queries.
+    // behaviour through safe calls. Horizon accepts that only on explicit request.
     unsafe { wgpu::ExperimentalFeatures::enabled() }
 }
 
