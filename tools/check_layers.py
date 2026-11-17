@@ -12,7 +12,9 @@ optional (behind a feature), for the layer and the portable check alike. The che
 - an `optional` entry whose dependency is no longer optional;
 - with --base, an `allowed` or `optional` entry the branch added from a crate that already had a layer on the base;
 - a shipped crate depending on a tool;
-- a portable crate depending on a crate of the repository that isn't portable, or on a `forbidden` library.
+- a portable crate depending on a crate of the repository that isn't portable, or on a `forbidden` library;
+- a `portable.pending` crate doing the same beyond the crates its entry lists, listed as portable too, or (with
+  --base) gaining an entry its base list lacks.
 An `allowed` or `optional` entry with no dependency left is reported, not failed. Dev-dependencies are exempt: tests may reach the platform, but shipped code may not.
 
     python3 tools/check_layers.py                     # the check
@@ -162,16 +164,29 @@ def check(config, graph, base=None, optional=frozenset(), upstream=None):
     return problems, notes
 
 
-def portable(config, packages):
+def portable(config, packages, base=None):
     """Problems of the portable crates (docs/layers.md#engine): a path dependency on a crate that isn't portable,
     or a normal or build dependency on a library they never take (window, GPU, sound, gamepad, clipboard, HTTP)."""
     spec = config.get("portable", {})
     crates, forbidden = set(spec.get("crates", [])), set(spec.get("forbidden", []))
     optional_baselines = optional_rows(config)
+    pending = {crate: set(deps) for crate, deps in spec.get("pending", {}).items() if not crate.startswith("_")}
     problems = {f"{crate}: listed as portable in {CONFIG_PATH}, but not an engine crate there"
-                for crate in crates if config["crates"].get(crate) != "engine"}
+                for crate in crates | set(pending) if config["crates"].get(crate) != "engine"}
+    problems |= {f"{crate}: in both portable.crates and portable.pending of {CONFIG_PATH}"
+                 for crate in crates & set(pending)}
+    base_pending = (base or {}).get("portable", {}).get("pending", {})
+    base_portable = set((base or {}).get("portable", {}).get("crates", []))
+    for crate, deps in pending.items():
+        if crate in base_portable and crate not in base_pending and deps:
+            problems.add(f"{crate}: portable on the base, now in portable.pending of {CONFIG_PATH} with "
+                         f"{', '.join(sorted(deps))}. A portable crate stays portable")
+        if crate in base_pending:
+            for dep in sorted(deps - set(base_pending[crate])):
+                problems.add(f"{crate} -> {dep}: added to portable.pending in {CONFIG_PATH}. "
+                             f"The exceptions only shrink")
     for package in packages:
-        if package["name"] not in crates:
+        if package["name"] not in crates and package["name"] not in pending:
             continue
         for dep in package["dependencies"]:
             if dep.get("kind") == "dev":
@@ -179,7 +194,7 @@ def portable(config, packages):
             edge = f"{package['name']} -> {dep['name']}"
             if dep.get("optional") and edge in optional_baselines:
                 continue
-            if dep.get("path") and dep["name"] not in crates:
+            if dep.get("path") and dep["name"] not in crates | pending.get(package["name"], set()):
                 problems.add(f"{edge}: a portable crate depends only on the other portable crates "
                              f"({DOC}{SECTION['engine']})")
             elif not dep.get("path") and dep["name"] in forbidden:
@@ -228,7 +243,7 @@ def main(argv=None):
         if upstream is not None or provenance:
             problems, notes = check(config, graph, base, optional, upstream)
         problems = provenance + problems
-    problems += portable(config, packages)
+    problems += portable(config, packages, base)
     for note in notes:
         print(f"note: {note}")
     if problems:

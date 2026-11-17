@@ -1,0 +1,13 @@
+[package]
+name = "horizon-client-gameplay"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Client-only gameplay: what vanilla's client jar adds to the logical side"
+
+[dependencies]
+horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
+
+[lints]
+workspace = true

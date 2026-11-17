@@ -24,6 +24,8 @@ mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab" }
 horizon-engine-slots = { path = "../horizon-engine-slots" }
 horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
 horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
+horizon-gameplay = { path = "../horizon-gameplay" }
+horizon-client-gameplay = { path = "../horizon-client-gameplay" }
 horizon-assets = { path = "../horizon-assets" }
 horizon-client-core = { path = "../horizon-client-core" }
 horizon-client-input = { path = "../horizon-client-input" }
