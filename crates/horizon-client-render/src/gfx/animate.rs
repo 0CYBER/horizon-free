@@ -368,6 +368,15 @@ impl SpriteAnimator {
         &self.changed
     }
 
+    /// The frame selected for this layer, including animation modes.
+    pub(super) fn current_frame(&self, layer: u32) -> Option<usize> {
+        self.sprites
+            .iter()
+            .find(|s| s.animation.layer == layer)?
+            .shown
+            .map(|b| b.frame)
+    }
+
     /// [`Self::animate_with`] with the Polytone animation modes' inputs the renderer was last given.
     pub fn animate_modes(
         &mut self,

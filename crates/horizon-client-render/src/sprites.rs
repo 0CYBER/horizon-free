@@ -28,9 +28,13 @@ impl SpriteAnimation {
         self.materials.iter().any(Option::is_some)
     }
     /// Material categories follow the selected colour frame, without colour interpolation.
+    #[cfg(test)]
     pub(crate) fn material_pixels(&self, kind: usize, tick: u64) -> Option<&[u8]> {
         let frames = self.materials[kind].as_ref()?;
         Some(&frames[self.frame(tick) % frames.len()])
+    }
+    pub(crate) fn material_frames(&self, kind: usize) -> Option<&[Vec<u8>]> {
+        self.materials[kind].as_deref().map(Vec::as_slice)
     }
     /// Polytone's `mode` on this animation, when it has one.
     pub fn mode(&self) -> Option<&horizon_assets::animation::ClipMode> {
@@ -938,6 +942,17 @@ pub(crate) fn test_frames(layer: u32, frames: Vec<Vec<u8>>, metadata: &str) -> S
         frames: Arc::new(frames),
         materials: [None, None],
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_material_frames(
+    frames: Vec<Vec<u8>>,
+    metadata: &str,
+    materials: [Option<Vec<Vec<u8>>>; 2],
+) -> SpriteAnimation {
+    let mut animation = test_frames(0, frames, metadata);
+    animation.materials = materials.map(|m| m.map(Arc::new));
+    animation
 }
 
 /// How many reduced copies a sprite atlas keeps: the Mipmap Levels option plus the

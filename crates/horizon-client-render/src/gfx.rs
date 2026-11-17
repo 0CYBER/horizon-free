@@ -447,6 +447,9 @@ mod hdr_start;
 mod hdr_stats;
 pub(crate) mod hud_coverage;
 mod in_flight;
+mod material_animate;
+#[cfg(test)]
+mod material_animation_tests;
 pub use hdr::{Calibration as HdrCalibration, Output as HdrOutput};
 pub use output::{DisplayReading, EffectiveOutput, FrameConfiguration, FrameRequest};
 
@@ -1546,7 +1549,7 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: animate::SpriteAnimator,
-    material_animations: Vec<SpriteAnimation>,
+    material_animations: material_animate::MaterialAnimations,
     active_animated_layers: Vec<u64>,
     uploads: upload::Uploads,
     /// Section meshes are staged through their own belt into
@@ -3559,11 +3562,7 @@ impl Renderer {
                 )
             })
             .collect();
-        let material_animations = animations
-            .iter()
-            .filter(|a| a.has_materials())
-            .cloned()
-            .collect();
+        let material_animations = material_animate::MaterialAnimations::new(animations);
         let animations = animate::SpriteAnimator::new(
             &device,
             animations,
@@ -7383,51 +7382,49 @@ impl Renderer {
             active,
             self.own_timing.as_mut(),
         );
-        if let Some(arrays) = &self.pbr_maps {
-            for animation in &self.material_animations {
-                if !self.animations.changed().contains(&animation.layer) {
-                    continue;
-                }
-                let Some(pair) = arrays.get((animation.layer / self.sprite_split) as usize) else {
-                    continue;
-                };
-                for kind in 0..2 {
-                    let Some(pixels) = animation.material_pixels(kind, tick) else {
-                        continue;
+        if let Some(arrays) = &self.pbr_maps
+            && let Some(pair) = arrays.first()
+        {
+            let selected = self.animations.changed().iter().filter_map(|&layer| {
+                self.animations
+                    .current_frame(layer)
+                    .map(|frame| (layer, frame))
+            });
+            let size = pair[0].width();
+            let levels = pair[0].mip_level_count();
+            let changed = self.material_animations.animate(
+                selected,
+                size,
+                levels,
+                |layer, kind, level, size, pixels| {
+                    let Some(pair) = arrays.get((layer / self.sprite_split) as usize) else {
+                        return;
                     };
-                    let texture = &pair[kind];
-                    let from = (pixels.len() / 4).isqrt() as u32;
-                    for level in 0..texture.mip_level_count() {
-                        let size = texture.width() >> level;
-                        let pixels = crate::sprites::resample(pixels, from, size);
-                        self.uploads.texture(
-                            encoder,
-                            wgpu::TexelCopyTextureInfo {
-                                texture,
-                                mip_level: level,
-                                origin: wgpu::Origin3d {
-                                    x: 0,
-                                    y: 0,
-                                    z: animation.layer % self.sprite_split,
-                                },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            size,
-                            size,
-                            &pixels,
-                        );
-                    }
-                }
-            }
-            if let Some(atlases) = &self.pack_material_atlases {
-                for kind in 0..2 {
-                    let arrays: Vec<_> = arrays.iter().map(|pair| pair[kind].clone()).collect();
-                    atlases[kind].copy(
-                        &self.device,
+                    self.uploads.texture(
                         encoder,
-                        &arrays,
-                        self.animations.changed().iter().copied(),
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &pair[kind],
+                            mip_level: level,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: 0,
+                                z: layer % self.sprite_split,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        size,
+                        size,
+                        pixels,
                     );
+                },
+            );
+            if let Some(atlases) = &self.pack_material_atlases {
+                for (kind, layers) in changed.into_iter().enumerate() {
+                    if layers.is_empty() {
+                        continue;
+                    }
+                    let arrays: Vec<_> = arrays.iter().map(|pair| pair[kind].clone()).collect();
+                    atlases[kind].copy(&self.device, encoder, &arrays, layers);
                 }
             }
         }
