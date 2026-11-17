@@ -259,10 +259,10 @@ def blockers(inventory, have):
     out = {}
     for x in inventory:
         s = x['raw_shape']
-        if s and x['target'] not in out:
+        if s:
             used = set().union(*(leaves(a['ty']) for a in s['args']), leaves(s['return_ty']),
                                leaves(s['receiver']['ty'] if s['receiver'] else ''))
-            out[x['target']] = used - have
+            out.setdefault(x['target'], set()).update(used - have)
     return out
 
 

@@ -193,6 +193,13 @@ class RankTest(unittest.TestCase):
         self.assertEqual(scaffold.rank(blocked), [('Boat', 1, 2), ('Map', 0, 1)])
         self.assertEqual(scaffold.rank(blocked, resolved={'Boat'}), [('Map', 1, 1)])
 
+    def test_blockers_merge_every_overload_shape(self):
+        def shape(target, args):
+            return {'target': target, 'raw_shape': {
+                'args': [{'ty': t} for t in args], 'return_ty': '()', 'receiver': None}}
+        self.assertEqual(scaffold.blockers([shape('a', ['Boat']), shape('a', ['Map'])], have=set()),
+                         {'a': {'Boat', 'Map'}})
+
     def test_ref_and_key_names_carry_the_engine_type(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / 'crates/horizon-mod-vocab/src'
