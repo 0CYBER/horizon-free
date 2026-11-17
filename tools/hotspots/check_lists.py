@@ -47,6 +47,28 @@ USE = re.compile(r"\bpub(?:\s*\([^)]*\))?\s+use\s+([^;]*);")
 COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 
 
+def use_names(tree):
+    """Names in a `pub use` tree: braces and commas at angle depth 0 separate names.
+
+    A comma inside a generic argument list (`Foo<Bar, Baz>`) belongs to the single
+    name `Foo<Bar, Baz>`; splitting on every comma would count it twice. Path
+    prefixes such as `a::` or `x::` are not names and are left out.
+    """
+    parts = []
+    start = 0
+    depth = 0
+    for index, char in enumerate(tree):
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0 and char in "{},":
+            parts.append(tree[start:index])
+            start = index + 1
+    parts.append(tree[start:])
+    return [part for part in parts if part.strip() and not part.strip().endswith("::")]
+
+
 def longest_list(source):
     """Names in the longest braced `pub use` of a Rust source (0 when none has braces)."""
     best = 0
@@ -54,8 +76,7 @@ def longest_list(source):
         tree = m.group(1)
         if "{" not in tree:
             continue
-        names = [x for x in re.split(r"[{},]", tree) if x.strip() and not x.strip().endswith("::")]
-        best = max(best, len(names))
+        best = max(best, len(use_names(tree)))
     return best
 
 
