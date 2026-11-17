@@ -89,6 +89,9 @@ impl Renderer {
         &mut self,
         mut pack: Option<crate::gfx::native_pack::NativePack>,
     ) -> Option<String> {
+        // A frame still on the submit thread binds the kept resources `install_kept` destroys:
+        // its submission would fail on them.
+        self.land_frame();
         if let (Some(new), Some(old)) = (&mut pack, &mut self.native) {
             new.carry(old);
         }
