@@ -2976,13 +2976,11 @@ impl Hub {
         let ready = |c: &Chunk| {
             c.lit
                 && streaming.is_none_or(|streaming| {
-                    (-1..=1).all(|dz| {
-                        (-1..=1).all(|dx| {
-                            let (x, z) = (c.x + dx, c.z + dz);
-                            world.chunks.contains_key(&(x, z))
-                                || streaming.proto_sections(x, z).is_some()
-                        })
-                    })
+                    neighbours_ready(
+                        &world.chunks,
+                        |x, z| streaming.proto_sections(x, z).is_some(),
+                        c,
+                    )
                 })
         };
         let near: Vec<_> = g
@@ -5167,10 +5165,39 @@ fn equipment_source(g: &Guest, index: usize) -> Option<&ItemStack> {
     }
 }
 
+/// The original neighbour check of `next_batch`'s readiness: each of the nine
+/// columns around `c` (itself included) is a full chunk in `chunks` or a proto
+/// chunk `proto` reports.
+fn neighbours_scanned(
+    chunks: &crate::chunk_map::ChunkMap,
+    proto: impl Fn(i32, i32) -> bool,
+    c: &Chunk,
+) -> bool {
+    (-1..=1).all(|dz| {
+        (-1..=1).all(|dx| {
+            let (x, z) = (c.x + dx, c.z + dz);
+            chunks.contains_key(&(x, z)) || proto(x, z)
+        })
+    })
+}
+
+/// `neighbours_scanned`, with the resident-neighbourhood index as a fast path:
+/// a column whose nine columns are all resident (`ChunkMap::surrounded`) is ready
+/// without the nine lookups. Anything else takes the scan, so the answer is the
+/// scan's in every case.
+fn neighbours_ready(
+    chunks: &crate::chunk_map::ChunkMap,
+    proto: impl Fn(i32, i32) -> bool,
+    c: &Chunk,
+) -> bool {
+    chunks.surrounded((c.x, c.z)) || neighbours_scanned(chunks, proto, c)
+}
+
 #[cfg(test)]
 mod tests {
     mod bundle_sound_tests;
     mod cave_air_tests;
+    mod chunk_ready_tests;
     mod collision_exclusion_tests;
     mod effect_meta_tests;
     #[path = "../far_tests.rs"]
