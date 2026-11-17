@@ -1,5 +1,5 @@
 name: pr labels
-# A pull request's kind label (the box ticked in the template) and area labels (the paths it changes):
+# A pull request's kind label (the box ticked in the template), area labels (the paths it changes) and size label:
 # tools/ci/pr_labels.py, CONTRIBUTING.md "Pull requests".
 #
 # Why no pull request's code runs here, though `pull_request_target` gives a token that can write to fork PRs:
@@ -17,6 +17,12 @@ jobs:
     # Edits that change neither the description nor the title (the kind and areas they state) change nothing: skip
     # them before a runner starts.
     if: github.event.action != 'edited' || github.event.changes.body != null || github.event.changes.title != null
+    # The runs that set the size label (all but edits) go one at a time per pull request, so two quick pushes can't each
+    # leave their own; a waiting one gives way to a newer one. Edits never wait or give way: each carries the change
+    # the kind swap reads.
+    concurrency:
+      group: pr-labels-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && github.run_id || 'files' }}
+      cancel-in-progress: false
     # One of our small runners (horizon-light), out of GitHub's pool: it runs main's script only (above), so a fork's
     # pull request runs none of its code there (docs/ci-runners.md). SELF_HOSTED_CI=off: GitHub's runners.
     runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'ubuntu-latest' }}

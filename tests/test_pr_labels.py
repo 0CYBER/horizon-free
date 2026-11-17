@@ -1,6 +1,11 @@
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from tools import pr_ready
 from tools.ci import pr_labels as pl
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +125,104 @@ class BackfillTests(unittest.TestCase):
         self.assertIsNone(pl.guess_kind("x", None, []))
 
 
+class FakeApi:
+    def __init__(self, labels=(), files=(), pulls=(), existing=()):
+        self.now, self._files, self.pulls, self.existing = set(labels), list(files), list(pulls), set(existing)
+        self.calls = []
+
+    def files(self, n):
+        return self._files
+
+    def labels(self, n):
+        return set(self.now)
+
+    def add(self, n, names):
+        self.calls.append(("add", n, names))
+
+    def remove(self, n, name):
+        self.calls.append(("remove", n, name))
+
+    def open_pulls(self):
+        return self.pulls
+
+    def existing_labels(self):
+        return self.existing
+
+    def create_label(self, name, color, description):
+        self.calls.append(("create", name))
+
+
+class SizeTests(unittest.TestCase):
+    def test_edges(self):
+        for lines, size in ((0, "XS"), (50, "XS"), (51, "S"), (150, "S"), (151, "M"), (500, "M"), (501, "L"),
+                            (3000, "L"), (3001, "XL")):
+            self.assertEqual(pl.size_of([("crates/a/src/lib.rs", lines)]), f"size: {size}", lines)
+        self.assertEqual(pl.size_of([]), "size: XS")
+        self.assertEqual(pl.size_of([("crates/a/src/lib.rs", 2000), ("launcher/src/b.rs", 1001)]), "size: XL")
+
+    def test_docs_and_tests_dont_count(self):
+        files = [("crates/a/src/lib.rs", 40), ("docs/a.md", 5000), ("README.md", 900), ("tests/test_a.py", 900),
+                 ("crates/a/tests/it.rs", 900), ("crates/a/src/test/x.rs", 900), ("tools/test_a_parity.py", 900)]
+        self.assertEqual(pl.size_of(files), "size: XS")
+        self.assertEqual(pl.size_of(files + [("Cargo.lock", 11)]), "size: S")  # pr_ready counts lock files too
+
+    def test_counted_is_pr_readys_rule(self):
+        for path in ("crates/a/src/lib.rs", "docs/a.md", "README.md", "tests/test_a.py", "crates/a/tests/it.rs",
+                     "crates/a/src/test/x.rs", "tools/test_a_parity.py", "test_root.py", "tools/ci/pr_labels.py",
+                     "Cargo.lock", "mods/horizon/src/test/java/A.java", "crates/a/src/tests.rs", "attest/a.rs"):
+            self.assertEqual(pl.counted(path), pr_ready.reviewed(path), path)
+
+    def test_one_size_replaces_the_old(self):
+        files = [("crates/a/src/lib.rs", 200)]
+        self.assertEqual(pl.size_change(set(), files), ("size: M", []))
+        self.assertEqual(pl.size_change({"size: M", "bug"}, files), (None, []))
+        self.assertEqual(pl.size_change({"size: S", "bug"}, files), ("size: M", ["size: S"]))
+        self.assertEqual(pl.size_change({"size: XS", "size: M", "size: XL"}, files),
+                         (None, ["size: XL", "size: XS"]))
+
+    def run_event(self, api, action):
+        ev = event(body("bug"), labels=("bug", "size: XS"), action=action)  # older than now
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "event.json")
+            path.write_text(json.dumps(ev))
+            with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(path)}), mock.patch("builtins.print"):
+                pl.event(api)
+
+    def test_event_reads_the_labels_now(self):
+        api = FakeApi(labels={"bug", "size: L"}, files=[("crates/a/src/lib.rs", 200)])
+        self.run_event(api, "synchronize")
+        self.assertEqual(api.calls, [("remove", 9, "size: L"), ("add", 9, ["size: M"])])
+
+    def test_event_edit_leaves_size(self):
+        api = FakeApi(labels={"bug", "size: L"}, files=[("crates/a/src/lib.rs", 200)])
+        self.run_event(api, "edited")
+        self.assertEqual(api.calls, [])
+
+    def test_remove_encodes_the_name_and_ignores_a_missing_label(self):
+        with mock.patch.object(pl, "gh") as gh:
+            pl.Api("o/r").remove(7, "size: XS")
+        gh.assert_called_once_with("api", "-X", "DELETE", "repos/o/r/issues/7/labels/size%3A%20XS")
+        with mock.patch.object(pl, "gh", side_effect=RuntimeError("gh api : Label does not exist (HTTP 404)")):
+            pl.Api("o/r").remove(7, "size: XS")
+        with mock.patch.object(pl, "gh", side_effect=RuntimeError("gh api : (HTTP 403)")):
+            self.assertRaises(RuntimeError, pl.Api("o/r").remove, 7, "size: XS")
+
+    def test_create_only_what_is_missing(self):
+        have = {label for _, label, _ in pl.KINDS} | pl.AREA_LABELS | {"Size: XS", "size: s"}
+        api = FakeApi(existing=have)
+        self.assertEqual(pl.create(api, apply=True), ["size: M", "size: L", "size: XL"])
+        self.assertEqual(api.calls, [("create", "size: M"), ("create", "size: L"), ("create", "size: XL")])
+
+    def test_backfill(self):
+        pulls = [{"number": 1, "title": "x", "body": None, "labels": [{"name": "size: XL"}, {"name": "bug"}]},
+                 {"number": 2, "title": "x", "body": None, "labels": [{"name": "size: XS"}, {"name": "bug"}]}]
+        api = FakeApi(files=[("crates/a/src/lib.rs", 10)], pulls=pulls)
+        self.assertEqual(pl.backfill(api, apply=False), [(1, ["size: XS"], ["size: XL"])])
+        self.assertEqual(api.calls, [])
+        pl.backfill(api, apply=True)
+        self.assertEqual(api.calls, [("remove", 1, "size: XL"), ("add", 1, ["size: XS"])])
+
+
 class WorkflowTests(unittest.TestCase):
     def test_workflow_is_safe(self):
         text = (ROOT / ".github/workflows/pr-labels.yml").read_text()
@@ -128,6 +231,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("pull_request_target", text)
         self.assertIn("ref: main", text)
         self.assertIn("persist-credentials: false", text)
+        # Two pushes in a row run one after the other (one size label); edits run alone.
+        self.assertIn("group: pr-labels-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && "
+                      "github.run_id || 'files' }}"
+                      "\n      cancel-in-progress: false", text)
         for bad in ("contents: write", "issues: write", "head.sha", "head.ref", "github.event.pull_request.body"):
             self.assertNotIn(bad, text)
         # The checkout fetches the script alone.

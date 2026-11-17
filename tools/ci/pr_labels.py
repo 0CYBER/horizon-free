@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Kind and area labels on pull requests (CONTRIBUTING.md "Pull requests", issue #3859).
+"""Kind, area and size labels on pull requests (CONTRIBUTING.md "Pull requests", issues #3859 and #17606).
 
-    pr_labels.py event                     one pull request event (pr-labels.yml): its kind and area labels
-    pr_labels.py create [--apply]          creates the kind and area labels the repository lacks
+    pr_labels.py event                     one pull request event (pr-labels.yml): its kind, area and size labels
+    pr_labels.py create [--apply]          creates the kind, area and size labels the repository lacks
     pr_labels.py backfill [--apply]        labels the open pull requests once; prints what it would do without --apply
 
 Kind: the box ticked in the template's "Kind" list, else the title's `kind(area): ` prefix (`fix` and `feat` count as
@@ -12,6 +12,9 @@ never removed.
 `feature` keeps its release meaning (listed under New, docs/release-flow.md).
 Areas: the area labels the title names (`perf(chunks,rendering): ...`), then the paths the pull request changes
 (docs/architecture.md), at most 3, each with a tenth of the changed lines or more. Added, never removed.
+Size: one label from the lines the API reports per changed file (added plus removed) outside Markdown and test files:
+pr_ready's count, but with the moved lines and inline tests it leaves out, which only the diff shows. Set on every
+push; a new size replaces the old one, whoever set it.
 
 The workflow runs on `pull_request_target` from main: this script reads the event file and the API's list of changed
 files, never a pull request's code.
@@ -23,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 
 # Kind: (the word ticked in the template, the label, its description).
 KINDS = [
@@ -84,6 +88,11 @@ KIND_LINE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*\**`?(\w+)`?", re.M)
 TITLE = re.compile(r"^\s*(\w+)(?:\(([^)]*)\))?\s*:\s*\S")
 TITLE_ALIASES = {"fix": "bug", "feat": "feature"}  # Conventional Commits' words
 AREA_LABELS = {label for label, _, _ in AREAS}
+# Size: (label, the most counted lines it takes, its colour). XL is over the 3000 lines of CONTRIBUTING.md's limit,
+# though this count also has the moved lines and inline tests that pr_ready leaves out.
+SIZES = [("size: XS", 50, "ededed"), ("size: S", 150, "d4d4d4"), ("size: M", 500, "bbbbbb"),
+         ("size: L", 3000, "9e9e9e"), ("size: XL", None, "808080")]
+SIZE_LABELS = {label for label, _, _ in SIZES}
 
 
 def titled(title: str | None) -> tuple[str | None, list[str]]:
@@ -122,6 +131,25 @@ def areas(files: list[tuple[str, int]]) -> list[str]:
             lines[a] = lines.get(a, 0) + max(n, 1)
     big = [a for a, n in sorted(lines.items(), key=lambda kv: -kv[1]) if n * 10 >= total]
     return big[:MAX_AREAS]
+
+
+def counted(path: str) -> bool:
+    """Whether a file's lines count towards a pull request's size: tools/pr_ready.py `reviewed`, kept equal by a test
+    (the workflow checks out this file alone)."""
+    return not path.endswith(".md") and not path.startswith("tests/") and not re.search(
+        r"(^|/)tests?/|/test_\w+\.py$", path)
+
+
+def size_of(files: list[tuple[str, int]]) -> str:
+    """The size label of a change, from (path, changed lines)."""
+    n = sum(lines for path, lines in files if counted(path))
+    return next(label for label, most, _ in SIZES if most is None or n <= most)
+
+
+def size_change(have: set[str], files: list[tuple[str, int]]) -> tuple[str | None, list[str]]:
+    """(size label to add, size labels to remove): exactly one stays."""
+    size = size_of(files)
+    return (None if size in have else size), sorted(have & SIZE_LABELS - {size})
 
 
 def kind_of(body: str | None, title: str | None) -> list[str]:
@@ -172,7 +200,14 @@ class Api:
         gh(*args)
 
     def remove(self, n: int, name: str) -> None:
-        gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/labels/{name}")
+        try:
+            gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/labels/{urllib.parse.quote(name, safe='')}")
+        except RuntimeError as e:
+            if "HTTP 404" not in str(e):  # already gone
+                raise
+
+    def labels(self, n: int) -> set[str]:
+        return set(gh("api", f"repos/{self.repo}/issues/{n}/labels", "--jq", ".[].name").splitlines())
 
     def open_pulls(self) -> list[dict]:
         raw = gh("pr", "list", "-R", self.repo, "--state", "open", "--limit", "1000", "--json",
@@ -211,11 +246,17 @@ def event(api) -> int:
     n = ev["pull_request"]["number"]
     files = None if ev.get("action") == "edited" else api.files(n)
     add, remove = plan_event(ev, files)
-    if remove:
-        api.remove(n, remove)
+    removes = [remove] if remove else []
+    if files is not None:
+        # The labels now, not the event's: two quick pushes would otherwise each leave their own size.
+        size, stale = size_change(api.labels(n), files)
+        add += [size] if size else []
+        removes += stale
+    for name in removes:
+        api.remove(n, name)
     if add:
         api.add(n, add)
-    print(f"#{n}: +{add} -{remove or []}")
+    print(f"#{n}: +{add} -{removes}")
     return 0
 
 
@@ -236,7 +277,7 @@ def guess_kind(title: str, body: str | None, files: list[tuple[str, int]]) -> st
     return None
 
 
-def backfill(api, apply: bool) -> list[tuple[int, list[str]]]:
+def backfill(api, apply: bool) -> list[tuple[int, list[str], list[str]]]:
     out = []
     for pr in api.open_pulls():
         have = {l["name"] for l in pr["labels"]}
@@ -245,10 +286,15 @@ def backfill(api, apply: bool) -> list[tuple[int, list[str]]]:
         if not have & KIND_LABELS and (k := guess_kind(pr["title"], pr["body"], files)):
             add.append(k)
         add += [a for a in titled(pr["title"])[1] + areas(files) if a not in have and a not in add]
-        if add:
-            out.append((pr["number"], add))
+        size, stale = size_change(have, files)
+        add += [size] if size else []
+        if add or stale:
+            out.append((pr["number"], add, stale))
             if apply:
-                api.add(pr["number"], add)
+                for name in stale:
+                    api.remove(pr["number"], name)
+                if add:
+                    api.add(pr["number"], add)
     return out
 
 
@@ -256,6 +302,8 @@ def create(api, apply: bool) -> list[str]:
     have = {n.lower() for n in api.existing_labels()}
     todo = [(label, "5319e7", desc) for _, label, desc in KINDS if label not in have]
     todo += [(label, "c5def5", desc) for label, desc, _ in AREAS if label not in have]
+    todo += [(label, color, f"Size: {f'up to {most}' if most else 'over 3000'} changed lines, not counting .md and "
+              "test files") for label, most, color in SIZES if label.lower() not in have]
     for label, color, desc in todo if apply else []:
         api.create_label(label, color, desc)
     return [t[0] for t in todo]
