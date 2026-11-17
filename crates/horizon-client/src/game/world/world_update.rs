@@ -404,6 +404,10 @@ impl Game<'_> {
                 self.streaming.free(spent);
             }
             renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
+            // Sections whose mesh the arena refused: meshed again, as an edit's section
+            // is, once their retry comes due. The mesh is dropped with the uploads above,
+            // so this is the only way back for them.
+            renderer.queue_upload_retries(&mut self.world.dirty_sections, now);
             // Meshes in the works are the view's terrain while it is new, then edits'.
             let meshing = self.streaming.busy() || !self.pending_uploads.is_empty();
             let sampling = self.lod.as_ref().is_some_and(|lod| lod.sampling());

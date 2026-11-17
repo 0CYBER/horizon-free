@@ -516,6 +516,8 @@ mod sunrise_fan;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
+mod upload_retry;
+use upload_retry::UploadRetries;
 mod view;
 mod view_sections;
 mod visbuffer;
@@ -1599,6 +1601,8 @@ pub struct Renderer {
     detail_columns: FxHashMap<(i32, i32), SectionMask>,
     /// Bumped whenever a column becomes or stops being complete.
     detail_revision: u64,
+    /// Sections whose mesh the arena refused (`upload`), waiting to be meshed again.
+    upload_retries: UploadRetries,
     arena: arena::Arena,
     /// Translucent quads' own arena, with large pages, while the layout is split
     /// (`translucent_split`): the back-to-front list then stays in one page (and
@@ -4458,6 +4462,7 @@ impl Renderer {
             lod_pending: None,
             detail_columns: Default::default(),
             detail_revision: 0,
+            upload_retries: UploadRetries::default(),
             arena,
             translucent_arena,
             translucent_batching,
@@ -5068,14 +5073,37 @@ impl Renderer {
     ) -> Option<bool> {
         self.occlusion.visible_for_camera(key, camera_section)
     }
-    pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
+    /// Section `key`'s quads in, from `mesh`; whether the section has them now, a section
+    /// with no quads counting (there is nothing to draw). False when the arena had no room
+    /// for them: the mesh is gone once the game frees it, so the section is remembered here
+    /// (`queue_upload_retries`) and meshed again once memory allows.
+    pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) -> bool {
         if let Some(copies) = &mut self.capture_copies {
             copies.section(key, mesh);
         }
         let facts = MeshFacts::of(mesh);
         let fading = self.before_mesh(key, &facts);
         let section = self.upload_mesh(mesh);
+        let drawn = section.is_some() || facts.empty;
+        if drawn {
+            self.upload_retries.uploaded(key);
+        } else {
+            let quads = ((mesh.solid.len() + mesh.translucent.len()) / 4) as u32;
+            self.upload_retries.refused(key, Instant::now(), quads);
+        }
         self.after_mesh(key, &facts, section, fading);
+        drawn
+    }
+    /// Puts the sections whose retry is due (`upload`) back in the mesh queue `dirty`
+    /// (`World::dirty_sections`), as an edit puts a changed section there: the game meshes
+    /// them again, and the next upload of them finds out whether the arena takes their
+    /// quads. How many went back.
+    pub fn queue_upload_retries(
+        &mut self,
+        dirty: &mut crate::world::DirtySections,
+        now: Instant,
+    ) -> usize {
+        self.upload_retries.queue_due(dirty, now)
     }
     /// Section `key`'s new mesh drawn from now on, its quads uploaded (`section`: none when it
     /// has none, or the arena had no room).
@@ -5647,6 +5675,7 @@ impl Renderer {
         self.lod_pending = None;
         self.detail_columns.clear();
         self.detail_revision += 1;
+        self.upload_retries.clear();
         // A dimension change drops every page at once: freed later, off this thread.
         self.graveyard.add(self.arena.clear());
         if let Some(gpu) = &mut self.gpu_culling {
@@ -5833,6 +5862,13 @@ impl Renderer {
         let columns: Vec<(i32, i32)> = columns.into_iter().collect();
         if let Some(copies) = &mut self.capture_copies {
             copies.remove_columns(&columns);
+        }
+        if !self.upload_retries.is_empty() && !columns.is_empty() {
+            // Nothing meshes a section of a column that left the view: the retry would
+            // only fill the queue for a chunk that is gone.
+            let dropped: crate::fast_hash::FxHashSet<_> = columns.iter().copied().collect();
+            self.upload_retries
+                .retain_columns(|x, z| !dropped.contains(&(x, z)));
         }
         // Most of the view at once (a teleport at render distance 32 drops some 3700
         // columns): a pass over each store instead of a lookup per section key, which
