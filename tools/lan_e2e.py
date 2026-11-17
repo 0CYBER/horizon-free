@@ -3954,6 +3954,12 @@ def bed_at(game, foot):
     return [x + 1, y, z]
 
 
+def clock_gap(a, b):
+    """Ticks between two day times, the short way round the 24000-tick day."""
+    gap = abs(a - b) % 24000
+    return min(gap, 24000 - gap)
+
+
 def check_sleep(host, guest, out):
     for g in (host, guest):
         g('command', command='gamemode survival')
@@ -3976,6 +3982,8 @@ def check_sleep(host, guest, out):
     # Alone in bed: still night 120 ticks later (everyone must sleep).
     guest.wait(120)
     night = host('state')['time']['time_of_day']
+    # The guest's own clock while it is in bed (#16656).
+    night_guest = guest('state')['time']['time_of_day']
     # Escape gets the guest up (InBedChatScreen), then back to bed.
     guest.raw('key', 'esc', 'tap')
     guest.wait(10)
@@ -3987,18 +3995,37 @@ def check_sleep(host, guest, out):
     lying['guest'] = bool(remote(guest)['lying_players'])
     host.wait(125)
     after = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
-             'time': host('state')['time']['time_of_day']}
+             'time': host('state')['time']['time_of_day'],
+             'time_guest': guest('state')['time']['time_of_day']}
     lying['after'] = bool(remote(guest)['lying_players'])
     guest.shot(out, 'sleep-morning')
     for at in (guest_bed, host_bed):
         guest('command', command=f'fill {at[0] - 1} {at[1]} {at[2]} {at[0]} {at[1]} {at[2]} minecraft:air')
     host('command', command='time set day')
-    detail = {'asleep': asleep, 'night': night, 'up': up, 'after': after, 'lying': lying}
+    detail = {'asleep': asleep, 'night': night, 'night_guest': night_guest, 'up': up, 'after': after,
+              'lying': lying}
     assert asleep['guest'] == guest_bed and asleep['server'] == guest_bed, f'the guest is not in its bed: {detail}'
     assert asleep['host'] is None, f'the guest\'s bed put the host to sleep: {detail}'
     assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
     assert up is None, f'Escape did not get the guest up: {detail}'
     assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+    # ClientClockManager takes the skipped night from the SetTime the hub
+    # broadcasts (ServerClockManager.modifyClock): the guest's day time stays
+    # the world's, in bed and woken (#16656).
+    #
+    # The two day times are two RPCs into two processes, with the guest's own
+    # clock ticking in between, so one read trails the other by however long the
+    # round trips take: a loaded machine spends that much between two socket
+    # reads, and 10 ticks (half a second at 20 ticks a second) is the slack.
+    # A guest that missed the sync is not off by ticks: the world jumps from
+    # 18000 to dawn while the guest's clock runs on, so the unsynced read is
+    # still past 18000 against a world the assert above holds under 1000, and
+    # the short way round the 24000-tick day is about 5700-6000 ticks -- near
+    # six hundred times this tolerance. A guest that never took a SetTime is
+    # wherever its own clock ran to; only RPC noise fits the slack.
+    slack = 10
+    assert clock_gap(night_guest, night) <= slack, f'the guest clock left the world clock: {detail}'
+    assert clock_gap(after['time_guest'], after['time']) <= slack, f'the woken guest kept the night: {detail}'
     assert lying['host'] and lying['guest'], f'a sleeping player is drawn standing: {detail}'
     assert not lying['after'], f'a player up again is still drawn lying: {detail}'
     return detail
