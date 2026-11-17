@@ -214,6 +214,9 @@ pub struct Config {
     /// The game reads this section itself (docs/chat-filter.md); written only when it isn't the default.
     #[serde(default, skip_serializing_if = "chat_filter_default")]
     pub chat_filter: horizon_chat_filter::Config,
+    /// The game reads this section itself (docs/hosting.md); written only when it allows a start.
+    #[serde(default, skip_serializing_if = "MissingMods::is_default")]
+    pub missing_mods: MissingMods,
     /// A one-time prune of barely visited chunks before a start (prune.rs); written only when set.
     #[serde(default, skip_serializing_if = "crate::prune::Settings::is_default")]
     pub prune_chunks: crate::prune::Settings,
@@ -285,6 +288,20 @@ pub struct Combat {
     pub legacy: bool,
 }
 impl Combat {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// `[missing_mods]`: `allow = true` opens a world saved with mods that are not loaded now instead of refusing
+/// it (docs/hosting.md). The game reads it from the same file (game/interface/dedicated/missing_mods.rs), so the
+/// supervisor only has to keep it; without this section it would refuse a file that has one as unknown.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MissingMods {
+    pub allow: bool,
+}
+impl MissingMods {
     fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -908,6 +925,7 @@ pub fn render(config: &Config) -> String {
     for section in [
         "anticheat",
         "chat_filter",
+        "missing_mods",
         "prune_chunks",
         "combat",
         "biome_regions",
@@ -1250,6 +1268,26 @@ keep = {keep}
         assert!(!off.lines().any(|l| l.trim() == "[combat]"), "{off}");
         assert!(Config::parse("[combat]\nlegacy = 1\n").is_err());
         assert!(Config::parse("[combat]\nlegcy = true\n").is_err());
+    }
+
+    #[test]
+    fn a_world_opens_without_its_mods_only_when_the_section_says_so() {
+        // docs/hosting.md: the switch that lets a server open a world whose mods are gone, as the game
+        // reads it. The supervisor keeps the section rather than refusing the file as unknown.
+        assert!(!Config::default().missing_mods.allow);
+        let set = Config::parse(&format!("{TEMPLATE}\n[missing_mods]\nallow = true\n")).unwrap();
+        assert!(set.missing_mods.allow);
+        // Kept when the file is written again, and left out while default.
+        assert_eq!(Config::parse(&render(&set)).unwrap(), set);
+        assert_eq!(
+            Config::parse(&format!("{TEMPLATE}\n[missing_mods]\nallow = false\n"))
+                .unwrap()
+                .missing_mods,
+            Config::default().missing_mods
+        );
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[missing_mods]"), "{off}");
+        assert!(Config::parse("[missing_mods]\nalow = true\n").is_err());
     }
 
     #[test]
