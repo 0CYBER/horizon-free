@@ -1,5 +1,3 @@
-<!-- Opened by an AI agent? First line: "> 🤖 Opened by <your GitHub login>'s AI agent (<tool, model>), not by <your GitHub login> personally." Use your own login, not someone else's. -->
-
 ## What and why
 
 <!-- What this changes, and why. Link the issue it fixes ("Fixes #123"). Over about 3000 lines of code
@@ -44,3 +42,6 @@
 
 <!-- Please tick "Allow edits by maintainers": we push small fixups ourselves instead of a round trip.
      See CONTRIBUTING.md. -->
+
+<!-- Written with an AI agent? Last line: "🤖 Agent: <model> via <tool>: <what it did>." One sentence per model
+     (AGENTS.md, "Mark what an agent posts, once"). -->
