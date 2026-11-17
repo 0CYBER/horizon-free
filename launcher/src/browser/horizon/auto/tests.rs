@@ -2,6 +2,7 @@
 //! `.hmod` files on disk, listed in an index the way the registry lists them.
 use super::*;
 use crate::browser::horizon::tests::{sample, scratch};
+use crate::browser::GAME;
 
 const MANIFEST: &str = "id = \"ruby\"\nname = \"Ruby\"\napi = \"0.2\"\nside = \"both\"\n\
                         capabilities = [\"registries\"]\n";

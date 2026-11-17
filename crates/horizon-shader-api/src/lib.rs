@@ -17,5 +17,5 @@ pub use manifest::{
     API, Blend, Coverage, LightColor, MANIFEST, Manifest, Material, OptionKind, OptionPage,
     PackOption, PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
 };
-pub use package::{EXTENSION, Pack};
+pub use package::{Declared, EXTENSION, Pack};
 pub use stages::{Composed, StageKind, compose, compose_scene};

@@ -120,6 +120,7 @@ fn migrate_shader_values(home: &Path, pack: &Path, key: &str) -> std::io::Result
 /// The packs of `kind` in the game folder `home`, by name: turning one on or off leaves it where
 /// it is.
 pub fn list(home: &Path, kind: Kind) -> Vec<Pack> {
+    let _game = crate::game_shader_api::for_home(home);
     let on = enabled(home, kind);
     let mut packs: Vec<Pack> = fs::read_dir(home.join(kind.folder()))
         .into_iter()
@@ -207,7 +208,11 @@ fn read(path: &Path, kind: Kind, on: &[String]) -> Option<Pack> {
             unsupported = manifest
                 .as_ref()
                 .and_then(|t| t.get("api")?.as_str())
-                .filter(|api| *api != horizon_shader_api::API)
+                .filter(|api| {
+                    !crate::game_shader_api::served()
+                        .iter()
+                        .any(|line| line == api)
+                })
                 .map(crate::browser::horizon::made_for_other_shader_api);
             (
                 name.unwrap_or_else(|| file.clone()),

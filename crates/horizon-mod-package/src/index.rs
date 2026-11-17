@@ -511,13 +511,23 @@ impl Index {
     }
 
     /// A project's newest version for Minecraft `game` that wasn't taken down and asks for no
-    /// capability this build doesn't know; a shader pack's, for this build's shader API
-    /// ([`needs_other_shader_api`]).
+    /// capability this build doesn't know; a shader pack's, for this build's shader API.
     pub fn installable<'a>(&self, project: &'a Project, game: &str) -> Option<&'a Version> {
+        self.installable_for(project, game, &[horizon_shader_api::API])
+    }
+
+    /// [`Index::installable`] for a game that serves the shader API lines `served`
+    /// ([`needs_other_shader_api`]): what a launcher asks for the game it installed.
+    pub fn installable_for<'a>(
+        &self,
+        project: &'a Project,
+        game: &str,
+        served: &[impl AsRef<str>],
+    ) -> Option<&'a Version> {
         project.versions.iter().find(|v| {
             v.game == game
                 && v.capabilities.unknown().is_empty()
-                && !needs_other_shader_api(project, v)
+                && !needs_other_shader_api(project, v, served)
                 && self.revoked(&project.id, &v.file.sha256).is_none()
         })
     }
@@ -744,6 +754,21 @@ pub fn check_file(
     version: &Version,
     path: &Path,
 ) -> Result<Trust, String> {
+    check_file_for(index, project, version, path, &[horizon_shader_api::API])
+}
+
+/// [`check_file`] for a game that serves the shader API lines `served`. A shader pack made for
+/// one of them that this build doesn't serve can't go through this build's check
+/// (`horizon_shader_api::check` reads its own line only): it keeps every check of the file and
+/// of what its manifest declares, and the game that serves the line checks the rest when it
+/// loads the pack.
+pub fn check_file_for(
+    index: &Index,
+    project: &Project,
+    version: &Version,
+    path: &Path,
+    served: &[impl AsRef<str>],
+) -> Result<Trust, String> {
     let size = std::fs::metadata(path)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .len();
@@ -774,14 +799,28 @@ pub fn check_file(
             project.kind.name()
         ));
     }
-    inspect(&project.kind, path)?.matches(project, version)?;
+    let another_builds = project.kind == Kind::Shader
+        && version.api != horizon_shader_api::API
+        && served.iter().any(|line| line.as_ref() == version.api);
+    let facts = if another_builds {
+        let declared = horizon_shader_api::Pack::declared(path)?;
+        Facts {
+            id: Some(declared.id),
+            version: Some(declared.version),
+            api: declared.api,
+            ..Facts::default()
+        }
+    } else {
+        inspect(&project.kind, path)?
+    };
+    facts.matches(project, version)?;
     Ok(trust)
 }
 
-/// Whether version `v` of `project` is a Horizon shader pack made for a shader API other than
-/// the one this build serves ([`horizon_shader_api::API`]): the game refuses its manifest.
-pub fn needs_other_shader_api(project: &Project, v: &Version) -> bool {
-    project.kind == Kind::Shader && v.api != horizon_shader_api::API
+/// Whether version `v` of `project` is a Horizon shader pack made for a shader API line that
+/// is none of `served`, the lines a game serves: that game refuses its manifest.
+pub fn needs_other_shader_api(project: &Project, v: &Version, served: &[impl AsRef<str>]) -> bool {
+    project.kind == Kind::Shader && !served.iter().any(|line| line.as_ref() == v.api)
 }
 
 /// What a file says about itself, read by its kind's own check

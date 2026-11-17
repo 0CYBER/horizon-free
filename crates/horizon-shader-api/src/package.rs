@@ -33,6 +33,14 @@ pub struct Pack {
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
+/// What a manifest says of its pack before anything checks it ([`Pack::declared`]).
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct Declared {
+    pub id: String,
+    pub version: String,
+    pub api: String,
+}
+
 /// A relative path made of plain parts: no root, `..`, `\`, empty or
 /// hidden parts.
 pub fn plain_path(path: &str) -> bool {
@@ -51,6 +59,47 @@ pub fn plain_path(path: &str) -> bool {
 pub fn is_pack(path: &Path) -> bool {
     path.join(MANIFEST).is_file()
         || (path.is_file() && path.extension().is_some_and(|e| e == EXTENSION))
+}
+
+/// Every file of the `.hshader` at `path`, by its path in the package.
+fn read_zip(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| format!("{}: not a .{EXTENSION} (zip): {e}", path.display()))?;
+    if zip.len() > MAX_ENTRIES {
+        return Err(format!("over {MAX_ENTRIES} files in the package"));
+    }
+    // The pack's total is counted while reading, not after (from_files): a zip's sizes are its
+    // own claim, and 511 files of 1 MiB of zeros take 561 KiB zipped, so checking afterwards
+    // let one upload hold 1 GiB of the registry's memory.
+    let per_file = MAX_OTHER.max(MAX_WGSL);
+    let mut total = 0u64;
+    let mut files = BTreeMap::new();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().map_err(|e| e.to_string())?.into_owned();
+        let room = per_file.min(MAX_TOTAL - total);
+        let mut bytes = Vec::new();
+        (&mut entry)
+            .take(room + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("{name}: {e}"))?;
+        if bytes.len() as u64 > room {
+            return Err(if room < per_file {
+                format!("the pack is over {} MiB", MAX_TOTAL >> 20)
+            } else {
+                format!("{name} is over {} KiB", per_file >> 10)
+            });
+        }
+        total += bytes.len() as u64;
+        if files.insert(name.clone(), bytes).is_some() {
+            return Err(format!("{name} is in the package twice"));
+        }
+    }
+    Ok(files)
 }
 
 /// A manifest's text, held to the same size limit from a folder or a ZIP.
@@ -101,6 +150,32 @@ impl Pack {
         Some(declared.id)
     }
 
+    /// What the manifest of the `.hshader` at `path` declares, whether or not this build takes
+    /// the manifest: for a pack made for an API line another build serves, which only that build
+    /// can check. The package's own shape is still held as [`Pack::read`] holds it: its file
+    /// count, plain paths, and the sizes of each file and of all, counted while reading.
+    pub fn declared(path: &Path) -> Result<Declared, String> {
+        let files = read_zip(path)?;
+        for (name, bytes) in &files {
+            if !plain_path(name) {
+                return Err(format!("{name:?} is not a plain path"));
+            }
+            let max = if name.ends_with(".wgsl") {
+                MAX_WGSL
+            } else {
+                MAX_OTHER
+            };
+            if bytes.len() as u64 > max {
+                return Err(format!("{name} is over {} KiB", max >> 10));
+            }
+        }
+        let text = files
+            .get(MANIFEST)
+            .ok_or_else(|| format!("{MANIFEST}: missing at the pack's root"))?;
+        let text = std::str::from_utf8(text).map_err(|_| format!("{MANIFEST}: not UTF-8"))?;
+        toml::from_str(text).map_err(|e| format!("{MANIFEST}: {e}"))
+    }
+
     /// Reads the manifest from an already-open ZIP, using the same size limit as a folder.
     pub fn read_zip_manifest<R: Read + Seek>(
         zip: &mut zip::ZipArchive<R>,
@@ -111,46 +186,13 @@ impl Pack {
     /// Reads `path`: a `.hshader` file, or a folder (its hidden files and
     /// folders, such as `.git`, are skipped).
     pub fn read(path: &Path) -> Result<Pack, String> {
-        let mut files = BTreeMap::new();
-        if path.is_dir() {
+        let files = if path.is_dir() {
+            let mut files = BTreeMap::new();
             read_dir(path, "", &mut files, &mut 0)?;
+            files
         } else {
-            let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let mut zip = zip::ZipArchive::new(file)
-                .map_err(|e| format!("{}: not a .{EXTENSION} (zip): {e}", path.display()))?;
-            if zip.len() > MAX_ENTRIES {
-                return Err(format!("over {MAX_ENTRIES} files in the package"));
-            }
-            // The pack's total is counted while reading, not after (from_files): a zip's sizes are its
-            // own claim, and 511 files of 1 MiB of zeros take 561 KiB zipped, so checking afterwards
-            // let one upload hold 1 GiB of the registry's memory.
-            let per_file = MAX_OTHER.max(MAX_WGSL);
-            let mut total = 0u64;
-            for i in 0..zip.len() {
-                let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
-                if entry.is_dir() {
-                    continue;
-                }
-                let name = entry.name().map_err(|e| e.to_string())?.into_owned();
-                let room = per_file.min(MAX_TOTAL - total);
-                let mut bytes = Vec::new();
-                (&mut entry)
-                    .take(room + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| format!("{name}: {e}"))?;
-                if bytes.len() as u64 > room {
-                    return Err(if room < per_file {
-                        format!("the pack is over {} MiB", MAX_TOTAL >> 20)
-                    } else {
-                        format!("{name} is over {} KiB", per_file >> 10)
-                    });
-                }
-                total += bytes.len() as u64;
-                if files.insert(name.clone(), bytes).is_some() {
-                    return Err(format!("{name} is in the package twice"));
-                }
-            }
-        }
+            read_zip(path)?
+        };
         Pack::from_files(files)
     }
 

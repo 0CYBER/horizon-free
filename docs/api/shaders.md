@@ -165,6 +165,8 @@ names an exact filesystem path; `shaders/` packs still use filenames.
 0.2 is the line this build serves, the line for linear light and HDR
 ([hdr-linear-light.md](../design/hdr-linear-light.md)): `horizon-shader check` and `pack` take it, the game draws it
 and the registry lists it. A pack for another line is refused (`needs shader API 0.1; this Horizon serves 0.2`).
+The launcher goes by the game it installed, not by its own build: it asks that game for its lines
+(`--launch-api`, `content.shader.api`) and offers and installs a registry pack made for one of them.
 A pack draws the world
 into a float frame where the device can (else the 8-bit one): the frame follows the picked pack,
 rebuilding the renderer and remeshing the world when needed. A refused or missing pack, or one whose owner mod is off,

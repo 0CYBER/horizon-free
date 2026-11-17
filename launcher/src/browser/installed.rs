@@ -218,6 +218,7 @@ pub fn install(
     home: &Path,
     progress: &dyn Fn(&str, f32),
 ) -> Result<Vec<Entry>, String> {
+    let _game = crate::game_shader_api::for_home(home);
     let _lock = super::lock_home(home).map_err(|e| e.to_string())?;
     if project.source == SourceId::Horizon {
         return super::horizon::install(project, home, progress);

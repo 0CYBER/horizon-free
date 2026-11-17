@@ -17,6 +17,7 @@ pub mod export;
 #[cfg(unix)]
 pub mod game_app;
 pub mod game_log;
+pub mod game_shader_api;
 pub mod github;
 pub mod github_mods;
 pub mod heads;

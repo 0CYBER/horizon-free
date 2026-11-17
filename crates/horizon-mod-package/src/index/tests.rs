@@ -380,6 +380,146 @@ fn the_newest_unrevoked_version_for_this_game_is_installed() {
     assert_eq!(index.installable(p, "26.3"), None);
 }
 
+/// The shader pack `glow` with one version per API line in `apis`, newest first, each named
+/// after its line.
+fn glow_for(index: &Index, apis: &[&str]) -> Project {
+    let mut glow = index.project("glow").unwrap().clone();
+    let base = glow.versions[0].clone();
+    glow.versions = apis
+        .iter()
+        .map(|api| Version {
+            version: format!("for-{api}"),
+            api: (*api).to_owned(),
+            ..base.clone()
+        })
+        .collect();
+    glow
+}
+
+/// A game gets the newest shader pack version made for a shader API line it serves: one that
+/// serves 0.1 and 0.2, one that serves only 0.2 (main since #15886), and the Nightly of
+/// 2026-11-13, which says 0.1.
+#[test]
+fn a_shader_pack_version_is_for_a_line_the_game_serves() {
+    let index = sample();
+    let picked = |apis: &[&str], served: &[&str]| {
+        let glow = glow_for(&index, apis);
+        index
+            .installable_for(&glow, "26.3", served)
+            .map(|v| v.api.clone())
+    };
+    for (served, only_01, only_02, mixed) in [
+        (&["0.1", "0.2"][..], Some("0.1"), Some("0.2"), Some("0.1")),
+        (&["0.2"][..], None, Some("0.2"), Some("0.2")),
+        (&["0.1"][..], Some("0.1"), None, Some("0.1")),
+    ] {
+        assert_eq!(picked(&["0.1"], served).as_deref(), only_01, "{served:?}");
+        assert_eq!(picked(&["0.2"], served).as_deref(), only_02, "{served:?}");
+        assert_eq!(
+            picked(&["0.1", "0.2"], served).as_deref(),
+            mixed,
+            "{served:?}"
+        );
+    }
+    // What this build itself serves is the answer where nothing names a game (the game's own
+    // mod list), and only shader packs are asked.
+    let old = glow_for(&index, &["0.1"]);
+    assert_eq!(index.installable(&old, "26.3"), None);
+    let hud = index.project("coords_hud").unwrap();
+    assert!(index.installable_for(hud, "26.3", &["0.1"]).is_some());
+    assert!(!needs_other_shader_api(hud, &hud.versions[0], &["0.1"]));
+}
+
+/// A `.hshader` of `files`, stored as they are: a pack this build's own packer wouldn't take.
+fn hshader(path: &Path, files: &[(&str, &str)]) {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    for (name, text) in files {
+        zip.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(text.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+/// A shader pack for a line the game serves and this build doesn't: this build's checker can't
+/// read it, so the file's size, hash and declared id, version and line are what is held.
+#[test]
+fn a_shader_pack_for_a_line_only_the_game_serves_keeps_the_index_s_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = |id: &str| {
+        format!(
+            "schema = 1\nid = \"{id}\"\nname = \"Glow\"\nversion = \"for-0.1\"\napi = \"0.1\"\n\
+             [[post]]\nfile = \"post.wgsl\"\n"
+        )
+    };
+    let listed = |index: &Index, path: &Path| {
+        let mut glow = glow_for(index, &["0.1"]);
+        glow.versions[0].file.size = std::fs::metadata(path).unwrap().len();
+        glow.versions[0].file.sha256 = sha256_file(path).unwrap();
+        glow
+    };
+    let index = sample();
+    let good = dir.path().join("glow.hshader");
+    let post = "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n";
+    hshader(
+        &good,
+        &[
+            (horizon_shader_api::MANIFEST, &manifest("glow")),
+            ("post.wgsl", post),
+        ],
+    );
+    let glow = listed(&index, &good);
+    let v = &glow.versions[0];
+    assert_eq!(
+        check_file_for(&index, &glow, v, &good, &["0.1"]),
+        Ok(Trust::Unsigned)
+    );
+    assert_eq!(
+        check_file_for(&index, &glow, v, &good, &["0.1", "0.2"]),
+        Ok(Trust::Unsigned)
+    );
+    // A game that doesn't serve the line, and this build: the file goes to this build's check.
+    for refused in [
+        check_file_for(&index, &glow, v, &good, &["0.2"]),
+        check_file(&index, &glow, v, &good),
+    ] {
+        let e = refused.unwrap_err();
+        assert!(
+            e.contains("needs shader API 0.1; this Horizon serves 0.2"),
+            "{e}"
+        );
+    }
+    let mut changed = glow.clone();
+    changed.versions[0].file.sha256 = "0".repeat(64);
+    let e = check_file_for(&index, &changed, &changed.versions[0], &good, &["0.1"]).unwrap_err();
+    assert!(e.contains("SHA-256"), "{e}");
+
+    let other = dir.path().join("other.hshader");
+    hshader(
+        &other,
+        &[
+            (horizon_shader_api::MANIFEST, &manifest("other")),
+            ("post.wgsl", post),
+        ],
+    );
+    let glow = listed(&index, &other);
+    let e = check_file_for(&index, &glow, &glow.versions[0], &other, &["0.1"]).unwrap_err();
+    assert!(e.contains("isn't what the index lists"), "{e}");
+
+    let escaping = dir.path().join("escaping.hshader");
+    hshader(
+        &escaping,
+        &[
+            (horizon_shader_api::MANIFEST, &manifest("glow")),
+            ("../post.wgsl", post),
+        ],
+    );
+    let glow = listed(&index, &escaping);
+    let e = check_file_for(&index, &glow, &glow.versions[0], &escaping, &["0.1"]).unwrap_err();
+    assert!(e.contains("is not a plain path"), "{e}");
+}
+
 #[test]
 fn shader_packs_pass_the_game_s_own_check() {
     let manifest = "schema = 1\nid = \"glow\"\nname = \"Glow\"\nversion = \"1.0.0\"\napi = \"0.2\"\n\

@@ -2283,6 +2283,10 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
         (ModsCmd::Search { .. }, _) | (_, None) => backend::game_home(),
         (_, Some(i)) => i.home.clone(),
     };
+    // What is found, installed and updated is for the game this instance plays.
+    let _game = instance
+        .as_ref()
+        .map(|i| horizon_launcher::game_shader_api::for_home(&i.home));
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
     let from_registry = installed::Installed::load(&home)
