@@ -4,6 +4,7 @@ horizon-mod-package holder::entry_tests::every_fresh_lease_and_retained_metadata
 horizon-mod-package holder::game_entry::tests::acquired_snapshot_rechecks_completion_and_directory_identity lib daily child-process
 horizon-mod-package holder::game_entry::tests::direct_entry_blocks_cleanup_and_refuses_busy_or_deleted_install lib daily child-process
 horizon-mod-package holder::game_entry::tests::missing_registration_is_displayed_and_information_does_not_register lib daily child-process
+horizon-mod-package holder::game_entry::tests::standalone_entry_resolves_data_root_ancestors_but_rejects_a_linked_root lib daily child-process
 horizon-mod-package holder::game_entry::tests::symlinked_resources_are_leased_by_canonical_identity lib daily child-process
 horizon-mod-package holder::game_entry::tests::unpublished_enclosing_unit_refuses_and_target_build_needs_no_install_marker lib daily child-process
 horizon-mod-package holder::record::gc::tests::both_malformed_roots_retain_entire_group lib daily child-process

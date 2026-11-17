@@ -338,6 +338,8 @@ fn data_directory_leaf_never_leases_ancestors_outside_data() {
     if let Some(root) = std::env::var_os(ENV) {
         let data = std::path::PathBuf::from(root).join("data");
         fs::create_dir_all(&data).unwrap();
+        // Registry entry consumes an authoritative path; shared() resolves the same root.
+        let data = data.canonicalize().unwrap();
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.current_dir(&data).env("HORIZON_HOME", &data);
         let _claims = shared(&command).unwrap();

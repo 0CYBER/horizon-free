@@ -76,6 +76,7 @@ fn entry_uses_held_directory_after_root_path_is_redirected() {
     let moved = home.0.with_extension("original");
     fs::rename(&home.0, &moved).unwrap();
     std::os::unix::fs::symlink(&outside.0, &home.0).unwrap();
+    assert!(matches!(Root::configured(&home.0), Err(Error::Unsafe(_))));
     storage
         .apply(vec![entry], Some(Category::RustCompiler), false)
         .unwrap();
@@ -165,24 +166,24 @@ fn referenced_jar_and_uninstrumented_unused_jar_are_kept() {
 
 #[cfg(unix)]
 #[test]
-// The release build's test step (launcher.yml, "Test every launcher target in a scratch home") gets exit code 0
-// where 78 is expected since the mod API merge; debug builds pass. Skipped there until that is fixed.
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "fails in optimized builds since the mod API merge"
-)]
 fn capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_residual() {
     crate::test_support::assert_holder_capability();
     use std::process::Command;
     let Some(root) = std::env::var_os("CLASSIFICATION_ROOT") else {
         let root = tempfile::tempdir().unwrap();
+        // Exercise a configured home behind an ancestor alias on every Unix host, not only
+        // macOS's /var and /tmp. Managed descendants must still be walked without links.
+        let real = root.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
         let mut actor = Command::new(std::env::current_exe().unwrap());
         actor.args(["--exact", "storage::inventory::regressions::capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_residual"])
-            .env("CLASSIFICATION_ROOT", root.path()).env("HORIZON_LAUNCHER_HOME", root.path().join("data"))
-            .env("HORIZON_HOME", root.path().join("data/cache"))
-            .env("XDG_DATA_HOME", root.path().join("xdg-data")).env("XDG_CONFIG_HOME", root.path().join("xdg-config"))
-            .env("HORIZON_LAUNCHER_TRASH", root.path().join("trash")).env("HORIZON_LAUNCHER_CLIPBOARD", root.path().join("clipboard"))
-            .env("HORIZON_LAUNCHER_DESKTOP", root.path().join("desktop"))
+            .env("CLASSIFICATION_ROOT", &alias).env("HORIZON_LAUNCHER_HOME", alias.join("data"))
+            .env("HORIZON_HOME", alias.join("data/cache"))
+            .env("XDG_DATA_HOME", alias.join("xdg-data")).env("XDG_CONFIG_HOME", alias.join("xdg-config"))
+            .env("HORIZON_LAUNCHER_TRASH", alias.join("trash")).env("HORIZON_LAUNCHER_CLIPBOARD", alias.join("clipboard"))
+            .env("HORIZON_LAUNCHER_DESKTOP", alias.join("desktop"))
             .env("HORIZON_LAUNCHER_NO_SELF_UPDATE", "1").env("HORIZON_NO_AUDIO", "1");
         assert!(actor.status().unwrap().success());
         return;
@@ -241,17 +242,40 @@ fn capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_res
         Err(Error::UnprovenExclusion)
     ));
     assert_eq!(fs::read(cache.join("resource")).unwrap(), b"whole resource");
+    let outside = root.join("outside");
+    fs::create_dir_all(outside.join("cache")).unwrap();
+    fs::write(outside.join("cache/world"), b"player data").unwrap();
+    let redirected = root.join("data/redirected");
+    std::os::unix::fs::symlink(&outside, &redirected).unwrap();
+    assert!(crate::cache_cleanup::delete_game_unit(&redirected.join("cache")).is_err());
+    assert_eq!(
+        fs::read(outside.join("cache/world")).unwrap(),
+        b"player data"
+    );
+    let linked = root.join("data/linked");
+    std::os::unix::fs::symlink(&cache, &linked).unwrap();
+    assert!(matches!(
+        crate::cache_cleanup::delete_game_unit(&linked),
+        Err(Error::Unsafe(_))
+    ));
+    assert_eq!(fs::read(cache.join("resource")).unwrap(), b"whole resource");
     fs::remove_dir_all(&old).unwrap();
     let command = || {
         let mut game = Command::new(&image);
         game.args(["--exact", "storage::inventory::regressions::capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_residual"])
-            .env("CLASSIFICATION_GAME", "1").current_dir(root.join("work"));
+            .env("CLASSIFICATION_GAME", "1")
+            .env("RUST_TEST_NOCAPTURE", "1")
+            .current_dir(root.join("work"));
         game
     };
     let mut game = command().spawn().unwrap();
     let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while !root.join("ready").exists() {
-        assert!(std::time::Instant::now() < end);
+        assert!(
+            std::time::Instant::now() < end,
+            "game never acknowledged its leases; child status: {:?}",
+            game.try_wait().unwrap()
+        );
         std::thread::yield_now();
     }
     assert!(matches!(
@@ -264,6 +288,7 @@ fn capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_res
     assert!(!cache.exists());
     assert_eq!(command().status().unwrap().code(), Some(78));
     fs::remove_file(install.join(".installed")).unwrap();
+    let install = install.canonicalize().unwrap();
     let storage = Storage::at(&root.join("data")).unwrap();
     assert!(
         storage

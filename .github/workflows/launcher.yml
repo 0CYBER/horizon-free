@@ -199,8 +199,32 @@ jobs:
             echo "::notice::No Metal toolchain on this runner: GPUI compiles its shaders at run time"
             echo "LAUNCHER_FEATURES=gpui_platform/runtime_shaders" >> "$GITHUB_ENV"
           fi
-      # Every test target (the library, the binary, tests/), on each system the launcher ships for.
-      - run: cargo test --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
+      # Binary and integration tests link the library without cfg(test), so its fallback
+      # test_home does not isolate them. Use pr_ready's scratch-home convention for every target.
+      - name: Test every launcher target in a scratch home
+        run: |
+          set -euo pipefail
+          scratch=$(python3 - <<'PY'
+          import os
+          import tempfile
+          base = os.path.realpath(tempfile.gettempdir())
+          if os.name == "nt" and (not base.isascii() or " " in base):
+              public = os.environ.get("ProgramData", "")
+              base = public if os.path.isabs(public) and public.isascii() and " " not in public else r"C:\ProgramData"
+          print(tempfile.mkdtemp(prefix="horizon-launcher-tests-", dir=base).replace("\\", "/"))
+          PY
+          )
+          trap 'rm -rf "$scratch"' EXIT
+          export HORIZON_LAUNCHER_HOME="$scratch/launcher"
+          export HORIZON_HOME="$scratch/game"
+          export HORIZON_LAUNCHER_LOCATION_FILE="$scratch/location.json"
+          export XDG_DATA_HOME="$scratch/data"
+          export XDG_CONFIG_HOME="$scratch/config"
+          export HORIZON_LAUNCHER_TRASH="$scratch/trash"
+          export HORIZON_LAUNCHER_CLIPBOARD="$scratch/clipboard"
+          export HORIZON_LAUNCHER_DESKTOP="$scratch/desktop"
+          export HORIZON_LAUNCHER_NO_SELF_UPDATE=1 HORIZON_NO_AUDIO=1
+          cargo test --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - name: Verify Windows executable architecture
         if: runner.os == 'Windows'

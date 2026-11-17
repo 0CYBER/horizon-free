@@ -351,7 +351,18 @@ pub(crate) fn delete_game_unit_observed(
     after_classification: impl FnOnce(),
 ) -> Result<(), Error> {
     use horizon_platform::mod_package::{locks::Release, runtime_leases::Registry};
-    let registry = Registry::with_release(&crate::backend::data_dir(), Release::Close)?;
+    let data = crate::backend::data_dir();
+    crate::native_cache::checked(&data, true)?;
+    let real_data = data.canonicalize()?;
+    // The configured root may have an aliased ancestor (macOS /var or /tmp).
+    // Resolve only that root, leaving the managed suffix for remove_unit's no-follow walk.
+    let rebased = path
+        .strip_prefix(&data)
+        .ok()
+        .filter(|_| data != real_data)
+        .map(|relative| real_data.join(relative));
+    let path = rebased.as_deref().unwrap_or(path);
+    let registry = Registry::with_release(&real_data, Release::Close)?;
     registry.remove_unit(path, |directory, is_directory| {
         Access::for_unit(path)?.check()?;
         after_classification();

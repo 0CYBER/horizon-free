@@ -79,6 +79,17 @@ impl Root {
             directory,
         })
     }
+
+    /// Configured roots may have aliases; managed descendants still use `open`
+    /// and the held directory's no-follow traversal.
+    fn configured(root: &Path) -> Result<Self, Error> {
+        checked(root, true)?;
+        match root.canonicalize() {
+            Ok(root) => Self::open(&root),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::open(root),
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 struct Entry {
@@ -357,7 +368,7 @@ impl Storage {
                 }
             }
         }
-        let data = Root::open(&backend::data_dir())?;
+        let data = Root::configured(&backend::data_dir())?;
         let played: HashSet<_> = instances::list()
             .into_iter()
             .filter_map(|instance| instance.resolve_version(None).ok())
@@ -408,7 +419,7 @@ impl Storage {
             if backend::in_use(&version) {
                 continue;
             }
-            let root = Root::open(&instance.home)?;
+            let root = Root::configured(&instance.home)?;
             old_logs(&mut entries, &root)?;
             unused_jars(&mut entries, &root)?;
             for relative in [".horizon-cache", "wasm-cache", "cache"] {

@@ -453,6 +453,14 @@ scripts and tests). Test runs also set `HORIZON_LAUNCHER_TRASH=<folder>` and
 system's trash goes into that folder, and what Copy would put on the clipboard is written to that
 file, so a test never touches the real trash or clipboard.
 
+Game-cache inventory, cleanup and direct game entry resolve aliases above configured roots
+(including macOS's `/var` and `/tmp`) before entering the lease protocol. Direct entry checks
+the discovered data root before resolving its ancestors and only opens an existing registry.
+The data folder itself and managed descendants may not be symbolic links. A deleted selected
+home remains a managed lease requirement, so a late game cannot start after cleanup. Unknown
+game builds still block shared-cache deletion, and a running game's leases prevent deletion
+until its final owner exits.
+
 ## AI agents (MCP)
 
 `horizon-launcher mcp` is a Model Context Protocol server over stdio. `horizon-launcher
@@ -581,6 +589,14 @@ client starts (`--help`) and that the binaries import only system libraries (Win
 
     cargo test --lib    # tag separation, version order, update selection, notes as text,
                         # the auto-install default, the links fallback
+
+Run the complete launcher checks through `python3 tools/pr_ready.py` from the repository root.
+It and the launcher workflow give every Cargo test target fresh launcher/game homes, a private
+location pointer, XDG data/config folders, trash, clipboard and desktop paths, and remove the
+scratch home on exit. On Windows the scratch path must also be ASCII and contain no spaces,
+or build tools can fall back outside it. Direct Cargo runs of binary or integration tests need
+the same overrides: they link the library without `cfg(test)`, so its library-test fallback
+alone does not keep them out of the player's profile.
 
 Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's on-screen keyboard) are
 bundled so the type is the same on every platform.
