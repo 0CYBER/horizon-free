@@ -30,6 +30,7 @@ import base64
 import contextlib
 import datetime
 import json
+import math
 import os
 import platform
 import re
@@ -86,9 +87,10 @@ def parse_timings(html):
     except ValueError:
         return None
     if not isinstance(units, list) or not all(isinstance(u, dict) and isinstance(u.get("name"), str) and
-                                              all(isinstance(u.get(k), (int, float)) for k in ("i", "start", "duration"))
+                                              all(isinstance(u.get(k), (int, float)) and math.isfinite(u[k])
+                                                  for k in ("i", "start", "duration"))
                                               for u in units):
-        return None
+        return None  # NaN and Infinity are not numbers a report can hold: JSON has no spelling for them
     return units
 
 
