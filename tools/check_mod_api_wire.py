@@ -125,9 +125,41 @@ def violations(source):
     return missing
 
 
+# Rust string escapes, decoded once from left to right. An escaped backslash
+# consumes only itself, so "a\\nb" is a backslash followed by 'n', not a newline.
+_ESCAPES = {'n': '\n', 'r': '\r', 't': '\t', '0': '\0', '\\': '\\', '"': '"', "'": "'"}
+
+
+def _decode_escapes(text):
+    out, i = [], 0
+    while i < len(text):
+        char = text[i]
+        if char != '\\':
+            out.append(char)
+            i += 1
+            continue
+        i += 1
+        if i >= len(text):
+            out.append('\\')
+            break
+        escaped = text[i]
+        if escaped == 'u' and i + 1 < len(text) and text[i + 1] == '{':
+            close = text.find('}', i + 2)
+            if close != -1:
+                try:
+                    out.append(chr(int(text[i + 2:close], 16)))
+                    i = close + 1
+                    continue
+                except ValueError:
+                    pass
+        out.append(_ESCAPES.get(escaped, '\\' + escaped))
+        i += 1
+    return ''.join(out)
+
+
 def decode_literal(literal):
     if literal.startswith('"'):
-        return literal[1:-1].replace('\\n', '\n').replace('\\"', '"')
+        return _decode_escapes(literal[1:-1])
     if re.match(r'r#*"', literal):
         return literal.split('"', 1)[1].rsplit('"', 1)[0]
     return None
