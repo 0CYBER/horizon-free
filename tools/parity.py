@@ -1702,7 +1702,11 @@ def main():
         chosen = [name for name in found if records.get(name, {}).get("status") == "fail"]
     elif args.changed or args.changed_files:
         if args.changed_files:
-            changed, since = set(Path(args.changed_files).read_text(encoding="utf-8").split("\n")) - {""}, ""
+            try:
+                text = Path(args.changed_files).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                parser.error(f"cannot read changed-files path {args.changed_files}: {error}")
+            changed, since = set(text.split("\n")) - {""}, ""
         else:
             changed, since = changed_files(args.changed), f" since the merge base with {args.changed}"
         if changed is None:
