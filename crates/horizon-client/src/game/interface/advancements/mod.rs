@@ -2973,11 +2973,10 @@ mod tests {
         game.mobs[0].add_effect_with("minecraft:speed", -1, 2, false, false);
         assert_eq!(
             game.mobs[0].extra.effects,
-            vec![horizon_client::mobs::StoredEffect::new(
-                "minecraft:speed",
-                -1,
-                2
-            )]
+            vec![horizon_client::mobs::StoredEffect {
+                show_icon: false,
+                ..horizon_client::mobs::StoredEffect::new("minecraft:speed", -1, 2)
+            }]
         );
         assert_eq!(
             game.entity_view_of(Target::Mob(32300)).effects,
