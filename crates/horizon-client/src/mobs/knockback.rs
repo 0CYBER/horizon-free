@@ -77,6 +77,10 @@ impl Mob {
         }
         let len = (xd * xd + zd * zd).sqrt();
         let (kx, kz) = (xd / len * power, zd / len * power);
+        // Shulker.setDeltaMovement ignores the shove after its sync and random draws.
+        if self.species() == Species::Shulker {
+            return;
+        }
         self.velocity = Vec3::new(
             self.velocity.x / 2.0 - kx,
             if self.on_ground {

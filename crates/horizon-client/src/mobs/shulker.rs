@@ -1224,6 +1224,22 @@ mod tests {
         assert_eq!(posted(&events), ["minecraft:container_close"]);
     }
 
+    /// `Shulker.setDeltaMovement` is empty: a hit's knockback leaves the shell where it is.
+    #[test]
+    fn a_hit_does_not_move_a_shulker() {
+        let mut m = shulker();
+        m.on_ground = true;
+        m.knockback(
+            &mut crate::health::TestLevel::new(0).level(),
+            0.4,
+            3.0,
+            -4.0,
+            &Damage::of(crate::mobs::DamageKind::Thrown),
+            1.0,
+        );
+        assert_eq!(m.velocity, Vec3::ZERO);
+    }
+
     /// A shulker fixed to a block face.
     pub(super) fn shulker() -> Mob {
         let mut kind = kind();
