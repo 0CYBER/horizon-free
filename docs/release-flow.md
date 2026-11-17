@@ -126,9 +126,9 @@ requires `verify` for everyone, and a council member's review (team `council`) f
 and ships releases). Branches don't have to be up to date with main: main's own `checks` run catches the rare
 semantic conflict.
 
-**Who merges.** The Horizon Team (GitHub team `horizon-team`: kacpherek, levzzz5154, rdbtCVS, Online5277, dezer-x) and
-Ludovic. The orchestrator's agents prove only the risky pull requests (below), so a contributor's ordinary pull
-request doesn't wait for them.
+**Who merges.** The Horizon Team (GitHub team `horizon-team`: kacpherek, levzzz5154, rdbtCVS, Online5277, dezer-x,
+NikitaMGrimm) and Ludovic. The orchestrator's agents prove only the risky pull requests (below), so a contributor's
+ordinary pull request doesn't wait for them.
 
 **An ordinary pull request merges on CI.** A Team member:
 
