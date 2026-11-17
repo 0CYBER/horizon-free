@@ -20,8 +20,13 @@ Make the worlds with `tools/perf_bench.py --seed N --scenes village --repeats 1 
 game (the world is .local/perf-bench/<game>/saves/PerfBench; copy it before the next run, which
 deletes it), or with `tools/vanilla_world_check.py` for vanilla's.
 
+A non-overworld --dimension is read only from its own dimensions/minecraft/<dimension>/region folder;
+if that folder is missing the comparison fails instead of silently falling back to the overworld.
+An empty comparison domain (no chunks/biomes/terrain actually compared) also fails.
+
 Exit status 1 when the spawn, a biome or a structure start differs, or stone, deepslate or water
-overlap under 99%. Standard library only.
+overlap under 99%, the requested dimension is missing, or the comparison domain is empty.
+Standard library only.
 """
 import argparse
 import collections
@@ -106,8 +111,18 @@ def world_info(world):
 
 
 def region_folder(world, dimension):
+    """The region folder for `dimension`, or None when a requested dimension is absent.
+
+    The overworld may use the root ``region/`` layout (documented compatibility). Every other
+    dimension must resolve to its own ``dimensions/minecraft/<dimension>/region`` folder; falling
+    back to the root would compare unrelated overworld chunks under the requested dimension's name.
+    """
     base = os.path.join(world, 'dimensions', 'minecraft', dimension, 'region')
-    return base if os.path.isdir(base) else os.path.join(world, 'region')
+    if os.path.isdir(base):
+        return base
+    if dimension == 'overworld':
+        return os.path.join(world, 'region')
+    return None
 
 
 def read_chunks(folder):
@@ -257,7 +272,15 @@ def main():
     if info['A'][0] != info['B'][0] or info['A'][1] != info['B'][1]:
         print('MISMATCH: the seed or the spawn differs between A and B')
         ok = False
-    chunks = {k: read_chunks(region_folder(w, args.dimension)) for k, w in worlds.items()}
+    folders = {k: region_folder(w, args.dimension) for k, w in worlds.items()}
+    missing = [k for k, folder in folders.items() if folder is None]
+    if missing:
+        print('MISMATCH: dimension %r has no region folder in %s' % (
+            args.dimension, ', '.join(worlds[k] for k in missing)))
+        print()
+        print('RESULT: DIFFERS')
+        return 1
+    chunks = {k: read_chunks(folder) for k, folder in folders.items()}
     print('chunks saved: ' + ', '.join('%s %d' % (k, len(c)) for k, c in chunks.items()))
     print('chunks A and B both saved: %d, as full: %d' % (len(set(chunks['A']) & set(chunks['B'])), len(full_pairs(chunks['A'], chunks['B']))))
 
@@ -286,6 +309,10 @@ def main():
         print('  %-36s in both %d' % (name, sum(1 for s in sa & sb if s[0] == name)))
     if sa != sb:
         print('MISMATCH: only in A %s, only in B %s' % (sorted(sa - sb)[:4], sorted(sb - sa)[:4]))
+        ok = False
+    compared_terrain = sum(ab[w][0] + ab[w][1] + ab[w][2] for w in TERRAIN)
+    if cells == 0 and compared_terrain == 0:
+        print('MISMATCH: no comparable chunks, biome cells or terrain positions (empty comparison domain)')
         ok = False
     print()
     print('RESULT:', 'matches' if ok else 'DIFFERS')
