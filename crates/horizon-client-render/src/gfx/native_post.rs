@@ -788,6 +788,11 @@ impl NativeFrame {
         }
     }
 
+    /// Group 3's layout entries (`layout`), which a material stage's own layouts start with.
+    pub(in crate::gfx) fn entries(&self) -> &[wgpu::BindGroupLayoutEntry] {
+        &self.entries
+    }
+
     fn regroup(&mut self, device: &wgpu::Device) {
         self.group = Self::group(
             device,

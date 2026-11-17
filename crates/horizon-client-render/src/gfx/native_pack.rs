@@ -7,7 +7,9 @@ use horizon_shader_api::{Report, StageKind};
 use super::displace::Displacement;
 use super::external::Capabilities;
 use super::native_entity::NativeEntity;
-use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
+use super::native_material::{
+    DisplacedShape, MaterialPipelines, NativeMaterial, TerrainKept, TerrainShape,
+};
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
@@ -190,16 +192,27 @@ impl NativePack {
     }
 
     /// Joins the frame's group with this frame's `scene` from `camera` for a material stage
-    /// that traces: after the frame's group changed for this frame, before the terrain draws.
+    /// that traces, and with the kept resources it reads: after the frame's group changed for
+    /// this frame and the kept resources' frame started (`before_world`), before the terrain
+    /// draws.
     pub(in crate::gfx) fn bind_scene(
         &mut self,
         device: &wgpu::Device,
         scene: Option<&RayScene>,
         camera: glam::DVec3,
     ) {
-        if let Some(trace) = self.material.as_mut().and_then(|m| m.scene.as_mut()) {
-            let scene = scene.and_then(|s| s.traced(camera));
-            trace.bind(device, &self.frame, scene.as_ref());
+        let scene = scene.and_then(|s| s.traced(camera));
+        self.bind_terrain(device, scene.as_ref());
+    }
+
+    /// `bind_scene` with this frame's `scene` as the camera traces it.
+    pub(in crate::gfx) fn bind_terrain(
+        &mut self,
+        device: &wgpu::Device,
+        scene: Option<&Traced<'_>>,
+    ) {
+        if let Some(m) = &mut self.material {
+            m.bind(device, &self.frame, scene, &self.post);
         }
     }
 
@@ -212,7 +225,7 @@ impl NativePack {
 
     /// The pipelines the pack's terrain draws with this frame, and its group 3.
     pub(in crate::gfx) fn terrain(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
-        Some(self.material.as_ref()?.drawn(&self.frame.group))
+        Some((self.material.as_ref()?).drawn(&self.frame.group, self.post.parity()))
     }
 
     /// The pack of the checked stages `report` with the option values `constants`, drawing
@@ -381,6 +394,8 @@ impl NativePack {
                     steps: d.view.steps,
                     layout: &d.draw_layout,
                 });
+                let reads = super::native_post::kept::terrain_reads(&report.manifest);
+                let kept = reads.map(|(b, e)| TerrainKept::new(device, &frame, b, e));
                 NativeMaterial::new(
                     device,
                     terrain,
@@ -391,6 +406,7 @@ impl NativePack {
                     coverage,
                     has_vertex,
                     displaced.as_ref(),
+                    kept,
                 )
             })
             .transpose()?;

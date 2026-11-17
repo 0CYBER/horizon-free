@@ -624,7 +624,7 @@ fn a_compute_entry_is_a_dispatch_in_the_chain() {
     );
     for key in [
         "compute = true",
-        "reads = [\"tex\"]",
+        "writes = [\"buf\"]",
         "dispatch = \"pixels\"",
     ] {
         refused(

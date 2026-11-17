@@ -193,8 +193,11 @@ fn ray_tracing() -> String {
          named as one of these functions.\n\n\
          In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share\n\
          its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.\n\
-         `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for\n\
-         translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.\n\n",
+         A ray in `material` is paid for every terrain fragment drawn, overdraw included; a ray in a post pass once a\n\
+         pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn't `present` behind water,\n\
+         glass or entities) and has no albedo, so direct light that must be right there is traced in `material`. With\n\
+         `[material] reads`, a pack can also trace in a compute or `[[before_world]]` pass and apply the result in\n\
+         `material`.\n\n",
     );
     out += &table(&RAY_HIT, None);
     out += &format!(
@@ -240,7 +243,13 @@ fn kept() -> String {
          `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has\n\
          the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either\n\
          may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.\n\n\
-         **Not yet, in a later step:** `[material]` can't read kept resources.\n\n"
+         `[material] reads` lists the kept resources the terrain reads (no `writes`): `x` for this frame's version of a\n\
+         texture a `[[before_world]]` pass writes, which the terrain sees in the same frame, `x_previous` for last\n\
+         frame's, and a buffer as it is. A texture only `[[post]]` passes write is written after the terrain draws, so\n\
+         the check refuses its `x` there: read `x_previous`. Its declarations are in the material's module at the same\n\
+         bindings, for `material`'s fragments only: the check refuses `displacement` reaching one, and the `[vertex]`\n\
+         file naming one, as both also draw the shadow map, which gets no kept resources. On a frame that clears a\n\
+         resource the terrain reads zeros, or what a `[[before_world]]` pass wrote since.\n\n"
     );
     out += &table(&COMPUTE_INPUT, None);
     out += &format!(

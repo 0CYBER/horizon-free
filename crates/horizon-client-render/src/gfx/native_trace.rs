@@ -18,6 +18,7 @@ use horizon_shader_api::stages::{
 };
 
 use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
+use super::kept::Reads;
 use super::{NativeFrame, NativePost, post_pipeline};
 pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::Traced;
 
@@ -82,9 +83,10 @@ pub(in crate::gfx) struct TerrainTrace {
     layout: wgpu::BindGroupLayout,
     pipelines: MaterialPipelines,
     rays: Rays,
-    /// The group, made for the frame's group `.0` and the scene of generation `.1` (the TLAS and
-    /// the store are replaced as they grow, and the frame's group as its targets change).
-    group: Option<(wgpu::BindGroup, u64, wgpu::BindGroup)>,
+    /// The group, made for the frame's group `.0`, the scene of generation `.1` (the TLAS and
+    /// the store are replaced as they grow, and the frame's group as its targets change) and
+    /// the kept resources the material reads `.2` (`Reads::made`): one, or one a parity of them.
+    group: Option<(wgpu::BindGroup, u64, Option<u32>, Vec<wgpu::BindGroup>)>,
     /// Whether this frame traces the scene.
     on: bool,
 }
@@ -189,7 +191,7 @@ fn post_pbr_entries(visibility: wgpu::ShaderStages) -> [wgpu::BindGroupLayoutEnt
 
 /// What `limits` lacks for the shader stage `stage` that reads the group `group` and the other
 /// groups' entries `others`, if anything.
-pub(super) fn over_limits(
+pub(in crate::gfx) fn over_limits(
     group: &[wgpu::BindGroupLayoutEntry],
     others: &[wgpu::BindGroupLayoutEntry],
     limits: &wgpu::Limits,
@@ -569,10 +571,12 @@ impl TerrainTrace {
         device: &wgpu::Device,
         frame: &NativeFrame,
         (terrain, entities): (&TerrainShape<'_>, bool),
+        kept: &[wgpu::BindGroupLayoutEntry],
         build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<MaterialPipelines, String>,
     ) -> Option<Self> {
         let fragment = wgpu::ShaderStages::FRAGMENT;
-        let (own, others) = (vec![(frame.entries.clone(), fragment)], terrain_entries());
+        let own = vec![([&frame.entries[..], kept].concat(), fragment)];
+        let others = terrain_entries();
         let shape = TraceShape::of(terrain, entities);
         let build = |layouts: &[wgpu::BindGroupLayout]| build(&layouts[0]);
         let (layouts, pipelines, rays) = with_scene(device, (own, &others), &shape, build)?;
@@ -595,25 +599,42 @@ impl TerrainTrace {
         Some(self.rays.write(queue, scene?))
     }
 
-    /// Joins the frame's group, as it is now, with `scene`, this frame's: the terrain draws
-    /// with these pipelines while there is one.
+    /// Joins the frame's group, as it is now, with `scene`, this frame's, and the kept
+    /// resources the material reads (`reads`): the terrain draws with these pipelines while
+    /// there is a scene.
     pub(in crate::gfx) fn bind(
         &mut self,
         device: &wgpu::Device,
         frame: &NativeFrame,
         scene: Option<&Traced<'_>>,
+        reads: Option<Reads<'_>>,
     ) {
         self.on = scene.is_some();
         let Some(scene) = scene else {
             return;
         };
-        let made = |(group, generation, _): &(wgpu::BindGroup, u64, wgpu::BindGroup)| {
-            *group == frame.group && *generation == scene.generation
+        let stamp = reads.map(|r| r.made());
+        let made = |(group, generation, kept, _): &(_, u64, Option<u32>, _)| {
+            *group == frame.group && *generation == scene.generation && *kept == stamp
         };
         if !self.group.as_ref().is_some_and(made) {
-            let joined = frame.joined(device, &self.layout, &self.rays.entries(scene));
-            self.group = Some((frame.group.clone(), scene.generation, joined));
+            let join = |parity| {
+                let mut entries = self.rays.entries(scene);
+                entries.extend(reads.map(|r| r.entries(parity)).unwrap_or_default());
+                frame.joined(device, &self.layout, &entries)
+            };
+            let groups = match reads {
+                Some(_) => vec![join(0), join(1)],
+                None => vec![join(0)],
+            };
+            self.group = Some((frame.group.clone(), scene.generation, stamp, groups));
         }
+    }
+
+    /// Group 3's layout with the scene, for a test's own entry points.
+    #[cfg(test)]
+    pub(in crate::gfx) fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout
     }
 
     /// Whether the terrain traces the entity layer.
@@ -621,16 +642,20 @@ impl TerrainTrace {
         self.rays.entities
     }
 
-    /// The pipelines and group 3 the terrain draws with this frame, if it traces.
-    pub(in crate::gfx) fn drawn(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
-        let (_, _, group) = self.group.as_ref().filter(|_| self.on)?;
-        Some((&self.pipelines, group))
+    /// The pipelines and group 3 the terrain draws with this frame, if it traces, the kept
+    /// resources' version `parity` this frame's.
+    pub(in crate::gfx) fn drawn(
+        &self,
+        parity: usize,
+    ) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
+        let (_, _, _, groups) = self.group.as_ref().filter(|_| self.on)?;
+        Some((&self.pipelines, &groups[parity.min(groups.len() - 1)]))
     }
 }
 
 impl NativeFrame {
     /// The frame's group as `group` makes it, with `scene`'s entries, of the layout `layout`.
-    fn joined(
+    pub(in crate::gfx) fn joined(
         &self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,

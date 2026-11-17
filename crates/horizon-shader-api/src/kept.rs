@@ -604,6 +604,25 @@ pub(crate) fn check(
     })
 }
 
+/// `[material] reads` (it has no `writes`): declared resources, as a pass's are, and a texture's
+/// this-frame version only where a `[[before_world]]` pass writes it, before the terrain draws;
+/// a `[[post]]` pass writes it after, so the terrain reads it as `_previous`. A buffer has one
+/// version, read as it is.
+pub(crate) fn material(m: &Stage, kept: &Kept) -> Result<(), String> {
+    access(m, &kept.resources)?;
+    let written = |name: &String| kept.before_world.iter().any(|w| w.writes.contains(name));
+    let late = (kept.resources.iter())
+        .find(|r| r.is_texture() && m.reads.contains(&r.name) && !written(&r.name));
+    match late {
+        Some(r) => Err(format!(
+            "{}: reads {:?}, this frame's, which no [[before_world]] pass writes before the \
+             terrain draws: read {}_previous",
+            m.file, r.name, r.name
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The kept textures of the post target budget, by name: an `output` naming a kept texture
 /// writes it, at its own size (no `scale`), never its `_previous` nor an integer one
 /// (`Format::is_uint`), which only a compute pass writes; each R-relative kept texture counts.

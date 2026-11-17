@@ -70,6 +70,9 @@ pub(super) struct KeptStore {
     started: bool,
     /// The epochs the resources were last cleared for.
     cleared: [u32; 2],
+    /// Moves on each time resources are made (`allocate`, `fit`): the material's groups hold
+    /// them (`Reads`).
+    made: u32,
 }
 
 impl KeptStore {
@@ -99,6 +102,7 @@ impl KeptStore {
             started: false,
             begun: 0,
             cleared: [1, 1],
+            made: 0,
         }
     }
 
@@ -108,6 +112,7 @@ impl KeptStore {
         if self.held.is_empty() {
             (self.size, self.refused) = (size, None);
             self.worlds.clear();
+            self.made = self.made.wrapping_add(1);
             let (resources, size) = (&self.kept.resources, self.size);
             self.held = made(device, resources, size).map_err(|e| {
                 let bytes: u64 = resources.iter().map(|r| bytes(r.shape, size)).sum();
@@ -162,6 +167,7 @@ impl KeptStore {
         };
         (self.size, self.refused) = (size, None);
         self.worlds.clear();
+        self.made = self.made.wrapping_add(1);
         for (_, held) in resources.zip(&mut self.held).filter(|(r, _)| scaled(r)) {
             *held = remade.next().expect("one remade a scaled resource");
         }
@@ -459,7 +465,17 @@ pub(super) fn entries(
     let (Some(k), Some(p)) = (kept, self::pass(kept, pass)) else {
         return Vec::new();
     };
-    (p.bindings.iter())
+    bound(k, &p.bindings, parity)
+}
+
+/// The group entries of `bindings` of `k`'s resources for the frames whose written version is
+/// `parity`.
+fn bound<'a>(
+    k: &'a KeptStore,
+    bindings: &[KeptBinding],
+    parity: usize,
+) -> Vec<wgpu::BindGroupEntry<'a>> {
+    (bindings.iter())
         .map(|b| wgpu::BindGroupEntry {
             binding: b.binding,
             resource: match (&k.held[b.resource], b.access) {
@@ -471,6 +487,39 @@ pub(super) fn entries(
             },
         })
         .collect()
+}
+
+/// What the terrain reads of a pack's kept resources (`[material] reads`): its `bindings`.
+#[derive(Clone, Copy)]
+pub(in crate::gfx) struct Reads<'a> {
+    store: &'a KeptStore,
+    bindings: &'a [KeptBinding],
+}
+
+impl<'a> Reads<'a> {
+    /// Which resources the groups were made with (`KeptStore::made`).
+    pub(in crate::gfx) fn made(&self) -> u32 {
+        self.store.made
+    }
+
+    /// The group entries for the frames whose written version is `parity`: this frame's version
+    /// what a `[[before_world]]` pass wrote, `_previous` the other.
+    pub(in crate::gfx) fn entries(&self, parity: usize) -> Vec<wgpu::BindGroupEntry<'a>> {
+        bound(self.store, self.bindings, parity)
+    }
+}
+
+impl NativePost {
+    /// What a material of `bindings` reads of this pack's kept resources, if it has any.
+    pub(in crate::gfx) fn reads<'a>(&'a self, bindings: &'a [KeptBinding]) -> Option<Reads<'a>> {
+        let store = self.kept.as_ref()?;
+        Some(Reads { store, bindings })
+    }
+
+    /// The version of the kept textures this frame writes (`KeptStore::parity`); 0 without.
+    pub(in crate::gfx) fn parity(&self) -> usize {
+        self.kept.as_ref().map_or(0, |k| k.parity)
+    }
 }
 
 /// This frame's set of the cached `groups`, one a parity with kept resources.
@@ -557,9 +606,10 @@ impl NativePost {
         }
     }
 
-    /// Dispatches the `[[before_world]]` passes, once a frame (the first call after
-    /// `kept_frame`): the frame starts there (`KeptStore::begin`, at the frame's R), so the
-    /// passes after them read what they wrote as this frame's. With `scene`, this frame's (built
+    /// Starts the frame of the kept resources (`KeptStore::begin`, at the frame's R) and
+    /// dispatches the `[[before_world]]` passes, once a frame (the first call after
+    /// `kept_frame`), before the world draws: the terrain (`[material] reads`) and the passes
+    /// after read what they wrote as this frame's. With `scene`, this frame's (built
     /// before them), the passes that trace run against it. With `timing`, each is timed.
     pub(in crate::gfx) fn before_world(
         &mut self,
@@ -571,12 +621,15 @@ impl NativePost {
         let Some(k) = &mut self.kept else {
             return;
         };
-        let worlds = k.computes.iter().filter(|p| p.at.is_none()).count();
-        if worlds == 0 || !k.once(1) {
+        if !k.once(1) {
             return;
         }
         if k.begin(device, encoder, k.next.1) {
             self.groups = None;
+        }
+        let worlds = k.computes.iter().filter(|p| p.at.is_none()).count();
+        if worlds == 0 {
+            return;
         }
         let traced = self.trace.as_ref().zip(scene);
         let generation = traced.map(|(_, scene)| scene.generation);
@@ -981,6 +1034,17 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
     }
 }
 
+/// What `[material] reads` of `manifest`'s kept resources: their bindings and layout entries,
+/// for the fragment stage only. None where it reads none.
+pub(in crate::gfx) fn terrain_reads(
+    manifest: &Manifest,
+) -> Option<(Vec<KeptBinding>, Vec<wgpu::BindGroupLayoutEntry>)> {
+    let bindings = kept_bindings(manifest, manifest.material.as_ref()?);
+    let fragment = wgpu::ShaderStages::FRAGMENT;
+    let entries = layout_entries(&manifest.kept, &bindings, fragment);
+    (!bindings.is_empty()).then_some((bindings, entries))
+}
+
 /// The layout entries of `bindings` (`kept_bindings`) for `visibility`: a buffer read-only
 /// where the pass doesn't write it, a written texture write-only storage, a read one filterable
 /// only as `rgba16float` (the 32-bit ones are read with `textureLoad`), the integer ones
@@ -1151,3 +1215,7 @@ mod tests;
 #[cfg(test)]
 #[path = "native_kept_trace_tests.rs"]
 mod trace_tests;
+
+#[cfg(test)]
+#[path = "native_material_kept_tests.rs"]
+mod material_tests;

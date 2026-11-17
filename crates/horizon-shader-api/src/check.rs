@@ -13,8 +13,8 @@ use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
-    Composed, GROUP, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING,
-    StageKind, compose_traced, identifiers,
+    Composed, GROUP, KEPT_BINDING, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING,
+    RAY_SCENE_BINDING, StageKind, compose_traced, identifiers,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
@@ -328,7 +328,19 @@ fn check_entry(
     let composed = compose_traced(pack, kind, file, at, false);
     let module = parse(&composed)?;
     let info = validate(&module, &composed, Capabilities::default())?;
-    let problems = sampled_data(&module, &info, &composed, &pack.manifest);
+    let mut problems = sampled_data(&module, &info, &composed, &pack.manifest);
+    if kind == StageKind::Material {
+        let what = "a kept resource: it runs in a vertex shader, which reads none, and casts the \
+                    shadow, which gets none";
+        let kept = KEPT_BINDING..=u32::MAX;
+        problems.extend(vertex_reach(
+            &module,
+            &info,
+            &composed,
+            &pack.manifest,
+            (kept, what),
+        ));
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -341,7 +353,10 @@ fn check_entry(
             let capabilities = Capabilities::default() | Capabilities::RAY_QUERY;
             let info = validate(&module, &composed, capabilities)?;
             if kind == StageKind::Material {
-                let problems = vertex_rays(&module, &info, &composed, &pack.manifest);
+                let what = "a trace function: it runs in a vertex shader, and only `material` \
+                            traces rays";
+                let scene = (RAY_SCENE_BINDING..=RAY_ENTITY_RETAINED_BINDING, what);
+                let problems = vertex_reach(&module, &info, &composed, &pack.manifest, scene);
                 if !problems.is_empty() {
                     return Err(problems);
                 }
@@ -491,8 +506,12 @@ fn undeclared(mut problems: Vec<Problem>, m: &crate::Manifest, kind: StageKind) 
                         "`{name}` is a kept resource this pass doesn't list in `reads`/`writes`"
                     )
                 }
+                StageKind::Material => {
+                    format!("`{name}` is a kept resource the material doesn't list in `reads`")
+                }
                 _ => format!(
-                    "`{name}` is a kept resource, which the {} stage can't read yet",
+                    "`{name}` is a kept resource, which the {} stage doesn't read: `material` \
+                     and the passes do, as their `reads` list",
                     kind.name()
                 ),
             };
@@ -549,22 +568,20 @@ fn sampled_data(
         .collect()
 }
 
-/// Where a material stage built against the scene reaches it from a function that runs in a
-/// vertex shader: `displacement`, and the vertex stage's `vertex`, which shares its module. The
-/// renderer binds the scene for the fragment stage only.
-fn vertex_rays(
+/// Where a material stage reaches group 3's `bindings` (`what` they are and why not) from a
+/// function that runs in a vertex shader: `displacement`, and the vertex stage's `vertex`, which
+/// shares its module. The renderer binds the scene and the kept resources for the fragment
+/// stage only.
+fn vertex_reach(
     module: &naga::Module,
     info: &ModuleInfo,
     composed: &Composed,
     manifest: &crate::manifest::Manifest,
+    (bindings, what): (std::ops::RangeInclusive<u32>, &str),
 ) -> Vec<Problem> {
-    // The entity layer's bindings come last.
     let scene: Vec<_> = (module.global_variables.iter())
         .filter(|(_, g)| {
-            g.binding.as_ref().is_some_and(|b| {
-                let bindings = RAY_SCENE_BINDING..=RAY_ENTITY_RETAINED_BINDING;
-                b.group == GROUP && bindings.contains(&b.binding)
-            })
+            (g.binding.as_ref()).is_some_and(|b| b.group == GROUP && bindings.contains(&b.binding))
         })
         .map(|(handle, _)| handle)
         .collect();
@@ -581,13 +598,7 @@ fn vertex_rays(
                 .get_span(handle)
                 .to_range()
                 .map(|r| r.start);
-            problems.push(located(
-                composed,
-                at,
-                format!(
-                    "`{name}` reaches a trace function: it runs in a vertex shader, and only `material` traces rays"
-                ),
-            ));
+            problems.push(located(composed, at, format!("`{name}` reaches {what}")));
         }
     }
     problems

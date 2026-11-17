@@ -862,27 +862,26 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        // Compute keys: `[[post]]` and `[[before_world]]` only, which `kept::check` reads.
+        // Compute keys: `[[post]]` and `[[before_world]]` only, and `reads` `[material]`'s too,
+        // which `kept::check` reads.
         let computes = |s: &Stage| {
-            s.compute
-                || s.dispatch.is_some()
-                || s.workgroup.is_some()
-                || !s.reads.is_empty()
-                || !s.writes.is_empty()
+            s.compute || s.dispatch.is_some() || s.workgroup.is_some() || !s.writes.is_empty()
         };
+        let reads = |s: &Stage| computes(s) || !s.reads.is_empty();
         if raw
             .sky
             .iter()
-            .chain(&raw.material)
             .chain(&raw.vertex)
             .chain(&raw.weather)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
-            .any(computes)
+            .any(reads)
+            || raw.material.iter().any(computes)
         {
             return Err(err(
                 "`compute`, `dispatch`, `workgroup`, `reads` and `writes` are keys of [[post]] \
-                 and [[before_world]]"
+                 and [[before_world]], and `reads` of [material]: the terrain reads kept \
+                 resources, compute passes write them"
                     .into(),
             ));
         }
@@ -901,6 +900,9 @@ impl Manifest {
             resets,
         )
         .map_err(err)?;
+        if let Some(m) = &raw.material {
+            crate::kept::material(m, &kept).map_err(err)?;
+        }
         check_post_targets(&raw.post, traced, moving, &kept.resources).map_err(err)?;
         let tracer =
             !raw.post.is_empty() || raw.material.is_some() || !kept.before_world.is_empty();

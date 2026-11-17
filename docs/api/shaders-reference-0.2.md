@@ -394,8 +394,11 @@ named as one of these functions.
 
 In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share
 its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.
-`material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for
-translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.
+A ray in `material` is paid for every terrain fragment drawn, overdraw included; a ray in a post pass once a
+pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn't `present` behind water,
+glass or entities) and has no albedo, so direct light that must be right there is traced in `material`. With
+`[material] reads`, a pack can also trace in a compute or `[[before_world]]` pass and apply the result in
+`material`.
 
 ### `RayHit`
 
@@ -452,7 +455,13 @@ reductions stay uniform: one beyond the dispatch has `in_bounds` false and touch
 the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either
 may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.
 
-**Not yet, in a later step:** `[material]` can't read kept resources.
+`[material] reads` lists the kept resources the terrain reads (no `writes`): `x` for this frame's version of a
+texture a `[[before_world]]` pass writes, which the terrain sees in the same frame, `x_previous` for last
+frame's, and a buffer as it is. A texture only `[[post]]` passes write is written after the terrain draws, so
+the check refuses its `x` there: read `x_previous`. Its declarations are in the material's module at the same
+bindings, for `material`'s fragments only: the check refuses `displacement` reaching one, and the `[vertex]`
+file naming one, as both also draw the shadow map, which gets no kept resources. On a frame that clears a
+resource the terrain reads zeros, or what a `[[before_world]]` pass wrote since.
 
 ### `ComputeInput`
 
