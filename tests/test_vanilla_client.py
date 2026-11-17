@@ -1,3 +1,5 @@
+import contextlib
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -67,6 +69,37 @@ class OutputTests(unittest.TestCase):
                 command = vanilla_client.command(args)
         self.assertIn("-Dstdout.encoding=UTF-8", command)
         self.assertIn("-Dstderr.encoding=UTF-8", command)
+
+
+class OptionParsingTests(unittest.TestCase):
+    def test_option_without_colon_is_a_clean_argparse_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            stderr = io.StringIO()
+            argv = ["vanilla_client.py", "--game-dir", str(game_dir), "--option", "GOOD:1",
+                    "--option", "BAD", "--print"]
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    vanilla_client.main()
+            self.assertEqual(caught.exception.code, 2)
+            message = stderr.getvalue()
+            self.assertIn("--option", message)
+            self.assertIn("KEY:VALUE", message)
+            self.assertIn("BAD", message)
+            self.assertFalse((game_dir / "options.txt").exists())
+
+    def test_valid_options_keep_their_value_including_extra_colons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            argv = ["vanilla_client.py", "--game-dir", str(game_dir), "--option", "GOOD:1",
+                    "--option", "KEY:a:b", "--print"]
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(vanilla_client, "command", return_value=["java"]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                vanilla_client.main()
+            lines = (game_dir / "options.txt").read_text().splitlines()
+            self.assertIn("GOOD:1", lines)
+            self.assertIn("KEY:a:b", lines)
 
 
 class BinaryTests(unittest.TestCase):

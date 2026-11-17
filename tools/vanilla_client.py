@@ -196,7 +196,13 @@ def main():
     args = parser.parse_args()
     args.game_dir = args.game_dir.resolve()
     args.game_dir.mkdir(parents=True, exist_ok=True)
-    write_options(args.game_dir, dict(o.split(":", 1) for o in args.option))
+    extra = {}
+    for option in args.option:
+        key, sep, value = option.partition(":")
+        if not sep or not key:
+            parser.error(f"argument --option: expected KEY:VALUE, got {option!r}")
+        extra[key] = value
+    write_options(args.game_dir, extra)
     cmd = command(args)
     if args.print:
         print(" ".join(cmd))
