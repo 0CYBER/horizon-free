@@ -2224,6 +2224,8 @@ fn java(
         .map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
+    // On macOS the download's Java home is inside its jre.bundle (#17894).
+    let home = prepare::java::runtime_home(&home).unwrap_or(home);
     find(major, &[home]).map(|jdk| jdk.home())
 }
 

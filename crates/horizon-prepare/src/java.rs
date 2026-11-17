@@ -221,16 +221,21 @@ pub fn minecraft_runtimes(runtime: &Path) -> Vec<PathBuf> {
     let mut homes = Vec::new();
     for component in children(runtime) {
         for platform in children(&component) {
-            let home = platform.join(component.file_name().unwrap_or_default());
-            for home in [home.join("jre.bundle/Contents/Home"), home] {
-                if executable(&home.join("bin"), "java").is_file() {
-                    homes.push(home);
-                    break;
-                }
-            }
+            homes.extend(runtime_home(
+                &platform.join(component.file_name().unwrap_or_default()),
+            ));
         }
     }
     homes
+}
+
+/// The Java home of one runtime the official launcher laid out at `dir`
+/// (`<component>/<platform>/<component>/`): a macOS one keeps it in `jre.bundle/Contents/Home`.
+/// None when neither has `bin/java`.
+pub fn runtime_home(dir: &Path) -> Option<PathBuf> {
+    [dir.join("jre.bundle/Contents/Home"), dir.to_path_buf()]
+        .into_iter()
+        .find(|home| executable(&home.join("bin"), "java").is_file())
 }
 
 /// Finds a JDK whose compiler and runtime are both at least `major`, the version
@@ -590,6 +595,31 @@ mod tests {
         make(dir.join("jre-legacy/linux/jre-legacy"), false);
         assert_eq!(minecraft_runtimes(&dir), [epsilon, gamma]);
         assert!(minecraft_runtimes(&dir.join("missing")).is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_downloaded_runtime_names_its_java_home() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-prepare-runtime-home-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let put_java = |home: &Path| {
+            fs::create_dir_all(home.join("bin")).unwrap();
+            fs::write(executable(&home.join("bin"), "java"), b"").unwrap();
+        };
+        // The folder Mojang's download is put in, as the launcher gets it back (#17894).
+        let mac = dir.join("java-runtime-epsilon/mac-os-arm64/java-runtime-epsilon");
+        put_java(&mac.join("jre.bundle/Contents/Home"));
+        assert_eq!(
+            runtime_home(&mac),
+            Some(mac.join("jre.bundle/Contents/Home"))
+        );
+        let linux = dir.join("java-runtime-epsilon/linux/java-runtime-epsilon");
+        put_java(&linux);
+        assert_eq!(runtime_home(&linux), Some(linux.clone()));
+        assert_eq!(runtime_home(&dir.join("missing")), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 }
