@@ -355,6 +355,12 @@ impl Game<'_> {
         registries.function_tags = store.function_tags.keys().cloned().collect();
         registries.predicates = store.predicates.keys().cloned().collect();
         registries.item_modifiers = store.item_modifiers.keys().cloned().collect();
+        // On world open the content tables get the world's packs only after this: the
+        // candidate's own loot tables are named here, as its predicates and modifiers are.
+        let pack_tables = store.files.keys().filter_map(|id| id.strip_prefix("loot_table/"));
+        registries.loot_tables.extend(pack_tables.map(str::to_owned));
+        registries.loot_tables.sort();
+        registries.loot_tables.dedup();
         let sources = registries
             .by_registry
             .entry("minecraft:slot_source".into())
