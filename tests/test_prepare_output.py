@@ -74,6 +74,11 @@ class PrepareOutputTests(unittest.TestCase):
         constant = prepare_output.CONSTANT.search((root / prepare_output.LIB).read_text())
         self.assertEqual(prepare_output.problems(current, int(constant.group(1))), [])
 
+    def test_a_corrupt_manifest_fails_with_a_clear_error(self):
+        with self.assertRaises(SystemExit) as caught:
+            prepare_output.canonical(prepare_output.MANIFEST, b'{"schema": 7, trunc')
+        self.assertIn(prepare_output.MANIFEST, str(caught.exception))
+        self.assertIn('corrupt manifest', str(caught.exception))
 
 if __name__ == '__main__':
     unittest.main()

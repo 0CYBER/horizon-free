@@ -68,7 +68,10 @@ def canonical_json(value, key=''):
 
 def canonical(rel: str, data: bytes) -> bytes:
     if rel == MANIFEST:
-        manifest = json.loads(data)
+        try:
+            manifest = json.loads(data)
+        except ValueError as e:
+            raise SystemExit(f'{rel}: corrupt manifest: {e}')
         scalars = {k: v for k, v in manifest.items() if not isinstance(v, (dict, list))}
         return json.dumps(scalars, sort_keys=True).encode()
     if rel.endswith('.json'):
