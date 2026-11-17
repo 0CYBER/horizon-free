@@ -513,3 +513,26 @@ fn unit_tests_never_resolve_the_real_profile() {
         );
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn unsupported_windows_destinations_explain_how_to_retry_without_changing_data() {
+    let f = Fixture::new("build");
+    for name in ["My Games", "Игры"] {
+        let target = f.temp.0.join(name).join("Horizon");
+        let error = f.refuse(&target);
+        assert!(
+            error.contains(&target.join("build").display().to_string()),
+            "{error}"
+        );
+        assert!(error.contains("Windows build tools cannot use the build folder"));
+        assert!(error.contains("spaces, other whitespace, or non-ASCII characters"));
+        assert!(error.contains("English letters, numbers, underscores or hyphens"));
+        assert!(error.contains(r"D:\Horizon_Data"));
+        assert!(error.contains("Check every parent folder too"));
+        assert!(!target.exists(), "rejection must precede copying");
+    }
+    let target = f.temp.0.join("Horizon_Data-2");
+    let roots = migrate(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    f.migrated(&roots);
+}

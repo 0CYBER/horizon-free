@@ -571,10 +571,10 @@ fn tool_safe(path: &Path) -> Result<()> {
             .to_str()
             .is_some_and(|s| s.is_ascii() && !s.bytes().any(|b| b.is_ascii_whitespace()))
     {
-        return Err(
-            "Choose a destination with only ASCII characters and no spaces for Windows build tools"
-                .into(),
-        );
+        return Err(crate::i18n::trf(
+            "Windows build tools cannot use the build folder \"{path}\" because its full path contains spaces, other whitespace, or non-ASCII characters. Choose an empty destination whose full path uses English letters, numbers, underscores or hyphens, for example D:\\Horizon_Data. Check every parent folder too.",
+            &[("path", &path.display().to_string())],
+        ));
     }
     Ok(())
 }
