@@ -176,7 +176,7 @@ Raw draws own their shading and must follow `hdr-passes.md`. Give raw-hook event
 scene/display phase, paper-white units, R/O sizes, jittered/unjittered matrices and history-reset information.
 An RGBA16F format alone does not say gamma or linear, or whether the curve already ran. Never guess from pack
 presence. Keep the existing late `WorldDrawn` at a documented phase; a new earlier hook is a separate capability.
-That hook and mod API changes belong with arismoko/horizon under CONTRIBUTING, not an upstream mod-API PR.
+That hook and mod API changes are their own pull requests, not part of this one.
 `ExternalPipeline` remains internal and is not the mod interface. World-warp pipelines currently replace pack
 material shading; composable warped lighting/motion is a separate follow-up, not fixed by this note.
 

@@ -34,7 +34,7 @@ Credits:
   ("3-layer split: engine / platform / Horizon", #contributors, 2026-11-08), the portable crates (#12997, #13002),
   and the review that made the Horizon layer linked crates rather than native mods.
 - **arismoko:** the mod API owns its types and a CI property check keeps engine types out of it
-  ([arismoko/horizon](https://github.com/arismoko/horizon), arismoko/horizon#1608). Also the idea of shipping
+  (arismoko/horizon#1608). Also the idea of shipping
   Horizon's own parts from another repository as a launcher plugin.
 - **Martipops** (controllers, splitscreen): the compositor's place in the engine, and where controllers,
   splitscreen, Replay Studio, PvP & HUD and a UI page API go.
@@ -697,7 +697,7 @@ HDR in M6: moving HDR behind engine extension points moves the frame pipeline (f
 present). NikitaMGrimm leads HDR, so that part is planned with them and comes after HDR's step 5 (float targets on
 by default), so the pipeline moves once. HDR off stays bit-exact.
 
-The mod API work on arismoko/horizon lands upstream as part of the platform. The API owns its types,
+The mod API is part of the platform. The API owns its types,
 `horizon-mod-runtime` gets no game dependency, and its CI property check stays as a stricter check inside the
 platform.
 
