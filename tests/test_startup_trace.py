@@ -26,6 +26,10 @@ class StartupTraceTests(unittest.TestCase):
         # The first time a mark happened.
         self.assertEqual(marks, {"title.shown": 450.0})
 
+    def test_p95_is_nearest_rank_when_the_count_is_a_multiple_of_twenty(self):
+        runs = [[(0.0, float(value), "step", "main") for value in range(1, 21)]]
+        self.assertEqual(startup_trace.step_stats(runs)["step"]["p95_ms"], 19.0)
+
     def test_a_missing_trace_has_no_events(self):
         self.assertEqual(startup_trace.read_trace("/nonexistent/trace.jsonl"), [])
 

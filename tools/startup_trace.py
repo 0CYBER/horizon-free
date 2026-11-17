@@ -19,6 +19,7 @@ the trace wrapped as a JSON array: Perfetto (ui.perfetto.dev) opens it.
 """
 import argparse
 import json
+import math
 import pathlib
 import shutil
 import signal
@@ -82,7 +83,8 @@ def step_stats(runs):
     out = {}
     for name, values in sorted(durations.items()):
         ordered = sorted(values)
-        p95 = ordered[min(len(ordered) - 1, max(0, int(len(ordered) * 0.95)))]
+        # Nearest-rank percentile: for 20 samples the 95th is the 19th, not the maximum.
+        p95 = ordered[min(len(ordered) - 1, max(0, math.ceil(len(ordered) * 0.95) - 1))]
         out[name] = {
             "n": len(values),
             "median_ms": statistics.median(values),
