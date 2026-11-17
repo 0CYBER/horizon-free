@@ -137,6 +137,10 @@ def top_items(source):
             if toks[i] == "(":
                 end = group_end(toks, i)
                 vis, i = "pub(" + " ".join(toks[i + 1:end - 1]) + ")", end
+        if toks[i:i + 2] == ["extern", "crate"]:
+            # `extern crate foo;` exports nothing here, and is not a modifier of the item after it.
+            i = toks.index(";", i) + 1
+            continue
         while toks[i] in ("unsafe", "async", "default", "extern") or (
                 toks[i] == "const" and toks[i + 1] in ("fn", "unsafe", "async", "extern")):
             i += 2 if toks[i] == "extern" and toks[i + 1].startswith('"') else 1
