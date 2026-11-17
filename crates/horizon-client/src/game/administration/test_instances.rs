@@ -327,7 +327,9 @@ impl Game<'_> {
             .iter()
             .map(|(&pos, (text, _))| ([pos.0, pos.1, pos.2], text.clone(), HIGHLIGHT_FILL))
             .collect();
-        for (pos, entity) in &self.world.block_entities {
+        // Test instance blocks are among the boxes (`BlockEntities::boxes`), not every block
+        // entity of the world, every frame.
+        for (pos, entity) in self.world.block_entities.boxes() {
             let BlockEntity::TestInstanceBlock(b) = entity else {
                 continue;
             };

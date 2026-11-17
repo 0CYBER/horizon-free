@@ -1427,6 +1427,79 @@ mod tests {
         b.clear();
         assert!(b.boxes.is_empty());
     }
+
+    /// Marker drawing and `boxes` name the same test instance blocks, and the box list is
+    /// faster than walking every block entity. Scene: 8000 chests and 3 test blocks.
+    #[test]
+    fn test_instance_markers_come_from_the_box_list() {
+        use std::time::Instant;
+        const CHESTS: i32 = 8000;
+        const RUNS: usize = 11;
+        let mut entities = level();
+        for i in 0..CHESTS {
+            entities.insert(((i % 200) * 16, 64, (i / 200) * 16), hopper());
+        }
+        let tests = [(1, 70, 1), (40, 70, 2), (90, 80, 3)];
+        for pos in tests {
+            entities.insert(pos, BlockEntity::TestInstanceBlock(Box::default()));
+        }
+        let from_scan = |entities: &BlockEntities| {
+            let mut v: Vec<_> = entities
+                .iter()
+                .filter_map(|(pos, entity)| {
+                    matches!(entity, BlockEntity::TestInstanceBlock(_)).then_some(*pos)
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let from_boxes = |entities: &BlockEntities| {
+            let mut v: Vec<_> = entities
+                .boxes()
+                .filter_map(|(pos, entity)| {
+                    matches!(entity, BlockEntity::TestInstanceBlock(_)).then_some(*pos)
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(from_scan(&entities), tests.to_vec());
+        assert_eq!(from_boxes(&entities), from_scan(&entities));
+        let mut scans = Vec::new();
+        let mut boxes = Vec::new();
+        for _ in 0..2 {
+            let _ = from_scan(&entities);
+            let _ = from_boxes(&entities);
+        }
+        for _ in 0..RUNS {
+            let start = Instant::now();
+            assert_eq!(from_scan(&entities).len(), 3);
+            scans.push(start.elapsed().as_nanos());
+            let start = Instant::now();
+            assert_eq!(from_boxes(&entities).len(), 3);
+            boxes.push(start.elapsed().as_nanos());
+        }
+        scans.sort_unstable();
+        boxes.sort_unstable();
+        let med = |s: &[u128]| s[s.len() / 2];
+        let p95 = |s: &[u128]| s[((s.len() as f64) * 0.95).ceil() as usize - 1];
+        let report = format!(
+            "scene chests={CHESTS} test_instances=3 runs={RUNS}\n\
+             scan_ns median={} p95={} worst={}\n\
+             boxes_ns median={} p95={} worst={}\n",
+            med(&scans),
+            p95(&scans),
+            scans[scans.len() - 1],
+            med(&boxes),
+            p95(&boxes),
+            boxes[boxes.len() - 1],
+        );
+        std::fs::write(std::env::temp_dir().join("hz-measure-markers.txt"), &report).unwrap();
+        println!("{report}");
+        // Pin the work avoided, not host scheduling: wall-clock samples remain diagnostics.
+        assert_eq!(entities.iter().count(), CHESTS as usize + tests.len());
+        assert_eq!(entities.boxes().count(), tests.len());
+    }
 }
 
 #[cfg(test)]
