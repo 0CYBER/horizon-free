@@ -2130,11 +2130,9 @@ pub(super) fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>
             super::finalize::variant_sound(m, "growl").unwrap_or("entity.wolf.growl")
         }
         Species::Wolf if m.random.next_int_bound(3).unwrap_or(1) == 0 => {
-            let kind = if m.extra.tame && m.health < m.attrs.max_health / 2.0 {
-                "whine"
-            } else {
-                "pant"
-            };
+            // Wolf.getAmbientSound: under 20 health, whatever the max health.
+            let hurt = m.extra.tame && m.health < 20.0;
+            let kind = if hurt { "whine" } else { "pant" };
             super::finalize::variant_sound(m, kind).unwrap_or("entity.wolf.pant")
         }
         Species::Parrot => super::parrot::ambient(m, w),
