@@ -8,16 +8,18 @@ PAGE = Path(__file__).resolve().parents[1] / 'docs/design/mod-api/neoforge-exten
 
 
 def counts(content):
-    result = {}
-    for name, section in re.findall(r'## `(I\w+Extension)`\n(.*?)(?=\n## |\Z)', content, re.S):
-        rows = re.findall(r'^\| `([^`]+)` \| (Covered|Partial|Missing|n/a)\b', section, re.M)
-        if name == 'IBlockStateExtension':
-            tally = result['IBlockExtension'].copy()
-            for _, verdict in rows:
-                tally[verdict] -= 1
-        else:
-            tally = Counter(verdict for _, verdict in rows)
-        result[name] = tally
+    """{interface: Counter of its rows' verdicts}, in the page's section order. An `IBlockStateExtension` row
+    repeats the `IBlockExtension` row of the same method, so its tally is the block's minus its own rows: that one
+    is derived after every section is read, so either section may come first."""
+    sections = [(name, re.findall(r'^\| `([^`]+)` \| (Covered|Partial|Missing|n/a)\b', section, re.M))
+                for name, section in re.findall(r'## `(I\w+Extension)`\n(.*?)(?=\n## |\Z)', content, re.S)]
+    state_rows = next((rows for name, rows in sections if name == 'IBlockStateExtension'), None)
+    result = {name: Counter(verdict for _, verdict in rows) for name, rows in sections}
+    if state_rows is not None:
+        tally = result['IBlockExtension'].copy()
+        for _, verdict in state_rows:
+            tally[verdict] -= 1
+        result['IBlockStateExtension'] = tally
     return result
 
 
