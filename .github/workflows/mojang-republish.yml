@@ -25,7 +25,7 @@ jobs:
     runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Sparse like the other bots on these runners: their checkout stays in the work folder, and a full
           # checkout after a sparse one keeps only the sparse one's paths (#17524).

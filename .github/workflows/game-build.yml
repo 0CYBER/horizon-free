@@ -45,7 +45,7 @@ jobs:
     # Three full preparations (two isolated, one batched) besides the compile.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
@@ -75,7 +75,7 @@ jobs:
             ! \( -name '*.class' \( -path 'exporters/server/dev/horizonlab/parity/*' -o -path 'exporters/client/dev/horizonlab/parity/*' \) \))
           [ -z "$stray" ] || { echo "::error::not one of our classes: $stray"; exit 1; }
           python3 tools/check_prepare_exporters.py --binary target/release/horizon-prepare
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: original-exporters
           path: exporters/
@@ -149,7 +149,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
@@ -276,14 +276,14 @@ jobs:
           # Published with the release; the publish job checks it again before it publishes anything.
           cp "$home/smoke.json" "$RUNNER_TEMP/smoke-test.json"
       # One smoke-test.json per build, the Apple Silicon one's; the Intel build must pass its own run too.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: runner.environment == 'self-hosted' && !matrix.target
         with:
           name: smoke-test.json
           path: ${{ runner.temp }}/smoke-test.json
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: original-exporters
           path: exporters
@@ -327,7 +327,7 @@ jobs:
             codesign --verify --strict "dist/${{ matrix.dir }}/$binary"
           done
           packaging/macos/notarize.sh "dist/${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
@@ -349,7 +349,7 @@ jobs:
           rm -f "${{ matrix.server_asset }}"
           tar czf "${{ matrix.server_asset }}" "${{ matrix.server_dir }}"
           ls -l "${{ matrix.server_asset }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.server_asset
         with:
           name: ${{ matrix.server_asset }}
