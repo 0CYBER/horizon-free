@@ -21,6 +21,8 @@ use std::{io::Read, path::Path};
 pub const SCHEMA: u32 = 1;
 /// The biggest file the registry takes (a `.hmod` with content, a `.hpack`).
 pub const MAX_FILE: u64 = 64 << 20;
+/// The shader API line this build serves; the registry reports it from `/healthz`.
+pub const SHADER_API: &str = horizon_shader_api::API;
 /// The biggest native binary build ID, in bytes.
 pub const MAX_NATIVE_BUILD: usize = 128;
 /// Where files may be downloaded from: the registry's release assets.

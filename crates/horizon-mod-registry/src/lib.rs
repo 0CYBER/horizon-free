@@ -162,9 +162,19 @@ impl App {
     }
 }
 
+/// The service's version and the shader API line it serves: a deployment older than a shader
+/// API bump is visible from here, without a signed-in request (#17395).
+async fn healthz() -> String {
+    format!(
+        "ok {} shader-api {}",
+        env!("CARGO_PKG_VERSION"),
+        index::SHADER_API
+    )
+}
+
 pub fn router(app: App) -> Router {
     Router::new()
-        .route("/healthz", get(|| async { "ok" }))
+        .route("/healthz", get(healthz))
         .route("/api/mods/auth/login", get(login))
         .route("/api/mods/auth/callback", get(callback))
         .route("/api/mods/auth/logout", post(logout))
@@ -1650,5 +1660,11 @@ mod tests {
         assert!(is_target_triple("x86_64-pc-windows-gnu"));
         assert!(is_target_triple("aarch64-apple-darwin"));
         assert!(!is_target_triple("riscv64gc-unknown-linux-gnu"));
+    }
+    #[tokio::test]
+    async fn healthz_names_the_shader_api_this_build_serves() {
+        let body = healthz().await;
+        assert!(body.contains(env!("CARGO_PKG_VERSION")), "{body}");
+        assert!(body.contains(index::SHADER_API), "{body}");
     }
 }
