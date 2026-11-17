@@ -157,7 +157,9 @@ pub(super) struct Identity {
     rustc: String,
     target: String,
     side: String,
-    pub(super) link_args: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    link_args: Vec<String>,
     #[serde(default)]
     pub(super) registry_lock: Option<String>,
     #[serde(default)]
@@ -489,21 +491,12 @@ fn standard_library(rust: &Toolchain) -> Result<PathBuf, String> {
 /// rustc with the prebuilt game's settings, its libraries and `out`'s on the search path, and the
 /// native libraries the game's build scripts link (`native/`: the `windows` crates' import
 /// libraries).
-fn rustc(
-    rust: &Toolchain,
-    game: &Path,
-    out: &Path,
-    edition: &str,
-    link_args: &[String],
-) -> Command {
+fn rustc(rust: &Toolchain, game: &Path, out: &Path, edition: &str) -> Command {
     let mut cmd = rustc_with(
         rust,
         &[&game.join("deps"), &game.join("host"), out],
         edition,
     );
-    for arg in link_args {
-        cmd.arg("-C").arg(format!("link-arg={arg}"));
-    }
     cmd.arg("-L")
         .arg(format!("native={}", game.join("native").display()));
     cmd
@@ -746,7 +739,7 @@ pub(super) fn compile(
             let facade = &generated[id];
             fs::write(&source, &facade.source).map_err(|e| e.to_string())?;
             let rlib = out.join(format!("libinternals_{id}.rlib"));
-            let mut cmd = rustc(rust, game, out, "2024", &sdk.link_args);
+            let mut cmd = rustc(rust, game, out, "2024");
             cmd.args(["--crate-type", "rlib", "--crate-name", "internals"])
                 .arg("-C")
                 .arg(format!("metadata={id}"))
@@ -774,7 +767,7 @@ pub(super) fn compile(
             project,
             &declared[index],
             out,
-            |edition| rustc(rust, game, out, edition, &sdk.link_args),
+            |edition| rustc(rust, game, out, edition),
             |package| match package {
                 "internals" => &facades[id],
                 _ => &libraries[package],
@@ -803,7 +796,7 @@ pub(super) fn compile(
         &rlibs,
         &crate_names,
         &sdk,
-        |edition| rustc(rust, game, out, edition, &sdk.link_args),
+        |edition| rustc(rust, game, out, edition),
     )?;
     let mut installed = runtime_libraries(rust, &sdk, game)?;
     for &index in &resolution.order {
@@ -833,7 +826,7 @@ pub(super) fn compile(
         let saved = library.with_extension("fingerprint");
         let unchanged =
             library.is_file() && fs::read_to_string(&saved).ok().as_deref() == Some(&fingerprint);
-        let mut cmd = rustc(rust, game, out, "2024", &sdk.link_args);
+        let mut cmd = rustc(rust, game, out, "2024");
         cmd.args(["--crate-type", "dylib", "--crate-name", "horizon_patch"]);
         for (name, path) in wrapper_externs(&deps)? {
             cmd.arg("--extern")
@@ -1182,6 +1175,37 @@ pub(super) fn runtime_libraries(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn library_command_omits_executable_link_args() {
+        let sdk: super::Identity = serde_json::from_value(serde_json::json!({
+            "commit": "test", "rustc": "test", "target": "test", "side": "client",
+            "link_args": ["-Wl,-stack_size,0x8800000"]
+        }))
+        .unwrap();
+        let rust = super::Toolchain {
+            dir: std::path::PathBuf::from("toolchain"),
+            host: &super::rust_toolchain::hosts()[0],
+        };
+        let cmd = super::rustc(
+            &rust,
+            std::path::Path::new("game"),
+            std::path::Path::new("out"),
+            "2024",
+        );
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.iter().any(|arg| arg.contains(&sdk.link_args[0])));
+        assert!(args.iter().any(|arg| arg == "prefer-dynamic"));
+        if cfg!(target_os = "macos") {
+            assert!(args.iter().any(|arg| arg.contains("@loader_path")));
+        }
+        if cfg!(target_os = "linux") {
+            assert!(args.iter().any(|arg| arg.contains("$ORIGIN")));
+        }
+    }
+
     #[test]
     fn library_names_are_case_insensitive_and_entry_lints_are_checked() {
         let mut names = std::collections::HashSet::new();

@@ -278,7 +278,7 @@ pub(super) fn compile(
                 toml::toml! { path = facade_relative package = facade_package }.into(),
             );
         }
-        let mut link_args = sdk.link_args.clone();
+        let mut link_args = Vec::new();
         if cfg!(target_os = "linux") {
             link_args.push("-Wl,--disable-new-dtags".into());
             link_args.push("-Wl,-rpath,$ORIGIN".into());
@@ -430,7 +430,7 @@ pub(super) fn compile(
     for (name, path) in &externs {
         prebuilt::refuse_closure_rlib("horizon_patch", name, path)?;
     }
-    let mut link_args = sdk.link_args.clone();
+    let mut link_args = Vec::new();
     if cfg!(target_os = "linux") {
         link_args.push("-Wl,--disable-new-dtags".into());
         link_args.push("-Wl,-rpath,$ORIGIN".into());
