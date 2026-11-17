@@ -101,7 +101,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::RedstoneLamp => self.lamp_neighbor_changed(pos, state),
                 Class::RedstoneTorch => self.torch_neighbor_changed(pos, state),
                 Class::RedstoneWire => {
-                    if self.level.redstone_experiments() && changed == b.named.redstone_wire {
+                    // RedStoneWireBlock.neighborChanged: a client's wire keeps the power the
+                    // server sent (#16864).
+                    if self.level.is_client_side()
+                        || self.level.redstone_experiments() && changed == b.named.redstone_wire
+                    {
                         return;
                     }
                     if self.can_survive(state, pos) {
@@ -212,7 +216,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::RedstoneTorch => self.torch_notify_neighbors(pos, state),
                 Class::RedstoneWire => {
-                    if !same {
+                    if !same && !self.level.is_client_side() {
                         self.wire_update_power(pos, state, None, true);
                         for direction in [Direction::Up, Direction::Down] {
                             self.update_neighbors_at(rel(pos, direction), block);
@@ -409,8 +413,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.torch_notify_neighbors(pos, state);
                     }
                 }
+                // RedStoneWireBlock.affectNeighborsAfterRemoval takes a ServerLevel (#16864).
                 Class::RedstoneWire => {
-                    if !moved {
+                    if !moved && !self.level.is_client_side() {
                         for direction in Direction::ALL {
                             self.update_neighbors_at(rel(pos, direction), block);
                         }

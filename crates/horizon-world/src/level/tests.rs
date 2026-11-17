@@ -2455,6 +2455,105 @@ fn tnt_duper_3856_client_neighbor_does_not_prime_or_remove_tnt() {
     assert_eq!(w.level.random.next_long(), random.next_long());
 }
 
+/// RedStoneWireBlock.neighborChanged works out the wire's power only when
+/// `!level.isClientSide()`: a client's wire keeps the power the server sent.
+/// A client that moved the redstone block away from its wire (the piston
+/// event it replays) turned the wire off itself, a tick before the server, so
+/// a piston clock's wire never showed lit (#16864). The server still does.
+#[test]
+fn a_client_wire_keeps_the_servers_power_when_a_neighbour_changes() {
+    for client in [true, false] {
+        let mut w = world!();
+        let f = w.f;
+        w.level.client_side = client;
+        let pos = BlockPos::new(0, 1, 0);
+        w.put(pos.offset(0, -1, 0), w.id("stone", &[]));
+        w.put(pos, w.id("redstone_wire", &[("power", "15")]));
+        let air = w.id("air", &[]);
+        f.behaviours.handle_neighbor_changed(
+            &mut w.level,
+            &mut w.ticks,
+            pos,
+            f.behaviours.block(air),
+        );
+        let expected = if client { "15" } else { "0" };
+        assert_eq!(w.prop(pos, "power"), expected, "client={client}");
+    }
+}
+
+/// RedStoneWireBlock.affectNeighborsAfterRemoval takes a `ServerLevel`: only a
+/// server's removed wire works out its neighbours' power and notifies them.
+/// A client's (a wire a replayed piston destroys) leaves the wire beside it at
+/// the power the server sent and notifies nothing (#16864).
+#[test]
+fn a_client_wire_removed_leaves_its_neighbours_alone() {
+    use std::cell::RefCell;
+    struct Heard {
+        inner: TestLevel,
+        seen: RefCell<Vec<BlockPos>>,
+    }
+    impl crate::level::BlockEntityNeighbors for Heard {}
+    impl LevelAccess for Heard {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn is_client_side(&self) -> bool {
+            self.inner.client_side
+        }
+        fn observe_neighbor_changed(
+            &self,
+            _: &mut Ticks,
+            pos: BlockPos,
+            _: BlockStateId,
+            _: BlockId,
+            _: bool,
+        ) {
+            self.seen.borrow_mut().push(pos);
+        }
+    }
+    let w = world!();
+    let b = w.b();
+    let stone = w.id("stone", &[]);
+    let removed = w.id("redstone_wire", &[("power", "15")]);
+    let beside = w.id("redstone_wire", &[("power", "14")]);
+    let (gone, kept) = (BlockPos::new(0, 1, 0), BlockPos::new(1, 1, 0));
+    for client in [true, false] {
+        let mut level = Heard {
+            inner: TestLevel::new(b),
+            seen: RefCell::new(Vec::new()),
+        };
+        level.inner.client_side = client;
+        for pos in [gone, kept] {
+            level.set_raw(pos.offset(0, -1, 0), stone);
+        }
+        level.set_raw(kept, beside);
+        let mut ticks = Ticks::new(0);
+        b.sim(&mut level, &mut ticks)
+            .affect_neighbors_after_removal(removed, gone, false);
+        let power = b.table.int(level.block_state(kept), b.props.power);
+        let heard = level.seen.borrow().len();
+        if client {
+            assert_eq!(power, 14, "a client's wire keeps the server's power");
+            assert_eq!(heard, 0, "a client's removed wire notifies nothing");
+        } else {
+            assert_eq!(power, 0, "the server works the power out again");
+            assert!(heard > 0);
+        }
+    }
+}
+
 #[test]
 fn tnt_duper_3856_client_placement_does_not_prime_tnt() {
     let mut w = world!();
