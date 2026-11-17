@@ -110,6 +110,8 @@ pub fn start<G>(
     horizon_look::give();
     // OptiFine's and Polytone's pack formats (platform, docs/layers.md), before any pack loads.
     horizon_client::pack_formats::install();
+    // The controller glyphs' pictures: Horizon's own art, until a platform crate registers its own.
+    horizon_client::pad_glyph::install();
     // horizon-extras (docs/forking.md): without the feature, no Horizon Settings or Mods page.
     if !cfg!(feature = "horizon-extras") {
         horizon_client::options_ui::HORIZON_EXTRAS

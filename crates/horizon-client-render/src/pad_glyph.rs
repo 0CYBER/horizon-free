@@ -96,6 +96,61 @@ static ART: &[Art] = art![
     Nintendo DPadRight "nx_right",
 ];
 
+/// Where the glyphs' pictures come from. The engine draws a glyph's picture only when a source
+/// is registered (`register_art`, at startup, before the first atlas is built); with none, every
+/// glyph is its label on a dark key. Horizon's own art is the source `install` registers, and a
+/// platform crate may register another (spec #14205, the glyph provider).
+pub trait GlyphArt: Sync {
+    /// The atlas sprite of `button` in `family`, if the source has a picture of it.
+    fn sprite(&self, family: GlyphStyle, button: Button) -> Option<&'static str>;
+    /// How wide that picture shows, in GUI pixels.
+    fn width(&self, family: GlyphStyle, button: Button) -> Option<f32>;
+    /// The pictures for the atlas: each `(sprite, width, height, RGBA texels)`.
+    fn images(&self) -> Vec<(String, u32, u32, Vec<u8>)>;
+}
+
+static SOURCE: std::sync::OnceLock<&'static dyn GlyphArt> = std::sync::OnceLock::new();
+
+/// Registers the glyphs' picture source, once, before the game starts. Later ones are ignored.
+pub fn register_art(source: &'static dyn GlyphArt) {
+    if SOURCE.set(source).is_err() {
+        log::warn!("A glyph art source is already registered; ignoring the second");
+    }
+}
+
+/// Registers Horizon's own controller art as the picture source.
+pub fn install() {
+    register_art(&HorizonArt);
+}
+
+/// The registered source. Unit tests of this crate always have Horizon's.
+fn source() -> Option<&'static dyn GlyphArt> {
+    #[cfg(test)]
+    let _ = SOURCE.set(&HorizonArt);
+    SOURCE.get().copied()
+}
+
+/// Horizon's own art: [`ART`].
+struct HorizonArt;
+
+impl GlyphArt for HorizonArt {
+    fn sprite(&self, family: GlyphStyle, button: Button) -> Option<&'static str> {
+        find(button, family).map(|art| art.sprite)
+    }
+    fn width(&self, family: GlyphStyle, button: Button) -> Option<f32> {
+        find(button, family).map(art_width)
+    }
+    fn images(&self) -> Vec<(String, u32, u32, Vec<u8>)> {
+        ART.iter()
+            .map(|art| (art.sprite, art.png))
+            .map(|(name, png)| {
+                let (w, h, pixels) = decode(png).expect("Horizon's controller art is PNG");
+                (name.to_owned(), w, h, pixels)
+            })
+            .collect()
+    }
+}
+
 /// The glyphs a player sees: a pad family's art, and whether a Nintendo pad goes by its letters.
 /// Opaque: it is only made from the settings and the pad (`of`), or by the one named exception
 /// (`unheld`), so nothing can drop the letter setting. Letter mode is part of it, and callers
@@ -184,11 +239,6 @@ impl Glyph {
         let (family, button) = self.glyphs.on_pad(self.part);
         colour(button, family)
     }
-    /// Its art, if the family has a picture of the button.
-    fn art(self) -> Option<&'static Art> {
-        let (family, button) = self.glyphs.on_pad(self.part);
-        find(button, family)
-    }
 }
 
 /// What is printed on a button of a pad family (`Auto` reads as Xbox).
@@ -253,9 +303,9 @@ fn sprite(button: Button, style: GlyphStyle) -> Option<&'static str> {
 
 /// The sprite this atlas can draw for the glyph; none (the boot screen's atlas) means text.
 pub fn art(atlas: &HudAtlas, glyph: Glyph) -> Option<&'static str> {
-    glyph
-        .art()
-        .map(|art| art.sprite)
+    let (family, button) = glyph.glyphs.on_pad(glyph.part);
+    source()?
+        .sprite(family, button)
         .filter(|name| atlas.sprites.contains_key(*name))
 }
 
@@ -268,8 +318,9 @@ fn art_width(art: &Art) -> f32 {
 
 /// How wide the glyph shows, in GUI pixels.
 pub fn width(atlas: &HudAtlas, glyph: Glyph) -> f32 {
-    match glyph.art().filter(|a| atlas.sprites.contains_key(a.sprite)) {
-        Some(art) => art_width(art),
+    let (family, button) = glyph.glyphs.on_pad(glyph.part);
+    match art(atlas, glyph).and_then(|_| source()?.width(family, button)) {
+        Some(width) => width,
         None => HudBatch::text_width(atlas, glyph.label()).ceil() + 4.0,
     }
 }
@@ -302,13 +353,13 @@ pub fn draw(batch: &mut HudBatch, atlas: &HudAtlas, glyph: Glyph, x: f32, y: f32
 
 /// Horizon's art for the atlas: each `(sprite, width, height, RGBA texels)`.
 pub fn images() -> impl Iterator<Item = (String, u32, u32, Vec<u8>)> {
-    ART.iter()
-        .map(|art| (art.sprite, art.png))
-        .chain([(pad_cursor::SPRITE, pad_cursor::PNG)])
-        .map(|(name, png)| {
-            let (w, h, pixels) = decode(png).expect("Horizon's controller art is PNG");
-            (name.to_owned(), w, h, pixels)
-        })
+    let (name, png) = (pad_cursor::SPRITE, pad_cursor::PNG);
+    let (w, h, pixels) = decode(png).expect("Horizon's controller art is PNG");
+    source()
+        .map(|source| source.images())
+        .unwrap_or_default()
+        .into_iter()
+        .chain([(name.to_owned(), w, h, pixels)])
 }
 
 fn decode(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
