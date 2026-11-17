@@ -1830,10 +1830,14 @@ impl Projectile {
             );
         }
         self.position = to;
-        // Fireballs ease towards the motion (`ProjectileUtil.rotateTowardsMovement`);
-        // wind charges still face their motion at once; the thrown kinds turned
-        // in `tick` above.
-        if self.is_fireball() {
+        // `AbstractHurtingProjectile.tick` (fireballs and wind charges) eases towards the motion
+        // (`ProjectileUtil.rotateTowardsMovement`); the thrown kinds turned in `tick` above.
+        if self.is_fireball()
+            || matches!(
+                self.kind,
+                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+            )
+        {
             self.rotate_towards_movement(0.2);
         } else if !self.turns_with_update_rotation() {
             self.update_rotation();
