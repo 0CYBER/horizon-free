@@ -15,7 +15,9 @@ exporter-noise files may differ, and each must be the hash of its own run's file
 
 Then each preparer runs again over the other's output (Rust over a Python tree, Python over the
 Rust tree): the manifests are read the same way, so nothing is exported again and no resource
-changes. Development tool: it needs Python 3.11+, Java and git. Report: <work>/report.json.
+changes. Success requires no port differences, every recorded digest to be the hash of its own
+run's file, and both cross-reruns to leave resources untouched and print no re-export marker.
+Development tool: it needs Python 3.11+, Java and git. Report: <work>/report.json.
 """
 import argparse
 import hashlib
@@ -98,6 +100,7 @@ def main():
         command = [str(binary), '--root', str(folder), *game] if name == 'rust' else python
         times[name] = run(name, command, folder, work / f'{name}.log')
     first, second, rust = (hashes(folders[n]) for n in ['python-1', 'python-2', 'rust'])
+    by_run = {'python-1': first, 'python-2': second, 'rust': rust}
     names = sorted(first.keys() | second.keys() | rust.keys())
     identical = [n for n in names if first.get(n) == second.get(n) == rust.get(n) is not None]
     noise = [n for n in names if first.get(n) != second.get(n)]
@@ -122,6 +125,33 @@ def main():
                 manifest_differences.append('.'.join(path))
 
     walk(manifests['python-1'], manifests['rust'], [])
+    # The cross-run walk only proves rust's noisy digests; python-2's manifest was never read.
+    # Every run's recorded digest must be the sha256 of that same run's file, so a stale hash
+    # cannot hide in classifier noise no matter which reference wrote it.
+    #
+    # Only the *_files_sha256 maps record prepared resources: their keys are paths relative to
+    # the manifest's resource directory, so resolve each one to that exact path under .local.
+    # A basename lookup would validate against an unrelated file of the same name elsewhere in
+    # .local, and a reference to a file that was never written would be silently skipped. Both
+    # a missing file (hashed lookup is None) and a stale digest are failures. Jar/exporter and
+    # top-level hash fields are not resource files and are deliberately left alone; the
+    # manifest schema is unchanged.
+    resource_dir = manifest.rsplit('/', 1)[0]
+
+    def integrity(node, path, hashed):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, dict) and key.endswith('_files_sha256'):
+                    for filename, digest in value.items():
+                        rel = f'{resource_dir}/{filename}'
+                        field = '.'.join(path + [key, filename])
+                        if hashed.get(rel) != digest and field not in manifest_differences:
+                            manifest_differences.append(field)
+                else:
+                    integrity(value, path + [key], hashed)
+
+    for name, hashed in by_run.items():
+        integrity(manifests[name], [], hashed)
     if manifest in port and not manifest_differences:
         port.remove(manifest)
     # Each preparer over the other's output: nothing to export again, no resource changes.
@@ -137,7 +167,8 @@ def main():
                    if n.startswith(resources) and before[name].get(n) != after.get(n)]
         rerun_changes[name] = changed
     exported_again = {name: [line.strip() for line in (work / log).read_text().splitlines() if 'Exporting' in line]
-                      for name, log in [('rust over python', 'rust-over-python.log')]}
+                      for name, log in [('rust over python', 'rust-over-python.log'),
+                                        ('python over rust', 'python-over-rust.log')]}
     report = {'python_ref': args.python_ref, 'binary': str(binary), 'seconds': times,
               'files': len(names), 'identical': len(identical), 'exporter_noise': noise,
               'port_differences': port, 'manifest_differences': manifest_differences,
@@ -147,7 +178,18 @@ def main():
     if not args.keep:
         for folder in folders.values():
             shutil.rmtree(folder, ignore_errors=True)
-    ok = not port and not manifest_differences
+    failures = []
+    if port:
+        failures.append('port differences')
+    if manifest_differences:
+        failures.append('manifest differences')
+    if any(rerun_changes.values()):
+        failures.append('cross-rerun resource changes')
+    if any(exported_again.values()):
+        failures.append('re-export')
+    if failures:
+        print('FAILED CONDITIONS: ' + ', '.join(failures), flush=True)
+    ok = not failures
     print('identical output' if ok else 'DIFFERENT OUTPUT', flush=True)
     return 0 if ok else 1
 
