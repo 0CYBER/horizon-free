@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verify-static's guard of the unit tier: a test that boots the game is a daily test.
+"""verify-tree's guard of the unit tier: a test that boots the game is a daily test.
 
 Fails naming every `#[test]` function that is not `#[ignore]`d and calls a game-boot fixture, directly or through a
 helper function of the same file that does. The fixtures are the names in tools/ci/game-boot-fixtures.txt (one

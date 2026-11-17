@@ -1,4 +1,4 @@
-"""The verify-static unittest suite exercises the book's computed totals."""
+"""The verify-tree unittest suite exercises the book's computed totals."""
 import unittest
 from tools.neoforge_extension_counts import counts, render
 

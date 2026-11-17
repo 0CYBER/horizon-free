@@ -1,5 +1,5 @@
 # Game-boot fixtures: a test that calls one of these, directly or through a helper of its own file, boots the game
-# and is a daily test (#[ignore = "daily"] and its row; tools/ci/check_game_boot_tests.py, run by verify-static).
+# and is a daily test (#[ignore = "daily"] and its row; tools/ci/check_game_boot_tests.py, run by verify-tree).
 # One name per line, a function (matched as a call of a function or method of that name) or `Type::function`.
 # Add a new fixture here; remove one only with a reason in the pull request.
 

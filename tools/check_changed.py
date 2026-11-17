@@ -2,7 +2,8 @@
 """Check only what this branch changed: rustfmt, clippy and tests of the changed crates and their dependents.
 
 Compares the working tree (committed, uncommitted and untracked files) with the merge-base against the base branch and
-uses CI's crate selection (tools/ci/test_scope.py). A change outside every crate, such as Cargo.lock, .cargo/ or
+uses tools/ci/test_scope.py's crate selection (CI's verify tests the whole workspace instead: its build folder
+holds main's workspace build, which a `-p` selection would not reuse). A change outside every crate, such as Cargo.lock, .cargo/ or
 .github/, selects the whole workspace. The launcher is its own workspace: tools/pr_ready.py checks it.
 """
 

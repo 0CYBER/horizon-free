@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The crates a pull request's `cargo test` must cover, for GITHUB_OUTPUT.
+"""The crates a branch's `cargo test` must cover (tools/check_changed.py; CI's verify tests the whole workspace).
 
 Prints `packages=-p a -p b ...`, or `packages=` when the whole workspace must run (main and nightly never call this).
 A package is selected when a changed file is in its directory, when it depends (normal, dev or build) on a selected one,

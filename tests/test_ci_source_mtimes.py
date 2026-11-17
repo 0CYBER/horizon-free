@@ -132,8 +132,34 @@ class SourceMtimesTests(unittest.TestCase):
 
 
 # Steps that compile into the job's Cargo target: Cargo itself and the tools that run it.
-BUILDS = re.compile(r"\bcargo (build|test|check|clippy|rustc|run|doc)\b|vanilla-data\.sh|prebuilt_game\.py|"
+BUILDS = re.compile(r"\bcargo (\+\S+ )?(build|test|check|clippy|rustc|run|doc)\b|vanilla-data\.sh|prebuilt_game\.py|"
                     r"ignored_tests\.py|run_test_binaries\.py")
+
+
+class BlacksmithBuildFolderTests(unittest.TestCase):
+    def test_every_verify_build_on_blacksmith_restores_its_own_disk_first(self):
+        # A build before the restore would compare against checkout dates and trust another tree's artifacts' dates;
+        # two jobs on one disk would each replace the other's build.
+        jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+        keys = []
+        for name, job in jobs.items():
+            steps = job.get("steps", [])
+            builds = [i for i, step in enumerate(steps) if BUILDS.search(step.get("run", ""))]
+            if not builds or "blacksmith-" not in str(job.get("runs-on")):
+                continue
+            with self.subTest(job=name):
+                mount = next(i for i, step in enumerate(steps)
+                             if step.get("uses", "").startswith("useblacksmith/stickydisk@"))
+                restore = next(i for i, step in enumerate(steps) if "tools/ci/build_folder.sh" in step.get("run", ""))
+                self.assertLess(mount, restore)
+                self.assertLess(restore, builds[0])
+                self.assertEqual(steps[restore]["run"], f"tools/ci/build_folder.sh {steps[mount]['with']['path']}")
+                self.assertEqual(steps[mount]["if"], steps[restore]["if"])
+                keys.append(steps[mount]["with"]["key"])
+        self.assertGreaterEqual(len(keys), 4)
+        self.assertEqual(len(set(keys)), len(keys))
+        for key in keys:
+            self.assertTrue(key.endswith("-${{ env.BUILD_DISKS }}"), key)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,10 @@ WORKFLOWS = ROOT / ".github/workflows"
 LIGHT = ("horizon-light", "playhorizon-light", "playhorizon-ci")
 CHECKS = ("horizon-checks",)
 FORK_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
+VERIFY_PARTS = ("verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test")
+# verify's parts: our checks runners only with SELF_HOSTED_CI=all, Blacksmith's otherwise.
+ONLY_WITH_ALL = re.compile(r"^\$\{\{ vars\.SELF_HOSTED_CI == 'all' && fromJSON\('\[\"self-hosted\", \"linux\", "
+                           r"\"horizon-checks\"\]'\) \|\| 'blacksmith-\d+vcpu-ubuntu-2404' \}\}$")
 TRUSTED_WRITES = re.compile(r"^\s*(contents|actions|packages|id-token|deployments|attestations): write", re.M)
 # actions: write can start workflows too; cancel-on-close needs it to cancel runs and runs no checkout at all.
 CANCELS_RUNS = {"cancel-on-close.yml cancel"}
@@ -70,6 +74,8 @@ class OwnRunnerTests(unittest.TestCase):
         count = 0
         for where, _, _, _, value, pools in routed():
             count += 1
+            if ONLY_WITH_ALL.match(value):
+                continue
             self.assertIn("vars.SELF_HOSTED_CI != 'off'", value, where)
             # Both labels select a GitHub-hosted or Blacksmith Ubuntu runner when our pools are disabled.
             self.assertRegex(value, r"\|\| '(?:ubuntu-(?:latest|24\.04)|blacksmith-\d+vcpu-ubuntu-2404)' \}\}$", where)
@@ -105,21 +111,14 @@ class OwnRunnerTests(unittest.TestCase):
                 self.assertNotRegex(block, r":\s*write", where)
                 self.assertNotRegex(head, r":\s*write", where)
 
-    def test_checks_split_between_both_pools(self):
+    def test_verify_parts_go_to_one_pool(self):
         ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
-        value = runs_on(ci["verify-static"])
-        # A pull request by the last digit of its number unless SELF_HOSTED_CI=all; main's pushes keep GitHub's cache.
-        self.assertIn("github.event_name == 'pull_request' && ", value)
-        self.assertIn("vars.SELF_HOSTED_CI == 'all'", value)
-        self.assertIn("endsWith(format('{0}', github.event.pull_request.number), '0')", value)
-        # The whole merge queue, unless SELF_HOSTED_CI is light or off.
-        self.assertIn("github.event_name == 'merge_group') &&", value)
-        self.assertNotIn("head_ref", value)
-        # verify's parts all go where the first goes; verify itself only waits for them.
-        for part in ("verify-static", "verify-test"):
+        # Every part goes to our checks runners or every part to Blacksmith's (only the size differs); verify itself
+        # only waits for them.
+        for part in VERIFY_PARTS:
             with self.subTest(part=part):
-                self.assertEqual(runs_on(ci[part]), value)
-        self.assertIn("needs: [verify-static, verify-test]", ci["verify"])
+                self.assertRegex(runs_on(ci[part]), ONLY_WITH_ALL)
+        self.assertIn(f"needs: [{', '.join(VERIFY_PARTS)}]", ci["verify"])
         # Never skipped: GitHub counts a skipped required check as passed.
         self.assertIn("if: always()", ci["verify"])
 
@@ -129,7 +128,7 @@ class OwnRunnerTests(unittest.TestCase):
         # can start carries the fork guard (test_light_runners_take_main_code_only), and ci.yml's two runs-on
         # expressions (the other workflows keep their own guards) no longer test the head repository.
         ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
-        for name in ("verify-static", "verify-test"):
+        for name in VERIFY_PARTS:
             self.assertNotIn("head.repo", runs_on(ci[name]), name)
         for where, on, _, block, _, pools in routed():
             if "light" in pools and "pull_request" in on:

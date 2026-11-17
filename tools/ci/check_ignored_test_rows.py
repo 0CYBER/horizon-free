@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verify-static's guard for tools/ci/ignored-tests/: read every policy file as the ignored-test readers do.
+"""verify-tree's guard for tools/ci/ignored-tests/: read every policy file as the ignored-test readers do.
 
 Fails on a malformed row, a test listed in two files, a folder with no rows or with a file other than `*.txt`
 and README.md, and a file at the retired single-list path. The shared reader validates both `needs`

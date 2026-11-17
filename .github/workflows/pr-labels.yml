@@ -25,7 +25,7 @@ jobs:
       cancel-in-progress: false
     # One of our small runners (horizon-light), out of GitHub's pool: it runs main's script only (above), so a fork's
     # pull request runs none of its code there (docs/ci-runners.md). SELF_HOSTED_CI=off: GitHub's runners.
-    runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'ubuntu-latest' }}
+    runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     permissions:
       contents: read

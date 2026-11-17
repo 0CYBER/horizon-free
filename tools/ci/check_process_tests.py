@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verify-static's guard of the unit tier: a test that starts a child process is a daily test.
+"""verify-tree's guard of the unit tier: a test that starts a child process is a daily test.
 
 Fails naming every `#[test]` function that is not `#[ignore]`d and starts a process, directly or through a helper
 function of the same file. A function starts one when its body:

@@ -1,5 +1,5 @@
 name: checks
-# verify: every pull request and every push to main, its two parts side by side (below). It is the check main
+# verify: every pull request and every push to main, its parts side by side (below). It is the check main
 # requires, so it runs in every run of this workflow, even a cancelled one: a skipped job counts as passed, and every
 # run must report a real verify (a pull request that changes no Rust finishes its Rust parts in seconds instead).
 # parity: the vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the
@@ -30,50 +30,40 @@ concurrency:
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   HORIZON_TELEMETRY_URL: "off"
+  # Whose sticky disks a run's build folders are on (see verify below): this repository's own runs share theirs, and a
+  # fork's pull request gets its own, so what one leaves never reaches main's.
+  BUILD_DISKS: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'own' || 'fork' }}
 
 jobs:
-  # verify runs as two jobs side by side, so a run takes as long as its slowest part (the Rust tests), not the sum:
-  # one job doing everything in turn took 14-21 minutes on GitHub's runners (main's run 43595807302: 859 s), and every
-  # merge wave waits for main's. Two, not more: GitHub gives the organisation 20 concurrent jobs and a burst of pull
-  # requests drains through them, each job costing about a minute of setup (checkout, toolchain, cache) before it works.
-  # Measured 2026-11-13..15 (medians): the Rust tests 8.8 min, format and lint 4.0, the tree checks 2.0, the launcher
-  # under 1.5 min in 92% of runs (median 0.5). The three short parts were once three jobs (four with the tests, so
-  # four slots per pull request); they are one now, which is no slower than the tests and halves the slots.
-  # `verify` itself is the check main requires: it waits for the two and passes only when each passed or had nothing
+  # verify runs as one job per part, side by side, so a run takes as long as its slowest part, not the sum. It was two
+  # jobs (the three short parts as steps of one) while GitHub's 20 concurrent jobs were what a burst of pull requests
+  # waited for; Blacksmith's runners are not in that pool. #18004's runs, both cold: the two jobs took 13.7 and 5.2
+  # min, the first with its 32 cores mostly idle (clippy 5.5, the server build's clippy 3.0, the launcher 2.3, the Python
+  # tests 1.9, one after another).
+  # `verify` itself is the check main requires: it waits for the parts and passes only when each passed or had nothing
   # to do. It runs even in a cancelled run (`always()`), so it fails there instead of being skipped, which GitHub
-  # would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the other.
+  # would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the others.
   #
-  # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take pull requests whose number ends in 0,
-  # this repository's own and approved forks' alike, and the whole merge queue (about 11 runs an hour; the
-  # build folder persists there, so a queue run's Rust tests take about 3 min against about 9 on GitHub's runners);
-  # GitHub's runners take the other pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs
-  # read), so both pools work at once. A fork's run starts only after a maintainer approves it, and its code runs on
-  # an isolated runner user with no secret and a token that writes nothing. The repository variable SELF_HOSTED_CI
-  # moves this repository's own runs: `all` every job to ours, `light` (the CI VPS down) or `off` every job to
-  # GitHub's. A fork's pull request sees no repository variable, so no switch can move it off a machine that is off:
-  # it waits there until the machine is back (runner-watch.yml opens an issue). On ours the build folder persists
-  # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.
-  # "GitHub's runners" for these jobs are Blacksmith's (blacksmith.sh sponsors our minutes): GitHub's own image on
-  # faster machines, but they report themselves as self-hosted, so the steps tell them apart by runner.name.
-  verify-static:
-    name: verify (tree, lint and launcher)
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' &&
-      endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      github.event_name == 'merge_group') &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 45
+  # Where (docs/ci-runners.md): Blacksmith's runners (blacksmith.sh sponsors our minutes), each part on a size that
+  # fits it, for every pull request (a fork's once a maintainer approves it), the merge queue and main's pushes. They are
+  # GitHub's own image on faster machines, but report themselves as self-hosted, so the steps tell them apart by
+  # runner.name. The repository variable SELF_HOSTED_CI=all sends every part to our checks runners (label
+  # horizon-checks), whose build folder persists (CARGO_TARGET_DIR, outside the checkout).
+  # On Blacksmith each Rust part keeps its build folder on a sticky disk instead (tools/ci/build_folder.sh), one disk per
+  # part: parts that ran side by side on one disk would each replace the other's build. A cold disk builds everything
+  # once; after that a pull request rebuilds what it changed.
+  verify-tree:
+    name: verify (tree and Python tests)
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
       # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
-      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
-      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
-      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
-      # caches hold (the steps below say which).
+      # that commit's push run would repeat a finished, green verify. Only a green merge_group run of this very commit
+      # counts; an admin merge never had one, and an API error counts as not tested, so the push then verifies in full.
       - name: Did the merge queue already verify this commit?
         id: queued
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -88,7 +78,7 @@ jobs:
           fi
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
+        if: startsWith(runner.name, 'blacksmith-')
         with:
           python-version: '3.12'
       # A pull request or a merge group adds only its own commits to main, so it reads those; main's pushes read every
@@ -106,13 +96,11 @@ jobs:
           else
             python tools/check_public_tree.py --history
           fi
-      # Our runners as GitHub's: some Python tests compile Rust with a bare `rustc` (GitHub's image has a default
-      # toolchain, our runners' own rustup homes may not), and the GPU tests find no adapter there, so they return
-      # early. Ours have Mesa's software Vulkan for parity; a backend Linux lacks keeps the tests from it, so a pull
-      # request's verify doesn't depend on which pool took it (#8627: a GPU test that flakes on lavapipe).
-      # Blacksmith's runners too: their image has Mesa's llvmpipe, and the GPU tests fail on its GL backend.
+      # Some Python tests compile Rust with a bare `rustc` (GitHub's image has a default toolchain, our runners' own
+      # rustup homes may not), and the GPU tests find no adapter, so they return early. Our runners have Mesa's software
+      # Vulkan for parity and Blacksmith's image Mesa's llvmpipe, on which the GPU tests fail; a backend Linux lacks keeps
+      # the tests from both, so a pull request's verify doesn't depend on which pool took it (#8627).
       - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
-        if: runner.environment != 'github-hosted'
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
@@ -132,161 +120,23 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
         run: python3 tools/check_addresses.py ${BASE:+--base "$BASE"}
+      # One module per process, on every core: in one process the suite took ~2 minutes.
       - name: Test offline research tooling
         if: steps.queued.outputs.tested != 'true'
-        run: python -m unittest discover -s tests -v
-      # Format, lint and the launcher are not in the merge queue: GitHub's 20 concurrent jobs are what the queue waits
-      # for, every pull request passed them on its own head, and main's push after the merge still runs clippy (a
-      # combination that breaks a lint shows there). The steps below carry the merge_group guard themselves, so the
-      # queue's run of this job is the tree checks only. A failed step skips the later ones: fix it and re-run.
-      - name: Does this pull request need Rust checks?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # As in verify-static: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
-      - name: Install Rust toolchain and the ALSA and udev headers the client links against
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
-        env:
-          HOSTED: ${{ (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-')) }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies and the workspace crates' own clippy output, saved from main's runs (pull requests read main's
-      # cache). rust-cache leaves the workspace crates out by default, so clippy re-checked all of them on every run;
-      # cache-workspace-crates keeps them. The UTC day is in shared-key (rust-cache ignores `key` when shared-key is
-      # set), so main's first push of each day saves a fresh copy and a pull request never starts from an older day's;
-      # before that push, it finds none. .ci-built holds the commit that copy was checked at.
-      - name: Which day's lint cache
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        id: lint-day
-        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        with:
-          shared-key: verify-lint-${{ steps.lint-day.outputs.day }}
-          cache-workspace-crates: true
-          cache-directories: .ci-built
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Cargo rebuilds a crate whose source file is newer than its saved output, and a checkout stamps every file with
-      # the time of the checkout. So on a pull request the files are dated old again, except those that changed since
-      # the cached commit, and clippy re-checks only those crates and what depends on them. Without a usable
-      # .ci-built/sha the script does nothing and clippy checks everything, as before.
-      - name: Date unchanged files as the cache saw them
-        if: >-
-          github.event_name == 'pull_request' && github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' &&
-          (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        run: tools/ci/pin_mtimes.sh .ci-built
-      # rust-cache saves the dependencies from a registry and the workspace's crates, and deletes the rest of target/:
-      # the path-patched crates in third_party/. Clippy rebuilt them on every restore, then re-checked every crate
-      # above them, which is most of the workspace. So main carries their build in .ci-built (the step that records
-      # the commit moves it there) and a pull request moves it back. Main builds them anew each time, from files
-      # dated as a pull request's are: Cargo rebuilds a crate like these when its newest file time differs.
-      - name: Put back the path-patched crates' build, or prepare main's
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        env:
-          ACTION: ${{ github.event_name == 'pull_request' && 'restore .ci-built' || 'prepare' }}
-        run: python3 tools/ci/path_crates.py $ACTION
-      - name: Check formatting and lint
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
-        # A commit the queue verified skips the format check but still runs clippy: its build is what verify-static's
-        # rust-cache saves from main, and a run that saved nothing would leave pull requests an emptier cache.
-        env:
-          TESTED: ${{ steps.queued.outputs.tested }}
-        run: |
-          [ "$TESTED" = true ] || cargo +stable fmt --all -- --check
-          cargo +stable clippy --workspace --all-targets --locked -- -D warnings
-      # The server build (released as horizon-engine): the game without sound or controllers. Its libraries and
-      # binaries, not the tests and examples the first clippy already checked. Every pull request runs it: the merge
-      # queue no longer runs this job, so a change that breaks only the server build must stop on its own pull request
-      # (a crate below the client can break it without touching one).
-      - name: Lint the server build
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
-        run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
-      # Every run that may save the cache records its commit (save-if above: any event on main, a run started by
-      # hand included): a cache saved without it pins nothing, and pull requests then recheck every crate.
-      # Pull requests restore it and never save it.
-      - name: Record the commit this lint cache was checked at
-        if: github.ref == 'refs/heads/main' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        run: |
-          mkdir -p .ci-built
-          git rev-parse HEAD > .ci-built/sha
-          python3 tools/ci/path_crates.py save .ci-built
-      # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
-      # changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
-      # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
-      # after their merge shows it. A push's range is the commits it added to main; a range the job cannot read (a push
-      # with no earlier commit, or one a force push removed) runs everything.
-      - name: Does this change the launcher or a crate it builds?
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'merge_group'
-        id: launcher
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-        run: |
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
-            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "No earlier commit to compare with: the launcher is checked"
-          else
-            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Install Rust and the headers GPUI links against
-        if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false'
-        env:
-          HOSTED: ${{ (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-')) }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
-              libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # cache-bin: false: this step's save deletes the binaries ~/.cargo/bin held when it started, cargo among them.
-      # The lint cache above saves after it (post steps run in reverse), found no cargo, listed no crates and saved
-      # an empty target/ that every pull request then restored (main's run 43786916028, #17145's push).
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        with:
-          workspaces: launcher
-          shared-key: launcher
-          cache-bin: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Check the launcher's formatting, lint and tests
-        if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false'
-        working-directory: launcher
-        env:
-          TESTED: ${{ steps.queued.outputs.tested }}
-        # A commit the queue verified is only built (clippy, test binaries) for the cache main saves, not run.
-        run: |
-          [ "$TESTED" = true ] || cargo +stable fmt --check
-          cargo +stable clippy --all-targets --locked -- -D warnings
-          if [ "$TESTED" = true ]; then
-            cargo +stable test --locked --lib --bins --no-run
-          else
-            cargo +stable test --locked --lib --bins
-          fi
-  verify-test:
-    name: verify (Rust tests)
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' &&
-      endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      github.event_name == 'merge_group') &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-32vcpu-ubuntu-2404' }}
+        run: python tools/ci/unittest_parallel.py
+  # Format and lint are not in the merge queue: every pull request passed them on its own head, and main's push after
+  # the merge still runs clippy (a combination that breaks a lint shows there). A commit the queue verified skips the
+  # format check but still runs clippy.
+  verify-lint:
+    name: verify (format and lint)
+    if: github.event_name != 'merge_group'
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
-      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
-      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
-      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
-      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
-      # caches hold (the steps below say which).
       - name: Did the merge queue already verify this commit?
         id: queued
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -307,9 +157,178 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # As in verify-static: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
+      - name: Install Rust toolchain and the ALSA and udev headers the client links against
+        if: steps.rust.outputs.required != 'false'
+        env:
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
+        run: |
+          if [ "$HOSTED" = true ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+          fi
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Mount the build folder
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+        with:
+          key: ${{ github.repository }}-verify-lint-${{ env.BUILD_DISKS }}
+          path: ~/horizon-target
+      - name: Build in it, rebuilding only what changed
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        run: tools/ci/build_folder.sh ~/horizon-target
+      - name: Check formatting and lint
+        if: steps.rust.outputs.required != 'false'
+        env:
+          TESTED: ${{ steps.queued.outputs.tested }}
+        run: |
+          [ "$TESTED" = true ] || cargo +stable fmt --all -- --check
+          cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+  # The server build (released as horizon-engine): the game without sound or controllers. Its libraries and binaries,
+  # not the tests and examples verify-lint checks. Every pull request runs it: the merge queue doesn't, so a change that
+  # breaks only the server build must stop on its own pull request (a crate below the client can break it without
+  # touching one).
+  verify-server:
+    name: verify (server build lint)
+    if: github.event_name != 'merge_group'
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Does this pull request need Rust checks?
+        if: github.event_name == 'pull_request'
+        id: rust
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain and the ALSA and udev headers the client links against
+        if: steps.rust.outputs.required != 'false'
+        env:
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
+        run: |
+          if [ "$HOSTED" = true ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+          fi
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Mount the build folder
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+        with:
+          key: ${{ github.repository }}-verify-server-${{ env.BUILD_DISKS }}
+          path: ~/horizon-target
+      - name: Build in it, rebuilding only what changed
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        run: tools/ci/build_folder.sh ~/horizon-target
+      - name: Lint the server build
+        if: steps.rust.outputs.required != 'false'
+        run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
+  # The launcher is its own workspace (launcher/Cargo.toml), so verify's other cargo runs never build it. A pull request
+  # that changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
+  # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
+  # after their merge shows it. A push's range is the commits it added to main; a range the job cannot read (a push with
+  # no earlier commit, or one a force push removed) runs everything. Not in the merge queue, as verify-lint.
+  verify-launcher:
+    name: verify (launcher)
+    if: github.event_name != 'merge_group'
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Did the merge queue already verify this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
+            tested=true
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+      - name: Does this change the launcher or a crate it builds?
+        if: github.event_name != 'workflow_dispatch'
+        id: launcher
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
+            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "No earlier commit to compare with: the launcher is checked"
+          else
+            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Rust and the headers GPUI links against
+        if: steps.launcher.outputs.required != 'false'
+        env:
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
+        run: |
+          if [ "$HOSTED" = true ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
+              libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
+          fi
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Mount the build folder
+        if: steps.launcher.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+        with:
+          key: ${{ github.repository }}-verify-launcher-${{ env.BUILD_DISKS }}
+          path: ~/horizon-target
+      - name: Build in it, rebuilding only what changed
+        if: steps.launcher.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        run: tools/ci/build_folder.sh ~/horizon-target
+      - name: Check the launcher's formatting, lint and tests
+        if: steps.launcher.outputs.required != 'false'
+        working-directory: launcher
+        env:
+          TESTED: ${{ steps.queued.outputs.tested }}
+        # A commit the queue verified is only built (clippy, test binaries), so the build folder keeps main's build.
+        run: |
+          [ "$TESTED" = true ] || cargo +stable fmt --check
+          cargo +stable clippy --all-targets --locked -- -D warnings
+          if [ "$TESTED" = true ]; then
+            cargo +stable test --locked --lib --bins --no-run
+          else
+            cargo +stable test --locked --lib --bins
+          fi
+  verify-test:
+    name: verify (Rust tests)
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Did the merge queue already verify this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
+            tested=true
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+      - name: Does this pull request need Rust checks?
+        if: github.event_name == 'pull_request'
+        id: rust
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      # As in verify-tree: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
       - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
-        if: runner.environment != 'github-hosted'
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
@@ -317,122 +336,69 @@ jobs:
       - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
         if: steps.rust.outputs.required != 'false'
         env:
-          HOSTED: ${{ (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-')) }}
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
         run: |
           if [ "$HOSTED" = true ]; then
             sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev mold
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies, and for pull requests the workspace's own build too, saved from main's runs (pull requests read
-      # main's cache). The UTC date is in shared-key (rust-cache ignores `key` when shared-key is set), so main's first
-      # push of each day saves a fresh one; before that push, a pull request finds none. .ci-built/sha, written below,
-      # says which main commit that build is of.
-      - name: Which day's build cache
-        if: steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        id: build-day
-        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
+      - name: Mount the build folder
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
-          shared-key: verify-${{ steps.build-day.outputs.day }}
-          cache-workspace-crates: true
-          cache-directories: .ci-built
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Cargo rebuilds a crate when a source file is newer than its build. Checkout gives every file today's time, so
-      # a pull request pins the unchanged files to 2001 and touches the ones that differ from main's built commit. The
-      # merge queue and main's pushes skip this and rebuild in full, so a wrong reuse can never reach main.
-      - name: Rebuild only what this pull request changed
-        if: >-
-          github.event_name == 'pull_request' && steps.rust.outputs.required != 'false' &&
-          (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        run: tools/ci/pin_mtimes.sh .ci-built
-      # As in verify-static: rust-cache drops the path-patched crates' build, and rebuilding them rebuilt most of the
-      # workspace above them. The step that records main's commit moves it into .ci-built.
-      - name: Put back the path-patched crates' build, or prepare main's
-        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        env:
-          ACTION: ${{ github.event_name == 'pull_request' && 'restore .ci-built' || 'prepare' }}
-        run: python3 tools/ci/path_crates.py $ACTION
-      # sccache through GitHub's cache, GitHub's runners only (ours keep their build folder): a pull request still
-      # rebuilds what main changed since its cached build, and sccache knows those crates by their content. Only
-      # main's pushes write to it: an entry a pull request writes is scoped to that pull request, no other run can
-      # read it, and it would push main's entries out of the repository's 10 GB. Pull requests and the merge queue read main's. RUSTC_WRAPPER is set after
-      # rust-cache, whose key hashes the RUST* variables.
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        if: steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        with:
-          version: v0.19.0
-      - name: Compile through sccache
-        if: steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        env:
-          WRITE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          if [ "$WRITE" != true ]; then echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"; fi
-      # The mold linker, GitHub's runners only (installed above): linking the test binaries was a large part of this
+          key: ${{ github.repository }}-verify-test-${{ env.BUILD_DISKS }}
+          path: ~/horizon-target
+      - name: Build in it, rebuilding only what changed
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        run: tools/ci/build_folder.sh ~/horizon-target
+      # The mold linker, Blacksmith's runners only (installed above): linking the test binaries was a large part of this
       # job. Rust uses its own lld on x86_64 Linux by default; -linker-features=-lld turns that off so mold's
-      # -fuse-ld applies. Set after rust-cache, whose key hashes the RUST* variables, and the same on every event so
-      # sccache's hashes match between main and pull requests.
+      # -fuse-ld applies. The same on every event, so the build folder's artifacts match between main and pull requests.
       - name: Link with mold
-        if: steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
+        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
-      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-static's clippy
+      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
       # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
       # these 4-core runners it was no faster (#4978).
-      # A pull request tests the crates it changes, the crates that depend on them, and the crates whose tests read
-      # its files (tools/ci/test_scope.py); a change outside every crate tests the whole workspace. main's pushes
-      # always test the whole workspace, so a missed crate shows on main.
-      - name: Which crates must the Rust tests cover?
-        if: github.event_name == 'pull_request' && steps.rust.outputs.required != 'false'
-        id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/test_scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      # Every event tests the whole workspace, pull requests included. A pull request used to test only its crates and
+      # their dependents (`-p`, tools/ci/test_scope.py), but Cargo resolves features for the packages selected: `-p
+      # horizon-core` builds libc, serde, syn and proc-macro2 with other features than `--workspace`, so a scoped run
+      # rebuilt its whole selection from the bottom and never reused main's build in the build folder. With the folder
+      # warm, the workspace build costs only what changed; running every test costs ~35 s (#18025's cold run: unit
+      # tests 17 s, content-root 4 s, doc tests 13 s).
       - name: Test Rust core and voxel kernel correctness
         if: steps.rust.outputs.required != 'false'
         env:
-          PACKAGES: ${{ steps.scope.outputs.packages }}
           TESTED: ${{ steps.queued.outputs.tested }}
         run: |
-          # A commit the queue already tested is only built, with the same arguments, for the caches main saves.
+          # A commit the queue already tested is only built, with the same arguments, so the build folder keeps main's build.
           if [ "$TESTED" = true ]; then
-            cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests --no-run
+            cargo +stable test --locked --workspace --lib --bins --tests --no-run
             exit 0
           fi
-          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests
+          cargo +stable test --locked --workspace --lib --bins --tests
           # The full content-root tests (#[ignore]d: minutes each on a laptop). The same build as above; they need the
           # prepared vanilla data, so without it they pass at once. Keep the target selection identical to avoid
           # recompiling the workspace with a different dependency graph.
-          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
-          cargo +stable test --locked ${PACKAGES:---workspace} --doc
-      # What main's cache holds is a build of this commit: pull requests compare their files against it.
-      - name: Record the commit this build is of
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        run: |
-          mkdir -p .ci-built && git rev-parse HEAD > .ci-built/sha
-          python3 tools/ci/path_crates.py save .ci-built
-      - name: What sccache reused
-        if: always() && steps.rust.outputs.required != 'false' && (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
-        run: |
-          "$SCCACHE_PATH" --show-stats
+          cargo +stable test --locked --workspace --lib --bins --tests mod_content::tests:: -- --ignored
+          cargo +stable test --locked --workspace --doc
   verify:
-    needs: [verify-static, verify-test]
+    needs: [verify-tree, verify-lint, verify-server, verify-launcher, verify-test]
     if: always()
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Every part of verify passed or had nothing to do
         env:
-          STATIC: ${{ needs.verify-static.result }}
+          TREE: ${{ needs.verify-tree.result }}
+          LINT: ${{ needs.verify-lint.result }}
+          SERVER: ${{ needs.verify-server.result }}
+          LAUNCHER: ${{ needs.verify-launcher.result }}
           TEST: ${{ needs.verify-test.result }}
         run: |
-          echo "tree, lint and launcher: $STATIC, Rust tests: $TEST"
-          for result in "$STATIC" "$TEST"; do
+          echo "tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST"
+          for result in "$TREE" "$LINT" "$SERVER" "$LAUNCHER" "$TEST"; do
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
@@ -538,7 +504,7 @@ jobs:
   parity-scope:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     # A git diff of this repository's own branch: one of our small runners (horizon-light, docs/ci-runners.md).
-    runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'ubuntu-latest' }}
+    runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'blacksmith-2vcpu-ubuntu-2404' }}
     outputs:
       run: ${{ steps.scope.outputs.run }}
     steps:

@@ -12,7 +12,7 @@ test is in (`lib`, `bin:NAME` or `test:NAME`, as the daily run selects it), TEST
 `select` reads a measurement of verify's tests (tab-separated with a header: package, target_kind, target, test,
 source, max_seconds, ...; each test timed in-process by libtest's --report-time) and prints the tests that move:
 - `slow`: its slower run took more than 2 seconds (the unit tier's limit; CONTRIBUTING.md "CI tiers");
-- `game-boot`: it reaches a game-boot fixture (tools/ci/check_game_boot_tests.py, the same check verify-static
+- `game-boot`: it reaches a game-boot fixture (tools/ci/check_game_boot_tests.py, the same check verify-tree
   runs, so after the move that check passes).
 A test that is both is `slow`. Rows that are not Rust tests (documentation examples, Python) are reported, not
 listed: an attribute cannot move them.
