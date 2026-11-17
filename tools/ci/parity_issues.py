@@ -33,6 +33,7 @@ AUDIT = ROOT / ".local" / "parity-runner" / "audit.json"
 LOGS = ROOT / ".local" / "parity-runner" / "logs"
 LABEL = "parity-regression"
 TITLE = "Parity regression: "
+MASS_TITLE = "Nightly audit: "
 MASS_FAILURE = 20
 
 
@@ -64,6 +65,11 @@ def mass_failure(actions):
     """The harnesses to report in one issue instead of one each, or [] when the audit looks normal."""
     opened = [harness for kind, harness in actions if kind == "open"]
     return opened if len(opened) > MASS_FAILURE else []
+
+
+def mass_issue(listed):
+    """The open mass-failure issue to add a night's mass failure to, or None. listed: open issues with the label."""
+    return min((issue["number"] for issue in listed if issue["title"].startswith(MASS_TITLE)), default=None)
 
 
 def first_errors(lines=40):
@@ -117,13 +123,24 @@ def main():
     mass = mass_failure(actions)
     if mass:
         actions = [action for action in actions if action[0] != "open"]
-        print(f"open: one issue for {len(mass)} harnesses that newly fail at once")
-        gh("issue", "create", "--label", LABEL, "--title", f"Nightly audit: {len(mass)} harnesses newly fail",
-           "--body", f"{len(mass)} harnesses passed in the previous nightly audit, or are new, and fail in the audit of "
-           f"`{commit[:12]}` ({run}): usually a commit that does not build or a broken runner, so they get this "
-           f"one issue instead of one each.\n\n{', '.join(f'`{harness}`' for harness in mass)}\n\n"
-           f"<details><summary>First compiler error in the logs</summary>\n\n```\n{first_errors()}\n```\n"
-           f"</details>\n", dry_run=args.dry_run)
+        listing = (f"{', '.join(f'`{harness}`' for harness in mass)}\n\n"
+                   f"<details><summary>First compiler error in the logs</summary>\n\n```\n{first_errors()}\n```\n"
+                   f"</details>\n")
+        # Their results aren't recorded (below), so a mass failure that lasts comes back every night: it goes on the
+        # open issue instead of a new one each night (#17343, then #17794 for the same 57).
+        umbrella = mass_issue(listed)
+        if umbrella:
+            print(f"comment: #{umbrella}, {len(mass)} harnesses that newly fail at once")
+            gh("issue", "comment", str(umbrella), "--body", f"The audit of `{commit[:12]}` ({run}) finds "
+               f"{len(mass)} harnesses failing that passed in the last recorded audit, or are new: the same mass "
+               f"failure or another one.\n\n{listing}",
+               dry_run=args.dry_run)
+        else:
+            print(f"open: one issue for {len(mass)} harnesses that newly fail at once")
+            gh("issue", "create", "--label", LABEL, "--title", f"{MASS_TITLE}{len(mass)} harnesses newly fail",
+               "--body", f"{len(mass)} harnesses passed in the previous nightly audit, or are new, and fail in the "
+               f"audit of `{commit[:12]}` ({run}): usually a commit that does not build or a broken runner, so they "
+               f"get this one issue instead of one each.\n\n{listing}", dry_run=args.dry_run)
     for kind, harness in actions:
         details = (f"Nightly audit of `{commit[:12]}` ({run}).\n\n"
                    f"Reproduce: `python3 tools/parity.py {harness}`\n\n<details><summary>End of the log</summary>\n\n"

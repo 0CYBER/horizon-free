@@ -34,7 +34,7 @@ class ParityMainTests(unittest.TestCase):
             self.assertEqual(parity_main.base(runs=[]), parent, "no green run yet: the last merge")
             self.assertEqual(parity_main.base(runs=[head]), head)
 
-    def bisect(self, broken_from, merges=4, budgets=None, scripted=None, late=None):
+    def bisect(self, broken_from, merges=4, budgets=None, scripted=None, late=None, known=None):
         """Run bisect over merges where each harness of broken_from fails from that merge's index on (None: never;
         0: at the base too). Returns the exit code and the pull requests commented on; with budgets, one run after
         another on the same runner, each as (exit code, comments, commits it ran harnesses at, what it reported).
@@ -49,6 +49,9 @@ class ParityMainTests(unittest.TestCase):
             last_run = Path(tmp) / ".local/parity-runner/last-run.json"
             last_run.parent.mkdir(parents=True)
             last_run.write_text(json.dumps({"failed": list(broken_from)}))
+            if known:
+                (Path(tmp) / "tools").mkdir()
+                (Path(tmp) / "tools/parity_hosts.json").write_text(json.dumps({"known_failing": known}))
             real_run = parity_main.subprocess.run
             comments, ran, reported = [], [], []
             # git runs for real in the scratch repo; a `gh pr comment` is only recorded, never sent.
@@ -84,6 +87,15 @@ class ParityMainTests(unittest.TestCase):
                          (1, [("2", "`music`, `sound`")]))
         # Two merges broke two harnesses: each is named.
         self.assertEqual(self.bisect({"music": 3, "sound": 1}), (1, [("1", "`sound`"), ("3", "`music`")]))
+
+    def test_known_failing_harnesses_are_not_searched(self):
+        # parity.py passes a probe whose only failure is a known failing harness (tools/parity_hosts.json), so a
+        # search for one would read passes where it fails and blame whichever merge broke the others.
+        self.assertEqual(self.bisect({"datafix#2": 1, "crafter": 1, "mace": 2},
+                                     known={"datafix": "#1: paths", "crafter": "#2: max_damage"}),
+                         (1, [("2", "`mace`")]))
+        self.assertEqual(self.bisect({"datafix#2": 1, "datafix#1": 2}, known={"datafix#2": "#1: paths"}),
+                         (1, [("2", "`datafix#1`")]), "a listed shard leaves its harness's other shards searched")
 
     def test_a_search_out_of_time_says_how_far_it_got_and_the_next_run_goes_on(self):
         # 2026-11-09 to 11-11: seven runs searched up to 1,500 merges until the job's limit, and named nothing.

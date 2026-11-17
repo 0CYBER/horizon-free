@@ -31,6 +31,13 @@ class ParityIssuesTests(unittest.TestCase):
         # A few real regressions still get one issue each.
         self.assertEqual(issues.mass_failure([("open", "a"), ("open", "b"), ("comment", "c")]), [])
 
+    def test_a_lasting_mass_failure_goes_on_the_open_report(self):
+        listed = [{"number": 17794, "title": "Nightly audit: 57 harnesses newly fail"},
+                  {"number": 16300, "title": "Parity regression: boat_void"},
+                  {"number": 17343, "title": "Nightly audit: 58 harnesses newly fail"}]
+        self.assertEqual(issues.mass_issue(listed), 17343)
+        self.assertIsNone(issues.mass_issue(listed[1:2]))
+
 
 if __name__ == "__main__":
     unittest.main()

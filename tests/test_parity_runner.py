@@ -246,6 +246,21 @@ class ParityRunnerTests(unittest.TestCase):
             self.assertEqual(parity.platform_skips(config, "macmini"), {})
             self.assertEqual(parity.platform_skips(config, "elsewhere"), {})
 
+    def test_known_failing_harnesses_report_without_failing_the_run(self):
+        results = {"crafter": {"status": "fail"}, "datafix#1": {"status": "fail"}, "datafix#2": {"status": "pass"},
+                   "sculk": {"status": "pass"}, "mace": {"status": "fail"}, "boat_void": {"status": "pass"}}
+        known = {"crafter": "#1: max_damage", "datafix": "#2: paths", "sculk": "#3: phase"}
+        blocking, again, passed = parity.split_known_failing(results, known)
+        self.assertEqual(blocking, ["mace"])  # not on the list: it fails the run
+        self.assertEqual(again, ["crafter", "datafix#1"])  # a failing shard counts under its harness
+        self.assertEqual(passed, ["sculk"])  # passes now: datafix doesn't, as one of its shards failed
+        self.assertEqual(parity.split_known_failing({"crafter": {"status": "fail"}}, known)[0], [])
+        # A listed shard covers only itself.
+        self.assertEqual(parity.split_known_failing(results, {"datafix#1": "#2: paths"})[:2],
+                         (["crafter", "mace"], ["datafix#1"]))
+        self.assertEqual(parity.split_known_failing(results, {"datafix#2": "#2: paths"})[2], ["datafix#2"])
+        self.assertEqual(parity.known_failing({}), {})
+
     def test_named_only_harnesses_are_listed_from_the_host_config(self):
         self.assertEqual(parity.named_only({"named_only": {"lan_integration": "slow"}}), {"lan_integration": "slow"})
         self.assertEqual(parity.named_only({}), {})

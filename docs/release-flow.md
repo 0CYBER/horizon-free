@@ -172,6 +172,11 @@ which runs them on main a batch of merges at a time, on the Mac mini's runner:
   a broken or flaky harness holds only what landed after the last green run, never the whole Nightly (before
   2026-11-03, any later failure held every Nightly until a run passed again: 30 h without one). `release.yml`
   also starts when a parity-main run finishes. A forced run (`force=true`) doesn't wait for parity-main.
+- A harness that keeps failing on main while its issue is open goes on `known_failing` in
+  `tools/parity_hosts.json` ([parity-workflow.md](parity-workflow.md)): it still runs and reports, but no longer
+  fails parity-main, so main's last green commit moves on and later merges are checked and bisected on their own.
+  From 2026-11-15 to 11-17 one batch of regressions kept every run red and no Nightly could ship. Harnesses whose
+  difference harms players (crashes, saves, multiplayer) stay off the list: they hold the Nightly until fixed.
 
 A pull request still runs its own parity job when it changes a harness script, an oracle
 (`mods/horizon/src/test/`), a probe (`crates/*/examples/`, `game/*_fixture.rs`, `game/*_harness.rs`), the runner

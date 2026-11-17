@@ -107,8 +107,15 @@ def bisect(since, timeout, comment, budget=90):
     failed = []
     if LAST_RUN.exists():
         failed = json.loads(LAST_RUN.read_text(encoding="utf-8")).get("failed") or []
+    # tools/parity.py doesn't fail a run for a known failing harness (tools/parity_hosts.json), so a probe running one
+    # would pass where it fails, and a merge that broke another harness could be blamed for it too.
+    try:
+        known = json.loads((ROOT / "tools" / "parity_hosts.json").read_text(encoding="utf-8")).get("known_failing", {})
+    except (OSError, ValueError):
+        known = {}
+    failed = [name for name in failed if name not in known and name.split("#")[0] not in known]
     if not failed:
-        print("No failed harness recorded: nothing to bisect.")
+        print("No failed harness recorded, known failing ones aside: nothing to bisect.")
         return 1
     head = git("rev-parse", "HEAD").stdout.strip()
     commits = git("rev-list", "--first-parent", "--reverse", f"{since}..{head}").stdout.split()
