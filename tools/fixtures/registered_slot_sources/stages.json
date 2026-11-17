@@ -1,0 +1,98 @@
+[
+  {
+    "id": "A",
+    "purpose": "loaded registry/condition/write/from/context identities and fallback sentinels",
+    "operations": [
+      {
+        "id": "read/items",
+        "command": "execute if items block 0 100 0 complete:first_three *",
+        "result": 7,
+        "after": []
+      },
+      {
+        "id": "read/slots",
+        "command": "execute if slots block 0 100 0 complete:first_three",
+        "result": 3,
+        "after": []
+      },
+      {
+        "id": "read/inline",
+        "command": "execute if items block 0 100 0 {type:\"limit_slots\",limit:3,slot_source:{type:\"slot_range\",slots:\"container.*\"}} *",
+        "result": 7,
+        "after": []
+      },
+      {
+        "id": "write/named",
+        "command": "item replace block 4 100 0 complete:one with minecraft:diamond 3",
+        "result": 1,
+        "after": [
+          "execute if items block 4 100 0 container.0 minecraft:diamond[count=3]"
+        ]
+      },
+      {
+        "id": "modify/named",
+        "command": "item modify block 4 100 0 complete:one complete:two",
+        "result": 1,
+        "after": [
+          "execute if items block 4 100 0 container.0 minecraft:diamond[count=2]"
+        ]
+      },
+      {
+        "id": "from/named",
+        "command": "item replace block 4 100 0 complete:one from block 0 100 0 complete:one",
+        "result": 1,
+        "after": [
+          "execute if items block 4 100 0 container.0 minecraft:stone[count=5]"
+        ]
+      },
+      {
+        "id": "fill/named",
+        "command": "item fill block 4 100 0 complete:empty with minecraft:emerald 3",
+        "result": 1,
+        "after": [
+          "execute if items block 4 100 0 container.2 minecraft:emerald[count=3]"
+        ]
+      },
+      {
+        "id": "override/named",
+        "command": "item override block 4 100 0 complete:one with minecraft:dirt 4",
+        "result": 1,
+        "after": [
+          "execute if items block 4 100 0 container.0 minecraft:dirt[count=4]"
+        ]
+      },
+      {
+        "id": "context/container",
+        "command": "execute if items block 0 100 0 complete:explicit_container *",
+        "result": 5,
+        "after": []
+      },
+      {
+        "id": "context/executor_read",
+        "command": "execute as @e[tag=complete_executor,limit=1] if items block 0 100 0 complete:this_hand *",
+        "result": 11,
+        "after": []
+      },
+      {
+        "id": "context/absent_executor",
+        "command": "execute if slots block 0 100 0 complete:this_hand",
+        "result": 0,
+        "after": []
+      },
+      {
+        "id": "context/executor_write",
+        "command": "execute as @e[tag=complete_executor,limit=1] run item replace block 4 100 0 complete:this_hand with minecraft:gold_ingot 6",
+        "result": 1,
+        "after": [
+          "execute if items entity @e[tag=complete_executor,limit=1] weapon.mainhand minecraft:gold_ingot[count=6]"
+        ]
+      },
+      {
+        "id": "missing/parse",
+        "command": "execute if slots block 0 100 0 complete:missing",
+        "result": null,
+        "after": []
+      }
+    ]
+  }
+]

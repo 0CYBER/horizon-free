@@ -34,6 +34,8 @@ HORIZON_CLIENT = [
     "research-lock.json", "tests/fixture_support/item_resource_properties.rs", "tests/fixtures",
     # shader_packs.rs tests load the sample pack.
     "crates/horizon-shader-api/packs/traced_shadows",
+    # The registered slot-source test loads its pack and program.
+    "tools/fixtures/registered_slot_sources",
 ]
 # The generator scans these to write the mod API, the points and the host boundary: its own sources, the vocabulary, the
 # engine crates holding hook targets and their manifests.

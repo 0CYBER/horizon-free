@@ -1,0 +1,2 @@
+# #15851: every registered slot-source read and write mode, on the fixture pack, with the prepared 26.3 data.
+horizon-client game::commands::items::registered_source_completion_qualification_v2::registered_sources_reach_live_read_write_from_and_executor_context_v2 lib daily resources

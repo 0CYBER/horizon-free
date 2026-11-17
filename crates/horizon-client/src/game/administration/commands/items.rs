@@ -3076,6 +3076,9 @@ mod registered_slot_source_preservation_tests {
 }
 
 #[cfg(test)]
+include!("items/registered_source_qualification_v2_tests.rs");
+
+#[cfg(test)]
 mod set_custom_data_tests {
     use super::*;
 
