@@ -83,6 +83,11 @@ def percentile(values, percent):
     return ordered[low] + (ordered[min(low + 1, len(ordered) - 1)] - ordered[low]) * (position - low)
 
 
+def sha256_file(path):
+    """Hash a file's current bytes; used to pin executable identity."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=Path("target/release/examples/shared_json_startup_profile"))
@@ -138,6 +143,24 @@ def main():
     for executable, _ in commands.values():
         if not executable.is_file():
             parser.error(f"release executable missing: {executable}")
+
+    # Pin each executable's identity before the first sample. Several modes can
+    # point at one resolved path (same-binary comparisons / alias paths), so pin
+    # every distinct path once and report that same identity for all its modes.
+    frozen_identity = {}
+    for executable, _ in commands.values():
+        if executable not in frozen_identity:
+            frozen_identity[executable] = sha256_file(executable)
+
+    def verify_identity(executable):
+        """Reject a persistent change to an executable's bytes mid-profile."""
+        current = sha256_file(executable)
+        expected = frozen_identity[executable]
+        if current != expected:
+            raise RuntimeError(
+                f"executable identity changed while profiling {executable}: "
+                f"frozen sha256={expected}, current sha256={current}")
+
     modes = list(commands)
     samples = {mode: [] for mode in modes}
     orders = []
@@ -147,7 +170,14 @@ def main():
         orders.append(list(order))
         for mode in order:
             executable, binary_mode = commands[mode]
+            verify_identity(executable)
             samples[mode].append(run(executable, resources, binary_mode))
+            verify_identity(executable)
+    # Final guard before emitting the report: every sampled path still matches
+    # the identity it was frozen with, so the report cannot pair timings with a
+    # replacement binary's hash.
+    for executable in frozen_identity:
+        verify_identity(executable)
     result = {
         "scope": "Assets + BlockFacts + Behaviours loader only; no full startup or first frame",
         "resources": str(resources),
@@ -157,7 +187,7 @@ def main():
         "load_average_after": os.getloadavg(),
         "executables": {
             mode: {"path": str(executable), "mode": binary_mode,
-                   "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
+                   "sha256": frozen_identity[executable]}
             for mode, (executable, binary_mode) in commands.items()
         },
         "metrics": {
