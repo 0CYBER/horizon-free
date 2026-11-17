@@ -88,6 +88,11 @@ pub fn main() -> horizon_client::Result<()> {
         };
         output.push_str(f[0]);
         for _ in 0..2 {
+            // As the game ticks an item: `Entity.baseTick`'s burning, then the block effects.
+            if item.health > 0 {
+                let in_lava = item.in_lava(&world, &facts);
+                item.burning_tick(in_lava, &can_hurt);
+            }
             if item.health > 0 {
                 item.environment_tick(&world, &facts, assets.registry, &can_hurt);
             }
