@@ -12,6 +12,9 @@ command reported to the player's CommandResultCallback. World, entity and item
 changes are observed through probe commands whose feedback reports them
 (execute if, clear with a zero count, data get, scoreboard queries...).
 Messages that depend on time or a random UUID are compared after masking.
+The explicitly scoped vanilla_help comparison projects declared Horizon-only
+native root usage after checking its complete raw callback count; both raw
+captures and the projection boundary are retained in the report.
 Direct falling-block probes also compare the physical entities in each level,
 independently of the command selector's support for those entity types.
 """
@@ -39,6 +42,11 @@ except ImportError:
     import command_exec_corpus as corpus_module
 
 SEED = 1
+
+# vanilla::session_dispatcher adds this documented platform command outside the
+# reference vanilla dispatcher. Do not infer exclusions from unexpected output:
+# any new extension must be declared here explicitly.
+HORIZON_ONLY_COMMAND_ROOTS = frozenset({'modprofile'})
 
 
 def install_datapack_fixtures(world, predicates, functions, jar, advancements=None, loot_tables=None, recipes=None):
@@ -712,7 +720,11 @@ def main():
                   {'cmd': op['cmd'], 'comparison': op['comparison'],
                    'vanilla_results': v['results'], 'rust_results': r['results']}
                   for op, v, r in zip(recorded_ops, vanilla, rust) if op.get('comparison')],
-              'scope': 'Feedback and failure messages (text and resolved style), chat lines, and CommandResultCallback results of commands run by the single-player owner of an integrated server; world, entity and item effects through probe commands. Explicit positive_result operations compare presence only; their unmodified raw counts remain in the records and comparison_overrides.'}
+              'vanilla_help_projection': {
+                  'excluded_native_roots': sorted(HORIZON_ONLY_COMMAND_ROOTS),
+                  'native_count_guard': 'One successful integer callback must equal the complete raw usage-line count before subtracting excluded lines.',
+                  'raw_records': ['vanilla.jsonl', 'rust.jsonl']},
+              'scope': 'Feedback and failure messages (text and resolved style), chat lines, and CommandResultCallback results of commands run by the single-player owner of an integrated server; world, entity and item effects through probe commands. Explicit positive_result operations compare presence only; vanilla_help projects only declared Horizon-only native root usage after validating the complete raw callback count. Vanilla expected records are unchanged; unmodified raw counts remain in the records and comparison_overrides.'}
     for override in report['comparison_overrides']:
         print(f'{override["comparison"]}: {override["cmd"]}: '
               f'Java {override["vanilla_results"]}, Horizon {override["rust_results"]}', flush=True)
@@ -860,10 +872,26 @@ def unordered_attributes(record):
 
 
 def masked(record):
-    text = json.dumps(record['messages'], ensure_ascii=False)
-    # GameRuleCommand registers the rules in identity-hash order, different
-    # in every JVM: compare /help's gamerule alternatives as a set.
-    text = GAMERULES.sub(lambda m: '/gamerule (' + '|'.join(sorted(m.group(1).split('|'))) + ')', text)
+    messages = record['messages']
+    if record.get('cmd') == '/help':
+        messages = json.loads(json.dumps(messages))
+        for line in messages:
+            if len(line) != 1:
+                continue
+            match = GAMERULES.fullmatch(line[0][0])
+            if match is None:
+                continue
+            alternatives = match.group(1).split('|')
+            pairs = list(zip(alternatives[::2], alternatives[1::2]))
+            # GameRules.visitGameRuleTypes visits GameRuleMap's identity-hash
+            # keySet, not the built-in registry's insertion order. Only rule
+            # identities are unordered: GameRuleCommand.register always adds
+            # each short name immediately before its minecraft-qualified alias.
+            if len(alternatives) % 2 == 0 and all(
+                    re.fullmatch(r'[a-z0-9_./-]+', short) and qualified == 'minecraft:' + short
+                    for short, qualified in pairs):
+                line[0][0] = '/gamerule (' + '|'.join(name for pair in sorted(pairs) for name in pair) + ')'
+    text = json.dumps(messages, ensure_ascii=False)
     for pattern, replacement in MASKS:
         text = pattern.sub(replacement, text)
     return text
@@ -880,14 +908,46 @@ def positive_result(record):
     return count > 0
 
 
+def vanilla_help(record):
+    """Project native root usage, never repairing an incorrect raw callback."""
+    messages, results = record.get('messages'), record.get('results')
+    if record.get('cmd') != '/help' or not isinstance(messages, list):
+        return None
+    if (not isinstance(results, list) or len(results) != 1 or
+            not isinstance(results[0], list) or len(results[0]) != 2 or
+            results[0][0] is not True or type(results[0][1]) is not int or
+            results[0][1] != len(messages)):
+        return None
+    kept, excluded = [], set()
+    for line in messages:
+        # HelpCommand sends one literal component per root's smart usage.
+        if (not isinstance(line, list) or len(line) != 1 or
+                not isinstance(line[0], list) or len(line[0]) != 2 or
+                not isinstance(line[0][0], str) or not line[0][0].startswith('/')):
+            return None
+        root = line[0][0][1:].split(' ', 1)[0]
+        if root in HORIZON_ONLY_COMMAND_ROOTS:
+            if root in excluded:
+                return None
+            excluded.add(root)
+        else:
+            kept.append(line)
+    return {**record, 'messages': kept, 'results': [[True, results[0][1] - len(excluded)]]}
+
+
 def compare(v, r, comparison=None):
-    # Explicit per-operation scope for random counts (for example explosion
-    # fire). All raw feedback/results remain in the JSON and report; every
-    # other command still compares exact feedback, styles and results.
+    # Explicit per-operation scope retains all raw feedback/results in the JSON
+    # and report. The default still compares exact feedback, styles and results.
     if comparison == 'positive_result':
         left, right = positive_result(v), positive_result(r)
         return None if left is not None and right is not None and left == right else 'positive_result'
-    if comparison is not None:
+    if comparison == 'vanilla_help':
+        if v.get('cmd') != '/help':
+            return 'vanilla_help'
+        r = vanilla_help(r)
+        if r is None:
+            return 'vanilla_help'
+    elif comparison is not None:
         raise ValueError(f'unknown command comparison: {comparison}')
     if v.get("state") != r.get("state"):
         return "state"

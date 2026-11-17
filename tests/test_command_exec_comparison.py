@@ -59,6 +59,74 @@ class CommandComparisonTests(unittest.TestCase):
         self.assertEqual(compare(saved, wrong_style), 'messages')
         self.assertEqual(compare(finalized, {**finalized, 'results': [[True, 0]]}), 'results')
 
+class HelpUsageComparisonTests(unittest.TestCase):
+    PLAIN = [None] + [False] * 5
+
+    def usage(self, *rules, cmd='/help'):
+        return {'cmd': cmd, 'messages': [[['/gamerule (' + '|'.join(rules) + ')', self.PLAIN]]],
+                'results': [[True, 1]]}
+
+    def test_rule_identities_are_unordered_but_alias_registration_is_not(self):
+        left = self.usage('a', 'minecraft:a', 'b', 'minecraft:b')
+        right = self.usage('b', 'minecraft:b', 'a', 'minecraft:a')
+        originals = copy.deepcopy((left, right))
+        self.assertIsNone(compare(left, right))
+        self.assertEqual((left, right), originals)
+        for alternatives in [
+                ('minecraft:a', 'a', 'b', 'minecraft:b'),
+                ('a', 'b', 'minecraft:a', 'minecraft:b'),
+                ('a', 'minecraft:a'),
+                ('a', 'minecraft:a', 'a', 'minecraft:a'),
+                ('a', 'minecraft:a', 'c', 'minecraft:c')]:
+            self.assertEqual(compare(left, self.usage(*alternatives)), 'messages')
+
+    def test_rule_order_normalization_does_not_mask_chat_styles_or_callbacks(self):
+        left = self.usage('a', 'minecraft:a', 'b', 'minecraft:b')
+        right = self.usage('b', 'minecraft:b', 'a', 'minecraft:a')
+        self.assertEqual(compare({**left, 'cmd': '/say text'}, {**right, 'cmd': '/say text'}), 'messages')
+        styled = copy.deepcopy(right)
+        styled['messages'][0][0][1] = [123] + [False] * 5
+        self.assertEqual(compare(left, styled), 'messages')
+        self.assertEqual(compare(left, {**right, 'results': [[True, 2]]}), 'results')
+
+    def root_usage(self, *lines):
+        return {'cmd': '/help', 'messages': [[[line, self.PLAIN]] for line in lines],
+                'results': [[True, len(lines)]]}
+
+    def test_native_extension_projection_is_explicit_and_leaves_raw_records_intact(self):
+        vanilla = self.root_usage('/help [<command>]', '/say <message>')
+        native = self.root_usage('/help [<command>]', '/say <message>', '/modprofile (start|stop|report)')
+        originals = copy.deepcopy((vanilla, native))
+        self.assertEqual(compare(vanilla, native), 'messages')
+        self.assertIsNone(compare(vanilla, native, 'vanilla_help'))
+        self.assertEqual((vanilla, native), originals)
+        # The expected vanilla data is never projected.
+        self.assertEqual(compare(native, native, 'vanilla_help'), 'messages')
+
+    def test_projection_retains_unknown_roots_vanilla_order_styles_and_state(self):
+        vanilla = self.root_usage('/help [<command>]', '/say <message>')
+        for lines in [
+                ('/help [<command>]', '/say <message>', '/unknown_extension'),
+                ('/help [<command>]', '/modprofile (start|stop|report)'),
+                ('/say <message>', '/help [<command>]', '/modprofile (start|stop|report)')]:
+            self.assertEqual(compare(vanilla, self.root_usage(*lines), 'vanilla_help'), 'messages')
+        native = self.root_usage('/help [<command>]', '/say <message>', '/modprofile (start|stop|report)')
+        styled = copy.deepcopy(native)
+        styled['messages'][0][0][1] = [123] + [False] * 5
+        self.assertEqual(compare(vanilla, styled, 'vanilla_help'), 'messages')
+        self.assertEqual(compare(vanilla, {**native, 'state': 1}, 'vanilla_help'), 'state')
+
+    def test_projection_cannot_repair_wrong_failed_or_malformed_raw_usage_counts(self):
+        vanilla = self.root_usage('/help [<command>]')
+        native = self.root_usage('/help [<command>]', '/modprofile (start|stop|report)')
+        for results in ([[True, 1]], [[True, 3]], [[False, 2]], [[True, True]],
+                        [[True, 2.0]], [[True, 2], [True, 2]], []):
+            self.assertEqual(compare(vanilla, {**native, 'results': results}, 'vanilla_help'), 'vanilla_help')
+        duplicate = self.root_usage('/help [<command>]', '/modprofile start', '/modprofile stop')
+        self.assertEqual(compare(vanilla, duplicate, 'vanilla_help'), 'vanilla_help')
+        self.assertEqual(compare({**vanilla, 'cmd': '/help execute'}, native, 'vanilla_help'), 'vanilla_help')
+
+
 class UnorderedAttributesTests(unittest.TestCase):
     KEY, PLAIN, ID = [5636095] + [False] * 5, [None] + [False] * 5, [5635925] + [False] * 5
 

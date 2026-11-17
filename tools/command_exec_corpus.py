@@ -3153,7 +3153,7 @@ def social():
         cmd('/tellraw @s {"text":"click","click_event":{"action":"run_command","command":"/say x"},"underlined":true}'),
         cmd('/title @s title {"selector":"@s"}'),
         cmd('/list uuids'),
-        cmd('/help'),
+        cmd('/help', comparison='vanilla_help'),
         cmd('/help execute'),
         cmd('/help scoreboard players'),
         cmd('/help nonexistent'),
