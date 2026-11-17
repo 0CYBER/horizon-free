@@ -10,7 +10,7 @@ The game ships only the Nightly since 2026-10-28 (Ludovic): when `decide --kind 
 `nightly build` on the commit it decided (tools/ci/nightly.py), and "the last release" is the published Nightly.
 A kind releases when a pull request merged into main since its last published release changed one of its
 player-facing paths (GAME_PATHS, LAUNCHER_PATHS), once BATCH of them are waiting and the newest merged at least
-DEBOUNCE ago (a burst of merges becomes one release), or once the oldest has waited MAX_WAIT (a lone fix still ships),
+DEBOUNCE ago (a burst of merges becomes one release), or once the oldest has waited MAX_WAIT (LAUNCHER_MAX_WAIT for the launcher: a lone fix still ships),
 or at once when one of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
 towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases,
 and an open issue labelled release-blocker stops game releases, even forced ones, until it is closed.
@@ -49,6 +49,10 @@ MAINTAINER = "ludovic111"
 BATCH = 5
 DEBOUNCE = dt.timedelta(minutes=5)
 MAX_WAIT = dt.timedelta(hours=6)
+# The launcher waits an hour at most: a fix to installs or updates is what players are waiting for, and a launcher
+# release updates itself without touching worlds (2026-11-17: the Voltz install fix sat merged, "3 of 5 pull
+# requests: waiting for more, or 234 more minutes", while players couldn't install the mod).
+LAUNCHER_MAX_WAIT = dt.timedelta(hours=1)
 # Kept as typed in release titles, where the clauses after the first are lowercased.
 PROPER = {"Horizon", "Horizon's", "Minecraft", "Mojang", "Microsoft", "Java", "Xbox", "PlayStation", "Steam", "Windows",
           "Linux", "LAN", "Kira", "Discord", "Wayland", "Hyprland", "F3", "GUI", "UI"}
@@ -319,6 +323,8 @@ def decision(kind, prs, now, paused=False, force=False, new_line=None, blockers=
     counted = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     urgent = [pr for pr in counted if "release-now" in pr["labels"]]
     merged = [pr["merged_at"] for pr in counted if pr.get("merged_at")]
+    max_wait = LAUNCHER_MAX_WAIT if kind == "launcher" else MAX_WAIT
+    hours = max_wait.seconds // 3600
     if blockers:
         return False, "held by " + ", ".join(f"release-blocker #{number}" for number in blockers)
     if force:
@@ -331,10 +337,11 @@ def decision(kind, prs, now, paused=False, force=False, new_line=None, blockers=
         return False, "no merged pull request changed what players run"
     if urgent:
         return True, "release-now: " + ", ".join(f"#{pr['number']}" for pr in urgent)
-    if merged and now - min(merged) >= MAX_WAIT:
-        return True, f"{len(counted)} pull requests changed what players run; the oldest has waited {MAX_WAIT.seconds // 3600} hours"
+    if merged and now - min(merged) >= max_wait:
+        return True, (f"{len(counted)} pull requests changed what players run; the oldest has waited {hours} "
+                      f"hour{'s' if hours != 1 else ''}")
     if len(counted) < BATCH:
-        wait = MAX_WAIT - (now - min(merged)) if merged else MAX_WAIT
+        wait = max_wait - (now - min(merged)) if merged else max_wait
         return False, (f"{len(counted)} of {BATCH} pull requests: waiting for more, or {wait.seconds // 60 + 1} more "
                        "minutes for the oldest")
     if merged and now - max(merged) < DEBOUNCE:

@@ -266,6 +266,10 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])]))
         self.assertFalse(decide([pr(1)], paused=True))
         self.assertTrue(decide([], paused=True, force=True))
+        launcher = lambda prs: train.decision("launcher", prs, NOW)[0]
+        self.assertFalse(launcher([pr(1, merged=50 * minute)]), "a lone launcher fix waits for others a while")
+        self.assertTrue(launcher([pr(1, merged=hour)]), "but only an hour")
+        self.assertFalse(launcher(five(2 * minute)), "a launcher batch still merging waits too")
 
     def test_an_open_release_blocker_holds_every_release_even_forced(self):
         release, why = train.decision("game", [pr(1, labels=["release-now"])], NOW, blockers=[7, 9])

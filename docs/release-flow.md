@@ -630,7 +630,10 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
 
 - `tools/release_train.py decide --kind launcher` counts the pull requests merged since the last published
   launcher release that changed those paths (not `launcher/links.json`, which the launcher reads from main, nor
-  tests or Markdown), with the same batching rule (5 pull requests settled 5 minutes, or the oldest 6 hours), `release-now`, `skip-release` and `RELEASES_PAUSED`.
+  tests or Markdown), with the same batching rule except that the oldest waits 1 hour, not 6 (5 pull requests settled
+  5 minutes, or the oldest 1 hour: a fix to installs or updates starts its release at most ~70 minutes after it
+  merges, as the decision runs every 10 minutes, then builds and publishes), `release-now`, `skip-release` and
+  `RELEASES_PAUSED`.
 - The tag is `launcher@X.Y.Z` on the release line (`launcher@0.2.0` first; the game and the launcher count their
   patches separately). Without `.github/release-line.txt`, `launcher-vX.Y.Z`: the patch after the last launcher tag,
   or the next minor (`X.Y+1.0`) when one of those pull requests is labelled `feature`. `launcher-v0.2.0` was taken
