@@ -8,10 +8,10 @@
 //! colour. They read the terrain's group 0, the flat draws' group 1 where those run, and the
 //! pack's frame at group 3.
 
-use horizon_shader_api::check::CheckedStage;
-use horizon_shader_api::stages::{GROUP, KeptBinding};
+use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
 use super::displace::{Displacement, MAX_SECTIONS, Near};
+use super::native_post::kept::StageReads;
 use super::native_post::trace::{TerrainTrace, Traced};
 use super::native_post::{NativeFrame, NativePost, present_constants};
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
@@ -322,42 +322,7 @@ pub struct NativeMaterial {
     /// The stage calls `set_surface`: its solid pipelines also write the surface target.
     pub writes_surface: bool,
     /// `[material] reads`: none without.
-    pub(super) kept: Option<TerrainKept>,
-}
-
-/// The kept resources the terrain reads (`[material] reads`), in its group 3 from binding 64
-/// (`kept_bindings`), for the fragment stage only: the vertex stage and `displacement` also draw
-/// the shadow, which reads none.
-pub(super) struct TerrainKept {
-    pub(super) bindings: Vec<KeptBinding>,
-    /// Their layout entries (`native_kept::layout_entries`).
-    pub(super) entries: Vec<wgpu::BindGroupLayoutEntry>,
-    /// The frame's entries and theirs, the pipelines' group 3 that doesn't trace.
-    layout: wgpu::BindGroupLayout,
-    /// The group a parity (`KeptStore::parity`), made for the frame's group `.0` and the store's
-    /// resources `.1` (`Reads::made`).
-    groups: Option<(wgpu::BindGroup, u32, [wgpu::BindGroup; 2])>,
-}
-
-impl TerrainKept {
-    /// The terrain's kept `bindings` and their layout `entries`, joined with the frame's.
-    pub(super) fn new(
-        device: &wgpu::Device,
-        frame: &NativeFrame,
-        bindings: Vec<KeptBinding>,
-        entries: Vec<wgpu::BindGroupLayoutEntry>,
-    ) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Native shader pack material, kept"),
-            entries: &[frame.entries(), &entries].concat(),
-        });
-        Self {
-            bindings,
-            entries,
-            layout,
-            groups: None,
-        }
-    }
+    pub(super) kept: Option<StageReads>,
 }
 
 /// terrain.wgsl's group 0 (`TerrainShape::globals`): its globals, the sprite arrays and their
@@ -507,7 +472,7 @@ impl NativeMaterial {
         coverage: horizon_shader_api::Coverage,
         vertex: bool,
         displaced: Option<&DisplacedShape<'_>>,
-        kept: Option<TerrainKept>,
+        kept: Option<StageReads>,
     ) -> Result<Self, String> {
         let writes_surface = horizon_shader_api::stages::calls_set_surface(&stage.source);
         let linear = frame.linear;
@@ -516,14 +481,10 @@ impl NativeMaterial {
             let terrain = (shape, displaced, constants);
             Self::pipelines(device, terrain, (stage, source), group, flags, linear)
         };
-        if let Some(k) = &kept {
-            let group = [frame.entries(), &k.entries].concat();
-            let fragment = wgpu::ShaderStages::FRAGMENT;
-            let limits = device.limits();
-            let over = super::native_post::trace::over_limits;
-            if let Some(why) = over(&group, &terrain_entries(), &limits, fragment) {
-                return Err(format!("{}: {why}", stage.file));
-            }
+        let limits = device.limits();
+        if let Some(why) = (kept.as_ref()).and_then(|k| k.over(frame, &terrain_entries(), &limits))
+        {
+            return Err(format!("{}: {why}", stage.file));
         }
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let built = build(
@@ -556,25 +517,12 @@ impl NativeMaterial {
         scene: Option<&Traced<'_>>,
         post: &NativePost,
     ) {
-        let Self {
-            scene: trace, kept, ..
-        } = self;
-        let kept = kept
-            .as_mut()
-            .map(|k| (&k.bindings, &k.layout, &mut k.groups));
-        let bindings = kept.as_ref().map(|k| k.0);
-        let reads = bindings.and_then(|b| post.reads(b));
-        if let Some(trace) = trace {
+        if let Some(trace) = &mut self.scene {
+            let reads = self.kept.as_ref().and_then(|k| k.reads(post));
             trace.bind(device, frame, scene, reads);
         }
-        if let (Some((_, layout, groups)), Some(reads)) = (kept, reads) {
-            let made = |(group, made, _): &(wgpu::BindGroup, u32, [wgpu::BindGroup; 2])| {
-                *group == frame.group && *made == reads.made()
-            };
-            if !groups.as_ref().is_some_and(made) {
-                let group = |parity| frame.joined(device, layout, &reads.entries(parity));
-                *groups = Some((frame.group.clone(), reads.made(), [0, 1].map(group)));
-            }
+        if let Some(k) = &mut self.kept {
+            k.bind(device, frame, post);
         }
     }
 
@@ -592,8 +540,9 @@ impl NativeMaterial {
         parity: usize,
     ) -> (&'a MaterialPipelines, &'a wgpu::BindGroup) {
         let traced = self.scene.as_ref().and_then(|t| t.drawn(parity));
-        let kept = self.kept.as_ref().and_then(|k| k.groups.as_ref());
-        let group = kept.map_or(group, |(_, _, groups)| &groups[parity]);
+        let group = (self.kept.as_ref())
+            .and_then(|k| k.group(parity))
+            .unwrap_or(group);
         traced.unwrap_or((&self.pipelines, group))
     }
 

@@ -9260,7 +9260,7 @@ impl Renderer {
         // its layers, and the entities with its pipelines, which read the pack's frame at group 3.
         let native = self.native.as_ref().filter(|_| !frame.title);
         let material = native.and_then(native_pack::NativePack::terrain_layers);
-        let entity_stage = native.and_then(|n| Some((n.entity.as_ref()?, &n.frame.group)));
+        let entity_stage = native.and_then(|n| n.entities());
         // Without HDR output, the solid shaders without its lighting (`SolidPipeline`).
         let hdr = self.hdr.is_some();
         let solid_pipeline = material.map_or(self.solid.get(hdr), |m| m.solid);

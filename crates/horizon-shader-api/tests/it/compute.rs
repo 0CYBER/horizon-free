@@ -534,6 +534,18 @@ fn a_compute_file_keeps_the_api_s_rules() {
     );
 }
 
+/// `storageBarrier()` is WGSL's, as `workgroupBarrier()` is: the check takes it in a compute
+/// pass, reached by every invocation, between a write to a kept buffer and a read of it.
+#[test]
+fn a_compute_pass_may_order_its_buffer_writes_with_a_storage_barrier() {
+    let ordered = "override bounces: i32 = 1;\nfn compute(input: ComputeInput) {\n    \
+                   if input.in_bounds {\n        cache[input.cell.x] = vec4<u32>(1u);\n    }\n    \
+                   storageBarrier();\n    \
+                   if input.in_bounds && input.local == 0u {\n        \
+                   cache[input.cell.x] = cache[input.cell.x] + vec4<u32>(1u);\n    }\n}\n";
+    check(&example_with("cache_update.wgsl", ordered)).unwrap();
+}
+
 #[test]
 fn pass_counts_are_bounded() {
     let before = |i: usize| {

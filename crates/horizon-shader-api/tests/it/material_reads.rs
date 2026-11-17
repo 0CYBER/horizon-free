@@ -95,8 +95,8 @@ fn the_material_names_declared_resources_once_and_writes_none() {
     ] {
         refused(&material(reads), needle);
     }
-    let keys = "and `reads` of [material]: the terrain reads kept resources, compute passes \
-                write them";
+    let keys = "and `reads` of [material], [entity] and [sky]: they draw with kept resources, \
+                compute passes write them";
     for key in [
         "writes = [\"buf\"]",
         "compute = true",
@@ -105,8 +105,8 @@ fn the_material_names_declared_resources_once_and_writes_none() {
     ] {
         refused(&material(&format!("{key}\n")), keys);
     }
-    // The other stages read none.
-    for stage in ["vertex", "sky", "weather", "tonemap", "entity"] {
+    // The other stages read none (`[entity]` and `[sky]` do: entity_sky_reads.rs).
+    for stage in ["vertex", "weather", "tonemap"] {
         refused(
             &format!(
                 "{}[{stage}]\nfile = \"s.wgsl\"\nreads = [\"buf\"]\n",

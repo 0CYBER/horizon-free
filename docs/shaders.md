@@ -383,6 +383,11 @@ only `material`'s fragments read them: `displacement` and the `[vertex]` file al
 no kept resources, so the check refuses them there. On a frame that clears a resource the terrain reads zeros, or
 what a `[[before_world]]` pass wrote since.
 
+`[entity] reads` and `[sky] reads` work the same way, so mobs, block entities and the sky can use the light the
+terrain gets. The entities and the sky draw after `[[before_world]]` and before `[[post]]`, as the terrain does, and
+read the same versions. Only their fragments read them: the shadow map's entities are Horizon's own draw, with no
+kept resources.
+
 ```toml
 [[before_world]]
 file = "light_cache.wgsl"
@@ -393,6 +398,10 @@ writes = ["cache"]
 [material]
 file = "material.wgsl"
 reads = ["cache", "trail_previous"]
+
+[entity]
+file = "entity.wgsl"
+reads = ["cache"]
 ```
 
 ## Options

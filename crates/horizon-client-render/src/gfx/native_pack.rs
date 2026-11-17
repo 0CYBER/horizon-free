@@ -7,9 +7,8 @@ use horizon_shader_api::{Report, StageKind};
 use super::displace::Displacement;
 use super::external::Capabilities;
 use super::native_entity::NativeEntity;
-use super::native_material::{
-    DisplacedShape, MaterialPipelines, NativeMaterial, TerrainKept, TerrainShape,
-};
+use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
+use super::native_post::kept::StageReads;
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
@@ -214,6 +213,7 @@ impl NativePack {
         if let Some(m) = &mut self.material {
             m.bind(device, &self.frame, scene, &self.post);
         }
+        self.bind_kept(device);
     }
 
     /// Whether the pack's rays read the scene's entity layer: its files name `RAY_ENTITY`, and
@@ -221,6 +221,16 @@ impl NativePack {
     pub(in crate::gfx) fn traces_entities(&self) -> bool {
         let material = self.material.as_ref().and_then(|m| m.scene.as_ref());
         self.post.traces_entities() || material.is_some_and(|t| t.traces_entities())
+    }
+
+    /// The pack's entity stage and the group 3 it draws with this frame.
+    pub(in crate::gfx) fn entities(&self) -> Option<(&NativeEntity, &wgpu::BindGroup)> {
+        let entity = self.entity.as_ref()?;
+        let kept = entity
+            .kept
+            .as_ref()
+            .and_then(|k| k.group(self.post.parity()));
+        Some((entity, kept.unwrap_or(&self.frame.group)))
     }
 
     /// The pipelines the pack's terrain draws with this frame, and its group 3.
@@ -382,7 +392,15 @@ impl NativePack {
         let sky = others
             .iter()
             .find(|s| s.kind == StageKind::Sky)
-            .map(|stage| NativeSky::new(device, globals, &frame, stage, constants, format))
+            .map(|stage| {
+                let kept = StageReads::new(
+                    device,
+                    &report.manifest,
+                    report.manifest.sky.as_ref(),
+                    &frame,
+                );
+                NativeSky::new(device, globals, (&frame, kept), stage, constants, format)
+            })
             .transpose()?;
         let mut material = others
             .iter()
@@ -394,8 +412,8 @@ impl NativePack {
                     steps: d.view.steps,
                     layout: &d.draw_layout,
                 });
-                let reads = super::native_post::kept::terrain_reads(&report.manifest);
-                let kept = reads.map(|(b, e)| TerrainKept::new(device, &frame, b, e));
+                let listed = report.manifest.material.as_ref();
+                let kept = StageReads::new(device, &report.manifest, listed, &frame);
                 NativeMaterial::new(
                     device,
                     terrain,
@@ -416,6 +434,9 @@ impl NativePack {
             .map(|stage| {
                 let groups = [terrain.entities, terrain.retained_entities];
                 let manifest = &report.manifest;
+                let listed = manifest.entity.as_ref();
+                let kept = StageReads::new(device, manifest, listed, &frame);
+                let stage = (stage, kept);
                 NativeEntity::new(device, format, groups, &frame, stage, constants, manifest)
             })
             .transpose()?;

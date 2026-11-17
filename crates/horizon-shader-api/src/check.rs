@@ -509,9 +509,13 @@ fn undeclared(mut problems: Vec<Problem>, m: &crate::Manifest, kind: StageKind) 
                 StageKind::Material => {
                     format!("`{name}` is a kept resource the material doesn't list in `reads`")
                 }
+                StageKind::Entity | StageKind::Sky => format!(
+                    "`{name}` is a kept resource the {} stage doesn't list in `reads`",
+                    kind.name()
+                ),
                 _ => format!(
-                    "`{name}` is a kept resource, which the {} stage doesn't read: `material` \
-                     and the passes do, as their `reads` list",
+                    "`{name}` is a kept resource, which the {} stage doesn't read: `material`, \
+                     `entity`, `sky` and the passes do, as their `reads` list",
                     kind.name()
                 ),
             };

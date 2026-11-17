@@ -11,8 +11,8 @@ use horizon_shader_api::{MANIFEST, Pack, StageKind, check};
 
 const HEAD: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n";
 const IDENTITY: &str = "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n";
-/// A full-screen triangle that shows the material file's `shown`.
-const PROBE: &str = "
+/// A full-screen triangle that shows a stage file's `shown`.
+pub(super) const PROBE: &str = "
 @vertex fn test_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     return vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
 }
@@ -26,7 +26,7 @@ const MATERIAL: &str =
     "fn material(input: MaterialInput) -> Surface { return Surface(shown() * input.albedo); }\n";
 
 /// A device with its adapter's limits, as the game opens one.
-fn device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
+pub(super) fn device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     let desc = wgpu::DeviceDescriptor {
@@ -47,6 +47,21 @@ fn build(
     manifest: &str,
     files: &[(&str, &str)],
 ) -> Result<(NativePack, String, Option<String>), String> {
+    let (pack, mut sources) = built(device, queue, scene, manifest, files)?;
+    let (_, source, scene_source) = (sources.drain(..))
+        .find(|(kind, ..)| *kind == StageKind::Material)
+        .unwrap();
+    Ok((pack, source, scene_source))
+}
+
+/// `build`, with every stage's composed sources: its kind, without the scene and with it.
+pub(super) fn built(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: Option<&Scene>,
+    manifest: &str,
+    files: &[(&str, &str)],
+) -> Result<(NativePack, Vec<(StageKind, String, Option<String>)>), String> {
     let manifest = format!("{HEAD}{manifest}[tonemap]\nfile = \"t.wgsl\"\n");
     let mut all: std::collections::BTreeMap<String, Vec<u8>> = (files.iter())
         .chain(&[("t.wgsl", IDENTITY)])
@@ -54,10 +69,9 @@ fn build(
         .collect();
     all.insert(MANIFEST.into(), manifest.into_bytes());
     let report = check(&Pack::from_files(all).unwrap()).unwrap();
-    let stage = (report.stages.iter())
-        .find(|s| s.kind == StageKind::Material)
-        .unwrap();
-    let sources = (stage.source.clone(), stage.scene_source.clone());
+    let sources = (report.stages.iter())
+        .map(|s| (s.kind, s.source.clone(), s.scene_source.clone()))
+        .collect();
     let sprite = || {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -98,39 +112,35 @@ fn build(
     };
     let pbr = [map(), map()];
     let (globals, empty) = crate::gfx::native_pack::tests::terrain_layouts(device);
-    // The entities' group 0 as the shadow pass's entity draw declares it: the atlas and its
-    // sampler.
-    let fragment = wgpu::ShaderStages::FRAGMENT;
+    // The entities' group 0, which the entity stage and the shadow pass's entity draw read, and
+    // the retained block entities' transform.
     let entities = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None,
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: fragment,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
+        entries: &crate::gfx::native_entity::entity_entries(),
+    });
+    let retained = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: fragment,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
+            count: None,
+        }],
     });
     let terrain = crate::gfx::native_material::TerrainShape {
         sprite_views: scene.map_or(&own, |s| &s.sprites),
         pbr: Some(&pbr),
         entities: &entities,
+        retained_entities: &retained,
         ..crate::gfx::native_pack::tests::terrain_shape(&globals, &empty)
     };
     let (mut pack, _) = NativePack::new(device, queue, &terrain, report, &[], Default::default())?;
     install(device, Some(&mut pack.post), None, [1, 1])?;
-    Ok((pack, sources.0, sources.1))
+    Ok((pack, sources))
 }
 
 /// Frame `n` of `pack` as the renderer starts it, with `scene` or without: its inputs, its
@@ -170,7 +180,35 @@ fn frame(
         source
     };
     let text = crate::gfx::native_material::test_shader(source) + PROBE;
-    let parsed = naga::front::wgsl::parse_str(&text).unwrap_or_else(|e| panic!("{e}"));
+    let (_, group) = pack.terrain().unwrap();
+    let target = shown(device, &mut encoder, &text, material.drawn_layout(), group);
+    if let Some(world) = world {
+        let view = world.screen.create_view(&Default::default());
+        let targets = (&world.color, &world.depth, &pack.frame.surface_view);
+        (pack.post).run(
+            device,
+            &mut encoder,
+            targets,
+            &view,
+            [4, 4],
+            false,
+            None,
+            scene,
+        );
+    }
+    texel((device, queue), encoder, &target)
+}
+
+/// Draws `text`'s `test_vs` and `test_fs` (`PROBE`) in `encoder`, with `group` of `layout` at
+/// group 3, over one `rgba32float` texel.
+pub(super) fn shown(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    text: &str,
+    layout: &wgpu::BindGroupLayout,
+    group: &wgpu::BindGroup,
+) -> wgpu::Texture {
+    let parsed = naga::front::wgsl::parse_str(text).unwrap_or_else(|e| panic!("{e}"));
     // The terrain's overrides the probe doesn't reach still need values.
     let constants: Vec<(String, f64)> = (parsed.overrides.iter())
         .filter(|(_, o)| o.init.is_none())
@@ -183,7 +221,7 @@ fn frame(
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[None, None, None, Some(material.drawn_layout())],
+        bind_group_layouts: &[None, None, None, Some(layout)],
         ..Default::default()
     });
     let options = wgpu::PipelineCompilationOptions {
@@ -239,25 +277,19 @@ fn frame(
             })],
             ..Default::default()
         });
-        let (_, group) = pack.terrain().unwrap();
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]);
         pass.draw(0..3, 0..1);
     }
-    if let Some(world) = world {
-        let view = world.screen.create_view(&Default::default());
-        let targets = (&world.color, &world.depth, &pack.frame.surface_view);
-        (pack.post).run(
-            device,
-            &mut encoder,
-            targets,
-            &view,
-            [4, 4],
-            false,
-            None,
-            scene,
-        );
-    }
+    target
+}
+
+/// Submits `encoder` with a copy of `target`'s texel: the texel.
+pub(super) fn texel(
+    (device, queue): (&wgpu::Device, &wgpu::Queue),
+    mut encoder: wgpu::CommandEncoder,
+    target: &wgpu::Texture,
+) -> [f32; 4] {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 256,
@@ -289,15 +321,15 @@ fn frame(
 }
 
 /// A counter a `[[before_world]]` pass moves on once a frame, in a buffer and a texture.
-const COUNTER: &str = "[[resource]]\nname = \"tex\"\nformat = \"r32float\"\nsize = [1, 1]\nkeep = \"view\"\n\
+pub(super) const COUNTER: &str = "[[resource]]\nname = \"tex\"\nformat = \"r32float\"\nsize = [1, 1]\nkeep = \"view\"\n\
                        [[resource]]\nname = \"count\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
                        [[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
                        writes = [\"tex\", \"count\"]\n";
-const COUNTS: &str = "fn compute(input: ComputeInput) {\n    if input.in_bounds {\n        \
+pub(super) const COUNTS: &str = "fn compute(input: ComputeInput) {\n    if input.in_bounds {\n        \
                       count[0] = count[0] + 1u;\n        \
                       textureStore(tex, vec2<i32>(0), vec4<f32>(f32(count[0])));\n    }\n}\n";
 /// This frame's texture, last frame's, and the buffer.
-const SHOWS_COUNT: &str = "fn shown() -> vec4<f32> {\n    \
+pub(super) const SHOWS_COUNT: &str = "fn shown() -> vec4<f32> {\n    \
                            return vec4<f32>(textureLoad(tex, vec2<i32>(0), 0).x, \
                            textureLoad(tex_previous, vec2<i32>(0), 0).x, f32(count[0]), 1.0);\n}\n";
 

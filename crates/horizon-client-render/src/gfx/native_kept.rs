@@ -731,6 +731,19 @@ impl super::super::native_pack::NativePack {
     ) {
         self.post
             .before_world(device, encoder, scene, self.timing.as_mut());
+        // The sky may draw next, in a pass of its own (`draw_sky_pass`).
+        self.bind_kept(device);
+    }
+
+    /// Makes the groups the entity and sky stages read the kept resources with, for the
+    /// frame's group as it is now: once its frame started (`before_world`), and again where the
+    /// frame's group changes before the world draws (`bind_scene`).
+    pub(in crate::gfx) fn bind_kept(&mut self, device: &wgpu::Device) {
+        let entity = self.entity.as_mut().and_then(|e| e.kept.as_mut());
+        let sky = self.sky.as_mut().and_then(|s| s.kept.as_mut());
+        for k in entity.into_iter().chain(sky) {
+            k.bind(device, &self.frame, &self.post);
+        }
     }
 }
 
@@ -1034,15 +1047,84 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
     }
 }
 
-/// What `[material] reads` of `manifest`'s kept resources: their bindings and layout entries,
-/// for the fragment stage only. None where it reads none.
-pub(in crate::gfx) fn terrain_reads(
-    manifest: &Manifest,
-) -> Option<(Vec<KeptBinding>, Vec<wgpu::BindGroupLayoutEntry>)> {
-    let bindings = kept_bindings(manifest, manifest.material.as_ref()?);
-    let fragment = wgpu::ShaderStages::FRAGMENT;
-    let entries = layout_entries(&manifest.kept, &bindings, fragment);
-    (!bindings.is_empty()).then_some((bindings, entries))
+/// The kept resources a stage that draws the world reads (`reads` of `[material]`, `[entity]`,
+/// `[sky]`), in its group 3 from binding 64 (`kept_bindings`), for the fragment stage only: the
+/// material's vertex stage and `displacement` also draw the shadow, which reads none.
+pub(in crate::gfx) struct StageReads {
+    bindings: Vec<KeptBinding>,
+    /// Their layout entries (`layout_entries`).
+    pub(in crate::gfx) entries: Vec<wgpu::BindGroupLayoutEntry>,
+    /// The frame's entries and theirs, the stage's group 3 where it doesn't trace.
+    pub(in crate::gfx) layout: wgpu::BindGroupLayout,
+    /// The group a parity (`KeptStore::parity`), made for the frame's group `.0` and the store's
+    /// resources `.1` (`Reads::made`).
+    groups: Option<(wgpu::BindGroup, u32, [wgpu::BindGroup; 2])>,
+}
+
+impl StageReads {
+    /// What `stage` of `manifest` reads, joined with `frame`'s entries; none where it reads none.
+    pub(in crate::gfx) fn new(
+        device: &wgpu::Device,
+        manifest: &Manifest,
+        stage: Option<&horizon_shader_api::Stage>,
+        frame: &super::NativeFrame,
+    ) -> Option<Self> {
+        let bindings = kept_bindings(manifest, stage?);
+        let fragment = wgpu::ShaderStages::FRAGMENT;
+        let entries = layout_entries(&manifest.kept, &bindings, fragment);
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Native shader pack stage, kept"),
+            entries: &[frame.entries(), &entries].concat(),
+        });
+        (!bindings.is_empty()).then_some(Self {
+            bindings,
+            entries,
+            layout,
+            groups: None,
+        })
+    }
+
+    /// Why the fragment stage, group 3 with these and the stage's `others` groups' entries,
+    /// is over the device's `limits`, if it is.
+    pub(in crate::gfx) fn over(
+        &self,
+        frame: &super::NativeFrame,
+        others: &[wgpu::BindGroupLayoutEntry],
+        limits: &wgpu::Limits,
+    ) -> Option<String> {
+        let group = [frame.entries(), &self.entries].concat();
+        super::trace::over_limits(&group, others, limits, wgpu::ShaderStages::FRAGMENT)
+    }
+
+    /// What it reads of `post`'s store.
+    pub(in crate::gfx) fn reads<'a>(&'a self, post: &'a NativePost) -> Option<Reads<'a>> {
+        post.reads(&self.bindings)
+    }
+
+    /// Makes the groups for the frame's group as it is now and the store's resources, unless
+    /// they are made.
+    pub(in crate::gfx) fn bind(
+        &mut self,
+        device: &wgpu::Device,
+        frame: &super::NativeFrame,
+        post: &NativePost,
+    ) {
+        let Some(reads) = post.reads(&self.bindings) else {
+            return;
+        };
+        let made = |(group, made, _): &(wgpu::BindGroup, u32, [wgpu::BindGroup; 2])| {
+            *group == frame.group && *made == reads.made()
+        };
+        if !self.groups.as_ref().is_some_and(made) {
+            let group = |parity| frame.joined(device, &self.layout, &reads.entries(parity));
+            self.groups = Some((frame.group.clone(), reads.made(), [0, 1].map(group)));
+        }
+    }
+
+    /// The group of the frames whose written version is `parity`, once made (`bind`).
+    pub(in crate::gfx) fn group(&self, parity: usize) -> Option<&wgpu::BindGroup> {
+        self.groups.as_ref().map(|(_, _, groups)| &groups[parity])
+    }
 }
 
 /// The layout entries of `bindings` (`kept_bindings`) for `visibility`: a buffer read-only
@@ -1219,3 +1301,7 @@ mod trace_tests;
 #[cfg(test)]
 #[path = "native_material_kept_tests.rs"]
 mod material_tests;
+
+#[cfg(test)]
+#[path = "native_entity_sky_kept_tests.rs"]
+mod entity_sky_tests;

@@ -239,7 +239,10 @@ fn kept() -> String {
          own `output`.\n\n\
          A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's\n\
          workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`\n\
-         reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute\n\
+         reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. WGSL's\n\
+         `storageBarrier()` is allowed too: it orders one workgroup's accesses to its kept buffers, as\n\
+         `workgroupBarrier()` does `var<workgroup>`; neither orders different workgroups, and the next pass sees all of a\n\
+         pass's writes. A compute\n\
          `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has\n\
          the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either\n\
          may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.\n\n\
@@ -249,7 +252,10 @@ fn kept() -> String {
          the check refuses its `x` there: read `x_previous`. Its declarations are in the material's module at the same\n\
          bindings, for `material`'s fragments only: the check refuses `displacement` reaching one, and the `[vertex]`\n\
          file naming one, as both also draw the shadow map, which gets no kept resources. On a frame that clears a\n\
-         resource the terrain reads zeros, or what a `[[before_world]]` pass wrote since.\n\n"
+         resource the terrain reads zeros, or what a `[[before_world]]` pass wrote since.\n\n\
+         `[entity] reads` and `[sky] reads` follow the same rules: the entities and the sky draw after `[[before_world]]`\n\
+         and before `[[post]]`, as the terrain does, and read the same versions. Their declarations are in the stage's\n\
+         module, for its fragments only; the shadow map's entities are Horizon's own draw and read none.\n\n"
     );
     out += &table(&COMPUTE_INPUT, None);
     out += &format!(
