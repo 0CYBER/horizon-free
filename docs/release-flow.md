@@ -655,6 +655,9 @@ Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and for Ludovic, with 
   than 60 actions per reviewer in 24 hours (counted from the workflow's own comments).
 - **Safety.** Same as `/nightly`: main's copy of the workflow runs, no pull request's code is checked out or run,
   the comment reaches the script as env vars, and the token has `issues` and `pull-requests` write only.
+- **`needs-info`.** `/label needs-info` on an issue asks its author for more. A person's comment takes it off
+  (bots' don't count); with no answer in 7 days, `.github/workflows/needs-info.yml` (`tools/ci/needs_info.py`)
+  closes the issue as not planned. It can be reopened once the details are there.
 - **The council stays in charge.** A one-line pull request removing a reviewer's line revokes it as soon as it merges
   (the council reviews the file under CODEOWNERS). A line `paused` stops `/nightly`, the triage commands and the
   reviewers' claim powers for every reviewer; the council's own still work.
