@@ -175,10 +175,19 @@ def violations(files: dict[str, str], allowed: dict[str, dict]) -> list[str]:
                 predicates = [source[attributes.start() + cfg.start(1):attributes.start() + cfg.end(1)]
                               for cfg in re.finditer(r'#\[\s*cfg\s*\(([^\]]*)\)\s*\]',
                                                      code[attributes.start():attributes.end()])] if attributes else []
-                guarded = any(re.sub(r'\s+', '', predicate) in {
+                # Rust ANDs stacked #[cfg] attributes. A conjunction such as
+                # `not(test) && feature("testing")` still holds in an ordinary
+                # build with that feature, so it is reachable in production.
+                # Only a single, direct test/testing-only cfg may gate
+                # test-support state: any additional predicate is refused
+                # rather than being judged on its own with any(), which used to
+                # let the approved half of a stack admit the whole item.
+                approved = {
                     'test', 'feature="testing"', 'any(test,feature="testing")',
                     'any(feature="testing",test)',
-                } for predicate in predicates)
+                }
+                normalized = [re.sub(r'\s+', '', predicate) for predicate in predicates]
+                guarded = len(normalized) == 1 and normalized[0] in approved
                 if not guarded:
                     errors.append(f'{path}:{line}: test-support state requires a direct test/testing-only cfg')
     for key in sorted({key for key in allowed if not key.startswith('@generated/')} - seen):
