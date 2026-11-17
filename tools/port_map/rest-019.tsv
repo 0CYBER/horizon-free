@@ -27,7 +27,7 @@ FolderRepositorySource.FolderPackDetector.createZipPack	inline	crates/horizon-cl
 Pack.readMetaAndCreate	port	crates/horizon-client-render/src/packs.rs::pack	reads pack.mcmeta and makes the pack, none when it is missing
 Pack.readPackMetadata	inline	crates/horizon-client-render/src/packs.rs::pack	gap: minor: no required feature flags, no hidden flag, no fallback when the pack section fails to parse
 Pack.equals	skip:java		identity by pack id; the selection model compares ids
-PackDetector.detectPackResources	inline	crates/horizon-client-render/src/packs.rs::discover	gap: minor: no symlink validation; a folder without pack.mcmeta is dropped by pack()
+PackDetector.detectPackResources	inline	crates/horizon-client-render/src/packs.rs::detected_pack_path	symlinks are validated against allowed_symlinks.txt (detected_pack_path, forbidden_links); a folder without pack.mcmeta is dropped by pack()
 PackRepository.displayPackList	skip:debug		pack ids for the system report (MinecraftServer)
 PackRepository.reload	port	crates/horizon-client/src/game/world/packs/mod.rs::Game::refresh_pack_lists	re-discovers the packs and resets the selection
 PackRepository.discoverAvailable	port	crates/horizon-client-render/src/packs.rs::discover	scans the sources for packs

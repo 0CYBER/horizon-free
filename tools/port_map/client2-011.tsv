@@ -80,7 +80,7 @@ TabButton.updateWidgetNarration	skip:other		screen-reader text; Horizon has no n
 TextCursorUtils.extractInsertCursor	port	crates/horizon-client-render/src/ui.rs::EditBox::draw	insert caret is a 1 px bar; blinks every 300 ms
 Tooltip.create	skip:java		factory; Horizon passes the lines to ui::tooltip
 Tooltip.toCharSequence	port	crates/horizon-client-render/src/screen_draw.rs::tooltip	wraps at 170 px as splitTooltip does; no per-language cache
-WidgetSprites.get	port	crates/horizon-client-render/src/ui.rs::button	disabled and hovered pick the sprite; gap: minor: keyboard focus does not pick the highlighted sprite
+WidgetSprites.get	port	crates/horizon-client-render/src/ui.rs::button	disabled and hovered pick the sprite, and a keyboard-focused control draws the highlighted one (ui.rs::focused_button)
 WidgetTooltipHolder.refreshTooltipForNextRenderPass	port	crates/horizon-client-render/src/ui.rs::tooltip	gap: minor: tooltips show only under the pointer, not for keyboard focus
 WidgetTooltipHolder.createTooltipPositioner	missing		minor: a keyboard-focused widget gets no tooltip placed below or above it
 DebugEntryBiome.display	port	crates/horizon-client/src/game/interface/debug_lines.rs::Game::debug_biome_line	the biome's name at the feet, inside the build height

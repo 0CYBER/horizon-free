@@ -86,7 +86,7 @@ WrittenBookContent.markResolved	port	crates/horizon-items/src/item_data.rs::Writ
 WrittenBookContent.resolvePage	port	crates/horizon-items/src/item_data.rs::resolve_page_tag	one page's component with its selectors and scores replaced, recursing into `extra` and `with`
 WrittenBookContent.isPageTooLarge	port	crates/horizon-items/src/item_data.rs::WrittenBook::resolve	a page whose resolved text passes 32767 characters cancels the resolution and only marks the book resolved
 WrittenBookContent.getPages	port	crates/horizon-client/src/game/interface/books.rs::view_pages	gap: minor: returns the stored pages; the filtered-text choice (filterEnabled) is not modelled
-WrittenBookContent.withReplacedPages	missing		minor: loot function set_written_book_pages is not in the loot modifiers, so a loot book gets no pages
+WrittenBookContent.withReplacedPages	port	crates/horizon-world/src/loot.rs::LootData::run	`set_written_book_pages` applies its list operation (replace, append, insert or section) to the stack's `minecraft:written_book_content` pages and keeps the other fields; `set_written_book_pages_applies_the_page_operation` covers append
 BookCloningRecipe.matches	port	crates/horizon-client/src/crafting.rs::Special::matches	BookCloning arm: one written book within the allowed generations, plus material
 BookCloningRecipe.assemble	port	crates/horizon-client/src/crafting.rs::Special::assemble	copies the book with generation plus one; material count sets the copies
 BookCloningRecipe.getRemainingItems	port	crates/horizon-client/src/crafting.rs::Recipes::remainders	the first written book is kept as one copy (BookCloning arm); the crafting remainder item is kept too
@@ -129,11 +129,11 @@ SlotDisplay.AnyFuel.resolve	port	crates/horizon-client/src/recipe_book.rs::ghost
 SlotDisplay.Composite.resolve	port	crates/horizon-client/src/recipe_book.rs::Book::stacks	`Book::stacks` flattens a composite display into its members' stacks (recursively)
 SlotDisplay.DyedSlotDemo.resolve	port	crates/horizon-client/src/crafting.rs::book_displays	the targets cycle fastest and the list stops at 16 stacks
 SlotDisplay.ItemSlotDisplay.resolve	port	crates/horizon-client/src/recipe_book.rs::Book::items_of	the item of a single-item slot
-SlotDisplay.ItemStackSlotDisplay.resolve	port	crates/horizon-client/src/recipe_book.rs::Book::items_of	gap: minor: keeps item ids only; the stack's components are not carried into the display
-SlotDisplay.OnlyWithComponent.resolve	missing		the book's displays hold item ids, not stacks (Book::items_of), so there is no component for a predicate to test
+SlotDisplay.ItemStackSlotDisplay.resolve	port	crates/horizon-client/src/recipe_book.rs::Book::items_of	a server packet's `ItemStackSlotDisplay` keeps the item id and count; the stack's components are not carried into the display
+SlotDisplay.OnlyWithComponent.resolve	inline	crates/horizon-client/src/recipe_book.rs::PacketNames::stacks	a server packet's display shows its source stack; the component is not tested, and a local book display holds item ids only
 SlotDisplay.SmithingTrimDemoSlotDisplay.resolve	port	crates/horizon-client/src/stations.rs::StationRecipes::trim_demo	a random base trimmed by a random material
 SlotDisplay.WithAnyPotion.resolve	port	crates/horizon-client/src/crafting.rs::book_displays	every potion resolved onto the source item
-SlotDisplay.WithRemainder.resolve	missing		remainders are kept for play (Recipes::remainders), and the book's displays never apply them
+SlotDisplay.WithRemainder.resolve	inline	crates/horizon-client/src/recipe_book.rs::PacketNames::stacks	a server packet's display shows its input stack; the remainder is kept for play (`Recipes::remainders`) and not applied to the display
 SlotDisplay.WithRemainder.isEnabled	missing		no feature flag check: the recipe load and the book never read the level's enabled_features
 BlockPlaceContext.at	port	crates/horizon-world/src/level/place.rs::Sim::placement_at	the placement position and face from the clicked block
 UseOnContext.isSecondaryUseActive	port	crates/horizon-client/src/game.rs::Game::use_hand	the shift key sets the context's sneaking flag

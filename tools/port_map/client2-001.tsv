@@ -15,10 +15,10 @@ DebugCrosshairRenderer.<init>	skip:debug		F3 3D axis gizmo at the view; Horizon 
 DynamicGpuData.reset	skip:other		GPU per-frame ring reset; wgpu staging in Horizon's Uploads belt
 DynamicGpuData.close	skip:other		GPU buffer release; Rust drops the wgpu buffers
 DynamicGpuData.writeTransform	skip:other		per-draw uniform staging; Horizon writes its uniforms directly with queue writes
-DynamicGpuData.writeChunkSections	port	crates/horizon-client-render/src/gfx/section_fade.rs::section_instance	gap: player: section fade-in (vanilla default 0.75 s) is not sent; Horizon writes a fixed fourth value
-DynamicGpuData.writeChunkSectionsInstanced	port	crates/horizon-client-render/src/gfx/section_fade.rs::section_instance	gap: player: section fade-in (vanilla default 0.75 s) is not sent; same instance record as writeChunkSections
+DynamicGpuData.writeChunkSections	port	crates/horizon-client-render/src/gfx/section_fade.rs::section_instance	the instance step's mantissa carries 1 - visibility while the fade code is 0, read back by terrain.wgsl's instance_visibility; a section fades in over the chunk fade-in (vanilla default 0.75 s)
+DynamicGpuData.writeChunkSectionsInstanced	port	crates/horizon-client-render/src/gfx/section_fade.rs::section_instance	the same instance record as writeChunkSections: origin, fade code and the fade-in visibility packed into the step
 DynamicGpuData.writeChunkSectionCommands	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	IndexedDraw records built and uploaded into the indirect buffer
-DynamicGpuData.ChunkSectionInfo.write	port	crates/horizon-client-render/src/gfx/section_fade.rs::section_instance	gap: player: packs origin only; the fade-in visibility float (default 0.75 s) is not in the record
+DynamicGpuData.ChunkSectionInfo.write	port	crates/horizon-client-render/src/gfx/section_fade.rs::section_instance	packs the origin, the fade code and the fade-in visibility (1 - visibility in the step's low bits while the fade code is 0)
 DynamicGpuData.IndexedDraw.write	skip:other		indirect draw args; Horizon keeps them as [u32;5] words uploaded in one copy
 DynamicGpuData.TerrainTransform.write	skip:other		terrain UBO layout; Horizon's terrain pass uses its own uniforms
 DynamicGpuData.Transform.write	skip:other		std140 layout of the transform UBO; wgpu bindings in Horizon
@@ -41,7 +41,7 @@ FaceInfo.VertexInfo.select	skip:data		corner selection; Horizon's unit-cube corn
 FirstPersonHandsAndItemsRenderer.calculateMapTilt	inline	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::two_handed_map_geometry	tilt computed inline with the calculateMapTilt comment
 FirstPersonHandsAndItemsRenderer.renderPlayerHand	port	crates/horizon-client/src/game.rs::Game::hand_geometry	empty main hand's arm model with the player skin
 FirstPersonHandsAndItemsRenderer.renderMapHand	port	crates/horizon-client/src/first_person.rs::map_arm_poses	both arms behind a two-handed map, at the jar's rotations and offsets
-FirstPersonHandsAndItemsRenderer.renderOneHandedMap	port	crates/horizon-client/src/first_person.rs::one_handed_map_pose	gap: player: the arm holding a map is not drawn; the map hand branch skips the arm
+FirstPersonHandsAndItemsRenderer.renderOneHandedMap	port	crates/horizon-client/src/first_person.rs::one_handed_map_pose	the hand's pose; the arm under it is drawn from map_arm_poses in frame_geometry.rs::Game::hand_geometry
 FirstPersonHandsAndItemsRenderer.renderTwoHandedMap	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::two_handed_map_geometry	gap: player: the arms that hold a two-handed map are not drawn
 FirstPersonHandsAndItemsRenderer.renderMap	port	crates/horizon-client/src/game/blocks/maps/mod.rs::Game::held_map	map background with its 7-pixel border, then the map contents
 FirstPersonHandsAndItemsRenderer.applyEatTransform	port	crates/horizon-client/src/first_person.rs::item_pose	ItemPose::Eat: bob and jiggle while eating or drinking
@@ -55,7 +55,7 @@ GameRenderer.close	skip:other		GPU resource teardown; wgpu drops the renderer's 
 GameRenderer.checkEntityPostEffect	port	crates/horizon-client/src/game/network/remote_camera.rs::entity_post_effect	spectating maps creeper to minecraft:creeper, spider and cave spider to minecraft:spider, enderman to minecraft:invert, and a first-person camera clears it
 GameRenderer.processBlurEffect	port	crates/horizon-client-render/src/menu_blur.rs::MenuBlur::apply	menu background blur pass
 GameRenderer.preloadUiShader	skip:other		GPU pipeline precompile at load; Horizon builds its pipelines in Renderer::new
-GameRenderer.update	port	crates/horizon-client-render/src/camera.rs::AvatarBob::update_bob	gap: minor: the requested post-effect list (from /postEffect) is not built
+GameRenderer.update	port	crates/horizon-client-render/src/camera.rs::AvatarBob::update_bob	the frame's requested post-effect list (screen_backgrounds.rs::requested_post_effects: the pack's own end_of_frame chain, then the server's LocalPlayer.postEffects) is run by post_chain.rs::PostEffects::apply
 GameRenderer.extract	skip:other		render-state copy for the vanilla render thread; Horizon renders from game state
 GameRenderer.preparePostEffects	port	crates/horizon-client-render/src/post_chain.rs::PostEffects::apply	vanilla post chains are made on first use from the request the game builds
 GameRenderer.applyPostEffects	port	crates/horizon-client-render/src/post_chain.rs::PostEffects::apply	the same chain runs after the world pass
@@ -78,7 +78,7 @@ LevelEventHandler.stopJukeboxSong	port	crates/horizon-client/src/game/blocks/juk
 LevelRenderer.<init>	port	crates/horizon-client-render/src/gfx.rs::Renderer::new	targets, pipelines and buffers built once
 LevelRenderer.submitFeatures	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	entities, block entities, crumbling, particles, outline and gizmos are submitted and drawn in the frame
 LevelRenderer.repositionCamera	port	crates/horizon-client-render/src/gfx/resident.rs::camera_column	camera section column that the section grid is centred on; gap: minor: world border invalidation is not part of it
-LevelRenderer.addMainPass	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	gap: minor: the Improved transparency targets (depth bounds, transmittance, accumulate) are not created
+LevelRenderer.addMainPass	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	the Improved transparency targets are Oit::new's three stages (gfx/oit.rs: DepthBounds, Transmittance, Accumulate)
 LevelRenderer.executeAlwaysOnTop	port	crates/horizon-client/src/game.rs::Game::render	always-on-top debug lines and crosshair drawn over the world
 LevelRenderer.executeSolid	port	crates/horizon-client-render/src/gfx.rs::Renderer::draw_sections	solid section draws in arena page order
 LevelRenderer.prepareTranslucents	port	crates/horizon-client-render/src/gfx/translucency.rs::Sorter::sort	translucent quads sorted from the camera each frame
@@ -101,7 +101,7 @@ LevelRenderer.scheduleTranslucentSectionResort	port	crates/horizon-client-render
 LevelRenderer.scheduleResort	port	crates/horizon-client-render/src/gfx/translucency.rs::SortState::update	per-section resort gated by point-of-view change and translucent geometry
 LevelRenderer.resetLevelRenderData	port	crates/horizon-client-render/src/gfx.rs::Renderer::clear_sections	section data released when a level is left
 LevelRenderer.hasRenderedAllSections	inline	crates/horizon-client/src/game/world/saving.rs::Game::tick_world_icon	renderer.drawn_sections > 10: the icon waits on the same count vanilla's hasRenderedAllSections asks for
-LevelRenderer.isSectionCompiledAndVisible	port	crates/horizon-client-render/src/gfx/resident.rs::Resident::contains	gap: minor: no section fade-in, so the 0.3 visibility threshold is not checked
+LevelRenderer.isSectionCompiledAndVisible	port	crates/horizon-client-render/src/gfx.rs::Renderer::visible_block_entities	a section's block entities draw once its fade visibility reaches 0.3 (CHUNK_VISIBILITY_THRESHOLD)
 LevelRenderer.finalizeGizmoCollection	port	crates/horizon-client/src/game/interface/debug_keys.rs::Game::debug_gizmos	debug gizmos collected for the frame
 LevelTargetBundle.replace	skip:other		render-target bundle for post chains; Horizon has no frame graph
 LevelTargetBundle.get	skip:other		render-target bundle for post chains; Horizon has no frame graph

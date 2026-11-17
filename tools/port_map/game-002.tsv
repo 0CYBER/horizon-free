@@ -59,7 +59,7 @@ ServerLevel.addEntity	inline	crates/horizon-client/src/game/mobs/creatures/mod.r
 ServerLevel.tryAddFreshEntityWithPassengers	inline	crates/horizon-client/src/game/world/persist.rs::Game::load_mob	gap: minor: loads a mob with its Passengers but never refuses a UUID that is already loaded, so /summon with a fixed UUID twice makes two
 ServerLevel.unload	inline	crates/horizon-client/src/game.rs::Game::update_world	unloaded columns drop their block entities and names, and their entities are saved out
 ServerLevel.playSeededSound	port	crates/horizon-client/src/lan/containers.rs::Hub::sound
-ServerLevel.sendBlockUpdated	inline	crates/horizon-client-render/src/world.rs::World::set	gap: minor: mobs never re-plan a path when a block on it changes (Mob::recompute_path is never triggered by a block update), so they walk a stale path until a goal re-paths
+ServerLevel.sendBlockUpdated	inline	crates/horizon-client/src/mobs.rs::blocks_changed	a write that changes a collision shape re-paths the mobs whose path runs near it (should_recompute_path), found once per tick (collision_changes)
 ServerLevel.neighborChanged	port	crates/horizon-world/src/level/hooks.rs::Sim::neighbor_changed
 ServerLevel.getDestroyType	port	crates/horizon-client/src/game/explosion.rs::Game::explode	mob explosions pick Keep, Destroy or DestroyWithDecay from mob_griefing and mob_explosion_drop_decay
 ServerLevel.doBlockEvent	inline	crates/horizon-world/src/level/pistons.rs::Behaviours::run_block_events

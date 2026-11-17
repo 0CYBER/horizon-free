@@ -25,12 +25,12 @@ ClientChunkCache.Storage.refreshEmptySections	skip:java		empty-section bookkeepi
 ClientChunkCache.Storage.markSectionEmpty	skip:java		empty-section set update; see Storage.onSectionEmptinessChanged
 ClientChunkCache.Storage.markSectionNotEmpty	skip:java		empty-section set update; see Storage.onSectionEmptinessChanged
 ClientChunkCache.Storage.dumpChunks	skip:debug		writes a chunk list file for debugging
-ClientCommonPacketListenerImpl.onPacketError	missing		minor: Horizon logs an undecodable packet and carries on (Event::DecodeError) instead of disconnecting with a report
+ClientCommonPacketListenerImpl.onPacketError	inline	crates/horizon-client/src/net.rs::receive_play	a packet that does not decode is logged and skipped (Event::DecodeError; poll_remote counts them and warns for the first 20) instead of disconnecting with a report
 ClientCommonPacketListenerImpl.createDisconnectionInfo	skip:debug		builds the disconnect crash report and its file
 ClientCommonPacketListenerImpl.storeDisconnectionReport	skip:debug		writes the disconnect report file under debug/
 ClientCommonPacketListenerImpl.shouldHandleMessage	inline	crates/horizon-client/src/net.rs::receive_play	minor: receive_play returns at Transfer, so nothing else is read after a transfer starts
 ClientCommonPacketListenerImpl.handleKeepAlive	port	crates/horizon-client/src/net.rs::receive_play	gap: minor: the keep-alive reply is sent at once; vanilla defers it while the game is frozen at poll events
-ClientCommonPacketListenerImpl.handleCustomPayload	port	crates/horizon-client/src/net.rs::receive_brand	gap: minor: reads the brand only; other custom payloads go to the game and are ignored
+ClientCommonPacketListenerImpl.handleCustomPayload	port	crates/horizon-client/src/net.rs::receive_brand	the brand, quiet, mod-network and LOD channels are read in receive_brand; mod-network, attachment-sync, menu-extra and recipe transfer/content payloads in Game::handle_packet
 ClientCommonPacketListenerImpl.handleResourcePackPush	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_push
 ClientCommonPacketListenerImpl.handleResourcePackPop	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_pop
 ClientCommonPacketListenerImpl.handlePostEffects	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet
@@ -49,7 +49,7 @@ ClientCommonPacketListenerImpl.PackConfirmScreen.<init>	port	crates/horizon-clie
 ClientCommonPacketListenerImpl.PackConfirmScreen.update	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_push	adds the new request to the open prompt
 ClientConfigurationPacketListenerImpl.handleRegistryData	port	crates/horizon-client/src/net.rs::configure	registry entries are collected in configuration
 ClientConfigurationPacketListenerImpl.handleUpdateTags	port	crates/horizon-client/src/net.rs::configure	UpdateTags fills the registry's tags before the play state, so a datapack's tags are the server's
-ClientConfigurationPacketListenerImpl.handleSelectKnownPacks	port	crates/horizon-client/src/net.rs::configure	gap: minor: always answers with no known packs, so the server sends every registry entry
+ClientConfigurationPacketListenerImpl.handleSelectKnownPacks	port	crates/horizon-client/src/net.rs::configure	select_known_packs answers with the server-offered core pack the client has, else none; fill_known_entries then reads that pack\'s omitted registry entries from the client\'s own data
 ClientConfigurationPacketListenerImpl.runWithResources	skip:data		resource loading for known packs; Horizon reads its data from tables
 ClientConfigurationPacketListenerImpl.handleCodeOfConduct	port	crates/horizon-client/src/net.rs::configure	the screen shows the text with the not-again box, Acknowledge and Disconnect before the connection continues (game/interface/code_of_conduct.rs)
 ClientConfigurationPacketListenerImpl.handleConfigurationFinished	port	crates/horizon-client/src/net.rs::configure	gap: minor: no registry filter for an integrated server (see filterRegistries)
@@ -91,7 +91,7 @@ ClientLevel.pollLightUpdates	skip:other		light is applied when it arrives or rel
 ClientLevel.getPrecipitationAt	port	crates/horizon-client/src/game/blocks/level_access.rs::GameLevel::precipitation	the column's biome decides; no column, no answer (the chunk lookup fails, as vanilla answers none for an unloaded column)
 ClientLevel.removeBlockBreakingProgress	inline	crates/horizon-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress	minor: the 400-tick expiry runs on every update, not every 20 ticks
 ClientLevel.removeProgress	inline	crates/horizon-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress	cracks are keyed by breaker id, so there are no per-position sets to tidy
-ClientLevel.shouldTickDeath	missing		minor: death animations tick for every remote mob held; no simulation-distance check
+ClientLevel.shouldTickDeath	inline	crates/horizon-client/src/mobs/ai.rs::base_tick	death_time advances for every held remote mob; no simulation-distance gate decides whether the death animation ticks
 ClientLevel.tickNonPassenger	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	ticks each remote entity
 ClientLevel.tickPassenger	port	crates/horizon-client/src/game/entities/passengers.rs::Game::position_riders	gap: minor: passengers are placed on their vehicle; no per-passenger tick
 ClientLevel.update	skip:other		runs the light queue each tick; Horizon relights when changes arrive

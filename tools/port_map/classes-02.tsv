@@ -35,7 +35,7 @@ ItemAttributeModifiers.Entry.matches	inline	crates/horizon-world/src/attributes/
 OminousBottleAmplifier.addToTooltip	port	crates/horizon-client/src/item_tooltip.rs::ominous_bottle_line	the Bad Omen line of an ominous bottle, listed in the stack tooltip (stack_tooltip_lines)
 SimpleMutableContainer.modifySlots	port	crates/horizon-client/src/game/administration/commands/items.rs::Game::cmd_item_modify	each slot is visited and set
 SimpleMutableContainer.replaceSlotItems	port	crates/horizon-client/src/game/administration/commands/items.rs::Game::cmd_item	/item replace fills slots from the item list
-SulfurCubeContent.addToTooltip	missing		minor: Horizon never writes sulfur_cube_content, so no item shows the absorbed block line
+SulfurCubeContent.addToTooltip	missing		minor: the component is written on a sulfur bucket (entity_nbt::bucket_components) but no tooltip line reads it, so the absorbed block is not shown
 SuspiciousStewEffects.addToTooltip	port	crates/horizon-client/src/item_tooltip.rs::stew_lines	the effects of a suspicious stew, in the stack tooltip (stack_tooltip_lines)
 TypedEntityData.addToTooltip	port	crates/horizon-client/src/item_tooltip.rs::spawn_egg_peaceful_line	in Peaceful, a spawn egg of a monster shows the red "Disabled in Peaceful" line
 TypedEntityData.equals	skip:java

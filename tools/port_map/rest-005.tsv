@@ -23,7 +23,7 @@ SuffixArray.print	skip:debug		suffix array debug dump
 SuffixArray.getString	skip:debug		suffix array debug text
 SuffixArray.compare	skip:java		binary-search helper of the suffix array
 SuffixArray.search	port	crates/horizon-client/src/creative.rs::Creative::search_results	substring match by linear scan, same matches in tab order
-IntegratedPlayerList.canPlayerLogin	inline	crates/horizon-client/src/lan/mod.rs::Shared::try_admit	gap: minor: no owner-name check; duplicate logins are matched by uuid
+IntegratedPlayerList.canPlayerLogin	inline	crates/horizon-client/src/lan/mod.rs::Shared::try_admit	the owner-name check (isSingleplayerOwner, case-insensitive) refuses the owner's name while a player of that name is online; a duplicate uuid waits for the old connection to leave (30 s, then slow_login)
 IntegratedServer.processPacketsAndTick	skip:debug		gizmo collector for debug draws
 IntegratedServer.fillServerSystemReport	skip:debug		system report for crash reports
 IntegratedServer.getPersonalGameMode	port	crates/horizon-client/src/game/world/integrated.rs::Game::server_options	owner's game mode, read from the guest record

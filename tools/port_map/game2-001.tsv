@@ -1,6 +1,6 @@
 WorldGenRegion.getChunk	port	crates/horizon-world/src/worldgen/feature_region.rs::TerrainRegion::chunk	gap: minor: returns the resident chunk without the generating-step status check
 GossipContainer.getReputation	port	crates/horizon-client/src/gossip.rs::Gossips::reputation	Villager calls it with all types only; the type predicate is fixed to all
-Frog.travelInWater	missing		minor: frog water travel (getSpeed() move, 0.9 drag on all axes) absent; generic fluid travel used instead
+Frog.travelInWater	port	crates/horizon-client/src/mobs/frog.rs::travel	in water: `move_relative(m.ai.speed, input)`, the move, then the whole velocity scaled by 0.9; out of water it returns false so the usual travel runs
 HappyGhast.HappyGhastBodyRotationControl.clientTick	port	crates/horizon-client/src/mobs/happy_ghast.rs::ridden	gap: minor: vehicle yaw sync only; the super.clientTick step is Mob::body_rotation_tick in control.rs
 SnifferAi.initCoreActivity	inline	crates/horizon-client/src/mobs/animal_brain.rs::sniffer_package	core behaviour list (Swim, panic, sink, cooldown) built here
 SnifferAi.initSniffingActivity	inline	crates/horizon-client/src/mobs/animal_brain.rs::sniffer_package	Searching entry here; memory gates in update_activity
@@ -30,8 +30,8 @@ Wolf.createAttributes	skip:data		attribute values come from data tables
 Wolf.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	flags, variant and anger metadata sent to clients
 Wolf.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	CollarColor written
 Wolf.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	CollarColor, sound_variant and anger read; live command writes initialize the wolf remaining anger at the current level clock
-Wolf.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	gap: minor: sound variant is stored but no sound uses it (see getSoundSet)
-Wolf.getAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::ambient_sound	gap: minor: angry is taken as having a target, not the anger timer
+Wolf.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	the sound variant is stored and `variant_sound` reads it for the wolf's growl, pant and whine
+Wolf.getAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::ambient_sound	angry reads the persistent anger timer (`tame::angry`) and plays the variant's growl, else a calm wolf plays its variant's pant or whine
 Wolf.die	port	crates/horizon-client/src/mobs/tame.rs::die	`drops::die` asks it first: isWet/isShaking and both shake animations are cleared
 Wolf.getHeadRollAngle	port	crates/horizon-client/src/mobs/tame.rs::anim
 Wolf.applyTamingSideEffects	port	crates/horizon-client/src/mobs/tame.rs::set_tame

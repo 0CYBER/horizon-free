@@ -39,7 +39,7 @@ LootPredicates	skip:data		registry bootstrap; loot conditions are matched in loo
 MatchBlock.blockMatches	skip:java		static builder
 MatchBlock.getReferencedContextParams	skip:data		validation metadata for context params
 MatchBlock.test	port	crates/horizon-items/src/items.rs::LootContext::condition	match_block arm: block id, state and property ranges; gap: minor: the block-entity part of the predicate is not read
-MatchTool.test	port	crates/horizon-items/src/items.rs::LootContext::condition	match_tool arm; gap: minor: item ids, tags and enchantment levels only, other ItemPredicate parts are not read
+MatchTool.test	port	crates/horizon-items/src/items.rs::LootContext::condition	match_tool arm: item ids and tags, enchantment level ranges and the custom_data predicate; other ItemPredicate parts are not read
 TimeCheck	missing		no `time_check` arm in `loot.rs::condition`; no vanilla data file uses it, so only a datapack reaches it
 WeatherCheck.test	port	crates/horizon-client/src/advancements.rs::conditions	named command predicates compare both optional fields against Game View's effective weather; channeling remains a separate thunder-only caller
 NbtProviders	skip:data		registry bootstrap
@@ -134,7 +134,7 @@ Vec2.scale	skip:other		2D vector maths; Horizon has no Vec2 type and keeps 2D ma
 Vec2.equals	skip:java		Object equality; Rust derives it
 Vec2.hashCode	skip:java		Object hashing; Rust derives it
 ArrayVoxelShape.getCoords	port	crates/horizon-core/src/geometry/shape.rs::VoxelShape::coordinates
-BitSetDiscreteVoxelShape.<init>	port	crates/horizon-core/src/geometry/shape.rs::VoxelShape::from_cube	gap: minor: takes the occupancy from the caller; there is no empty-grid constructor
+BitSetDiscreteVoxelShape.<init>	port	crates/horizon-core/src/geometry/shape.rs::VoxelShape::from_cube, crates/horizon-core/src/geometry/shape.rs::VoxelShape::empty_ref	from_cube builds any sized grid from its occupancy bitmap, an all-false bitmap being an empty grid, and empty_ref is the shared zero-sized empty shape
 BitSetDiscreteVoxelShape.clearZStrip	port	crates/horizon-core/src/geometry/shape.rs::clear_strip
 BitSetDiscreteVoxelShape.fillUpdateBounds	inline	crates/horizon-core/src/geometry/shape.rs::VoxelShape::build	bounds computed from the filled grid
 BitSetDiscreteVoxelShape.forAllBoxes	port	crates/horizon-core/src/geometry/shape.rs::VoxelShape::decompose

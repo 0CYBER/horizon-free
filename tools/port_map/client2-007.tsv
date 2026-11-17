@@ -125,8 +125,8 @@ MapTextureManager.MapInstance.updateTextureIfNeeded	port	crates/horizon-client/s
 SkinManager.get	port	crates/horizon-client-render/src/skins.rs::lookup	gap: minor: the packed textures come from ResolvedProfile::textures; the debug default-skin override is not ported
 SkinManager.registerTextures	port	crates/horizon-client-render/src/skins.rs::lookup	gap: minor: returns the skin location only; cape and elytra are downloaded here but not returned
 SkinManager.TextureCache.getOrLoad	port	crates/horizon-client-render/src/skins.rs::Downloader::state	one download per URL, then its state
-SkinManager.TextureCache.getTextureLocation	port	crates/horizon-client-render/src/skins.rs::skin_location	gap: minor: only the skins/ location; capes and elytra have no location fn
-SplashManager.getSplash	port	crates/horizon-client/src/title.rs::choose_splash	gap: player: no '<NAME> IS YOU' splash; vanilla sometimes shows the logged-in player's name instead of a splash on the title screen
+SkinManager.TextureCache.getTextureLocation	port	crates/horizon-client-render/src/skins.rs::skin_location	the skins/ and capes/ locations (skin_location, cape_location); elytra has no location fn
+SplashManager.getSplash	port	crates/horizon-client/src/title.rs::Title::with_user	a one in splash-count roll (nextInt(size) == 42) shows the logged-in player's name as '<NAME> IS YOU' instead of a splash (rolls_user_splash, choose_splash)
 WaypointStyle.validate	port	crates/horizon-client/src/locator_bar.rs::WaypointStyle::parse	validation is folded into the parse
 WaypointStyleManager.apply	port	crates/horizon-client/src/locator_bar.rs::WaypointStyles::load	gap: minor: loads the arrow and dot sprites from the assets folder into one map
 ClientLanguage.appendFrom	port	crates/horizon-client-core/src/lang.rs::Language::load	layers the translation JSON from the sources

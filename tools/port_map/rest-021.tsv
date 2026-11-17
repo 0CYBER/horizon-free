@@ -74,7 +74,7 @@ Ease.inOutQuint	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS
 Ease.outBounce	port	crates/horizon-world/src/environment_timeline.rs::out_bounce	the 7.5625 branches at 0.36363637 and 0.72727275, the third test in double as the bytecode widens it
 Ease.outElastic	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "out_elastic" entry: 0 and 1 first, else 2^(-10x) * sin((10x-0.75) * 2pi/3) + 1
 Ease.outExpo	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "out_expo" entry: 1 at 1, else 1 - 2^(-10x)
-EasingType.cubicBezier	inline	crates/horizon-client-render/src/environment.rs::Environment::load_dimension	reads the four control points of a cubic_bezier ease; gap: minor: no range check, see CubicBezierControls.validate
+EasingType.cubicBezier	inline	crates/horizon-client-render/src/environment.rs::Environment::load_dimension	reads the four control points of a cubic_bezier ease; Easing::parse checks x1 and x2 are in 0-1 (horizon-world/src/environment_timeline.rs, EasingType.CubicBezierControls.validate)
 EasingType.CubicBezier.curveFromControls	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	the curve coefficients closure
 EasingType.CubicBezier.solveT	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	Newton steps with the 1e-5 tolerance
 EasingType.CubicBezier.solveTBisect	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	bisection fallback when Newton does not converge
@@ -116,7 +116,7 @@ FastBufferedInputStream.read	skip:java		buffered stream helper; Rust readers do 
 FastBufferedInputStream.skip	skip:java		buffered stream helper; Rust readers do their own buffering
 FastBufferedInputStream.fill	skip:java		buffered stream helper; Rust readers do their own buffering
 FileSystemUtil.safeGetPath	skip:other		opens a jar or zip filesystem for a URI; Horizon reads archives with the zip crate
-FileUtil.sanitizeName	port	crates/horizon-client/src/title.rs::Title::target_folder	gap: minor: replaces every non-alphanumeric character with _; vanilla only replaces illegal file characters, dots, slashes and quotes
+FileUtil.sanitizeName	port	crates/horizon-client/src/title.rs::Title::target_folder	sanitize_name replaces the ILLEGAL_FILE_CHARACTERS set and dots, slashes and quotes, as vanilla does (title/world_folder.rs::sanitize_name); the reserved Windows names are escaped after it
 FileUtil.isPathPortable	port	crates/horizon-client/src/game/administration/structure_blocks.rs::portable_path	the structure path's check: no empty, `.` or `..` segment; vanilla also tests the part's characters (isPathPartPortable)
 FileUtil.decomposePath	skip:data		resource path handling; Horizon reads its data from tables and files
 FileUtil.resolvePath	skip:data		resource path handling; Horizon reads its data from tables and files

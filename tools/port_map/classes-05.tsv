@@ -3,7 +3,7 @@ RegionFileVersion.register	skip:data		static version table; Horizon's codecs are
 RegionFileVersion.wrap	port	crates/horizon-world/src/compression.rs::Compression::encode	whole-buffer codec; output side (input side is Compression::decode)
 RegionStorageInfo.withTypeSuffix	port	crates/horizon-client/src/save.rs::Folder::name	folder name per region kind; only the fixed region, entities and poi folders exist, none is suffixed
 EntityLookup.add	skip:java		index insert; Horizon keeps entities in per-kind Vecs (game.rs) and a uuid map (game/world/persist.rs)
-EntityLookup.getEntities	port	crates/horizon-client/src/mobs/seen_grid.rs::SeenGrid::candidates	gap: minor: returns mob candidates only (only mobs are indexed); callers test the boxes exactly
+EntityLookup.getEntities	port	crates/horizon-client/src/mobs/seen_grid.rs::SeenGrid::candidates	returns the candidates of the snapshot the grid indexed (mobs for the entity lookup, minecart carts and boats for their collisions); callers test the boxes exactly
 EntityLookup.getEntity	skip:java		lookup by id or uuid over Horizon's per-kind lists and the uuid map
 EntityLookup.remove	skip:java		index removal; Horizon removes the entity from its per-kind list
 EntitySection	skip:java		section container; Horizon has no section index, only the mob grid (mobs/seen_grid.rs)

@@ -77,16 +77,16 @@ Interval.lerpFiniteBounds	port	crates/horizon-core/src/density/interval.rs::Inte
 Interval.lerpInfiniteBounds	inline	crates/horizon-core/src/density/interval.rs::Interval::lerp_values	the infinite-bound branch is folded into lerp_values
 Interval.equals	port	crates/horizon-core/src/density/interval.rs::Interval::eq	gap: minor: two NaI intervals compare equal here; vanilla compares NaN bounds, so they differ unless same object
 Interval.toString	skip:debug		debug text of a range; Horizon has no Display for Interval
-net/minecraft/util/Keyframe#codec	port	crates/horizon-client/src/patrol.rs::GameplayAttributes::load	gap: minor: only boolean keyframe values are read
-KeyframeTrack.mapCodec	port	crates/horizon-client/src/patrol.rs::GameplayAttributes::load	gap: minor: the ease field is not read; boolean tracks are never eased
-KeyframeTrack.validateKeyframes	missing		minor: no check that keyframes are ordered or that more than two share a tick; load only skips an empty track
-KeyframeTrack.validatePeriod	missing		minor: no check that keyframe ticks lie in 0..period on load
+net/minecraft/util/Keyframe#codec	port	crates/horizon-world/src/environment_timeline.rs::Track::parse	each keyframe's ticks and value, the value typed by the track's attribute; patrol.rs reads its own boolean tracks
+KeyframeTrack.mapCodec	port	crates/horizon-world/src/environment_timeline.rs::Track::parse	ease is read as the track's easing (Easing::parse), linear by default; the modifier is override by default
+KeyframeTrack.validateKeyframes	port	crates/horizon-world/src/environment_timeline.rs::Track::parse	tracks must be ordered by ticks and hold at most two keyframes on one tick; an empty track is refused
+KeyframeTrack.validatePeriod	port	crates/horizon-world/src/environment_timeline.rs::Track::validate_period	every keyframe tick must lie in [0; period]; Timeline::parse calls it for each track
 KeyframeTrack.Builder.addKeyframe	skip:java		builder; Horizon builds keyframe lists from JSON
 KeyframeTrack.Builder.build	skip:java		builder; Horizon builds keyframe lists from JSON
-KeyframeTrackSampler.bakeSegments	inline	crates/horizon-client/src/patrol.rs::BoolTrack::sample	gap: minor: no periodic wrap segment; with a period and a first keyframe after tick 0, ticks before it read keyframes[0] instead of the last keyframe
-KeyframeTrackSampler.addSegmentsFromKeyframes	inline	crates/horizon-client/src/patrol.rs::BoolTrack::sample	segments are not built; sample reads the keyframes directly
-KeyframeTrackSampler.getSegmentAt	inline	crates/horizon-client/src/patrol.rs::BoolTrack::sample	the keyframe lookup is a scan in sample
-KeyframeTrackSampler.loopTicks	inline	crates/horizon-client/src/patrol.rs::BoolTrack::sample	the period wrap (rem_euclid) inside sample
+KeyframeTrackSampler.bakeSegments	port	crates/horizon-world/src/environment_timeline.rs::Track::sampler	one segment per keyframe pair; with a period, a wrap segment from the last keyframe back to the first is added on each side of the loop
+KeyframeTrackSampler.addSegmentsFromKeyframes	inline	crates/horizon-world/src/environment_timeline.rs::Track::add_segments_from_keyframes	one segment per consecutive pair, each carrying the track's easing
+KeyframeTrackSampler.getSegmentAt	inline	crates/horizon-world/src/environment_timeline.rs::TrackSampler::sample	the first segment whose end tick is after the sampled tick, else the last; the ends clamp and the middle lerps
+KeyframeTrackSampler.loopTicks	inline	crates/horizon-world/src/environment_timeline.rs::TrackSampler::sample	the period wrap is rem_euclid against the track's period, Java's floor modulo
 LightCoordsUtil.addSmoothBlockEmission	port	crates/horizon-client-render/src/particles.rs::Particle::light_coords	the age-emission arms add the emitted block light capped at 240
 LinearCongruentialGenerator.next	inline	crates/horizon-core/src/biome.rs::BiomeZoom::quart_at_block	the g closure is the LCG step; the coordinate is added separately
 MemoryReserve.release	skip:other		frees a JVM heap reserve for OutOfMemoryError; Horizon is native code

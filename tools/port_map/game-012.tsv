@@ -22,7 +22,7 @@ Fox.setTarget	missing		minor: only clears the defending flag, which is never set
 Fox.playAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::play_ambient	ticked in #3512; `Fox.playAmbientSound` is cited at crates/horizon-client/src/mobs/ai.rs:1095 (in a comment, so `where` names the enclosing fn)
 Fox.getAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::play_ambient	ticked in #3512; `Fox.getAmbientSound` is cited at crates/horizon-client/src/mobs/ai.rs:1093 (in a comment, so `where` names the enclosing fn)
 Fox.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	0.55 of the eye height
-Fox.FoxAlertableEntitiesSelector.test	inline	crates/horizon-client/src/mobs/fox.rs::alertable	gap: minor: any other mob counts even when asleep or sneaking, and a trusted mob is not skipped (no trust)
+Fox.FoxAlertableEntitiesSelector.test	inline	crates/horizon-client/src/mobs/fox.rs::alertable	the mob branch takes chickens and rabbits and untamed wolf, cat, parrot and nautilus; the player branch skips creative, spectator and sneaking players and shrinks the range by visibility; trust is still not modelled
 Fox.FoxEatBerriesGoal.onReachedTarget	inline	crates/horizon-client/src/mobs/fox.rs::EatBerries::tick	after 40 ticks at the bush, picks when mob griefing is on
 Fox.FoxEatBerriesGoal.pickGlowBerry	port	crates/horizon-client/src/mobs/fox.rs::EatBerries::pick	CaveVines.use: one glow berry, berries off, pick sound with 0.8 to 1.2 pitch
 Fox.FoxEatBerriesGoal.pickSweetBerries	port	crates/horizon-client/src/mobs/fox.rs::EatBerries::pick	1 or 2 berries (+1 when fully grown), the first into the mouth when empty, age back to 1
@@ -67,7 +67,7 @@ Tadpole.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_
 Tadpole.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	Age and AgeLocked
 Tadpole.saveToBucketTag	port	crates/horizon-client/src/entity_nbt.rs::bucket_data	Age and AgeLocked for axolotls and tadpoles
 Tadpole.loadFromBucketTag	port	crates/horizon-client/src/entity_nbt.rs::apply_item_components	Age and AgeLocked from `minecraft:bucket_entity_data`
-Tadpole.ageUp	inline	crates/horizon-client/src/mobs/aquatic.rs::ai_step	gap: player: at 24000 the frog is spawned fresh with yaw and persistence only (SpawnSetup), so a named, silenced or glowing tadpole turns into a plain frog; the grow-up sound is 1.0 loud, not 0.15
+Tadpole.ageUp	inline	crates/horizon-client/src/mobs/aquatic.rs::ai_step	at 24000 ticks the tadpole converts through `conversion::single` with `After::Finalize`: name, effects, age, flags and position carry over, the frog is finalized and persistent, and the grow_up sound is 0.15
 TadpoleAi.initCoreActivity	inline	crates/horizon-client/src/mobs/aquatic.rs::register	panic at 2.0 as a goal
 TadpoleAi.initIdleActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::tadpole_package	the idle entries: the food tempt, look at players, then the swim stroll at speed 0.5, the walk-from-look and the stay-in-water actions
 Goat.createHorn	port	crates/horizon-client/src/mobs/goat.rs::Goal::create_horn	ticked in #3512; `Goat.createHorn` is cited at crates/horizon-client/src/mobs/goat.rs:512
@@ -100,7 +100,7 @@ CopperGolemAi.initCoreActivity	port	crates/horizon-client/src/mobs/animal_brain.
 CopperGolemAi.initIdleActivity	port	crates/horizon-client/src/mobs/animal_brain.rs::copper_golem_package	transport between chests, look at player, then stroll (2 blocks) or do nothing while the transport cooldown runs
 CopperGolemAi.getTargetReachedInteractions	inline	crates/horizon-client/src/mobs/transport_items.rs::reached_interaction	pickup, pickup nothing, place, place nothing from what the chest holds and what the golem carries
 CopperGolemAi.onReachedTargetInteraction	inline	crates/horizon-client/src/mobs/transport_items.rs::Transport::on_reached	tick 1 opens the chest and sets the state, tick 9 plays the sound, tick 60 closes it
-IronGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_iron	gap: player: no MoveBackToVillageGoal and no village-bound stroll (plain stroll 0.6), so golems wander off from their village; no ResetUniversalAngerTargetGoal
+IronGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_iron	registers MoveBackToVillageGoal (10-tick interval), GolemRandomStrollInVillageGoal and ResetUniversalAngerTargetGoal with the golem's alertOthersOfSameType false
 IronGolem.decreaseAirSupply	port	crates/horizon-client/src/mobs/ai/air.rs::keeps_its_air	`iload_1; ireturn`: the air is handed back unchanged, so a golem under water never loses a bubble and never reaches the -20 that drowns
 IronGolem.createAttributes	skip:data		attributes come from entity-types.json
 IronGolem.doPush	port	crates/horizon-client/src/mobs/ai.rs::push_entities	a monster that is not a creeper becomes the target one time in 20, drawn only for those, then the push
@@ -112,7 +112,7 @@ IronGolem.hurtServer	port	crates/horizon-client/src/mobs.rs::Mob::damage_with	go
 IronGolem.isPlayerCreated	inline	crates/horizon-client/src/mobs/goals.rs::Mob::spares_players	the flag is extra.player_created; spares_players reads it, and entity_nbt.rs writes and reads it
 IronGolem.setPlayerCreated	inline	crates/horizon-client/src/game/mobs/golems.rs::Game::check_golem_spawn	sets extra.player_created on the golem built from blocks; mob_from_nbt sets it on load
 IronGolem.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	0.875 of the eye height, the default width/2 forwards
-SnowGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_snow	gap: minor: stroll uses the 0.001 water-avoiding probability, vanilla 1.0000001E-5
+SnowGolem.registerGoals	port	crates/horizon-client/src/mobs/golem.rs::register_snow	the water-avoiding stroll takes the constructor's 1.0000001e-5 chance, not the default 0.001
 SnowGolem.shear	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_shear_mob	shear sound, pumpkin off, shearing loot table at eye height
 SnowGolem.hasPumpkin	inline	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_shear_mob	extra.sheared is the inverse; synced as DATA_PUMPKIN_ID in lan.rs and remote_mob_data.rs
 SnowGolem.setPumpkin	inline	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_shear_mob	sets extra.sheared (shears, dispenser); nothing puts a pumpkin back, as in vanilla
@@ -132,7 +132,7 @@ HappyGhast.getControllingPassenger	port	crates/horizon-client/src/mobs/happy_gha
 HappyGhast.tickRidden	port	crates/horizon-client/src/mobs/happy_ghast.rs::ridden	turns 8 percent toward the rider's yaw, pitch half of theirs, head and body follow
 HappyGhast.getHappyGhastRestrictionRadius	port	crates/horizon-client/src/mobs/happy_ghast.rs::restriction_radius	64 for a bare adult, 32 otherwise
 HappyGhast.checkRestriction	inline	crates/horizon-client/src/mobs/happy_ghast.rs::ai_step	home set to the block when unleashed and unridden and stale or the radius changed
-HappyGhast.continuousHeal	inline	crates/horizon-client/src/mobs/happy_ghast.rs::ai_step	gap: minor: one point every 600 ticks, every 20 in precipitation; the in-clouds fast heal is missing
+HappyGhast.continuousHeal	inline	crates/horizon-client/src/mobs/happy_ghast.rs::ai_step	one point every 600 ticks, every 20 in rain or snow or inside a cloud band (`in_clouds`); `a_happy_ghast_in_the_clouds_heals_every_second` covers both
 HappyGhast.defineSynchedData	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	gap: minor: STAYS_STILL is synced; IS_LEASH_HOLDER is not tracked (no leashHolderTime), so the harness rope layer is never drawn
 HappyGhast.syncStayStillFlag	port	crates/horizon-client/src/game/network/lan/mod.rs::mob_meta	STAYS_STILL shown while the timeout is above zero (on_still_timeout)
 HappyGhast.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	Vec3.ZERO, the rope at the ghast's feet rather than an eye height up

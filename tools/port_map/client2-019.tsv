@@ -116,12 +116,12 @@ WorldCreationGameRulesScreen.initContent	port	crates/horizon-client/src/game_rul
 WorldCreationUiState.<init>	port	crates/horizon-client/src/title.rs::Title::new_world	gap: minor: builds the defaults only; Re-Create and preset starts are in click_action and WorldOptions::of_world
 WorldCreationUiState.onChanged	skip:ui		listener refresh; Horizon's buttons read WorldOptions every frame, bonus chest via WorldOptions::bonus_chest
 WorldCreationUiState.setName	port	crates/horizon-client/src/title.rs::Title::edit_field	name text kept in Mode::Create.name; gap: minor: target folder is not recomputed per keystroke (create_tooltip and create_action compute it)
-WorldCreationUiState.findResultFolder	port	crates/horizon-client/src/title.rs::Title::target_folder	gap: minor: a blank name gives folder World, vanilla gives New World
+WorldCreationUiState.findResultFolder	port	crates/horizon-client/src/title.rs::Title::target_folder	a blank name becomes New World (world_folder::result_folder), then FileUtil.getAvailableName
 WorldCreationUiState.isAllowCommands	port	crates/horizon-client/src/title/create_world.rs::WorldOptions::commands	never in Hardcore, else on for Creative until toggled
 WorldCreationUiState.setSeed	port	crates/horizon-client/src/title.rs::parse_seed	gap: minor: seed text is stored in Mode::Create.seed and parsed in create_action
 WorldCreationUiState.isBonusChest	port	crates/horizon-client/src/title/create_world.rs::WorldOptions::bonus_chest	never in Hardcore
 WorldCreationUiState.tryUpdateDataConfiguration	skip:data		datapack and feature-flag config; Horizon has neither at creation
-WorldCreationUiState.setWorldType	port	crates/horizon-client/src/title/create_world.rs::WorldOptions::press	Superflat toggle (id 25); gap: player: only Default and Superflat exist, vanilla's other presets such as Amplified are missing
+WorldCreationUiState.setWorldType	port	crates/horizon-client/src/title/create_world.rs::WorldOptions::press	the world type button (id 25) steps Normal, Flat, Large Biomes, Amplified and Single Biome, with Debug Mode on Alt
 WorldCreationUiState.getPresetEditor	port	crates/horizon-client/src/title/create_world.rs::buttons	customize button enabled for the flat and single-biome presets, the two PresetEditor.EDITORS has; the editor opens in title.rs click_action arm 26
 WorldCreationUiState.updatePresetLists	skip:data		preset lists from the registry; Horizon has two built-in types
 WorldCreationUiState.findPreset	skip:data		registry lookup
@@ -129,7 +129,7 @@ WorldCreationUiState.getNonEmptyList	skip:data		registry tag lookup
 WorldCreationUiState.WorldTypeEntry.describePreset	port	crates/horizon-client/src/title/create_world.rs::buttons	world type label: Default or Superflat
 WorldCreationUiState.WorldTypeEntry.isAmplified	inline	crates/horizon-client/src/title/create_world.rs::buttons	the amplified preset's help tooltip on the world type cycle button
 WorldOpenFlows.createFreshLevel	port	crates/horizon-client/src/game/world/world_loading.rs::WorldRequest::prepare	writes a fresh level.dat; gap: minor: vanilla uses it for the debug recreate and the demo world; no datapack dimensions
-WorldOpenFlows.createWorldAccess	port	crates/horizon-client/src/save.rs::SessionLock::acquire	takes the world's session lock as the access; gap: minor: no symlink warning
+WorldOpenFlows.createWorldAccess	port	crates/horizon-client/src/save.rs::SessionLock::acquire	takes the world's session lock as the access; a folder holding links is refused in Title::play with Alert::Symlink first
 WorldOpenFlows.createLevelFromExistingSettings	port	crates/horizon-client/src/game/world/world_session.rs::Game::open_world	starts the world with the given settings; the packs come from datapack::for_recreate and are installed before the world opens
 WorldOpenFlows.loadWorldStem	port	crates/horizon-client/src/game/world/world_loading.rs::WorldRequest::prepare	reads level data and generator settings and discovers the world's packs (datapack::discover_with_features); gap: minor: no safe-mode retry when a pack fails to load
 WorldOpenFlows.recreateWorldData	port	crates/horizon-client/src/title/create_world.rs::WorldOptions::of_world	reads the old world's settings for Re-Create; title.rs click_action arm 15 fills name, seed and mode
@@ -141,7 +141,7 @@ WorldOpenFlows.openWorldLoadLevelData	port	crates/horizon-client/src/game/world/
 WorldOpenFlows.openWorldCheckVersionCompatibility	port	crates/horizon-client/src/title.rs::Title::play	a world from another series opens the incompatible AlertScreen instead
 WorldOpenFlows.createBackupAndOpenWorld	port	crates/horizon-client/src/title.rs::Title::start_backup	the backup runs on its own thread; the world opens once it finishes (backup_then_open)
 WorldOpenFlows.upgradeAndOpenWorld	port	crates/horizon-client/src/save.rs::upgrade_older_world	runs the file fixes and upgrades on open under FileFixerProgressScreen (level_loading::draw_file_fixer, Cancel wired in game.rs); gap: player: no upgrade-done join-now confirm
-WorldOpenFlows.tryFileFixAndReportErrors	port	crates/horizon-world/src/datafix/files.rs::fix_world_files	runs the file fixer; gap: player: cancel, symlink and failed-cleanup alerts are not shown
+WorldOpenFlows.tryFileFixAndReportErrors	port	crates/horizon-world/src/datafix/files.rs::fix_world_files	runs the file fixer; a cancelled upgrade stops the open and goes back to the title (game/integrated.rs::Game::poll_integrated_start) and a world folder holding links is refused in title.rs::Title::play with Alert::Symlink; gap: player: the failed-cleanup alert is not shown
 WorldOpenFlows.openWorldLoadLevelStem	port	crates/horizon-client/src/game/world/world_loading.rs::WorldRequest::prepare	loads the level stem and generator; gap: minor: no safe-mode retry
 WorldOpenFlows.openWorldCheckWorldStemCompatibility	port	crates/horizon-client/src/title.rs::Title::after_prompt	an old customized or experimental world asks its own question before the load, the stem issue of Mode::BackupBeforeUpgrade
 WorldOpenFlows.openWorldLoadBundledResourcePack	inline	crates/horizon-client/src/game/world/server_packs.rs::Game::server_packs_world_pack	the world's pack goes in as a local pack and the world connects (game/world/integrated.rs); a pack that fails to load has no prompt

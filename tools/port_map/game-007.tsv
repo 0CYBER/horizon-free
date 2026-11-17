@@ -19,9 +19,9 @@ SteppedInterpolationHandler.InterpolationData.addStep	port	crates/horizon-world/
 SteppedInterpolationHandler.InterpolationData.addSteps	port	crates/horizon-world/src/stepped_interpolation.rs::add_steps
 SteppedInterpolationHandler.InterpolationData.getInterpolationTicks	inline	crates/horizon-world/src/stepped_interpolation.rs::add_steps	the sum of the steps' ticks
 SteppedInterpolationHandler.InterpolationData.getNewPositionAndRotation	port	crates/horizon-world/src/stepped_interpolation.rs::new_position
-SteppedInterpolationTracker.addStep	missing		minor: a LAN host never builds stepped paths; lan/entity.rs always sends a linear position, so guests interpolate each move over the update interval instead of replaying the host's step timing
-SteppedInterpolationTracker.updateTracking	missing		minor: same, the host keeps no tracked steps
-SteppedInterpolationTracker.getPositionPath	missing		minor: same, only PositionPath::Linear is sent
+SteppedInterpolationTracker.addStep	inline	crates/horizon-client/src/lan/entity.rs::ServerEntity::add_step	a bounced position (`sync_position`) becomes a step with the ticks since the last one, when any passed
+SteppedInterpolationTracker.updateTracking	inline	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	sendChanges counts the ticks since the last step and marks a bounce (`sync_position`) at once
+SteppedInterpolationTracker.getPositionPath	inline	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	a stepped path when any step was tracked, else a linear one; the tracked steps are cleared after the path is sent
 SulfurCubeArchetype.AttributeEntry.add	skip:data		archetype attribute modifiers are constants in mobs/sulfur_cube.rs ARCHETYPES
 SulfurCubeArchetype.AttributeEntry.multiply	skip:data		same table
 SulfurCubeArchetypes.bootstrap	skip:data		the 12 archetypes are the ARCHETYPES table in mobs/sulfur_cube.rs
@@ -94,7 +94,7 @@ AnimalMakeLove.stop	port	crates/horizon-client/src/mobs/animal_brain.rs::do_stop
 AnimalMakeLove.hasBreedTargetOfRightType	inline	crates/horizon-client/src/mobs/animal_brain.rs::can_mate_with	same-species test on the remembered partner
 AnimalPanic.checkExtraStartConditions	inline	crates/horizon-client/src/mobs/animal_brain.rs::try_start	hurt by a panic cause, or already panicking
 AnimalPanic.start	port	crates/horizon-client/src/mobs/animal_brain.rs::try_start	panic memory set, walk target cleared, navigation stopped
-AnimalPanic.lookForWater	missing		minor: a burning brain animal (sniffer, ghastling) does not run for nearby water; goal-driven animals do (goals.rs Panic)
+AnimalPanic.lookForWater	port	crates/horizon-client/src/mobs/animal_panic.rs::panic_pos	a burning animal looks 5 blocks out for the nearest water (`animal_water_pos`, the 2x2 check shared with `PanicGoal`), else a land spot 5 out and 4 up or down
 BabyFollowAdult.create	port	crates/horizon-client/src/mobs/animal_brain.rs::trigger	B::FollowAdult for the ghastling; goat, camel, armadillo, axolotl and hoglin babies use the FollowParent goal
 BackUpIfTooClose.create	inline	crates/horizon-client/src/mobs/piglin.rs::too_close	goal stand-in for the piglin brain (no tick parity: the probe has no piglin brain); only a crossbow piglin, and the backward strafe is BackUpIfTooClose's Goal::tick
 BecomePassiveIfMemoryPresent.create	port	crates/horizon-client/src/mobs/piglin.rs::hoglin_repellent	a hoglin near a repellent is pacified for 200 ticks and drops its target

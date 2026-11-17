@@ -86,8 +86,8 @@ MenuScreens.create	port	crates/horizon-client/src/game/network/remote/mod.rs::Ga
 MenuScreens.register	skip:data		registry of menu types; Horizon reads them from tables
 MenuScreens.selfTest	skip:debug		startup check that every menu has a screen
 MenuScreens.ScreenConstructor.fromPacket	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_open_screen	builds the screen from the open-screen packet and sets the container menu
-NoticeWithLinkScreen.init	missing		minor: no symlink warning when a world or pack folder is a symlink
-NoticeWithLinkScreen.getNarrationMessage	missing		the symlink warning screen does not exist (see init), so nothing narrates it
+NoticeWithLinkScreen.init	port	crates/horizon-client/src/title.rs::Title::play	opening a world whose folder holds links sets Mode::Error with Alert::Symlink (symlink_warning.title.world)
+NoticeWithLinkScreen.getNarrationMessage	inline	crates/horizon-client/src/title.rs::Title::narration	the world_error screen narrates the symlink title and message
 OutOfMemoryScreen.init	missing		minor: unsure: no out-of-memory screen; Horizon does not handle allocation failures this way
 PauseScreen.added	skip:service		friend list listener on the pause screen (social)
 PauseScreen.init	port	crates/horizon-client/src/game/interface/screens.rs::pause_buttons	button layout; the title is drawn in draw_pause_menu

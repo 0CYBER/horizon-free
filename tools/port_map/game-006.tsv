@@ -10,7 +10,7 @@ Leashable.isLeashed	inline	crates/horizon-client/src/mobs/leash.rs::tick	the mob
 Leashable.setDelayedLeashHolderId	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	SetEntityLink arm: a holder id not known yet waits as Holder::Mob until the knot arrives (remote_objects.rs)
 Leashable.readLeashData	port	crates/horizon-client/src/mobs/leash.rs::pending_from_nbt	holder UUID or fence knot block; kept pending until the holder exists
 Leashable.restoreLeashFromSave	port	crates/horizon-client/src/game/entities/leads.rs::Game::tick_leads	holder found by UUID or knot block; a lead whose holder never shows up drops as an item after 100 ticks
-Leashable.angularFriction	inline	crates/horizon-client/src/mobs/leash.rs::tick	gap: minor: ground friction is a fixed 0.6 times 0.91, not the friction of the block under the mob (ice, slime)
+Leashable.angularFriction	inline	crates/horizon-client/src/mobs/leash.rs::tick	ground friction is the friction of the block under the mob (0.989 on blue ice, 0.6 default) times 0.91; 0.8 in a liquid, 0.91 in the air
 Leashable.checkElasticInteractions	port	crates/horizon-client/src/mobs/leash.rs::tick	live mob dispatch selects shared quad physics only when both holder and leashee support it; llama remains single
 Leashable.getHolderMovement	port	crates/horizon-client/src/mobs/leash.rs::holder_state	gap: minor: the holder's velocity is always used; a NoAI mob holder should count as standing still
 Leashable.computeElasticInteraction	port	crates/horizon-client/src/mobs/leash.rs::spring	gap: minor: single attachment pair (0, 0.5, 0.5 of the mob and 0, 0.5, 0 of the holder); the four-point version is missing
@@ -64,7 +64,7 @@ LivingEntity.dropFromLootTable	port	crates/horizon-client/src/mobs/drops.rs::rol
 LivingEntity.dropFromEntityInteractLootTable	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_armadillo	brush/armadillo is the only table that uses it
 LivingEntity.dropFromShearingLootTable	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_mob	sheep by colour; snow golem and bogged in interact_shear_mob; gap: minor: a mooshroom's five mushrooms are hardcoded, not read from the table
 LivingEntity.getFallDamageSound	inline	crates/horizon-client/src/mobs/landing.rs::MobLanding::living_fall_sound	a monster gets entity.hostile.big_fall and entity.hostile.small_fall, anything else the generic pair; a player's comes from landing.rs
-LivingEntity.getHitbox	missing		minor: a rider's hitbox is not cut at its seat height; spear and melee tests use the full box
+LivingEntity.getHitbox	port	crates/horizon-client/src/mobs.rs::Mob::hitbox	a rider box starts no lower than its seat (getPassengerRidingPosition), and the box is what entity tracking and targeting read (mobs/seen.rs)
 LivingEntity.postPiercingAttack	port	crates/horizon-client/src/game/items/enchant_effects.rs::Game::post_piercing_attack	Lunge's dash after a jab
 LivingEntity.trapdoorUsableAsLadder	port	crates/horizon-world/src/climbing.rs::on_climbable	gap: minor: the player only; a mob's ai.rs::on_climbable checks the climbable tag at its feet, no open trapdoor over a ladder
 LivingEntity.isAlive	port	crates/horizon-client/src/mobs.rs::Mob::alive	not removed and health above zero
@@ -119,8 +119,8 @@ Mob.getNavigation	inline	crates/horizon-client/src/mobs/riders.rs::tick	controll
 Mob.getControllingPassenger	inline	crates/horizon-client/src/mobs/riders.rs::controller	NoAI vehicle has no controller; a mob passenger may have NoAI but must not be in non_controlling_rider
 Mob.asValidTarget	port	crates/horizon-client/src/mobs/monster_brain.rs::can_attack	creative and spectator players are never valid; goal mobs use goals.rs Mob::can_target_player
 Mob.spawnAnim	port	crates/horizon-client/src/game/mobs/spawner.rs::Game::poof_particles	the poof of a mob a spawner made (event 20 on a server's client)
-Mob.updateControlFlags	inline	crates/horizon-client/src/mobs/riders.rs::drive	gap: minor: a mob in a boat keeps its JUMP goals
-Mob.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	gap: minor: drop_chances and DeathLootTable survive only from the loaded raw tag
+Mob.updateControlFlags	inline	crates/horizon-client/src/mobs/riders.rs::drive	a controlled rider disables MOVE, JUMP and LOOK (and TARGET for a ravager) through the goal flags `drive` sets
+Mob.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	drop_chances writes only the non-default chances; DeathLootTable and DeathLootTableSeed are written from the mob's fields
 Mob.burnUndead	inline	crates/horizon-client/src/mobs/ai.rs::ai_step	burn_undead sends SunProtectionWear for an undead with its sun-protection item, and Game::wear_sun_protection does hurtAndBreak(nextInt(2)) on a damageable one, emptying the slot with the break event when it breaks; an unprotected undead is ignited for 160 ticks
 Mob.pickUpItem	port	crates/horizon-client/src/mobs/equip.rs::Slot::wants_to_pick_up	ticked in #3514; `Mob.pickUpItem` is cited at crates/horizon-client/src/mobs/equip.rs:211
 Mob.attemptToShearEquipment	inline	crates/horizon-client/src/game/mobs/mounts.rs::Game::shear_pig_saddle	pig saddle before mounting; happy ghast harness and llama carpet remain in their adapters; gap: minor: other equipment slots and component overrides are not generalized
@@ -146,8 +146,8 @@ Mob.removeAfterChangingDimensions	inline	crates/horizon-client/src/game/blocks/n
 Mob.onAttributeUpdated	missing		minor: follow_range set at runtime does not resize the pathfinder's visited-node cap (set once in Mob::new)
 Mob.registerDebugValues	skip:debug		debug overlay values
 Mob.swingForAttack	port	crates/horizon-client/src/mobs/ai.rs::Mob::swing_hand_modified	swing duration with haste, conduit power and mining fatigue
-NeutralMob.addPersistentAngerSaveData	port	crates/horizon-client/src/mobs/bee.rs::to_nbt	gap: minor: anger_end_time only; angry_at (the target's UUID) is not saved, and wolves and polar bears keep a tick counter instead
-NeutralMob.readPersistentAngerSaveData	port	crates/horizon-client/src/mobs/bee.rs::from_nbt	gap: minor: anger_end_time only; angry_at is not read, so a reloaded angry bee picks its target again
+NeutralMob.addPersistentAngerSaveData	port	crates/horizon-client/src/mobs/bee.rs::to_nbt	anger_end_time and angry_at (the target's UUID) are written; a mob target the level has not loaded keeps its loaded UUID
+NeutralMob.readPersistentAngerSaveData	port	crates/horizon-client/src/mobs/bee.rs::from_nbt	anger_end_time and angry_at are read back; a non-player UUID becomes Who::Mob(0) until the level resolves it
 NeutralMob.isAngryAtAllPlayers	inline	crates/horizon-client/src/mobs/tame.rs::angry_at_player	the universal_anger rule on, anger left and no persistent target angers the mob at any player
 NeutralMob.playerDied	port	crates/horizon-client/src/mobs/ai.rs::forgive_dead_player	ticked in #3514; `NeutralMob.playerDied` is cited at crates/horizon-client/src/mobs/ai.rs:2334
 OminousItemSpawner.tick	port	crates/horizon-client/src/game/mobs/ominous_item_spawner/mod.rs::Game::tick_ominous_item_spawners	count, then server and client parts

@@ -136,8 +136,8 @@ OptionInstance.IntRange.validateValue	port	crates/horizon-client-render/src/opti
 OptionInstance.IntRangeBase.toSliderValue	port	crates/horizon-client-render/src/options_ui.rs::Opt::slider_position	the step over min..max; Options.chatDelay's tenths in options_ui_values.rs::kind
 OptionInstance.IntRangeBase.fromSliderValue	port	crates/horizon-client-render/src/options_ui.rs::Opt::set_slider
 OptionInstance.OptionInstanceSliderButton.updateMessage	skip:ui		label and tooltip text
-OptionInstance.OptionInstanceSliderButton.applyValue	port	crates/horizon-client-render/src/options_ui.rs::delays_apply	gap: minor: values apply at once; the 600 ms delay only holds the handle
+OptionInstance.OptionInstanceSliderButton.applyValue	port	crates/horizon-client-render/src/options_ui_wheel.rs::delays_apply	gap: minor: values apply at once; the 600 ms delay only holds the handle
 OptionInstance.OptionInstanceSliderButton.applyUnsavedValue	port	crates/horizon-client-render/src/options_ui.rs::set_slider
 OptionInstance.OptionInstanceSliderButton.resetValue	port	crates/horizon-client-render/src/options_ui.rs::OptionsUi::slider_shown
-OptionInstance.OptionInstanceSliderButton.extractWidgetRenderState	port	crates/horizon-client-render/src/options_ui.rs::slider_unsnapped	gap: minor: no deferred apply after 600 ms; only the handle display
+OptionInstance.OptionInstanceSliderButton.extractWidgetRenderState	port	crates/horizon-client-render/src/options_ui_wheel.rs::slider_unsnapped	gap: minor: no deferred apply after 600 ms; only the handle display
 OptionInstance.OptionInstanceSliderButton.keyPressed	port	crates/horizon-client/src/game/interface/key_focus.rs::slider_edit_on_focus	Tab focus on a slider starts its arrow-key editing

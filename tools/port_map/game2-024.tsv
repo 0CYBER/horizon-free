@@ -119,10 +119,10 @@ ScheduledTick.toSavedTick	port	crates/horizon-core/src/ticks/mod.rs::ScheduledTi
 Timeline.filterSyncableTracks	skip:other		network filter for environment attribute tracks; Horizon has no attribute tracks to sync
 Timeline.validateRegistry	skip:data		registry validation
 Timeline.validateInternal	skip:data		data validation of timeline files
-Timeline.getPeriodCount	missing		minor: no day count from a clock period; the day number of /time query and the F3 Day line is not computed
+Timeline.getPeriodCount	port	crates/horizon-world/src/environment_timeline.rs::Timeline::period_count	whole periods the clock has run: `total / period` (0 without a period), the day count from a clock period
 Timeline.getCurrentTicks	port	crates/horizon-world/src/level/timeline.rs::Sim::day_ticks	gap: minor: the overworld day clock only, 24000 ticks
 Timeline.registerTimeMarkers	skip:data		clock time markers are read from the registry data (registries.rs clock_time_markers)
-Timeline.createTrackSampler	missing		unsure: no environment attribute track sampler; the day-time curves are coded per feature (game.rs sky_darken, fog.rs)
+Timeline.createTrackSampler	port	crates/horizon-world/src/environment_system.rs::timeline_layer	one TrackSampler per track over the timeline period, pushed as the timeline layer and reading the timeline clock
 Timeline.Builder.addModifierTrack	skip:data		timeline builder used by data bootstrap
 Timeline.Builder.addTimeMarker	skip:data		timeline builder used by data bootstrap
 Timeline.Builder.build	skip:data		timeline builder used by data bootstrap

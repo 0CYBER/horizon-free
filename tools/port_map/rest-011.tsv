@@ -38,8 +38,8 @@ ComponentUtils.resolveStyle	missing		minor: a selector inside a show_text hover 
 ComponentUtils.formatAndSortList	port	crates/horizon-client/src/scoreboard_cmd.rs::format_names	gap: minor: the name formatter is fixed (green names); the list is sorted with gray commas
 ComponentUtils.fromMessage	port	crates/horizon-client-core/src/text.rs::Text::from	a plain message becomes a literal
 ComponentUtils.isTranslationResolvable	port	crates/horizon-client-core/src/lang.rs::has	gap: minor: the fallback case is handled in component.rs to_text_with, not here
-FilterMask.apply	missing		minor: the server's text-filter masks are ignored, so filtered words show in full (only a text filter service sends masks)
-FilterMask.applyWithFormatting	missing		minor: masks are ignored, so filtered words are not replaced with # in gray (only a text filter service sends masks)
+FilterMask.apply	inline	crates/horizon-client-render/src/chat.rs::filtered_message	the kind-1 mask answers fully filtered (None); kind 0 passes the signed content through
+FilterMask.applyWithFormatting	port	crates/horizon-client-render/src/chat.rs::filtered_message	kind 2 replaces each masked UTF-16 unit with # in dark gray, keeping the rest; used by shown_player_chat for a partial mask
 FilterMask.equals	skip:java		value equality
 FilterMask.hashCode	skip:java		hashing
 FormattedText.of	skip:java		adapter from a String to FormattedText
@@ -55,7 +55,7 @@ LastSeenMessagesTracker.addPending	port	crates/horizon-protocol/src/secure_chat.
 LastSeenMessagesTracker.addEntry	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::add_pending	inlined
 LastSeenMessagesTracker.ignorePending	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::ignore_pending	handle_delete_chat calls it
 LastSeenMessagesTracker.generateAndApplyUpdate	port	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::update
-LastSeenTrackedEntry.acknowledge	missing		minor: part of the client-side last-seen tracker, which is absent
+LastSeenTrackedEntry.acknowledge	inline	crates/horizon-protocol/src/secure_chat.rs::LastSeenTracker::update	every pending entry is acknowledged in the update window and its pending flag cleared
 LocalChatSession.createMessageEncoder	port	crates/horizon-protocol/src/secure_chat.rs::Encoder::new
 MessageSignature.equals	skip:java		value equality
 MessageSignature.Packed.unpack	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::unpack
@@ -67,8 +67,8 @@ MutableComponent.hashCode	skip:java		hashing
 MutableComponent.toString	skip:debug		debug text
 OutgoingChatMessage.create	port	crates/horizon-client/src/lan/hub/chat.rs::Hub::broadcast_command_chat	a message without signing context goes out as a disguised chat; a signed one as player chat
 OutgoingChatMessage.Player.sendToPlayer	port	crates/horizon-client/src/lan/hub/chat.rs::Hub::send_chat	gap: minor: the filter is always pass-through; the message goes to players who show chat
-PlayerChatMessage.withUnsignedContent	missing		minor: the hub never sets unsigned content (there is no chat decorator), so decorated text is not sent
-PlayerChatMessage.removeUnsignedContent	missing		minor: unsigned content is never set, so there is nothing to remove
+PlayerChatMessage.withUnsignedContent	inline	crates/horizon-client/src/lan/hub/chat.rs::ChatMessage::decorate	the decorated text becomes the unsigned content beside the signed body
+PlayerChatMessage.removeUnsignedContent	inline	crates/horizon-client/src/lan/hub/chat.rs::ChatMessage::decorate	decorate(None) clears the unsigned content again
 PlayerChatMessage.filter	missing		minor: the hub sends pass-through filter masks; there is no text filter
 PlayerChatMessage.removeSignature	port	crates/horizon-client/src/lan/hub/chat.rs::ChatMessage::new	the unsigned branch keeps the content and drops the signature and the last seen
 PlayerChatMessage.verify	port	crates/horizon-protocol/src/secure_chat.rs::MessageValidator::update_and_validate	the signature over the link and body; also the chain check of Chain::unpack on the server

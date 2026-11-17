@@ -133,7 +133,7 @@ LocalPlayer.openTextEdit	port	crates/horizon-client/src/game/interface/sign_edit
 LocalPlayer.modifyInputSpeedForSquareMovement	port	crates/horizon-client-input/src/input.rs::square_movement
 LocalPlayer.distanceToUnitSquare	inline	crates/horizon-client-input/src/input.rs::square_movement
 LocalPlayer.resetPos	inline	crates/horizon-client/src/game/interface/screens.rs::Game::respawn_player	gap: minor: no free-height search, pose, rotation or velocity reset
-LocalPlayer.shouldStopRunSprinting	port	crates/horizon-client/src/sprint.rs::Conditions::should_stop	gap: player: minor_horizontal_collision is always false, so wall slides stop the sprint
+LocalPlayer.shouldStopRunSprinting	port	crates/horizon-client/src/sprint.rs::Conditions::should_stop	minor_horizontal_collision comes from the move's minor collision (Entity.minorHorizontalCollision), so a wall slide keeps the sprint
 LocalPlayer.shouldStopSwimSprinting	port	crates/horizon-client/src/sprint.rs::Conditions::should_stop
 LocalPlayer.tickDeath	missing		minor: unsure: the dead local player is not removed after 20 ticks; the death screen flow covers it
 LocalPlayer.rideTick	port	crates/horizon-client/src/game/network/remote_vehicles.rs::Game::remote_ride	the keys are latched into the boat's input and the seat follows its turn
@@ -145,6 +145,6 @@ LocalPlayer.onGameModeChanged	missing		minor: switching to spectator keeps verti
 LocalPlayer.getRopeHoldPosition	port	crates/horizon-client/src/game/entities/leads.rs::Game::player_rope_hold	the first-person rope point from the look angles and the main arm
 LocalPlayer.raycastHitResult	port	crates/horizon-client/src/game/items/hand.rs::GameHands::hit	gap: minor: block fallback is Game::pick; no separate item attack-range pass
 LocalPlayer.filterHitResult	inline	crates/horizon-client/src/game.rs::Game::pick	gap: minor: reach is applied inside the clip; no miss direction is returned
-LocalPlayerResolver.fetchByName	missing		minor: unsure: no player-list lookup by name on the client
+LocalPlayerResolver.fetchByName	inline	crates/horizon-client-render/src/skins.rs::Resolver::state	a name is fetched by getByName (resolve_profile) after StringUtil.isValidPlayerName; an invalid name caches as no profile
 LocalPlayerResolver.fetchById	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_pushes	the uuid -> tab entry lookup is inline wherever a player's name, team or skin is needed
 Options.mouseWheelSensitivity	port	crates/horizon-client-render/src/options_ui_wheel.rs::kind	IntRange(-200, 100) through logMouse/unlogMouse: the slider runs over 10^(i/100), 0.01 to 10.0

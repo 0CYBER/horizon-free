@@ -116,7 +116,7 @@ ShelfBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::updat
 ShulkerBoxBlock.useWithoutItem	port	crates/horizon-client/src/game.rs::Game::open_menu	opens the box and awards the open stat; canOpen via shulker_can_open
 ShulkerBoxBlock.playerWillDestroy	port	crates/horizon-client/src/game/blocks/block_items.rs::Game::drop_creative_shulker	creative filled box spawns directly with collected components; ordinary removal keeps contents for survival drops
 ShulkerBoxBlock.getDrops	port	crates/horizon-world/src/level/removal.rs::pre_remove	gap: minor: the contents kept on the dropped box come from the same kind; the loot drop is not traced here
-ShulkerBoxBlock.getBlockSupportShape	missing		unsure: shulker_is_closed returns None in the level and the client, so an open box keeps the full cube as its support shape
+ShulkerBoxBlock.getBlockSupportShape	port	crates/horizon-world/src/dynamic_support.rs::DynamicSupport::shape	a closed box is the full cube; an open one (shulker_is_closed false) is the plate on the face opposite its facing, LevelBlockEntities reading the lid state from the level
 ShulkerBoxBlock.rotate	port	crates/horizon-world/src/worldgen/structure.rs::StateTransforms::rotate	facing rotation from the generated state table
 SideChainPartBlock.addBlocksConnectingTowards	inline	crates/horizon-world/src/level/shelf.rs::Sim::shelf_chain_size	the walk that counts connected shelves
 SideChainPartBlock.canConnect	inline	crates/horizon-world/src/level/shelf.rs::Sim::shelf_on_powering_up	chain length test before connecting

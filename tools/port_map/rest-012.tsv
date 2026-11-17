@@ -36,14 +36,14 @@ ClientboundBossEventPacket.AddOperation.dispatch	port	crates/horizon-client/src/
 ClientboundChunksBiomesPacket.ChunkBiomeData.calculateChunkSize	inline	crates/horizon-protocol/src/packets/play.rs::ChunkBiomeData::from_biomes	the buffer grows as each section's container is written, so no size is computed or prefixed on the wire
 ClientboundChunksBiomesPacket.ChunkBiomeData.extractChunkData	port	crates/horizon-protocol/src/packets/play.rs::ChunkBiomeData::from_biomes	the column's sections' biome containers written one after another into the buffer
 ClientboundCommandSuggestionsPacket.toSuggestions	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_command_suggestions	start, length and tooltip become the suggestion range
-ClientboundCommandsPacket.validateEntries	missing		minor: an impossible command tree is not rejected; from_packet skips bad child indexes
+ClientboundCommandsPacket.validateEntries	port	crates/horizon-protocol/src/packets/play/commands.rs::Commands::read	a node whose redirect or children never build (a cycle) is refused; the root index is read last
 ClientboundCommandsPacket.enumerateNodes	port	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	breadth-first node ids on the LAN host
 ClientboundCommandsPacket.createEntries	port	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	builds the node list for the LAN host's Commands packet
 ClientboundCommandsPacket.createEntry	inline	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	flags, redirect and children are set in the final node map
 ClientboundCommandsPacket.getRoot	port	crates/horizon-command/src/network.rs::from_packet	the packet's root becomes the client's dispatcher root
 ClientboundCommandsPacket.ArgumentNodeStub.serializeCap	port	crates/horizon-client/src/lan/commands.rs::properties	argument parser property bytes
-ClientboundCommandsPacket.Entry.canBuild	inline	crates/horizon-command/src/network.rs::from_packet	gap: minor: no build-order check; children and redirects resolve recursively
-ClientboundCommandsPacket.Entry.canResolve	inline	crates/horizon-command/src/network.rs::from_packet	gap: minor: no build-order check; children and redirects resolve recursively
+ClientboundCommandsPacket.Entry.canBuild	inline	crates/horizon-command/src/network.rs::from_packet	from_packet resolves the tree it was given; the build order (redirects before children, no cycles) is checked by Commands::read
+ClientboundCommandsPacket.Entry.canResolve	inline	crates/horizon-command/src/network.rs::from_packet	from_packet resolves the tree it was given; the build order (redirects before children, no cycles) is checked by Commands::read
 ClientboundCommandsPacket.NodeResolver.resolve	port	crates/horizon-command/src/network.rs::from_packet	builds the client's tree from the packet nodes
 ClientboundCommandsPacket.Entry.write	inline	crates/horizon-protocol/src/packets/play/commands.rs::Commands::write	each node's flags, children and redirect, then its stub
 ClientboundCommandsPacket.ArgumentNodeStub.write	inline	crates/horizon-protocol/src/packets/play/commands.rs::Commands::write	an argument node's parser id, properties and suggestions after its name
@@ -108,11 +108,11 @@ ServerboundSetStructureBlockPacket.<init>	port	crates/horizon-client/src/game/ad
 ServerboundSetStructureBlockPacket.write	port	crates/horizon-protocol/src/packets/play.rs::SetStructureBlock::write	pos, update type and mode, the name, each offset and size as a byte, mirror and rotation, data, integrity, seed, then the four flags in one byte
 VecDelta.Stepped.hasDeltaX	skip:other		no callers in vanilla
 VecDelta.Stepped.hasDeltaZ	skip:other		no callers in vanilla
-VecDelta.Stepped.tryEncode	missing		minor: the LAN host sends only linear deltas (send_changes); no stepped path is encoded
+VecDelta.Stepped.tryEncode	inline	crates/horizon-client/src/lan/entity.rs::try_encode	the Stepped arm walks the steps and encodes each from the step before, each a short delta
 VecDelta.Linear.decode	inline	crates/horizon-client/src/game/remote.rs::Game::handle_packet	MoveEntity arms: the delta applied to the tracked position (VecDelta::end)
 VecDelta.Stepped.decode	inline	crates/horizon-client/src/game/remote.rs::Game::handle_packet	MoveEntity arms: each step applied to the previous step's position, with its ticks
 VecDeltaCodec.isDeltaTooBig	inline	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	the i16 range check on each delta
-VecDeltaCodec.tryEncode	inline	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	gap: minor: linear positions only; stepped paths are not encoded
+VecDeltaCodec.tryEncode	port	crates/horizon-client/src/lan/entity.rs::try_encode	send_changes encodes the position path: a linear target or the tracked steps, each a short delta from the base
 ClientIntent.byId	missing		minor: an unknown handshake intent is not rejected; the intent stays a raw number in handshake.rs
 ClientIntent.id	skip:other		constants STATUS, LOGIN and TRANSFER in handshake.rs
 ClientIntentionPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! Intention {protocol, host, port, intent}

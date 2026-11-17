@@ -55,7 +55,7 @@ QueryThreadGs4.recoverSocketError	inline	crates/horizon-server/src/query.rs::ser
 QueryThreadGs4.initSocket	port	crates/horizon-server/src/query.rs::start	the UDP socket on server-ip and query.port, with vanilla's warning when it can't be opened
 RconClient.run	port	crates/horizon-server/src/rcon.rs::client	login, command and unknown request, with vanilla's answers; gap: minor: the packets are read from the stream, not one read each
 RconClient.send	port	crates/horizon-server/src/rcon.rs::send	-
-RconClient.sendCmdResponse	port	crates/horizon-server/src/rcon.rs::send_output	packets of 4096 characters, one even when empty; gap: minor: cut at 4096 characters, vanilla at 4096 UTF-16 units
+RconClient.sendCmdResponse	port	crates/horizon-server/src/rcon.rs::send_output	packets of 4096 UTF-16 units, one even when empty; a surrogate pair cut at the boundary becomes question marks, as Java substring leaves half a pair
 RconClient.closeSocket	inline	crates/horizon-server/src/rcon.rs::client	the stream is dropped when the connection ends
 RconThread.clearClients	inline	crates/horizon-server/src/rcon.rs::serve	the open connections are counted (Place) and capped at 16, where vanilla keeps a list
 RconThread.run	port	crates/horizon-server/src/rcon.rs::serve	accept a connection and start its thread; gap: minor: past 16 connections the new one is closed

@@ -8,7 +8,7 @@ ActiveTextCollector.ClickableStyleFinder.accept	port	crates/horizon-client-rende
 ActiveTextCollector.ClickableStyleFinder.acceptScrolling	missing		minor: scrolling text is not hit-tested for click and hover styles (Chat::style_at searches chat lines only)
 ActiveTextCollector.Parameters.withScale	skip:java		record copy-with helper; Horizon has no pose matrix per text
 ActiveTextCollector.Parameters.withOpacity	skip:java		record copy-with helper; opacity is the colour's alpha byte in Horizon
-ActiveTextCollector.Parameters.withScissor	missing		minor: a nested scissor is not intersected with the enclosing rectangle; Draw::Scissor replaces it
+ActiveTextCollector.Parameters.withScissor	port	crates/horizon-client-render/src/screen_draw.rs::paint	a scissor cuts what is drawn since it opened, intersected with the enclosing one and the screen; closing it restores the enclosing one
 ComponentPath.path	skip:other		focus path builder for nested containers; Horizon focus is a flat per-screen state
 ComponentPath.Path.applyFocus	skip:other		focus path propagation; Horizon focus is a flat per-screen state
 Font.bidirectionalShaping	port	crates/horizon-client-render/src/bidi.rs::visual_str	Arabic shaping and bidi reorder
@@ -23,7 +23,7 @@ Font.PreparedTextBuilder.addEmptyGlyph	skip:other		hit areas for glyphs with no 
 Font.PreparedTextBuilder.accept	port	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	per-character draw with bold, italic, shadow, underline and strikethrough
 Font.PreparedTextBuilder.visit	skip:other		visitor over prepared glyphs for draw order and hit tests; Horizon draws straight into the batch
 Font.PreparedTextBuilder.getTextColor	inline	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	style colour with the base colour's alpha
-Font.PreparedTextBuilder.getShadowColor	inline	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	gap: minor: style shadow colour is ignored; shadow is always 0.25 of the text colour
+Font.PreparedTextBuilder.getShadowColor	inline	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	a styled glyph's shadow_color is used, its alpha scaled by the text's; otherwise the shadow is 0.25 of the text colour
 Font.PreparedTextBuilder.bounds	skip:other		bounds of prepared text for vanilla hit tests; Horizon hit-tests by advance
 Gui.update	inline	crates/horizon-client/src/game/interface/narrator.rs::Game::narrate_screen	once a turn after the frame's widgets were read: ScreenNarrator::frame runs the narration handleDelayedNarration makes due and a new screen's
 Gui.isPausing	port	crates/horizon-client/src/game/interface/pointer_capture.rs::Game::pauses_game	gap: minor: checks the open screen only, not the overlay part
@@ -35,9 +35,9 @@ Gui.buildInitialScreens	port	crates/horizon-client/src/title.rs::Title::next_ban
 Gui.addInitialScreens	port	crates/horizon-client-render/src/ban_notice.rs::initial_notices	the ban notices in vanilla's order; the accessibility onboarding is queued by Title::start_onboarding
 Gui.canInterruptScreen	missing		minor: unsure: no check that stops a server-opened screen from replacing an open one was found
 Gui.renderActiveTextDebug	skip:debug		debug overlay of text bounds
-GuiGraphicsExtractor.enableScissor	port	crates/horizon-client-render/src/screen_draw.rs::paint	gap: minor: callers push a rectangle; there is no stack, so enclosing rectangles are not intersected
+GuiGraphicsExtractor.enableScissor	port	crates/horizon-client-render/src/screen_draw.rs::paint	a pushed rectangle is cut to the screen and to the one around it
 GuiGraphicsExtractor.outline	port	crates/horizon-client/src/game/interface/key_focus.rs::draw_outline	gap: minor: the one-pixel outline is drawn only as the keyboard focus ring, in white; no other screen outlines a rectangle
-GuiGraphicsExtractor.innerFill	port	crates/horizon-client-render/src/hud.rs::HudBatch::fill	gap: minor: one colour only; a second gradient colour (color2) is not drawn
+GuiGraphicsExtractor.innerFill	port	crates/horizon-client-render/src/hud.rs::HudBatch::fill_gradient	two colours, top to bottom down the rectangle
 GuiGraphicsExtractor.textWithWordWrap	port	crates/horizon-client-render/src/screen_draw.rs::Measure::split	gap: minor: only the wrap; the caller draws each line at y+9
 GuiGraphicsExtractor.blitSprite	port	crates/horizon-client-render/src/hud.rs::HudBatch::sprite_scaled	gap: minor: tile and nine-slice scaling is in ui.rs (tiled, draw_nine_slice)
 GuiGraphicsExtractor.blitNineSliceInnerSegment	port	crates/horizon-client-render/src/ui.rs::draw_nine_slice	inner segments of a nine-slice sprite
@@ -63,8 +63,8 @@ GuiGraphicsExtractor.textRenderer	skip:ui		builds a text collector; Horizon draw
 GuiGraphicsExtractor.createDefaultTextParameters	skip:ui		default pose, opacity and scissor for text; Horizon passes colour and rectangle directly
 GuiGraphicsExtractor.RenderingTextCollector.accept	port	crates/horizon-client-render/src/screen_draw.rs::text	gap: minor: no hover or click registration here (see Chat::style_at)
 GuiGraphicsExtractor.RenderingTextCollector.acceptScrolling	port	crates/horizon-client-render/src/screen_draw.rs::scrolling_text	the font's width and a 9 px line into defaultScrollingHelper, for the screen_draw widgets; ui.rs::scrolling_text_around_at is the same for the HudBatch widgets
-GuiGraphicsExtractor.ScissorStack.push	inline	crates/horizon-client-render/src/screen_draw.rs::paint	gap: minor: the pushed rectangle replaces the current one; it is not intersected
-GuiGraphicsExtractor.ScissorStack.pop	inline	crates/horizon-client-render/src/screen_draw.rs::paint	gap: minor: Draw::NoScissor clears the scissor instead of restoring the enclosing one
+GuiGraphicsExtractor.ScissorStack.push	inline	crates/horizon-client-render/src/screen_draw.rs::paint	the rectangle is intersected with the enclosing one, and with the screen when none is open
+GuiGraphicsExtractor.ScissorStack.pop	inline	crates/horizon-client-render/src/screen_draw.rs::paint	NoScissor pops the stack and puts the enclosing rectangle back
 GuiGraphicsExtractor.ScissorStack.containsPoint	missing		minor: hover ignores the scissor, so a widget clipped out of view can still highlight
 Hud.extractHotbarAndDecorations	port	crates/horizon-client-render/src/hud_layout.rs::hotbar	items and decorations are drawn by Game::draw_item
 Hud.<init>	skip:java		constructor state setup

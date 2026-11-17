@@ -17,7 +17,7 @@ Util.makeExecutor	skip:java		background ForkJoin pool with thread names
 Util.getMaxThreads	skip:java		max.bg.threads pool size; Horizon sizes its own pools
 Util.makeIoExecutor	skip:java		cached IO thread pool
 Util.throwAsRuntime	skip:java		Java checked-exception rethrow
-Util.onThreadException	port	crates/horizon-client-render/src/crash.rs::install	gap: player: vanilla then relays a crash report to the main thread and the game ends; Horizon only logs an error from a worker thread
+Util.onThreadException	port	crates/horizon-client-render/src/crash.rs::install	a panic on a worker thread becomes a crash report titled Exception on worker thread (worker_panic_report), delivered to the main thread as vanilla relays it; the game emergency-saves and ends with exit code 101
 Util.doFetchChoiceType	skip:data		DataFixer choice-type lookup; Horizon migrates saves in horizon-world datafix
 Util.runNamed	skip:debug		renames the thread and opens a Tracy zone
 Util.getRegisteredName	skip:debug		registry key text for logs and debug output (Ticket.toString)

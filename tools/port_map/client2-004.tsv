@@ -44,9 +44,9 @@ AtmosphericFogEnvironment.getBaseColor	port	crates/horizon-client-render/src/fog
 AtmosphericFogEnvironment.applyWeatherDarken	inline	crates/horizon-client-render/src/fog.rs::setup_fog	rain and thunder darkening folded into the atmospheric colour
 BlindnessFogEnvironment.setupFog	port	crates/horizon-client-render/src/fog.rs::setup_fog	blindness distance and sky/cloud ends
 BlindnessFogEnvironment.getModifiedDarkness	inline	crates/horizon-client-render/src/fog.rs::setup_fog	blindness darkness folded into setup_fog
-LavaFogEnvironment.setupFog	port	crates/horizon-client-render/src/fog.rs::setup_fog	gap: player: spectator (-8 start, half render distance) and fire resistance (0 to 5) are not applied in lava
+LavaFogEnvironment.setupFog	port	crates/horizon-client-render/src/fog.rs::setup_fog	the lava fog's own starts: spectator (-8 start, half render distance), fire resistance (0 to 5), else (0.25, 1.0)
 MobEffectFogEnvironment.isApplicable	inline	crates/horizon-client/src/game/interface/render_tick.rs::Game::frame_fog	effect gate is where frame_fog builds the blindness and darkness inputs
-PowderedSnowFogEnvironment.setupFog	port	crates/horizon-client-render/src/fog.rs::setup_fog	gap: player: spectator case (-8 start, half render distance) is not applied
+PowderedSnowFogEnvironment.setupFog	port	crates/horizon-client-render/src/fog.rs::setup_fog	the spectator case (-8 start, half render distance) is the powder snow fog's own start, else (0.0, 2.0)
 WaterFogEnvironment.setupFog	port	crates/horizon-client-render/src/fog.rs::setup_fog	gap: minor: water fog start is fixed at -8; vanilla reads the WATER_FOG_START_DISTANCE attribute
 DrawableGizmoPrimitives.addPoint	missing		minor: debug points are not drawn; Gizmos has no point kind
 DrawableGizmoPrimitives.addLine	port	crates/horizon-client/src/gizmos.rs::Gizmos::line
