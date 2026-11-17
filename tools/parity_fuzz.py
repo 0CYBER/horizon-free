@@ -37,11 +37,20 @@ RELOAD_TICKS = 60  # enough for both engines to save and drop a chunk whose forc
 # saved and loaded to compare. A Horizon result that differs from vanilla's is a divergence.
 GUARDS = {'chunk': [[True, 1]], 'entity': [[False, 0]]}
 
-# Differences that are not parity bugs, by field path (a regular expression on the normalised path).
+
+def set_alike(vanilla, horizon):
+    """Absolute game times differ by the engines' clocks: only whether each is set (not 0 or -1) is compared."""
+    unset = lambda v: v is None or str(v).rstrip('L') in ('0', '-1')  # noqa: E731
+    return vanilla is not None and horizon is not None and unset(vanilla) == unset(horizon)
+
+
+# Differences that are not parity bugs: (regular expression on the normalised path, reason, test on the two values).
+# The two engines' worlds start the script at different game times (they settle in a different number of ticks).
 ALLOWED = [
-    # CopperGolem.nextWeatheringTick is an absolute game time, and the two engines' worlds start the script at
-    # different game times (they settle in a different number of ticks).
-    (r'next_weather_age', 'absolute game time'),
+    (r'next_weather_age', 'absolute game time (CopperGolem.nextWeatheringTick)', set_alike),
+    (r'server_data\.state_updating_resumes_at', 'absolute game time (VaultServerData.pauseStateUpdatingUntil)',
+     set_alike),
+    (r'LastGossipDecay', 'absolute game time (Villager.maybeDecayGossip)', set_alike),
 ]
 
 
@@ -129,8 +138,8 @@ def normalise(path):
     return re.sub(r'\[\d+\]', '[]', path)
 
 
-def allowed(path):
-    return any(re.fullmatch(pattern, normalise(path)) for pattern, _ in ALLOWED)
+def allowed(path, vanilla, horizon):
+    return any(re.fullmatch(pattern, normalise(path)) and test(vanilla, horizon) for pattern, _, test in ALLOWED)
 
 
 def compare(vanilla, rust):
@@ -142,7 +151,7 @@ def compare(vanilla, rust):
                 return [('<result>', harness.render(vanilla)[:300], harness.render(rust)[:300])]
             return []
         found = ([('<name>', left[0], right[0])] if left[0] != right[0] else []) + diff(left[1], right[1])
-        return [d for d in found if not allowed(d[0])]
+        return [d for d in found if not allowed(*d)]
     kind = harness.compare(vanilla, rust)
     return [(f'<{kind}>', harness.render(vanilla)[:300], harness.render(rust)[:300])] if kind else []
 
@@ -446,7 +455,9 @@ def main():
     # One bug, one shrink: each group's smallest scenario stands for it.
     shrunk = shrink(runner, {sig: min(members, key=lambda m: len(json.dumps(m[0]))) for sig, members in groups.items()},
                     args.shrink_rounds)
-    report = {'scenarios': len(scenarios), 'invalid': invalid, 'diverging': len(failing), 'groups': []}
+    report = {'scenarios': len(scenarios), 'invalid': invalid, 'diverging': len(failing), 'groups': [],
+              # Each diverging seed's signatures, to compare runs of the same seeds before and after a change.
+              'by_seed': {s['seed']: signatures(r) for s, r in failing}}
     for sig, members in sorted(groups.items(), key=lambda g: -len(g[1])):
         scenario, result = shrunk[sig]
         report['groups'].append({

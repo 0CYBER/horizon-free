@@ -51,6 +51,14 @@ class SnbtDiffTests(unittest.TestCase):
         self.assertEqual(fuzz.compare(renamed, missing)[0][0], '<result>')
         self.assertEqual(fuzz.normalise('Items[3].components[0].id'), 'Items[].components[].id')
 
+    def test_absolute_game_times_compare_only_whether_they_are_set(self):
+        vanilla = record('Villager has the following entity data: {LastGossipDecay: 6612L}')
+        self.assertEqual(fuzz.compare(vanilla, record('Villager has the following entity data: {LastGossipDecay: 1294L}')), [])
+        self.assertEqual(fuzz.compare(vanilla, record('Villager has the following entity data: {LastGossipDecay: 0L}')),
+                         [('LastGossipDecay', '6612L', '0L')])
+        self.assertEqual(fuzz.compare(vanilla, record('Villager has the following entity data: {}')),
+                         [('LastGossipDecay', '6612L', None)])
+
     def test_attributes_compare_in_any_order_but_by_value(self):
         a = {'attributes': [{'id': 'b', 'base': '1.0d'}, {'id': 'a', 'base': '2.0d'}]}
         self.assertEqual(fuzz.diff(a, {'attributes': a['attributes'][::-1]}), [])
