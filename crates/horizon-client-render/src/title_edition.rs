@@ -45,12 +45,27 @@ const T_LEFT: usize = FIRST_FACE + 3 * (GLYPH_WIDTH + LETTER_GAP) + 1;
 /// Horizon's R, U and S: face rectangles `[x0, y0, x1, y1)` in texels from the
 /// face's top-left, 42 wide and 39 tall, with 11-texel stems, 10-texel bars and
 /// 7-texel notches for the rounded corners.
+/// The R's leg is a staircase of 11-texel steps, not one rectangle: it starts
+/// under the bowl's bar at x 24 and steps 7 texels right to the baseline at
+/// x 31, ending in the bowl's right columns as the texture's bends do — its
+/// "J"'s hook curves into the stem and its strokes drift as they descend
+/// (26.3's `textures/gui/title/edition.png`), and the "R" of
+/// `textures/gui/title/minecraft.png` slants its leg out from under the bowl
+/// the same way. One rectangle collinear with the bowl's right stroke read as
+/// a "P" with a bar, not an R (#16002). The 7-texel sideways travel is the
+/// family's corner-notch unit, and the notch above the leg keeps its 7-texel
+/// width, so the right side steps in and back out like the other bends; the
+/// leg still ends in x 31..41, so "RUST" spans "JAVA"'s columns as before.
 const R: &[[usize; 4]] = &[
     [0, 0, 11, 39],
     [0, 0, 35, 10],
     [31, 7, 42, 19],
     [0, 15, 35, 25],
-    [31, 25, 42, 39],
+    [24, 25, 35, 28],
+    [26, 28, 37, 31],
+    [28, 31, 39, 34],
+    [30, 34, 41, 37],
+    [31, 37, 42, 39],
 ];
 const U: &[[usize; 4]] = &[[0, 0, 11, 32], [31, 0, 42, 32], [7, 29, 35, 39]];
 const S: &[[usize; 4]] = &[
@@ -453,6 +468,29 @@ mod tests {
     fn only_vanilla_is_rebuilt() {
         let source = stand_in();
         assert!(rust_edition(512, 64, &source).is_none());
+    }
+
+    /// The R's leg bends out of the bowl instead of continuing its right
+    /// stroke straight down (#16002): it starts under the bowl's bar, 7
+    /// texels left of the stroke, and drifts right as it descends, ending in
+    /// the stroke's columns at the baseline — the bend the texture's letters
+    /// show (26.3's `edition.png`, the `minecraft.png` logo's "R").
+    #[test]
+    fn r_leg_bends_out_of_the_bowl() {
+        let out = compose(&stand_in());
+        let lit = |x: usize, y: usize| lum(pixel(&out, FIRST_FACE + x, FACE_TOP + y)) >= 100;
+        // The leg's left edge by face row (the stem stays out of the range).
+        let left = |y: usize| (11..GLYPH_WIDTH).find(|&x| lit(x, y)).expect("the leg");
+        // Under the bowl's bar it begins left of the bowl's right stroke; the
+        // row just under the bar is the bar's own bright bottom edge, so the
+        // leg is measured from the next one down.
+        assert_eq!(left(26), 24);
+        // ... and it never drifts back left, reaching the stroke's columns at
+        // the baseline (so the glyph's span is unchanged, x 31..41).
+        assert!((26..38).all(|y| left(y + 1) >= left(y)));
+        assert_eq!(left(38), 31);
+        // The bowl's right stroke above it is untouched, x 31..41.
+        assert!(lit(31, 10) && lit(41, 10) && !lit(41, 20), "bowl and notch");
     }
 
     /// Against the prepared vanilla resources when they are present.
