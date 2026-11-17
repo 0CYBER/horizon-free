@@ -69,7 +69,7 @@ impl super::Renderer {
     pub(super) fn improved_transparency_runs(&self) -> bool {
         self.improved_transparency
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.is_none()
+            && self.executor.is_none()
             && supported(&self.device)
     }
 

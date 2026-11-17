@@ -5,6 +5,7 @@ use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
+use super::external::Capabilities;
 use super::native_entity::NativeEntity;
 use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
@@ -562,9 +563,22 @@ impl NativePack {
         );
     }
 
-    /// Whether the pack's `[tonemap]` takes the place of Horizon's tone curve.
-    pub fn tonemaps(&self) -> bool {
-        self.post.tonemaps()
+    /// What the pack does in the renderer's place, fixed while it runs: the renderer keeps it
+    /// from the pack's install on (`replace_native`).
+    pub fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            shadow: self.shadow.is_some(),
+            reflection: self.frame.reflects,
+            // GPU culling doesn't list the sections `[displacement]`'s grid takes quads from.
+            displacement: self.displacement.is_some(),
+            material: self.material.is_some(),
+            hides_clouds: !self.vanilla_clouds,
+            // `[sky]`'s sun and stars are left out only where its stage draws its own.
+            hides_sun: self.sky.is_some() && !self.vanilla_sun,
+            hides_stars: self.sky.is_some() && !self.vanilla_stars,
+            tone_curve: self.post.tonemaps(),
+            ray_scene: self.traces,
+        }
     }
 
     /// Times the pack's passes, or stops, as the renderer's settings say, before its world
@@ -646,7 +660,7 @@ pub struct WorldTargets<'a> {
 
 #[cfg(test)]
 pub(in crate::gfx) mod tests {
-    use super::{NativePack, TerrainShape, chosen_shadow, reads_opaque};
+    use super::{Capabilities, NativePack, TerrainShape, chosen_shadow, reads_opaque};
     use horizon_shader_api::manifest::{OptionKind, PackOption, Shadow};
 
     /// The world before translucent terrain is copied only for a pack whose material, or the
@@ -730,6 +744,61 @@ file = \"material.wgsl\"
         assert!(built.is_err(), "the pack should be refused");
     }
 
+    /// What the renderer keeps of a pack from its install on: each answer as its manifest and
+    /// the renderer's resources give it.
+    #[test]
+    fn a_pack_tells_the_renderer_what_it_draws_in_its_place() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let instance = crate::gfx::test_gpu::instance();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let (globals, empty) = terrain_layouts(&device);
+        let does = |stages: &str| {
+            let shape = terrain_shape(&globals, &empty);
+            let built = NativePack::new(
+                &device,
+                &queue,
+                &shape,
+                pack(stages),
+                &[],
+                Default::default(),
+            );
+            built.expect("the pack builds").0.capabilities()
+        };
+        let material = "[material]\nfile = \"material.wgsl\"\n";
+        assert_eq!(does(""), Capabilities::default());
+        let hides = Capabilities {
+            hides_clouds: true,
+            hides_sun: true,
+            hides_stars: true,
+            ..Capabilities::default()
+        };
+        assert_eq!(does("clouds = false\nsun = false\nstars = false\n"), hides);
+        let terrain = Capabilities {
+            material: true,
+            ..Capabilities::default()
+        };
+        assert_eq!(does(material), terrain);
+        // No resource pack's height maps here (`TerrainShape::pbr`): nothing to displace.
+        assert_eq!(does(&format!("{material}[displacement]\n")), terrain);
+        let traces = Capabilities {
+            ray_scene: true,
+            ..terrain
+        };
+        assert_eq!(does(&format!("{material}[ray_tracing]\n")), traces);
+        let tonemap = Capabilities {
+            tone_curve: true,
+            ..Capabilities::default()
+        };
+        assert_eq!(does("[tonemap]\nfile = \"tonemap.wgsl\"\n"), tonemap);
+    }
+
     /// A pack with a sky stage and the manifest's `stages` after it.
     fn pack(stages: &str) -> horizon_shader_api::Report {
         use horizon_shader_api::{MANIFEST, Pack, check};
@@ -755,6 +824,12 @@ file = \"material.wgsl\"
         );
         if stages.contains("[material]") {
             files.push(("material.wgsl", &material));
+        }
+        if stages.contains("[tonemap]") {
+            files.push((
+                "tonemap.wgsl",
+                "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n",
+            ));
         }
         let files = files
             .into_iter()

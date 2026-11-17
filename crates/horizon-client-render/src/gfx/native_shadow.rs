@@ -779,6 +779,12 @@ pub struct ShadowLists<'a> {
 }
 
 impl super::native_pack::NativePack {
+    /// The shadow camera's view this frame, for a pack with `[shadow]`.
+    pub fn shadow_request(&self, frame: &super::Frame) -> Option<super::external::ShadowView> {
+        self.shadow.as_ref()?;
+        self.frame.shadow_view(frame)
+    }
+
     /// The pack's shadow passes (`[shadow]`): the solid terrain the light sees into its shadow
     /// map, the translucent over a copy of it, then the entities. A pack without one gets its
     /// 1×1 map cleared to "far" once.

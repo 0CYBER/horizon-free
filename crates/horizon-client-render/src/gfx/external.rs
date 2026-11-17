@@ -41,6 +41,30 @@ pub trait ExternalPipeline: Send {
     fn reset_history(&mut self) {}
 }
 
+/// What a shader pack's executor does in the engine's place, fixed from when it is installed
+/// until it is replaced (for now only Horizon's own packs, `NativePack::capabilities`). The
+/// renderer reads these where it decides, never asking the executor each frame; with none
+/// running it has none, and draws vanilla's way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// It draws a shadow map from the engine's shadow lists ([`ShadowView`]).
+    pub shadow: bool,
+    /// It reads the water mirror, which needs the frame's `water_plane`.
+    pub reflection: bool,
+    /// It takes the near solid quads of the visibility walk's sections for a displaced grid.
+    pub displacement: bool,
+    /// Its terrain draws with layers of its own.
+    pub material: bool,
+    /// Its sky leaves out vanilla's clouds, sun or stars.
+    pub hides_clouds: bool,
+    pub hides_sun: bool,
+    pub hides_stars: bool,
+    /// Its post ends in a tone curve of its own, in place of the engine's.
+    pub tone_curve: bool,
+    /// It traces rays through a scene the engine keeps.
+    pub ray_scene: bool,
+}
+
 /// What the shadow camera sees of the terrain, for the game's draw lists: its view and
 /// projection in wgpu's clip space, the direction toward the light, and how far from the camera
 /// terrain is drawn (`shadowDistanceRenderMul`).

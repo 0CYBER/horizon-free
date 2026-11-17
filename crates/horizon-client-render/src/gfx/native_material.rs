@@ -775,12 +775,6 @@ impl super::native_pack::NativePack {
         }
     }
 
-    /// Whether `[displacement]`'s grid takes its quads from the frame's visible sections, which
-    /// GPU culling doesn't list.
-    pub fn displaces(&self) -> bool {
-        self.displacement.is_some()
-    }
-
     /// Writes out the solid quads of the sections `[displacement]` reaches and picks this
     /// frame's grid (none on the title screen, where the renderer hands over no sections).
     pub fn prepare_displacement<'s>(

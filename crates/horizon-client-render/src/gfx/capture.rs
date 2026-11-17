@@ -396,7 +396,7 @@ impl Renderer {
                 fullbright: self.fullbright,
                 improved_transparency: self.improved_transparency,
                 animated_textures: self.animated_textures,
-                shader_pack: self.pack_post.is_some() || self.native.is_some(),
+                shader_pack: self.pack_post.is_some() || self.executor.is_some(),
             },
             frame: FrameInputs {
                 camera: frame.camera.to_array(),
