@@ -82,9 +82,12 @@ pub(in crate::game) enum TeleportMotion {
 }
 
 /// `AbstractMinecart.getKnownMovement` with `OldMinecartBehavior`: the cart's
-/// motion clamped to 0.4 either way along x and z, what a teleport's
-/// `PositionMoveRotation.of(this)` carries over.
+/// motion clamped to 0.4 either way along x and z (or zero when any component
+/// is NaN), what a teleport's `PositionMoveRotation.of(this)` carries over.
 pub(super) fn cart_known_movement(velocity: Vec3) -> Vec3 {
+    if velocity.x.is_nan() || velocity.y.is_nan() || velocity.z.is_nan() {
+        return Vec3::ZERO;
+    }
     Vec3::new(
         velocity.x.clamp(-0.4, 0.4),
         velocity.y,
@@ -913,5 +916,19 @@ mod tests {
     fn an_axis_the_command_did_not_set_leaves_the_riders_own() {
         assert!(passenger_rotation([0.0, 0.0], [f32::NAN, 0.0], [30.0, 0.0])[0] == 30.0);
         assert!(passenger_rotation([0.0, 0.0], [0.0, f32::NAN], [0.0, 40.0])[1] == 40.0);
+    }
+    #[test]
+    fn cart_known_movement_zeros_nan_and_clamps_horizontal() {
+        let clamped = cart_known_movement(Vec3::new(1.25, -0.75, -0.9));
+        assert_eq!((clamped.x, clamped.y, clamped.z), (0.4, -0.75, -0.4));
+
+        for nan_vec in [
+            Vec3::new(f64::NAN, 0.1, 0.2),
+            Vec3::new(0.1, f64::NAN, 0.2),
+            Vec3::new(0.1, 0.2, f64::NAN),
+        ] {
+            let zeroed = cart_known_movement(nan_vec);
+            assert_eq!((zeroed.x, zeroed.y, zeroed.z), (0.0, 0.0, 0.0));
+        }
     }
 }
