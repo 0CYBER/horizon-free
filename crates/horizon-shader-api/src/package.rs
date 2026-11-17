@@ -199,6 +199,9 @@ impl Pack {
     /// Checks a pack's files: a manifest, the WGSL it names (as UTF-8),
     /// nothing it doesn't use, and sizes within bounds.
     pub fn from_files(files: BTreeMap<String, Vec<u8>>) -> Result<Pack, String> {
+        if files.len() > MAX_ENTRIES {
+            return Err(format!("over {MAX_ENTRIES} files in the package"));
+        }
         let text = files
             .get(MANIFEST)
             .ok_or_else(|| format!("{MANIFEST}: missing at the pack's root"))?;
@@ -323,6 +326,9 @@ fn read_dir(
             *total += size;
             if *total > MAX_TOTAL {
                 return Err(format!("the pack is over {} MiB", MAX_TOTAL >> 20));
+            }
+            if files.len() >= MAX_ENTRIES {
+                return Err(format!("over {MAX_ENTRIES} files in the package"));
             }
             let bytes = std::fs::read(&path).map_err(|e| format!("{rel}: {e}"))?;
             files.insert(rel, bytes);
