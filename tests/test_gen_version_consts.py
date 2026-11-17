@@ -1,7 +1,9 @@
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
+import time
 import unittest
 import zipfile
 
@@ -27,6 +29,27 @@ class GenVersionConstsTests(unittest.TestCase):
 
     def test_build_time_is_printed_in_utc(self):
         self.assertEqual(gen.java_date("2026-09-15T13:20:48+02:00"), "Tue Sep 15 11:20:48 UTC 2026")
+
+    def test_naive_instant_is_utc_regardless_of_host_timezone(self):
+        """A naive ISO timestamp is a UTC instant: java_date() must not shift it by the host offset."""
+        naive = "2026-09-15T13:20:48"
+        aware = naive + "+00:00"
+        expected = "Tue Sep 15 13:20:48 UTC 2026"
+        original_tz = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "America/New_York"
+            if hasattr(time, "tzset"):
+                time.tzset()
+            self.assertEqual(gen.java_date(naive), expected)
+            self.assertEqual(gen.java_date(aware), expected)
+            self.assertEqual(gen.java_date(naive), gen.java_date(aware))
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            if hasattr(time, "tzset"):
+                time.tzset()
 
     def test_reads_the_jar(self):
         with tempfile.TemporaryDirectory() as directory:

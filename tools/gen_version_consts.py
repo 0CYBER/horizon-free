@@ -26,7 +26,12 @@ OUT = lab.ROOT / "crates/horizon-core/src/version.rs"
 
 def java_date(iso):
     """`Date.toString()` of an ISO-8601 instant, in UTC (Locale.ROOT names)."""
-    return datetime.fromisoformat(iso).astimezone(timezone.utc).strftime("%a %b %d %H:%M:%S UTC %Y")
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        # A naive timestamp has no offset: treat it as UTC, not the host's local time,
+        # so BUILD_TIME does not shift with the machine's timezone.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%a %b %d %H:%M:%S UTC %Y")
 
 
 def render(info):
