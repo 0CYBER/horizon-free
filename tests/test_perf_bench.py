@@ -105,6 +105,14 @@ class PerfBenchStatsTests(unittest.TestCase):
         self.assertEqual(summary([5.0])["ci95"], None)
         self.assertIsNone(summary([None]))
 
+    def test_non_finite_cpu_and_gpu_samples_are_dropped_like_frame_times(self):
+        s = frames("x", 0, [10.0, 20.0, float("nan")],
+                   [1.0, 3.0, float("inf")], [float("nan")])
+        self.assertEqual(s["frames"], 2)
+        self.assertEqual(s["cpu_p50_ms"], 1.0)
+        self.assertNotIn("gpu_p50_ms", s)
+        json.dumps(s, allow_nan=False)
+
     def test_a_short_flight_still_has_lows(self):
         s = frames("x", 0, [5.0, 20.0])
         self.assertEqual((s["low_1pct_fps"], s["low_01pct_fps"]), (50.0, 50.0))

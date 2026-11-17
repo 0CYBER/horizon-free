@@ -175,8 +175,10 @@ def frames(phase, repeat, frame_ms, cpu_ms=(), gpu_ms=()):
         "p999_ms": rnd(pct(times, 0.999)), "max_ms": rnd(times[-1]),
     }
     for key, values in (("cpu_p50_ms", cpu_ms), ("gpu_p50_ms", gpu_ms)):
-        if values:
-            entry[key] = rnd(pct(sorted(values), 0.5))
+        # horizon_bench::Frames::of filters all three series; a non-finite sample would poison the report's JSON.
+        finite = sorted(value for value in values if math.isfinite(value))
+        if finite:
+            entry[key] = rnd(pct(finite, 0.5))
     entry["histogram"] = histogram
     return entry
 
