@@ -6,7 +6,9 @@ pub trait Hooks {
     /// experience and death message have not run. `entity` is its id and
     /// `kind` its type (`minecraft:zombie`, `minecraft:player`). `source` and
     /// `weapon` are the complete killing blow, as `living_incoming_damage` saw
-    /// it, including the causing player, direct projectile and weapon components.
+    /// it. `source.causing` is the mob or player's entity id when known, or 0
+    /// when there is no attacker or the attacking player is unknown; the source
+    /// also retains the direct projectile and weapon components.
     /// Cancellation skips death and loot without changing the listener's health:
     /// heal it to keep it alive; at health <= 0 its body is removed after 20 ticks.
     /// Armor stands, boats and other non-mob entities are not told.
