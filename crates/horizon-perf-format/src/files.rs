@@ -46,11 +46,32 @@ pub fn is_capture_name(name: &str) -> bool {
         return false;
     };
     let b = stamp.as_bytes();
-    b.len() == 15
-        && b[8] == b'-'
-        && b.iter()
+    if b.len() != 15
+        || b[8] != b'-'
+        || !b
+            .iter()
             .enumerate()
             .all(|(i, c)| i == 8 || c.is_ascii_digit())
+    {
+        return false;
+    }
+    let n = |at: usize, len: usize| {
+        b[at..at + len]
+            .iter()
+            .fold(0, |v, c| v * 10 + u32::from(c - b'0'))
+    };
+    let (y, m, d) = (n(0, 4), n(4, 2), n(6, 2));
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let days = match m {
+        2 => 28 + u32::from(leap),
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=12).contains(&m)
+        && (1..=days).contains(&d)
+        && n(9, 2) < 24
+        && n(11, 2) < 60
+        && n(13, 2) < 60
 }
 
 /// Creates the folder and a new capture file in it named for `unix_secs`, or the next free second.

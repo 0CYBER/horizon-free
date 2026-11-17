@@ -48,6 +48,7 @@ fn names_are_the_utc_time() {
 #[test]
 fn only_names_the_game_makes_match() {
     assert!(files::is_capture_name("profile-20251107-143844Z.hzperf"));
+    assert!(files::is_capture_name("profile-20000229-235959Z.hzperf"));
     for renamed in [
         "profile-20251107-143844Z-lag.hzperf",
         "profile-20251107-143844Z.hzperf.bak",
@@ -72,6 +73,19 @@ fn retention_deletes_the_oldest_of_31_and_never_a_renamed_file() {
     }
     let renamed = touch(dir, "profile-20251107-140000Z-keep-me.hzperf", 10);
     let old_report = touch(dir, "perf-2025-11-07_14-00-00Z.json", 10);
+    // Shaped like captures but no time `file_name` can make: older by name, so
+    // they would go first if retention took them.
+    let impossible: Vec<PathBuf> = [
+        "profile-20250001-120000Z.hzperf",
+        "profile-20250229-120000Z.hzperf",
+        "profile-20250431-120000Z.hzperf",
+        "profile-20250101-240000Z.hzperf",
+        "profile-20250101-126000Z.hzperf",
+        "profile-20250101-120060Z.hzperf",
+    ]
+    .into_iter()
+    .map(|name| touch(dir, name, 10))
+    .collect();
     let keep = dir.join(&names[30]);
     let deleted = files::retain(dir, &keep, KEEP_FILES, u64::MAX).unwrap();
     assert_eq!(deleted, vec![dir.join(&names[0])]);
@@ -80,6 +94,9 @@ fn retention_deletes_the_oldest_of_31_and_never_a_renamed_file() {
         assert!(dir.join(name).exists(), "{name}");
     }
     assert!(renamed.exists() && old_report.exists());
+    for path in &impossible {
+        assert!(path.exists(), "{}", path.display());
+    }
 }
 
 #[test]
