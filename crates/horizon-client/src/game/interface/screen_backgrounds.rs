@@ -130,7 +130,11 @@ impl Game<'_> {
         partial: f32,
     ) -> Option<horizon_client::gfx::BorderDraw> {
         use horizon_client::border_render::{self, BorderRenderer};
-        let distance = f64::from(self.streaming.radius * 16);
+        // The wall and its gradient span what the camera draws: `LevelRenderer`
+        // takes `optionsRenderState.renderDistance * 16`, which far terrain
+        // lengthens, as `Camera.depthFar` below does. At the vanilla length the
+        // wall would end inside that longer drawn world, before the fog.
+        let distance = f64::from(self.terrain_distance() * 16);
         border_render::extract(
             &self.border,
             partial,
@@ -145,7 +149,9 @@ impl Game<'_> {
             self.border_renderer.invalidate();
             self.border_section = Some(section);
         }
-        // Camera.depthFar, as the renderer's far plane.
+        // Camera.depthFar, as the renderer's far plane. With far terrain on, the
+        // wall and the far plane share the elongated distance, so the wall
+        // reaches past the fog.
         let depth_far =
             horizon_client::camera::depth_far(self.terrain_distance(), self.settings.cloud_range);
         if !self
