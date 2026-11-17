@@ -26,6 +26,7 @@ repeat on the same terrain. Build the bots first: cargo build --release -p horiz
 import argparse
 import datetime
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -138,10 +139,15 @@ def tps(start_ticks, end_ticks, seconds):
 
 
 def percentile(values, p):
+    """Nearest-rank percentile, as in startup_trace.step_stats: the smallest sample whose rank is at least p%.
+
+    p50 of four samples is the 2nd, and p99 of 100 samples is the 99th, not the maximum.
+    """
     if not values:
         return None
     ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int(p / 100 * len(ordered)))]
+    rank = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * p / 100) - 1))
+    return ordered[rank]
 
 
 def cpu_seconds(text):
