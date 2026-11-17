@@ -71,8 +71,8 @@ class OwnRunnerTests(unittest.TestCase):
         for where, _, _, _, value, pools in routed():
             count += 1
             self.assertIn("vars.SELF_HOSTED_CI != 'off'", value, where)
-            # Both labels select a GitHub-hosted Ubuntu runner when our pools are disabled.
-            self.assertRegex(value, r"\|\| 'ubuntu-(?:latest|24\.04)' \}\}$", where)
+            # Both labels select a GitHub-hosted or Blacksmith Ubuntu runner when our pools are disabled.
+            self.assertRegex(value, r"\|\| '(?:ubuntu-(?:latest|24\.04)|blacksmith-\d+vcpu-ubuntu-2404)' \}\}$", where)
             if "checks" in pools:
                 # SELF_HOSTED_CI=light: every checks job back to GitHub, the bots stay.
                 self.assertIn("vars.SELF_HOSTED_CI != 'light'", value, where)

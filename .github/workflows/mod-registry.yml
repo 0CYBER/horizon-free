@@ -25,7 +25,7 @@ jobs:
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -35,7 +35,7 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       # Ours keep their build folder between jobs.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: runner.environment == 'github-hosted'
+        if: (runner.environment == 'github-hosted' || startsWith(runner.name, 'blacksmith-'))
         with:
           workspaces: crates/horizon-mod-registry
           save-if: ${{ github.ref == 'refs/heads/main' }}
