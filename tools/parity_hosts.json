@@ -64,8 +64,6 @@
   "shulker_lock_drop": "capture-preserving harness: needs --work-dir (a fresh capture folder) and --reference-dir, which an automatic run doesn't pass, so it fails at startup whatever changed",
   "pot_hopper": "capture-preserving harness: needs --work-dir (a fresh capture folder) and --reference-dir, which an automatic run doesn't pass, so it fails at startup whatever changed",
   "stand_lodestone": "capture-preserving harness: needs --work-dir (a new capture folder), --reference-dir and --binary, which an automatic run doesn't pass, so it fails at startup whatever changed",
-  "hoglin_repeat_attack": "has never passed on CI since #12823 added it, and fails whatever a pull request changes (#15158): the pig's HurtTime and health after repeated hits differ; take it off this list with the fix",
-  "last_hurt_by_mob": "has never passed on CI since #12843 added it, and fails whatever a pull request changes (#15158): a pig summoned with last_hurt_by_mob loses it, and the saved key order differs; take it off this list with the fix",
   "mob_command_damage_vibration": "has never passed on CI since #11179 added it, and fails whatever a pull request changes (#15158): 25 of 184 records differ, mostly sensor messages; take it off this list with the fix"
  },
  "known_flaky": {
