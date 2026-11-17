@@ -28,7 +28,11 @@ def text(value, where):
 
 
 def git(root, *arguments):
-    env = dict(os.environ, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0")
+    # Replacement/graft refs must never substitute the physical bytes a record
+    # names, for the source commit or for an --against comparison. This overrides
+    # a caller's environment and keeps the no-lazy-fetch / no-prompt safety.
+    env = dict(os.environ, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0",
+               GIT_NO_REPLACE_OBJECTS="1")
     result = subprocess.run(["git", "--literal-pathspecs", *arguments], cwd=root, env=env,
                             capture_output=True)
     if result.returncode:
