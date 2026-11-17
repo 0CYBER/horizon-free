@@ -626,12 +626,12 @@ Two cases the oracle fills in:
     mixin that keeps lakes out of its structures. Over chunks -64..63 that adds 13 starts at
     seed 1234 (pirate ships, churches, a tavern, the castle in the sky...) and 16 at seed 2,
     and every other start stays as it was.
-  - **Processors written in Java** are taken out of their lists (#822). The game, like
-    vanilla, refuses a list holding a type it does not know, and with it every pool naming the
-    list. The structures now generate undecorated (no pillars under them, spawners as the
-    template has them); 1,427 processors of 146 types in ATM10's mods, the most common
-    `lithostitched:block_swap`, Formations' `biome_replacements` and Repurposed Structures'
-    pillar, fluid and void processors.
+  - **Processors written in Java** that carry does not turn into the game's own types are
+    taken out of their lists and counted in the carry report (#822). The game, like vanilla,
+    refuses a list holding a type it does not know, and with it every pool naming the list.
+    A structure with such a processor generates without what it adds. The ones carried are
+    described below (spawners, pillars, fluid fixes, structure voids, rule tests, waterlogging,
+    Lithostitched's). Still taken out: YUNG's processors and Formations'.
   - **Spawner processors** carried as data (`horizon-port-pack/src/processors.rs`). Most
     chests in the mods' templates already name their loot table; what the Java processors add
     is the spawners' mobs. Moog's and Repurposed Structures' spawner randomizing processors
@@ -822,7 +822,7 @@ Two cases the oracle fills in:
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
-      (YUNG's banners and decorations, Better Strongholds' legs, Lithostitched's block swaps);
+      (YUNG's processors: its banners, decorations, pillars and Better Strongholds' legs);
   - **Formations** (Overworld and Nether: 50 structures, 128 pool elements) places one
     template per start at a height found in the noise columns under its corners and centre: on
     the surface, on water or lava, or in a cave (on its floor, under its ceiling, buried in
