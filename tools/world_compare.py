@@ -36,6 +36,11 @@ import struct
 import sys
 import zlib
 
+try:
+    from . import modified_utf8
+except ImportError:
+    import modified_utf8
+
 # The blocks reported: terrain first, then what decoration places.
 WATCH = [
     'minecraft:stone', 'minecraft:deepslate', 'minecraft:water', 'minecraft:lava', 'minecraft:grass_block',
@@ -65,7 +70,8 @@ class Nbt:
         return struct.unpack(fmt, self.take(struct.calcsize(fmt)))[0]
 
     def string(self):
-        return self.take(self.unpack('>H')).decode('utf-8', 'replace')
+        text, self.p = modified_utf8.read_utf(self.d, self.p)
+        return text
 
     def payload(self, t):
         if t in (1, 2, 3, 4, 5, 6):

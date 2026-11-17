@@ -22,7 +22,21 @@ import struct
 import sys
 import zlib
 
+try:
+    from . import modified_utf8
+except ImportError:
+    import modified_utf8
+
 USAGE = __doc__
+
+
+def read_string(f):
+    """A TAG_String payload: two-byte length, then modified UTF-8 bytes."""
+    n = struct.unpack('>H', f.read(2))[0]
+    raw = f.read(n)
+    if len(raw) != n:
+        raise ValueError('truncated NBT string: want %d bytes, got %d' % (n, len(raw)))
+    return modified_utf8.decode_mutf8(raw)
 
 
 def read_tag(f, tag_id):
@@ -42,8 +56,7 @@ def read_tag(f, tag_id):
         n = struct.unpack('>i', f.read(4))[0]
         return ('B', list(struct.unpack(f'>{n}b', f.read(n))))
     if tag_id == 8:
-        n = struct.unpack('>H', f.read(2))[0]
-        return f.read(n).decode('utf-8', 'replace')
+        return read_string(f)
     if tag_id == 9:
         inner, n = struct.unpack('>bi', f.read(5))
         return [read_tag(f, inner) for _ in range(max(n, 0))]
@@ -53,8 +66,7 @@ def read_tag(f, tag_id):
             t = f.read(1)[0]
             if t == 0:
                 return out
-            n = struct.unpack('>H', f.read(2))[0]
-            name = f.read(n).decode('utf-8', 'replace')
+            name = read_string(f)
             out[name] = read_tag(f, t)
     if tag_id == 11:
         n = struct.unpack('>i', f.read(4))[0]
