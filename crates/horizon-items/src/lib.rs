@@ -8,6 +8,8 @@
 pub mod banner_layer;
 pub mod blocks;
 pub mod bundle;
+#[cfg(test)]
+mod component_removal_tests;
 pub mod content_namespaces;
 pub mod cooldowns;
 pub mod durability;

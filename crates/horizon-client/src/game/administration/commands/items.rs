@@ -856,7 +856,9 @@ impl Game<'_> {
             .as_deref()
             .map(horizon_client::item_data::command_components)
         {
-            Some(Ok(tag)) => horizon_client::item_data::decode_components(Some(&tag)),
+            Some(Ok(tag)) => {
+                horizon_client::item_data::decode_components_for_item(id, Some(&tag))
+            }
             Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
             None => (0, None),
         };
@@ -1632,7 +1634,8 @@ fn edit_components(stack: &mut ItemStack, f: impl FnOnce(&mut horizon_core::nbt:
     };
     f(&mut c);
     let tag = Tag::Compound(c);
-    let (damage, extra) = horizon_client::item_data::decode_components(Some(&tag));
+    let (damage, extra) =
+        horizon_client::item_data::decode_components_for_item(&stack.item, Some(&tag));
     stack.damage = damage;
     stack.extra = extra;
     stack.tidy();

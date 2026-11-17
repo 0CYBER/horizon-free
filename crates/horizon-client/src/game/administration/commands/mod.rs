@@ -1309,7 +1309,9 @@ impl Game<'_> {
             .as_deref()
             .map(horizon_client::item_data::command_components)
         {
-            Some(Ok(tag)) => horizon_client::item_data::decode_components(Some(&tag)),
+            Some(Ok(tag)) => {
+                horizon_client::item_data::decode_components_for_item(&id, Some(&tag))
+            }
             Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
             None => (0, None),
         };

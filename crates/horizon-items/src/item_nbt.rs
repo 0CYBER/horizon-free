@@ -99,7 +99,7 @@ pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
         .or_else(|| number(tag.get("Count")))
         .filter(|count| (1..=99).contains(count))
         .unwrap_or(1) as u32;
-    let (damage, extra) = crate::item_data::decode_components(tag.get("components"));
+    let (damage, extra) = crate::item_data::decode_components_for_item(&id, tag.get("components"));
     Some(crate::items::ItemStack {
         item: Arc::from(id.as_str()),
         count,

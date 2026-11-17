@@ -774,9 +774,17 @@ impl ItemStack {
             })
             .collect()
     }
-    /// `DataComponents.POTION_DURATION_SCALE` with the item's default: 0.125
-    /// for a tipped arrow, 0.25 for a lingering potion, else 1.
+    /// `getOrDefault(DataComponents.POTION_DURATION_SCALE, 1.0F)` with the
+    /// item's prototype default: 0.125 for a tipped arrow, 0.25 for a
+    /// lingering potion, else 1. A removal patch leaves the lookup empty and
+    /// the call's own 1.0 default applies.
     pub fn potion_duration_scale(&self) -> f32 {
+        if self
+            .data()
+            .is_some_and(|d| d.other("!minecraft:potion_duration_scale").is_some())
+        {
+            return 1.0;
+        }
         match self
             .data()
             .and_then(|d| d.other("minecraft:potion_duration_scale"))
@@ -1135,7 +1143,7 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
             if !(1..=99).contains(&count) {
                 return None;
             }
-            let (damage, extra) = decode_components(tag.get("components"));
+            let (damage, extra) = decode_components_for_item(&id, tag.get("components"));
             Some(ItemStack {
                 item: Arc::from(id.as_str()),
                 count: count as u32,
@@ -1700,21 +1708,18 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             _ => Vec::new(),
         },
         written: seen.written_book_content.map(written_book_from_tag),
-        fireworks: seen
-            .fireworks
-            .map(|f| {
-                let flight = f
-                    .get("flight_duration")
-                    .and_then(int)
-                    .unwrap_or(0)
-                    .clamp(0, 255) as u8;
-                let explosions = match f.get("explosions") {
-                    Some(Tag::List(list)) => list.iter().map(explosion_from).collect(),
-                    _ => Vec::new(),
-                };
-                (flight, explosions)
-            })
-            .filter(|(flight, explosions)| !(*flight == 1 && explosions.is_empty())),
+        fireworks: seen.fireworks.map(|f| {
+            let flight = f
+                .get("flight_duration")
+                .and_then(int)
+                .unwrap_or(0)
+                .clamp(0, 255) as u8;
+            let explosions = match f.get("explosions") {
+                Some(Tag::List(list)) => list.iter().map(explosion_from).collect(),
+                _ => Vec::new(),
+            };
+            (flight, explosions)
+        }),
         firework_explosion: seen.firework_explosion.map(explosion_from),
         dyed_color: seen
             .dyed_color
@@ -1814,6 +1819,33 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         data.other.sort_by(|a, b| a.0.cmp(&b.0));
     }
     (damage, (!data.is_empty()).then(|| Box::new(data)))
+}
+
+/// `decode_components` with the item id known, so a component value equal to
+/// the item's prototype is left out the way `PatchedDataComponentMap.applyPatch`
+/// leaves it out of the patch.
+pub fn decode_components_for_item(
+    item: &str,
+    components: Option<&Tag>,
+) -> (u32, Option<Box<StackData>>) {
+    let (damage, mut extra) = decode_components(components);
+    if let Some(data) = extra.as_deref_mut() {
+        elide_prototype_fireworks(item, data);
+        if data.is_empty() {
+            extra = None;
+        }
+    }
+    (damage, extra)
+}
+
+/// `PatchedDataComponentMap.applyPatch` leaves a component out of the patch
+/// when it equals the item prototype. `Items.FIREWORK_ROCKET` carries
+/// `Fireworks(1, [])`, so that exact value is the prototype's, not the
+/// stack's; the same value on any other item is the stack's own component.
+pub(crate) fn elide_prototype_fireworks(item: &str, data: &mut StackData) {
+    if item == "minecraft:firework_rocket" && data.fireworks == Some((1, Vec::new())) {
+        data.fireworks = None;
+    }
 }
 
 /// The `[id=value,...]` component list of an item argument (`ItemParser`)
@@ -3062,21 +3094,18 @@ mod tests {
             written: c
                 .get("minecraft:written_book_content")
                 .map(written_book_from_tag),
-            fireworks: c
-                .get("minecraft:fireworks")
-                .map(|f| {
-                    let flight = f
-                        .get("flight_duration")
-                        .and_then(int)
-                        .unwrap_or(0)
-                        .clamp(0, 255) as u8;
-                    let explosions = match f.get("explosions") {
-                        Some(Tag::List(list)) => list.iter().map(explosion_from).collect(),
-                        _ => Vec::new(),
-                    };
-                    (flight, explosions)
-                })
-                .filter(|(flight, explosions)| !(*flight == 1 && explosions.is_empty())),
+            fireworks: c.get("minecraft:fireworks").map(|f| {
+                let flight = f
+                    .get("flight_duration")
+                    .and_then(int)
+                    .unwrap_or(0)
+                    .clamp(0, 255) as u8;
+                let explosions = match f.get("explosions") {
+                    Some(Tag::List(list)) => list.iter().map(explosion_from).collect(),
+                    _ => Vec::new(),
+                };
+                (flight, explosions)
+            }),
             firework_explosion: c.get("minecraft:firework_explosion").map(explosion_from),
             dyed_color: c
                 .get("minecraft:dyed_color")

@@ -60,8 +60,16 @@ impl UseCooldown {
 }
 
 /// The component a stack carries: its own patch first (`ItemStack.get`), then
-/// the item's default from `items.json` (`ItemInfo::use_cooldown`).
+/// the item's default from `items.json` (`ItemInfo::use_cooldown`). A
+/// `!minecraft:use_cooldown` removal patch leaves the lookup empty, so the
+/// prototype default does not come back.
 pub fn component(stack: &ItemStack, default: Option<&UseCooldown>) -> Option<UseCooldown> {
+    if stack
+        .data()
+        .is_some_and(|d| d.other("!minecraft:use_cooldown").is_some())
+    {
+        return None;
+    }
     stack
         .data()
         .and_then(|d| d.other("minecraft:use_cooldown"))
