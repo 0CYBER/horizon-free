@@ -182,5 +182,18 @@ class ReachTests(unittest.TestCase):
                          set(self.dependencies))
 
 
+class ImplSubjectTests(unittest.TestCase):
+    def test_return_arrow_in_bound_is_not_the_end_of_the_generics(self):
+        # The '>' of `Fn() -> u8` must not close the angle-bracket depth: the whole `<...>` is the generic list.
+        self.assertEqual(parity_reach.impl_subject("<T: Fn() -> u8> Trait for Foo"),
+                         ({"T"}, " Trait for Foo"))
+        # A higher-ranked bound and a where clause still parse the same way.
+        self.assertEqual(parity_reach.impl_subject("<T, F: for<'a> Fn(&'a T) -> u8> MyTrait for Foo<T> where T: Copy"),
+                         ({"T", "F"}, " MyTrait for Foo<T> "))
+        # Simple impls are unchanged.
+        self.assertEqual(parity_reach.impl_subject("<T> Trait for Foo"), ({"T"}, " Trait for Foo"))
+        self.assertEqual(parity_reach.impl_subject("Trait for Foo"), (set(), "Trait for Foo"))
+
+
 if __name__ == "__main__":
     unittest.main()

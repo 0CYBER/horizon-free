@@ -730,6 +730,8 @@ def impl_subject(header):
     if header.startswith("<"):
         depth = 0
         for index, character in enumerate(header):
+            if character == ">" and header[max(0, index - 1)] == "-":
+                continue  # the '>' of an `->` return arrow in a bound, not the end of the generic list
             depth += {"<": 1, ">": -1}.get(character, 0)
             if depth == 0:
                 generics, header = header[1:index], header[index + 1:]
