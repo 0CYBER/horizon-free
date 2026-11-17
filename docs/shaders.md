@@ -366,6 +366,10 @@ with `compute = true`, and an option's `resets`. A compute file defines `fn comp
 The game runs them. The keys, their limits and the WGSL each pass sees are in the
 [reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
 
+A pack whose kept resources don't fit in video memory is refused when it loads ("its kept resources (N MiB) don't fit
+in video memory"), and the pack that ran keeps running, its resources made again as at a load. R-relative textures
+that don't fit at a new render size stay at the old one, which the log says once, until the size changes again.
+
 Under `[ray_tracing]` a compute or `[[before_world]]` file that calls a trace function gets them, as a post pass does;
 a `[[before_world]]` pass traces this frame's scene. The four trace names are found by name, as in the material
 stage, so under `[ray_tracing]` don't give them to anything of the pack's own. One part comes in a later step: `[material]` can't read kept

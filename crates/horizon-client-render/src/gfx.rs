@@ -7000,7 +7000,9 @@ impl Renderer {
             &constants,
             lights,
         )?;
-        self.replace_native(Some(pack));
+        if let Some(refused) = self.replace_native(Some(pack)) {
+            return Err(refused);
+        }
         self.pack_post = None;
         self.pack_atlas = None;
         self.pack_material_atlases = None;

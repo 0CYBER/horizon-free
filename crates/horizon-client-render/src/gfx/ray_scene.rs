@@ -83,16 +83,26 @@ impl Renderer {
     /// `HORIZON_RAY_TRACING=1` every pack keeps one). Called before the pack's first frame, so
     /// the scene is there when it gathers what it traces. A rebuild of the pack that runs keeps
     /// its kept resources (`NativePack::carry`); else they go before the new pack's are made.
+    /// Why `pack` was refused, if it was (`native_pack::install_kept`): then the pack that ran
+    /// keeps running, unless it can't.
     pub(in crate::gfx) fn replace_native(
         &mut self,
         mut pack: Option<crate::gfx::native_pack::NativePack>,
-    ) {
+    ) -> Option<String> {
         if let (Some(new), Some(old)) = (&mut pack, &mut self.native) {
             new.carry(old);
         }
-        let old = self.native.as_mut().map(|p| &mut p.post);
-        let new = pack.as_mut().map(|p| &mut p.post);
-        crate::gfx::native_post::kept::install(&self.device, new, old);
+        // The R the pack's frames get (`NativePack::start_frame`), before its first.
+        let size = (self.world_post).pack_render_size([self.config.width, self.config.height]);
+        let install = crate::gfx::native_pack::install_kept;
+        if let Err((refused, runs)) =
+            install(&self.device, pack.as_mut(), self.native.as_mut(), size)
+        {
+            if !runs {
+                self.replace_native(None);
+            }
+            return Some(refused);
+        }
         let traces = pack.as_ref().is_some_and(|p| p.traces);
         follow(
             &mut self.ray_scene,
@@ -100,6 +110,7 @@ impl Renderer {
             super::wanted(super::switch(), traces),
         );
         self.native = pack;
+        None
     }
 
     /// Every section is gone (a new world, a new dimension): so are the pack's kept resources.

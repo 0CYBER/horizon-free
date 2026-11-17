@@ -183,7 +183,7 @@ fn pack(
     };
     let (mut pack, _) =
         NativePack::new(device, queue, &terrain, report, &[], Default::default()).unwrap();
-    install(device, Some(&mut pack.post), None);
+    install(device, Some(&mut pack.post), None, [1, 1]).unwrap();
     pack
 }
 

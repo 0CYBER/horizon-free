@@ -115,6 +115,33 @@ fn chosen_shadow(
     })
 }
 
+/// Installs the kept resources of `new`, the pack that runs from now on, where `old` ran
+/// (`native_post::kept::install`), at the R of its frames `size`. Without the video memory for
+/// them, why, and whether `old` can keep running: its own are made again, as at its load, unless
+/// there is no room for those either.
+pub(in crate::gfx) fn install_kept(
+    device: &wgpu::Device,
+    new: Option<&mut NativePack>,
+    mut old: Option<&mut NativePack>,
+    size: [u32; 2],
+) -> Result<(), (String, bool)> {
+    let posts = (
+        new.map(|p| &mut p.post),
+        old.as_deref_mut().map(|p| &mut p.post),
+    );
+    let Err(refused) = super::native_post::kept::install(device, posts.0, posts.1, size) else {
+        return Ok(());
+    };
+    let runs = old.is_none_or(|old| {
+        let made = old.reload_kept(device);
+        if let Err(e) = &made {
+            log::warn!("Horizon shader pack: the running pack stops: {e}");
+        }
+        made.is_ok()
+    });
+    Err((refused, runs))
+}
+
 impl NativePack {
     /// Writes this frame's inputs (`NativeFrame::write`), and for a `[ray_tracing]` pack where
     /// its passes and material stage trace this frame's `scene` from, once it is built.
@@ -150,6 +177,15 @@ impl NativePack {
             self.post.carry(&mut old.post);
             self.frame.carry(&mut old.frame);
         }
+    }
+
+    /// Makes this pack's kept resources again, as zeros, after the pack that was to replace it
+    /// had no room for its own (`install_kept`), at R `size`: it sees a load.
+    fn reload_kept(&mut self, device: &wgpu::Device) -> Result<(), String> {
+        if let Some(epochs) = &mut self.frame.epochs {
+            epochs.note(horizon_shader_api::kept::REASON_LOAD);
+        }
+        super::native_post::kept::reinstall(device, &mut self.post)
     }
 
     /// Joins the frame's group with this frame's `scene` from `camera` for a material stage

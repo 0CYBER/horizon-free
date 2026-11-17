@@ -382,11 +382,13 @@ impl Post {
     }
 
     fn sizes_with_upscale(&self, window: [u32; 2], upscale: f32) -> ([u32; 2], [u32; 2]) {
-        let output = window.map(|v| ((v as f32 * self.scale).round() as u32).clamp(1, 8192));
-        (
-            output.map(|v| ((v as f32 / upscale).round() as u32).max(1)),
-            output,
-        )
+        sizes(window, self.scale, upscale)
+    }
+
+    /// The size the world draws at under a shader pack, which always has a target (`prepare`'s
+    /// `always`) and no TAA, so no upscaling: what the pack's frames get, before its first.
+    pub(super) fn pack_render_size(&self, window: [u32; 2]) -> [u32; 2] {
+        sizes(window, self.scale, 1.0).0
     }
 
     /// The next TAA frame's input size, even before its first jitter or resize.
@@ -767,6 +769,16 @@ pub(super) fn reprojection(
 }
 
 /// The radical inverse of `i` in `base`: a low-discrepancy sequence in 0..1.
+/// The world's size and the output's for `window` at resolution scale `scale`, the world
+/// drawn smaller by TAA's `upscale` (1 without it).
+fn sizes(window: [u32; 2], scale: f32, upscale: f32) -> ([u32; 2], [u32; 2]) {
+    let output = window.map(|v| ((v as f32 * scale).round() as u32).clamp(1, 8192));
+    (
+        output.map(|v| ((v as f32 / upscale).round() as u32).max(1)),
+        output,
+    )
+}
+
 fn halton(mut i: u32, base: u32) -> f32 {
     let (mut f, mut r) = (1.0, 0.0);
     while i > 0 {
@@ -793,6 +805,22 @@ mod tests {
         let then = reprojection(previous, previous_camera, current, camera) * (now / now.w);
         let expected = clip(previous, previous_camera);
         assert!((then.truncate() / then.w - expected.truncate() / expected.w).length() < 1e-9);
+    }
+
+    /// Kept resources are made before a pack's first frame at the size it draws at: no TAA
+    /// under a pack, so none of TAA's upscaling that ran before it, and the scale applied with
+    /// or without a target yet.
+    #[test]
+    fn a_pack_draws_at_the_scaled_window_without_taa_s_upscaling() {
+        for (window, scale, upscale, before, pack) in [
+            ([1280, 720], 1.0, 2.0, [640, 360], [1280, 720]),
+            ([1281, 721], 0.5, 2.0, [321, 181], [641, 361]),
+            ([1920, 1080], 0.75, 1.0, [1440, 810], [1440, 810]),
+            ([10000, 10000], 2.0, 4.0, [2048, 2048], [8192, 8192]),
+        ] {
+            assert_eq!(sizes(window, scale, upscale).0, before);
+            assert_eq!(sizes(window, scale, 1.0).0, pack);
+        }
     }
 
     #[test]
@@ -829,6 +857,9 @@ mod tests {
             assert_eq!(post.taa_render_size(window), expected);
             post.taa_on = true;
             assert_eq!(post.sizes(window).0, expected);
+            // A pack's frame: TAA off, so what the pack's kept resources are made for.
+            post.taa_on = false;
+            assert_eq!(post.pack_render_size(window), post.sizes(window).0);
         }
     }
 
