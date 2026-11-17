@@ -182,7 +182,7 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                 on: java::is_enabled(home, &native.id),
                 entry: None,
                 icon: icon.image,
-                error: icon.error,
+                error: native.note().map(String::from).or(icon.error),
                 kind: Some((ModKind::Native, native.id.clone())),
                 internals: native.internals.clone(),
                 native: Some(native),
@@ -458,12 +458,16 @@ impl Launcher {
             )
         };
         let native = self.mods.java.is_none()
-            && self.instance_mods.list.iter().any(|r| {
-                r.native.is_some()
-                    || r.entry
-                        .as_ref()
-                        .is_some_and(|e| native_status::is_native_file(&e.file))
-            });
+            && (native_status::asks_for_build(
+                self.instance_mods
+                    .list
+                    .iter()
+                    .filter_map(|r| r.native.as_ref()),
+            ) || self.instance_mods.list.iter().any(|r| {
+                r.entry
+                    .as_ref()
+                    .is_some_and(|e| native_status::is_native_file(&e.file))
+            }));
         let build = native.then(|| self.native_build(cx)).flatten();
         let card = plate::cut(
             night::PIXEL_CORNER,
@@ -719,6 +723,24 @@ mod tests {
             broken.native.is_some(),
             "invalid files must remain removable"
         );
+    }
+
+    #[test]
+    fn a_retired_hnmod_row_says_why_and_asks_for_no_build() {
+        let scratch = TestHome::new();
+        let home = &scratch.0;
+        let installed = home.join(native_mods::INSTALLED);
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(installed.join("teem_client-0.1.0.hnmod"), b"old format").unwrap();
+        let rows = read(home, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].error.as_deref(),
+            Some("Old format (.hnmod): ask its author to republish it as .hmod")
+        );
+        assert!(!native_status::asks_for_build(
+            rows.iter().filter_map(|r| r.native.as_ref())
+        ));
     }
 
     #[test]

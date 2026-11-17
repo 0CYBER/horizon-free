@@ -1416,7 +1416,7 @@ impl Launcher {
             return None;
         }
         let busy = self.mods.busy.is_some();
-        let native = !native_entries.is_empty()
+        let native = native_status::asks_for_build(&native_entries)
             || self.mods.java.is_none()
                 && entries
                     .iter()
