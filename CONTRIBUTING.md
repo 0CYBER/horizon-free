@@ -185,11 +185,6 @@ it (edited on every push, never repeated): talk to its author in the thread befo
   `skip-release` when players see no change (tooling, docs, tests), nothing for a fix. `release-now` is for crash
   fixes that shouldn't wait. pr_ready suggests one.
 
-Every open PR gets an informational `vouch:trusted`, `vouch:unvouched`, or `vouch:denounced` label. Authors with
-write access are trusted automatically. The council maintains [the vouch list](.github/VOUCHED.td) for other
-contributors. Comment `/recheck-vouch` on its own line to refresh an open PR's label. These labels have no effect
-on CI or contribution permissions.
-
 Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; risky ones (saves, network, world
 generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).
 A bot, CodeRabbit, also comments when a pull request opens. Treat it like any reviewer: fix what's right, say why
