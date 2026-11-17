@@ -248,7 +248,12 @@ uniform! {
         /// larger of the horizontal distance and the height difference from the camera. Only a
         /// pack with `[frame] fog = "pack"` has this field.
         fog_render: [f32; 2],
-        @pad padding: [u32; 2],
+        /// The moon's phase, as Horizon draws the moon: 0 full, 1 waning gibbous, 2 third
+        /// quarter, 3 waning crescent, 4 new, 5 waxing crescent, 6 first quarter, 7 waxing
+        /// gibbous. It moves on by one each day. Only a pack whose files name `moon_phase` has
+        /// this field.
+        moon_phase: u32,
+        @pad padding: [u32; 1],
     }
 }
 
@@ -265,39 +270,65 @@ impl Frame {
     /// epochs, so that no field before them moves.
     pub const FOG_FIELDS: std::ops::Range<usize> = 61..63;
 
+    /// Where `moon_phase` is among the fields: the last, in what was padding at the end, so the
+    /// uploaded struct keeps its size and no field moves.
+    pub const MOON_FIELDS: std::ops::Range<usize> = 63..64;
+
     /// The fields the prelude declares, for a pack that asks for the scene (`[ray_tracing]`)
-    /// or not, keeps resources (`[[resource]]`) or not, and fogs its stages itself
-    /// (`[frame] fog = "pack"`) or not.
-    pub fn declared(ray_tracing: bool, kept: bool, fog: bool) -> Vec<Field> {
+    /// or not, keeps resources (`[[resource]]`) or not, fogs its stages itself
+    /// (`[frame] fog = "pack"`) or not, and whose files name `moon_phase` or not.
+    pub fn declared(ray_tracing: bool, kept: bool, fog: bool, moon_phase: bool) -> Vec<Field> {
+        Self::declared_at(ray_tracing, kept, fog, moon_phase)
+            .into_iter()
+            .map(|i| Self::WGSL.fields[i])
+            .collect()
+    }
+
+    /// `declared`'s fields, by their index among all of them.
+    fn declared_at(ray_tracing: bool, kept: bool, fog: bool, moon_phase: bool) -> Vec<usize> {
         let skipped = |i: usize| {
             (!ray_tracing && Self::RAY_FIELDS.contains(&i))
                 || (!kept && Self::KEPT_FIELDS.contains(&i))
                 || (!fog && Self::FOG_FIELDS.contains(&i))
+                || (!moon_phase && Self::MOON_FIELDS.contains(&i))
         };
-        let fields = Self::WGSL.fields.iter().enumerate();
-        fields
-            .filter(|&(i, _)| !skipped(i))
-            .map(|(_, f)| *f)
+        (0..Self::WGSL.fields.len())
+            .filter(|&i| !skipped(i))
             .collect()
     }
 
-    /// `declared` as WGSL. Without `[[resource]]` the fog's fields would follow `luminance`
-    /// where the epochs are: there `luminance` keeps the epochs' bytes (`@size`), so they stay
-    /// at the offsets the uploaded struct has.
-    pub fn declared_wgsl(ray_tracing: bool, kept: bool, fog: bool) -> String {
+    /// `declared` as WGSL. Where the fields left out would bring the next one closer than the
+    /// uploaded struct has it (the epochs or the fog's, before a later field), the field before
+    /// them keeps their bytes (`@size`), so every field stays at its uploaded offset.
+    pub fn declared_wgsl(ray_tracing: bool, kept: bool, fog: bool, moon_phase: bool) -> String {
         let mut out = format!("struct {} {{\n", Self::WGSL.name);
-        for f in Self::declared(ray_tracing, kept, fog) {
-            let luminance = f.name == Self::WGSL.fields[Self::KEPT_FIELDS.start - 1].name;
-            if luminance && fog && !kept {
-                let epochs = Self::OFFSETS[Self::FOG_FIELDS.start]
-                    - Self::OFFSETS[Self::KEPT_FIELDS.start - 1];
-                out += &format!("    @size({epochs}) ");
-            } else {
-                out += "    ";
+        let at = Self::declared_at(ray_tracing, kept, fog, moon_phase);
+        for (n, &i) in at.iter().enumerate() {
+            let f = Self::WGSL.fields[i];
+            out += "    ";
+            if let Some(&next) = at.get(n + 1) {
+                let (size, _) = layout(f.ty);
+                let (_, align) = layout(Self::WGSL.fields[next].ty);
+                if (Self::OFFSETS[i] + size).next_multiple_of(align) != Self::OFFSETS[next] {
+                    out += &format!("@size({}) ", Self::OFFSETS[next] - Self::OFFSETS[i]);
+                }
             }
             out += &format!("{}: {},\n", f.name, f.ty);
         }
         out + "}\n"
+    }
+}
+
+/// The size and alignment of a uniform field's WGSL type (`wgsl_types!`).
+fn layout(ty: &str) -> (usize, usize) {
+    match ty {
+        "f32" | "u32" | "i32" => (4, 4),
+        "vec2<f32>" => (8, 8),
+        "vec3<f32>" => (12, 16),
+        "vec4<f32>" => (16, 16),
+        "mat4x4<f32>" => (64, 16),
+        "array<vec4<f32>, 8>" => (128, 16),
+        _ => unreachable!("not a uniform field's type: {ty}"),
     }
 }
 
@@ -507,10 +538,10 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 63);
+        assert_eq!(wgsl.fields.len(), 64);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
         // `luminance` is a `vec3`, on the next 16 bytes, the epochs after it, then the fog's
-        // two pairs, to the end of the next 16.
+        // two pairs and the moon's phase, to the end of the next 16.
         let size = std::mem::size_of::<Frame>();
         assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 5 * 16);
         assert_eq!(
@@ -521,28 +552,29 @@ mod tests {
                 size - 32,
                 size - 28,
                 size - 24,
-                size - 16
+                size - 16,
+                size - 8
             ]
         );
         // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
         // `[[resource]]` pack's, the fog's only a `[frame] fog = "pack"` pack's.
         let names = |s: Vec<Field>| s.iter().map(|f| f.name).collect::<Vec<_>>();
-        let traced = names(Frame::declared(true, false, false));
+        let traced = names(Frame::declared(true, false, false, false));
         assert_eq!(
             traced[Frame::RAY_FIELDS],
             ["has_ray_tracing", "ray_distance"]
         );
         assert_eq!(traced.last(), Some(&"luminance"));
-        let untraced = names(Frame::declared(false, false, false));
+        let untraced = names(Frame::declared(false, false, false, false));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
         assert_eq!(untraced.last(), Some(&"luminance"));
         let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
         let fog = ["fog_environment", "fog_render"];
         for ray_tracing in [false, true] {
-            let kept = names(Frame::declared(ray_tracing, true, false));
+            let kept = names(Frame::declared(ray_tracing, true, false, false));
             assert_eq!(kept[kept.len() - 3..], epochs);
-            let fogged = names(Frame::declared(ray_tracing, false, true));
+            let fogged = names(Frame::declared(ray_tracing, false, true, false));
             assert_eq!(fogged[fogged.len() - 3..], ["luminance", fog[0], fog[1]]);
         }
         assert_eq!(
@@ -550,6 +582,10 @@ mod tests {
             epochs
         );
         assert_eq!(names(Frame::WGSL.fields.to_vec())[Frame::FOG_FIELDS], fog);
+        assert_eq!(
+            names(Frame::WGSL.fields.to_vec())[Frame::MOON_FIELDS],
+            ["moon_phase"]
+        );
         assert!(wgsl.wgsl().contains(
             "    camera_position: vec3<f32>,
     time: f32,

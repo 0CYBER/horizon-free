@@ -741,6 +741,7 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 | `reset_reasons` | `u32` | 804 | Why an epoch changed this frame: the prelude's `REASON_*` bits ("Kept resources"); 0 when neither did. Only a pack with `[[resource]]` has this field. |
 | `fog_environment` | `vec2<f32>` | 808 | Where the fog of where the camera is starts and where it is full (x, y), in blocks along the straight line from the camera: the dimension's and the biome's, thickened by rain, or that of water, lava, powder snow, blindness, darkness or a boss. Only a pack with `[frame] fog = "pack"` has this field. |
 | `fog_render` | `vec2<f32>` | 816 | Where the render distance's fog starts and where it is full (x, y), in blocks along the larger of the horizontal distance and the height difference from the camera. Only a pack with `[frame] fog = "pack"` has this field. |
+| `moon_phase` | `u32` | 824 | The moon's phase, as Horizon draws the moon: 0 full, 1 waning gibbous, 2 third quarter, 3 waning crescent, 4 new, 5 waxing crescent, 6 first quarter, 7 waxing gibbous. It moves on by one each day. Only a pack whose files name `moon_phase` has this field. |
 
 ## Anti-aliasing
 

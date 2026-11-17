@@ -45,6 +45,10 @@ pub struct Sky {
     pub ambient_light_color: [f32; 3],
     pub sun_angle: f32,
     pub moon_angle: f32,
+    /// The moon's phase the sky draws, 0 full to 7 waxing gibbous: vanilla's `visual/moon_phase`,
+    /// one a day on the day clock sampled.
+    #[serde(default)]
+    pub moon_phase: u32,
     pub star_angle: f32,
     pub star_brightness: f32,
     pub sunrise_color: [f32; 4],
@@ -1151,6 +1155,7 @@ impl Environment {
             ambient_light_color: rgb("visual/ambient_light_color"),
             sun_angle: float("visual/sun_angle"),
             moon_angle: float("visual/moon_angle"),
+            moon_phase: (at.day_time / 24000).rem_euclid(8) as u32,
             star_angle: float("visual/star_angle"),
             star_brightness: float("visual/star_brightness"),
             sunrise_color: argb("visual/sunrise_sunset_color"),

@@ -364,3 +364,32 @@ fn on_a_brighter_display_only_the_disc_follows_its_peak() {
         );
     }
 }
+
+/// The sun's quad and the moon's, as `Game::celestial_geometry` emits them: a pack's sky that
+/// draws one of them leaves out that body's six indices, and one that draws neither leaves all
+/// of them in, also where one body's sprite didn't load and only the other's quad is there.
+#[test]
+fn a_pack_sky_leaves_out_the_sun_or_the_moon_it_draws() {
+    use super::bodies;
+    let quad = |tier: u8| {
+        let mut v: Vertex = bytemuck::Zeroable::zeroed();
+        v.layer = 2 | u32::from(tier) << 16;
+        [v; 4]
+    };
+    let (sun, moon) = (quad(VERY_BRIGHT), quad(LOW));
+    let both = [sun, moon].concat();
+    assert_eq!(bodies(&both, false, false), 0..12);
+    assert_eq!(bodies(&both, true, false), 6..12);
+    assert_eq!(bodies(&both, false, true), 0..6);
+    assert!(bodies(&both, true, true).is_empty());
+    // Only the sun: hiding the moon leaves it, hiding it leaves nothing.
+    for own_moon in [false, true] {
+        assert_eq!(bodies(&sun, false, own_moon), 0..6);
+        assert!(bodies(&sun, true, own_moon).is_empty());
+    }
+    // Only the moon: the other way round.
+    for own_sun in [false, true] {
+        assert_eq!(bodies(&moon, own_sun, false), 0..6);
+        assert!(bodies(&moon, own_sun, true).is_empty());
+    }
+}

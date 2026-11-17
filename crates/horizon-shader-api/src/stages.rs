@@ -1314,7 +1314,7 @@ impl StageKind {
             self,
             StageKind::Post | StageKind::Material | StageKind::Compute | StageKind::BeforeWorld
         );
-        self.prelude_rays(tracing, rays, false, false, false)
+        self.prelude_rays(tracing, rays, false, false, false, false)
     }
 
     /// `prelude_traced`, with the ray names only where `rays`: a material, compute or
@@ -1322,6 +1322,7 @@ impl StageKind {
     /// them. `kept`: the frame's epochs, for a pack with `[[resource]]`. With `entities` (the
     /// pack's files name `RAY_ENTITY`) the trace functions have the entity layer too. `fog`:
     /// the frame's fog distances and `vanilla_fog`, for a pack with `[frame] fog = "pack"`.
+    /// `moon_phase`: the frame's `moon_phase`, for a pack whose files name it.
     fn prelude_rays(
         self,
         tracing: Tracing,
@@ -1329,6 +1330,7 @@ impl StageKind {
         kept: bool,
         entities: bool,
         fog: bool,
+        moon_phase: bool,
     ) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1340,7 +1342,7 @@ impl StageKind {
             crate::API,
             crate::reference::PATH
         );
-        out += &Frame::declared_wgsl(tracing != Tracing::None, kept, fog);
+        out += &Frame::declared_wgsl(tracing != Tracing::None, kept, fog, moon_phase);
         if kept {
             out += &crate::kept::reasons_wgsl();
         }
@@ -1737,6 +1739,19 @@ pub fn names_ray_entity(pack: &Pack) -> bool {
     pack.manifest.ray_tracing.is_some() && pack.manifest.files().into_iter().any(named)
 }
 
+/// Whether the files of `pack` name `moon_phase` anywhere outside a comment, dead code included:
+/// only then does its `Frame` have the field, so a pack that doesn't is built from the WGSL it
+/// had before it.
+pub fn names_moon_phase(pack: &Pack) -> bool {
+    let named = |file: &str| {
+        let text = pack.source(file).unwrap_or_default();
+        identifiers(text)
+            .iter()
+            .any(|(_, name)| *name == "moon_phase")
+    };
+    pack.manifest.files().into_iter().any(named)
+}
+
 /// Whether a material stage's files, `texts`, name a trace function: only then does its prelude
 /// have them and the renderer build its terrain against the scene.
 fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
@@ -1810,7 +1825,8 @@ pub(crate) fn compose_traced(
     let kept = !m.kept.resources.is_empty();
     let entities = rays && names_ray_entity(pack);
     let fog = m.fog == crate::Fog::Pack;
-    let mut prelude = kind.prelude_rays(tracing, rays, kept, entities, fog)
+    let moon_phase = names_moon_phase(pack);
+    let mut prelude = kind.prelude_rays(tracing, rays, kept, entities, fog, moon_phase)
         + &texture_declarations(&pack.manifest.textures);
     if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);

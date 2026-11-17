@@ -55,9 +55,10 @@ pub struct Capabilities {
     pub displacement: bool,
     /// Its terrain draws with layers of its own.
     pub material: bool,
-    /// Its sky leaves out vanilla's clouds, sun or stars.
+    /// Its sky leaves out vanilla's clouds, sun, moon or stars.
     pub hides_clouds: bool,
     pub hides_sun: bool,
+    pub hides_moon: bool,
     pub hides_stars: bool,
     /// Its post ends in a tone curve of its own, in place of the engine's.
     pub tone_curve: bool,

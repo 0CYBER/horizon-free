@@ -390,11 +390,11 @@ pub struct NativeShadow {
 }
 
 /// The entity draw's shader. Like the terrain's (`shader_source`), it declares `Frame` without
-/// the fields only a `[frame] fog = "pack"` prelude has.
+/// the fields only some packs' preludes have (`[frame] fog = "pack"`'s, `moon_phase`).
 fn entity_source() -> String {
     format!(
         "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{ENTITY_ENTRIES}",
-        FrameInputs::declared_wgsl(true, true, false),
+        FrameInputs::declared_wgsl(true, true, false, false),
         horizon_shader_api::stages::SHADOW_HELPERS,
     )
 }
@@ -510,7 +510,7 @@ fn shader_source(
         (None, None) => (
             format!(
                 "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{UNTAKEN}",
-                FrameInputs::declared_wgsl(true, true, false),
+                FrameInputs::declared_wgsl(true, true, false, false),
                 horizon_shader_api::stages::SHADOW_HELPERS,
             ),
             super::native_material::DISPLACE_VANILLA,
@@ -899,7 +899,7 @@ mod tests {
     #[test]
     fn the_shadow_shaders_declare_the_frame_as_before() {
         use sha2::{Digest, Sha256};
-        let frame = FrameInputs::declared_wgsl(true, true, false);
+        let frame = FrameInputs::declared_wgsl(true, true, false, false);
         assert_eq!(
             format!("{:x}", Sha256::digest(&frame)),
             "9218b8f0da2c1af28ace7bc402e44701448011acee478c9cef34277b2ab5e034"

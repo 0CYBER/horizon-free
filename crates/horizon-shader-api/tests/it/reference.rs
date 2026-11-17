@@ -194,10 +194,15 @@ fn the_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
 }
 
 /// The `Frame` struct a prelude declares, for a pack with `[ray_tracing]` or without, with
-/// `[[resource]]` or without, and with `[frame] fog = "pack"` or without, as (name, offset) and
-/// its span.
-fn frame_layout(ray_tracing: bool, kept: bool, fog: bool) -> (Vec<(String, usize)>, usize) {
-    let module = validate(&Frame::declared_wgsl(ray_tracing, kept, fog));
+/// `[[resource]]` or without, with `[frame] fog = "pack"` or without, and whose files name
+/// `moon_phase` or not, as (name, offset) and its span.
+fn frame_layout(
+    ray_tracing: bool,
+    kept: bool,
+    fog: bool,
+    moon_phase: bool,
+) -> (Vec<(String, usize)>, usize) {
+    let module = validate(&Frame::declared_wgsl(ray_tracing, kept, fog, moon_phase));
     let (_, ty) = module
         .types
         .iter()
@@ -227,34 +232,34 @@ fn the_frame_s_wgsl_layout_is_the_uploaded_struct_s() {
     for ray_tracing in [false, true] {
         for kept in [false, true] {
             for fog in [false, true] {
-                let mut want = rust.clone();
-                let left = |range: std::ops::Range<usize>, on: bool| (!on).then_some(range);
-                for range in [
-                    left(Frame::FOG_FIELDS, fog),
-                    left(Frame::KEPT_FIELDS, kept),
-                    left(Frame::RAY_FIELDS, ray_tracing),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    want.drain(range);
+                for moon_phase in [false, true] {
+                    let mut want = rust.clone();
+                    let left = |range: std::ops::Range<usize>, on: bool| (!on).then_some(range);
+                    for range in [
+                        left(Frame::MOON_FIELDS, moon_phase),
+                        left(Frame::FOG_FIELDS, fog),
+                        left(Frame::KEPT_FIELDS, kept),
+                        left(Frame::RAY_FIELDS, ray_tracing),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        want.drain(range);
+                    }
+                    let keys = format!(
+                        "ray tracing {ray_tracing}, kept {kept}, fog {fog}, moon phase {moon_phase}"
+                    );
+                    let (wgsl, span) = frame_layout(ray_tracing, kept, fog, moon_phase);
+                    assert_eq!(wgsl, want, "{keys}");
+                    // Without the fog's fields and the moon's phase the struct ends before them,
+                    // a prefix of the buffer; without the epochs either, before those.
+                    let end = match (kept, fog || moon_phase) {
+                        (_, true) => size,
+                        (true, false) => size - 16,
+                        (false, false) => size - 32,
+                    };
+                    assert_eq!(span, end, "{keys}");
                 }
-                let (wgsl, span) = frame_layout(ray_tracing, kept, fog);
-                assert_eq!(
-                    wgsl, want,
-                    "ray tracing {ray_tracing}, kept {kept}, fog {fog}"
-                );
-                // Without the fog's fields the struct ends before them, a prefix of the buffer;
-                // without the epochs either, before those.
-                let end = match (kept, fog) {
-                    (_, true) => size,
-                    (true, false) => size - 16,
-                    (false, false) => size - 32,
-                };
-                assert_eq!(
-                    span, end,
-                    "ray tracing {ray_tracing}, kept {kept}, fog {fog}"
-                );
             }
         }
     }

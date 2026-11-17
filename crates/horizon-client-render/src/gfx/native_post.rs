@@ -1677,7 +1677,8 @@ pub fn frame_inputs(
         reset_reasons: 0,
         fog_environment: [fog[0], fog[1]],
         fog_render: [fog[2], fog[3]],
-        padding: [0; 2],
+        moon_phase: frame.sky.moon_phase,
+        padding: [0; 1],
     }
 }
 

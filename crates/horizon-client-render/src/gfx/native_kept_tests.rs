@@ -1009,6 +1009,19 @@ fn a_compute_pass_writes_an_r32uint_texture_a_post_pass_loads() {
 /// `[[before_world]]` passes recorded by `NativePack::before_world`, then its chain; the
 /// screen's first pixel each frame, red `wants`.
 fn through_pack(manifest: &str, files: &[(&str, &str)], wants: &[f32]) {
+    through_pack_frames(manifest, files, wants, |_, _| {}, true);
+}
+
+/// `through_pack`, with `set` changing the renderer's frame before each (by its index), and
+/// with `refusal` the store's refusal on a device without room for it after them, which only a
+/// pack with `[[resource]]` has.
+fn through_pack_frames(
+    manifest: &str,
+    files: &[(&str, &str)],
+    wants: &[f32],
+    set: impl Fn(&mut crate::gfx::Frame, usize),
+    refusal: bool,
+) {
     let Some((device, queue)) = device() else {
         return;
     };
@@ -1031,6 +1044,7 @@ fn through_pack(manifest: &str, files: &[(&str, &str)], wants: &[f32]) {
     let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     for (n, &want) in (1..).zip(wants) {
+        set(&mut frame, n as usize - 1);
         // A scripted clock: a slow frame on a loaded machine is no pause that resets the store.
         let timing = crate::gfx::pack_uniforms::FrameTiming::nth(n, 50.0);
         frame.pack.frame_timing = Some(timing);
@@ -1042,6 +1056,11 @@ fn through_pack(manifest: &str, files: &[(&str, &str)], wants: &[f32]) {
         let post = &mut pack.post;
         let got = screen.show((&device, &queue), post, &pack.frame.surface_view, [4, 4]);
         assert!(shows(got, [want, 0.0, 0.0]), "{got:?}, {want} expected");
+    }
+    if !refusal {
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "{error:?}");
+        return;
     }
     // The same pack again, on a device without the video memory for its store (`NO_ROOM`):
     // refused (`install_kept`), and this one keeps running, its store made again and its
@@ -1099,6 +1118,24 @@ fn through_pack(manifest: &str, files: &[(&str, &str)], wants: &[f32]) {
 fn a_pack_s_own_frames_run_its_compute_pass() {
     let (manifest, files) = SUMMING;
     through_pack(manifest, &files, &[0.25, 0.5, 0.75]);
+}
+
+/// A pack whose files name `moon_phase` reads the phase the renderer's frame carries
+/// (`Sky::moon_phase`), through `NativePack::write`, where its prelude declares the field: each
+/// frame shows its own phase. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each
+/// backend.
+#[test]
+fn a_pack_reads_the_moon_phase_the_renderer_draws() {
+    let files = [(
+        "p.wgsl",
+        "fn post(input: PostInput) -> vec4<f32> {\n    \
+         return vec4<f32>(f32(frame.moon_phase) * 0.125, 0.0, 0.0, 1.0);\n}\n",
+    )];
+    let phases = [2, 5, 7];
+    let wants = phases.map(|p| p as f32 * 0.125);
+    let manifest = "[[post]]\nfile = \"p.wgsl\"\n";
+    let set = |frame: &mut crate::gfx::Frame, n: usize| frame.sky.moon_phase = phases[n];
+    through_pack_frames(manifest, &files, &wants, set, false);
 }
 
 /// `SUMMING` with its compute pass before the world (`[[before_world]]`) instead.
