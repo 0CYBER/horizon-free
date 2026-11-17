@@ -345,7 +345,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             {
                 self.level.send_block_updated(pos);
             }
-            if update_flags & flags::UPDATE_NEIGHBORS != 0 {
+            // Level.setBlock's neighbour report is Level.blockUpdated, which
+            // does nothing on a client (Level.blockUpdated checks isClientSide);
+            // its analog-output report is guarded the same way. A client's level
+            // takes the state the server sent, and the shape updates below
+            // (which both sides run) keep it consistent.
+            if update_flags & flags::UPDATE_NEIGHBORS != 0 && !self.level.is_client_side() {
                 let old_block = self.block_of(old);
                 self.update_neighbors_at(pos, old_block);
                 if self.has_analog_output(state) {
@@ -436,7 +441,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.block_of(self.state(pos)) != new_block {
             return None;
         }
-        if update_flags & flags::UPDATE_SKIP_ON_PLACE == 0 {
+        // LevelChunk.setBlockState runs onPlace on the server only
+        // (!level.isClientSide && (flags & 512) == 0): a client's copy of the
+        // level takes the state the server sent and waits for the server's
+        // block events, so no onPlace tick, neighbour report or sound runs there.
+        if !self.level.is_client_side() && update_flags & flags::UPDATE_SKIP_ON_PLACE == 0 {
             self.on_place(state, pos, old, moved);
         }
         let landed = self.state(pos);

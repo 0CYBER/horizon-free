@@ -2468,6 +2468,43 @@ fn tnt_duper_3856_client_placement_does_not_prime_tnt() {
     assert!(w.level.events.is_empty());
 }
 
+/// `LevelChunk.setBlockState` runs `onPlace` on the server only, and
+/// `Level.blockUpdated` (the neighbour report of a set) does nothing on a
+/// client: a client's copy of the level takes the state the server sent and
+/// waits for the server's own block events. Shape updates, which both sides
+/// run, still keep it consistent.
+#[test]
+fn a_client_placement_runs_no_on_place_and_no_neighbour_report() {
+    let mut w = world!();
+    w.level.client_side = true;
+    w.floor(0, 3, "stone");
+    let fire_pos = BlockPos::new(0, 1, 0);
+    let door_pos = BlockPos::new(2, 1, 0);
+    let door = w.id(
+        "oak_door",
+        &[
+            ("half", "lower"),
+            ("facing", "east"),
+            ("hinge", "left"),
+            ("open", "false"),
+            ("powered", "false"),
+        ],
+    );
+    w.put(door_pos, door);
+    assert!(w.set(fire_pos, w.id("fire", &[])));
+    assert_eq!(
+        w.ticks.blocks.count(),
+        0,
+        "onPlace runs on a server only: no client-side fire tick"
+    );
+    assert!(w.set(fire_pos.offset(1, 0, 0), w.id("redstone_block", &[])));
+    assert_eq!(
+        w.prop(door_pos, "open"),
+        "false",
+        "a client takes no neighbour report from a set: the door stays as the server left it"
+    );
+}
+
 #[test]
 fn tnt_duper_3856_server_still_primes_each_powered_tnt() {
     let mut w = world!();
