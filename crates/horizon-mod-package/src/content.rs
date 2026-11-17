@@ -224,30 +224,9 @@ pub struct StateValues<T> {
     pub default: Option<T>,
 }
 
-/// Block-local boxes selected by an ordered tuple of state properties.
-#[derive(Clone, Debug, PartialEq)]
+/// Block-local boxes selected by one state property or an ordered tuple.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct BlockShapes(pub StateValues<Vec<[f64; 6]>>);
-
-impl<'de> Deserialize<'de> for BlockShapes {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Shapes {
-            #[serde(default)]
-            properties: Vec<String>,
-            #[serde(default)]
-            values: BTreeMap<String, Vec<[f64; 6]>>,
-            default: Option<Vec<[f64; 6]>>,
-        }
-        let shapes = Shapes::deserialize(deserializer)?;
-        Ok(Self(StateValues {
-            property: String::new(),
-            properties: shapes.properties,
-            values: shapes.values,
-            default: shapes.default,
-        }))
-    }
-}
 
 impl std::ops::Deref for BlockShapes {
     type Target = StateValues<Vec<[f64; 6]>>;
@@ -1933,10 +1912,8 @@ capabilities = ["registries"]
             block.collision_shapes.as_ref().unwrap().default,
             Some(vec![])
         );
-        assert!(
-            serde_json::from_str::<BlockShapes>(r#"{"property":"axis","default":[]}"#).is_err()
-        );
         for value in [
+            r#"{"property":"axis","properties":["axis"],"default":[]}"#,
             r#"{"properties":["axis","axis"],"default":[]}"#,
             r#"{"properties":["Axis"],"default":[]}"#,
             r#"{"properties":["axis","count"],"values":{"x":[]}}"#,
@@ -1968,6 +1945,26 @@ capabilities = ["registries"]
         let mut nonfinite = oversized;
         nonfinite.default = Some(vec![[f64::NAN; 6]]);
         assert!(nonfinite.check().is_err());
+    }
+
+    #[test]
+    fn content_package_accepts_legacy_single_property_shapes() {
+        let content = hmod(
+            "legacy-shapes",
+            MANIFEST_TEXT,
+            &[(
+                "data/ruby/horizon/block/pipe.json",
+                br#"{"template":"minecraft:iron_chain","shapes":{"property":"axis","values":{"x":[[0,0.375,0.375,1,0.625,0.625]]}},"collision_shapes":{"property":"axis","values":{"x":[]}}}"#,
+            )],
+        )
+        .unwrap();
+        let block = &content.blocks[0];
+        let shapes = block.shapes.as_ref().unwrap();
+        assert_eq!(shapes.property_names(), ["axis"]);
+        assert_eq!(shapes.values["x"], [[0.0, 0.375, 0.375, 1.0, 0.625, 0.625]]);
+        let collision = block.collision_shapes.as_ref().unwrap();
+        assert_eq!(collision.property_names(), ["axis"]);
+        assert!(collision.values["x"].is_empty());
     }
 
     fn hmod(name: &str, manifest: &str, files: &[(&str, &[u8])]) -> Result<Content, String> {
