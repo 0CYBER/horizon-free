@@ -463,12 +463,14 @@ impl<E: Entry> UserList<E> {
     pub fn save(&self) -> std::io::Result<()> {
         std::fs::write(&self.file, self.to_json())
     }
-    /// StoredUserList.load: a missing file leaves the list as it is.
+    /// StoredUserList.load: a missing file leaves the list as it is; a path that exists but cannot
+    /// be read is an error, as vanilla's reader throws before it clears the map.
     pub fn load(&mut self) -> Result<(), String> {
-        let Ok(text) = read_utf8(&self.file) else {
-            return Ok(());
-        };
-        self.load_str(&text)
+        match read_utf8(&self.file) {
+            Ok(text) => self.load_str(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("{}: {e}", self.file.display())),
+        }
     }
     pub fn load_str(&mut self, text: &str) -> Result<(), String> {
         self.map = JavaHashMap::default();
@@ -704,6 +706,36 @@ mod tests {
             std::fs::write(&file, bytes).unwrap();
             assert_eq!(read_utf8(&file).unwrap(), expected, "{bytes:x?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `StoredUserList.load` only treats a missing path as a no-op: a path that exists but cannot
+    /// be read (here a directory in place of the JSON file) throws before the map is touched.
+    #[test]
+    fn a_list_that_cannot_be_read_is_an_error_and_keeps_its_entries() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-lists-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("whitelist.json");
+        std::fs::write(
+            &file,
+            r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Alex"}]"#,
+        )
+        .unwrap();
+        let mut white = WhiteList::new(&file);
+        white.load().unwrap();
+        assert_eq!(white.entries().len(), 1);
+
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        let error = white.load().unwrap_err();
+        assert!(error.contains("whitelist.json"), "{error}");
+        assert_eq!(white.entries().len(), 1, "the entries survive a read error");
+
+        let mut missing = WhiteList::new(dir.join("missing.json"));
+        missing.load().unwrap();
+        assert!(missing.is_empty());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
