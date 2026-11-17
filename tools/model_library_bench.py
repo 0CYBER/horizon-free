@@ -16,6 +16,30 @@ import subprocess
 import tempfile
 
 
+def parse_row(text):
+    """Every `key=value` numeric token a benchmark printed, with a named error for a malformed one.
+
+    The old `[0-9.]+` class dropped negative values (e.g. `delta_ms=-3.0`) without a word and matched
+    `v=1.2.3`, leaving a bare `float()` to raise after all samples had been collected.
+    """
+    row = {}
+    for key, value in re.findall(r"(\w+)=(\S+)", text):
+        try:
+            row[key] = float(value)
+        except ValueError as error:
+            raise ValueError(f"cannot parse {key}={value!r} in benchmark output: {text!r}") from error
+    return row
+
+
+def summarize(rows):
+    """Per-key figures over every sample that reported that key, not just the ones in the first sample."""
+    keys = sorted({key for row in rows for key in row})
+    return {key: {
+        "median": statistics.median(row[key] for row in rows if key in row),
+        "samples": [row[key] for row in rows if key in row],
+    } for key in keys}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline", type=Path)
@@ -36,16 +60,13 @@ def main():
                     text = output.read()
                     if process.returncode:
                         raise subprocess.CalledProcessError(process.returncode, command, text)
-            row = {key: float(value) for key, value in re.findall(r"(\w+)=([0-9.]+)", text)}
+            row = parse_row(text)
             row["peak_rss_kib"] = usage.ru_maxrss
             print(json.dumps({"iteration": iteration, "label": label, **row}), flush=True)
             if iteration >= 2:
                 samples[label].append(row)
     for label, rows in samples.items():
-        print(label, json.dumps({key: {
-            "median": statistics.median(row[key] for row in rows),
-            "samples": [row[key] for row in rows],
-        } for key in rows[0]}), flush=True)
+        print(label, json.dumps(summarize(rows)), flush=True)
 
 
 if __name__ == "__main__":
