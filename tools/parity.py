@@ -271,7 +271,9 @@ def artifacts_of(arguments):
     index = 1
     while index < len(arguments):
         argument = arguments[index]
-        flag, _, value = argument.partition("=")
+        flag, sep, value = argument.partition("=")
+        if not sep and flag[:2] in ("-p", "-F") and len(flag) > 2:
+            flag, value = flag[:2], flag[2:]
         if flag in SELECTION_FLAGS | {"--profile", "--example", "--bin"} and not value and index + 1 < len(arguments):
             value = arguments[index + 1]
             index += 1

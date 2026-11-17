@@ -33,6 +33,16 @@ class ParityRunnerTests(unittest.TestCase):
         self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin=horizon-world"]),
                          [["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
 
+    def test_artifacts_keep_combined_short_package_and_feature_flags(self):
+        combined = parity.artifacts_of(["cargo", "run", "-pfoo", "-Ffeat", "--example", "p"])
+        separated = parity.artifacts_of(["cargo", "run", "-p", "foo", "--features", "feat", "--example", "p"])
+        self.assertEqual(combined, [["example", "p", "dev", ["-p", "foo", "--features", "feat"], True]])
+        self.assertEqual(combined, separated)
+        self.assertEqual(
+            parity.prebuild_commands(combined, {("example", "p"): "foo"}),
+            [["cargo", "build", "--locked", "--profile", "dev", "-p", "foo", "--features", "feat", "--example", "p"]],
+        )
+
     def test_prebuild_follows_a_moved_target_without_losing_features(self):
         selection = ["-p", "horizon-client", "--no-default-features", "--features", "horizon-client/rng-trace"]
         artifacts = [["example", "client_probe", "fast", selection, True],
