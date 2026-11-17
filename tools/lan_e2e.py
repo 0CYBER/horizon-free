@@ -14369,5 +14369,54 @@ CHECKS += ['loot_give_guest']
 CHECK_FNS['loot_give_guest'] = check_loot_give_guest
 
 
+def check_hive_bees(host, guest, out):
+    """Hive the guest breaks with Silk Touch keeps its bees and honey on the guest's
+    client, not only on the server: the stack arrives with `minecraft:bees` and
+    `minecraft:block_state` (BeehiveBlock.playerWillDestroy, Bees and BlockItemStateProperties'
+    stream codecs)."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    cell = (x, y + 1, z + 2)
+    host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
+    guest('command', command='clear @s')
+    guest('command', command='gamemode survival')
+    # An axe is the hive's tool: Efficiency V netherite breaks it at once (35 / 0.6 / 30 > 1).
+    guest('command', command='item replace entity @s weapon.mainhand with '
+                             'minecraft:netherite_axe[enchantments={silk_touch:1,efficiency:5}]')
+    host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:beehive[honey_level=5]'
+                            '{bees:[{entity_data:{id:"minecraft:bee"},ticks_in_hive:0,min_ticks_in_hive:2400}]}')
+    guest.wait(10)
+    try:
+        guest.raw('look-at', x + 0.5, y + 1.5, z + 2.5)
+        guest.raw('mouse', 'left', 'click')
+        guest.wait(10)
+        broken = host.raw('block', *cell).get('block')
+        guest.raw('collect', '6')
+        guest.wait(10)
+        inv = guest('inventory')
+        hives = [s for s in inv['hotbar'] + inv['main'] if s and s.get('item') == 'minecraft:beehive']
+        server = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:beehive"}].components',
+                              'bees')
+        guest.shot(out, 'hive-bees')
+    finally:
+        guest('command', command='gamemode creative')
+        guest('command', command='clear @s')
+    client = hives[0].get('components', '') if hives else ''
+    bee = re.compile(r'id"?:\s*"minecraft:bee"')
+    honey = re.compile(r'honey_level"?:\s*"5"')
+    seen = {'broken': broken, 'client': client, 'server': server,
+            'client bees': len(bee.findall(client)), 'server bees': len(bee.findall(server)),
+            'client honey': bool(honey.search(client)), 'server honey': bool(honey.search(server))}
+    assert broken == 'minecraft:air', f'the hive still stands: {seen}'
+    assert len(hives) == 1, f'the guest picked up {len(hives)} hive stacks: {inv["counts"]}'
+    assert seen['server bees'] == 1 and seen['server honey'], f'the server\'s hive: {seen}'
+    assert seen['client bees'] == 1, f'the guest\'s client lost the bees: {seen}'
+    assert seen['client honey'], f'the guest\'s client lost the honey level: {seen}'
+    return seen
+
+
+CHECKS += ['hive_bees']
+CHECK_FNS['hive_bees'] = check_hive_bees
+
+
 if __name__ == '__main__':
     main()

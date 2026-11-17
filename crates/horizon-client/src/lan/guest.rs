@@ -1362,9 +1362,70 @@ fn builtin_component(
             }
         }
         "minecraft:tool" => write_tool(value, ids, &mut w)?,
+        "minecraft:bees" => write_bees(value, ids, &mut w)?,
+        "minecraft:block_state" => write_block_state(value, &mut w)?,
         _ => return None,
     }
     Some(horizon_protocol::item::Component::Raw(w.data))
+}
+
+/// `Bees.STREAM_CODEC` from the saved list: each `Occupant` as its
+/// `TypedEntityData` (the entity type's registry id, then its data without
+/// the id), `ticksInHive` and `minTicksInHive`.
+fn write_bees(
+    value: &horizon_core::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_core::nbt::Tag;
+    // An empty list is the hive item's default, which a patch leaves out.
+    let Tag::List(bees) = value else {
+        return None;
+    };
+    if bees.is_empty() {
+        return None;
+    }
+    w.varint(i32::try_from(bees.len()).ok()?);
+    for bee in bees {
+        let Some(Tag::Compound(data)) = bee.get("entity_data") else {
+            return None;
+        };
+        let mut data = data.clone();
+        let Some(Tag::String(kind)) = data.remove(&"id".into()) else {
+            return None;
+        };
+        let kind = horizon_world::datafix::dynamic::namespaced(&kind.to_string().ok()?);
+        w.varint(ids("minecraft:entity_type", &kind)?);
+        w.nbt(&Tag::Compound(data));
+        let int = |key: &str| match bee.get(key) {
+            Some(Tag::Int(v)) => Some(*v),
+            _ => None,
+        };
+        w.varint(int("ticks_in_hive")?);
+        w.varint(int("min_ticks_in_hive")?);
+    }
+    Some(())
+}
+
+/// `BlockItemStateProperties.STREAM_CODEC` from the saved map: the count of
+/// properties, then each name and value as strings.
+fn write_block_state(
+    value: &horizon_core::nbt::Tag,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_core::nbt::Tag;
+    let Tag::Compound(properties) = value else {
+        return None;
+    };
+    w.varint(i32::try_from(properties.len()).ok()?);
+    for (name, value) in properties {
+        let Tag::String(value) = value else {
+            return None;
+        };
+        w.string(&name.to_string().ok()?);
+        w.string(&value.to_string().ok()?);
+    }
+    Some(())
 }
 
 /// `Tool.STREAM_CODEC` from `Tool.CODEC`'s saved form: the rules (blocks, an
@@ -1848,6 +1909,14 @@ pub(super) fn network_stack(
             (
                 "minecraft:attribute_modifiers",
                 horizon_protocol::item::component::ATTRIBUTE_MODIFIERS,
+            ),
+            // A hive item's bees: its tooltip, its bundle weight and whether
+            // it stacks all read them.
+            ("minecraft:bees", horizon_protocol::item::component::BEES),
+            // A block item's state: a hive's honey level, a statue's pose.
+            (
+                "minecraft:block_state",
+                horizon_protocol::item::component::BLOCK_STATE,
             ),
         ] {
             if d.other(&format!("!{name}")).is_some() {

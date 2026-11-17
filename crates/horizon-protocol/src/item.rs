@@ -122,6 +122,10 @@ pub mod component {
     /// `Tool`: rules, default mining speed, wear per block, creative breaking.
     pub const TOOL: i32 = 28;
     pub const CONTAINER: i32 = 77;
+    /// `BlockItemStateProperties`: the block state a block item places (a hive's honey level).
+    pub const BLOCK_STATE: i32 = 78;
+    /// `Bees`: a hive item's occupants.
+    pub const BEES: i32 = 79;
     pub const SULFUR_CUBE_CONTENT: i32 = 80;
     pub const PAINTING_VARIANT: i32 = 109;
     /// `SignText.STREAM_CODEC`: a sign item's text, front and back.

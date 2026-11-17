@@ -623,6 +623,22 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 };
                 Tag::compound([("material", material), ("pattern", pattern)])
             }
+            // `Bees`: a hive item's occupants, which its tooltip, its bundle
+            // weight and whether it stacks read.
+            Component::Raw(bytes) if *kind == component::BEES => {
+                let Some(bees) = bees_tag(bytes, builtin) else {
+                    continue;
+                };
+                bees
+            }
+            // `BlockItemStateProperties`: a hive's honey level, which its
+            // tooltip and whether it stacks read, or a statue's pose.
+            Component::Raw(bytes) if *kind == component::BLOCK_STATE => {
+                let Some(state) = block_state_tag(bytes) else {
+                    continue;
+                };
+                state
+            }
             Component::Raw(bytes) if *kind == component::CONSUMABLE => {
                 let Some(tag) = consumable_tag(bytes, builtin) else {
                     continue;
@@ -893,6 +909,45 @@ fn block_entity_data_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
     };
     data.insert("id".into(), Tag::String(kind.into()));
     Some(Tag::Compound(data))
+}
+
+/// `Bees.STREAM_CODEC` as `Bees.CODEC` saves it: each `Occupant`'s
+/// `TypedEntityData` (the entity type's registry id, then its data, which the
+/// saved form keeps with the id), `ticks_in_hive` and `min_ticks_in_hive`.
+fn bees_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
+    let types = builtin.get("minecraft:entity_type")?;
+    let mut r = Reader::new(bytes);
+    let n = r.count(r.remaining()).ok()?;
+    let mut bees = Vec::with_capacity(n);
+    for _ in 0..n {
+        let kind = types.name(r.varint().ok()?)?;
+        let Tag::Compound(mut data) = r.nbt().ok()? else {
+            return None;
+        };
+        data.insert("id".into(), Tag::String(kind.into()));
+        let ticks = r.varint().ok()?;
+        let min_ticks = r.varint().ok()?;
+        bees.push(Tag::compound([
+            ("entity_data", Tag::Compound(data)),
+            ("ticks_in_hive", Tag::Int(ticks)),
+            ("min_ticks_in_hive", Tag::Int(min_ticks)),
+        ]));
+    }
+    (r.remaining() == 0).then_some(Tag::List(bees))
+}
+
+/// `BlockItemStateProperties.STREAM_CODEC` as its codec saves it: a map of
+/// property names to their values, both strings.
+fn block_state_tag(bytes: &[u8]) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let n = r.count(r.remaining()).ok()?;
+    let mut properties = horizon_core::nbt::Compound::new();
+    for _ in 0..n {
+        let name = r.string(32767).ok()?;
+        let value = r.string(32767).ok()?;
+        properties.insert(name.as_str().into(), Tag::String(value.as_str().into()));
+    }
+    (r.remaining() == 0).then_some(Tag::Compound(properties))
 }
 
 /// `DataComponents.CAN_PLACE_ON`'s registry id (26.3); `CAN_BREAK` follows it.
@@ -2321,6 +2376,85 @@ mod tests {
                 unbreakable.then_some(&marker)
             );
         }
+    }
+
+    /// A silk-touched hive's bees and honey level reach the client, which reads
+    /// them for the hive's tooltip, its bundle weight and whether it stacks; an
+    /// empty hive sends neither, its item's defaults.
+    #[test]
+    fn hive_bees_and_honey_survive_inventory_sync() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); component::BEES as usize + 1];
+        components[component::BEES as usize] = "minecraft:bees".into();
+        components[component::BLOCK_STATE as usize] = "minecraft:block_state".into();
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".into(),
+                    Ids::from_names(vec!["minecraft:air".into(), "minecraft:beehive".into()]),
+                ),
+                (
+                    "minecraft:entity_type".into(),
+                    Ids::from_names(vec!["minecraft:allay".into(), "minecraft:bee".into()]),
+                ),
+                (
+                    "minecraft:data_component_type".into(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let ids = |registry: &str, name: &str| {
+            (registry == "minecraft:entity_type" && name == "minecraft:bee").then_some(1)
+        };
+        let bee = |ticks: i32, min_ticks: i32, age: i32| {
+            Tag::compound([
+                (
+                    "entity_data",
+                    Tag::compound([
+                        ("id", Tag::String("minecraft:bee".into())),
+                        ("Age", Tag::Int(age)),
+                    ]),
+                ),
+                ("ticks_in_hive", Tag::Int(ticks)),
+                ("min_ticks_in_hive", Tag::Int(min_ticks)),
+            ])
+        };
+        let sync = |hive: ItemStack| {
+            let sent = crate::lan::guest::stack_to_network(|_| 1, ids, &Some(hive));
+            let mut w = Writer::new();
+            Slot::write(&sent, &mut w);
+            let mut r = Reader::new(&w.data);
+            let received = Slot::read(&mut r).unwrap().unwrap();
+            assert_eq!(r.remaining(), 0);
+            let carried = [component::BEES, component::BLOCK_STATE]
+                .map(|kind| received.component(kind).is_some());
+            (
+                carried,
+                from_network(&received, &builtin, &Dynamic::default()),
+            )
+        };
+        let other =
+            |stack: &ItemStack, name: &str| stack.data().and_then(|d| d.other(name)).cloned();
+
+        let bees = Tag::List(vec![bee(120, 600, 0), bee(0, 2400, -24000)]);
+        let honey = Tag::compound([("honey_level", Tag::String("3".into()))]);
+        let mut full = ItemStack::new("minecraft:beehive", 1);
+        full.data_mut()
+            .set_other("minecraft:bees", Some(bees.clone()));
+        full.data_mut()
+            .set_other("minecraft:block_state", Some(honey.clone()));
+        let (carried, back) = sync(full);
+        assert_eq!(carried, [true, true]);
+        assert_eq!(&*back.item, "minecraft:beehive");
+        assert_eq!(other(&back, "minecraft:bees"), Some(bees));
+        assert_eq!(other(&back, "minecraft:block_state"), Some(honey));
+
+        let (carried, back) = sync(ItemStack::new("minecraft:beehive", 1));
+        assert_eq!(carried, [false, false]);
+        assert_eq!(other(&back, "minecraft:bees"), None);
+        assert_eq!(other(&back, "minecraft:block_state"), None);
     }
 
     /// A stack's own `tool` and `attribute_modifiers` reach the client in
