@@ -34,10 +34,11 @@ class ParityMainTests(unittest.TestCase):
             self.assertEqual(parity_main.base(runs=[]), parent, "no green run yet: the last merge")
             self.assertEqual(parity_main.base(runs=[head]), head)
 
-    def bisect(self, broken_from, merges=4, budgets=None):
+    def bisect(self, broken_from, merges=4, budgets=None, scripted=None, late=None):
         """Run bisect over merges where each harness of broken_from fails from that merge's index on (None: never;
         0: at the base too). Returns the exit code and the pull requests commented on; with budgets, one run after
-        another on the same runner, each as (exit code, comments, commits it ran harnesses at, what it reported)."""
+        another on the same runner, each as (exit code, comments, commits it ran harnesses at, what it reported).
+        A harness of scripted fails as its list says, one entry a run, wherever it runs; the budget is spent once late() says so."""
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(parity_main, "ROOT", Path(tmp)):
             git = lambda *arguments: parity_main.git(*arguments).stdout.strip()
             git("init", "-q")
@@ -55,12 +56,13 @@ class ParityMainTests(unittest.TestCase):
                                                   if command[0] == "gh" else real_run(command, **kwargs))
             at = lambda: commits.index(git("rev-parse", "HEAD"))
             run = lambda names, timeout: ran.append(at()) or [
-                name for name in names if broken_from[name] is not None and at() >= broken_from[name]]
+                name for name in names if (scripted[name].pop(0) if name in (scripted or {}) else
+                                           broken_from[name] is not None and at() >= broken_from[name])]
             runs = []
             with mock.patch.object(parity_main, "LAST_RUN", last_run), \
                  mock.patch.object(parity_main, "BISECT", last_run.with_name("bisect.json")), \
                  mock.patch.object(parity_main, "run_harnesses", run), \
-                 mock.patch.object(parity_main.subprocess, "run", fake_run), \
+                 mock.patch.object(parity_main.subprocess, "run", fake_run),                  mock.patch.object(parity_main.time, "monotonic", lambda: 1e9 if late and late() else 0.0), \
                  mock.patch("builtins.print", lambda *lines, **kwargs: reported.extend(lines)):
                 for budget in budgets or [90]:
                     del comments[:], ran[:], reported[:]
@@ -101,7 +103,29 @@ class ParityMainTests(unittest.TestCase):
         # Finding sound's merge (2) tried merges 7, 3 and 1, where music passed: music's search starts above 7.
         code, comments, ran, _ = self.bisect({"sound": 2, "music": 11}, merges=16, budgets=[90])[0]
         self.assertEqual(comments, [("2", "`sound`"), ("11", "`music`")])
-        self.assertEqual(ran, [15, 0, 7, 3, 1, 2, 11, 9, 10])
+        self.assertEqual(ran, [15, 0, 7, 3, 1, 2, 2, 1, 11, 9, 10, 11, 10], "each named merge and the one before run again")
+
+    def test_a_harness_that_fails_some_of_the_time_names_no_merge(self):
+        # 2026-11-15: pearl_wind_charge failed twice at HEAD and passed once at the base and at each merge tried, so
+        # the search ended on #16690; it fails one run in three before that merge too.
+        fail, ok = True, False
+        for runs, why in (([fail, ok, ok, ok, fail, fail], "fails at the commit before too"),
+                          ([fail, ok, ok, ok, ok], "passes at the merge")):
+            code, comments, ran, reported = self.bisect({"music": 3, "pearl": None}, scripted={"pearl": runs},
+                                                        budgets=[90])[0]
+            self.assertEqual((code, comments), (1, [("3", "`music`")]), why)
+            self.assertEqual(runs, [], "the merge, then the commit before it, ran again")
+            self.assertTrue(any("pearl" in line and "flaky" in line for line in reported), reported)
+        # The budget ends between the two reruns: the one that passed at the merge is settled, the other goes on.
+        runs = [fail, ok, ok, ok, ok]
+        code, comments, _, reported = self.bisect({"music": 3, "pearl": None}, scripted={"pearl": runs},
+                                                  late=lambda: not runs, budgets=[90])[0]
+        self.assertEqual((code, comments), (1, []))
+        self.assertTrue(any("pearl" in line and "flaky" in line for line in reported), reported)
+        self.assertTrue(any("music passes at" in line and "The next run goes on" in line for line in reported), reported)
+        # Failing again at the merge and passing again before it names the merge.
+        self.assertEqual(self.bisect({"pearl": None}, scripted={"pearl": [fail, ok, ok, ok, fail, ok]}),
+                         (1, [("3", "`pearl`")]))
 
     def test_a_harness_a_commit_does_not_have_cannot_fail_there(self):
         with mock.patch.object(parity_main.subprocess, "run") as run:

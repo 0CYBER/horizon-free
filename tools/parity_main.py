@@ -12,7 +12,8 @@ fails again at HEAD and passes at BASE, the first merge it fails on (written to 
 
 The search has --budget minutes: the job's limit otherwise cuts it off with nothing said (seven runs between
 2026-11-09 and 11-11, searching up to 1,500 merges). When they are spent it says between which merges each harness
-broke and stops. What it learnt stays in .local/parity-runner/bisect.json while the base is the same, so the next
+broke and stops. A merge is named only when its harness fails there again and passes again at the commit before it: the search runs
+each merge once, so a harness that fails some of the time would otherwise end on any merge. What it learnt stays in .local/parity-runner/bisect.json while the base is the same, so the next
 run goes on from there, and a merge it already named is not commented on again.
 """
 
@@ -119,10 +120,11 @@ def bisect(since, timeout, comment, budget=90):
     results = state["results"]
     deadline = None  # set once HEAD and the base ran: the budget is for the search between them
 
-    def fails(commit, names):
-        """Those of names that fail at commit: from an earlier run of them there, else by running them now."""
+    def fails(commit, names, again=False):
+        """Those of names that fail at commit: from an earlier run of them there, else (or with again) by running
+        them now."""
         known = results.setdefault(commit, {})
-        missing = [name for name in names if name not in known]
+        missing = [name for name in names if again or name not in known]
         if missing:
             if deadline is not None and time.monotonic() >= deadline:
                 raise OutOfTime
@@ -181,7 +183,30 @@ def bisect(since, timeout, comment, budget=90):
             span = commits[low:high + 1]
             culprit = first_bad(span, failing) if len(span) > 1 else span[0]
             hit = failing(culprit)
-            blames.append((culprit, hit))
+            # The search took one run's word at each merge, so a harness that fails only some of the time ends on
+            # whichever merge follows its last lucky pass (2026-11-15: #16690 named for pearl_wind_charge, which fails
+            # one run in three before it). A merge is named for a harness that fails there once more and passes once
+            # more at the commit before; the others are flaky. One already named was confirmed by the run that did.
+            before = commits[commits.index(culprit) - 1] if commits.index(culprit) else since
+            unconfirmed = [name for name in hit if state["named"].get(name) != culprit]
+            # Each rerun's flaky harnesses are settled before the next rerun, which the budget may end.
+            flaky = []
+            for commit, fail_means_flaky in ((culprit, False), (before, True)):
+                failed_again = fails(commit, [name for name in unconfirmed if name not in flaky], again=True)
+                found = [name for name in unconfirmed if name not in flaky and (name in failed_again) == fail_means_flaky]
+                if found:
+                    report(f"parity-main: {', '.join(found)} {'fail' if fail_means_flaky else 'pass'} when run again "
+                           f"at {commit[:9]}, {'before' if fail_means_flaky else 'the merge the search ended on'}"
+                           f"{f' {culprit[:9]}' if fail_means_flaky else ''}: flaky: no merge is named.")
+                    # Their single runs are no ground for the next run's search either.
+                    for ran in results.values():
+                        for name in found:
+                            ran.pop(name, None)
+                    BISECT.write_text(json.dumps(state), encoding="utf-8")
+                    remaining = [name for name in remaining if name not in found]
+                    flaky += found
+            if len(flaky) < len(hit):
+                blames.append((culprit, [name for name in hit if name not in flaky]))
             remaining = [name for name in remaining if name not in hit]
             low = commits.index(culprit) + 1
     except OutOfTime:
