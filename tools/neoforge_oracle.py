@@ -157,8 +157,14 @@ def classpath(home):
 
 
 def build(home, source=SOURCE, name='horizon-oracle.jar', cp=None):
-    """A dev-only mod jar (by default the exporter), rebuilt when its sources change."""
-    out = LOCAL / 'build'
+    """A dev-only mod jar (by default the exporter), rebuilt when its sources change.
+
+    The build directory is per NeoForge version: install() keeps one home per version, and the
+    compiler classpath (classpath()/client_classpath()) is pinned to NEOFORGE, so switching the
+    version invalidates a jar built against the previous version's classpath. Sharing one build
+    directory across versions would silently reuse that stale jar.
+    """
+    out = LOCAL / f'build-{NEOFORGE}'
     jar = out / name
     sources = sorted((source / 'java').rglob('*.java'))
     resources = sorted(p for p in (source / 'resources').rglob('*') if p.is_file())

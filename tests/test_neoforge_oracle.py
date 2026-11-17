@@ -56,5 +56,63 @@ class LinkTests(unittest.TestCase):
         self.assertEqual((self.root / 'linked.jar').read_bytes(), b'mod')
 
 
+class BuildCacheTests(unittest.TestCase):
+    """The jar cache must be invalidated when the pinned NeoForge version changes."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.root = Path(self._dir.name)
+        src = self.root / 'src'
+        (src / 'java').mkdir(parents=True)
+        (src / 'resources').mkdir()
+        java = src / 'java' / 'Exporter.java'
+        java.write_text('class Exporter {}')
+        # Keep the source well older than any jar the stubbed build writes, so the staleness
+        # check (`jar.mtime > newest`) caches it deterministically regardless of clock granularity.
+        os.utime(java, (1_000_000_000, 1_000_000_000))
+        self.source = src
+        self.compiles = []
+
+    def _fake_run(self, cmd, **kwargs):
+        self.compiles.append(list(cmd))
+        return mock.Mock(returncode=0, stdout='', stderr='')
+
+    def _fake_zip(self, path, *args, **kwargs):
+        class FakeZip:
+            def __enter__(self):
+                Path(path).write_bytes(b'compiled-against-this-classpath')
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def write(self, *a, **k):
+                pass
+
+        return FakeZip()
+
+    def _build(self, version, home, cp):
+        with mock.patch.multiple(oracle, LOCAL=self.root / 'oracle', NEOFORGE=version), \
+                mock.patch.object(oracle.subprocess, 'run', side_effect=self._fake_run), \
+                mock.patch.object(oracle.zipfile, 'ZipFile', side_effect=self._fake_zip):
+            return oracle.build(home, source=self.source, cp=cp)
+
+    def test_switching_version_recompiles_into_a_distinct_jar(self):
+        first = self._build('21.1.259', self.root / 'home-v1', 'cp-v1')
+        after_first = len(self.compiles)
+        second = self._build('99.9.999', self.root / 'home-v2', 'cp-v2')
+        after_second = len(self.compiles)
+        self.assertEqual(after_first, 1)
+        self.assertEqual(after_second, 2, 'switching NeoForge must recompile against the new classpath')
+        self.assertNotEqual(first, second, 'each version must get its own jar path')
+
+    def test_repeated_build_at_one_version_stays_cached(self):
+        first = self._build('21.1.259', self.root / 'home', 'cp')
+        again = self._build('21.1.259', self.root / 'home', 'cp')
+        self.assertEqual(first, again)
+        self.assertEqual(len(self.compiles), 1, 'an unchanged build at one version must stay cached')
+
+
 if __name__ == '__main__':
     unittest.main()
