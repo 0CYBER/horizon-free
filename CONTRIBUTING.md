@@ -21,7 +21,7 @@ the registry, and their docs ([mods](docs/mods.md), [native mods](docs/native-mo
 ## Build it
 
 - **Prerequisites:** Rust (stable), Python 3.11+, JDK 25, git 2.38 or newer, and on Linux the ALSA and udev headers
-  (`libasound2-dev libudev-dev`).
+  (`libasound2-dev libudev-dev`; Void Linux: `base-devel pkg-config alsa-lib-devel eudev-libudev-devel`).
 - **Resources:** Horizon never downloads the game; it prepares its resources from your own copy of Minecraft 26.3, as
   described in [Build from source](docs/native-client.md#run-from-a-checkout).
 - **Commands:**
