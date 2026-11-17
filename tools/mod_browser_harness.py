@@ -106,6 +106,16 @@ def pick_block(mod):
     raise Failed("the carry declares no block with an item")
 
 
+def ingredient_item_id(value):
+    """The item id of a vanilla ingredient, which since 1.20.5 is either a bare id or {"item": id}.
+
+    Anything else (a tag, a list of options, ...) has no single vanilla item id and returns None.
+    """
+    if isinstance(value, dict):
+        return value.get("item")
+    return value
+
+
 def pick_recipe(mod, ns):
     """A crafting recipe of the mod's whose result is its own and whose ingredients are plain vanilla
     item ids, shaped first."""
@@ -120,12 +130,14 @@ def pick_recipe(mod, ns):
             continue
         if r.get("type") == "minecraft:crafting_shaped":
             keys = r.get("key", {})
-            if all(isinstance(v, str) and v.startswith("minecraft:") for v in keys.values()) and \
+            if all(isinstance(ingredient_item_id(v), str) and ingredient_item_id(v).startswith("minecraft:")
+                   for v in keys.values()) and \
                     len(r["pattern"]) <= 3 and all(len(row) <= 3 for row in r["pattern"]):
                 found.append((0, f.name, r))
         elif r.get("type") == "minecraft:crafting_shapeless":
             ing = r.get("ingredients", [])
-            if ing and len(ing) <= 9 and all(isinstance(v, str) and v.startswith("minecraft:") for v in ing):
+            if ing and len(ing) <= 9 and all(isinstance(ingredient_item_id(v), str) and
+                                              ingredient_item_id(v).startswith("minecraft:") for v in ing):
                 found.append((1, f.name, r))
     if not found:
         raise Failed("no crafting recipe of the mod's with vanilla ingredients")
@@ -135,9 +147,9 @@ def pick_recipe(mod, ns):
 def grid_cells(recipe):
     """(slot, item) for each grid cell of a 3x3 crafting table (slots 100-108)."""
     if recipe["type"] == "minecraft:crafting_shaped":
-        return [(100 + 3 * y + x, recipe["key"][c]) for y, row in enumerate(recipe["pattern"])
+        return [(100 + 3 * y + x, ingredient_item_id(recipe["key"][c])) for y, row in enumerate(recipe["pattern"])
                 for x, c in enumerate(row) if c != " "]
-    return [(100 + i, item) for i, item in enumerate(recipe["ingredients"])]
+    return [(100 + i, ingredient_item_id(item)) for i, item in enumerate(recipe["ingredients"])]
 
 
 def inventory_slot(game, item):
