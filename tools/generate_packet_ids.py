@@ -21,7 +21,10 @@ DIRECTIONS = ["clientbound", "serverbound"]
 
 
 def const_name(name):
-    return name.split(":", 1)[1].replace("/", "_").upper()
+    _, sep, rest = name.partition(":")
+    if not sep:
+        raise ValueError(f"unqualified packet id: {name}")
+    return rest.replace("/", "_").upper()
 
 
 def main():
