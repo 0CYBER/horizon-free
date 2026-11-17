@@ -30,9 +30,12 @@ concurrency:
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   HORIZON_TELEMETRY_URL: "off"
-  # Whose sticky disks a run's build folders are on (see verify below): this repository's own runs share theirs, and a
-  # fork's pull request gets its own, so what one leaves never reaches main's.
-  BUILD_DISKS: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'own' || 'fork' }}
+  # Whether a job saves its build folder's sticky disk (see verify below). Only main's pushes and the merge queue do;
+  # every pull request, a fork's too, starts from what they built and its changes are discarded, so nothing a pull
+  # request builds reaches main's disk. Forks once had a disk of their own, but pull_request jobs never save one
+  # (Blacksmith refuses), so it stayed empty and every fork's pull request built the workspace from scratch: 7-10 min
+  # per Rust part on 2026-11-17, against ~2 min for a branch of this repository on main's disk.
+  SAVE_BUILD_DISK: ${{ github.event_name == 'pull_request' && 'false' || 'true' }}
 
 jobs:
   # verify runs as one job per part, side by side, so a run takes as long as its slowest part, not the sum. It was two
@@ -170,8 +173,9 @@ jobs:
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
-          key: ${{ github.repository }}-verify-lint-${{ env.BUILD_DISKS }}
+          key: ${{ github.repository }}-verify-lint-own
           path: ~/horizon-target
+          commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
@@ -216,8 +220,9 @@ jobs:
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
-          key: ${{ github.repository }}-verify-server-${{ env.BUILD_DISKS }}
+          key: ${{ github.repository }}-verify-server-own
           path: ~/horizon-target
+          commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
@@ -279,8 +284,9 @@ jobs:
         if: steps.launcher.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
-          key: ${{ github.repository }}-verify-launcher-${{ env.BUILD_DISKS }}
+          key: ${{ github.repository }}-verify-launcher-own
           path: ~/horizon-target
+          commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
         if: steps.launcher.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
@@ -346,8 +352,9 @@ jobs:
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
-          key: ${{ github.repository }}-verify-test-${{ env.BUILD_DISKS }}
+          key: ${{ github.repository }}-verify-test-own
           path: ~/horizon-target
+          commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target

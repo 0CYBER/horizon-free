@@ -53,14 +53,16 @@ Only `verify`, which waits for them all, is a required check; `tests/test_ci_run
 `runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners.
 
 Each Rust job keeps its Cargo build folder between runs on a Blacksmith sticky disk, as the VPS keeps its own
-(`tools/ci/build_folder.sh`): one disk per job, so jobs that ran side by side don't replace each other's build, and one
-set for this repository's own runs, another for forks' pull requests. A checkout dates every file now; the script gives
-each file whose Git object is the one the disk's last job saw that job's date back (`tools/ci/source_mtimes.py`), so
-Cargo rebuilds only what changed, and empties a disk past 50 GB (`MAX_TARGET_GB`). A failed or cancelled job leaves
-its disk as it found it. The organisation's branch-protected caches setting is on: only main's pushes write the disks,
-and pull requests and the merge queue build on main's latest and discard what they add ("commit denied ... not a
-trusted trigger" in their logs). So a pull request's disks are warm only once main has pushed since the job's disk
-was created, and a fork's copy of the workflow cannot write this repository's disks.
+(`tools/ci/build_folder.sh`): one disk per job, so jobs that ran side by side don't replace each other's build. A
+checkout dates every file now; the script gives each file whose Git object is the one the disk's last job saw that
+job's date back (`tools/ci/source_mtimes.py`), so Cargo rebuilds only what changed, and empties a disk past 50 GB
+(`MAX_TARGET_GB`). A failed or cancelled job leaves its disk as it found it. The organisation's branch-protected
+caches setting is on: only main's pushes write the disks, and pull requests and the merge queue build on main's latest
+and discard what they add ("commit denied ... not a trusted trigger" in their logs); a pull request's jobs also say so
+(`commit: false`). So a pull request's disks are warm only once main has pushed since the job's disk was created, and
+a fork's copy of the workflow cannot write this repository's disks. Forks' pull requests mount main's disks as well:
+until 2026-11-17 they had a set of their own that nothing could save, so each built the whole workspace (7-10 minutes
+per Rust part, against ~2 for a branch here).
 
 ## Which jobs, and when
 
@@ -84,9 +86,9 @@ when playhorizon is down or moves: the bots would wait for it. Back to the defau
 
 ## Forks
 
-An approved fork's pull request runs `verify` on Blacksmith's runners, like this repository's own, with its own
-sticky disks ([above](#verify-on-blacksmith)). It ran on the CI VPS for numbers ending in 0 until 2026-11-17, and
-waited there 30 to 150 minutes when the VPS's two checks runners ran back to back. `mod-registry` and
+An approved fork's pull request runs `verify` on Blacksmith's runners, like this repository's own, on main's sticky
+disks, which it cannot write ([above](#verify-on-blacksmith)). It ran on the CI VPS for numbers ending in 0 until
+2026-11-17, and waited there 30 to 150 minutes when the VPS's two checks runners ran back to back. `mod-registry` and
 `telemetry-server` check the head repository and run a fork's on Blacksmith's.
 
 `SELF_HOSTED_CI` cannot move a fork's run (it sees no repository variable): with `all`, its `verify` still runs on

@@ -141,7 +141,7 @@ class BlacksmithBuildFolderTests(unittest.TestCase):
         # A build before the restore would compare against checkout dates and trust another tree's artifacts' dates;
         # two jobs on one disk would each replace the other's build.
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-        keys = []
+        keys, commits = [], []
         for name, job in jobs.items():
             steps = job.get("steps", [])
             builds = [i for i, step in enumerate(steps) if BUILDS.search(step.get("run", ""))]
@@ -156,10 +156,14 @@ class BlacksmithBuildFolderTests(unittest.TestCase):
                 self.assertEqual(steps[restore]["run"], f"tools/ci/build_folder.sh {steps[mount]['with']['path']}")
                 self.assertEqual(steps[mount]["if"], steps[restore]["if"])
                 keys.append(steps[mount]["with"]["key"])
+                commits.append(steps[mount]["with"].get("commit"))
         self.assertGreaterEqual(len(keys), 4)
         self.assertEqual(len(set(keys)), len(keys))
         for key in keys:
-            self.assertTrue(key.endswith("-${{ env.BUILD_DISKS }}"), key)
+            # Forks' pull requests mount main's disks too: a disk of their own was never saved (pull_request jobs
+            # cannot), so they built from scratch.
+            self.assertTrue(key.endswith("-own"), key)
+        self.assertEqual(commits, ["${{ env.SAVE_BUILD_DISK }}"] * len(keys))
 
 
 if __name__ == "__main__":
