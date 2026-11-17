@@ -1472,7 +1472,8 @@ impl NativePost {
         for (i, ((label, pipeline), group)) in self.passes.iter().zip(passes).enumerate() {
             let computes = self.trace.as_ref().filter(|_| self.traced.is_some());
             let traced = computes.map(|t| t.computes.as_slice());
-            kept::dispatch(&self.kept, encoder, (passes, traced), i, size);
+            let timed = timing.as_deref_mut();
+            kept::dispatch(&self.kept, encoder, (passes, traced), i, size, timed);
             let view = match (self.plan[i].writes, &self.targets, &self.named, &d.picture) {
                 (Writes::Chain(slot), Some((_, t)), _, _) => &t[slot],
                 (Writes::Target(j), _, Some((_, n)), _) => &n[j],
