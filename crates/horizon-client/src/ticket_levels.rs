@@ -159,6 +159,72 @@ impl Map {
             Self::Tiled(map) => map.get(x, z),
         }
     }
+    /// Appends to `out` every chunk where random ticks run (`Levels::random_ticking`), ascending
+    /// by `(x, z)`: the grid by a counting sort on x (its cells come z first), the tiles by x
+    /// across each run of tiles in a column. Nothing is hashed per chunk and nothing is sorted by
+    /// comparison. False, and `out` untouched, for a grid that wraps past the `i32` range.
+    fn push_random_ticking(&self, out: &mut Vec<(i32, i32)>) -> bool {
+        let ticks = |&(loading, sim): &(u8, u8)| loading <= BLOCK_TICKING && sim <= ENTITY_TICKING;
+        match self {
+            Self::Grid {
+                x0,
+                z0,
+                width,
+                depth,
+                cells,
+            } => {
+                if x0.checked_add(*width as i32).is_none()
+                    || z0.checked_add(*depth as i32).is_none()
+                {
+                    return false;
+                }
+                let w = *width as usize;
+                let mut at = vec![0usize; w + 1];
+                for (i, cell) in cells.iter().enumerate() {
+                    if ticks(cell) {
+                        at[i % w + 1] += 1;
+                    }
+                }
+                for dx in 0..w {
+                    at[dx + 1] += at[dx];
+                }
+                let start = out.len();
+                out.resize(start + at[w], (0, 0));
+                for (i, cell) in cells.iter().enumerate() {
+                    if ticks(cell) {
+                        let dx = i % w;
+                        out[start + at[dx]] = (x0 + dx as i32, z0 + (i / w) as i32);
+                        at[dx] += 1;
+                    }
+                }
+                true
+            }
+            #[cfg(test)]
+            Self::Sparse(map) => {
+                let start = out.len();
+                out.extend(map.iter().filter(|(_, c)| ticks(c)).map(|(&k, _)| k));
+                out[start..].sort_unstable();
+                true
+            }
+            Self::Tiled(Tiled(tiles)) => {
+                let mut keys: Vec<(i32, i32)> = tiles.keys().copied().collect();
+                keys.sort_unstable();
+                for column in keys.chunk_by(|a, b| a.0 == b.0) {
+                    for lx in 0..16 {
+                        for key in column {
+                            let tile = &tiles[key];
+                            for lz in 0..16 {
+                                if ticks(&tile[lz * 16 + lx]) {
+                                    out.push((key.0 * 16 + lx as i32, key.1 * 16 + lz as i32));
+                                }
+                            }
+                        }
+                    }
+                }
+                true
+            }
+        }
+    }
     /// Each chunk whose loading level is `FULL` or better, with that level.
     fn for_each_loaded(&self, mut visit: impl FnMut(i32, i32, u8)) {
         match self {
@@ -350,6 +416,14 @@ impl Levels {
     pub fn random_ticking(&self, x: i32, z: i32) -> bool {
         self.get(x, z)
             .is_none_or(|(l, s)| l <= BLOCK_TICKING && s <= ENTITY_TICKING)
+    }
+    /// Fills `out` with the chunks where [`Self::random_ticking`] holds, ascending by `(x, z)`,
+    /// and says so. False (`out` untouched) with no tickets, where it holds everywhere, or for a
+    /// map this cannot enumerate: the caller scans its own chunks then.
+    pub fn random_ticking_sorted(&self, out: &mut Vec<(i32, i32)>) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|map| map.push_random_ticking(out))
     }
     /// The box that holds every chunk `random_ticking` can answer for, or
     /// `None` with no tickets at all, where it ticks everywhere. A box whose
@@ -1144,6 +1218,89 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `random_ticking_sorted` is the chunks `random_ticking` holds for, ascending by `(x, z)`:
+    /// the list `random_tick_chunks` used to make by scanning the resident chunks and sorting
+    /// them. Random tickets, near each other (a grid) and far apart (tiles).
+    #[test]
+    fn random_ticking_sorted_is_the_chunks_that_random_tick_in_order() {
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = move |n: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed % n) as i32
+        };
+        let (mut grids, mut tiles) = (0, 0);
+        for round in 0..300 {
+            let spread = if round % 3 == 0 { 3000 } else { 60 };
+            let at = |next: &mut dyn FnMut(u32) -> i32| {
+                (
+                    next(2 * spread as u32 + 1) - spread,
+                    next(2 * spread as u32 + 1) - spread,
+                )
+            };
+            let players: Vec<(i32, i32)> = (0..next(6) + 1).map(|_| at(&mut next)).collect();
+            let forced: Vec<(i32, i32)> = (0..next(3)).map(|_| at(&mut next)).collect();
+            let sources = Sources {
+                players: players.clone(),
+                forced: forced.clone(),
+                portal: Vec::new(),
+                dragon: (next(4) == 0).then(|| at(&mut next)),
+                viewed: Vec::new(),
+                view_distance: next(12) + 2,
+                simulation_distance: next(12) + 2,
+            };
+            let mut t = ChunkTickets::with_saved_portal(Vec::new());
+            t.update(Some(sources.clone()));
+            let with_portals = next(3) == 0;
+            if with_portals {
+                t.add_portal(at(&mut next));
+                t.update(Some(sources.clone()));
+            }
+            let levels = t.levels();
+            match &**levels.0.as_ref().unwrap() {
+                Map::Grid { .. } => grids += 1,
+                Map::Tiled(_) => tiles += 1,
+                #[cfg(test)]
+                Map::Sparse(_) => {}
+            }
+            let mut got = vec![(7, 7)];
+            assert!(levels.random_ticking_sorted(&mut got));
+            assert_eq!(got.remove(0), (7, 7), "the list is appended to");
+            assert!(
+                got.windows(2).all(|w| w[0] < w[1]),
+                "round {round}: sorted, no repeat"
+            );
+            for &(x, z) in &got {
+                assert!(levels.random_ticking(x, z), "round {round}: ({x}, {z})");
+            }
+            // Players and forced chunks alone: the list is exactly what a scan of their areas
+            // finds. With the arena or portal tickets, whose areas are elsewhere, it holds
+            // at least that.
+            let mut expected = Vec::new();
+            for &(px, pz) in players.iter().chain(&forced) {
+                for z in pz - 40..=pz + 40 {
+                    for x in px - 40..=px + 40 {
+                        if levels.random_ticking(x, z) {
+                            expected.push((x, z));
+                        }
+                    }
+                }
+            }
+            expected.sort_unstable();
+            expected.dedup();
+            if sources.dragon.is_none() && !with_portals {
+                assert_eq!(got, expected, "round {round}");
+            } else {
+                assert!(
+                    expected.iter().all(|c| got.binary_search(c).is_ok()),
+                    "round {round}"
+                );
+            }
+        }
+        assert!(grids > 20 && tiles > 20, "grids {grids}, tiles {tiles}");
     }
 
     /// A saved `PORTAL` ticket keeps its own level, one more a chunk away

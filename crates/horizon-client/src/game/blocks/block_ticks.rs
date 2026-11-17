@@ -337,6 +337,12 @@ impl Game<'_> {
         let levels = self.tickets.levels();
         let bounds = levels.random_tick_bounds();
         out.clear();
+        // The levels give the chunks that random tick already in order: the resident ones among
+        // them are the same list the scan of every resident chunk and its sort make.
+        if levels.random_ticking_sorted(out) {
+            out.retain(|&(x, z)| ticking_chunk(&self.world, x, z));
+            return;
+        }
         out.extend(self.world.chunks.keys().copied().filter(|&(x, z)| {
             if let Some((min_x, min_z, max_x, max_z)) = bounds
                 && (x < min_x || x > max_x || z < min_z || z > max_z)
