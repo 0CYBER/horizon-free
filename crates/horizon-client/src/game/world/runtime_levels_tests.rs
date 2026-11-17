@@ -13,6 +13,25 @@ fn flat() -> RuntimeLevel {
     RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Flat, 1)
 }
 
+/// The three built-in ids never wait for the table of extra dimensions: a hub resolves one per
+/// player and per tick, and a write in progress (a level opening) must not stall it.
+#[test]
+fn a_built_in_dimension_id_does_not_read_the_extra_table() {
+    let held = super::EXTRA_DIMS.write().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(
+            ["overworld", "the_nether", "the_end"].map(|name| super::Dim::from_id(&format!("minecraft:{name}"))),
+        );
+    });
+    let found = rx.recv_timeout(std::time::Duration::from_secs(10));
+    drop(held);
+    assert_eq!(
+        found,
+        Ok([super::Dim::Overworld, super::Dim::Nether, super::Dim::End])
+    );
+}
+
 #[test]
 fn the_cap_refuses_the_open_past_it_and_a_removal_frees_a_place() {
     let mut table = RuntimeTable::default();

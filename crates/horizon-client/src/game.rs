@@ -2077,6 +2077,7 @@ impl Dim {
     }
     fn from_id(id: &str) -> Self {
         match id {
+            "minecraft:overworld" => Self::Overworld,
             "minecraft:the_nether" => Self::Nether,
             "minecraft:the_end" => Self::End,
             _ => Self::extra(id).unwrap_or(Self::Overworld),
