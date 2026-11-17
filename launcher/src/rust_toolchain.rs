@@ -309,6 +309,14 @@ impl Toolchain {
     /// opens no console window: cargo is a console program, and the launcher has none to share, so
     /// each build showed an empty one for as long as it ran (#4770).
     pub fn command(&self, program: &Path) -> Command {
+        self.command_through(program, crate::proxy::for_programs())
+    }
+
+    /// [`Toolchain::command`], its downloads going through `proxy`, the launcher's setting: Cargo
+    /// fetches the crates and horizon-mixins itself and doesn't read the launcher's settings, so the
+    /// Settings page's proxy is handed to it (#16718). Without one it reads `HTTPS_PROXY` from the
+    /// environment, as the launcher does.
+    fn command_through(&self, program: &Path, proxy: Option<String>) -> Command {
         let mut cmd = crate::process::command(program);
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mingw = self.host.c_toolchain.map(|_| self.mingw_bin());
@@ -335,6 +343,9 @@ impl Toolchain {
             if name.to_str().is_some_and(scrubbed) {
                 cmd.env_remove(name);
             }
+        }
+        if let Some(proxy) = proxy {
+            cmd.env("CARGO_HTTP_PROXY", proxy);
         }
         // These are the launcher's own settings, so add them after removing the player's Cargo
         // target overrides. The ARM64 target's linker is LLVM-MinGW's Clang driver; Rust and cc
@@ -1272,6 +1283,27 @@ mod tests {
             Some(toolchain.dir.join("bin"))
         );
         assert!(get("CARGO_HOME").flatten().unwrap().ends_with("cargo"));
+    }
+
+    /// #16718: the Settings page's proxy reaches the build's Cargo, which downloads the crates and
+    /// horizon-mixins itself; without one Cargo is left to the environment's, like the launcher.
+    #[test]
+    fn the_settings_proxy_reaches_cargo() {
+        let toolchain = Toolchain {
+            dir: PathBuf::from("/rust/1.99.1-x"),
+            host: &HOSTS[0],
+        };
+        let proxy = |setting: Option<&str>| {
+            let cmd = toolchain.command_through(&toolchain.cargo(), setting.map(String::from));
+            cmd.get_envs()
+                .find(|(name, _)| *name == "CARGO_HTTP_PROXY")
+                .map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+        };
+        assert_eq!(
+            proxy(Some("socks5h://127.0.0.1:7891")),
+            Some(Some("socks5h://127.0.0.1:7891".into()))
+        );
+        assert_eq!(proxy(None), None, "the player's own CARGO_HTTP_PROXY stays");
     }
 
     /// The tools' scratch dir is the build's own (#5189): MinGW-w64's gcc, as and ld can't

@@ -5,7 +5,8 @@
 //!
 //! What goes through it: Horizon's releases and the launcher's own update, Minecraft's files and
 //! Java from Mojang, Modrinth, CurseForge, Horizon's mod registry, pictures, Microsoft sign-in,
-//! Tailscale's API, and the jars a modpack import downloads. A local address never does, and the
+//! Tailscale's API, the jars a modpack import downloads, and the crates and horizon-mixins a
+//! native build's Cargo downloads ([`for_programs`]). A local address never does, and the
 //! Servers page's calls to a game server's API (`servers.rs`) build their agent without it: they
 //! are on loopback and asked every second.
 //!
@@ -43,6 +44,13 @@ pub fn agent(builder: ureq::AgentBuilder, url: &str) -> ureq::AgentBuilder {
         Some(proxy) => builder.proxy(proxy),
         None => builder,
     }
+}
+
+/// The launcher's setting for the programs it starts that download by themselves, in curl's
+/// spelling, which they read: a native build's Cargo (`CARGO_HTTP_PROXY`), fetching crates and
+/// horizon-mixins. None without one: they read the environment's then, as the launcher does.
+pub fn for_programs() -> Option<String> {
+    setting().map(crate::downloads::proxy_address)
 }
 
 /// Why `spec` can't be used as a proxy, or None when it can (empty means none).

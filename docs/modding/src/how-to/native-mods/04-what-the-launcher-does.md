@@ -26,7 +26,10 @@ that commit's SDK.
    launcher's pinned Rust toolchain and required linker tools if needed; the player's Rust is not used.
 5. Compile the mods against the SDK's game libraries. Registry dependencies use the mod's supplied
    lockfile and the same immutable SDK. The launcher asks for permission before executing dependency
-   build scripts or procedural macros.
+   build scripts or procedural macros. Cargo downloads those dependencies, and horizon-mixins when
+   the launcher builds it from source, through the proxy set on the Settings page
+   (`CARGO_HTTP_PROXY`, a SOCKS proxy as `socks5h://`); without one, Cargo reads `HTTPS_PROXY` as
+   the launcher does.
 6. For `[[native.mixin]]` rows, download the pinned game source, copy the targeted functions into one patch
    library, apply the rows with horizon-mixins, and compile that library against the SDK. The game
    crates are not compiled. Each checked replacement is installed through its typed installer.

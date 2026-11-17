@@ -919,7 +919,10 @@ pub fn install_metadata(url: &str) -> Result<Vec<u8>, String> {
         None => run(engine.metadata(url, &crate::mojang::CANCEL)),
     }
 }
-fn proxy_address(spec: String) -> String {
+/// `spec` as curl spells a proxy, which reqwest and the native builds' Cargo read: SOCKS5 as
+/// `socks5h`, the proxy resolving host names (curl takes a bare `socks` for SOCKS4), and an
+/// address without a scheme as `http://`.
+pub(crate) fn proxy_address(spec: String) -> String {
     match spec.split_once("://") {
         Some(("socks" | "socks5", address)) => format!("socks5h://{address}"),
         Some(_) => spec,
