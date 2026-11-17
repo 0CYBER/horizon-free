@@ -397,3 +397,64 @@ fn a_java_editions_command_is_not_read_as_horizons() {
     let game = crate::launch::wrap(game, &crate::launch::Launch::default());
     assert!(override_value(&game, GAME).is_some());
 }
+
+/// A Java Edition command started from `java`, in the instance folder `home`.
+fn java_edition(java: &Path, home: &Path, logs: &Path) -> Command {
+    let mut command = Command::new(java);
+    command
+        .args(["-cp", "client.jar", "net.minecraft.client.main.Main"])
+        .current_dir(home)
+        .env("HORIZON_HOME", logs);
+    crate::launch::wrap(command, &crate::launch::Launch::default())
+}
+
+#[test]
+fn a_java_installed_outside_the_launcher_is_left_unmarked() {
+    // A Java the player installed (Program Files, /usr/lib/jvm) refuses the launcher's stamp:
+    // Play failed with "Could not access the native build cache: Access is denied" (#18018).
+    let root = tempfile::tempdir().unwrap();
+    let java_home = root.path().join("jdk");
+    let java = java_home
+        .join("bin")
+        .join(if cfg!(windows) { "javaw.exe" } else { "java" });
+    fs::create_dir_all(java.parent().unwrap()).unwrap();
+    fs::write(&java, b"").unwrap();
+    let home = root.path().join("instance");
+    fs::create_dir_all(&home).unwrap();
+    let _claims = shared(&java_edition(&java, &home, &root.path().join("logs")))
+        .map_err(crate::native_mods::cache_error)
+        .unwrap();
+    for folder in [&java_home, &java_home.join("bin")] {
+        assert!(
+            !folder.join(".last-used").exists(),
+            "stamped {}",
+            folder.display()
+        );
+    }
+}
+
+#[test]
+fn a_java_edition_launch_starts_when_its_folders_cannot_be_marked() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("instance");
+    // Opening a folder as the stamp file is refused on every system, as an administrator too.
+    fs::create_dir_all(home.join(".last-used")).unwrap();
+    let logs = root.path().join("logs");
+    let (_command, guard) =
+        crate::backend::prepare_command(java_edition(Path::new("java"), &home, &logs)).unwrap();
+    let shown = crate::backend::plain(home.canonicalize().unwrap())
+        .display()
+        .to_string();
+    let warning = guard.warning.as_deref().unwrap();
+    assert!(warning.contains(&shown), "{warning}");
+    // Horizon's own game still stops on it, and the message names the folder.
+    let source = root.path().join("game");
+    fs::create_dir_all(&source).unwrap();
+    let mut game = Command::new(source.join("horizon-client"));
+    game.current_dir(&home).env("HORIZON_HOME", &logs);
+    mark(&mut game, &source);
+    let Err(error) = shared(&game).map_err(crate::native_mods::cache_error) else {
+        panic!("Horizon's game started with its folder unmarked");
+    };
+    assert!(error.contains(&shown), "{error}");
+}
