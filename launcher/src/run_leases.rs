@@ -212,6 +212,11 @@ const GAME: &str = "HORIZON_LAUNCHER_GAME_COMMAND";
 
 /// Preserve the engine-owned argument grammar before wrappers obscure it.
 pub(crate) fn snapshot(command: &mut Command) {
+    // Only Horizon's game ([`mark`]ed) has that grammar: Minecraft: Java Edition's arguments
+    // read as Horizon's fail to pair up (#17950).
+    if override_value(command, SOURCE).flatten().is_none() {
+        return;
+    }
     let words: Vec<_> = std::iter::once(command.get_program().to_owned())
         .chain(command.get_args().map(std::ffi::OsStr::to_owned))
         .collect();
