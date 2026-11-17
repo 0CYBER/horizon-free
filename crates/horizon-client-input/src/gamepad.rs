@@ -988,8 +988,17 @@ impl PadSettings {
             self.bindings.insert(name, button);
         }
     }
+    /// Restore an action's default when this stick allows it, otherwise unbind it.
+    pub fn reset_binding(&mut self, action: &str) {
+        let default = Self::default_of(action).filter(|b| self.can_bind(action, *b));
+        self.bind(action, default);
+        if action == RADIAL {
+            self.openers = Default::default();
+        }
+    }
     pub fn reset_bindings(&mut self) {
         self.bindings.clear();
+        self.reset_binding(RADIAL);
     }
     /// Other actions on the same button (marked in the binds list).
     pub fn conflicts(&self, action: &str) -> bool {
@@ -997,7 +1006,7 @@ impl PadSettings {
             .is_some_and(|b| self.actions_of(b).iter().any(|a| *a != action))
     }
     pub fn is_default(&self, action: &str) -> bool {
-        !self.bindings.contains_key(action)
+        self.binding(action) == Self::default_of(action).filter(|b| self.can_bind(action, *b))
     }
     /// The actions a button triggers, in `ACTIONS` order.
     pub fn actions_of(&self, button: Button) -> Vec<&'static str> {

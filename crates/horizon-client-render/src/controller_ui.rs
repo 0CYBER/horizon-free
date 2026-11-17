@@ -625,7 +625,7 @@ impl Screen for ControllerScreen {
         let Item::Bind(action) = item else {
             return Vec::new();
         };
-        s.controller.bind(action, PadSettings::default_of(action));
+        s.controller.reset_binding(action);
         vec![Output::Event(Event::Changed)]
     }
     /// Whose profile these settings are, and the controller the game sees.
@@ -1036,6 +1036,44 @@ mod tests {
         let outputs = ui.click(&mut s, on_reset, SIZE, false, false, false);
         assert_eq!(outputs, [CLICK, CHANGED]);
         assert!(s.controller.is_default(JUMP));
+    }
+
+    #[test]
+    fn the_radial_reset_restores_the_current_sticks_valid_default() {
+        use gamepad::{RADIAL, RadialMode, RadialStick};
+        for stick in RadialStick::ALL {
+            let mut s = Settings::default();
+            s.controller.set_radial_stick(stick);
+            s.controller.radial_mode = RadialMode::Toggle;
+            s.controller.bind(RADIAL, Some(Button::LeftBumper));
+            s.controller.bind(JUMP, Some(Button::North));
+            let before = s.controller.clone();
+            let mut ui = ui(Page::Bindings);
+            let item = Item::Bind(RADIAL);
+            let (_, y) = ui.point_at(&s, SIZE, item);
+            let cols = Columns::of(SIZE.0, SIZE.1);
+            let on_reset = (cols.list_x + cols.list_w - 10.0, y);
+            assert_eq!(
+                ui.click(&mut s, on_reset, SIZE, false, false, false),
+                [CLICK, CHANGED]
+            );
+            let expected = (stick == RadialStick::Right).then_some(Button::DPadRight);
+            assert_eq!(s.controller.binding(RADIAL), expected, "{stick:?}");
+            assert!(matches!(
+                binding(RADIAL, &s.controller, ui.screen.context.glyphs).reset,
+                Reset::Default
+            ));
+            assert_eq!(s.controller.binding(JUMP), Some(Button::North));
+            assert_eq!(s.controller.radial_stick, stick);
+            assert_eq!(s.controller.radial_mode, before.radial_mode);
+            assert_eq!(s.controller.radial, before.radial);
+            assert_eq!(PadSettings::parse(&s.controller.serialize()), s.controller);
+            // Once reset, the same location is a binding row, not a working reset.
+            assert_eq!(
+                ui.click(&mut s, on_reset, SIZE, false, false, false),
+                [CLICK, Output::Bind(Capture::Pad(RADIAL))]
+            );
+        }
     }
 
     #[test]

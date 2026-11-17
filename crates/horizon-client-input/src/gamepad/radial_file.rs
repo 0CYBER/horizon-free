@@ -292,6 +292,35 @@ mod tests {
     }
 
     #[test]
+    fn resetting_bindings_keeps_the_selecting_stick_and_a_valid_opener() {
+        for stick in RadialStick::ALL {
+            let mut s = PadSettings::default();
+            s.bind(RADIAL, Some(Button::DPadLeft));
+            s.set_radial_stick(RadialStick::Left);
+            s.bind(RADIAL, Some(Button::North));
+            s.set_radial_stick(stick);
+            s.bind(RADIAL, Some(Button::LeftBumper));
+            s.bind("key.jump", Some(Button::RightBumper));
+            s.radial_mode = RadialMode::Toggle;
+            let pages = s.radial.clone();
+            s.reset_bindings();
+            let expected = (stick == RadialStick::Right).then_some(Button::DPadRight);
+            assert_eq!(s.binding(RADIAL), expected, "{stick:?}");
+            assert!(s.is_default(RADIAL), "{stick:?}");
+            assert_eq!(s.binding("key.jump"), Some(Button::South));
+            assert_eq!(s.radial_stick, stick);
+            assert_eq!(s.radial_mode, RadialMode::Toggle);
+            assert_eq!(s.radial, pages);
+            assert_eq!(PadSettings::parse(&s.serialize()), s);
+            // Reset also forgets cached custom openers from the other sticks.
+            s.set_radial_stick(RadialStick::Left);
+            assert_eq!(s.binding(RADIAL), None);
+            s.set_radial_stick(RadialStick::Right);
+            assert_eq!(s.binding(RADIAL), Some(Button::DPadRight));
+        }
+    }
+
+    #[test]
     fn a_file_from_before_the_radial_menu_binds_no_opener() {
         let s = PadSettings::parse("vibration:false\nbind_key.chat:up\n");
         assert_eq!(s.binding(RADIAL), None);
