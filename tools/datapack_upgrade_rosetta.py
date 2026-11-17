@@ -30,13 +30,38 @@ PREFIXES = ("data/minecraft/worldgen/", "data/minecraft/dimension_type/")
 RENAMES = {"configured_carver": "carver", "configured_feature": "feature"}
 
 
+def _safe_target(out, name):
+    """Resolve archive member `name` under `out`, or return None if it escapes.
+
+    Zip members normally use forward slashes, but a crafted or corrupted jar
+    can carry absolute paths, ``..`` components or Windows-style backslashes.
+    Normalise the separators and resolve the whole path (following any
+    symlinked parents) before requiring the result to stay under `out`.
+    """
+    name = name.replace("\\", "/")
+    if (not name or name.startswith("/")
+            or (len(name) >= 2 and name[0].isalpha() and name[1] == ":")):
+        return None
+    root = out.resolve()
+    target = (out / name).resolve()
+    if not target.is_relative_to(root):
+        return None
+    return target
+
+
 def extract(jar, out):
     with zipfile.ZipFile(jar) as z:
         for name in z.namelist():
-            if name.startswith(PREFIXES) and name.endswith(".json"):
-                target = out / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(z.read(name))
+            if not (name.startswith(PREFIXES) and name.endswith(".json")):
+                continue
+            target = _safe_target(out, name)
+            if target is None:
+                # The module promises that nothing is written outside the
+                # scratch folder, so reject members that would escape it.
+                print(f"ignoring unsafe jar member {name!r}", file=sys.stderr)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(z.read(name))
 
 
 def files(root):
