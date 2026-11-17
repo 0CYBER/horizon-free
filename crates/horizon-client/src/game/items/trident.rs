@@ -346,14 +346,9 @@ impl ThrownTrident {
             return;
         }
         self.in_ground_time = 0;
+        // The same turn as the host's tick: a fifth of the way, `Mth.atan2`.
+        self.turn_towards_movement();
         let m = self.velocity;
-        let (x, z) = if self.no_physics {
-            (-m.x, -m.z)
-        } else {
-            (m.x, m.z)
-        };
-        self.yaw = x.atan2(z).to_degrees() as f32;
-        self.pitch = m.y.atan2(m.x.hypot(m.z)).to_degrees() as f32;
         let to = self.position.add_vector(m);
         if !self.no_physics
             && let Some((at, _, _)) = w.clip(self.position, to)
@@ -1750,6 +1745,29 @@ mod tests {
         assert_eq!(t.velocity, Vec3::new(-2.0, 1.0, -0.5));
         assert_eq!(t.yaw, 185.0);
         assert!(t.needs_sync, "the turn goes out at once");
+    }
+
+    /// `AbstractArrow.tick` runs on a guest too: before the move the angles
+    /// turn a fifth of the way (`lerpRotation`) toward the motion, which faces
+    /// back without physics (a Loyalty trident coming home). Along (1, 0, 1)
+    /// that is yRot 45 and xRot 0, so from (0, 10) a fifth: (9, 8).
+    #[test]
+    fn a_remote_trident_turns_a_fifth_of_the_way_toward_its_motion() {
+        let mut trident = ThrownTrident::remote(1, Vec3::new(0.5, 100.0, 0.5), 0.0, 10.0);
+        trident.velocity = Vec3::new(1.0, 0.0, 1.0);
+        trident.remote_tick(&Air, None);
+        assert!((trident.yaw - 9.0).abs() < 1e-5, "yaw {}", trident.yaw);
+        assert!(
+            (trident.pitch - 8.0).abs() < 1e-5,
+            "pitch {}",
+            trident.pitch
+        );
+        let mut home = ThrownTrident::remote(2, Vec3::new(0.5, 100.0, 0.5), 0.0, 0.0);
+        home.no_physics = true;
+        home.velocity = Vec3::new(1.0, 0.0, 1.0);
+        home.remote_tick(&Air, None);
+        // atan2(-1, -1) = -135: a fifth of the way is -27.
+        assert!((home.yaw + 27.0).abs() < 1e-5, "yaw {}", home.yaw);
     }
 
     #[test]
