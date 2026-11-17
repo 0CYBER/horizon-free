@@ -131,8 +131,12 @@ impl Game<'_> {
         else {
             return false;
         };
+        // handleContainerClick: a menu that is no longer `stillValid` takes no click. A mount
+        // that died this tick has dropped its inventory already while its body still holds it;
+        // the menu itself closes in `tick_lan_mount_menus`.
         if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
             && !host.hub.guests[gi].spectator()
+            && self.lan_mount_valid(&host.hub.guests[gi], mob)
             && let Some(index) = self.mobs.iter().position(|m| m.id == mob)
         {
             let mut menu = self.mount_engine_menu(index, columns);
@@ -248,6 +252,66 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    /// `handleContainerClick` refuses a click on a menu that is no longer `stillValid`: a
+    /// chested donkey that died this tick has already dropped its chest, so its body's slots
+    /// must not be taken as well.
+    #[test]
+    #[ignore = "daily"]
+    fn a_dead_mounts_inventory_takes_no_click() {
+        use horizon_client::{items::ItemStack, mobs::Mob};
+        use horizon_core::geometry::Vec3;
+        use horizon_protocol::packets::play;
+        super::super::native_guest_turn_tests::with_guests(|game| {
+            let kind = game.res.mob_types().get("minecraft:donkey").unwrap().clone();
+            let mut mob = Mob::new(40, kind, Vec3::new(3.0, 64.0, 6.0), 0.0);
+            mob.extra.tame = true;
+            mob.extra.chested = true;
+            mob.extra.items = vec![None; 15];
+            mob.extra.items[0] = Some(ItemStack::new("minecraft:diamond", 5));
+            mob.extra.items[1] = Some(ItemStack::new("minecraft:emerald", 7));
+            game.mobs.push(mob);
+            game.lan_open_mount(12, 40);
+            let window = game.lan.as_ref().unwrap().play[&12]
+                .mount_window
+                .as_ref()
+                .unwrap()
+                .window;
+            let shift_click = |slot| {
+                play::Serverbound::ContainerClick(play::ContainerClick {
+                    container: window,
+                    state: 0,
+                    slot,
+                    button: 0,
+                    input: 1,
+                    changed: vec![],
+                    carried: None,
+                })
+            };
+            let held = |game: &crate::game::Game<'_>, item: &str| -> u32 {
+                let guest = game.lan.as_ref().unwrap().hub.guest(12).unwrap();
+                guest
+                    .inventory
+                    .iter()
+                    .flatten()
+                    .filter(|s| &*s.item == item)
+                    .map(|s| s.count)
+                    .sum()
+            };
+            // While it lives, a shift-click takes the chest's first slot (menu slot 2).
+            game.lan_guest_packet(12, shift_click(2));
+            assert_eq!(held(game, "minecraft:diamond"), 5);
+            assert_eq!(game.mobs[0].extra.items[0], None);
+            // Dead, with the menu still open: the next slot stays on the body.
+            game.mobs[0].health = 0.0;
+            game.lan_guest_packet(12, shift_click(3));
+            assert_eq!(held(game, "minecraft:emerald"), 0);
+            assert_eq!(
+                game.mobs[0].extra.items[1],
+                Some(ItemStack::new("minecraft:emerald", 7))
+            );
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn horse_inventory_click_keeps_complete_body_stack() {
