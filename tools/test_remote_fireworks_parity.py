@@ -15,7 +15,7 @@ def main():
                     '--bin', 'horizon-client', '--bin', 'horizon-ctl'], cwd=lab.ROOT, check=True)
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=lab.ROOT, text=True))
-    ctl = lab.ROOT / metadata['target_directory'] / 'fast' / 'horizon-ctl'
+    ctl = lab.binary(lab.ROOT / metadata['target_directory'] / 'fast', 'horizon-ctl')
     # CI supplies the display; each game still gets fresh scratch homes.
     lan.game_env = lambda _screen, home: lab.game_env(
         HORIZON_HOME=home)

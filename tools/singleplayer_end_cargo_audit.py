@@ -53,8 +53,8 @@ def run(bin_dir, resources):
             'HORIZON_HOME', 'HORIZON_LAUNCHER_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME')})
         home = Path(env['HORIZON_HOME'])
         socket = work / 'game.sock'
-        cli = Cli(bin_dir / 'horizon-ctl', socket, home, env)
-        args = [str(bin_dir / 'horizon-client'), '--resources', str(resources),
+        cli = Cli(lab.binary(bin_dir, 'horizon-ctl'), socket, home, env)
+        args = [str(lab.binary(bin_dir, 'horizon-client')), '--resources', str(resources),
                 '--world', 'cargo', '--creative', '--seed', '4242', '--offscreen',
                 '--render-distance', '4', '--control', '--control-socket', str(socket)]
         with (work / 'game.log').open('w') as log:

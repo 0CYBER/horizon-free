@@ -462,7 +462,7 @@ def launch(args, distance, tag):
         options.write_text(text.replace("enableVsync:false\n", "enableVsync:true\n"))
     sock = Path("/tmp") / f"horizon-pacing-{os.getpid()}{tag}.sock"
     sock.unlink(missing_ok=True)
-    client = Path(args.build).resolve() / "horizon-client"
+    client = lab.binary(Path(args.build).resolve(), "horizon-client")
     command = [str(client), "--resources", str(Path(args.resources).resolve()), "--control-socket", str(sock),
                "--no-pause", "--weather", "clear", "--time", "6000"]
     if args.size:
@@ -496,7 +496,7 @@ def dedicated_server(args, distance, directory):
     (directory / "server.properties").write_text("".join(f"{k}={v}\n" for k, v in properties.items()),
                                                  encoding="iso-8859-1")
     (directory / "eula.txt").write_text("eula=true\n")
-    binary = Path(args.build).resolve() / "horizon-client"
+    binary = lab.binary(Path(args.build).resolve(), "horizon-client")
     server = Server([binary, "--resources", Path(args.resources).resolve(), "--dedicated", "--nogui"],
                     directory, "server")
     server.wait_for(r"Done \(", 900)
@@ -507,7 +507,7 @@ def play(args, distance, names, result):
     """One game through `names`: in a fresh world, or (`join` alone) joining a dedicated server."""
     import shutil
     joining = names == ["join"]
-    perf = Path(args.perf or Path(args.build) / "horizon-perf").resolve()
+    perf = Path(args.perf or lab.binary(Path(args.build), "horizon-perf")).resolve()
     if not perf.exists():
         raise SystemExit(f"{perf} is missing: build it with `cargo build --profile fast -p horizon-perf` or pass --perf")
     proc, control, _, log, game_dir, sock, home = launch(args, distance, "-join" if joining else "")

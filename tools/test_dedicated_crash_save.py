@@ -41,7 +41,7 @@ PLAYER = 'Tester'
 def binary():
     metadata = subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True)
     import json
-    return Path(json.loads(metadata)['target_directory']) / 'fast' / 'horizon-client'
+    return lab.binary(Path(json.loads(metadata)['target_directory']) / 'fast', 'horizon-client')
 
 
 def start(directory, fixture=None):
@@ -126,7 +126,7 @@ def connected_saves(build):
     port = free_port()
     write_server_dir(directory, port)
     server = start(directory)
-    client = lan_e2e.Game('autosave', binary().with_name('horizon-ctl'), lab.RESOURCES)
+    client = lan_e2e.Game('autosave', lab.binary(binary().parent, 'horizon-ctl'), lab.RESOURCES)
     file = directory / 'world' / 'players' / 'data' / f'{offline_uuid(PLAYER)}.dat'
 
     def diamonds():
@@ -170,7 +170,7 @@ def signal_saves(build):
     port = free_port()
     write_server_dir(directory, port)
     server = start(directory)
-    client = lan_e2e.Game('sigterm', binary().with_name('horizon-ctl'), lab.RESOURCES)
+    client = lan_e2e.Game('sigterm', lab.binary(binary().parent, 'horizon-ctl'), lab.RESOURCES)
     file = directory / 'world' / 'players' / 'data' / f'{offline_uuid(PLAYER)}.dat'
     try:
         client.raw('launch', '--headless', '--game', binary())

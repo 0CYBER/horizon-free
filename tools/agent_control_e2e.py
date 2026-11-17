@@ -1024,7 +1024,7 @@ def no_ai_check(mode, ctl, resources):
                 reply = json.loads(r.stdout.strip().splitlines()[-1])
                 log(mode, words, reply)
                 assert r.returncode == 4 and reply == {'error': REFUSAL, 'kind': 'denied'}, (r.returncode, reply)
-            client = ctl.with_name('horizon-client')
+            client = lab.binary(ctl.parent, 'horizon-client')
             args = [str(client), '--control-socket', str(socket), '--world', 'NoAi', '--world-frames', '30']
             if sys.platform == 'darwin' or os.environ.get('HORIZON_E2E_HEADLESS'):
                 args.append('--offscreen')
@@ -1066,7 +1066,7 @@ def setting_check(mode, ctl, out, resources):
     socket = work / 'c.sock'
     env['HORIZON_CONTROL'] = str(socket)  # the default endpoint, this home's
     (work / 'horizon-extras.txt').write_text('agentControl:true\n')
-    args = [str(ctl.with_name('horizon-client'))]
+    args = [str(lab.binary(ctl.parent, 'horizon-client'))]
     if sys.platform == 'darwin':
         args.append('--offscreen')
     game = subprocess.Popen(args, cwd=work, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1173,7 +1173,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     modes = ['cli', 'mcp'] if args.mode == 'both' else [args.mode]
     scenarios = [*SCENARIOS, 'no-ai', 'setting'] if args.scenario == 'all' else [args.scenario]
-    results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s) for m in modes for s in scenarios}
+    results = {f'{m}/{s}': run(m, lab.binary(bins, 'horizon-ctl'), out, resources, s) for m in modes for s in scenarios}
     print(json.dumps(results))
     sys.exit(0 if all(results.values()) else 1)
 

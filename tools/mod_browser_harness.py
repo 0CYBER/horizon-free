@@ -161,7 +161,7 @@ def main():
     home = Path(tempfile.mkdtemp(prefix="horizon-mod-browser-"))
     env = lab.game_env(HORIZON_HOME=home, HORIZON_CONTROL=home / "ctl.sock")
     launcher = [args.launcher]
-    game = Game(str(Path(args.bin) / "horizon-ctl"), str(Path(args.bin) / "horizon-client"),
+    game = Game(str(lab.binary(Path(args.bin), "horizon-ctl")), str(lab.binary(Path(args.bin), "horizon-client")),
                 args.resources, home, env)
     summary = {"mod": args.mod}
     ok = False

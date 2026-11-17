@@ -354,7 +354,7 @@ def horizon_resave(source, destination, bin_dir):
     saves.mkdir(parents=True)
     shutil.copytree(source, saves / 'world')
     socket = Path(tempfile.mkdtemp(prefix='hzrt')) / 'control.sock'  # sockets need short paths
-    ctl = [str(bin_dir / 'horizon-ctl'), '--socket', str(socket)]
+    ctl = [str(lab.binary(bin_dir, 'horizon-ctl')), '--socket', str(socket)]
     extra = []
     # Offscreen on macOS, and on a Linux without vscreen (never a window on a real monitor).
     if sys.platform == 'darwin' or not shutil.which('vscreen'):

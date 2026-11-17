@@ -207,7 +207,7 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     dependencies, classes = compile_bot(build)
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [args.bin_dir.resolve() / 'horizon-client', '--resources', lab.RESOURCES, '--dedicated', '--nogui']
+    horizon_server = [lab.binary(args.bin_dir.resolve(), 'horizon-client'), '--resources', lab.RESOURCES, '--dedicated', '--nogui']
     client = ['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
               'dev.horizonlab.parity.VanillaProtocolClient']
     world = generate_world(vanilla_server, build)

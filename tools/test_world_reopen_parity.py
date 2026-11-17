@@ -62,7 +62,7 @@ def main():
     env, extra = game_env()
 
     def ctl(*words, check=True):
-        result = subprocess.run([str(bin_dir / 'horizon-ctl'), '--socket', str(socket), '--timeout', '600', *words],
+        result = subprocess.run([str(lab.binary(bin_dir, 'horizon-ctl')), '--socket', str(socket), '--timeout', '600', *words],
                                 cwd=RUN, env=env, capture_output=True, text=True)
         if check and result.returncode:
             sys.exit(f'horizon-ctl {" ".join(words)} failed: {result.stdout}{result.stderr}')

@@ -194,7 +194,7 @@ def run_lane(bins, name, lane, out):
     (folder / 'eula.txt').write_text('eula=true\n')
     props = dict(PROPERTIES, **{'server-port': str(lab.free_port()), 'server-ip': '127.0.0.1'})
     (folder / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
-    command = [bins / 'horizon-client', '--resources', lab.RESOURCES, '--dedicated', '--nogui']
+    command = [lab.binary(bins, 'horizon-client'), '--resources', lab.RESOURCES, '--dedicated', '--nogui']
     server = Server(command, folder, out / f'{name}.log')
     failed = []
     try:

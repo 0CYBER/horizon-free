@@ -51,8 +51,8 @@ def run(bin_dir, resources):
             if previous is not None:
                 shutil.copytree(previous, home / 'saves')
             socket = work / f'{stage}.sock'
-            cli = Cli(bin_dir / 'horizon-ctl', socket, home, env)
-            args = [str(bin_dir / 'horizon-client'), '--resources', str(resources),
+            cli = Cli(lab.binary(bin_dir, 'horizon-ctl'), socket, home, env)
+            args = [str(lab.binary(bin_dir, 'horizon-client')), '--resources', str(resources),
                     '--world', 'forced', '--creative', '--seed', '4242', '--offscreen',
                     '--render-distance', '4', '--control', '--control-socket', str(socket)]
             with (work / f'{stage}.log').open('w') as log:

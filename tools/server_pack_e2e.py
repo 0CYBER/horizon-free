@@ -208,9 +208,9 @@ class Game:
             (work / d).mkdir(parents=True)
         self.env = lab.game_env(HORIZON_HOME=self.home, HORIZON_LAUNCHER_HOME=work / 'launcher',
                                 XDG_DATA_HOME=work / 'data', XDG_CONFIG_HOME=work / 'config')
-        self.base = [str(bins / 'horizon-ctl'), '--socket', str(work / 'c.sock')]
+        self.base = [str(lab.binary(bins, 'horizon-ctl')), '--socket', str(work / 'c.sock')]
         self.log = work / 'c.log'
-        reply = self('launch', '--game', bins / 'horizon-client', '--offscreen', '--resources', resources)
+        reply = self('launch', '--game', lab.binary(bins, 'horizon-client'), '--offscreen', '--resources', resources)
         self.pid = reply.get('pid')
 
     def __call__(self, *words, ok=True, timeout=300):

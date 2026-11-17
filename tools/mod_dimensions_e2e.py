@@ -77,7 +77,7 @@ class Session:
         self.game_dir = self.root / 'game'
         self.game_dir.mkdir()
         self.bins, self.out, self.name = bins, out, name
-        self.binary = bins / 'horizon-client'
+        self.binary = lab.binary(bins, 'horizon-client')
         self.socket = self.root / 'ctl.sock'
         self.env = lab.game_env({k: v for k, v in os.environ.items()
                                  if k not in ('HORIZON_HOME', 'HORIZON_LAUNCHER_HOME',
@@ -85,9 +85,9 @@ class Session:
         self.failures = []
 
     def run(self, *words, timeout=30):
-        return subprocess.run([str(self.bins / 'horizon-ctl'), '--socket', str(self.socket), *map(str, words)],
-                              cwd=self.game_dir, env=self.env, capture_output=True, text=True,
-                              timeout=timeout)
+        return subprocess.run([str(lab.binary(self.bins, 'horizon-ctl')), '--socket', str(self.socket),
+                               *map(str, words)],
+                              cwd=self.game_dir, env=self.env, capture_output=True, text=True, timeout=timeout)
 
     def ctl(self, *words, timeout=30):
         """A horizon-ctl command's JSON answer; a refused one raises."""
@@ -111,8 +111,8 @@ class Session:
         (package / 'horizon-mod.toml').write_text(MANIFEST)
         (package / 'Cargo.toml').write_text("[package]\nname = 'dimprobe'\nversion = '1.0.0'\n")
         (package / 'src/lib.rs').write_text('// Built into the executable.\n')
-        self.binary = folder / 'horizon-client'
-        shutil.copy2(self.bins / 'horizon-mod-dimension-game', self.binary)
+        self.binary = lab.binary(folder, 'horizon-client')
+        shutil.copy2(lab.binary(self.bins, 'horizon-mod-dimension-game'), self.binary)
 
     def quit(self):
         """Quit, saving, and wait until the game has gone."""

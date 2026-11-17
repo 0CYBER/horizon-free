@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lab  # noqa: E402
 from test_world_reopen_parity import game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -56,7 +57,7 @@ def main():
         socket = Path(tempfile.mkdtemp(prefix='hzrs')) / 'control.sock'  # sockets need short paths
 
         def ctl(*words, check=True):
-            result = subprocess.run([str(bin_dir / 'horizon-ctl'), '--socket', str(socket), '--timeout', '600',
+            result = subprocess.run([str(lab.binary(bin_dir, 'horizon-ctl')), '--socket', str(socket), '--timeout', '600',
                                      *map(str, words)], cwd=folder, env=env, capture_output=True, text=True)
             if check and result.returncode:
                 sys.exit(f'horizon-ctl {" ".join(map(str, words))} failed: {result.stdout}{result.stderr}')
@@ -64,7 +65,7 @@ def main():
 
         # The game keeps launch's output handles, so it writes to a file: a pipe would not close.
         with open(folder / 'launch.txt', 'w') as out:
-            subprocess.run([str(bin_dir / 'horizon-ctl'), '--socket', str(socket), '--timeout', '600', 'launch',
+            subprocess.run([str(lab.binary(bin_dir, 'horizon-ctl')), '--socket', str(socket), '--timeout', '600', 'launch',
                             '--resources', str(RESOURCES), '--world', 'world', '--seed', '1', '--render-distance', '4',
                             *flags, *extra], cwd=folder, env=env, stdout=out, stderr=subprocess.STDOUT, check=True)
         try:

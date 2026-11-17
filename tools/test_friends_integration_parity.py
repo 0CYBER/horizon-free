@@ -23,8 +23,8 @@ if __name__ == '__main__':
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=lab.ROOT, text=True))
     bins = Path(metadata['target_directory']) / 'fast'
-    sys.argv = [sys.argv[0], '--client', str(bins / 'horizon-official'),
-                '--relay', str(bins / 'horizon-relay'), '--baseline',
+    sys.argv = [sys.argv[0], '--client', str(lab.binary(bins, 'horizon-official')),
+                '--relay', str(lab.binary(bins, 'horizon-relay')), '--baseline',
                 *(['--offscreen'] if sys.platform == 'darwin' else [])]
     with suite_lock():
         # The wrapper only selects binaries; test_friends isolates each game

@@ -92,7 +92,7 @@ def main():
                     '--bin', 'horizon-client', '--bin', 'horizon-ctl'], cwd=lab.ROOT, check=True)
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=lab.ROOT, text=True))
-    ctl = lab.ROOT / metadata['target_directory'] / 'fast' / 'horizon-ctl'
+    ctl = lab.binary(lab.ROOT / metadata['target_directory'] / 'fast', 'horizon-ctl')
     checks = ['sculk-walk-host', 'sculk-walk-guest']
     for role, name in zip(('host', 'guest'), checks):
         lan.CHECK_FNS[name] = lambda h, g, o, role=role: check_walk(h, g, o, role)

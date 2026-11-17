@@ -56,7 +56,7 @@ def main():
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     bins = build()
-    ctl, resources = bins / 'horizon-ctl', lab.RESOURCES.resolve()
+    ctl, resources = lab.binary(bins, 'horizon-ctl'), lab.RESOURCES.resolve()
     # 1. The source world: terrain of one seed around the origin.
     src = game(ctl, resources, 'source')
     try:

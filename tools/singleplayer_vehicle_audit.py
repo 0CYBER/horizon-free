@@ -31,8 +31,8 @@ def run(mode, bins, resources):
    env=lab.game_env({k:v for k,v in os.environ.items() if k not in ('HORIZON_HOME','HORIZON_LAUNCHER_HOME','XDG_DATA_HOME','XDG_CONFIG_HOME')})
    home=Path(env['HORIZON_HOME'])
    if previous:shutil.copytree(previous,home/'saves')
-   sock=work/f'{stage}.sock';cli=Cli(bins/'horizon-ctl',sock,home,env)
-   args=[str(bins/'horizon-client'),'--resources',str(resources),'--world','VehicleProof','--creative','--offscreen','--render-distance','2','--control','--control-socket',str(sock)]
+   sock=work/f'{stage}.sock';cli=Cli(lab.binary(bins,'horizon-ctl'),sock,home,env)
+   args=[str(lab.binary(bins,'horizon-client')),'--resources',str(resources),'--world','VehicleProof','--creative','--offscreen','--render-distance','2','--control','--control-socket',str(sock)]
    with (work/f'{stage}.log').open('w') as out:
     p=subprocess.Popen(args,cwd=home,env=env,stdout=out,stderr=out)
     try:

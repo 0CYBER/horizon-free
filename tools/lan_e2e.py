@@ -7492,7 +7492,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     # Recipes is an opt-in native mod; this check requires a game built with it.
     checks = args.check or [name for name in CHECKS if name != 'recipes-hmod']
-    results = run(bins / 'horizon-ctl', out, resources, checks)
+    results = run(lab.binary(bins, 'horizon-ctl'), out, resources, checks)
     (out / 'results.json').write_text(json.dumps({'checks': results}, indent=2) + '\n')
     print(json.dumps(results, indent=1))
     sys.exit(0 if results and all(r['pass'] for r in results.values()) else 1)

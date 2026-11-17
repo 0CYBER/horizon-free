@@ -471,7 +471,7 @@ def run(bins, out, checks):
     server = Server(['java', '-Xmx2g', f'-Dlog4j.configurationFile={work / "log4j2.xml"}', '-cp', classpath,
                      'net.minecraft.server.Main', 'nogui'], directory, 'vanilla')
     proxy = PacketProxy(port) if 'book_menu' in checks or 'dialog_close' in checks else None
-    game = Game('client', bins / 'horizon-ctl', lab.RESOURCES.resolve())
+    game = Game('client', lab.binary(bins, 'horizon-ctl'), lab.RESOURCES.resolve())
     for key in ('XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'HORIZON_LAUNCHER_HOME'):
         game.d.env[key] = str(game.work / key.lower())
     game.d.env['HORIZON_LAUNCHER_NO_SELF_UPDATE'] = '1'

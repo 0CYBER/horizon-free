@@ -93,7 +93,7 @@ def main():
     parser.add_argument('--keep', action='store_true', help='keep the scratch game home')
     args = parser.parse_args()
     bindir = Path(args.bin_dir).resolve()
-    client, ctl_path = bindir / 'horizon-client', bindir / 'horizon-ctl'
+    client, ctl_path = lab.binary(bindir, 'horizon-client'), lab.binary(bindir, 'horizon-ctl')
     for binary in (client, ctl_path):
         if not binary.exists():
             raise Failed(f'{binary} is missing; build it (cargo build --profile fast -p horizon-game '
