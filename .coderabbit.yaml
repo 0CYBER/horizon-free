@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews pull requests and only comments. Its rules are this repository's own docs, which stay the only
+# copy of them. Starting point: pingdotgg/t3code's .coderabbit.config.ts; Horizon's own changes say why.
+reviews:
+  # The pull request body is the author's (it ends with the agent mark); the walkthrough comment is enough.
+  high_level_summary: false
+  review_status: false
+  # Comments only: never approve or request changes. `verify` and the code owners decide merges.
+  auto_approvals:
+    enabled: false
+  auto_review:
+    enabled: true
+    # Review capacity follows the pull request's author, and a push past it is skipped, not retried. Two authors
+    # opened about 100 pull requests each in a day and a half, so re-reviewing every fix-up push would use up the
+    # first review of their next pull request. `@coderabbitai review` asks for another look.
+    auto_incremental_review: false
+  # Agent-written pull requests are welcome here (AGENTS.md); a "low quality" warning on them isn't the bot's call.
+  slop_detection:
+    enabled: false
+  # These commit to pull request branches. Maintainers already push there, and a moved head needs a new review.
+  finishing_touches:
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  # Machine translations stay unreviewed (docs/translations.md); lockfiles, vendored code and data aren't code.
+  path_filters:
+    - "!**/lang/**"
+    - "!**/Cargo.lock"
+    - "!flake.lock"
+    - "!research-lock.json"
+    - "!third_party/**"
+    - "!benchmarks/**"
+    - "!docs/media/**"
+    - "!**/tests/golden/**"
+    - "!**/*.jsonl"
+  path_instructions:
+    - path: "**/*.rs"
+      instructions: >-
+        Hold changed code to CONTRIBUTING.md "Vanilla first, then better" (with "When it doesn't have to be 1:1")
+        and docs/layers.md. Parity harnesses decide vanilla behaviour: don't state it from memory, and never
+        suggest a rewrite that changes a vanilla result.
+    - path: "{crates/horizon-client/**,crates/horizon-client-render/**,launcher/**}"
+      instructions: >-
+        Hold changed UI to docs/design-system.md and to AGENTS.md's rules on translated strings and controller
+        registration.
+    - path: "crates/horizon-client-render/src/{gfx.rs,gfx/**,*.wgsl}"
+      instructions: "Hold changed render passes to docs/hdr-passes.md."
+    - path: "{**/tests/**,**/*_tests.rs}"
+      instructions: >-
+        Hold changed tests to AGENTS.md "Write tests with signal". Request tests only as those rules allow.
+    - path: "crates/horizon-shaders/**"
+      instructions: >-
+        Clean-room code: judge it only against docs/cleanroom/shader-packs-spec.md, and never describe or cite
+        another shader loader's implementation.
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - files: "CONTRIBUTING.md,docs/layers.md"
+        applyTo: "**/*.rs"
+      - files: "docs/design-system.md"
+        applyTo: "crates/horizon-client/**,crates/horizon-client-render/**,launcher/**"
+      - files: "docs/hdr-passes.md"
+        applyTo: "crates/horizon-client-render/src/gfx.rs,crates/horizon-client-render/src/gfx/**,crates/horizon-client-render/src/*.wgsl"

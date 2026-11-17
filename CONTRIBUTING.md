@@ -187,6 +187,8 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 
 Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; risky ones (saves, network, world
 generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).
+A bot, CodeRabbit, also comments when a pull request opens. Treat it like any reviewer: fix what's right, say why
+when it isn't, and resolve the thread. It can't block a merge; `@coderabbitai review` asks it to look again.
 
 Every merge to main is released automatically ([release flow](docs/release-flow.md)), so main always stays playable.
 How agents, checks, releases and signed updates keep this safe: [security](docs/security.md).

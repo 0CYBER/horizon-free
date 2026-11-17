@@ -72,6 +72,9 @@ waiting in loops, and work someone else had already done. Tests were a small par
   harness where vanilla has nothing to compare (Horizon's own features, performance work).
 - **A red check isn't always yours.** When `verify` fails in a test your change can't reach, say so in the pull
   request and move on; don't hunt it.
+- **Bot reviews are advice.** CodeRabbit is often right and sometimes wrong. Check each finding against the code,
+  the vanilla game and these rules; fix the real ones, answer a wrong one once with the reason, and resolve the
+  thread. A missing or rate-limited bot review blocks nothing.
 - **Unsure about a rule? Finish the work.** Take the reading that lets you finish, and say in the pull request
   which one you took. Don't stop, and don't change direction halfway.
 
@@ -126,6 +129,8 @@ reads `README.md`, `launcher/links.json`, `docs/api/`, `roadmap/roadmap.json` an
 - Test outcomes, not only calls to stubs. Use mocks to isolate behavior, not as the behavior itself.
 - Skip tests of trivial constants, derives and getters, or behavior already covered by another test.
 - One test per changed behaviour is enough. A refactor or a move that changes no behaviour gets no new test.
+- In review, ask for a missing test only when it would catch a real regression, and flag a new test that breaks
+  these rules.
 - Avoid pinning implementation details; a harmless refactor should not break a behavior test.
 - Make slow tests faster without removing cases or weakening their coverage.
 - Never delete parity harnesses or tests that pin vanilla behaviour: they are the spec.
