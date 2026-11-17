@@ -27,8 +27,10 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'tools'))
-import lab  # noqa: E402
+try:
+    from . import lab
+except ImportError:  # running as a script
+    import lab
 
 ORIGIN = (200, 250, 200)
 SPACING = 24
@@ -430,6 +432,11 @@ def run_horizon(batch, args, work):
 
 # ---- compare -----------------------------------------------------------------------------------
 
+# No state can be reported for a tick one of the timelines never produced; this marker keeps that
+# visible in the diff instead of treating the missing tail as a match.
+MISSING_TICK = '<no tick>'
+
+
 def diff_frames(a, b):
     """The first tick where two timelines differ: (tick, [(pos, a state, b state)]), or None."""
     for fa, fb in zip(a, b):
@@ -440,6 +447,16 @@ def diff_frames(a, b):
                 if ba.get(pos) != bb.get(pos):
                     rows.append((pos, ba.get(pos, 'air'), bb.get(pos, 'air')))
             return fa['tick'], rows
+    # zip() stops at the shorter timeline. A run that stops early is not identical to one that kept
+    # ticking: report the first tick the other timeline never reached as a difference.
+    if len(a) != len(b):
+        a_is_longer = len(a) > len(b)
+        extra = (a if a_is_longer else b)[min(len(a), len(b))]
+        if a_is_longer:
+            rows = [(pos, state, MISSING_TICK) for pos, state in sorted(extra['blocks'].items())]
+        else:
+            rows = [(pos, MISSING_TICK, state) for pos, state in sorted(extra['blocks'].items())]
+        return extra['tick'], rows
     return None
 
 
