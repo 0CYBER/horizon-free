@@ -130,7 +130,8 @@ fn shoot(m: &mut Mob, head: usize, at: [f64; 3], dangerous: bool, events: &mut V
         Vec3::new(h[0], h[1], h[2]),
         Some(Who::Mob(m.id)),
         dir,
-    );
+    )
+    .shot_by(m.yaw, m.head_pitch);
     events.push(MobEvent::Projectile(p));
 }
 /// `WitherBoss.aiStep` before travel: climb above and close in on the

@@ -1040,7 +1040,9 @@ impl Projectile {
             self.velocity.z + source_velocity.z,
         );
     }
-    /// AbstractHurtingProjectile: movement along the direction at the acceleration power.
+    /// `AbstractHurtingProjectile(type, x, y, z, direction, level)`: movement
+    /// along the direction at the acceleration power. `snapTo` keeps the new
+    /// entity's rotation (0, 0); `rotateTowardsMovement` turns it from there.
     pub fn fireball(
         kind: ProjectileKind,
         position: Vec3,
@@ -1052,8 +1054,17 @@ impl Projectile {
             .sqrt()
             .max(1.0e-9);
         p.velocity = Vec3::new(dir[0] / len * 0.1, dir[1] / len * 0.1, dir[2] / len * 0.1);
-        p.update_rotation();
         p
+    }
+    /// `AbstractHurtingProjectile(type, mob, direction, level)` ends with
+    /// `setRot(mob.getYRot(), mob.getXRot())`: a mob's fireball starts with
+    /// its shooter's angles (`setRot` takes both % 360, `setXRot` clamps the
+    /// pitch to +-90), not its motion's. `yRotO`/`xRotO` stay as `snapTo` left
+    /// them.
+    pub fn shot_by(mut self, yaw: f32, pitch: f32) -> Self {
+        self.yaw = yaw % 360.0;
+        self.pitch = (pitch % 360.0).clamp(-90.0, 90.0);
+        self
     }
     /// `ThrownEgg`'s item: what its hatchlings' variant comes from.
     pub fn set_egg_item(&mut self, stack: &crate::items::ItemStack) {
@@ -2823,6 +2834,33 @@ mod tests {
         p.tick(&w);
         // Fresh Java 26.3: (0.1 + 0.1) * (double) 0.95f.
         assert_eq!(p.velocity.x, 0.189_999_997_615_814_2);
+    }
+
+    /// `AbstractHurtingProjectile(type, x, y, z, direction, level)` leaves the
+    /// rotation `snapTo` kept, (0, 0); the mob's constructor then
+    /// `setRot(mob.getYRot(), mob.getXRot())`. The first tick eases a fifth of
+    /// the way from there (`rotateTowardsMovement(0.2F)`) towards the motion,
+    /// which along +x is yRot atan2(0, x) + 90 = 90 and xRot atan2(x, 0) - 90 = 0.
+    #[test]
+    fn a_mobs_fireball_starts_with_its_shooters_angles() {
+        let at = Vec3::new(0.0, 100.0, 0.0);
+        let plain = Projectile::fireball(ProjectileKind::SmallFireball, at, None, [1.0, 0.0, -1.0]);
+        assert_eq!((plain.yaw, plain.pitch), (0.0, 0.0));
+        // setRot takes both % 360; setXRot clamps the pitch to +-90.
+        let shot = |yaw, pitch| {
+            Projectile::fireball(ProjectileKind::SmallFireball, at, None, [1.0, 0.0, 0.0])
+                .shot_by(yaw, pitch)
+        };
+        let p = shot(-400.0, 30.0);
+        assert_eq!((p.yaw, p.pitch), (-40.0, 30.0));
+        let p = shot(10.0, 450.0);
+        assert_eq!((p.yaw, p.pitch), (10.0, 90.0));
+        let mut p = shot(360.0, 30.0);
+        p.tick(&Empty(vec![]));
+        // 0 + 0.2 * (90 - 0), and 30 + 0.2 * (x - 30) where x is
+        // (float)(pi / 2 * 57.2957763671875) - 90 = -7.6e-6 (the bytecode
+        // multiplies by the folded RAD_TO_DEG), in floats.
+        assert_eq!((p.yaw, p.pitch), (18.0, 23.999_998));
     }
 
     /// `Fireball.setItem` with `Fireball.defineSynchedData`'s default and

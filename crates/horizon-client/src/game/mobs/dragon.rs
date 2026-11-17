@@ -3079,7 +3079,10 @@ impl Game<'_> {
     /// direction.normalize())`, whose `AbstractHurtingProjectile` constructor
     /// takes the dragon as its owner and `assignDirectionalMovement`s the
     /// direction normalized again times `accelerationPower` (0.1), then
-    /// `snapTo` the start. It joins the level's other projectiles.
+    /// `snapTo` the start with the angles (0, 0), which undoes the
+    /// constructor's `setRot(dragon)`: unlike a blaze's, ghast's or wither's,
+    /// it does not start at its shooter's rotation. It joins the level's other
+    /// projectiles.
     fn spawn_dragon_fireball(&mut self, at: Vec3, dir: Vec3) {
         // Vec3.normalize: a vector shorter than 1e-5 is zero.
         let normalize = |v: Vec3| {

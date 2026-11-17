@@ -122,12 +122,15 @@ impl Goal for BlazeAttack {
                         triangle(m, zd, 2.297 * sqd),
                     ];
                     let start = Vec3::new(m.position.x, m.position.y + half + 0.5, m.position.z);
-                    cx.events.push(MobEvent::Projectile(Projectile::fireball(
-                        ProjectileKind::SmallFireball,
-                        start,
-                        Some(Who::Mob(m.id)),
-                        dir,
-                    )));
+                    cx.events.push(MobEvent::Projectile(
+                        Projectile::fireball(
+                            ProjectileKind::SmallFireball,
+                            start,
+                            Some(Who::Mob(m.id)),
+                            dir,
+                        )
+                        .shot_by(m.yaw, m.head_pitch),
+                    ));
                 }
             }
             m.look_at_speed([t.position.x, t.eye_y, t.position.z], 10.0, 10.0);
@@ -397,14 +400,17 @@ impl Goal for GhastShoot {
                     m.position.y + half + 0.5,
                     m.position.z + view[1] * 4.0,
                 );
-                cx.events.push(MobEvent::Projectile(Projectile::fireball(
-                    ProjectileKind::LargeFireball {
-                        power: m.extra.ints[EXPLOSION_POWER],
-                    },
-                    start,
-                    Some(Who::Mob(m.id)),
-                    dir,
-                )));
+                cx.events.push(MobEvent::Projectile(
+                    Projectile::fireball(
+                        ProjectileKind::LargeFireball {
+                            power: m.extra.ints[EXPLOSION_POWER],
+                        },
+                        start,
+                        Some(Who::Mob(m.id)),
+                        dir,
+                    )
+                    .shot_by(m.yaw, m.head_pitch),
+                ));
                 self.charge = -40;
             }
         } else if self.charge > 0 {
