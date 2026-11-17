@@ -11,11 +11,41 @@ The measurement excludes full client startup, renderer and first frame.
 import argparse
 import hashlib
 import json
+import math
 import os
 import statistics
 import subprocess
 import tempfile
 from pathlib import Path
+
+
+def _measurement(fields, field, binary, mode):
+    """Parse one child-reported numeric field, rejecting invalid measurements.
+
+    Elapsed times and RSS counters are durations/sizes: NaN, infinities,
+    negative values and non-numeric text are never valid samples. Reject them
+    with a diagnostic naming the binary, mode and field rather than letting a
+    bad value reach aggregation or a JSON report.
+    """
+    if field not in fields:
+        raise RuntimeError(f"{binary} {mode}: missing required measurement {field}")
+    raw = fields[field]
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{binary} {mode}: invalid {field}: {raw!r} is not numeric") from exc
+    if not math.isfinite(value):
+        raise RuntimeError(f"{binary} {mode}: invalid {field}: {raw!r} is not finite")
+    if value < 0:
+        raise RuntimeError(f"{binary} {mode}: invalid {field}: {raw!r} is negative")
+    return value
+
+
+def _derived(value, field, binary, mode):
+    """Guard the wait4-derived measurements before they enter a report."""
+    if not math.isfinite(value) or value < 0:
+        raise RuntimeError(f"{binary} {mode}: invalid {field}: {value!r} is not finite and nonnegative")
+    return value
 
 
 def run(binary, resources, mode):
@@ -30,14 +60,14 @@ def run(binary, resources, mode):
         output.seek(0)
         fields = dict(line.rstrip().split("=", 1) for line in output if "=" in line)
     measurements = {
-        "phase_ms": float(fields["phase_ms"]),
-        "total_ms": float(fields["total_ms"]),
-        "cpu_ms": (usage.ru_utime + usage.ru_stime) * 1000.0,
-        "peak_rss_kib": usage.ru_maxrss,
+        "phase_ms": _measurement(fields, "phase_ms", binary, mode),
+        "total_ms": _measurement(fields, "total_ms", binary, mode),
+        "cpu_ms": _derived((usage.ru_utime + usage.ru_stime) * 1000.0, "cpu_ms", binary, mode),
+        "peak_rss_kib": _derived(usage.ru_maxrss, "peak_rss_kib", binary, mode),
     }
     for field in ("behaviour_json_ms", "facts_ms", "behaviours_ms", "post_rss_kib"):
         if field in fields:
-            measurements[field] = float(fields[field])
+            measurements[field] = _measurement(fields, field, binary, mode)
     return measurements
 
 
@@ -141,7 +171,10 @@ def main():
             for mode, rows in samples.items()
         },
     }
-    data = json.dumps(result, indent=2)
+    # Defense in depth: every value was validated at admission, but refuse to
+    # emit nonstandard NaN/Infinity tokens even if a future metric slips past.
+    # This raises before printing or writing, so an existing report is kept.
+    data = json.dumps(result, indent=2, allow_nan=False)
     print(data)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
