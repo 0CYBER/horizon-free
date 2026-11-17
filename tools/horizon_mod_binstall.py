@@ -24,7 +24,9 @@ PLATFORMS = [
     {"target": "aarch64-apple-darwin", "os": "macos-latest", "run": True},
 ]
 
-PLACEHOLDER = re.compile(r"\{\s*([a-z-]+)\s*\}")
+# Match any identifier-ish brace placeholder, not just lowercase letters and hyphens, so an unknown
+# name (e.g. `{target_os}`) reaches `fill()` and raises KeyError instead of surviving into the URL.
+PLACEHOLDER = re.compile(r"\{\s*([A-Za-z0-9_-]+)\s*\}")
 
 
 def _package(manifest=MANIFEST):
