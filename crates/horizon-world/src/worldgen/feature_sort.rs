@@ -36,6 +36,11 @@ impl std::fmt::Display for FeatureSortError {
 }
 impl std::error::Error for FeatureSortError {}
 
+/// How many steps and features, summed over every biome, one ordering takes. `FeatureSorter` has no
+/// limit: this one only keeps a broken pack from sorting for minutes. A world pack with some 900
+/// biomes has over 80 000, past the 65 536 this was before.
+const WORK_LIMIT: usize = 1 << 20;
+
 /// Inputs preserve biome order, step order and each holder set's encounter order.
 pub fn build_features_per_step(
     biomes: &[Vec<Vec<FeatureIdentity>>],
@@ -48,7 +53,7 @@ pub fn build_features_per_step(
     let mut encountered = Vec::new();
     let mut graph = BTreeMap::<Node, BTreeSet<Node>>::new();
     let mut steps = 0;
-    let mut remaining = 65536usize;
+    let mut remaining = WORK_LIMIT;
     for biome in biomes {
         if biome.len() > 8192 {
             return Err(FeatureSortError::WorkLimit);
