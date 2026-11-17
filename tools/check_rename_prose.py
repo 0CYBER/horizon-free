@@ -5,10 +5,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-NAME = r"(`?\b[A-Za-z_]\w*(?:::\w+)*`?)"
-SELF = re.compile(NAME + r"\s*(?:→|->|\b(?i:becomes)\b)\s*\1(?![\w:])")
-RENAMED = re.compile(r"\b(?i:renamed)\s+" + NAME + r"\s+(?i:to)\s+\1(?![\w:])")
-PAIR = re.compile(r"`([A-Za-z_]\w*)`\s*(?:\||(?i:and))\s*`\1`")
+# Capture the bare identifier: any backticks live outside the group so the
+# numeric backreference compares names, not their markdown decoration. The two
+# sides of a mapping need not agree on backticks ("`Foo` becomes Foo" is still
+# a self-mapping).
+NAME = r"`?\b([A-Za-z_]\w*(?:::\w+)*)\b`?"
+AGAIN = r"`?\b\1\b`?"  # the same name, independently backticked
+SELF = re.compile(NAME + r"\s*(?:→|->|\b(?i:becomes)\b)\s*" + AGAIN + r"(?![\w:])")
+RENAMED = re.compile(r"\b(?i:renamed)\s+" + NAME + r"\s+(?i:to)\s+" + AGAIN + r"(?![\w:])")
+PAIR = re.compile(r"`?\b([A-Za-z_]\w*)\b`?\s*(?:\||(?i:and))\s*`?\b\1\b`?")
 
 
 def check(text):
