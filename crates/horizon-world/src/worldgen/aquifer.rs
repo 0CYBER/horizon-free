@@ -52,7 +52,8 @@ impl GlobalFluidPicker {
     }
 }
 impl FluidPicker for GlobalFluidPicker {
-    fn compute(&self, [_, y, _]: [i32; 3]) -> FluidStatus {
+    fn compute(&self, position: [i32; 3]) -> FluidStatus {
+        let y = position[1];
         if self.disabled {
             FluidStatus {
                 level: -4064,
