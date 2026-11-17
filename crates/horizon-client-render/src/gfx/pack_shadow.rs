@@ -38,14 +38,20 @@ pub(super) struct ShadowTargets {
     /// Both sides of each shadowcolor buffer used; one texture for both when no `shadowcomp`
     /// program draws into or flips the buffer.
     pub color: [Option<[wgpu::TextureView; 2]>; SHADOW_COLORS],
+    /// A shadow-sized attachment for fragment programs that write only storage images.
+    pub sink: Option<wgpu::TextureView>,
+    /// Pre-pass copies used by samplers and lowered image loads sharing a storage image.
+    pub scratch: [Option<wgpu::TextureView>; SHADOW_COLORS],
+    /// Buffers accessed through storage; initialize them before any program can use them.
+    storage: u16,
     /// The clear colour of each buffer cleared every frame.
     pub clears: [Option<[f32; 4]>; SHADOW_COLORS],
     /// Bit n set: B is shadowcolor n's "main".
     pub main: u16,
-    /// Nothing cleared yet this frame: the first pass into the shadow buffers clears them as it
-    /// begins (`clear_ops`), which saves a pass that loads and stores them all on tiled GPUs.
+    /// The depth/ordinary attachments have not begun this frame. Their first draw clears
+    /// them; storage-backed colours may have initialized before the early programs.
     fresh: bool,
-    /// Bit n set: shadowcolor n was cleared that way.
+    /// Bit n set: shadowcolor n needs no further frame clear.
     cleared: u8,
     /// Depth comparison for `sampler2DShadow` (hardware filtering): linear, as GL filters it.
     pub comparison: wgpu::Sampler,
@@ -117,12 +123,18 @@ impl ShadowTargets {
             colors,
             doubled,
             self.depth1.is_some(),
+            self.storage,
+            self.scratch.iter().enumerate().fold(0, |mask, (n, view)| {
+                mask | if view.is_some() { 1 << n } else { 0 }
+            }),
+            self.sink.is_some(),
         );
     }
 
     /// The buffers of `shadow` the pack uses: `colors` (bit n: shadowcolor n), `depth1` when
     /// some program reads `shadowtex1`, `doubled` (bit n: shadowcolor n needs a B texture). The
     /// resolution is kept within the device's limit.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         shadow: &horizon_shaders::Shadow,
@@ -130,6 +142,9 @@ impl ShadowTargets {
         colors: u16,
         doubled: u16,
         depth1: bool,
+        storage: u16,
+        copied: u16,
+        image_sink: bool,
     ) -> Self {
         let size = shadow
             .resolution
@@ -145,7 +160,11 @@ impl ShadowTargets {
                         &label,
                         size,
                         formats[n],
-                        wgpu::TextureUsages::empty(),
+                        if storage & 1 << n != 0 {
+                            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC
+                        } else {
+                            wgpu::TextureUsages::empty()
+                        },
                     )
                     .1
                 };
@@ -163,6 +182,29 @@ impl ShadowTargets {
             depth: target(device, "Shader pack shadowtex0", size, depth, copy),
             depth1: depth1.then(|| target(device, "Shader pack shadowtex1", size, depth, copy)),
             color,
+            storage,
+            sink: image_sink.then(|| {
+                target(
+                    device,
+                    "Shader pack shadow sink",
+                    size,
+                    wgpu::TextureFormat::R8Unorm,
+                    wgpu::TextureUsages::empty(),
+                )
+                .1
+            }),
+            scratch: std::array::from_fn(|n| {
+                (copied & 1 << n != 0).then(|| {
+                    target(
+                        device,
+                        "Shader pack shadow image copy",
+                        size,
+                        formats[n],
+                        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    )
+                    .1
+                })
+            }),
             clears: std::array::from_fn(|n| {
                 let b = &shadow.colors[n];
                 b.clear.then(|| b.clear_color.unwrap_or([1.0; 4]))
@@ -186,11 +228,46 @@ impl ShadowTargets {
         self.color.get(n)?.as_ref().map(|c| &c[side])
     }
 
-    /// A new frame: the shadow map and the shadowcolor buffers cleared every frame (6.3) are
-    /// cleared by the first pass that begins (`clear_ops`), or else by `clear_rest`.
-    pub fn begin_frame(&mut self) {
+    /// Snapshot the current main side before the pass binds it for storage.
+    pub fn copy_colors(&self, encoder: &mut wgpu::CommandEncoder, mask: u16) {
+        for n in (0..SHADOW_COLORS).filter(|n| mask & 1 << n != 0) {
+            if let (Some(source), Some(copy)) = (self.color(n, false), &self.scratch[n]) {
+                encoder.copy_texture_to_texture(
+                    source.texture().as_image_copy(),
+                    copy.texture().as_image_copy(),
+                    source.texture().size(),
+                );
+            }
+        }
+    }
+
+    /// Starts frame state before setup/begin. Storage-backed colours follow their authored
+    /// clears here; other colours/depth stay deferred to the shadow draw or `clear_rest`.
+    pub fn begin_frame(&mut self, encoder: &mut wgpu::CommandEncoder) {
         self.fresh = true;
         self.cleared = 0;
+        let storage = self.storage;
+        for n in (0..SHADOW_COLORS).filter(|n| storage & 1 << n != 0) {
+            let Some(color) = self.clears[n] else {
+                continue;
+            };
+            {
+                let Some(view) = self.color(n, false) else {
+                    continue;
+                };
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Shader pack shadow image clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: clear(color),
+                    })],
+                    ..Default::default()
+                });
+            }
+            self.cleared |= 1 << n;
+        }
     }
 
     /// The load operations of a pass into the shadow map and shadowcolor buffers `writes`:
@@ -204,7 +281,9 @@ impl ShadowTargets {
         }
         let mut colors = [load(); SHADOW_COLORS];
         for n in writes.filter(|&n| n < SHADOW_COLORS) {
-            if let Some(c) = self.clears[n] {
+            if let Some(c) = self.clears[n]
+                && self.cleared & 1 << n == 0
+            {
                 colors[n] = clear(c);
                 self.cleared |= 1 << n;
             }
