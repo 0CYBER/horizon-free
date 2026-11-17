@@ -7,7 +7,7 @@ what stops them now, and what still needs Ludovic.
 ## Who does what
 
 - **Agents** (Claude sessions run by Ludovic) write most pull requests, review them, merge them and answer
-  reports. Everything an agent posts on GitHub says so ("Opened by Ludovic's AI agent").
+  reports. Everything an agent posts on GitHub says so ("🤖 Agent:").
 - **Contributors** send pull requests from their forks like on any open-source project.
 - **Players** report bugs on Discord and GitHub. Kira, the Discord bot, files their reports as issues.
 - **Releases** are automatic: every merged change that players run ships within the hour.

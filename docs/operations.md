@@ -36,7 +36,8 @@ single-player paths, a LAN guest, a screenshot for anything visible. The list is
 A pull request that touches a CODEOWNERS path needs a code owner's approving review: GitHub keeps its merge button
 locked until then. Leave it open and say in the thread that it waits for a code owner.
 
-Pull requests opened by the maintainer's agents (author `ludovic111`, body starting "Opened by Ludovic's AI agent")
+Pull requests opened by the maintainer's agents (author `ludovic111`, body starting "Opened by Ludovic's AI agent"
+or ending with a "🤖 Agent:" line)
 are ordinary pull requests: review and merge them like any other, or close them if they went stale. Closing keeps
 the branch.
 

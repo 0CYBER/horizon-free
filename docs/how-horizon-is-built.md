@@ -8,7 +8,7 @@ This page is also on the website: [playhorizon.dev/docs/how-horizon-is-built](ht
 
 Horizon is Ludovic Marie's project: he decides what it does and what ships. **Most of the code is written by AI agents**: Claude sessions that Ludovic runs, and contributors' own AI tools. Some contributors write their code by hand.
 
-Agents say what they are. A pull request opened by one of Ludovic's agents starts with "Opened by Ludovic's AI agent (Claude), not by Ludovic himself.", its comments start with "🤖 Agent:", and its commits name the agent in a `Co-Authored-By` line.
+Agents say what they are. An agent's issues, comments and reviews start with "🤖 Agent:", and a pull request it opened ends with a "🤖 Agent:" line naming the model and the tool that did the work.
 
 ## How changes are checked
 
