@@ -174,6 +174,15 @@ impl Game<'_> {
         }
         Some(0.0)
     }
+    /// The yaw of a mob's body (`LivingEntity.yBodyRot`), which its model turns
+    /// with and its head turns against; `entity_head_yaw` reads the head. None
+    /// for the other kinds, whose body yaw Horizon doesn't keep.
+    pub(super) fn entity_body_yaw(&self, entity: EntityRef) -> Option<f32> {
+        let Target::Mob(id) = self.native_entity_target(entity)? else {
+            return None;
+        };
+        Some(self.mobs.iter().find(|m| m.id == id)?.body_yaw)
+    }
     /// Turns a mob's head to `yaw` (`Entity.setYHeadRot`); its body follows
     /// as its AI turns it. Players' heads can turn too; false for other kinds
     /// or an unavailable player.
@@ -321,6 +330,9 @@ mod tests {
             assert_eq!(mob.velocity.y, 0.0);
             assert_eq!(entity.position(game), Some([5.0, 70.0, -3.0]));
             assert_eq!(entity.rotation(game), Some([90.0, 90.0]));
+            assert_eq!(entity.head_yaw(game), Some(90.0));
+            game.mobs[0].body_yaw = 33.0;
+            assert_eq!(entity.body_yaw(game), Some(33.0));
             assert_eq!(entity.head_yaw(game), Some(90.0));
             let before = entity.velocity(game).unwrap();
             assert!(entity.set_rotation(game, 15.0, 360.0));

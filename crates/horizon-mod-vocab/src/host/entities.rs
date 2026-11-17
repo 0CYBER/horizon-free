@@ -313,6 +313,14 @@ pub trait EntitiesBackend {
     #[access(WorldOnly)]
     fn entity_head_yaw(&self, entity: EntityRef) -> Option<f32>;
     /// Side: server.
+    /// The yaw of a mob's body (`LivingEntity.yBodyRot`), which its model
+    /// turns with and its head turns against; `entity_head_yaw` reads the
+    /// head. None for an entity that is gone and for the other kinds, whose
+    /// body yaw Horizon doesn't keep (a player's body trails its head, so its
+    /// facing yaw would be wrong).
+    #[access(WorldOnly)]
+    fn entity_body_yaw(&self, entity: EntityRef) -> Option<f32>;
+    /// Side: server.
     /// The horizontal direction the entity faces (`Entity.getDirection`):
     /// `north`, `south`, `east` or `west`.
     #[access(WorldOnly)]
