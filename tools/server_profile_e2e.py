@@ -7,7 +7,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -231,7 +230,7 @@ def main():
     out.mkdir(parents=True)
     os.environ.update(lab.game_env())
     resources = lab.RESOURCES
-    with tempfile.TemporaryDirectory(prefix='server-profile-e2e-') as scratch:
+    with lab.temp_folder('server-profile-e2e-') as scratch:
         try:
             check_horizon(bins, resources, Path(scratch), out)
             check_vanilla(bins, resources, Path(scratch), out)

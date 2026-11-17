@@ -53,7 +53,6 @@ import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid as uuidlib
@@ -683,7 +682,7 @@ def main():
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     os.environ.update(lab.game_env())
-    with tempfile.TemporaryDirectory(prefix='server-transfer-e2e-') as scratch:
+    with lab.temp_folder('server-transfer-e2e-') as scratch:
         try:
             run(bins, Path(args.resources), Path(scratch), out)
         except (Failed, RuntimeError) as e:

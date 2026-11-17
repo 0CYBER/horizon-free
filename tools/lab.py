@@ -6,6 +6,7 @@ generated files stay in .local/. Also the small helpers the harnesses share
 
 import argparse
 import atexit
+import contextlib
 from collections import Counter
 import hashlib
 import json
@@ -19,6 +20,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import uuid
 import zipfile
@@ -70,6 +72,27 @@ def _scratch_dir(prefix):
     path = tempfile.mkdtemp(prefix=prefix)
     _SCRATCH_DIRS.append(path)
     return path
+
+
+@contextlib.contextmanager
+def temp_folder(prefix):
+    """`tempfile.TemporaryDirectory` for a folder a server ran in: on Windows the folder can stay locked for a
+    second or two after the server exits, so removing it is retried instead of failing a run that passed."""
+    path = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield path
+    finally:
+        for attempt in range(10):
+            try:
+                shutil.rmtree(path)
+                break
+            except FileNotFoundError:
+                break
+            except OSError as error:
+                if attempt == 9:
+                    print(f"Could not remove scratch folder {path}: {error}", file=sys.stderr)
+                else:
+                    time.sleep(0.5)
 
 
 @atexit.register

@@ -7,7 +7,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -149,7 +148,7 @@ def main():
     os.environ.update(lab.game_env())
     # A 4 s capture of a small world allocates little that stays: sample often enough to hold some of it.
     os.environ['HORIZON_HEAP_SAMPLE_KIB'] = '64'
-    with tempfile.TemporaryDirectory(prefix='server-perf-e2e-') as scratch:
+    with lab.temp_folder('server-perf-e2e-') as scratch:
         try:
             check(bins, Path(scratch), out)
         except (Failed, RuntimeError) as e:

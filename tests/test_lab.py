@@ -384,5 +384,18 @@ class GameEnvScreenTests(unittest.TestCase):
                 self.assertNotIn("VSCREEN", env)
 
 
+
+class ScratchCleanupTests(unittest.TestCase):
+    def test_exhausted_retries_report_retained_path_and_error(self):
+        from tools import lab
+        with mock.patch.object(lab.shutil, "rmtree", side_effect=PermissionError("locked")), \
+                mock.patch.object(lab.time, "sleep"), \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with lab.temp_folder("horizon-test-") as path:
+                pass
+            self.assertIn(path, stderr.getvalue())
+            self.assertIn("locked", stderr.getvalue())
+        shutil.rmtree(path)
+
 if __name__ == "__main__":
     unittest.main()

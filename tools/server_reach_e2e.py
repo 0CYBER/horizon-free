@@ -33,7 +33,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -135,7 +134,7 @@ def main():
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     os.environ.update(lab.game_env())
-    with tempfile.TemporaryDirectory(prefix='server-reach-e2e-') as scratch:
+    with lab.temp_folder('server-reach-e2e-') as scratch:
         try:
             run(bins, Path(scratch) / 'server', out)
         except (Failed, RuntimeError) as e:

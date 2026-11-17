@@ -21,7 +21,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lab  # noqa: E402
@@ -107,7 +106,7 @@ def main():
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     os.environ.update(lab.game_env())
-    with tempfile.TemporaryDirectory(prefix='server-horizon-only-e2e-') as scratch:
+    with lab.temp_folder('server-horizon-only-e2e-') as scratch:
         try:
             check(bins, Path(scratch), out)
         except (Failed, RuntimeError) as e:
