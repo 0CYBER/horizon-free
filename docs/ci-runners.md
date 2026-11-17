@@ -7,7 +7,7 @@ we have to the max") every job that can runs on our own machines, and GitHub's p
 
 | Runner | Machine | Labels | Takes |
 | --- | --- | --- | --- |
-| `vps-checks-1`, `vps-checks-2` | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha` | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the whole merge queue, `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-checks-1`, `vps-checks-2` | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha` | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 (this repository's own and approved forks'), `verify` of the whole merge queue, `mod-registry`, `telemetry-server`, `pack load bench` |
 | `vps-light-1`…`-8` | the CI VPS | `horizon-light` | The bots, as playhorizon's light runners below |
 | `playhorizon-light-1`…`-12` | playhorizon (partner's server, 8 vCPU) | `horizon-light`, `playhorizon-light` | The bots that run main's own scripts: `pr labels`, `overlap note`, `cancel-on-close`, `claim command`, `triage command`, `mojang republish`, `nightly build`'s `answer`, and `checks`' `parity-scope` |
 | `playhorizon-ci-1`, `playhorizon-ci-2` | playhorizon | `playhorizon-ci` | Nothing routed since 2026-11-03 (they took `checks` of this repository's own pull requests with the old `SELF_HOSTED_CI=all`) |
@@ -29,7 +29,7 @@ mini's) is kept small by [`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) befor
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
-- **Main's pushes, and eight of ten pull requests' `verify`** (number ending in 2–9): `checks` runs
+- **Main's pushes, and nine of ten pull requests' `verify`** (number ending in 1–9): `checks` runs
   ~100 times an hour (2026-11-03: 21 pushes to main and 76 pull request runs an hour), each with `verify` (10–18
   minutes of work on GitHub; the launcher's checks are one of its steps). The CI VPS's two checks runners give ~120
   runner-minutes an hour. Main's pushes also save the Rust cache GitHub's runs of pull requests read. `SELF_HOSTED_CI=all` sends them all to ours.
@@ -57,7 +57,7 @@ for):
 
 | `SELF_HOSTED_CI` | Bots (`horizon-light`) | `checks`, `mod-registry`, `telemetry-server`, `pack load bench` (`horizon-checks`) |
 | --- | --- | --- |
-| unset (default) | ours | `verify`: ours for pull requests ending in 0 or 1 (forks' included, see Forks) and for the whole merge queue, GitHub's for the other pull requests and main's pushes; the rest ours, forks' pull requests excepted |
+| unset (default) | ours | `verify`: ours for pull requests ending in 0 (forks' included, see Forks) and for the whole merge queue, GitHub's for the other pull requests and main's pushes; the rest ours, forks' pull requests excepted |
 | `all` | ours | ours, every pull request |
 | `light` | ours | GitHub's |
 | `off` | GitHub's | GitHub's: everything back, in one switch |
@@ -72,10 +72,12 @@ when playhorizon is down or moves: the bots would wait for it. Back to the defau
 
 ## Forks
 
-An approved fork's pull request whose number ends in 0 or 1 runs `verify` on our checks runners (the CI
+An approved fork's pull request whose number ends in 0 runs `verify` on our checks runners (the CI
 VPS), like this repository's own; the others run on GitHub's. Why: GitHub's pool of 20
 jobs was the only place fork pull requests waited (2026-11-15: 544 runs queued, fork pull requests waiting 7+ hours
 while the VPS's two checks runners sat idle). The jobs no longer check the head repository before they pick our runners.
+Numbers ending in 1 went there too until 2026-11-17: with the desktop's three checks runners gone, the VPS's two ran
+back to back and a fork's `verify` waited 30 to 150 minutes for them, against a 2-minute median on GitHub's.
 
 The risk accepted: fork code runs on an isolated runner user after a maintainer approved it, and the runner's build
 folder persists between jobs. That is why nothing these runners build is shipped or signed.

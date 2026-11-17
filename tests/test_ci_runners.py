@@ -1,7 +1,7 @@
 """Which jobs may run on our own runners (docs/ci-runners.md).
 
 - horizon-light (playhorizon's and other small runners, which refuse a fork's pull request): main's own scripts only.
-- horizon-checks (isolated runners; an approved fork's pull request ending in 0 or 1 runs there too): no secret and
+- horizon-checks (isolated runners; an approved fork's pull request ending in 0 runs there too): no secret and
   no token that writes.
 - Neither takes a job that holds a secret or whose token can push, publish or start workflows: playhorizon is a
   partner's server, and a checks runner keeps what a fork's job left behind.
@@ -124,7 +124,7 @@ class OwnRunnerTests(unittest.TestCase):
         self.assertIn("if: always()", ci["verify"])
 
     def test_forks_reach_only_the_checks_runners(self):
-        # An approved fork's pull request ending in 0 or 1 runs on horizon-checks like this repository's own (GitHub's
+        # An approved fork's pull request ending in 0 runs on horizon-checks like this repository's own (GitHub's
         # 20-job pool is not the only place it may wait). Never the light runners: every light job that a pull request
         # can start carries the fork guard (test_light_runners_take_main_code_only), and ci.yml's two runs-on
         # expressions (the other workflows keep their own guards) no longer test the head repository.

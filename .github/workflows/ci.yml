@@ -43,7 +43,7 @@ jobs:
   # to do. It runs even in a cancelled run (`always()`), so it fails there instead of being skipped, which GitHub
   # would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the other.
   #
-  # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take pull requests whose number ends in 0 or 1,
+  # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take pull requests whose number ends in 0,
   # this repository's own and approved forks' alike, and the whole merge queue (about 11 runs an hour; the
   # build folder persists there, so a queue run's Rust tests take about 3 min against about 9 on GitHub's runners);
   # GitHub's runners take the other pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs
@@ -58,8 +58,7 @@ jobs:
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
+      endsWith(format('{0}', github.event.pull_request.number), '0') ||
       github.event_name == 'merge_group') &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
@@ -260,8 +259,7 @@ jobs:
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
+      endsWith(format('{0}', github.event.pull_request.number), '0') ||
       github.event_name == 'merge_group') &&
       fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45

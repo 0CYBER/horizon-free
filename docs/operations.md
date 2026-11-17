@@ -70,7 +70,7 @@ is waiting, and closes it once the runners are back.
 | Runner label | What waits | What to do |
 | --- | --- | --- |
 | `horizon-light` (bots) | Triage and claim commands, labels, overlap notes, the Mojang check | An organisation owner sets `SELF_HOSTED_CI` to `off` (Settings → Secrets and variables → Actions → Variables). Then everything runs on GitHub |
-| `horizon-checks` | `verify` of this repository's own pull requests ending in 0 or 1 | Same switch (`off` or `light`), then re-run the waiting checks. Forks' pull requests never use these runners |
+| `horizon-checks` | `verify` of pull requests ending in 0, approved forks' included | Same switch (`off` or `light`), then re-run the waiting checks. Forks' pull requests see no repository variable, so they wait for these runners |
 | `horizon-game` | A pull request's own parity job | It isn't required: merge on `verify`, and label pull requests that touch gameplay `needs-proof` |
 | `horizon-parity-main` | parity-main on main | Nothing can be done on GitHub. Nightlies wait for the last commit it passed on |
 | `horizon-nightly`, `horizon-release` | The Nightly's and the launcher's macOS builds | Nothing can be done on GitHub. No Nightly or launcher release until the Mac is back |
