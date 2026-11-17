@@ -39,6 +39,13 @@ impl View {
     pub fn view_proj(&self, pose: Mat4) -> Mat4 {
         self.projection * pose * self.view
     }
+
+    /// The view matrix the sky shares with the world. `GameRenderer.renderLevel`
+    /// multiplies this pose (the hurt bob, the view bob and the nausea spin)
+    /// into the projection before the level, sky included, is drawn.
+    pub fn posed_view(&self, pose: Mat4) -> Mat4 {
+        pose * self.view
+    }
 }
 
 /// Every view of a frame, and the one geometry is culled with.
@@ -167,5 +174,29 @@ mod tests {
         assert_eq!(set.views(), &[view]);
         assert_eq!(*set.primary(), view);
         assert_eq!(*set.cull(), view);
+    }
+
+    /// The sky gradient's rays and the sunrise fan use the same pose the
+    /// terrain is drawn with. A bare camera view leaves the sky still while
+    /// the world bobs.
+    #[test]
+    fn the_sky_view_includes_the_pose_the_world_is_drawn_with() {
+        let view = View::screen(20.0, -15.0, 70.0, 16.0 / 9.0, 512.0);
+        let pose =
+            Mat4::from_rotation_z(0.08) * Mat4::from_translation(Vec3::new(0.02, -0.04, 0.0));
+        let sky = view.posed_view(pose);
+        assert_ne!(
+            sky.to_cols_array().map(f32::to_bits),
+            view.view.to_cols_array().map(f32::to_bits)
+        );
+        assert_eq!(
+            sky.to_cols_array().map(f32::to_bits),
+            (pose * view.view).to_cols_array().map(f32::to_bits)
+        );
+        // `fs_sky` rebuilds its rays from this inverse. It is not the bare camera.
+        assert_ne!(
+            sky.inverse().to_cols_array().map(f32::to_bits),
+            view.view.inverse().to_cols_array().map(f32::to_bits)
+        );
     }
 }
