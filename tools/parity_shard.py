@@ -26,7 +26,7 @@ def shard(items):
 
 def label():
     """A directory name for this share ("2-4", or "all"): shards run at once and must not share outputs."""
-    spec = os.environ.get("PARITY_SHARD")
+    spec = os.environ.get("PARITY_SHARD") or None
     if spec:
         parse(spec)
     return "all" if spec is None else spec.replace("/", "-")
