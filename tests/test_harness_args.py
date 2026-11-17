@@ -5,6 +5,7 @@ The harnesses append a default scratch directory when the caller named none.
 last `--work-dir` wins, so an extra pair appended after `--work-dir=/tmp/x`
 would send the run somewhere the caller did not ask for.
 """
+import argparse
 import contextlib
 import importlib.util
 import io
@@ -52,6 +53,34 @@ class EnsureWorkDirTest(unittest.TestCase):
     def test_the_last_one_wins_as_in_argparse(self):
         argv = ['harness.py', '--work-dir', '/tmp/first', '--work-dir=/tmp/second']
         self.assertEqual(harness_args.ensure_work_dir(DEFAULT, argv), Path('/tmp/second'))
+
+    def test_a_work_dir_after_a_bare_separator_is_a_positional(self):
+        # argparse: everything after `--` is positional, so it cannot name the directory.
+        self.assertIsNone(harness_args.named_work_dir(
+            ['harness.py', '--', '--work-dir', '/tmp/not-an-option']))
+
+    def test_the_separator_keeps_the_work_dir_named_before_it(self):
+        argv = ['harness.py', '--work-dir=/tmp/asked-for', '--', '--work-dir', '/tmp/positional']
+        self.assertEqual(harness_args.ensure_work_dir(DEFAULT, argv), Path('/tmp/asked-for'))
+        self.assertEqual(argv, ['harness.py', '--work-dir=/tmp/asked-for', '--', '--work-dir', '/tmp/positional'])
+
+    def test_the_default_goes_before_the_separator_so_argparse_sees_it(self):
+        argv = ['harness.py', '--', 'positional']
+        self.assertEqual(harness_args.ensure_work_dir(DEFAULT, argv), DEFAULT)
+        self.assertEqual(argv, ['harness.py', '--work-dir', str(DEFAULT), '--', 'positional'])
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--work-dir')
+        parser.add_argument('rest', nargs='*')
+        self.assertEqual(parser.parse_args(argv[1:]).work_dir, str(DEFAULT))
+
+    def test_argparse_agrees_with_both_spellings(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--work-dir')
+        parser.add_argument('rest', nargs='*')
+        for spelling in (['--work-dir', '/tmp/a'], ['--work-dir=/tmp/a']):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(harness_args.named_work_dir(['harness.py', *spelling]),
+                                 parser.parse_args(spelling).work_dir)
 
 
 class FreshCaptureHarnessTest(unittest.TestCase):
