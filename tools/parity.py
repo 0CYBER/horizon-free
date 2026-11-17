@@ -1390,13 +1390,17 @@ def git_show(base, path):
     return result.stdout if result.returncode == 0 else None
 
 
+# A TOML line up to its comment: a "#" inside a basic ("...", with escapes) or literal ('...') string is kept.
+MANIFEST_COMMENT = re.compile(r'''^((?:[^#"']|"(?:[^"\\]|\\.)*"|'[^']*')*).*$''')
+
+
 def manifest_lines(text):
     """A Cargo.toml's lines that decide what is built: (section, line) pairs, without its package's identity and
     targets, comments, or workspace crates (whose code counts through its own sources)."""
     lines, section = set(), ""
     name = re.search(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', text or "", re.M | re.S)
     for raw in (text or "").splitlines():
-        line = re.sub(r"\s+", " ", raw.split("#", 1)[0]).strip()
+        line = re.sub(r"\s+", " ", MANIFEST_COMMENT.sub(r"\1", raw) if "#" in raw else raw).strip()
         if not line:
             continue
         if line.startswith("["):

@@ -756,6 +756,14 @@ class WorkspaceManifestTests(unittest.TestCase):
         resolver = {"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "3"\n'}
         self.assertEqual(self.verdict({"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "2"\n'}, resolver), set())
 
+    def test_a_hash_inside_a_quoted_value_is_not_a_comment(self):
+        git = '[dependencies]\nserde_json = {{ git = "https://example.invalid/repo.git#{}" }}\n'
+        self.assertNotEqual(parity.manifest_lines(git.format("rev1")), parity.manifest_lines(git.format("rev2")))
+        self.assertEqual(parity.manifest_lines("[dependencies]\nserde_json = \"1.0\" # note\nx = '#a' # b\n"),
+                         {("[dependencies]", 'serde_json = "1.0"'), ("[dependencies]", "x = '#a'")})
+        path = "crates/foo/Cargo.toml"
+        self.assertEqual(self.verdict({path: git.format("rev1")}, {path: git.format("rev2")}), set())
+
     def test_a_feature_of_a_workspace_crate_counts_through_its_sources(self):
         items = '[package]\nname = "horizon-items"\n\n[features]\ntest-support = []\n'
         client = self.CLIENT + '\n[dev-dependencies]\nhorizon-items = { path = "../horizon-items", features = ["test-support"] }\n'
