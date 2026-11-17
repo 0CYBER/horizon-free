@@ -39,12 +39,14 @@ def main():
     lock, jars, libraries = base.verify_artifacts()
     source = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaWorldSpawnPacketOracle.java'
     sources = [Path(__file__), source, lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/horizon-client/src/game/commands.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/lan_actions.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/administration/commands/mod.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/lan_actions/mod.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/lan_actions/packets.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/lan_actions/respawn.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/network/lan_actions/shared.rs',
                lab.ROOT / 'crates/horizon-client/src/lan/hub.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/lan.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/native_player_fx.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/server_travel.rs']
+               lab.ROOT / 'crates/horizon-client/src/game/network/lan/mod.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/world/server_travel.rs']
     hashes = base.source_hashes(sources)
     lab.write_json(build / 'input.json', dict(sources_sha256=hashes))
 

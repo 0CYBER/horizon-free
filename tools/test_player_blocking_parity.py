@@ -60,7 +60,7 @@ def main():
                     'dev.horizonlab.parity.VanillaPlayerBlockingOracle', str(cases), str(native)], check=True)
     binary = args.binary
     if binary is None:
-        subprocess.run(['cargo', 'build', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
+        subprocess.run(['cargo', 'build', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
         binary = lab.cargo_target() / 'debug' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     resources = args.resources or lab.LOCAL / 'horizon-client' / lock['minecraft']['version']
     rust = work / 'rust.txt'

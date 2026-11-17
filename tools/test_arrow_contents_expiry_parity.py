@@ -27,7 +27,7 @@ ORACLE = 'VanillaArrowContentsExpiryOracle'
 PRODUCTION = [
     'crates/horizon-client-render/src/brewing.rs',
     'crates/horizon-client/src/arrows.rs',
-    'crates/horizon-client/src/game/potions.rs',
+    'crates/horizon-client/src/game/items/potions.rs',
 ]
 
 
@@ -68,7 +68,7 @@ def main():
         p.error('input changed since the pinned Java oracle run')
     inputs.write_bytes(input_bytes)
     source=root/f'mods/horizon/src/test/java/dev/horizonlab/parity/{ORACLE}.java'
-    native=root/'crates/horizon-client/src/game/potions.rs'
+    native=root/'crates/horizon-client/src/game/items/potions.rs'
     provenance=dict(source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
                     phase=a.phase,rows=len(rows),input_sha256=sha(input_bytes),
                     oracle_source_sha256=sha(source.read_bytes()),native_source_sha256=sha(native.read_bytes()),

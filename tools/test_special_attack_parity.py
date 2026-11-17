@@ -90,14 +90,14 @@ def main():
     lock, jars, libraries = base.verify_artifacts()
     source_paths = [lab.ROOT / path for path in (
         'crates/horizon-client/src/game.rs',
-        'crates/horizon-client/src/game/melee.rs',
-        'crates/horizon-client/src/game/special_attacks.rs',
-        'crates/horizon-client/src/game/armor_stands.rs',
-        'crates/horizon-client/src/game/boats.rs',
-        'crates/horizon-client/src/game/minecarts.rs',
-        'crates/horizon-client/src/game/dragon.rs',
-        'crates/horizon-client/src/game/special_attack_fixture.rs',
-        'crates/horizon-client/src/game/dispense_fixture.rs',
+        'crates/horizon-client/src/game/entities/melee.rs',
+        'crates/horizon-client/src/game/items/special_attacks.rs',
+        'crates/horizon-client/src/game/entities/armor_stands.rs',
+        'crates/horizon-client/src/game/entities/boats/mod.rs',
+        'crates/horizon-client/src/game/entities/minecarts.rs',
+        'crates/horizon-client/src/game/mobs/dragon.rs',
+        'crates/horizon-client/src/game/items/special_attack_fixture.rs',
+        'crates/horizon-client/src/game/interface/dispense_fixture.rs',
         'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaDispenserOracle.java',
         'tools/test_special_attack_parity.py')]
     source_hashes = base.source_hashes(source_paths)

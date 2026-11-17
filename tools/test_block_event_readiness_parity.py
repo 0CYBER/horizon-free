@@ -16,7 +16,7 @@ except ImportError:
     import lab
     import test_rust_parity as base
 
-# The sculk regression lives in level::tests::trigger_tests after the test split.
+# The sculk regression's tests are in level::tests.
 TEST = 'fresh_chunk_'
 
 
@@ -42,8 +42,7 @@ def main():
                lab.ROOT / 'crates/horizon-world/src/level/mod.rs',
                lab.ROOT / 'crates/horizon-world/src/level/pistons.rs',
                lab.ROOT / 'crates/horizon-world/src/level/sculk.rs',
-               lab.ROOT / 'crates/horizon-world/src/level/tests.rs',
-               lab.ROOT / 'crates/horizon-world/src/level/tests/trigger_tests.rs']
+               lab.ROOT / 'crates/horizon-world/src/level/tests.rs']
     hashes = base.source_hashes(sources)
 
     def run(command, label, **kwargs):

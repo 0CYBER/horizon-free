@@ -22,11 +22,11 @@ def main():
     report.unlink(missing_ok=True)
     source = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaMobDiscardOracle.java'
     sources = [source, Path(__file__).resolve(),
-               lab.ROOT / 'crates/horizon-client/src/game/mob_discard_tests.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/commands.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/entity.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/native_mobs.rs',
-               lab.ROOT / 'crates/horizon-client/src/game/persist.rs']
+               lab.ROOT / 'crates/horizon-client/src/game/mobs/mob_discard_tests.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/administration/commands/mod.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/entities/entity.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/modding/native_mobs.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/world/persist.rs']
     def hashes():
         return {str(p.relative_to(lab.ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
     tested = hashes()

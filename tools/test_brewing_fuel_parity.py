@@ -43,7 +43,7 @@ def main():
                     lab.ROOT / "crates/horizon-client-render/src/providers.rs",
                     lab.ROOT / "crates/horizon-items/src/items.rs",
                     lab.ROOT / "crates/horizon-client/src/menu.rs",
-                    lab.ROOT / "crates/horizon-client/src/game/machines.rs",
+                    lab.ROOT / "crates/horizon-client/src/game/blocks/machines/mod.rs",
                     lab.ROOT / "crates/horizon-items/src/item_data.rs", lab.ROOT / "Cargo.lock"]
     tested_sources = base.source_hashes(tested_paths)
     tested_fixtures = base.source_hashes([inputs])
