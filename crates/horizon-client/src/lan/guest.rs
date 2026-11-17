@@ -1868,12 +1868,33 @@ pub(super) fn network_stack(
                 horizon_protocol::item::component::RARITY,
                 horizon_protocol::item::Component::Int(1),
             ));
+        }
+        // `tooltip_display`: `hide_tooltip` and the hidden components, which
+        // the client's tooltip reads. The raid banner hides its layers too.
+        let display = d.other("minecraft:tooltip_display");
+        if display.is_some() || d.ominous_banner {
+            let hide = display
+                .and_then(|t| crate::save::number(t.get("hide_tooltip")))
+                .is_some_and(|v| v != 0);
+            let mut hidden: Vec<i32> = match display.and_then(|t| t.get("hidden_components")) {
+                Some(horizon_core::nbt::Tag::List(names)) => names
+                    .iter()
+                    .filter_map(|name| {
+                        synced_id(
+                            "minecraft:data_component_type",
+                            &crate::save::text(Some(name))?,
+                        )
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let layers = horizon_protocol::item::component::BANNER_PATTERNS;
+            if d.ominous_banner && !hidden.contains(&layers) {
+                hidden.push(layers);
+            }
             stack.added.push((
                 horizon_protocol::item::component::TOOLTIP_DISPLAY,
-                horizon_protocol::item::Component::TooltipDisplay {
-                    hide: false,
-                    hidden: vec![horizon_protocol::item::component::BANNER_PATTERNS],
-                },
+                horizon_protocol::item::Component::TooltipDisplay { hide, hidden },
             ));
         }
         // `painting/variant`: a reference into the synced registry.
@@ -2545,6 +2566,62 @@ mod tests {
         assert_eq!(
             received.component(component::CUSTOM_NAME),
             Some(&Component::Text(name))
+        );
+    }
+
+    #[test]
+    fn a_stacks_tooltip_display_reaches_the_client() {
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:data_component_type", "minecraft:enchantments") => Some(13),
+            ("minecraft:data_component_type", "minecraft:lore") => Some(9),
+            _ => None,
+        };
+        let mut pickaxe = ItemStack::new("minecraft:diamond_pickaxe", 1);
+        assert_eq!(
+            stack_to_network(|_| 7, synced_id, &Some(pickaxe.clone()))
+                .unwrap()
+                .component(component::TOOLTIP_DISPLAY),
+            None
+        );
+        pickaxe.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([
+                ("hide_tooltip", Tag::Byte(1)),
+                (
+                    "hidden_components",
+                    Tag::List(vec![
+                        Tag::String("minecraft:enchantments".into()),
+                        Tag::String("minecraft:not_a_component".into()),
+                        Tag::String("minecraft:lore".into()),
+                    ]),
+                ),
+            ])),
+        );
+        let sent = stack_to_network(|_| 7, synced_id, &Some(pickaxe)).unwrap();
+        assert_eq!(
+            sent.component(component::TOOLTIP_DISPLAY),
+            Some(&Component::TooltipDisplay {
+                hide: true,
+                hidden: vec![13, 9],
+            })
+        );
+        // The raid captain's banner adds its hidden layers to the stack's own.
+        let mut banner = ItemStack::new("minecraft:white_banner", 1);
+        banner.data_mut().ominous_banner = true;
+        banner.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([(
+                "hidden_components",
+                Tag::List(vec![Tag::String("minecraft:lore".into())]),
+            )])),
+        );
+        let sent = stack_to_network(|_| 7, synced_id, &Some(banner)).unwrap();
+        assert_eq!(
+            sent.component(component::TOOLTIP_DISPLAY),
+            Some(&Component::TooltipDisplay {
+                hide: false,
+                hidden: vec![9, component::BANNER_PATTERNS],
+            })
         );
     }
 
