@@ -8317,6 +8317,38 @@ def mob_fall_clip():
                        f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 30} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
 
+def dispensed_projectile_rotation():
+    """Projectile.shoot sets the angles from the motion as (float)(Mth.atan2(..) * 180.0F / (float)Math.PI): the
+    table Mth.atan2 and the float pi, as every later turn (updateRotation, rotateTowardsMovement) does too.
+    Dispensers shoot each kind; their Rotation is read as they fly."""
+    x0, y0, z0 = 5696, 250, 5696
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256),
+           {'op': 'sync_randoms', 'uniquifier': 16609, 'entity_id': 16609000, 'level_seed': 16609}]
+    shots = [('lingering_potion', 'lingering_potion', 'south'), ('small_fireball', 'fire_charge', 'east'),
+             ('splash_potion', 'splash_potion', 'up'), ('egg', 'egg', 'east'), ('arrow', 'arrow', 'south'),
+             ('snowball', 'snowball', 'west'), ('spectral_arrow', 'spectral_arrow', 'north')]
+    for n, (kind, item, facing) in enumerate(shots):
+        x, z = x0 + 1 + n * 2, z0 + 7
+        ops.append(cmd(f'/setblock {x} {y0} {z} dispenser[facing={facing}]{{Items:[{{Slot:0b,id:"minecraft:{item}",'
+                       f'count:1}}]}}', expect_result=1))
+    for n, _ in enumerate(shots):
+        ops.append(cmd(f'/setblock {x0 + 1 + n * 2} {y0 + 1} {z0 + 7} redstone_block', False))
+
+    def reads():
+        for n, (kind, _, _) in enumerate(shots):
+            ops.append(cmd(f'/data get entity @e[type={kind},x={x0 + 1 + n * 2}.5,y={y0},z={z0 + 7}.5,distance=..6,'
+                           f'sort=nearest,limit=1] Rotation'))
+
+    ops.append({'op': 'tick', 'n': 5})
+    reads()
+    ops.append({'op': 'tick', 'n': 1})
+    reads()
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=48,dz=16]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 2} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
+
 def orb_fall_distance():
     """#14440: an experience orb's fall (`Entity.fallDistance`). `Entity.move` casts a move of a block or
     more over fall-resetting blocks and water, then `checkFallDamage` adds the drop outside water and on
@@ -8970,6 +9002,7 @@ def groups():
         ('rocket data merge', rocket_data_merge()),
         ('mob fall clip', mob_fall_clip()),
         ('armadillo scute time', armadillo_scute_time()),
+        ('dispensed projectile rotation', dispensed_projectile_rotation()),
         ('falling block fall on', falling_block_fall_on()),
         ('orb fall distance', orb_fall_distance()),
         ('rocket fall distance', rocket_fall_distance()),
