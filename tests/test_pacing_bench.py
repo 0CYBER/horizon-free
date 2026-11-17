@@ -1,9 +1,14 @@
+import contextlib
+import io
+import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import lab
-from tools.pacing_bench import capture_frames, frame_line, slowest_frames, stats
+from tools.pacing_bench import capture_frames, compare, frame_line, slowest_frames, stats
 
 FIXTURE = lab.ROOT / "tests/fixtures/pacing_slow_frames.hzperf"
 # The five slow frames of the fixture, written by hand in crates/horizon-perf/tests/pacing_fixture.rs.
@@ -12,6 +17,21 @@ SLOWEST = [
     "slow frame 62.5 ms, cpu 60.0 ms: tick 50.0, update_world 8.0",
     "slow frame 45.0 ms, cpu 12.0 ms: render 40.0/10.0, chunk_upload 25.0/6.0",
 ]
+
+
+class MedianTests(unittest.TestCase):
+    def test_an_even_number_of_runs_reports_the_median_not_the_upper_middle(self):
+        def run(path, p50):
+            path.write_text(json.dumps({"label": "horizon", "distance": 10, "scenarios": {"fly16": {
+                "p50_ms": p50, "p99_ms": p50, "p999_ms": p50, "max_ms": p50,
+                "low_1pct_fps": p50, "low_01pct_fps": p50, "over_33ms": 0}}}))
+        with tempfile.TemporaryDirectory() as folder, mock.patch("tools.pacing_bench.WORK", Path(folder)):
+            run(Path(folder, "horizon-rd10-a.json"), 10.0)
+            run(Path(folder, "horizon-rd10-b.json"), 30.0)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                compare(["horizon"])
+        self.assertIn("| horizon | 2 | 20 |", out.getvalue())
 
 
 def perf_binary():

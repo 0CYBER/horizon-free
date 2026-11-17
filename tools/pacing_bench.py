@@ -53,6 +53,7 @@ import argparse
 import json
 import math
 import os
+import statistics
 import subprocess
 import time
 from pathlib import Path
@@ -590,7 +591,8 @@ def compare(labels):
                 cells = []
                 for key, _ in COLUMNS:
                     values = sorted(e.get(key, 0) for e in entries)
-                    cells.append(f"{values[len(values) // 2]:g}")
+                    # `statistics.median` averages the two middle runs of an even set; the upper one is not the median.
+                    cells.append(f"{statistics.median(values):g}")
                 print(f"| {label} | {len(entries)} | " + " | ".join(cells) + " |")
 
 
