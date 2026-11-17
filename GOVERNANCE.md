@@ -278,7 +278,7 @@ measures the work, and only people above a floor can be nominated. Their body th
 
 | Signal | What counts | Source |
 | --- | --- | --- |
-| **Merged pull requests** | Pull requests merged in a public horizon-rust repo. For Modding, also in the mod API's fork (arismoko/horizon). Counted overall, and per group by label or by files touched | GitHub search, as the ranks are counted today |
+| **Merged pull requests** | Pull requests merged in a public horizon-rust repo. Counted overall, and per group by label or by files touched | GitHub search, as the ranks are counted today |
 | **Reviews** | Others' pull requests you reviewed: approved, asked for changes, or left a review with comments. One per pull request | GitHub search `reviewed-by:` and Kira's GitHub webhook |
 | **Triage** | Triage commands run (`/label`, `/close`, duplicates), issues labelled or closed, bug posts routed on Discord | The triage workflow's comments and Kira's webhook |
 | **Support answers** | #horizon-support posts you answered that ended solved | Kira's support feature |
@@ -400,7 +400,7 @@ holder or an org owner removes GitHub access when the Team role ends.
 
 | Group | Covers | GitHub | Discord |
 | --- | --- | --- | --- |
-| **Modding** | The mod API, native and content mods, mixins, the mod registry, `cargo horizon-mod` | The mod API lives in Ari's fork **arismoko/horizon**. Its owner runs that repo by their own rules; the council governs only what is Horizon's: horizon-rust/horizon-mods, horizon-mixins, horizon-native-mod-template, the registry. Label `mods` | The 🧩 MODDING category (#modding, #horizon-modding-team); roles 🧩 Modder (picked) and 🧩 Horizon Modding Team (the lead gives it) |
+| **Modding** | The mod API, native and content mods, mixins, the mod registry, `cargo horizon-mod` | The mod API lives in horizon-rust/horizon, beside horizon-rust/horizon-mods, horizon-mixins, horizon-native-mod-template and the registry. Label `mods` | The 🧩 MODDING category (#modding, #horizon-modding-team); roles 🧩 Modder (picked) and 🧩 Horizon Modding Team (the lead gives it) |
 | **Shaders and rendering** | The renderer, shaders, shader packs, OptiFine and Polytone pack formats | Label `rendering`; `crates/horizon-client-render` (gfx), `*.wgsl`, `horizon-shaders`, `horizon-shader-api`, `horizon-optifine`, `horizon-polytone` | #shaders-rendering |
 | **Performance** | Frame rate, memory, server tick, benchmarks | Label `perf`; `horizon-bench`, the benchmark tools | #performance |
 | **Launcher** | The launcher: installs, updates, instances, its pages | Label `launcher`; `launcher/` | #launcher |
