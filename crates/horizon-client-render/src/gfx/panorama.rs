@@ -3,7 +3,6 @@ use crate::{Result, hud::decode_bytes};
 use glam::Mat4;
 use horizon_assets::resource_source::ResourceSource;
 use std::sync::{Arc, Mutex};
-use wgpu::util::DeviceExt;
 
 /// Native cube order: +X, -X, +Y, -Y, +Z, -Z (CubeMapTexture.SUFFIXES).
 const FACE_ORDER: [u8; 6] = [1, 3, 5, 4, 0, 2];
@@ -313,7 +312,8 @@ impl Panorama {
     }
 
     fn cube(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::BindGroup {
-        let texture = device.create_texture_with_data(
+        let texture = super::upload::create_texture_with_data(
+            device,
             queue,
             &wgpu::TextureDescriptor {
                 label: Some("Title panorama cube"),
@@ -329,7 +329,6 @@ impl Panorama {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             },
-            wgpu::util::TextureDataOrder::LayerMajor,
             &self.faces.texels(),
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor {

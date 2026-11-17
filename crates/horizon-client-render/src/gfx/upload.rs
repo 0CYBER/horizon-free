@@ -3,6 +3,13 @@
 //! Metal a kernel call each), which made the animated sprites' few hundred
 //! texture writes a spike on every tick that changes a frame. The belt keeps a
 //! few mapped buffers and records the copies into the frame's encoder instead.
+//!
+//! Large textures made with their texels ([`create_texture_with_data`]) are
+//! staged a band at a time: wgpu's `create_texture_with_data` stages every
+//! byte at once and keeps the copy until a submission carrying it finishes, so
+//! the shared atlas (112 MiB at 4096x7168) stood twice in memory while the
+//! title artwork loaded, and the world renderer staged it again beside the
+//! block sprites (#15608). Phones share that memory with the game.
 use std::num::NonZeroU64;
 
 /// Large enough for a tick of animated sprites at 16x16 with every mip level.
@@ -118,6 +125,97 @@ impl Uploads {
     pub fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
         self.belt.finish_and_recall_on_submit(encoder);
     }
+}
+
+/// About how much one band stages; a large upload holds at most about two.
+const BAND: usize = 8 << 20;
+
+/// `device.create_texture_with_data(queue, desc, LayerMajor, data)`, staged a
+/// band at a time: each band is submitted, and the one before waited for, so
+/// its staging buffer is freed before the next is written.
+pub(crate) fn create_texture_with_data(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    desc: &wgpu::TextureDescriptor<'_>,
+    data: &[u8],
+) -> wgpu::Texture {
+    create_banded(device, queue, desc, data, BAND)
+}
+
+fn create_banded(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    desc: &wgpu::TextureDescriptor<'_>,
+    data: &[u8],
+    band: usize,
+) -> wgpu::Texture {
+    use wgpu::util::DeviceExt as _;
+    let block = desc.format.block_copy_size(None).unwrap_or(0) as usize;
+    if data.len() <= band
+        || block == 0
+        || desc.format.block_dimensions() != (1, 1)
+        || desc.dimension != wgpu::TextureDimension::D2
+    {
+        return device.create_texture_with_data(
+            queue,
+            desc,
+            wgpu::util::TextureDataOrder::LayerMajor,
+            data,
+        );
+    }
+    let mut desc = desc.clone();
+    desc.usage |= wgpu::TextureUsages::COPY_DST;
+    let texture = device.create_texture(&desc);
+    let (mut offset, mut staged, mut previous) = (0, 0, None);
+    // The order `create_texture_with_data` reads `LayerMajor` data in.
+    for layer in 0..desc.array_layer_count() {
+        for mip in 0..desc.mip_level_count {
+            let Some(size) = desc.mip_level_size(mip) else {
+                continue;
+            };
+            let row = size.width as usize * block;
+            let rows_per_band = (band / row).clamp(1, size.height as usize) as u32;
+            let mut y = 0;
+            while y < size.height {
+                let rows = rows_per_band.min(size.height - y);
+                let bytes = row * rows as usize;
+                let Some(texels) = data.get(offset..offset + bytes) else {
+                    return texture;
+                };
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: mip,
+                        origin: wgpu::Origin3d { x: 0, y, z: layer },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    texels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row as u32),
+                        rows_per_image: Some(rows),
+                    },
+                    wgpu::Extent3d {
+                        width: size.width,
+                        height: rows,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                (offset, staged, y) = (offset + bytes, staged + bytes, y + rows);
+                if staged >= band {
+                    let index = queue.submit([]);
+                    if let Some(earlier) = previous.replace(index) {
+                        let _ = device.poll(wgpu::PollType::Wait {
+                            submission_index: Some(earlier),
+                            timeout: None,
+                        });
+                    }
+                    staged = 0;
+                }
+            }
+        }
+    }
+    texture
 }
 
 #[cfg(test)]
@@ -364,6 +462,52 @@ mod tests {
                 expected[..]
             );
             readback.unmap();
+        }
+    }
+
+    /// Banded uploads, by rows of a layer and by layers of mips, put every
+    /// texel where wgpu's one-shot upload does.
+    #[test]
+    fn banded_uploads_match_one_upload() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        for (edge, mips) in [(64, 1), (16, 5)] {
+            let desc = wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: edge,
+                    height: edge,
+                    depth_or_array_layers: 3,
+                },
+                mip_level_count: mips,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            };
+            let len = (0..mips)
+                .map(|l| (edge >> l) * (edge >> l) * 4)
+                .sum::<u32>()
+                * 3;
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 + i / 251) as u8).collect();
+            // Three rows of the largest level a band: many submissions, each waited for.
+            let banded = create_banded(&device, &queue, &desc, &data, 3 * edge as usize * 4);
+            let whole = wgpu::util::DeviceExt::create_texture_with_data(
+                &device,
+                &queue,
+                &desc,
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &data,
+            );
+            assert_eq!(
+                read_back(&device, &queue, &banded),
+                read_back(&device, &queue, &whole),
+                "{edge} px, {mips} mips"
+            );
         }
     }
 }

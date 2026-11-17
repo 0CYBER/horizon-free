@@ -240,6 +240,11 @@ impl Loading {
         ) {
             Ok(r) => {
                 self.renderer = Some(r);
+                // The GPU holds the atlas now: keep its copy compressed until the world
+                // renderer reads it at the handoff, as the game does after its first frame.
+                if let Some(gui) = &mut self.gui {
+                    gui.atlas.pack_pixels();
+                }
             }
             Err(e) => self.error = Some(e),
         }
@@ -316,9 +321,15 @@ impl Loading {
         options.server = None;
         let gui = self.gui.take().ok_or("missing menu bundle")?;
         let window = self.window.clone().ok_or("window closed")?;
-        // Keep the loader's device and swap in the real textures in one step.
-        if let Some(renderer) = &mut self.renderer {
+        // Keep the loader's device and swap in the real textures in one step. The loading
+        // screen draws no frame after this: its atlas texture is freed before the world
+        // renderer uploads its own, so a phone never holds both (#15608).
+        let mut previous = self.renderer.take();
+        if let Some(renderer) = &mut previous {
             renderer.release_surface();
+            if let Some(atlas) = &renderer.hud.atlas_texture {
+                atlas.destroy();
+            }
         }
         let renderer_at = Instant::now();
         let renderer = startup::time("renderer.world", || {
@@ -327,14 +338,14 @@ impl Loading {
                 options.offscreen,
                 &loaded.pack,
                 &gui,
-                self.renderer.as_ref(),
+                previous.as_ref(),
                 loaded.renderer_cpu,
                 self.settings.horizon.api,
                 self.settings.horizon.translucent_batching,
                 self.settings.vsync,
                 &self.settings.horizon,
                 shader_packs::picked_pack_shape(&self.settings),
-                self.renderer
+                previous
                     .as_ref()
                     .map(|r| r.display_reading())
                     .unwrap_or_default(),
