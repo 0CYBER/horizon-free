@@ -120,10 +120,19 @@ under the usual cancellation rules. Each refused output logs one warning naming 
 output and conversion error. This policy is identical for native and wasm listeners.
 
 Hook methods take `&self` and require `Send + Sync`. The process-wide mod list is installed once, like mixin module statics. One mod instance serves both
-the window's game and the server-thread game. A hook can also fire again inside
-the same mod: for example, `LevelRef::set_block` fires `block_changed`. Mods keep mutable
+the window's game and the server-thread game, so two hooks of the same mod can run at the same time, and a
+`thread_local!` holds another value on each thread. A hook can also fire again inside
+the same mod: for example, `LevelRef::set_block` fires `block_changed`, so hold no lock across a host call that can
+fire a hook of yours. Mods keep mutable
 state with interior mutability so these calls can share the instance safely. Data-load
 hooks can run on any loading thread; item default changes must be identical on every side.
+
+A few hooks do not run on the thread that ticks the world, and their docs say so. The mesher asks the
+`SectionGeometry`, colour resolver and tint source a mod registers (`add_section_geometry`, `register_color_resolvers`,
+`register_block_tint_sources`) on its worker threads. The worldgen Part methods (`alter_ground`, `rotate`,
+`on_tree_grow`) run on the worldgen worker threads as well as the server thread, and `block_entity_update_tag` runs on
+another thread for a saved chunk sent past the view distance. These get no `Host` that writes, or none at all, so
+keep no mutable state in them that another thread could reach.
 
 `Hooks` contains global hooks. Scoped hooks belong to `BlockPart`, `BlockEntityPart`,
 `ItemPart`, `MenuPart` or `FluidPart` and run for the registered object.
