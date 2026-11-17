@@ -265,6 +265,17 @@ impl Mods {
             && p.support().installable()
     }
 
+    /// The results listed, by index into `results` (#18071).
+    pub(super) fn shown(&self) -> Vec<usize> {
+        shown(&self.results, self.everything, |p| self.support(p))
+    }
+
+    /// Flips Show everything. Its checks go too: `everything` picks which file a check reads.
+    pub(super) fn toggle_everything(&mut self) {
+        self.everything = !self.everything;
+        self.checks.clear();
+    }
+
     /// How well a result runs: a Java mod's from its check once it has one. In a Java
     /// instance, a result was searched for its version and loader: installing checks the file.
     pub(super) fn support(&self, p: &Project) -> Support {
@@ -283,6 +294,19 @@ impl Mods {
             _ => Support::Partial(tr("Checking its jar…").into()),
         }
     }
+}
+
+/// The indices of `results` to list: with Show everything off, what doesn't run in Horizon
+/// stays out. A Modrinth mod's verdict comes from its jar check after the search, so the search
+/// alone can't leave these out; `results` keeps every row, as paging counts on it.
+fn shown(
+    results: &[Project],
+    everything: bool,
+    support: impl Fn(&Project) -> Support,
+) -> Vec<usize> {
+    (0..results.len())
+        .filter(|&i| everything || support(&results[i]).installable())
+        .collect()
 }
 
 /// `51404735` → `51.4M`.
@@ -443,6 +467,8 @@ impl Launcher {
                         Err(e) => Checking::Failed(e),
                     };
                     m.checks.insert(key, state);
+                    // A row may leave the list (`shown`): measure them again (`cull`).
+                    m.results_list.reset();
                 }
                 Event::Loaded(l) => loaded.push(l),
                 Event::About(about) => {
@@ -1200,7 +1226,7 @@ impl Launcher {
                     .child(tr("Show everything")),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.mods.everything = !this.mods.everything;
+                this.mods.toggle_everything();
                 this.mods_search(0);
                 cx.notify();
             }));
@@ -1674,8 +1700,11 @@ impl Launcher {
         if let Some(e) = &m.error {
             return div().child(notice(e.clone(), &t));
         }
-        if m.results.is_empty() {
-            let line = if m.searching || !m.searched {
+        let shown = m.shown();
+        if shown.is_empty() {
+            let line = if !m.results.is_empty() {
+                tr("Nothing found that runs in Horizon. Show everything lists the rest.")
+            } else if m.searching || !m.searched {
                 tr("Searching…")
             } else if let Some(target) = m.java_for(m.kind) {
                 return centered(
@@ -1692,13 +1721,14 @@ impl Launcher {
             } else {
                 tr("Nothing found that runs in Horizon. Show everything lists the rest.")
             };
-            return centered(line, &t);
+            let out = div().flex().flex_col().child(centered(line, &t));
+            return self.mods_more(out, cx);
         }
-        let result_count = m.results.len();
+        let result_count = shown.len();
         let rows = m.results_list.clone();
         let scroll = self.content_scroll.handle.clone();
         let row = |i: usize| {
-            let project = self.mods.results[i].clone();
+            let project = self.mods.results[shown[i]].clone();
             let icon = self.mods_icon(&project, 56.);
             let p = &project;
             let m = &self.mods;
@@ -1810,7 +1840,12 @@ impl Launcher {
             )
         };
         let list = rows.column(&scroll, result_count, 8., |_| false, row);
-        let mut out = div().flex().flex_col().child(list);
+        self.mods_more(div().flex().flex_col().child(list), cx)
+    }
+
+    /// The list's More, under `out` while the source has more pages.
+    fn mods_more(&self, mut out: Div, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
         let m = &self.mods;
         if m.more {
             let mut more = button("mods-more", "More", Kind::Ghost, &t);
@@ -1920,5 +1955,37 @@ mod tests {
         let sum = format!("SHA-512:{}", "ab".repeat(64));
         assert_eq!(short_sum(&sum), "SHA-512 abababababab…abababab");
         assert_eq!(short_sum("SHA-1:abcd"), "SHA-1:abcd");
+    }
+
+    #[test]
+    fn show_everything_lists_what_doesnt_run() {
+        let project = |id: &str| Project {
+            source: SourceId::Modrinth,
+            id: id.into(),
+            slug: id.into(),
+            title: id.into(),
+            summary: String::new(),
+            author: String::new(),
+            downloads: 0,
+            page: String::new(),
+            icon: None,
+            license: String::new(),
+            kind: PackKind::Mod,
+            game_versions: vec!["26.3".into()],
+            loaders: vec!["fabric".into()],
+            blocked: None,
+        };
+        let results: Vec<Project> = ["fabric-api", "ferrite-core", "sodium", "fresh"]
+            .into_iter()
+            .map(project)
+            .collect();
+        // The verdicts the jar checks gave; `fresh` is still being checked.
+        let support = |p: &Project| match p.id.as_str() {
+            "fabric-api" | "sodium" => Support::No("Uses mixins.".into()),
+            "ferrite-core" => Support::Works,
+            _ => Support::Partial("Checking its jar…".into()),
+        };
+        assert_eq!(shown(&results, false, support), [1, 3]);
+        assert_eq!(shown(&results, true, support), [0, 1, 2, 3]);
     }
 }

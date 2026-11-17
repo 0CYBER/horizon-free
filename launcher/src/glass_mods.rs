@@ -155,7 +155,7 @@ impl Launcher {
                         ))
                         .child(ui::text(13., FontWeight::NORMAL, 0.7).child(tr("Show everything")))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.mods.everything = !this.mods.everything;
+                            this.mods.toggle_everything();
                             this.mods_search(0);
                             cx.notify();
                         })),
@@ -459,8 +459,12 @@ impl Launcher {
                         .child(actions),
                 );
         }
-        if m.results.is_empty() {
-            let line = if m.searching || !m.searched {
+        let shown = m.shown();
+        if shown.is_empty() {
+            let line = if !m.results.is_empty() {
+                tr("Nothing found that runs in Horizon. Show everything lists the rest.")
+                    .to_string()
+            } else if m.searching || !m.searched {
                 tr("Searching…").to_string()
             } else if let Some(target) = m.java_for(m.kind) {
                 trf(
@@ -480,10 +484,11 @@ impl Launcher {
                 tr("Nothing found that runs in Horizon. Show everything lists the rest.")
                     .to_string()
             };
-            return ui::text(14., FontWeight::NORMAL, 0.6)
+            let line = ui::text(14., FontWeight::NORMAL, 0.6)
                 .px(px(16.))
                 .py(px(24.))
                 .child(line);
+            return self.glass_mods_more(div().flex().flex_col().child(line), cx);
         }
         let picked = self.mods_picked().map(|p| p.id.clone());
         // Registry pages add up behind More: only the rows near the view are built (`cull`).
@@ -491,9 +496,9 @@ impl Launcher {
             self.mods.results_list.clone(),
             self.content_scroll.handle.clone(),
         );
-        let total = self.mods.results.len();
+        let total = shown.len();
         let row = |i: usize| {
-            let p = self.mods.results[i].clone();
+            let p = self.mods.results[shown[i]].clone();
             let icon = self.mods_icon(&p, 40.);
             let m = &self.mods;
             let installed = m.entry(&p).is_some();
@@ -621,11 +626,16 @@ impl Launcher {
                 cx.notify();
             }))
         };
-        let mut list =
-            div()
-                .flex()
-                .flex_col()
-                .child(rows.column(&scroll, total, 0., |_| false, row));
+        let list = div()
+            .flex()
+            .flex_col()
+            .child(rows.column(&scroll, total, 0., |_| false, row));
+        self.glass_mods_more(list, cx)
+    }
+
+    /// The list's More, under `list` while the source has more pages.
+    fn glass_mods_more(&self, mut list: Div, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
         if self.mods.more {
             let searching = self.mods.searching;
             let offset = self.mods.results.len();
@@ -648,12 +658,14 @@ impl Launcher {
     /// The picked result, else the first; when a search finds nothing, the card shown last stays
     /// (the mockup's detail keeps its mod).
     fn mods_picked(&mut self) -> Option<Project> {
+        let shown = self.mods.shown();
         let m = &mut self.mods;
+        let mut listed = shown.iter().map(|&i| &m.results[i]);
         let found = m
             .picked
             .as_ref()
-            .and_then(|id| m.results.iter().find(|p| &p.id == id))
-            .or(m.results.first())
+            .and_then(|id| listed.clone().find(|p| &p.id == id))
+            .or(listed.next())
             .cloned();
         match found {
             Some(p) => {
