@@ -612,7 +612,9 @@ impl Conn {
     /// Frame `bodies` into `out`, `queued` ones counted off `pending`: false
     /// if one could not be.
     fn frame(&mut self, now: Instant, bodies: Vec<Queued>, _queued: bool) -> bool {
-        for body in &bodies {
+        // By value: each body is freed once it is framed, so a large batch (a reopened
+        // world's first view, uncapped in process, #18313) is never held twice.
+        for body in bodies {
             let result = if body.prepared {
                 self.writer.frame_into(&body.body, &mut self.out);
                 Ok(())

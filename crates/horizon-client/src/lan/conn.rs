@@ -460,6 +460,19 @@ impl PlayerSender {
             })
             .is_ok()
     }
+    /// [`Self::reserve`] for a body to send, which a failed reservation closes the connection
+    /// for. A memory connection (the integrated server's own player, a splitscreen player) is not
+    /// bounded, as its outbox isn't (`Outbox::new`'s `capped`): it reads what it is sent as it
+    /// comes, and its first view arrives in one burst that can pass MAX_PENDING (a reopened
+    /// world's chunks all load from disk at once). Bounding it closed the connection with no
+    /// reason, "End of stream": #12849, then again #18313. Keep this exemption.
+    fn reserve_body(&self, cost: usize) -> bool {
+        if matches!(self.framing, horizon_protocol::connection::Framing::Memory) {
+            self.pending.fetch_add(cost, Ordering::AcqRel);
+            return true;
+        }
+        self.reserve(cost)
+    }
     /// Prepare a whole encoded packet without publishing it. The channel is diagnostic only;
     /// its wire identifier must already be included in `body`.
     pub fn prepare_payload(
@@ -510,7 +523,7 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        if !self.reserve(io_pool::charge(body.retained())) {
+        if !self.reserve_body(io_pool::charge(body.retained())) {
             self.close();
             return;
         }
@@ -554,7 +567,7 @@ impl PlayerSender {
         let mut held = self.held();
         for body in bodies {
             let body = body.into();
-            if !self.reserve(io_pool::charge(body.retained())) {
+            if !self.reserve_body(io_pool::charge(body.retained())) {
                 self.close();
                 return;
             }
@@ -583,7 +596,7 @@ impl PlayerSender {
             To::Pool(outbox, _) => {
                 let body = play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode();
                 let body = Body::from(body);
-                if !self.reserve(io_pool::charge(body.retained())) {
+                if !self.reserve_body(io_pool::charge(body.retained())) {
                     self.close();
                     return;
                 }
@@ -3962,6 +3975,58 @@ mod outgoing_budget_tests {
         }
         assert!(s.pending.load(Ordering::Relaxed) <= io_pool::MAX_PENDING);
         assert!(s.held().len() < io_pool::MAX_PENDING / std::mem::size_of::<Vec<u8>>());
+    }
+    fn outbox(s: &PlayerSender) -> &Arc<io_pool::Outbox> {
+        let To::Pool(outbox, _) = &s.to else {
+            unreachable!()
+        };
+        outbox
+    }
+    // The integrated server's own player: a reopened world sends its whole first view at once,
+    // more than the network budget, and the player must stay (#12849, #18313).
+    #[test]
+    fn a_memory_connection_stays_open_past_the_budget_on_send() {
+        let s = sender(Framing::Memory);
+        s.send(Vec::with_capacity(io_pool::MAX_PENDING));
+        s.send(vec![1, 2, 3]);
+        assert!(outbox(&s).alive(), "send closed the connection");
+        assert_eq!(outbox(&s).queued(), 2);
+    }
+    #[test]
+    fn a_memory_connection_stays_open_past_the_budget_on_send_many() {
+        let s = sender(Framing::Memory);
+        let half = io_pool::MAX_PENDING / 2;
+        s.send_many([Vec::with_capacity(half), Vec::with_capacity(half)]);
+        assert!(outbox(&s).alive(), "send_many closed the connection");
+        {
+            let _hold = Holding::start();
+            s.send_many([Vec::with_capacity(half), vec![1, 2, 3]]);
+        }
+        s.flush();
+        assert!(outbox(&s).alive(), "a held send_many closed the connection");
+        assert_eq!(outbox(&s).queued(), 4);
+    }
+    #[test]
+    fn a_memory_connection_past_the_budget_still_gets_its_disconnect() {
+        let s = sender(Framing::Memory);
+        // A first view's burst already queued.
+        s.pending.store(io_pool::MAX_PENDING, Ordering::Relaxed);
+        let reason = translatable("disconnect.closed", &[]);
+        s.disconnect(reason.clone());
+        let expected = play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode();
+        assert_eq!(
+            outbox(&s).queued_contents().last(),
+            Some(&expected),
+            "the disconnect was dropped"
+        );
+    }
+    /// A network client that reads slowly keeps the budget: past it, it is closed.
+    #[test]
+    fn a_network_connection_still_closes_past_the_budget() {
+        let s = sender(Framing::Network(None));
+        s.send(Vec::with_capacity(io_pool::MAX_PENDING));
+        assert!(!outbox(&s).alive());
+        assert_eq!(outbox(&s).queued(), 0);
     }
 }
 
