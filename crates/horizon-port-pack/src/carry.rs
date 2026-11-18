@@ -137,7 +137,8 @@ pub struct Report {
     /// Structure, placement and pool element types rewritten as vanilla's,
     /// and those left as they are.
     pub worldgen_types: crate::worldgen::Upgrade,
-    /// The loader's convention biome tags the structures name, carried.
+    /// The loader's convention biome tags the structures and biome modifiers
+    /// name, carried.
     pub convention_biome_tags: usize,
 }
 
@@ -1208,6 +1209,7 @@ pub fn carry(
                 let modifier =
                     modifier.and_then(|v| crate::lithostitched::modifier(&v, loaded, types));
                 if let Some(("biome_modifier", file)) = &modifier {
+                    crate::worldgen::convention_tags(&file["biomes"], &mut biome_conventions);
                     let to = format!("data/{id}/neoforge/biome_modifier/lithostitched/{path}");
                     write(
                         &inside.join(to),
@@ -1244,6 +1246,15 @@ pub fn carry(
             } else if rel.starts_with("tags/worldgen/biome/") && name.starts_with("data/") {
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                     crate::worldgen::convention_tags(&v, &mut biome_conventions);
+                }
+            } else if (rel.starts_with("neoforge/biome_modifier/")
+                || rel.starts_with("forge/biome_modifier/"))
+                && name.starts_with("data/")
+                && name.ends_with(".json")
+            {
+                // The biomes a modifier changes, often by the loader's tags (`#c:is_overworld`).
+                if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                    crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
                 }
             } else if rel.starts_with("advancement/")
                 && name.starts_with("data/")
@@ -1360,8 +1371,9 @@ pub fn carry(
             report.item_definitions_added += 1;
         }
     }
-    // The loader's convention biome tags the structures and their tags name
-    // (NeoForge's `c:is_plains`...): the game has no loader, so they come along.
+    // The loader's convention biome tags the structures, biome modifiers and
+    // their tags name (NeoForge's `c:is_plains`...): the game has no loader, so
+    // they come along.
     for tag in crate::worldgen::with_included(&biome_conventions, conventions) {
         let file = inside.join(format!("data/c/tags/worldgen/biome/{tag}.json"));
         if !file.exists() {
@@ -2917,6 +2929,67 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tag, json!({"values": ["minecraft:plains"]}));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A biome modifier that names its biomes by the loader's convention tags
+    /// (`#c:is_overworld`) brings those tags along, as a structure does: the
+    /// game has no loader to supply them and skips a modifier whose tag it
+    /// doesn't know, so the mod's ores never generate.
+    #[test]
+    fn biome_modifiers_bring_the_convention_tags_they_name() {
+        let dir = temp_dir("modifier-conventions");
+        let jar = dir.join("ores.jar");
+        write_jar(
+            &jar,
+            &[
+                (
+                    "data/example/neoforge/biome_modifier/tin.json",
+                    br##"{"type": "neoforge:add_features", "biomes": "#c:is_overworld",
+                        "features": "example:tin_ore", "step": "underground_ores"}"##,
+                ),
+                (
+                    "data/example/forge/biome_modifier/nether_tin.json",
+                    br##"{"type": "forge:add_features", "biomes": "#c:is_nether",
+                        "features": "example:nether_tin_ore", "step": "underground_ores"}"##,
+                ),
+            ],
+        );
+        let conventions = BTreeMap::from([
+            (
+                "is_overworld".to_owned(),
+                json!({"values": ["minecraft:plains"]}),
+            ),
+            (
+                "is_nether".to_owned(),
+                json!({"values": ["minecraft:nether_wastes"]}),
+            ),
+            (
+                "is_end".to_owned(),
+                json!({"values": ["minecraft:the_end"]}),
+            ),
+        ]);
+        let info = crate::jar::JarInfo {
+            mod_id: "example".into(),
+            ..Default::default()
+        };
+        let pack = Pack {
+            loaded: &|_| true,
+            mods: &|_| false,
+        };
+        let out = dir.join("out");
+        let report = carry(&jar, &info, &out, None, &|_| true, &pack, &conventions).unwrap();
+        let tags = out.join("carry/data/c/tags/worldgen/biome");
+        let tag = |t: &str| -> Value {
+            serde_json::from_slice(&fs::read(tags.join(format!("{t}.json"))).unwrap()).unwrap()
+        };
+        assert_eq!(tag("is_overworld"), json!({"values": ["minecraft:plains"]}));
+        assert_eq!(
+            tag("is_nether"),
+            json!({"values": ["minecraft:nether_wastes"]})
+        );
+        assert!(!tags.join("is_end.json").exists());
+        assert_eq!(report.convention_biome_tags, 2);
         fs::remove_dir_all(&dir).unwrap();
     }
 
