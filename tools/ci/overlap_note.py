@@ -261,15 +261,18 @@ class Api:
     def __init__(self, repo: str):
         self.repo = repo
 
-    def own_note(self, n: int) -> int | None:
+    def own_note(self, n: int) -> list[int]:
+        """Every marker comment this bot wrote on the pull request, in the order GitHub lists them."""
         raw = gh("api", "--paginate", f"repos/{self.repo}/issues/{n}/comments?per_page=100", "--jq",
                  f'.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("{MARKER}"))) | .id')
-        ids = raw.split()
-        return int(ids[0]) if ids else None
+        return [int(value) for value in raw.split()]
 
-    def write(self, n: int, comment: int | None, text: str) -> None:
-        if comment:
-            gh("api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{comment}", "-f", f"body={text}")
+    def write(self, n: int, comments: list[int], text: str) -> None:
+        """Edit the one note in place; delete the extras two racing runs may have created (AGENTS.md: one comment)."""
+        if comments:
+            gh("api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{comments[0]}", "-f", f"body={text}")
+            for extra in comments[1:]:
+                gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/comments/{extra}")
         else:
             gh("api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={text}")
 
@@ -285,7 +288,7 @@ def event() -> int:
     text = note(compare(me, pulls))
     api = Api(repo)
     existing = api.own_note(number)
-    if text is None and existing is None:
+    if text is None and not existing:
         return 0
     api.write(number, existing, text or CLEARED)
     return 0

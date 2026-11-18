@@ -1,8 +1,10 @@
+import json
 import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import overlap_note as ov
 
@@ -75,6 +77,59 @@ class FunctionTests(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(ov.functions(""), set())
+
+
+class OneNoteTests(unittest.TestCase):
+    def test_two_racing_notes_become_one(self):
+        calls = []
+        comments = {11: "first note", 12: "racing note", 13: "unrelated comment"}
+
+        def fake_gh(*arguments, **options):
+            calls.append(arguments)
+            url = next((value for value in arguments if value.startswith("repos/")), "")
+            if "/comments?" in url:
+                return "11\n12\n"
+            comment = int(url.rsplit("/", 1)[1])
+            if "PATCH" in arguments:
+                comments[comment] = next(value.removeprefix("body=") for value in arguments if value.startswith("body="))
+            elif "DELETE" in arguments:
+                del comments[comment]
+            return ""
+
+        with mock.patch.object(ov, "gh", fake_gh):
+            api = ov.Api("o/r")
+            existing = api.own_note(5)
+            api.write(5, existing, "edited")
+        self.assertEqual(existing, [11, 12])
+        patched = [call for call in calls if "PATCH" in call]
+        deleted = [call for call in calls if "DELETE" in call]
+        self.assertEqual(len(patched), 1)
+        self.assertTrue(any(value.endswith("/issues/comments/11") for value in patched[0]))
+        self.assertEqual(len(deleted), 1)
+        self.assertTrue(any(value.endswith("/issues/comments/12") for value in deleted[0]))
+        self.assertEqual(comments, {11: "edited", 13: "unrelated comment"})
+
+    def test_no_note_creates_one(self):
+        calls = []
+        comments = {("o/r", 5): [], ("o/r", 6): ["unrelated comment"]}
+
+        def fake_gh(*arguments, **options):
+            calls.append(arguments)
+            if "-f" in arguments:
+                url = next(value for value in arguments if value.startswith("repos/"))
+                parts = url.split("/")
+                target = ("/".join(parts[1:3]), int(parts[-2]))
+                comments.setdefault(target, []).append(
+                    next(value.removeprefix("body=") for value in arguments if value.startswith("body=")))
+            return ""
+
+        with mock.patch.object(ov, "gh", fake_gh):
+            api = ov.Api("o/r")
+            self.assertEqual(api.own_note(5), [])
+            api.write(5, [], "new")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-f", calls[1])
+        self.assertEqual(comments, {("o/r", 5): ["new"], ("o/r", 6): ["unrelated comment"]})
 
 
 class OverlapTests(unittest.TestCase):
