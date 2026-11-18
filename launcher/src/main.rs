@@ -559,6 +559,8 @@ struct Launcher {
     /// Pictures from disk made at their drawn size (`picture_cache`).
     pictures: picture_cache::Pictures,
     game_packs: packs_page::Packs,
+    /// The games' answers about their shader API seen so far (`game_shader_api::answers`).
+    shader_answers: u64,
     world_packs: datapacks_page::WorldPacks,
     export: Option<export_page::ExportPanel>,
     launch: Option<launch_page::LaunchPanel>,

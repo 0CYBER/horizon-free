@@ -861,6 +861,11 @@ fn install_from(
     let p = index
         .project(&project.id)
         .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
+    // Before the version is picked: by the launcher's own line, a pack made only for the
+    // game's line would look like one for another game.
+    if p.kind == index::Kind::Shader {
+        crate::game_shader_api::said().map_err(|e| format!("{}: {e}.", p.name))?;
+    }
     let v = newest(index, p)?;
     install_version(index, local, p, v, home, progress).map(|e| vec![e])
 }
@@ -972,6 +977,9 @@ fn install_version_guarded(
         return Err(format!("{} was taken down: {}", p.name, r.reason));
     }
     // Every install comes here, a modpack's pinned ones too: refused before the download.
+    if p.kind == index::Kind::Shader {
+        crate::game_shader_api::said().map_err(|e| format!("{}: {e}.", p.name))?;
+    }
     if needs_other_shader_api(p, v) {
         return Err(format!("{} {}.", p.name, other_shader_api(&v.api)));
     }

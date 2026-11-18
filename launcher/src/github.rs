@@ -28,6 +28,15 @@ pub const MIRROR: &str = "https://mcp.playhorizon.dev/github/public";
 /// [`backend::CHECK_EVERY`], so a few minutes late at worst.
 pub const FRESH_SECS: u64 = 5 * 60;
 
+/// How long one source may take to start answering, its connection included. With only the
+/// agent's limits (15 s to connect, 60 s for each read) a source that took the request and said
+/// nothing held the release list for two minutes, GitHub's turn and the mirror's one after the
+/// other (#18074). The body is then read for as long as it keeps coming, each read under the
+/// agent's limit: the release list is about 2 MB, which a slow line takes most of a minute to
+/// bring. Tests wait less.
+const HEADERS: std::time::Duration =
+    std::time::Duration::from_secs(if cfg!(test) { 1 } else { 20 });
+
 /// What one source answered.
 #[derive(Debug)]
 pub(crate) enum Answer {
@@ -148,7 +157,7 @@ fn github(url: &str, etag: Option<&str>) -> Answer {
     if let Some(etag) = etag {
         request = request.set("If-None-Match", etag);
     }
-    match request.call() {
+    match call(request, url) {
         Ok(r) if r.status() == 304 => Answer::NotModified,
         Ok(r) => {
             let etag = r.header("ETag").map(str::to_owned);
@@ -157,17 +166,36 @@ fn github(url: &str, etag: Option<&str>) -> Answer {
                 Err(e) => Answer::Failed(e.to_string()),
             }
         }
-        Err(e) => failure(url, e),
+        Err(answer) => answer,
     }
 }
 
 fn mirror(url: &str) -> Answer {
-    match backend::agent(url).get(url).call() {
+    match call(backend::agent(url).get(url), url) {
         Ok(r) => match r.into_json() {
             Ok(body) => Answer::Fresh(body, None),
             Err(e) => Answer::Failed(e.to_string()),
         },
-        Err(e) => failure(url, e),
+        Err(answer) => answer,
+    }
+}
+
+/// `request`'s response once its headers are in, or the source's failure; one that takes
+/// longer than [`HEADERS`] fails.
+fn call(request: ureq::Request, url: &str) -> Result<ureq::Response, Answer> {
+    let (sent, response) = std::sync::mpsc::channel();
+    // A late request is left to end on its own, within the agent's limits (15 s to connect, 60 s
+    // for a read); what it brings back is dropped.
+    std::thread::spawn(move || {
+        let _ = sent.send(request.call());
+    });
+    match response.recv_timeout(HEADERS) {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(failure(url, e)),
+        Err(_) => Err(Answer::Failed(format!(
+            "No connection: {url} didn't answer within {} s",
+            HEADERS.as_secs()
+        ))),
     }
 }
 

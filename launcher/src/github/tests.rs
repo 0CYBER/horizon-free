@@ -356,3 +356,47 @@ fn a_corrupt_or_foreign_copy_is_ignored() {
     assert_eq!(got.unwrap(), Some(list("v2")));
     let _ = fs::remove_dir_all(cache);
 }
+
+/// A local source that takes the request, waits `silent`, then sends its headers and a 16-byte
+/// JSON body a byte every 200 ms.
+fn slow_source(silent: std::time::Duration) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/list", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let _ = stream.read(&mut [0; 4096]);
+        std::thread::sleep(silent);
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n"
+        );
+        for byte in format!("[{:14}]", "").bytes() {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if stream.write_all(&[byte]).is_err() {
+                return;
+            }
+        }
+    });
+    url
+}
+
+/// A source that says nothing gives up once [`HEADERS`] have passed, so a release list isn't
+/// held for minutes (#18074); one that answers and sends its body slowly is read to its end,
+/// past that wait, so a slow line still gets the list.
+#[test]
+fn a_silent_source_gives_up_and_a_slow_one_is_read_whole() {
+    let started = std::time::Instant::now();
+    let silent = slow_source(std::time::Duration::from_secs(30));
+    assert!(matches!(mirror(&silent), Answer::Failed(_)));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    let started = std::time::Instant::now();
+    match mirror(&slow_source(std::time::Duration::ZERO)) {
+        Answer::Fresh(body, None) => assert_eq!(body, serde_json::json!([])),
+        other => panic!("{other:?}"),
+    }
+    assert!(started.elapsed() > HEADERS * 2);
+}

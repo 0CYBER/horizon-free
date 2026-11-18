@@ -4,6 +4,14 @@ use super::*;
 impl Launcher {
     pub(crate) fn drain(&mut self, window: gpui::AnyWindowHandle, cx: &mut Context<Self>) {
         let mut changed = false;
+        // A game said which shader API it serves: the packs judged by the launcher's own line
+        // while it was asked are judged again.
+        let answers = horizon_launcher::game_shader_api::answers();
+        if answers != self.shader_answers {
+            self.shader_answers = answers;
+            self.game_packs.stale();
+            changed = true;
+        }
         self.perf.tick();
         match self.bench.as_mut().map(|b| b.tick(&self.perf)) {
             Some(perf::Step::Go(page)) => {
