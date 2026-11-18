@@ -1212,7 +1212,7 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles, r
                           rounds=len(runs))
             if name in second_chance:
                 record["retried"] = "known flaky"
-            elif label in retried:
+            elif any(harness_of(rl) == name for rl in retried):
                 record["retried"] = "reused oracle results"
             if len({run["status"] for run in runs}) > 1:
                 record["flaky"] = [run["status"] for run in runs]
