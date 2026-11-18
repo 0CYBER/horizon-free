@@ -8349,6 +8349,33 @@ def dispensed_projectile_rotation():
                        f'/forceload remove {x0} {z0}')
 
 
+def text_component_key_order():
+    """ComponentSerialization writes a text component's contents, then `extra`, then its style, and the
+    CompoundTag's HashMap keeps that order among keys sharing a bucket: `text` and `bold` (bucket 11),
+    `keybind`, `extra` and `underlined` (bucket 7). A mob's CustomName and an item's custom_name are
+    read back with /data get."""
+    x0, y0, z0 = 5600, 250, 5600
+    ops = [cmd(f'/forceload add {x0} {z0}', False),
+           {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
+           cmd('/tick freeze', False)]
+    names = ['{text:"Sum",color:"green",bold:true}', '{bold:true,color:"green",text:"Sum"}',
+             '{underlined:true,extra:["a"],keybind:"key.jump"}',
+             '{translate:"entity.minecraft.pig",italic:true,fallback:"Pig",strikethrough:true}']
+    for n, name in enumerate(names, 1):
+        # The mob's name is read through command storage (CompoundTag.copy keeps the order): a reply naming
+        # the mob itself would also compare its styled display name.
+        ops.append(cmd(f'/summon pig {x0 + 2 * n}.5 {y0} {z0}.5 {{UUID:[I;16500,0,{n},1],NoAI:1b,NoGravity:1b,'
+                       f'CustomName:{name}}}', False))
+        ops.append(cmd(f'/data modify storage horizon:key_order name set from entity '
+                       f'00004074-0000-0000-0000-{n:04x}00000001 CustomName'))
+        ops.append(cmd('/data get storage horizon:key_order name'))
+        ops.append(cmd(f'/summon item {x0 + 2 * n}.5 {y0} {z0 + 3}.5 {{UUID:[I;16500,1,{n},1],NoGravity:1b,'
+                       f'PickupDelay:32767s,Item:{{id:"minecraft:stone",components:{{"minecraft:custom_name":{name}}}}}}}',
+                       expect_result=1))
+        ops.append(cmd(f'/data get entity 00004074-0000-0001-0000-{n:04x}00000001 Item.components'))
+    return ops + setup('/tick unfreeze', '/data remove storage horizon:key_order name', f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=24,dz=16]',
+                       f'/forceload remove {x0} {z0}')
+
 def orb_fall_distance():
     """#14440: an experience orb's fall (`Entity.fallDistance`). `Entity.move` casts a move of a block or
     more over fall-resetting blocks and water, then `checkFallDamage` adds the drop outside water and on
@@ -9009,6 +9036,7 @@ def groups():
         ('vehicle ground and fall', vehicle_ground_and_fall()),
         ('vehicle saved ground and fall', vehicle_saved_ground_and_fall()),
         ('ravager saved movement speed', ravager_saved_movement_speed()),
+        ('text component key order', text_component_key_order()),
         # Last: it leaves the player in other food than it found.
         (player_food.GROUP, player_food.cases(cmd, setup)),
     ]

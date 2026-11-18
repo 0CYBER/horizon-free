@@ -365,8 +365,75 @@ pub fn java_hash_order(
             .unwrap_or(WRITE_ORDER.len())
     };
     let mut entries: Vec<_> = c.iter().collect();
+    if let Some(component_rank) = text_component_rank(c) {
+        entries.sort_by_key(|(k, _)| (hash_bucket(c.len(), k), component_rank(k)));
+        return entries;
+    }
     entries.sort_by_key(|(k, _)| (hash_bucket(c.len(), k), rank(k)));
     entries
+}
+/// `ComponentSerialization`'s write order for a compound that is a text
+/// component: the contents' fields (`PlainTextContents`, `TranslatableContents`,
+/// `KeybindContents`, `ScoreContents`, `SelectorContents`, `NbtContents` and its
+/// data source, `ObjectContents`: its `AtlasSprite` or `PlayerSprite`, then
+/// `fallback`), then `extra`, then `Style.Serializer`'s fields. A compound has
+/// one kind of contents, so their fields share one list. A compound with any
+/// other key, or with no contents key, is not one and keeps the default order.
+fn text_component_rank(
+    c: &horizon_core::nbt::Compound,
+) -> Option<impl Fn(&horizon_core::nbt::JavaString) -> usize> {
+    const ORDER: &[&str] = &[
+        "text",
+        "translate",
+        "atlas",
+        "sprite",
+        "player",
+        "hat",
+        "fallback",
+        "with",
+        "keybind",
+        "score",
+        "selector",
+        "nbt",
+        "interpret",
+        "plain",
+        "separator",
+        "block",
+        "entity",
+        "storage",
+        "extra",
+        "color",
+        "shadow_color",
+        "bold",
+        "italic",
+        "underlined",
+        "strikethrough",
+        "obfuscated",
+        "click_event",
+        "hover_event",
+        "insertion",
+        "font",
+    ];
+    const CONTENTS: &[&str] = &[
+        "text",
+        "translate",
+        "sprite",
+        "player",
+        "keybind",
+        "score",
+        "selector",
+        "nbt",
+    ];
+    let position = |k: &horizon_core::nbt::JavaString| {
+        let k = string_of(k);
+        ORDER.iter().position(|w| *w == k)
+    };
+    let is_component = c
+        .iter()
+        .any(|(k, _)| CONTENTS.contains(&string_of(k).as_str()))
+        && c.iter().all(|(k, _)| position(k).is_some());
+    is_component
+        .then_some(move |k: &horizon_core::nbt::JavaString| position(k).unwrap_or(ORDER.len()))
 }
 /// `NbtUtils.toPrettyComponent`: the coloured, unindented form.
 pub fn pretty(tag: &Tag) -> Text {
@@ -430,6 +497,40 @@ mod tests {
             r#"{facing: "east", short: "false", type: "normal"}"#
         );
         assert_eq!(pretty(&tag).plain(), ordinary);
+    }
+    #[test]
+    fn a_text_component_keeps_the_codecs_order_in_a_shared_bucket() {
+        // ComponentSerialization writes the contents, then `extra`, then the
+        // style: `text` and `bold` share bucket 11; `keybind`, `extra` and
+        // `underlined` bucket 7.
+        let styled = parse_snbt(r#"{text:"Sum",color:"green",bold:1b}"#)
+            .unwrap()
+            .0;
+        assert_eq!(
+            pretty(&styled).plain(),
+            r#"{color: "green", text: "Sum", bold: 1b}"#
+        );
+        let keybind = parse_snbt(r#"{underlined:1b,extra:["a"],keybind:"key.jump"}"#)
+            .unwrap()
+            .0;
+        assert_eq!(
+            pretty(&keybind).plain(),
+            r#"{keybind: "key.jump", extra: ["a"], underlined: 1b}"#
+        );
+        // ObjectContents: `player` and `font` share bucket 15.
+        let player = parse_snbt(r#"{font:"minecraft:uniform",player:{name:"alex"}}"#)
+            .unwrap()
+            .0;
+        assert_eq!(
+            pretty(&player).plain(),
+            r#"{player: {name: "alex"}, font: "minecraft:uniform"}"#
+        );
+        // A compound with a key no text component has is not one: key order.
+        let other = parse_snbt(r#"{text:"Sum",bold:1b,count:1}"#).unwrap().0;
+        assert_eq!(
+            pretty(&other).plain(),
+            r#"{count: 1, bold: 1b, text: "Sum"}"#
+        );
     }
     #[test]
     fn mannequin_compound_orders_pose_before_immovable_in_shared_bucket() {
