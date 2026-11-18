@@ -471,6 +471,15 @@ pub fn upgrade_loot(v: &mut Value) {
     match v {
         Value::Array(a) => a.iter_mut().for_each(upgrade_loot),
         Value::Object(o) => {
+            // 1.21.1 built in the empty table (`BuiltInLootTables.EMPTY`); 26.3
+            // binds a nested table's name to a loaded table and has no
+            // `minecraft:empty`, so the whole loot table load stops on it.
+            if o.get("type").and_then(Value::as_str) == Some("minecraft:loot_table")
+                && o.get("value").and_then(Value::as_str) == Some("minecraft:empty")
+            {
+                o.remove("value");
+                o.insert("type".to_owned(), json!("minecraft:empty"));
+            }
             if let Some(Value::Array(pools)) = o.get_mut("pools") {
                 for pool in pools {
                     for key in ["rolls", "bonus_rolls"] {
@@ -2277,6 +2286,21 @@ mod tests {
         let mut tag_list = json!({"type": "minecraft:smelting",
             "ingredient": [{"tag": "c:ores"}, {"item": "gem:gem"}]});
         assert!(!upgrade_recipe(&mut tag_list));
+    }
+
+    /// A nested reference to 1.21.1's built-in empty table becomes an empty
+    /// entry, with its weight.
+    #[test]
+    fn the_empty_loot_table_becomes_an_empty_entry() {
+        let mut table = json!({"pools": [{"rolls": 1.0, "entries": [
+            {"type": "minecraft:loot_table", "value": "minecraft:empty", "weight": 3},
+            {"type": "minecraft:loot_table", "value": "m:other"}]}]});
+        upgrade_loot(&mut table);
+        assert_eq!(
+            table["pools"][0]["entries"],
+            json!([{"type": "minecraft:empty", "weight": 3},
+                {"type": "minecraft:loot_table", "value": "m:other"}])
+        );
     }
 
     #[test]
