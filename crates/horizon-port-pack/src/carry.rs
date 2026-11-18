@@ -444,27 +444,92 @@ pub fn renamed_assets(v: &mut Value) -> bool {
     }
 }
 
+/// The fields of 1.21.1's triggers that hold a context-aware predicate (a
+/// list of loot conditions, or an entity predicate), `victims` a list of them.
+const CONTEXT_FIELDS: [&str; 12] = [
+    "player",
+    "entity",
+    "source",
+    "lightning",
+    "bystander",
+    "zombie",
+    "villager",
+    "parent",
+    "partner",
+    "child",
+    "projectile",
+    "cause",
+];
+
 /// A 1.21.1 advancement in 26.3's shape, in place: an `enter_block`
 /// criterion names its block as `blocks`, which 26.3 reads as a block list.
 /// 26.3 skips the old `block` field, so the criterion matched any block the
-/// player entered (Regions Unexplored's "Downer" on the first dive).
+/// player entered (Regions Unexplored's "Downer" on the first dive). Every
+/// context-aware predicate is one loot condition ([`context_predicate`]):
+/// 26.3 refuses the old forms, and with them the whole advancement load.
+/// Renamed ids are 26.3's, as in loot tables ([`renamed_ids`]).
 pub fn upgrade_advancement(v: &mut Value) -> bool {
-    let mut changed = false;
+    let before = v.clone();
+    renamed_ids(v);
     let criteria = v.get_mut("criteria").and_then(Value::as_object_mut);
     for c in criteria.into_iter().flat_map(|o| o.values_mut()) {
         let trigger = c.get("trigger").and_then(Value::as_str);
-        if !matches!(trigger, Some("minecraft:enter_block" | "enter_block")) {
+        let enter_block = matches!(trigger, Some("minecraft:enter_block" | "enter_block"));
+        let Some(conditions) = c.get_mut("conditions").and_then(Value::as_object_mut) else {
             continue;
-        }
-        if let Some(conditions) = c.get_mut("conditions").and_then(Value::as_object_mut)
+        };
+        if enter_block
             && !conditions.contains_key("blocks")
             && let Some(block) = conditions.remove("block")
         {
             conditions.insert("blocks".into(), block);
-            changed = true;
+        }
+        for (key, field) in conditions.iter_mut() {
+            if key == "victims"
+                && let Value::Array(victims) = field
+            {
+                victims.iter_mut().for_each(context_predicate);
+            } else if CONTEXT_FIELDS.contains(&key.as_str()) || condition_list(field) {
+                context_predicate(field);
+            }
         }
     }
-    changed
+    *v != before
+}
+
+/// A list of 1.21.1 loot conditions (each keyed by `condition`), as a
+/// trigger's own fields hold them (`location` of `placed_block`).
+fn condition_list(v: &Value) -> bool {
+    v.as_array()
+        .is_some_and(|l| !l.is_empty() && l.iter().all(|c| c.get("condition").is_some()))
+}
+
+/// A 1.21.1 context-aware predicate as 26.3 reads it, one loot condition.
+/// 1.21.1 took a list of conditions, all of which must hold
+/// ([`upgrade_predicate`]), or an entity predicate on the entity itself,
+/// which is the entity's `minecraft:entity_properties` condition. A 1.21.1
+/// condition is keyed by `condition`, so an object without it, and without
+/// a condition's `predicate` or `terms`, is such an entity predicate.
+fn context_predicate(p: &mut Value) {
+    match p {
+        Value::Array(_) => upgrade_predicate(p),
+        Value::Object(o) if o.contains_key("condition") => upgrade_condition(p),
+        Value::Object(o)
+            if !["predicate", "term", "terms"]
+                .iter()
+                .any(|k| o.contains_key(*k))
+                && !o
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(loot_condition) =>
+        {
+            let mut entity = std::mem::take(p);
+            upgrade_entity_predicate(&mut entity);
+            *p = json!({"type": "minecraft:entity_properties", "entity": "this",
+                "predicate": entity});
+        }
+        _ => {}
+    }
 }
 
 /// A damage type's enum fields, vanilla's values (`DeathMessageType`,
@@ -498,6 +563,40 @@ fn java_damage_values(damage: &mut Value) -> Vec<String> {
         }
     }
     defaulted
+}
+
+/// 26.3's loot condition types, and those 1.21.1 had that 26.3 renamed: a bare object with
+/// one of these as its `type` is already a condition, not an entity predicate whose `type`
+/// is an entity type (`{"type": "minecraft:wolf"}`).
+const LOOT_CONDITIONS: [&str; 23] = [
+    "all_of",
+    "any_of",
+    "damage_source_properties",
+    "enchantment_active_check",
+    "entity_properties",
+    "entity_scores",
+    "environment_attribute_check",
+    "float_value_check",
+    "int_value_check",
+    "inverted",
+    "killed_by_player",
+    "location_check",
+    "match_block",
+    "match_tool",
+    "random_chance",
+    "random_chance_with_enchanted_bonus",
+    "survives_explosion",
+    "table_bonus",
+    "time_check",
+    "weather_check",
+    "block_state_property",
+    "value_check",
+    "reference",
+];
+
+/// Whether `kind` is a vanilla loot condition type ([`LOOT_CONDITIONS`]).
+fn loot_condition(kind: &str) -> bool {
+    LOOT_CONDITIONS.contains(&kind.strip_prefix("minecraft:").unwrap_or(kind))
 }
 
 /// A 1.21.1 loot table in 26.3's shape, in place: `conditions` lists become
@@ -662,9 +761,23 @@ pub fn upgrade_predicate(v: &mut Value) {
     }
 }
 
-/// One 1.21.1 loot condition in 26.3's shape.
+/// One 1.21.1 loot condition in 26.3's shape. Its kind is namespaced, as
+/// vanilla reads a bare `entity_properties`. 26.3 has no
+/// `minecraft:reference`: a condition naming a predicate file is that file's
+/// id.
 fn upgrade_condition(c: &mut Value) {
     rename_kind(c, "condition");
+    if let Some(Value::String(kind)) = c.get_mut("type")
+        && !kind.contains(':')
+    {
+        *kind = format!("minecraft:{kind}");
+    }
+    if c["type"] == "minecraft:reference"
+        && let Some(name) = c.get("name").filter(|n| n.is_string())
+    {
+        *c = name.clone();
+        return;
+    }
     if let Some(term) = c.get_mut("term") {
         upgrade_condition(term);
     }
@@ -2469,9 +2582,11 @@ mod tests {
             serde_json::from_slice(&fs::read(file).unwrap()).unwrap()
         };
         let ensnared = read("ensnared");
-        assert_eq!(ensnared["type"], "minecraft:entity_properties");
-        assert!(ensnared.get("condition").is_none());
-        assert!(ensnared["predicate"].get("type").is_none());
+        assert_eq!(
+            ensnared,
+            json!({"type": "minecraft:entity_properties", "entity": "this",
+                "predicate": {"minecraft:entity_type": "#example:ignores"}})
+        );
         let both = read("both");
         assert_eq!(both["type"], "minecraft:all_of");
         assert_eq!(both["terms"][0]["type"], "minecraft:random_chance");
@@ -2537,6 +2652,86 @@ mod tests {
             ["death_message_type example:melt", "effects example:pinch"]
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 26.3 reads every context-aware predicate of a criterion as one loot
+    /// condition; 1.21.1's list of conditions and its bare entity predicate
+    /// stop the advancement load.
+    #[test]
+    fn advancement_predicates_become_one_condition() {
+        let mut a = json!({"criteria": {
+            "sleep": {"trigger": "minecraft:slept_in_bed", "conditions": {"player": [
+                {"condition": "minecraft:entity_properties", "entity": "this",
+                    "predicate": {"location": {"dimension": "m:sky"}}}]}},
+            "tame": {"trigger": "minecraft:tame_animal",
+                "conditions": {"entity": {"type": "minecraft:wolf"}}},
+            "place": {"trigger": "minecraft:placed_block", "conditions": {"location": [
+                {"condition": "minecraft:random_chance", "chance": 0.5},
+                {"condition": "minecraft:survives_explosion"}]}},
+            "strike": {"trigger": "minecraft:channeled_lightning", "conditions": {"victims": [
+                [{"condition": "minecraft:entity_properties", "entity": "this",
+                    "predicate": {"type": "minecraft:creeper"}}]]}},
+            "chain": {"trigger": "minecraft:inventory_changed",
+                "conditions": {"items": [{"items": "minecraft:chain"}]}}}});
+        assert!(upgrade_advancement(&mut a));
+        let entity = |predicate: Value| json!({"type": "minecraft:entity_properties", "entity": "this", "predicate": predicate});
+        let c = &a["criteria"];
+        assert_eq!(
+            c["sleep"]["conditions"]["player"],
+            entity(json!({"minecraft:location": {"dimension": "m:sky"}}))
+        );
+        assert_eq!(
+            c["tame"]["conditions"]["entity"],
+            entity(json!({"minecraft:entity_type": "minecraft:wolf"}))
+        );
+        assert_eq!(
+            c["place"]["conditions"]["location"],
+            json!({"type": "minecraft:all_of", "terms": [
+                {"type": "minecraft:random_chance", "chance": 0.5},
+                {"type": "minecraft:survives_explosion"}]})
+        );
+        assert_eq!(
+            c["strike"]["conditions"]["victims"],
+            json!([entity(
+                json!({"minecraft:entity_type": "minecraft:creeper"})
+            )])
+        );
+        assert_eq!(
+            c["chain"]["conditions"]["items"],
+            json!([{"items": "minecraft:iron_chain"}])
+        );
+        // Already 26.3's: unchanged.
+        assert!(!upgrade_advancement(&mut a));
+        // A single condition stays one on the next pass, not an entity type of its name.
+        let mut chance = json!({"criteria": {"luck": {"trigger": "minecraft:tick",
+            "conditions": {"player": [{"condition": "minecraft:random_chance", "chance": 0.5}]}}}});
+        assert!(upgrade_advancement(&mut chance));
+        assert!(!upgrade_advancement(&mut chance));
+        assert_eq!(
+            chance["criteria"]["luck"]["conditions"]["player"],
+            json!({"type": "minecraft:random_chance", "chance": 0.5})
+        );
+    }
+
+    /// 26.3 has no `minecraft:reference`: the condition is the predicate's id.
+    /// A kind without a namespace is vanilla's, and upgraded as vanilla's.
+    #[test]
+    fn reference_conditions_become_ids_and_bare_kinds_vanillas() {
+        let mut p = json!({"condition": "minecraft:inverted",
+            "term": {"condition": "minecraft:reference", "name": "m:is_night"}});
+        upgrade_predicate(&mut p);
+        assert_eq!(
+            p,
+            json!({"type": "minecraft:inverted", "term": "m:is_night"})
+        );
+        let mut bare = json!({"condition": "entity_properties", "entity": "this",
+            "predicate": {"type": "minecraft:zombie"}});
+        upgrade_predicate(&mut bare);
+        assert_eq!(
+            bare,
+            json!({"type": "minecraft:entity_properties", "entity": "this",
+                "predicate": {"minecraft:entity_type": "minecraft:zombie"}})
+        );
     }
 
     #[test]
