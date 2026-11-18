@@ -133,6 +133,34 @@ class ConceptPages(unittest.TestCase):
         text = "```markdown\n[example](missing.md)\n```\n\nInline `[x](gone.md)` code.\n"
         pages.validate(text, "concepts/parts/a-item.md", self.src, {})
 
+    def test_heading_slugs_keep_unicode_letters_like_mdbook(self):
+        text = "# Café guide\n\n## Rüstung\n\n# Straße\n\n# 東京\n\n# Plain heading\n"
+        found = list(pages.headings(text))
+        self.assertEqual(found, [
+            ("Café guide", "café-guide"),
+            ("Rüstung", "rüstung"),
+            ("Straße", "straße"),
+            ("東京", "東京"),
+            ("Plain heading", "plain-heading"),
+        ])
+
+    def test_explicit_heading_ids_are_untouched(self):
+        self.assertEqual(list(pages.headings("# Café guide {#custom-id}\n")),
+                         [("Café guide", "custom-id")])
+
+    def test_existing_ascii_slugs_are_byte_identical(self):
+        text = "# Hello, World!\n\n## foo_bar-baz 42\n\n# Duplicate\n\n# Duplicate\n"
+        self.assertEqual([slug for _, slug in pages.headings(text)],
+                         ["hello-world", "foo_bar-baz-42", "duplicate", "duplicate-1"])
+
+    def test_unicode_fragment_links_are_accepted_but_folded_ones_rejected(self):
+        (self.src / "concepts/parts/b-block.md").write_text("# Café guide\n")
+        link = "concepts/parts/a-item.md"
+        for fragment in ("café-guide", "caf%C3%A9-guide"):
+            pages.validate(f"[x](b-block.md#{fragment})", link, self.src, {})
+        with self.assertRaisesRegex(AssertionError, "missing anchor"):
+            pages.validate("[x](b-block.md#cafe-guide)", link, self.src, {})
+
     def test_explicit_heading_ids_are_anchors(self):
         (self.src / "concepts/parts/b-block.md").write_text("# Block parts\n\n## Landing {#custom}\n")
         pages.validate("[x](b-block.md#custom)", "concepts/parts/a-item.md", self.src, {})

@@ -47,6 +47,7 @@ def headings(text):
             if explicit:
                 yield explicit[1], explicit[2]
                 continue
+            # mdBook keeps Unicode letters in heading IDs; it does not transliterate to ASCII.
             slug = re.sub(r"[^\w\- ]", "", title.lower()).replace(" ", "-")
             n = counts[slug]
             counts[slug] += 1
