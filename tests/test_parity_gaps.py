@@ -42,6 +42,22 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("player--visible%20gaps-3%20open-", twice)
         self.assertEqual(pg.written(twice)[0], 3)
 
+    def test_rewrite_adds_a_badge_without_the_canonical_title(self):
+        text = ("# Status page\n\n## Project status\n\n"
+                "**Player-visible gaps: 42 open** of the gaps.\n\nSome prose.\n")
+        out = pg.rewrite(text, "**Player-visible gaps: 5 open** of the gaps.", 5)
+        self.assertIn("**Player-visible gaps: 5 open**", out)
+        self.assertIn("player--visible%20gaps-5%20open-", out)
+        self.assertIn("img.shields.io/badge", out)
+        self.assertLess(out.index("img.shields.io/badge"), out.index("## Project status"))
+        self.assertEqual(pg.written(out)[0], 5)
+
+    def test_rewrite_fails_loudly_when_no_badge_placement_exists(self):
+        text = "Just some prose with no status section.\n"
+        with self.assertRaises(ValueError) as ctx:
+            pg.rewrite(text, "**Player-visible gaps: 5 open** of the gaps.", 5)
+        self.assertIn("could not place the player-visible gaps badge", str(ctx.exception))
+
     def test_the_readme_agrees_with_itself(self):
         text = README.read_text(encoding="utf-8")
         total, counts = pg.written(text)

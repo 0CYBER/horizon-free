@@ -83,11 +83,20 @@ def rewrite(text: str, new_block: str, still: int) -> str:
         text = text.replace("## Project status\n\n", f"## Project status\n\n{new_block}\n\n", 1)
     if BADGE.search(text):
         return BADGE.sub(lambda m: f"{m.group(1)}{still}{m.group(3)}", text)
-    # No badge yet: it goes last in the badge row, the paragraph that closes just above the title.
-    row_end = text.find("</p>\n\n# Horizon")
     badge = (f'  <a href="#project-status"><img src="https://img.shields.io/badge/player--visible%20gaps-{still}'
              f'%20open-F0795A" alt="Player-visible gaps open"></a>\n')
-    return text[:row_end] + badge + text[row_end:] if row_end >= 0 else text
+    # No badge yet: it goes last in the existing badge row, the paragraph that closes just above the title.
+    row_end = text.find("</p>\n\n# Horizon")
+    if row_end >= 0:
+        return text[:row_end] + badge + text[row_end:]
+    # No canonical title/badge row: put a fresh badge paragraph just before "Project status" so a rewrite never
+    # reports success while leaving the page without a badge.
+    heading = text.find("## Project status")
+    if heading >= 0:
+        row = f'<p align="center">\n{badge}</p>\n\n'
+        return text[:heading] + row + text[heading:]
+    raise ValueError("could not place the player-visible gaps badge: no badge, no `# Horizon` badge row "
+                     "and no `## Project status` heading")
 
 
 def main(argv: list[str]) -> int:
