@@ -717,7 +717,9 @@ impl Game<'_> {
         layer: LightLayer,
         pos: [i32; 3],
     ) -> Option<i32> {
-        let world = self.native_level_world(level)?;
+        // On a client, the level it shows or a level the server opened for viewing. On a server,
+        // the level in place or parked (`native_level_world`).
+        let world = self.native_level_view_world(level)?;
         world
             .is_loaded_at(pos[0], pos[1], pos[2])
             .then(|| world_brightness(world, layer, pos))

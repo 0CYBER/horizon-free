@@ -345,9 +345,10 @@ pub trait LevelsBackend {
     /// (`ClientLevel.hasChunkAt`). API 381.
     #[access(WorldOnly)]
     fn level_is_loaded(&self, level: LevelRef, pos: [i32; 3]) -> bool;
-    /// Side: server.
+    /// Side: both.
     /// The stored light of one layer at `pos` (`BlockAndLightGetter.getBrightness`), 0 to 15.
-    /// None as for `block_state`: a position that isn't loaded has no light to read.
+    /// None as for `block_state`: a position that isn't loaded has no light to read. On a client,
+    /// the level it shows or a level opened for viewing, the light the server sent.
     #[access(WorldOnly)]
     fn level_brightness(&self, level: LevelRef, layer: LightLayer, pos: [i32; 3]) -> Option<i32>;
     /// Side: both.

@@ -128,6 +128,59 @@ mod tests {
         BlockStateId(id).try_into_api().unwrap()
     }
 
+    /// A client reads the light of the level it shows and of a level it views. Each column's
+    /// section is painted with a different packed light (sky in the high nibble, block in the low).
+    #[test]
+    #[ignore = "daily"]
+    fn a_client_reads_the_light_of_the_level_it_shows_and_of_one_it_views() {
+        use horizon_client::chunk::Light;
+        use mod_api::LightLayer;
+        use std::sync::Arc;
+
+        fn paint(world: &mut horizon_client::world::World, y: i32, packed: u8) {
+            let chunk = Arc::make_mut(world.chunks.get_mut(&(0, 0)).expect("column"));
+            let index = chunk.section_index(y).expect("section");
+            Arc::make_mut(&mut chunk.sections[index]).light = Light::Uniform(packed);
+        }
+
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let (own, viewed) = viewing(&mut game);
+        paint(&mut game.world, POCKET[1], 0xC5);
+        paint(
+            &mut game
+                .remote
+                .as_mut()
+                .unwrap()
+                .viewed
+                .get_mut(1)
+                .unwrap()
+                .world,
+            POCKET[1],
+            0x3A,
+        );
+        assert_eq!(
+            game.level_brightness(own, LightLayer::Sky, POCKET),
+            Some(12)
+        );
+        assert_eq!(
+            game.level_brightness(own, LightLayer::Block, POCKET),
+            Some(5)
+        );
+        assert_eq!(
+            game.level_brightness(viewed, LightLayer::Sky, POCKET),
+            Some(3)
+        );
+        assert_eq!(
+            game.level_brightness(viewed, LightLayer::Block, POCKET),
+            Some(10)
+        );
+        assert_eq!(
+            game.level_brightness(own, LightLayer::Sky, [16, POCKET[1], 5]),
+            None
+        );
+    }
+
     /// The viewed level's handle reads the viewed world's block where the player's own level
     /// holds another: air against stone at the same position.
     #[test]
