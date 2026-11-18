@@ -3271,10 +3271,13 @@ impl Hub {
             data: 0,
             meta,
             forced_meta: [0; 4],
-            // The effect swirls go back to none.
+            // What a client still holds goes back to its default: the effect
+            // swirls to none, and the skin parts to 0, every outer layer hidden
+            // (Avatar.DATA_PLAYER_MODE_CUSTOMISATION).
             defaults: vec![
                 (10, serializer::PARTICLES, Value::Particles(Vec::new())),
                 (11, serializer::BOOLEAN, Value::Bool(false)),
+                (16, serializer::BYTE, Value::Byte(0)),
             ],
             equipment,
             attributes,
