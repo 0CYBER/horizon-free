@@ -9,8 +9,9 @@ use std::sync::OnceLock;
 
 /// The custom payload channel, both ways.
 pub const CHANNEL: &str = "horizon:mod_list";
-/// Mods in a list at most; a list with more is refused whole.
-pub const MAX_ENTRIES: usize = 128;
+/// Mods in a list at most; a list with more is refused whole. Large packs have
+/// hundreds (All the Mods 10: 273), and every one of them crosses here.
+pub const MAX_ENTRIES: usize = 1024;
 /// Characters in a mod's id or version at most.
 pub const MAX_TEXT: usize = 64;
 
@@ -174,6 +175,15 @@ mod tests {
         let list = vec![entry("ruby", "1.2.0", Side::Both)];
         assert_eq!(decode(&encode(&list)).unwrap(), list);
         assert_eq!(decode(&encode(&[])).unwrap(), []);
+    }
+
+    /// A modpack's list crosses whole: All the Mods 10 has 273 mods.
+    #[test]
+    fn a_large_packs_list_round_trips() {
+        let mods: Vec<_> = (0..273)
+            .map(|i| entry(&format!("mod_{i}"), "1.0.0", Side::Both))
+            .collect();
+        assert_eq!(decode(&encode(&mods)).unwrap(), mods);
     }
 
     #[test]
