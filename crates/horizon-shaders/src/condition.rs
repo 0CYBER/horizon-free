@@ -9,14 +9,13 @@ use crate::macros::{is_ident, is_ident_start};
 
 /// The value of a condition; `Err` says what is wrong with it.
 pub fn eval_condition(expr: &str, macros: &Macros) -> Result<i64, String> {
-    let (tokens, real) = tokens(&resolve_defined(expr, macros)?, macros)?;
+    let tokens = tokens(&resolve_defined(expr, macros)?, macros)?;
     let mut parser = Parser {
         tokens: &tokens,
         at: 0,
-        real,
         quiet: false,
     };
-    let value = parser.binary(0)?;
+    let (value, _real) = parser.binary(0)?;
     match parser.tokens.get(parser.at) {
         // A fraction is true, as any value but zero.
         None if value != 0.0 && value.abs() < 1.0 => Ok(value.signum() as i64),
@@ -176,14 +175,14 @@ fn find_word(text: &str, word: &str) -> Option<usize> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Token {
-    Num(f64),
+    Num { value: f64, real: bool },
     Op(&'static str),
 }
 
 impl Token {
     fn text(&self) -> String {
         match self {
-            Token::Num(n) => n.to_string(),
+            Token::Num { value, .. } => value.to_string(),
             Token::Op(op) => (*op).to_owned(),
         }
     }
@@ -194,10 +193,9 @@ const OPS: [&str; 22] = [
     "<", ">", "&", "^", "|",
 ];
 
-fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
+fn tokens(expr: &str, macros: &Macros) -> Result<Vec<Token>, String> {
     let expanded = macros.expand(expr);
     let mut out = Vec::new();
-    let mut real = false;
     let mut rest = expanded.trim_start();
     while let Some(c) = rest.chars().next() {
         let fraction = c == '.' && rest[1..].starts_with(|c: char| c.is_ascii_digit());
@@ -216,21 +214,29 @@ fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
                 .map_or(rest.len(), |(i, _)| i);
             let text = &rest[..len];
             if !hex && (text.contains('.') || text.contains(['e', 'E'])) {
-                real = true;
                 let text = text.trim_end_matches(['f', 'F']);
                 let n = text
                     .parse::<f64>()
                     .map_err(|_| format!("`{text}` is not a number"))?;
-                out.push(Token::Num(n));
+                out.push(Token::Num {
+                    value: n,
+                    real: true,
+                });
                 rest = &rest[len..];
             } else {
-                out.push(Token::Num(int_literal(&rest[..len])? as f64));
+                out.push(Token::Num {
+                    value: int_literal(&rest[..len])? as f64,
+                    real: false,
+                });
                 rest = &rest[len..];
             }
         } else if is_ident_start(c) {
             // Not a macro: 0, as the C preprocessor counts it.
             let len = rest.find(|c: char| !is_ident(c)).unwrap_or(rest.len());
-            out.push(Token::Num(0.0));
+            out.push(Token::Num {
+                value: 0.0,
+                real: false,
+            });
             rest = &rest[len..];
         } else {
             let op = OPS
@@ -242,7 +248,7 @@ fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
         }
         rest = rest.trim_start();
     }
-    Ok((out, real))
+    Ok(out)
 }
 
 /// Decimal, `0x` hexadecimal or leading-zero octal, with an optional `u` suffix.
@@ -261,8 +267,6 @@ fn int_literal(text: &str) -> Result<i64, String> {
 struct Parser<'a> {
     tokens: &'a [Token],
     at: usize,
-    /// A float literal appears: `/` and `%` divide as floats.
-    real: bool,
     /// Inside a side that `&&` / `||` skips: a division by zero is not an error.
     quiet: bool,
 }
@@ -288,7 +292,7 @@ impl Parser<'_> {
         t
     }
 
-    fn binary(&mut self, level: usize) -> Result<f64, String> {
+    fn binary(&mut self, level: usize) -> Result<(f64, bool), String> {
         if level == LEVELS.len() {
             return self.unary();
         }
@@ -300,19 +304,19 @@ impl Parser<'_> {
             self.at += 1;
             // C does not evaluate the side `&&` / `||` skips, so a guarded division by zero
             // there is no error.
-            let skipped = (op == "||" && left != 0.0) || (op == "&&" && left == 0.0);
+            let skipped = (op == "||" && left.0 != 0.0) || (op == "&&" && left.0 == 0.0);
             let outer = self.quiet;
             self.quiet |= skipped;
             let right = self.binary(level + 1);
             self.quiet = outer;
-            left = apply(op, left, right?, self.real, skipped || outer)?;
+            left = apply(op, left, right?, skipped || outer)?;
         }
         Ok(left)
     }
 
-    fn unary(&mut self) -> Result<f64, String> {
+    fn unary(&mut self) -> Result<(f64, bool), String> {
         match self.next() {
-            Some(Token::Num(n)) => Ok(n),
+            Some(Token::Num { value, real }) => Ok((value, real)),
             Some(Token::Op("(")) => {
                 let value = self.binary(0)?;
                 match self.next() {
@@ -320,42 +324,54 @@ impl Parser<'_> {
                     _ => Err("missing `)`".into()),
                 }
             }
-            Some(Token::Op("-")) => Ok(-self.unary()?),
+            Some(Token::Op("-")) => {
+                let (v, r) = self.unary()?;
+                Ok((-v, r))
+            }
             Some(Token::Op("+")) => self.unary(),
-            Some(Token::Op("!")) => Ok(f64::from(u8::from(self.unary()? == 0.0))),
-            Some(Token::Op("~")) => Ok(!(self.unary()? as i64) as f64),
+            Some(Token::Op("!")) => {
+                let (v, _) = self.unary()?;
+                Ok((f64::from(u8::from(v == 0.0)), false))
+            }
+            Some(Token::Op("~")) => {
+                let (v, _) = self.unary()?;
+                Ok((!(v as i64) as f64, false))
+            }
             Some(t) => Err(format!("unexpected `{}`", t.text())),
             None => Err("the condition ends too early".into()),
         }
     }
 }
 
-fn apply(op: &str, a: f64, b: f64, real: bool, quiet: bool) -> Result<f64, String> {
+fn apply(op: &str, a: (f64, bool), b: (f64, bool), quiet: bool) -> Result<(f64, bool), String> {
     let truth = |v: bool| f64::from(u8::from(v));
-    let (i, j) = (a as i64, b as i64);
+    let (ia, ib) = (a.0 as i64, b.0 as i64);
+    let (va, vb) = (a.0, b.0);
+    let (ra, rb) = (a.1, b.1);
+    let result_real = ra || rb;
     Ok(match op {
-        "||" => truth(a != 0.0 || b != 0.0),
-        "&&" => truth(a != 0.0 && b != 0.0),
-        "|" => (i | j) as f64,
-        "^" => (i ^ j) as f64,
-        "&" => (i & j) as f64,
-        "==" => truth(a == b),
-        "!=" => truth(a != b),
-        "<" => truth(a < b),
-        ">" => truth(a > b),
-        "<=" => truth(a <= b),
-        ">=" => truth(a >= b),
-        "<<" => i.wrapping_shl(j as u32) as f64,
-        ">>" => i.wrapping_shr(j as u32) as f64,
-        "+" => a + b,
-        "-" => a - b,
-        "*" => a * b,
-        "/" | "%" if b == 0.0 && quiet => 0.0,
-        "/" | "%" if b == 0.0 => return Err("division by zero".into()),
-        "/" if real => a / b,
-        "%" if real => a % b,
-        "/" => i.wrapping_div(j) as f64,
-        _ => i.wrapping_rem(j) as f64,
+        "||" => (truth(va != 0.0 || vb != 0.0), false),
+        "&&" => (truth(va != 0.0 && vb != 0.0), false),
+        "|" => ((ia | ib) as f64, false),
+        "^" => ((ia ^ ib) as f64, false),
+        "&" => ((ia & ib) as f64, false),
+        "==" => (truth(va == vb), false),
+        "!=" => (truth(va != vb), false),
+        "<" => (truth(va < vb), false),
+        ">" => (truth(va > vb), false),
+        "<=" => (truth(va <= vb), false),
+        ">=" => (truth(va >= vb), false),
+        "<<" => (ia.wrapping_shl(ib as u32) as f64, false),
+        ">>" => (ia.wrapping_shr(ib as u32) as f64, false),
+        "+" => (va + vb, result_real),
+        "-" => (va - vb, result_real),
+        "*" => (va * vb, result_real),
+        "/" | "%" if b.0 == 0.0 && quiet => (0.0, result_real),
+        "/" | "%" if b.0 == 0.0 => return Err("division by zero".into()),
+        "/" if result_real => (va / vb, true),
+        "%" if result_real => (va % vb, true),
+        "/" => (ia.wrapping_div(ib) as f64, false),
+        _ => (ia.wrapping_rem(ib) as f64, false),
     })
 }
 
@@ -406,6 +422,18 @@ mod tests {
         assert_eq!(eval("1.5f"), Ok(1));
         assert_eq!(eval("7 / 2"), Ok(3));
         assert_eq!(eval("SHADOW_RES == 2048.0"), Ok(1));
+    }
+
+    /// Local numeric promotion: a float literal promotes only its own operation,
+    /// not unrelated integer divisions (issue #16911).
+    #[test]
+    fn local_promotion_does_not_leak() {
+        // 7/2 stays integer division (3) even when a float appears elsewhere
+        assert_eq!(eval("7 / 2 == 3.0"), Ok(1));
+        // (7/2 == 3) is true (3==3), (0.5<1) is true, so && yields true
+        assert_eq!(eval("(7 / 2 == 3) && (0.5 < 1)"), Ok(1));
+        // Control: float division works when the dividend is a float
+        assert_eq!(eval("7.0 / 2 == 3.5"), Ok(1));
     }
 
     #[test]
