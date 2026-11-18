@@ -41,6 +41,8 @@
 - **Mods:** Horizon's own mod system, with mods like zoom and a minimap, and shader packs. Browse the [catalogue](https://playhorizon.dev/mods) or [make a mod](https://playhorizon.dev/docs/make-a-mod).
 - **Beyond vanilla:** terrain up to 1,024 chunks away, HDR, controller support, graphics presets and dynamic lights.
 
+The dedicated server is measured too: in a four-thread server run, Horizon averaged 47.83 ms per tick with 50 bots while vanilla's watchdog stopped its server during warm-up. Horizon used 1.11 GB of RSS at 50 bots, and the full comparison against vanilla, Paper and Fabric + Lithium is in [the server benchmark](docs/performance/server-vs-vanilla.md). Paper is a separately optimized, feature-breaking server and is a reference point rather than a direct vanilla-compatible comparison.
+
 <h2 align="center">What you need</h2>
 
 - **Your own copy of Minecraft: Java Edition.** Horizon ships no Minecraft files. It builds them from the game you bought, so install version 26.3 and start it once.

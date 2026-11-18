@@ -375,9 +375,10 @@ dev = """Redo the comparison after the current performance work (#1073); reliabi
 (#1346); a scene must count as loaded only once its first chunk arrives (#1749). Next: a performance history \
 across releases (an automatic comparison of each release with the last, on a timeline), more report fields \
 (server TPS and MSPT, power, battery drain, temperature, throttling) and more hardware (a MacBook on \
-battery, low-end laptops, community reports). Players' reports come in through `--benchmark` and \
+battery, low-end laptops, community reports). Server scale is published in #12930 and \
+docs/performance/server-vs-vanilla.md. Players' reports come in through `--benchmark` and \
 `horizon-launcher data benchmark` (docs/benchmark.md)."""
-links = ["#1073", "#1346", "#1749", "docs/benchmark.md"]
+links = ["#1073", "#1346", "#1749", "#12930", "docs/benchmark.md", "docs/performance/server-vs-vanilla.md"]
 
 [[item]]
 id = "world-entry"
