@@ -276,7 +276,12 @@ def pumpkin_defaults(exe, out):
 
 def pumpkin_config(text, port, args):
     """Pumpkin's default configuration with the benchmark's settings (PROPERTIES), listening on 127.0.0.1 only,
-    with no Bedrock or LAN listener, query, plugins or telemetry."""
+    with no Bedrock or LAN listener, query, plugins or telemetry.
+
+    Every declared key is written with its declared value: a key the template already has is replaced in place,
+    a missing one is inserted, and a missing section is added. Keeping an absent key out of the output would
+    silently leave Pumpkin's upstream default in place instead of applying the benchmark's setting.
+    """
     top = {'seed': f'"{args.seed}"', 'default_difficulty': '"Easy"', 'default_gamemode': '"Creative"',
            'force_gamemode': 'true', 'spawn_protection': '0', 'white_list': 'false', 'use_tty': 'false'}
     sections = {
@@ -295,14 +300,25 @@ def pumpkin_config(text, port, args):
         'telemetry': {'enabled': 'false', 'endpoint': '""'},
     }
     def setting(body, key, value):
-        return re.sub(r'(?m)^' + re.escape(key) + r' = .*$', f'{key} = {value}', body)
-    head, _, _ = text.partition('\n[')
+        """Replace key in a TOML body; insert it (preserving trailing whitespace) when it is absent."""
+        pattern = r'(?m)^[ \t]*' + re.escape(key) + r'[ \t]*=[ \t]*.*$'
+        line = f'{key} = {value}'
+        if re.search(pattern, body):
+            return re.sub(pattern, line, body)
+        stripped = body.rstrip('\n')
+        trailing = body[len(stripped):] or '\n'
+        return stripped + ('\n' if stripped else '') + line + trailing
+    first_table = re.search(r'(?m)^[ \t]*\[', text)
+    head = text[:first_table.start()] if first_table else text
     rest = text[len(head):]
     for key, value in top.items():
         head = setting(head, key, value)
     for name, settings in sections.items():
-        m = re.search(r'(?ms)^\[' + re.escape(name) + r'\]\n(.*?)(?=^\[|\Z)', rest)
+        m = re.search(r'(?ms)^[ \t]*\[' + re.escape(name) + r'\][ \t]*(?:#[^\n]*)?(?:\n|\Z)'
+                      r'(.*?)(?=^[ \t]*\[|\Z)', rest)
         if not m:
+            # The template does not declare this section at all: add it with every declared key.
+            rest = rest.rstrip('\n') + '\n[' + name + ']\n' + ''.join(f'{k} = {v}\n' for k, v in settings.items())
             continue
         body = m.group(1)
         for key, value in settings.items():
