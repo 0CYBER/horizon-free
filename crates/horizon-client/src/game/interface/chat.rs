@@ -2341,16 +2341,7 @@ impl Game<'_> {
         let message = match result {
             Ok(_) => {
                 log::info!("Saved screenshot to {}", path.display());
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let link = Text::styled(
-                    name,
-                    Style {
-                        underlined: Some(true),
-                        click: Some(ClickEvent::OpenFile(path.to_string_lossy().into_owned())),
-                        ..Style::default()
-                    },
-                );
-                message.unwrap_or_else(|| Text::translate("screenshot.success", &[link]))
+                message.unwrap_or_else(|| screenshot_saved_line(&path, None))
             }
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
@@ -2367,6 +2358,25 @@ impl Game<'_> {
             self.visual_ticks(),
             focused,
         );
+    }
+}
+
+/// The chat line for a saved screenshot: vanilla's, linking the file, or with its HDR copy
+/// (`hdr`) Horizon's, linking both.
+pub(super) fn screenshot_saved_line(path: &std::path::Path, hdr: Option<&std::path::Path>) -> Text {
+    let link = |path: &std::path::Path| {
+        Text::styled(
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            Style {
+                underlined: Some(true),
+                click: Some(ClickEvent::OpenFile(path.to_string_lossy().into_owned())),
+                ..Style::default()
+            },
+        )
+    };
+    match hdr {
+        Some(hdr) => Text::translate("horizon.screenshot.success_hdr", &[link(path), link(hdr)]),
+        None => Text::translate("screenshot.success", &[link(path)]),
     }
 }
 
@@ -2448,6 +2458,55 @@ mod tests {
                 &[Text::translate("horizon.screenshot.canceled", &[])]
             )
         );
+    }
+
+    /// An F2 shot with an HDR copy links both files; one without links the SDR file alone,
+    /// in vanilla's line.
+    #[test]
+    fn a_screenshot_line_links_the_hdr_copy_only_when_one_was_written() {
+        let sdr = std::path::Path::new("screenshots/shot.png");
+        let hdr = std::path::Path::new("screenshots/shot-hdr.png");
+        let link = |name: &str, file: &str| {
+            Text::styled(
+                name.to_owned(),
+                Style {
+                    underlined: Some(true),
+                    click: Some(ClickEvent::OpenFile(file.into())),
+                    ..Style::default()
+                },
+            )
+        };
+        let plain = screenshot_saved_line(sdr, None);
+        assert_eq!(
+            plain,
+            Text::translate(
+                "screenshot.success",
+                &[link("shot.png", "screenshots/shot.png")]
+            )
+        );
+        let both = screenshot_saved_line(sdr, Some(hdr));
+        assert_eq!(
+            both,
+            Text::translate(
+                "horizon.screenshot.success_hdr",
+                &[
+                    link("shot.png", "screenshots/shot.png"),
+                    link("shot-hdr.png", "screenshots/shot-hdr.png")
+                ]
+            )
+        );
+        use horizon_client::lang;
+        let mut en_us = std::collections::HashMap::new();
+        lang::read_lang_file(
+            include_bytes!("../../../assets/horizon/lang/en_us.json"),
+            &mut en_us,
+        );
+        // A text renders its translation when it is made.
+        let (shown, missing) = lang::scoped(lang::Language::of("en_us", en_us), || {
+            screenshot_saved_line(sdr, Some(hdr)).plain()
+        });
+        assert_eq!(shown, "Saved screenshot as shot.png and shot-hdr.png");
+        assert!(missing.is_empty(), "{missing:?}");
     }
 
     #[test]

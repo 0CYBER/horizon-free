@@ -38,8 +38,15 @@ impl Game<'_> {
                 self.ui
                     .screenshot_messages
                     .retain(|path| *path != write.save.original);
+                // A shot with an HDR copy gets the line linking both here, as `finish_screenshot`'s
+                // message: its signature is a mod point's.
+                let message = write.message.or_else(|| {
+                    let hdr = result.as_ref().ok()?.hdr_path.as_deref()?;
+                    Some(super::chat::screenshot_saved_line(&path, Some(hdr)))
+                });
                 self.ui.screenshot_messages.insert(0, path);
-                self.finish_screenshot(&result, write.message);
+                let result = result.map(|saved| saved.size);
+                self.finish_screenshot(&result, message);
             } else if let Err(error) = result {
                 log::warn!("Horizon: couldn't save the world icon: {error}");
             }

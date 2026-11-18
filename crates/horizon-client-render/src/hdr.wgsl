@@ -1,6 +1,7 @@
 // Horizon's HDR output: the frame's light, stored in vanilla's gamma, fitted to the display (the
 // tone curve), the HUD laid over it, and the picture written to the swapchain at the paper
-// white: HDR10 (BT.2020, PQ) or scRGB (1.0 = 80 nits).
+// white: HDR10 (BT.2020, PQ) or scRGB (1.0 = 80 nits, or on a Wayland surface at 80 nits'
+// reference the compositor's white, Horizon's 203 nits: `scrgb_gain`).
 @group(0) @binding(0) var frame: texture_2d<f32>;
 // The tone curve's input: the frame as the post effects left it (Hdr::tonemap).
 @group(0) @binding(1) var world: texture_2d<f32>;
@@ -19,6 +20,9 @@ struct Params {
     // 1 where Horizon's look lifted the world, else 0: whether the light ends at the look's
     // scene peak, which the tone curve then maps onto the display's (fs_tonemap).
     look: f32,
+    // What scRGB written to the swapchain is multiplied by: 80 / 203 where the surface's 1.0 is
+    // the compositor's reference white (hdr::surface_scale), else 1.
+    scrgb_gain: f32,
     // HDR calibration (hdr_calibration.rs): x its step (0 none, 1 black level,
     // 2 peak, 3 paper white), y the slider in nits, z where its controls start,
     // a share of the height.
@@ -118,7 +122,7 @@ fn calibration_picture(pos: vec4<f32>) -> vec4<f32> {
     if params.pq > 0.5 {
         return vec4(pq(nits), 1.0);
     }
-    return vec4(nits / 80.0, 1.0);
+    return vec4(nits / 80.0 * params.scrgb_gain, 1.0);
 }
 
 // On for the HDR10 swapchain alone (Hdr::new): its 10 bits get dither. A screenshot's HDR10 copy
@@ -170,9 +174,9 @@ fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
     }
     if params.black > 0.0 {
         let lifted = pq_nits(lift_black(pq(BT709_TO_BT2020 * scrgb * 80.0)));
-        return vec4(BT2020_TO_BT709 * lifted / 80.0, 1.0);
+        return vec4(BT2020_TO_BT709 * lifted / 80.0 * params.scrgb_gain, 1.0);
     }
-    return vec4(scrgb, 1.0);
+    return vec4(scrgb * params.scrgb_gain, 1.0);
 }
 
 // The last pass over a frame without the HUD's layer, a `shaders/` pack's (gfx/output.rs): its

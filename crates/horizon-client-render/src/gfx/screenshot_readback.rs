@@ -236,7 +236,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         };
         assert_eq!(saved_path, path);
-        assert_eq!(result, Ok([w, h]));
+        assert_eq!(result.map(|saved| saved.size), Ok([w, h]));
         let decoder =
             png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
         let mut reader = decoder.read_info().unwrap();

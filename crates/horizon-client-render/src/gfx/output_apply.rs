@@ -304,6 +304,7 @@ impl Renderer {
         }
         // The metadata the swapchain's configuration sends.
         [hdr.paper_white, hdr.peak, hdr.black] = output.nits;
+        hdr.reference_80 = self.hdr_reference_80();
         hdr.ui = output.ui_brightness;
         Ok(hdr)
     }
@@ -378,6 +379,7 @@ impl Renderer {
             self.display = None;
             self.display_fresh = false;
             self.reading.stop_watching();
+            self.follow_reference_80();
         } else if self.display.is_none() {
             let (watch, now) =
                 DisplayWatch::new(&self.window, self.surface.as_deref(), &self.adapter);
@@ -386,6 +388,27 @@ impl Renderer {
             self.output_caps.hdr = offer.unwrap_or(self.output_caps.hdr);
             self.reading = now;
             self.display_fresh = true;
+            self.follow_reference_80();
+        }
+    }
+
+    /// Whether an scRGB swapchain's reference white is 80 nits (`hdr::surface_scale`): on
+    /// Wayland, for the drivers that set no luminances (`hdr::scrgb_reference_80`).
+    fn hdr_reference_80(&self) -> bool {
+        self.display.as_ref().is_some_and(DisplayWatch::wayland) && {
+            let info = self.adapter.get_info();
+            hdr::scrgb_reference_80(info.vendor, &info.driver)
+        }
+    }
+    /// Keeps HDR output's `reference_80` right when the watch starts or stops, and sends the
+    /// metadata again on its scale.
+    fn follow_reference_80(&mut self) {
+        let reference_80 = self.hdr_reference_80();
+        if let Some(hdr) = &mut self.hdr
+            && hdr.reference_80 != reference_80
+        {
+            hdr.reference_80 = reference_80;
+            self.send_hdr_metadata();
         }
     }
 

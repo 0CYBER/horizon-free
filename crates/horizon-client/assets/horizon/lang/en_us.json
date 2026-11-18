@@ -1312,5 +1312,6 @@
   "horizon.options.menu_focus": "Focus",
   "horizon.options.menu_navigation": "Menu Navigation",
   "horizon.options.menu_pointer": "Pointer",
-  "horizon.screenshot.canceled": "Screenshot canceled"
+  "horizon.screenshot.canceled": "Screenshot canceled",
+  "horizon.screenshot.success_hdr": "Saved screenshot as %s and %s"
 }

@@ -14,8 +14,29 @@
 pub enum Output {
     /// HDR10: 10-bit BT.2020 with the PQ curve, the display's own signal.
     Pq,
-    /// scRGB: linear 16-bit float, BT.709 primaries, 1.0 = 80 nits.
+    /// scRGB: linear 16-bit float, BT.709 primaries, 1.0 = 80 nits (on Wayland, mostly the
+    /// compositor's reference white: `surface_scale`).
     ScRgb,
+}
+
+/// Horizon's nits in the surface's for `output`: 1, but 80 / 203 for scRGB on a surface whose
+/// reference white is 80 nits (`reference_80`), which the compositor shows at its own white,
+/// Horizon's 203 nits (`gfx::reported`). The HDR metadata's nits are on that scale too.
+pub fn surface_scale(output: Output, reference_80: bool) -> f32 {
+    if output == Output::ScRgb && reference_80 {
+        80.0 / 203.0
+    } else {
+        1.0
+    }
+}
+
+/// Whether the Vulkan driver (the adapter's PCI `vendor` and `driver` name) leaves a Wayland scRGB
+/// swapchain at wp_color_manager_v1's default reference white, 80 nits. Mesa (NVK included)
+/// describes it as sRGB primaries with the linear transfer function and sets no luminances, so the
+/// protocol's default reference of 80 applies; NVIDIA's own driver declares luminances 0..80 with
+/// reference 203, which is Horizon's scale already.
+pub fn scrgb_reference_80(vendor: u32, driver: &str) -> bool {
+    !(vendor == 0x10de && driver == "NVIDIA")
 }
 
 impl Output {
@@ -186,6 +207,9 @@ pub struct Hdr {
     pub look: bool,
     /// Calibration's test picture while it runs.
     pub calibration: Option<Calibration>,
+    /// An scRGB surface's reference white is 80 nits, the compositor's white (`surface_scale`):
+    /// on Wayland, but for NVIDIA's own driver (`scrgb_reference_80`).
+    pub reference_80: bool,
 }
 
 pub(super) fn shader() -> String {
@@ -364,6 +388,7 @@ impl Hdr {
             lighting: true,
             look: true,
             calibration: None,
+            reference_80: false,
         }
     }
 
@@ -382,6 +407,7 @@ impl Hdr {
             lighting: self.lighting,
             look: self.look,
             calibration: self.calibration,
+            reference_80: self.reference_80,
             ..Self::new(device, queue, self.format, output, self.layered.is_some())
         }
     }
@@ -683,6 +709,13 @@ impl Hdr {
         }
     }
 
+    /// The HDR metadata's peak (`declared_peak`) and black level, in the surface's nits
+    /// (`surface_scale`).
+    pub fn metadata(&self) -> (f32, f32) {
+        let scale = surface_scale(self.output, self.reference_80);
+        (self.declared_peak() * scale, self.black * scale)
+    }
+
     /// On the layered frame, which holds the world, the hand and the camera overlays as light:
     /// makes the HUD's backdrop from it, clipped to white, alpha 0 (`fs_keep`). The HUD and the
     /// menus draw on it from here on.
@@ -837,8 +870,12 @@ impl Hdr {
             self.black.clamp(0.0, paper),
             self.ui,
             look,
+            if pq {
+                1.0
+            } else {
+                surface_scale(self.output, self.reference_80)
+            },
             // Pad `calibration` to its 16-byte alignment.
-            0.0,
             0.0,
             c.map_or(0.0, |c| c.step as f32),
             c.map_or(0.0, |c| c.nits),
@@ -1179,6 +1216,61 @@ var<private> params: ReferenceParams;
             return std::array::from_fn(|i| f32::from(bytes[i]) / 255.0);
         }
         std::array::from_fn(|i| half::f16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]).to_f32())
+    }
+
+    /// Mesa's drivers (RADV, ANV, NVK on an NVIDIA card) leave a Wayland scRGB surface at the
+    /// protocol's reference white of 80 nits; NVIDIA's own driver declares 203.
+    #[test]
+    fn only_nvidias_own_driver_declares_its_scrgb_reference() {
+        for (vendor, driver, reference_80) in [
+            (0x1002, "radv", true),
+            (0x8086, "Intel open-source Mesa driver", true),
+            (0x10de, "NVK", true),
+            (0x10de, "NVIDIA", false),
+        ] {
+            assert_eq!(
+                super::scrgb_reference_80(vendor, driver),
+                reference_80,
+                "{driver}"
+            );
+        }
+    }
+
+    /// On a surface at 80 nits' reference, scRGB writes paper white's 203 nits as 1.0 and the
+    /// metadata's nits on that scale; HDR10, the screenshot's HDR10 copy and other surfaces
+    /// are untouched.
+    #[test]
+    fn scrgb_at_an_80_nit_reference_writes_203_nits_as_one() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = gpu() else {
+            return;
+        };
+        let gain = 80.0 / 203.0;
+        for output in [Output::Pq, Output::ScRgb] {
+            let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, output, true, None);
+            (hdr.peak, hdr.black) = (812.0, 0.5);
+            let plain = (
+                hdr.params(false, false),
+                hdr.params(false, true),
+                hdr.metadata(),
+            );
+            assert_eq!(plain.0[6], 1.0);
+            assert_eq!(plain.2, (812.0, 0.5));
+            hdr.reference_80 = true;
+            let scrgb = output == Output::ScRgb;
+            let params = hdr.params(false, false);
+            assert_eq!(params[6], if scrgb { gain } else { 1.0 }, "{output:?}");
+            assert_eq!(params[..6], plain.0[..6]);
+            assert_eq!(params[7..], plain.0[7..]);
+            // The PQ pass (present on HDR10, capture always) reads exactly what it did.
+            assert_eq!(hdr.params(false, true), plain.1, "{output:?}");
+            let want = if scrgb {
+                (812.0 * gain, 0.5 * gain)
+            } else {
+                (812.0, 0.5)
+            };
+            assert_eq!(hdr.metadata(), want, "{output:?}");
+        }
     }
 
     /// The world's writers read no gain from the display (docs/design/hdr-linear-light.md, step
