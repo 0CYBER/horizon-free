@@ -170,11 +170,16 @@ impl Game<'_> {
     /// entity data: the `Invulnerable` flag and the `invulnerable_time`
     /// window. `(false, 0)` where its data has neither.
     fn saved_invulnerability(&self, id: u32) -> (bool, i32) {
-        use horizon_core::nbt::Tag;
+        use horizon_core::nbt::{JavaString, Tag};
+        use std::sync::LazyLock;
+        // The two keys, built once: a `JavaString` is UTF-16 in a `Vec`, and building one per
+        // lookup allocated twice for every armor stand, item and dragon, every tick.
+        static FLAG: LazyLock<JavaString> = LazyLock::new(|| "Invulnerable".into());
+        static WINDOW: LazyLock<JavaString> = LazyLock::new(|| "invulnerable_time".into());
         match self.persist.raw.get(&id) {
             Some(Tag::Compound(map)) => (
-                matches!(map.get(&"Invulnerable".into()), Some(Tag::Byte(1))),
-                match map.get(&"invulnerable_time".into()) {
+                matches!(map.get(&*FLAG), Some(Tag::Byte(1))),
+                match map.get(&*WINDOW) {
                     Some(Tag::Int(ticks)) => *ticks,
                     _ => 0,
                 },
@@ -937,6 +942,56 @@ mod tests {
                 10.0,
                 "the ability flag holds even a creative hit back"
             );
+        });
+    }
+
+    /// The saved flag and window read with the keys built once are the ones read with the keys
+    /// built per lookup, for every shape of saved data a non-mob can hold.
+    #[test]
+    #[ignore = "daily"]
+    fn saved_invulnerability_matches_a_key_built_per_lookup() {
+        use horizon_core::nbt::Tag;
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let shapes: Vec<Option<Tag>> = {
+                let mut v = vec![None, Some(Tag::Int(3)), Some(Tag::Compound(Default::default()))];
+                for flag in [None, Some(Tag::Byte(1)), Some(Tag::Byte(0)), Some(Tag::Int(1))] {
+                    for window in [None, Some(Tag::Int(7)), Some(Tag::Int(-2)), Some(Tag::Byte(5))] {
+                        let mut map = std::collections::BTreeMap::new();
+                        if let Some(f) = &flag {
+                            map.insert("Invulnerable".into(), f.clone());
+                        }
+                        if let Some(w) = &window {
+                            map.insert("invulnerable_time".into(), w.clone());
+                        }
+                        map.insert("Other".into(), Tag::Int(1));
+                        v.push(Some(Tag::Compound(map)));
+                    }
+                }
+                v
+            };
+            for (i, shape) in shapes.into_iter().enumerate() {
+                let id = 100 + i as u32;
+                match shape.clone() {
+                    Some(tag) => {
+                        game.persist.raw.insert(id, tag);
+                    }
+                    None => {
+                        game.persist.raw.remove(&id);
+                    }
+                }
+                let new = game.saved_invulnerability(id);
+                let old = match &shape {
+                    Some(Tag::Compound(map)) => (
+                        matches!(map.get(&"Invulnerable".into()), Some(Tag::Byte(1))),
+                        match map.get(&"invulnerable_time".into()) {
+                            Some(Tag::Int(ticks)) => *ticks,
+                            _ => 0,
+                        },
+                    ),
+                    _ => (false, 0),
+                };
+                assert_eq!(new, old, "shape {i}");
+            }
         });
     }
 
