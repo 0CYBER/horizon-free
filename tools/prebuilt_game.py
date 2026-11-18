@@ -146,12 +146,17 @@ def head() -> str:
     return run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
 
 
-def stage(target_dir: Path, stage_tool: Path | None = None) -> Path:
+def stage(target_dir: Path, stage_tool: Path | None = None, prepare=None) -> Path:
     """A copy of HEAD's tracked source with the staging pass run over it (arismoko/horizon#589): every point method gets its
     `#[point]`, internals become public, and the build data is written with HEAD's commit in its header.
-    The copy is the commit's own bytes ([`tracked_blobs`]), never the working tree's, which is never rewritten."""
+    The copy is the commit's own bytes ([`tracked_blobs`]), never the working tree's, which is never rewritten.
+
+    The copy is built in `stage.next` and synced into `stage`, writing only the files whose bytes
+    changed. Cargo decides freshness by modification time, so a fresh copy every run rebuilt every
+    workspace crate."""
     setup_started = time.monotonic()
-    staged = target_dir / "stage"
+    final = target_dir / "stage"
+    staged = target_dir / "stage.next"
     if staged.exists():
         shutil.rmtree(staged)
     commit = head()
@@ -168,9 +173,56 @@ def stage(target_dir: Path, stage_tool: Path | None = None) -> Path:
               {**os.environ, "CARGO_TARGET_DIR": str(target_dir / "tools")}), end="")
     label = "Stage binary execution" if stage_tool is not None else "Stage release build and execution"
     print(f"{label}: {time.monotonic() - started:.3f}s (source copy/setup excluded)", flush=True)
+    # Edits that must land before the sync, so they are not a change on every run.
+    if prepare is not None:
+        prepare(staged)
+    sync_unchanged(staged, final)
+    shutil.rmtree(staged)
     # Only the prebuilt game splits the wasm runtime out: normal source builds stay static. With
     # prefer-dynamic, rustc picks this dylib for the game rather than folding its runtime stack into it.
-    return staged
+    return final
+
+
+def sync_unchanged(source: Path, destination: Path) -> tuple[int, int, int]:
+    """Make `destination` hold exactly `source`'s files, writing only those whose bytes differ, so an
+    unchanged file keeps its modification time (and Cargo its compiled crate). A top-level `target`
+    directory is left alone. Returns `(written, removed, unchanged)`."""
+    wanted = {Path(folder).relative_to(source) / name
+              for folder, _, files in os.walk(source) for name in files}
+    # Clear stale paths first: a tracked path may become a directory, or vice versa.
+    removed = 0
+    if destination.exists():
+        folders = []
+        for folder, directories, files in os.walk(destination):
+            relative = Path(folder).relative_to(destination)
+            if relative == Path("."):
+                # Pruned before descent, so Cargo's cache is never walked.
+                directories[:] = [name for name in directories if name != "target"]
+            else:
+                folders.append(Path(folder))
+            for name in files:
+                if relative / name not in wanted:
+                    (Path(folder) / name).unlink()
+                    removed += 1
+        # Deepest first, so a folder emptied of its subfolders goes too.
+        for path in reversed(folders):
+            if not any(path.iterdir()):
+                path.rmdir()
+    written = 0
+    for name in wanted:
+        data = (source / name).read_bytes()
+        target = destination / name
+        try:
+            previous = target.read_bytes()
+        except FileNotFoundError:
+            previous = None
+        if previous != data:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            written += 1
+    unchanged = len(wanted) - written
+    print(f"stage_sync written={written} removed={removed} unchanged={unchanged}", flush=True)
+    return written, removed, unchanged
 
 
 def cargo_features(server: bool, platform: str) -> list[str]:
@@ -367,12 +419,8 @@ def assert_externs(out: Path, eligible: list[str]) -> None:
         extern_args(out / "deps", crate)
 
 
-def build(out: Path, server: bool) -> None:
-    layout = package_format(ROOT)
-    # Resolved here: the staging and build steps run from the staged copy.
-    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "prebuilt"
-    staged = stage(target_dir)
-    host = rustc_host()
+def dylib_crate_types(staged: Path) -> None:
+    """Every API crate (and the wasm runtime) of the staged copy also builds as a dylib."""
     metadata = json.loads(run(["cargo", "metadata", "--format-version", "1"], cwd=staged))
     closure = api_closure(metadata)
     for package in metadata["packages"]:
@@ -389,6 +437,14 @@ def build(out: Path, server: bool) -> None:
         else:
             text += '\n[lib]\ncrate-type = ["rlib", "dylib"]\n'
         manifest.write_text(text)
+
+
+def build(out: Path, server: bool) -> None:
+    layout = package_format(ROOT)
+    # Resolved here: the staging and build steps run from the staged copy.
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "prebuilt"
+    staged = stage(target_dir, prepare=dylib_crate_types)
+    host = rustc_host()
 
     # One std for the game, every mod and the executable: the game links std dynamically, as mods will.
     rustflags = "-C prefer-dynamic --emit=metadata"

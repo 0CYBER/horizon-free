@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -67,14 +68,15 @@ class StageToolTests(unittest.TestCase):
                 if command[0] == "git":
                     return real_run(command, **kwargs)
                 calls.append(command)
-                self.assertEqual(command, [str(tool.resolve()), str(target / "stage"),
-                                          str(target / "stage/points.json"),
-                                          str(target / "stage/internals.json"), commit])
-                self.assertEqual(kwargs["cwd"], target / "stage")
+                fresh = target / "stage.next"
+                self.assertEqual(command, [str(tool.resolve()), str(fresh),
+                                          str(fresh / "points.json"),
+                                          str(fresh / "internals.json"), commit])
+                self.assertEqual(kwargs["cwd"], fresh)
                 self.assertIsNone(kwargs["env"])
-                self.assertEqual((target / "stage/tracked.rs").read_bytes(), committed)
-                self.assertFalse((target / "stage/untracked.rs").exists())
-                (target / "stage/tracked.rs").write_text("staged")
+                self.assertEqual((fresh / "tracked.rs").read_bytes(), committed)
+                self.assertFalse((fresh / "untracked.rs").exists())
+                (fresh / "tracked.rs").write_text("staged")
                 return "staged fixture\n"
 
             with patch.object(prebuilt_game, "ROOT", source), \
@@ -84,6 +86,93 @@ class StageToolTests(unittest.TestCase):
                 prebuilt_game.stage(target, stage_tool=tool)
             self.assertEqual(len(calls), 2)
             self.assertTrue((source / "tracked.rs").read_bytes().endswith(b"fn edited() {}\r\n"))
+            self.assertEqual((target / "stage" / "tracked.rs").read_text(), "staged")
+            self.assertFalse((target / "stage.next").exists())
+
+
+class SyncUnchangedTests(unittest.TestCase):
+    def test_source_paths_can_change_between_files_and_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, dest = root / "source", root / "dest"
+            (source / "file_to_dir").mkdir(parents=True)
+            (source / "file_to_dir" / "new.rs").write_bytes(b"new nested file")
+            (source / "dir_to_file").write_bytes(b"new flat file")
+            (dest / "dir_to_file").mkdir(parents=True)
+            (dest / "dir_to_file" / "old.rs").write_bytes(b"old nested file")
+            (dest / "file_to_dir").write_bytes(b"old flat file")
+
+            self.assertEqual(prebuilt_game.sync_unchanged(source, dest), (2, 2, 0))
+            self.assertEqual((dest / "file_to_dir" / "new.rs").read_bytes(), b"new nested file")
+            self.assertEqual((dest / "dir_to_file").read_bytes(), b"new flat file")
+
+    def test_an_unchanged_file_keeps_its_mtime_and_a_changed_one_is_written(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, dest = root / "source", root / "dest"
+            (source / "keep").mkdir(parents=True)
+            (source / "keep" / "same.txt").write_bytes(b"same")
+            (source / "new.txt").write_bytes(b"new")
+            (dest / "target").mkdir(parents=True)
+            (dest / "target" / "stale.o").write_bytes(b"object")
+            (dest / "keep").mkdir()
+            same = dest / "keep" / "same.txt"
+            same.write_bytes(b"same")
+            (dest / "gone.txt").write_bytes(b"gone")
+            (dest / "old" / "deep").mkdir(parents=True)
+            (dest / "old" / "deep" / "gone.rs").write_bytes(b"gone")
+            stamp = time.time() - 120
+            os.utime(same, (stamp, stamp))
+            before = same.stat().st_mtime_ns
+            written, removed, unchanged = prebuilt_game.sync_unchanged(source, dest)
+            self.assertEqual((written, removed, unchanged), (1, 2, 1))
+            self.assertEqual(same.stat().st_mtime_ns, before)
+            self.assertEqual(same.read_bytes(), b"same")
+            self.assertEqual((dest / "new.txt").read_bytes(), b"new")
+            self.assertFalse((dest / "gone.txt").exists())
+            self.assertFalse((dest / "old").exists())
+            self.assertEqual((dest / "target" / "stale.o").read_bytes(), b"object")
+
+    # A timing comparison, so it is a measurement rather than a check: a busy runner can reorder it.
+    @unittest.skipUnless(os.environ.get("HORIZON_MEASURE_STAGE") == "1", "set HORIZON_MEASURE_STAGE=1 to measure")
+    def test_measure_syncing_unchanged_files_against_rewriting_them(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, dest = root / "source", root / "dest"
+            count = 1500
+            for i in range(count):
+                path = source / "crates" / f"c{i // 50}" / f"f{i}.rs"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fn item() {}\n" * 8)
+            prebuilt_game.sync_unchanged(source, dest)
+
+            def rewrite():
+                started = time.perf_counter_ns()
+                for path in source.rglob("*.rs"):
+                    target = dest / path.relative_to(source)
+                    target.write_bytes(path.read_bytes())
+                return time.perf_counter_ns() - started
+
+            def sync():
+                started = time.perf_counter_ns()
+                prebuilt_game.sync_unchanged(source, dest)
+                return time.perf_counter_ns() - started
+
+            runs = 7
+            for _ in range(2):
+                rewrite()
+                sync()
+            copied = sorted(rewrite() for _ in range(runs))
+            synced = sorted(sync() for _ in range(runs))
+            med = lambda samples: samples[len(samples) // 2]
+            p95 = lambda samples: samples[max(0, int(len(samples) * 0.95) - 1)]
+            report = (
+                f"scene files={count} bytes=each about 100 runs={runs}\n"
+                f"rewrite_ns median={med(copied)} p95={p95(copied)} worst={copied[-1]}\n"
+                f"sync_ns median={med(synced)} p95={p95(synced)} worst={synced[-1]}\n"
+            )
+            Path(os.environ.get("TEMP", "."), "hz-measure-stage.txt").write_text(report)
+            print(report)
 
 
 class RegistryPatchTests(unittest.TestCase):
