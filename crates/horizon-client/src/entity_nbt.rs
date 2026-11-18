@@ -6804,6 +6804,15 @@ pub fn apply_item_components(m: &mut Mob, stack: &crate::items::ItemStack) {
     let Some(components) = stack.data() else {
         return;
     };
+    // SulfurCube.applyImplicitComponent(SULFUR_CUBE_CONTENT), before the
+    // custom name: setItemSlotAndDropWhenKilled(BODY, the absorbed block).
+    if m.species() == crate::mobs::Species::SulfurCube
+        && let Some(body) = components
+            .other("minecraft:sulfur_cube_content")
+            .and_then(item_from_nbt)
+    {
+        m.extra.set_body_stack(Some(body));
+    }
     if let Some(name) = stack.custom_name() {
         m.custom_name = Some(name);
         // Entity.applyImplicitComponent(CUSTOM_NAME): the whole text.
@@ -11159,5 +11168,44 @@ mod equine_temper_preservation_tests {
             let nbt = mob_to_nbt(&ravager, [0; 4], None, None, |_| None);
             assert_eq!(nbt.get("attributes"), Some(&saved));
         }
+    }
+}
+
+#[cfg(test)]
+mod sulfur_bucket_content_tests {
+    use super::*;
+    use crate::mobs::Species;
+
+    fn mob(species: Species, id: &str) -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.species = species;
+        ty.id = id.into();
+        Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+    }
+
+    /// `MobBucketItem.spawn` → `SulfurCube.applyImplicitComponent`: a cube
+    /// released from its bucket wears the block the bucket recorded
+    /// (`minecraft:sulfur_cube_content`) as its body again (#17990).
+    #[test]
+    fn a_released_sulfur_cube_keeps_the_block_its_bucket_carried() {
+        let mut cube = mob(Species::SulfurCube, "minecraft:sulfur_cube");
+        cube.extra.set_body(Some("minecraft:oak_planks".into()));
+        let mut bucket = crate::items::ItemStack::new("minecraft:sulfur_cube_bucket", 1);
+        bucket.extra = Some(Box::new(bucket_components(&cube)));
+        let bucket = item_from_nbt(&item_to_nbt(&bucket)).unwrap();
+
+        let mut released = mob(Species::SulfurCube, "minecraft:sulfur_cube");
+        apply_item_components(&mut released, &bucket);
+        assert_eq!(released.extra.body_id(), Some("minecraft:oak_planks"));
+
+        let empty = crate::items::ItemStack::new("minecraft:sulfur_cube_bucket", 1);
+        let mut released = mob(Species::SulfurCube, "minecraft:sulfur_cube");
+        apply_item_components(&mut released, &empty);
+        assert_eq!(released.extra.body_id(), None, "a bucket without content");
+
+        let mut cod = mob(Species::Cod, "minecraft:cod");
+        apply_item_components(&mut cod, &bucket);
+        assert_eq!(cod.extra.body_id(), None, "only a sulfur cube reads it");
     }
 }
