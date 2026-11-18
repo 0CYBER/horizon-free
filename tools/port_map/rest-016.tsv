@@ -9,10 +9,10 @@ SpreadPlayersCommand.Position.isSafe	port	crates/horizon-client/src/game/adminis
 StopCommand.register	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	gap: minor: /stop only from the dedicated console; no in-game /stop node
 StopSoundCommand.register	port	crates/horizon-command/src/tree_world.rs::sounds	/stopsound command tree
 StopSoundCommand.stopSound	inline	crates/horizon-gameplay/src/commands/sound.rs::stopsound	the StopSound packet is built once and sent to each target's connection there; the local player's own sounds stop through Audio::stop_sounds
-StopwatchCommand.createStopwatch	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_stopwatch	stopwatch.create arm
-StopwatchCommand.queryStopwatch	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_stopwatch	stopwatch.query arm
-StopwatchCommand.restartStopwatch	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_stopwatch	stopwatch.restart arm
-StopwatchCommand.removeStopwatch	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_stopwatch	default arm: remove
+StopwatchCommand.createStopwatch	port	crates/horizon-gameplay/src/commands/misc.rs::stopwatch	stopwatch.create arm
+StopwatchCommand.queryStopwatch	port	crates/horizon-gameplay/src/commands/misc.rs::stopwatch	stopwatch.query arm
+StopwatchCommand.restartStopwatch	port	crates/horizon-gameplay/src/commands/misc.rs::stopwatch	stopwatch.restart arm
+StopwatchCommand.removeStopwatch	port	crates/horizon-gameplay/src/commands/misc.rs::stopwatch	default arm: remove
 StopwatchCommand.register	port	crates/horizon-command/src/tree_misc.rs::stopwatch	create, query, restart and remove under the stopwatch literal
 SummonCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	root summon node
 SummonCommand.spawnEntity	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_summon	commands.summon.success
@@ -44,10 +44,10 @@ TeleportCommand.teleportToPos	port	crates/horizon-client/src/game/administration
 TeleportCommand.getRelatives	inline	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_teleport	relative coords resolved from the source up front; same end position
 TeleportCommand.performTeleport	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::teleport_to_in_level	gap: minor: zeroes all velocity and clears on_ground for a player; vanilla keeps horizontal motion, sets on_ground, stops mob navigation, skips Y reset while fall-flying
 TickCommand.nanosToMilisString	port	crates/horizon-client/src/game/administration/commands/misc.rs::millis	one-decimal millisecond string
-TickCommand.setTickingRate	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_tick	tick.rate arm
-TickCommand.step	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_tick	tick.step arm
-TickCommand.stopStepping	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_tick	tick.step.stop default arm
-TickCommand.stopSprinting	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_tick	tick.sprint.stop arm
+TickCommand.setTickingRate	port	crates/horizon-gameplay/src/commands/misc.rs::tick	tick.rate arm
+TickCommand.step	port	crates/horizon-gameplay/src/commands/misc.rs::tick	tick.step arm
+TickCommand.stopStepping	port	crates/horizon-gameplay/src/commands/misc.rs::tick	tick.step.stop default arm
+TickCommand.stopSprinting	port	crates/horizon-gameplay/src/commands/misc.rs::tick	tick.sprint.stop arm
 TimeCommand.suggestTimelines	port	crates/horizon-command/src/args.rs::ArgType::suggest	gap: minor: lists every timeline id, not only the ids of the parsed clock
 TimeCommand.queryGameTime	port	crates/horizon-gameplay/src/commands/time.rs::time	time.query.gametime arm
 TimeCommand.queryTime	port	crates/horizon-gameplay/src/commands/time.rs::time	time.query.time arm
