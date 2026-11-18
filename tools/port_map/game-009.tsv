@@ -26,8 +26,8 @@ VillagerGoalPackages.raidExistsAndNotVictory	inline	crates/horizon-client/src/mo
 VillagerMakeLove.canStillUse	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::tick_or_stop	MakeLove arm stops once now passes the birth time or breeding is no longer possible
 VillagerMakeLove.start	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	MakeLove arm: lock gaze, birth time 275 + random 50 ticks; entity event 18 has no villager effect
 VillagerMakeLove.canReach	inline	crates/horizon-client/src/mobs/villager_brain.rs::take_bed_for_child	bed counts only if create_path_to gets there
-VillagerMakeLove.breed	port	crates/horizon-client/src/game/mobs/villagers.rs::Game::villager_birth	baby villager at the parent, ages 6000 and -24000, hearts for the child
-VillagerMakeLove.giveBedToChild	inline	crates/horizon-client/src/game/mobs/villagers.rs::Game::villager_birth	child.extra.bed is the taken bed
+VillagerMakeLove.breed	port	crates/horizon-gameplay/src/villagers.rs::villager_birth	baby villager at the parent, ages 6000 and -24000, hearts for the child
+VillagerMakeLove.giveBedToChild	inline	crates/horizon-gameplay/src/villagers.rs::villager_birth	child.extra.bed is the taken bed
 WorkAtPoi.checkExtraStartConditions	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	WorkAtPoi arm: 300 tick gap, 1 in 2 roll, within 1.73 of the job site
 WorkAtPoi.canStillUse	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::tick_or_stop	WorkAtPoi arm: job site still within 1.73
 YieldJobSite.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	gap: minor: the villager gives up its potential site but the nearby villager is not handed the walk and look target or the potential site; it finds the site through its own job search

@@ -19,7 +19,7 @@ use horizon_core::geometry::Vec3;
 pub struct MobParts<'a> {
     pub mobs: &'a mut JoinList<Mob>,
     pub dropped: &'a mut JoinList<ItemEntity>,
-    /// The id the next entity will take (`ItemAreas` keys its cache on it).
+    /// The last entity id handed out; the next entity takes this plus one (`ItemAreas` keys its cache on it).
     pub next_entity: u32,
     /// The mobs that ticked this tick.
     pub ticked: &'a FxHashSet<u32>,

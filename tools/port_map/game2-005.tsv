@@ -17,7 +17,7 @@ ZombifiedPiglin.checkZombifiedPiglinSpawnRules	port	crates/horizon-client/src/mo
 ZombifiedPiglin.checkSpawnObstruction	port	crates/horizon-client/src/mobs/spawn_selection.rs::spawn_obstruction	the Mob default two tests: no liquid, unobstructed
 CatSpawner.spawnInVillage	port	crates/horizon-client/src/game/mobs/cat_spawner.rs::Game::spawn_cat_in_village	village cats: more than four claimed beds within 48 blocks and fewer than five cats
 CatSpawner.spawnCat	port	crates/horizon-client/src/game/mobs/cat_spawner.rs::Game::spawn_cat	black variant inside cats_spawn_as_black structures; persistence flag from the caller
-InventoryCarrier.pickUpItem	port	crates/horizon-client/src/game/mobs/villagers.rs::Game::villager_pickups	gap: minor: villager arm only; piglins, sulfur cubes, pandas and others have their own pickup fns
+InventoryCarrier.pickUpItem	port	crates/horizon-gameplay/src/villagers.rs::villager_pickups	gap: minor: villager arm only; piglins, sulfur cubes, pandas and others have their own pickup fns
 AbstractVillager.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	villager arm: type, then the baby group
 AbstractVillager.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	Offers; Villager inventory via villager::write_nbt, WanderingTrader inventory via extra.inventory, including empty
 AbstractVillager.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	Offers via read_villager; Villager inventory via villager::read_nbt, WanderingTrader via eight-slot extra.inventory; aggregation gap retained
@@ -39,7 +39,7 @@ Villager.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::re
 Villager.getAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::play_ambient	gap: minor: the trade ambient sound is not played while trading
 Villager.rewardTradeXp	port	crates/horizon-client/src/merchant.rs::Session::notify_trade	gap: minor: no 10 second Regeneration on the villager at level-up; accepted Game::merchant_traded records the actual trader for the next eligible mob AI phase
 Villager.customServerAiStep	port	crates/horizon-client/src/mobs/ai.rs::server_ai_step	Villager branch: Brain tick, then the retained trader event; Game::villager_traded_by applies reputation and current prices; existing NoAI gate
-Villager.die	port	crates/horizon-client/src/game/mobs/villagers.rs::Game::villager_murdered	gap: minor: releaseAllPois is not done on death
+Villager.die	port	crates/horizon-gameplay/src/villagers.rs::villager_murdered	gap: minor: releaseAllPois is not done on death
 Villager.releaseAllPois	missing		claims are per-mob fields (`extra.bed`, `extra.home` for the job site, `extra.meeting`) with no world-side point-of-interest store to release from; freeing a claim for another villager while this one lives has no counterpart
 Villager.releasePoi	missing		same as `releaseAllPois`: a single claim is that mob's field, dropped with the mob
 Villager.eatUntilFull	port	crates/horizon-client/src/mobs/villager.rs::Ext::eat_and_digest
@@ -48,7 +48,7 @@ Villager.increaseMerchantCareer	inline	crates/horizon-client/src/merchant.rs::Se
 Villager.handleEntityEvent	port	crates/horizon-client/src/game/mobs/villagers.rs::Game::entity_event_particles	villager event particles from the entity event table
 Villager.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	villager arm: breeding resets the profession, then type and the baby group
 Villager.thunderHit	port	crates/horizon-client/src/game/entities/lightning.rs::Game::thunder_hit	villager struck by lightning becomes a witch; gap: minor: releaseAllPois is not done on conversion
-Villager.wantsToPickUp	port	crates/horizon-client/src/game/mobs/villagers.rs::Game::villager_pickups	the want test (food, pick-up tag, requested items) inside the pickup loop
+Villager.wantsToPickUp	port	crates/horizon-gameplay/src/villagers.rs::villager_pickups	the want test (food, pick-up tag, requested items) inside the pickup loop
 Villager.countFoodPointsInInventory	port	crates/horizon-client/src/mobs/villager.rs::Ext::food_in_inventory
 Villager.updateTrades	port	crates/horizon-client/src/game/items/trading.rs::Game::ensure_offers	generates the trade set for profession and level; the level-up reroll is in merchant.rs notify_trade
 Villager.maybeDecayGossip	port	crates/horizon-client/src/mobs/villager.rs::Ext::maybe_decay

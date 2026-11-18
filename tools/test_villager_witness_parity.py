@@ -32,6 +32,7 @@ def main(argv=None):
                lab.ROOT / 'crates/horizon-client/src/mobs/villager_brain/reputation.rs',
                lab.ROOT / 'crates/horizon-client/src/mobs/villager_brain/reputation_witness_tests.rs',
                lab.ROOT / 'crates/horizon-client/src/game/mobs/villagers.rs',
+               lab.ROOT / 'crates/horizon-gameplay/src/villagers.rs',
                lab.ROOT / 'crates/horizon-client/src/game/mobs/tests/villager_witness_tests.rs',
                lab.ROOT / 'crates/horizon-client/src/game/entities/kill_die_vibration_tests.rs']
     hashes = base.source_hashes(sources)
