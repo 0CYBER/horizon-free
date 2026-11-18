@@ -163,7 +163,9 @@ removed filename cannot be mapped back to an ID. If several installed packs shar
 filename in lexical order is used and listed. The `HORIZON_SHADER_PACK` development override still
 names an exact filesystem path; `shaders/` packs still use filenames.
 
-## Shader API 0.2 (experimental)
+<a id="shader-api-02-experimental"></a>
+
+## Shader API 0.2
 
 0.2 is the line this build serves, the line for linear light and HDR
 ([hdr-linear-light.md](../design/hdr-linear-light.md)): `horizon-shader check` and `pack` take it, the game draws it
@@ -276,9 +278,10 @@ it: [the guide](../shaders.md#testing-a-pack-frame-by-frame).
 
 ## Stability
 
-Experimental (API 0.2). The stages ship in the game behind pack selection; see [stability.md](stability.md).
-While the API is experimental, a line is served until the next one is on by default: 0.1 ended when 0.2 was
-([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
+API 0.2 is final, at the preview level of [stability.md](stability.md): #17834 was its last breaking change. What
+the reference says stays: additions and fixes toward it go on in 0.2, and a change that breaks a 0.2 pack only comes
+with a new line, 0.3, after a deprecation while the game still serves 0.2. API 0.1 has ended: it is refused since #15886,
+when 0.2 went on by default ([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
 
 ## Not there yet
 
@@ -289,6 +292,8 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-18: API 0.2 is final (preview): #17834 was the last change that breaks a 0.2 pack. A breaking change now
+  starts 0.3, after a deprecation. No WGSL or manifest change.
 - 2026-11-17: API 0.2 (experimental, #18023): an R-relative kept texture takes its two versions at their size of the
   post targets' budget, `2 × scale² × bytes a texel / 8` render-size `rgba16float` textures, instead of 2 at any
   format and scale: `rgba16float` at scale 0.5 takes 0.5, `r32uint` at scale 1 takes 1. Packs that keep small

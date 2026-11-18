@@ -7,7 +7,7 @@ signature, input, resource and limit is in the generated
 
 **Shader API 0.1 is retired (#15886).** A 0.1 pack is refused with `needs shader API 0.1; this Horizon serves 0.2`:
 it stays in the list, and the game draws without it. To move one, set `api = "0.2"` and treat colours as linear light,
-as [api/shaders.md](api/shaders.md#shader-api-02-experimental) describes; the example pack Golden Hour 2.0.0 was moved
+as [api/shaders.md](api/shaders.md#shader-api-02) describes; the example pack Golden Hour 2.0.0 was moved
 that way.
 
 Shader packs in the Iris/OptiFine format are a separate feature with its own loader; this page is only about
@@ -15,7 +15,7 @@ Horizon's own format.
 
 | Part | Where | State |
 |---|---|---|
-| Format, stages, check | `crates/horizon-shader-api` | API 0.2, experimental |
+| Format, stages, check | `crates/horizon-shader-api` | API 0.2, final (preview) |
 | Authoring tool | `horizon-shader` (same crate) | `new`, `check`, `pack` |
 | Templates | `crates/horizon-shader-api/templates/` | post, sky, material |
 | Example pack | `crates/horizon-shader-api/packs/golden_hour` | a warm sky and two post passes |

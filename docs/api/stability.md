@@ -73,6 +73,7 @@ Every preview and stable API has tests that run old users against the current co
 | Server | `api::ROUTES` against `route()` (generated reference); a `server.toml` from each release line parses to the same settings; golden replies per endpoint |
 | Launcher | the generated reference; golden `--json` output per command |
 | Launch | the generated reference, which holds `--launch-api`'s reply; every listed option is accepted; `horizon-prepare`'s `--progress json` lines (`progress_json_lines_keep_their_shape`), its `--launch-api` reply and options (`launch_api::tests`, `launch_api_options_are_in_the_help`) |
+| Shader API | the generated reference (`shaders-reference-0.2.md`); the example pack, every template and the fixture packs pass `horizon-shader check` (`the_example_pack_passes`, `every_template_makes_a_pack_that_passes`, the fixture tests in `tests/it/check.rs`) |
 | Data formats | a sample file of every version a reader accepts, read by today's reader |
 
 The generated references are the API's own diff: a pull request that changes an API changes its reference, and the
@@ -90,7 +91,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | Content mods (`registries`: data-driven blocks, items, mob effects, thrown entity types and menu types) | preview | manifest `api = "0.2"` |
 | Native mods (flat Rust projects, [../modding/src/how-to/native-mods.md](../modding/src/how-to/native-mods.md)) | experimental | the pinned revisions |
 | `cargo horizon-mod` (`new`, `build`, `run`, `check`) | preview | none yet (unversioned) |
-| Shader API (linear light, [hdr-linear-light.md](../design/hdr-linear-light.md)) | experimental | 0.2 |
+| Shader API (linear light, [hdr-linear-light.md](../design/hdr-linear-light.md)) | preview | 0.2 |
 | `horizon-ctl` commands and MCP tools | preview | none yet (unversioned) |
 | The game's own control-socket commands outside `horizon-ctl`'s table (test hooks) | experimental | |
 | `horizon-server` commands, `server.toml` | stable | `horizon-server --version` |
