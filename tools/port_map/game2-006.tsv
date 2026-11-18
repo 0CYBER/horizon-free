@@ -6,7 +6,7 @@ FireworkRocketEntity.onHitBlock	inline	crates/horizon-client/src/game/entities/f
 FireworkRocketEntity.dealExplosionDamage	port	crates/horizon-client/src/game/entities/fireworks.rs::Game::explode_rocket	damage 5+2 per explosion; attached target takes the full blast, others within 5 blocks with line of sight
 FireworkRocketEntity.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::firework_rocket_to_nbt	Life, LifeTime, FireworksItem, ShotAtAngle and HasBeenShot, over `Projectile`'s Owner (only when it is the player) and LeftOwner
 FireworkRocketEntity.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::firework_rocket_from_nbt	Life, LifeTime (0 when absent), FireworksItem and ShotAtAngle, with Owner and LeftOwner
-FireworkRocketEntity.getExplosions	port	crates/horizon-client/src/game/entities/fireworks.rs::fireworks_of	explosion list from the item's fireworks component, empty without one
+FireworkRocketEntity.getExplosions	port	crates/horizon-gameplay/src/fireworks.rs::fireworks_of	explosion list from the item's fireworks component, empty without one
 FireworkRocketEntity.calculateHorizontalHurtKnockbackDirection	inline	crates/horizon-client/src/game/entities/fireworks.rs::Game::explode_rocket	knockback direction is the blast point to the target, which the mob damage gets as its from point
 FishingHook.<init>	port	crates/horizon-client/src/game/items/fishing.rs::Game::use_fishing_rod	the player cast: start point, velocity with the 0.0103365 triangle, luck and lure from the rod
 FishingHook.defineSynchedData	skip:java		synced hooked id and biting flag; Horizon keeps them on the Hook struct and sends them in Hook::track
