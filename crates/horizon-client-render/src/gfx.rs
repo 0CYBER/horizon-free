@@ -9153,6 +9153,7 @@ impl Renderer {
             &self.device,
             [self.config.width, self.config.height],
             pack_reads_world || fg,
+            pack_post,
         );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
