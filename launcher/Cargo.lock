@@ -2913,7 +2913,7 @@ version = "0.1.0"
 
 [[package]]
 name = "horizon-launcher"
-version = "0.2.0"
+version = "0.2.31"
 dependencies = [
  "base64 0.22.1",
  "cap-fs-ext",

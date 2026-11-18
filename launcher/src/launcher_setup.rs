@@ -31,7 +31,11 @@ impl Launcher {
                 .await;
             let counting = this.update(cx, |this, cx| {
                 let s = &mut this.settings;
-                if s.partner_hidden || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
+                // Horizon-free has no sponsor: nothing to count.
+                if !backend::PARTNER_BANNERS
+                    || s.partner_hidden
+                    || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE
+                {
                     return false;
                 }
                 // On screen on every page: the card in the sidebar, the banner on Servers.
@@ -175,6 +179,10 @@ impl Launcher {
             shop: Default::default(),
             shop_status: None,
             shop_kept: None,
+            skin: None,
+            dev_clicks: 0,
+            dev_options: false,
+            offline_name: offline_name(),
             // The first draw takes the launcher theme from Settings.
             restyle: true,
             background_error: None,

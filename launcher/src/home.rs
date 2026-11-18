@@ -233,6 +233,12 @@ impl Launcher {
                         })
                 }));
         }
+        let owner = if horizon_launcher::developer_offline::selected() {
+            Some(true)
+        } else {
+            self.owner
+        };
+        let press = play_press(ready, owner, self.preparing || running);
         let mut play = action("play", Action::Main, &t)
             .min_w(px(180.))
             .child(
@@ -243,17 +249,14 @@ impl Launcher {
             .child(label(match self.play_step.now() {
                 // The step a start is on, once it said one.
                 Some(step) if self.starting_client.is_some() => step.to_owned(),
-                _ => tr(if running { "Running" } else { "Play" }).to_string(),
+                _ => tr(if running {
+                    "Running"
+                } else {
+                    play_label(press, owner)
+                })
+                .to_string(),
             }));
-        match play_press(
-            ready,
-            if horizon_launcher::developer_offline::selected() {
-                Some(true)
-            } else {
-                self.owner
-            },
-            self.preparing || running,
-        ) {
+        match press {
             PlayPress::Nothing => play = disabled(play),
             PlayPress::Play => {
                 play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {

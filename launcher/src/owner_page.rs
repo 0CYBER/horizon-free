@@ -8,11 +8,19 @@ impl Launcher {
     /// Whether the screen covers the window: no owner, and either Play was refused or the player
     /// hasn't read it yet. The data question comes first.
     pub(crate) fn asking_owner(&self) -> bool {
-        (!horizon_launcher::developer_offline::selected() || sign_in_preview())
-            && (self.owner == Some(false) || sign_in_preview())
+        (self.owner_shown() == Some(false) || sign_in_preview())
             && (self.owner_screen_open || !self.settings.owner_notice_seen || sign_in_preview())
             && !self.asking_consent()
             && self.opening.is_none()
+    }
+
+    /// `owner` as the window shows it: the developer option that lets offline names play without
+    /// an owner (`dev_options`) hides the gate, as if the keychain hadn't answered yet.
+    pub(crate) fn owner_shown(&self) -> Option<bool> {
+        match self.owner {
+            Some(false) if self.settings.dev_offline => None,
+            owner => owner,
+        }
     }
 
     /// Opens the screen and starts the sign-in on it; a sign-in already under way (its code on
@@ -80,6 +88,10 @@ impl Launcher {
             .child(line(
                 "No Minecraft install needed: Horizon downloads it from Mojang for your account.",
                 n.ink_soft,
+            ))
+            .child(line(
+                "Your worlds, offline names and settings stay where they are.",
+                n.muted,
             ));
         let raised = || {
             div()
@@ -318,7 +330,10 @@ impl Launcher {
                     )))
                     .child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(
                         "No Minecraft install needed: Horizon downloads it from Mojang for your account.",
-))),
+                    )))
+                    .child(ui::text(14., FontWeight::NORMAL, ink::QUIET).child(tr(
+                        "Your worlds, offline names and settings stay where they are.",
+                    ))),
             );
         card = match state {
             Shown::Code(uri, user_code) => {
