@@ -285,9 +285,11 @@ def leg_detail(leg, conclusion, steps, reason):
     return f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}."
 
 
-def fixes_after(commit, titles, call, query, git):
+def fixes_after(commit, titles, call, query, contains=None):
     """title -> (number, fix) for each red title with no open issue whose newest closed issue was closed by a pull
-    request or commit `fix` that `commit` does not contain: the fix merged after the commit this run tested."""
+    request or commit `fix` that `commit` does not contain: the fix merged after the commit this run tested.
+    `contains(fix, commit)` answers True/False, or None when git cannot say; that is not evidence about the fix."""
+    contains = contains or contains_fix
     if not titles:
         return {}
     since = (dt.datetime.now(dt.timezone.utc) - FIX_LOOKBACK).date().isoformat()
@@ -302,8 +304,14 @@ def fixes_after(commit, titles, call, query, git):
             "timelineItems"]["nodes"]
         closer = (nodes[-1].get("closer") if nodes else None) or {}
         fix = (closer.get("mergeCommit") or {}).get("oid") or closer.get("oid")
-        # A commit missing from the checkout is not in `commit` either: the checkout holds all of its history.
-        if fix and git("merge-base", "--is-ancestor", fix, commit) is None:
+        if not fix:
+            continue
+        answer = contains(fix, commit)
+        if answer is None:
+            sys.exit(f"::error::git could not say whether `{commit[:9]}` contains the fix `{fix[:9]}`; nothing more "
+                     "is written, so a regression issue is never skipped on a git error")
+        # A commit the checkout does not hold is not in `commit` either: the checkout holds all of its history.
+        if not answer:
             fixes[title] = (number, fix)
     return fixes
 
@@ -392,12 +400,16 @@ def apply(actions, call, run_url):
             call("PATCH", f"issues/{action[1]}", {"state": "closed", "state_reason": "completed"})
 
 
-def git(*args):
-    result = subprocess.run(["git", *args], capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else None
+def contains_fix(fix, commit):
+    """True when `commit` already holds `fix`; False when it does not; None when git could not answer.
+    `git merge-base --is-ancestor` exits 0 for an ancestor, 1 for a non-ancestor and 128+ for an error."""
+    result = subprocess.run(["git", "merge-base", "--is-ancestor", fix, commit], capture_output=True, text=True)
+    if result.returncode == 0:
+        return True
+    return False if result.returncode == 1 else None
 
 
-def main(call=api, run_git=git, query=graphql):
+def main(call=api, run_git=contains_fix, query=graphql):
     env = os.environ
     commit = env["COMMIT"]
     # Only main writes, whatever the input says: a branch's run is always a dry run.

@@ -89,17 +89,16 @@ def closers(fixes):
     return query
 
 
-def git(ancestors=()):
-    """`git merge-base --is-ancestor` as fixes_after runs it: success for the commits in `ancestors`."""
-    def run(*args):
-        assert args[:2] == ("merge-base", "--is-ancestor"), args
-        return "" if args[2] in ancestors else None
+def contained(ancestors=(), error=False):
+    """`fixes_after`'s git boundary: True for a fix the commit holds, False otherwise, None for a git error."""
+    def run(fix, commit):
+        return None if error else fix in ancestors
     return run
 
 
 class DailySummaryTests(unittest.TestCase):
     def run_summary(self, api, reports=(), results=LEGS, ref="refs/heads/main", dry_run="false", fixes=None,
-                    ancestors=()):
+                    ancestors=(), git_error=False):
         with tempfile.TemporaryDirectory() as folder:
             for index, report in enumerate(reports):
                 path = Path(folder, "reports", f"daily-report-{index}")
@@ -110,7 +109,7 @@ class DailySummaryTests(unittest.TestCase):
                    "RESULTS": json.dumps(results), "REPORTS": str(Path(folder, "reports")),
                    "GITHUB_STEP_SUMMARY": str(Path(folder, "summary"))}
             with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
-                summary.main(api, git(ancestors), closers(fixes or {}))
+                summary.main(api, contained(ancestors, git_error), closers(fixes or {}))
             return Path(folder, "summary").read_text()
 
     def test_all_green_closes_issues_that_went_green(self):
@@ -173,6 +172,17 @@ class DailySummaryTests(unittest.TestCase):
         # A fix the tested commit holds did not fix it, and a hand close names no fix: both are filed anew.
         self.assertCountEqual([body["title"] for _, path, body in api.writes if path == "issues"],
                               ["Daily: horizon-world a::fixed_before", "Daily: horizon-world a::closed_by_hand"])
+
+    def test_a_git_error_aborts_instead_of_reusing_a_closed_issue(self):
+        jobs = [job("shards / ignored-tests-shards (horizon-world)", "failure", ["Run"])] + GREEN_JOBS[2:]
+        issues = [{"number": 901, "title": "Daily: horizon-world a::fixed_later", "state": "closed"}]
+        api = Api(jobs, issues=issues)
+        report = shard_report([failure("a::fixed_later")])
+        with self.assertRaises(SystemExit) as caught:
+            self.run_summary(api, [report], results=dict(LEGS, shards={"result": "failure"}),
+                             fixes={901: "f" * 40}, git_error=True)
+        self.assertIn("git could not say", str(caught.exception))
+        self.assertEqual(api.writes, [])
 
     def test_a_leg_that_failed_without_test_names_gets_one_issue_per_leg(self):
         jobs = [job("shards / ignored-tests-shards (horizon-world)", "cancelled", ["Run the ignored tests that need no vanilla data"]),
