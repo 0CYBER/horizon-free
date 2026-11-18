@@ -27,13 +27,22 @@ import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "tools"))
-import anvil_dump  # noqa: E402
-from test_dedicated_server_parity import Server, free_port  # noqa: E402
+try:
+    from . import anvil_dump
+    from .test_dedicated_server_parity import Server, free_port
+except ImportError:  # running as a script
+    import anvil_dump
+    from test_dedicated_server_parity import Server, free_port
 
 JARS = {"26.2": ROOT / ".local/vanilla-26.2/server.jar", "26.3": ROOT / ".local/minecraft/26.3/jars/server.jar"}
-ERRORS = re.compile(r"Failed to (load|parse|get element)|Errors in registry|Unknown registry key|"
-                    r"No key|Missing|Couldn't load|Failed to load datapacks|Exception", re.I)
+# A pack/registry failure is logged as a diagnostic message, either at the start of the line or
+# behind a bracketed log prefix ([Server/ERROR]:, [DataFixerUpper/WARN]:, a timestamp, ...).
+# Anchoring the two looser phrases that way keeps ordinary console chat such as
+# "<Steve> Missing key" from being counted as a fatal pack error, while the specific
+# "Failed to ..." / "Unknown ..." diagnostics stay unanchored so they match wherever they appear.
+ERRORS = re.compile(r"Failed to (?:load|parse|get element)|Errors in registry|Unknown registry key|"
+                    r"Couldn't load|Failed to load datapacks|Exception|"
+                    r"(?:^|\[[^\]]*\][:\s]*)(?:Missing|No key)\b", re.I)
 
 
 def java():
