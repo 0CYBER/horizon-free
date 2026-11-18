@@ -115,8 +115,15 @@ def rule_known_packs_as_vanilla(entries):
     answer = [e for e in entries if e['dir'] == 'c2s' and e['name'] == 'select_known_packs']
     if not offered or not answer:
         raise Failed(f'no known packs exchange (server {len(offered)}, client {len(answer)})')
-    if answer[0].get('data') != offered[0].get('data'):
-        raise Failed(f'the server offered {offered[0].get("data")}, the client answered {answer[0].get("data")}')
+    # A retained prefix cannot prove packet equality: unrecorded tails may differ. Vanilla's core
+    # pack exchange fits in net_capture's full-payload limit; other captures must retain full data
+    # too before this rule can report a pass.
+    server = offered[0].get('data')
+    client = answer[0].get('data')
+    if server is None or client is None:
+        raise Failed(f'no complete payload to compare: server {server!r}, client {client!r}')
+    if client != server:
+        raise Failed(f'the server offered {server}, the client answered {client}')
     return 'answered with the packs offered (minecraft:core)'
 
 
