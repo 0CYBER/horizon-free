@@ -1485,8 +1485,8 @@ pub(crate) mod v26_1 {
     }
 }
 
-/// 1.21.6 to 1.21.8. Clientbound nothing changes for a server: 1.21.6 sends set_equipment without the saddle
-/// slot (7), which 1.21.8 added, and entity data is laid out alike (the serializer ids differ only from 1.21.9,
+/// 1.21.6 to 1.21.8. Clientbound nothing changes for a server: set_equipment has the saddle slot (7) since 1.21.5,
+/// and entity data is laid out alike (the serializer ids differ only from 1.21.9,
 /// see adapter.rs). Serverbound, 1.21.8's `test_instance_block_action` names its test by identifier and 1.21.6
 /// by a VarInt id in a registry.
 pub(crate) mod v1_21_6 {
