@@ -32,9 +32,18 @@ def exceptions(path=EXCEPTIONS):
 
 
 def problems(rows, functions, allowed):
-    """A descriptive ignore must have an exact exception; daily selection uses the complete libtest identity."""
+    """A descriptive ignore must have an exact exception; daily selection uses the complete libtest identity.
+
+    Every daily row is validated: rows sharing an identity are kept together instead of one silently
+    overwriting the other, and a duplicate identity across policy files is itself reported.
+    """
     found = []
-    daily = {(row.package, row.reference, row.test): row for row in rows if row.mark == "daily"}
+    # Keep *all* daily rows, keyed by identity. A dict comprehension keyed by identity would let a later
+    # row from another policy file erase an earlier one, leaving that row's file never validated.
+    daily = {}
+    for row in rows:
+        if row.mark == "daily":
+            daily.setdefault((row.package, row.reference, row.test), []).append(row)
     marked = set()
     for function in functions:
         if function.reason is None:
@@ -48,9 +57,13 @@ def problems(rows, functions, allowed):
         elif (*identity, function.reason) not in allowed:
             found.append(f"{location}: descriptive ignore {function.reason!r} is not daily or an explicitly "
                          "documented exception; migrate it with its exact logical identity")
-    for identity, row in daily.items():
-        if identity not in marked:
-            found.append(f"{row.file}: {' '.join(identity)}: daily row selects no #[ignore = \"daily\"] test")
+    for identity, group in daily.items():
+        if len(group) > 1:
+            files = ", ".join(row.file for row in group)
+            found.append(f"{files}: {' '.join(identity)}: duplicate daily rows select the same test identity")
+        for row in group:
+            if identity not in marked:
+                found.append(f"{row.file}: {' '.join(identity)}: daily row selects no #[ignore = \"daily\"] test")
     return found
 
 class Test(NamedTuple):

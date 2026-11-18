@@ -34,6 +34,8 @@ class IgnoredInventory(unittest.TestCase):
                 'mod tests { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ignored_case.rs")); }\n')
             put("crates/horizon-relay/src/ignored_case.rs",
                 '#[test] #[ignore = "needs prepared resources"] fn otherwise_unselected() {}\n')
+            # Exercise the real source-only traversal: flattened game modules, explicit lib paths,
+            # both include! forms, and fake tests in strings/comments. It never builds the game.
             functions = ignored_inventory.tests(root)
             self.assertEqual(len(functions), 2)
             daily = ignored_tests.Row("horizon-client", "game::widget::tests::daily_test", "lib", "daily",
@@ -52,6 +54,19 @@ class IgnoredInventory(unittest.TestCase):
             empty = [function._replace(reason="") if function.package == "horizon-relay" else function
                      for function in functions]
             self.assertEqual(len(ignored_inventory.problems([daily], empty, allowed)), 1)
+
+    def test_duplicate_daily_rows_are_reported_not_collapsed(self):
+        # Two policy files list the same test identity; problems() used to build `daily` as a dict and
+        # silently drop the earlier row, so neither its file nor the ambiguity was ever diagnosed.
+        functions = (ignored_inventory.Test("p", "lib", "x.rs", 1, "slow_test", "daily", True),)
+        first = ignored_tests.Row("p", "slow_test", "lib", "daily", "topic-a.txt", "slow")
+        second = first._replace(file="topic-b.txt")
+        problems = ignored_inventory.problems([first, second], functions, {})
+        self.assertTrue(problems, "duplicate daily rows must never be silently dropped")
+        self.assertTrue(any("topic-a.txt" in line and "topic-b.txt" in line for line in problems),
+                        f"a finding must name both conflicting files: {problems}")
+        # The ordinary single-row case keeps its quiet behavior: the row is satisfied by the function.
+        self.assertEqual(ignored_inventory.problems([first], functions, {}), [])
 
 
 if __name__ == "__main__":
