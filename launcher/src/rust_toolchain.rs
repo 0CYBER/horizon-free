@@ -304,6 +304,42 @@ impl Toolchain {
         }
     }
 
+    /// Links `libLLVM.dylib` into the target's library folder on macOS so that tools like
+    /// `rust-objcopy` (which have an `@rpath` of `@loader_path/../lib`) can resolve it (#16038).
+    pub(crate) fn ensure_tool_links(&self) -> Result<(), String> {
+        if !self.host.target.ends_with("-apple-darwin") {
+            return Ok(());
+        }
+        let dylib = self.dir.join("lib").join("libLLVM.dylib");
+        if !dylib.is_file() {
+            return Ok(());
+        }
+        let target_lib = self
+            .dir
+            .join("lib")
+            .join("rustlib")
+            .join(self.host.target)
+            .join("lib");
+        let link = target_lib.join("libLLVM.dylib");
+        if link.is_file() {
+            return Ok(());
+        }
+        fs::create_dir_all(&target_lib).map_err(|e| format!("{}: {e}", target_lib.display()))?;
+        let _ = fs::remove_file(&link);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(Path::new("../../../libLLVM.dylib"), &link)
+                .map_err(|e| format!("{} → ../../../libLLVM.dylib: {e}", link.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::hard_link(&dylib, &link)
+                .or_else(|_| fs::copy(&dylib, &link).map(|_| ()))
+                .map_err(|e| format!("{} → {}: {e}", link.display(), dylib.display()))?;
+        }
+        Ok(())
+    }
+
     /// `program` (this toolchain's cargo, or a tool built with it) set up to use only this
     /// toolchain: its rustc, its C/link tools where it has them, the launcher's Cargo home, and none of
     /// the player's rustup, compiler-wrapper or compiler-flag settings ([`scrubbed`]). On Windows it
@@ -540,7 +576,11 @@ pub fn installed() -> Option<Toolchain> {
         dir: dir_for(host),
         host,
     };
-    (toolchain.dir.join(COMPLETE).is_file() && toolchain.compiler_available()).then_some(toolchain)
+    if !(toolchain.dir.join(COMPLETE).is_file() && toolchain.compiler_available()) {
+        return None;
+    }
+    let _ = toolchain.ensure_tool_links();
+    Some(toolchain)
 }
 
 // Check the byte after the pinned prefix before the shared writer can commit it.
@@ -669,6 +709,11 @@ pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
             ));
         }
     }
+    let toolchain = Toolchain {
+        dir: partial.clone(),
+        host,
+    };
+    toolchain.ensure_tool_links()?;
     fs::write(partial.join(COMPLETE), VERSION).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&dir);
     fs::rename(&partial, &dir).map_err(|e| e.to_string())?;
@@ -1761,5 +1806,65 @@ mod tests {
             WINDOWS_ARM64_MACHINE,
             "managed native-mod game must be ARM64"
         );
+    }
+
+    #[test]
+    fn ensure_tool_links_links_libllvm_for_apple_darwin() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-toolchain-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let host = HOSTS
+            .iter()
+            .find(|h| h.target == "aarch64-apple-darwin")
+            .unwrap();
+        let toolchain = Toolchain {
+            dir: dir.clone(),
+            host,
+        };
+        let lib = dir.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        let llvm = lib.join("libLLVM.dylib");
+        fs::write(&llvm, b"mock libLLVM").unwrap();
+
+        toolchain.ensure_tool_links().unwrap();
+
+        let target_lib = dir.join("lib/rustlib/aarch64-apple-darwin/lib");
+        let link = target_lib.join("libLLVM.dylib");
+        assert!(
+            link.is_file(),
+            "libLLVM.dylib must be present in target lib"
+        );
+        #[cfg(unix)]
+        {
+            let symlink_target = fs::read_link(&link).unwrap();
+            assert_eq!(symlink_target, Path::new("../../../libLLVM.dylib"));
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ensure_tool_links_noop_for_non_darwin() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-toolchain-non-darwin-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let host = HOSTS
+            .iter()
+            .find(|h| h.target == WINDOWS_X64_TARGET)
+            .unwrap();
+        let toolchain = Toolchain {
+            dir: dir.clone(),
+            host,
+        };
+        let lib = dir.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(lib.join("libLLVM.dylib"), b"mock libLLVM").unwrap();
+
+        toolchain.ensure_tool_links().unwrap();
+
+        let target_lib = dir.join("lib/rustlib").join(WINDOWS_X64_TARGET).join("lib");
+        assert!(!target_lib.join("libLLVM.dylib").exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
