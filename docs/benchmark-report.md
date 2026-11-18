@@ -81,6 +81,7 @@ confidence interval of the mean, Student's t, null when `n` is 1). The unit is t
 | --- | --- |
 | `startup.title_ms` | process start to the first frame of the title screen |
 | `startup.world_ms` | process start to in-world, every chunk around the spawn loaded and drawn |
+| `startup.first_chunk_ms` | Horizon `perf_bench.py` only: world open or server join to the first non-empty resident-chunk status; vanilla reports omit this diagnostic and it is not a comparison metric |
 | `chunks.<phase>.load_ms` | teleport to every chunk in view distance loaded and drawn |
 | `chunks.<phase>.generated_count`, `chunks.<phase>.meshed_count`, `chunks.<phase>.generated_per_s` | chunks generated and section meshes built while loading, and the rate |
 | `fps.<phase>.avg_fps`, `fps.<phase>.low_1pct_fps`, `fps.<phase>.low_01pct_fps` | per-phase figures across repeats |
