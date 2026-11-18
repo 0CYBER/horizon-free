@@ -5484,6 +5484,78 @@ fn biome_modifiers_none_keep_the_vanilla_biomes() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// A mod's own biome joins the biome bundle, its tags and the command registry, and a biome
+/// modifier reaches it through its tag; vanilla's biomes stay.
+#[test]
+fn mod_biomes_join_the_biome_bundle() {
+    for with_modifier in [false, true] {
+        let base = biome_base(&format!("mod-biomes-{with_modifier}"));
+        let scratch = base.parent().unwrap().to_owned();
+        fs::write(
+            base.join("command-registries.json"),
+            r#"{"blocks":{},"items":[],"by_registry":{"minecraft:worldgen/biome":{"ids":[]}}}"#,
+        )
+        .unwrap();
+        let foo = r#"{"temperature":1.5,"downfall":0.2,"features":[[],[],[],[],[],[],[]]}"#;
+        let mut files = vec![
+            ("horizon-mod.toml", manifest("zinc", "")),
+            (
+                "data/zinc/worldgen/feature/ore_zinc.json",
+                r#"{"type":"minecraft:ore","config":{}}"#.to_owned(),
+            ),
+            (
+                "data/zinc/worldgen/placed_feature/ore_zinc.json",
+                r#"{"feature":"zinc:ore_zinc","placement":[]}"#.to_owned(),
+            ),
+            ("data/zinc/worldgen/biome/foo.json", foo.to_owned()),
+            (
+                "data/zinc/tags/worldgen/biome/hot.json",
+                r#"{"values":["zinc:foo"]}"#.to_owned(),
+            ),
+        ];
+        if with_modifier {
+            files.push((
+                "data/zinc/neoforge/biome_modifier/ores.json",
+                r##"{"type":"neoforge:add_features","biomes":"#zinc:hot","features":"zinc:ore_zinc","step":"underground_ores"}"##.to_owned(),
+            ));
+        }
+        let files: Vec<(&str, &str)> = files.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let m = folder_mod(&scratch.join("zinc"), &files);
+        let out = scratch.join("out");
+        build_fixture(&base, Path::new(""), &[m], &out).unwrap();
+
+        let bundle: BTreeMap<String, String> =
+            serde_json::from_slice(&fs::read(out.join("worldgen/biomes.json")).unwrap()).unwrap();
+        let vanilla: BTreeMap<String, String> =
+            serde_json::from_slice(&fs::read(base.join("worldgen/biomes.json")).unwrap()).unwrap();
+        assert_eq!(bundle["minecraft:plains"], vanilla["minecraft:plains"]);
+        let foo: serde_json::Value = serde_json::from_str(&bundle["zinc:foo"]).unwrap();
+        let ores = match with_modifier {
+            true => serde_json::json!(["zinc:ore_zinc"]),
+            false => serde_json::json!([]),
+        };
+        assert_eq!(foo["features"][6], ores, "modifier: {with_modifier}");
+        let tags: BTreeMap<String, String> =
+            serde_json::from_slice(&fs::read(out.join("worldgen/biome_tags.json")).unwrap())
+                .unwrap();
+        let hot: serde_json::Value = serde_json::from_str(&tags["zinc:hot"]).unwrap();
+        assert_eq!(hot["values"], serde_json::json!(["zinc:foo"]));
+        let commands: serde_json::Value =
+            serde_json::from_slice(&fs::read(out.join("command-registries.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            commands["by_registry"]["minecraft:worldgen/biome"]["ids"],
+            serde_json::json!(["zinc:foo"])
+        );
+        let mods: Vec<String> = crate::biome::mod_biome_files(&out)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(mods, ["zinc:foo"]);
+        let _ = fs::remove_dir_all(&scratch);
+    }
+}
+
 /// An unknown biome, biome tag, feature, entity type, step or modifier type is
 /// skipped with a warning or fails the build with the mod and file named.
 #[test]
