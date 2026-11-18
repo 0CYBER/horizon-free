@@ -1,6 +1,5 @@
 use super::*;
 use std::sync::atomic::Ordering;
-thread_local! { pub(super) static TYPE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[test]
 #[ignore = "daily"]

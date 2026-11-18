@@ -26,7 +26,7 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 [features]
 # Source retention only, as in horizon-client: the helper-thread profiling hooks.
 upstream-parallel-mobs = []
-# The conversion counters horizon-client's tests read (`api_values::damage`, `api_values::loot_values`).
+# Counters horizon-client's tests read (`api_values::damage`, `api_values::loot_values`, `boats::TYPE_BUILDS`); never in a game build.
 test-support = []
 
 [lints]

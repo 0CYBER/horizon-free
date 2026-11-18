@@ -2744,15 +2744,6 @@ impl Entity for ThrownTrident {
     }
 }
 
-impl EntityRules for Boat {
-    fn is_no_gravity(&self) -> bool {
-        self.no_gravity
-    }
-    /// `AbstractBoat.getDefaultGravity`.
-    fn get_default_gravity(&self) -> f64 {
-        0.04
-    }
-}
 impl EntityRules for FallingBlock {
     fn is_no_gravity(&self) -> bool {
         self.no_gravity
