@@ -157,6 +157,114 @@ pub struct Upgrade {
 /// `data/<id>/worldgen/<kind>/horizon_added/<name>.json`.
 pub const ADDED: &str = "horizon_added";
 
+/// Worldgen folders 26.3 renamed (before and after); the game reads a mod's
+/// carvers and configured features only under the new names.
+const RENAMED_IN_26_3: [(&str, &str); 2] = [
+    ("configured_carver", "carver"),
+    ("configured_feature", "feature"),
+];
+
+/// `data/<ns>/worldgen/<folder>/<file>` under 26.3's folder name, for a
+/// folder it renamed ([`RENAMED_IN_26_3`]).
+pub fn renamed_in_26_3(name: &str) -> Option<String> {
+    let (ns, rest) = name.strip_prefix("data/")?.split_once('/')?;
+    let rest = rest.strip_prefix("worldgen/")?;
+    RENAMED_IN_26_3.iter().find_map(|(before, after)| {
+        let file = rest.strip_prefix(before)?.strip_prefix('/')?;
+        Some(format!("data/{ns}/worldgen/{after}/{file}"))
+    })
+}
+
+/// Vanilla's carver types, 1.21.1's and 26.3's (`nether_cave` became `cave`).
+const CARVER_TYPES: [&str; 3] = ["cave", "nether_cave", "canyon"];
+
+/// The carver id of `data/<ns>/worldgen/{configured_carver,carver}/<path>.json`.
+fn carver_id(name: &str) -> Option<String> {
+    let (ns, rest) = name.strip_prefix("data/")?.split_once('/')?;
+    let rest = rest.strip_prefix("worldgen/")?;
+    let path = ["configured_carver/", "carver/"]
+        .iter()
+        .find_map(|folder| rest.strip_prefix(folder))?
+        .strip_suffix(".json")?;
+    Some(format!("{ns}:{path}"))
+}
+
+/// The mod's carvers of a type written in Java (any but vanilla's), with that
+/// type, by carver id. The game generates vanilla's carvers only and refuses
+/// a world whose carvers hold another type, so these stay outside
+/// ([`java_carver`]) and the mod's biomes stop naming them ([`drop_carvers`]).
+pub fn java_carvers<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut budget = crate::entry::Budget::archive();
+    for i in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        let Some(id) = entry.name().ok().as_deref().and_then(carver_id) else {
+            continue;
+        };
+        // Read as the carry reads the file itself: up to its size limit,
+        // with comments.
+        let declared = entry.size();
+        let Ok(bytes) = budget.read(&mut entry, declared, crate::entry::MAX_FILE) else {
+            continue;
+        };
+        if let Some(t) = crate::carry::lenient_json(&bytes)
+            .as_ref()
+            .and_then(java_type)
+        {
+            out.insert(id, t.to_owned());
+        }
+    }
+    out
+}
+
+/// A carver's type when it is not vanilla's.
+fn java_type(carver: &Value) -> Option<&str> {
+    let t = carver["type"].as_str()?;
+    (!CARVER_TYPES.contains(&t.strip_prefix("minecraft:").unwrap_or(t))).then_some(t)
+}
+
+/// Why the carry leaves a carver file outside: its type is Java code
+/// ([`java_carvers`]).
+pub fn java_carver(name: &str, carvers: &BTreeMap<String, String>) -> Option<String> {
+    let t = carvers.get(&carver_id(name)?)?;
+    Some(format!(
+        "carver type {t} is the mod's Java code; the game generates vanilla's carvers only"
+    ))
+}
+
+/// A biome's `carvers` without the ones left outside ([`java_carvers`]) and
+/// the inline ones of a Java type; whether any was there.
+pub fn drop_carvers(biome: &mut Value, carvers: &BTreeMap<String, String>) -> bool {
+    let java = |c: &Value| match c {
+        Value::String(id) => {
+            let id = if id.contains(':') {
+                id.to_owned()
+            } else {
+                format!("minecraft:{id}")
+            };
+            carvers.contains_key(&id)
+        }
+        Value::Object(_) => java_type(c).is_some(),
+        _ => false,
+    };
+    match biome.get_mut("carvers") {
+        Some(Value::Array(list)) => {
+            let before = list.len();
+            list.retain(|c| !java(c));
+            list.len() != before
+        }
+        Some(single) if java(single) => {
+            *single = Value::Array(Vec::new());
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Rewrites one `data/<ns>/worldgen/<kind>/...` file in place; whether it
 /// changed.
 /// `set_tags` are the mod's structure set tags, expanded
@@ -177,21 +285,35 @@ pub fn upgrade(
     upgrade_types(kind, v, report, set_tags) || states || features || dropped || renamed
 }
 
-/// A 1.21.1 configured or placed feature in 26.3's form, as world packs get
-/// it ([`crate::upgrade`]): `config` unwrapped (26.3 skips a feature that
-/// keeps it), patches and placements rewritten. Whether it changed.
+/// A 1.21.1 configured or placed feature, configured carver or biome in
+/// 26.3's form, as world packs get it ([`crate::upgrade`]): `config`
+/// unwrapped (26.3 skips a feature or carver that keeps it), patches and
+/// placements rewritten, a biome's carvers a list and its spawns and effects
+/// attributes (26.3 refuses the old biome, and with it every biome of the
+/// load). Whether it changed.
 fn features(kind: &str, v: &mut Value, report: &mut Upgrade) -> bool {
     let mut r = crate::upgrade::Report::default();
     let new = match kind {
-        // Every 1.21.1 configured feature has `config`; one without is 26.3's.
+        // Every 1.21.1 configured feature and carver has `config`; one without is 26.3's.
         "configured_feature" if v.get("config").is_some() => {
             crate::upgrade::features::feature(v, &mut r)
         }
+        "configured_carver" if v.get("config").is_some() => {
+            crate::upgrade::registries::carver(v, &mut r)
+        }
         "placed_feature" => crate::upgrade::features::placed(v, &mut r),
+        // 26.3's biome has neither `spawners` nor carvers by step.
+        "biome" if v.get("spawners").is_some() || v["carvers"].is_object() => {
+            crate::upgrade::registries::biome(v, &mut r)
+        }
         _ => return false,
     };
     for (t, n) in r.unknown {
         *report.unsupported.entry(t).or_default() += n;
+    }
+    // What the upgrade had to leave out (a carver's own `replaceable` tag).
+    for (t, n) in r.lossy {
+        *report.rules_lost.entry(t).or_default() += n;
     }
     let changed = new != *v;
     *v = new;

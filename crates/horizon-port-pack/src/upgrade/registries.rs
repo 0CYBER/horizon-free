@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 /// A configured carver in 26.3's form. 26.2's cave carvers hard-coded their
 /// count, thickness and the room's vertical scale per type; 26.3 reads them.
-pub(super) fn carver(v: &Value, report: &mut Report) -> Value {
+pub(crate) fn carver(v: &Value, report: &mut Report) -> Value {
     let Some(t) = kind(v) else {
         return v.clone();
     };
@@ -95,7 +95,7 @@ fn spawner(s: &Value) -> Value {
 /// `minecraft:gameplay/natural_mob_spawns` attribute (every category kept,
 /// empty ones too, so nothing comes from the dimension's defaults), and the
 /// creature spawn probability its own attribute.
-pub(super) fn biome(v: &Value, report: &mut Report) -> Value {
+pub(crate) fn biome(v: &Value, report: &mut Report) -> Value {
     let mut v = v.clone();
     states(&mut v);
     let Some(o) = v.as_object_mut() else {

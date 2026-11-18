@@ -16,7 +16,7 @@
 mod density;
 pub(crate) mod features;
 mod noise;
-mod registries;
+pub(crate) mod registries;
 mod settings;
 
 use density::Context;
