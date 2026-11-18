@@ -237,6 +237,10 @@ pub struct Installed {
     pub origin: Option<crate::github_mods::Origin>,
     /// The validated package icon, or the package error (the file remains removable).
     pub icon: Result<Option<Arc<horizon_platform::mod_package::icon::Icon>>, String>,
+    /// Whether its row may switch `mod.<id>`. Not when the manifest can't be read (the id is
+    /// only the file name), nor for a `horizon-mods/` copy whose id another mod has: either
+    /// would switch that other mod. The file stays removable.
+    pub switch: bool,
 }
 
 impl Installed {
@@ -252,21 +256,38 @@ impl Installed {
             crate::i18n::tr("Old format (.hnmod): ask its author to republish it as .hmod")
         })
     }
+
+    /// Whether the file is in `horizon-native-mods/`; one in `horizon-mods/` is a wasm or
+    /// content mod, which needs no build and no native permission.
+    pub fn native(&self) -> bool {
+        self.file
+            .strip_prefix(native_mods::INSTALLED)
+            .is_some_and(|rest| rest.starts_with('/'))
+    }
 }
 
 /// Whether `files` hold a native mod the build card is for; a retired file is not one.
 pub fn asks_for_build<'a>(files: impl IntoIterator<Item = &'a Installed>) -> bool {
-    files.into_iter().any(|file| !file.retired())
+    files
+        .into_iter()
+        .any(|file| file.native() && !file.retired())
 }
 
 /// Discover the actual files, not just GitHub sidecars. Registry files already have a row.
+/// Besides native files, an `.hmod` copied by hand into `horizon-mods/` is listed too (#18301).
 pub fn untracked(home: &Path) -> Vec<Installed> {
     let tracked = crate::browser::installed::Installed::load(home);
-    listed(home)
+    let native = listed(home)
         .into_iter()
-        .filter_map(|path| {
-            let file = format!("{}/{}", native_mods::INSTALLED, path.file_name()?.to_str()?);
-            if !path.is_file() || tracked.entries.iter().any(|e| e.file == file) {
+        .map(|path| (native_mods::INSTALLED, path));
+    let wasm = wasm_hmods(home)
+        .into_iter()
+        .map(|path| (horizon_platform::mod_package::mod_list::DIR, path));
+    let mut rows: Vec<Installed> = native
+        .chain(wasm)
+        .filter_map(|(folder, path)| {
+            let file = format!("{folder}/{}", path.file_name()?.to_str()?);
+            if !path.is_file() || tracked.entries.iter().any(|e| same_file(&e.file, &file)) {
                 return None;
             }
             let package = horizon_platform::mod_package::manifest::Package::read(&path);
@@ -275,8 +296,10 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 .map(|p| (p.manifest.id.clone(), p.manifest.version.clone()))
                 .unwrap_or_else(|_| (stem(&path), String::new()));
             // A GitHub install's Remove deletes `<id>.hmod`: an old `.hnmod` is removed as a file.
+            // GitHub installs only go into the native folder.
             let hmod = path.extension().is_some_and(|e| e == "hmod");
-            let origin = (hmod && path.file_stem()?.to_str()? == id)
+            let github = folder == native_mods::INSTALLED;
+            let origin = (github && hmod && path.file_stem()?.to_str()? == id)
                 .then(|| crate::github_mods::origin(home, &id))
                 .flatten();
             let internals = package
@@ -289,10 +312,38 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 version,
                 internals,
                 origin,
+                switch: package.is_ok(),
                 icon: package.map(|p| p.icon.map(Arc::new)),
             })
         })
-        .collect()
+        .collect();
+    let tracked_ids: Vec<&str> = tracked
+        .entries
+        .iter()
+        .filter_map(crate::browser::horizon::mod_id)
+        .collect();
+    let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+    for (i, row) in rows.iter_mut().enumerate() {
+        let shared = tracked_ids.contains(&row.id.as_str())
+            || ids
+                .iter()
+                .enumerate()
+                .any(|(j, id)| j != i && *id == row.id);
+        if !row.native() && shared {
+            row.switch = false;
+        }
+    }
+    rows
+}
+
+/// Whether installed.json's `tracked` names `file`: Windows and macOS folders ignore case, so
+/// a tracked `ruby.hmod` renamed `Ruby.hmod` is still that file, not a hand-copied one.
+fn same_file(tracked: &str, file: &str) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        tracked.eq_ignore_ascii_case(file)
+    } else {
+        tracked == file
+    }
 }
 
 /// The mods installed version `version` was built with, or None when it isn't a native build
@@ -676,6 +727,37 @@ mod tests {
         );
         assert!(files[0].icon.is_err(), "a refusal is not an absent icon");
         fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_copy_has_no_switch_and_a_renamed_tracked_file_no_second_row() {
+        use crate::browser::installed;
+        let home = tempfile::tempdir().unwrap();
+        let folder = home
+            .path()
+            .join(horizon_platform::mod_package::mod_list::DIR);
+        fs::create_dir_all(&folder).unwrap();
+        // Its id would be only its file name, which could be another mod's.
+        fs::write(folder.join("ruby.hmod"), b"corrupt").unwrap();
+        fs::write(folder.join("Gem.hmod"), b"corrupt").unwrap();
+        let entry: installed::Entry = serde_json::from_value(serde_json::json!({"source":"horizon","project":"gem","slug":"gem","title":"Gem","kind":"mod","version":"1","number":"1","file":"horizon-mods/gem.hmod","checksum":"","page":""})).unwrap();
+        installed::Installed {
+            entries: vec![entry],
+        }
+        .save(home.path())
+        .unwrap();
+        let files = untracked(home.path());
+        let seen: Vec<_> = files.iter().map(|f| (f.file.as_str(), f.switch)).collect();
+        // Windows and macOS: `Gem.hmod` is the tracked `gem.hmod` renamed, not a second mod.
+        let expected: &[(&str, bool)] = if cfg!(any(windows, target_os = "macos")) {
+            &[("horizon-mods/ruby.hmod", false)]
+        } else {
+            &[
+                ("horizon-mods/Gem.hmod", false),
+                ("horizon-mods/ruby.hmod", false),
+            ]
+        };
+        assert_eq!(seen, expected);
     }
 
     #[test]

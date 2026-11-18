@@ -472,13 +472,16 @@ impl Launcher {
         let reason = tr("Choose what to do about your worlds first");
         // A retired file can't load: Remove is all its row offers (Installed::retired).
         let retired = row.retired();
+        // A wasm or content `.hmod` copied into `horizon-mods/` by hand needs no native consent.
+        let native = row.native();
         let flip = switch(format!("native-switch-{id}"), on, &t);
-        right = right.when(!retired, |right| {
+        // A retired file can't be read, so it has no switch either (`Installed::switch`).
+        right = right.when(row.switch, |right| {
             right.child(if named {
                 self.with_reason(disabled(flip), reason)
             } else {
                 flip.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if !on && this.settings.native_mods_allowed_at.is_none() {
+                    if native && !on && this.settings.native_mods_allowed_at.is_none() {
                         this.pending_consent = Some(PendingConsent::Local(id.clone()));
                         cx.notify();
                         return;
@@ -500,8 +503,10 @@ impl Launcher {
                 }))
             })
         });
-        right = right.child(blocks::badge(tr("NATIVE"), t.muted, &t));
-        if !retired && self.settings.native_mods_allowed_at.is_none() {
+        if native {
+            right = right.child(blocks::badge(tr("NATIVE"), t.muted, &t));
+        }
+        if native && !retired && self.settings.native_mods_allowed_at.is_none() {
             let id = row.id.clone();
             right = right
                 .child(blocks::badge(tr("Needs permission"), t.muted, &t))
