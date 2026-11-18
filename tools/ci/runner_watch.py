@@ -112,10 +112,14 @@ def gh(*arguments):
 def all_jobs(repo, since):
     jobs = []
     for status in ("queued", "in_progress"):
-        runs = json.loads(gh("api", f"repos/{repo}/actions/runs?status={status}&per_page=100&created=%3E%3D{since}",
-                             "--jq", "[.workflow_runs[].id]") or "[]")
-        for run in runs:
-            jobs += json.loads(gh("api", f"repos/{repo}/actions/runs/{run}/jobs?per_page=100", "--jq", ".jobs") or "[]")
+        pages = json.loads(gh("api", "--paginate", "--slurp",
+                              f"repos/{repo}/actions/runs?status={status}&per_page=100&created=%3E%3D{since}"))
+        for page in pages:
+            for run in page["workflow_runs"]:
+                job_pages = json.loads(gh("api", "--paginate", "--slurp",
+                                          f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100"))
+                for job_page in job_pages:
+                    jobs += job_page["jobs"]
     return jobs
 
 

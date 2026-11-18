@@ -1,7 +1,9 @@
 import datetime as dt
+import json
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "ci"))
 import runner_watch as rw  # noqa: E402
@@ -48,6 +50,28 @@ class Plan(unittest.TestCase):
     def test_an_unknown_label_set_is_still_reported_by_its_labels(self):
         waiting = rw.waiting_jobs([job(["self-hosted", "gpu-box"], 3)], NOW, 2)
         self.assertIn("| `gpu-box` | 1 |", rw.plan(waiting, None, NOW)[1])
+
+
+class AllJobs(unittest.TestCase):
+    def test_reads_every_page_of_runs_and_jobs(self):
+        calls = []
+        runs = [{"workflow_runs": [{"id": 1}, {"id": 2}]}, {"workflow_runs": [{"id": 3}]}]
+        # Run 1 has two different job pages; dropping the second must fail this test.
+        jobs = {1: [[{"id": 11}], [{"id": 12}]], 2: [[{"id": 21}]], 3: [[{"id": 31}]]}
+
+        def fake_gh(*arguments):
+            calls.append(arguments)
+            url = arguments[3]
+            if "status=queued" in url:
+                return json.dumps(runs)
+            if "status=in_progress" in url:
+                return json.dumps([{"workflow_runs": []}])
+            run = int(url.split("/runs/")[1].split("/")[0])
+            return json.dumps([{"jobs": page} for page in jobs[run]])
+
+        with mock.patch.object(rw, "gh", fake_gh):
+            self.assertEqual([job["id"] for job in rw.all_jobs("o/r", "2026-11-15")], [11, 12, 21, 31])
+        self.assertTrue(all("--paginate" in call for call in calls))
 
 
 if __name__ == "__main__":
