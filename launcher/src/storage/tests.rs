@@ -27,6 +27,58 @@ impl Drop for Home {
     }
 }
 
+/// A directory link as the game makes one: a symlink on Unix, a junction on Windows.
+#[cfg(unix)]
+pub(super) fn link_dir(from: &Path, to: &Path) {
+    std::os::unix::fs::symlink(from, to).unwrap();
+}
+#[cfg(windows)]
+pub(super) fn link_dir(from: &Path, to: &Path) {
+    // mklink takes plain paths: no forward slash and no verbatim prefix.
+    let plain = |path: &Path| {
+        let path = path.to_string_lossy().replace('/', "\\");
+        path.trim_start_matches(r"\\?\").to_owned()
+    };
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(plain(to))
+        .arg(plain(from))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// #17911: the game links what a resource pack leaves untouched into the pack's mirror in its
+/// cache. Such a link counts nothing and is never followed; where none is expected, one still
+/// refuses the measurement.
+#[test]
+fn a_game_made_link_counts_nothing_and_is_not_followed() {
+    let home = Home::new();
+    let outside = Home::new();
+    let vanilla = outside.0.join("version/assets/minecraft/textures");
+    fs::create_dir_all(&vanilla).unwrap();
+    fs::write(vanilla.join("atlas.png"), vec![7; 4 << 20]).unwrap();
+    home.seed(".horizon-cache/resourcepacks/0123456789abcdef/assets/minecraft/pack.json");
+    let cache = home.0.join(".horizon-cache");
+    let alone = allocated_bytes(&cache).unwrap();
+    link_dir(
+        &vanilla,
+        &cache.join("resourcepacks/0123456789abcdef/assets/minecraft/textures"),
+    );
+
+    assert!(matches!(allocated_bytes(&cache), Err(Error::Unsafe(_))));
+    let measured = walk(&cache, &mut HashSet::new(), Links::GameMade).unwrap();
+    assert!(
+        measured >= alone && measured < (4 << 20),
+        "{measured} bytes with the link, {alone} without"
+    );
+    assert_eq!(fs::read(vanilla.join("atlas.png")).unwrap().len(), 4 << 20);
+}
+
 #[test]
 fn build_tools_remain_clearable_without_claiming_game_absence() {
     let home = Home::new();

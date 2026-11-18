@@ -97,6 +97,7 @@ struct Entry {
     directory: Option<Arc<Dir>>,
     relative: PathBuf,
     path: PathBuf,
+    links: Links,
 }
 
 impl Entry {
@@ -119,6 +120,7 @@ impl Entry {
             directory: root.directory.clone(),
             relative: relative.to_owned(),
             path,
+            links: Links::Refused,
         })
     }
 
@@ -248,6 +250,15 @@ impl Entry {
         }
     }
 
+    /// The space the entry takes, each file once across `seen`.
+    fn bytes(&self, seen: &mut HashSet<(u64, u64)>) -> Result<u64, Error> {
+        walk(&self.path, seen, self.links)
+    }
+
+    fn bytes_alone(&self) -> Result<u64, Error> {
+        self.bytes(&mut HashSet::new())
+    }
+
     fn clear(&self) -> Result<(), Error> {
         if !self.path.try_exists()? {
             return Ok(());
@@ -257,7 +268,7 @@ impl Entry {
         };
         let access = self.access()?;
         if matches!(access, Access::LeasedGame) {
-            return crate::cache_cleanup::delete_game_unit(&self.path);
+            return crate::cache_cleanup::delete_game_unit_with(&self.path, self.links);
         }
         access.check()?;
         let mut parent = root.try_clone()?;
@@ -422,7 +433,13 @@ impl Storage {
             let root = Root::configured(&instance.home)?;
             old_logs(&mut entries, &root)?;
             unused_jars(&mut entries, &root)?;
-            for relative in [".horizon-cache", "wasm-cache", "cache"] {
+            // The game links what a resource pack leaves untouched into the pack's mirror
+            // there (#17911).
+            let mut cache =
+                Entry::fixed(&root, Path::new(".horizon-cache"), Category::OtherCaches)?;
+            cache.links = Links::GameMade;
+            entries.push(cache);
+            for relative in ["wasm-cache", "cache"] {
                 add(&mut entries, &root, relative, Category::OtherCaches)?;
             }
         }
@@ -549,7 +566,7 @@ impl Storage {
                     let Some(unit_revision) = entry.revision() else {
                         return Ok(Unit {
                             eligible: false,
-                            bytes: walk(&entry.path, &mut seen)?,
+                            bytes: entry.bytes(&mut seen)?,
                             last_used,
                             tier: Tier::Protected,
                         });
@@ -580,7 +597,7 @@ impl Storage {
                 };
                 Ok(Unit {
                     eligible: entry.access()?.check().is_ok(),
-                    bytes: walk(&entry.path, &mut seen)?,
+                    bytes: entry.bytes(&mut seen)?,
                     last_used,
                     tier,
                 })
@@ -615,13 +632,13 @@ impl Storage {
                     Err(
                         error @ (Error::Busy | Error::UnprovenExclusion | Error::IncompleteUnit),
                     ) => row.kept.push(Kept {
-                        bytes: allocated_bytes(&entry.path)?,
+                        bytes: entry.bytes_alone()?,
                         reason: native_mods::cache_error(error),
                     }),
                     Err(error) => return Err(error),
                 }
             }
-            let remaining = allocated_bytes(&entry.path)?;
+            let remaining = entry.bytes_alone()?;
             if !selected.contains(&index) && remaining > 0 {
                 row.kept.push(Kept {
                     bytes: remaining,
@@ -680,7 +697,7 @@ impl Storage {
         if clear.is_none() && !all {
             for entry in self.entries()? {
                 if let Err(error) = entry.access().and_then(|access| access.check()) {
-                    let bytes = allocated_bytes(&entry.path)?;
+                    let bytes = entry.bytes_alone()?;
                     if bytes > 0 {
                         report
                             .rows
@@ -745,7 +762,7 @@ impl Storage {
                             .find(|row| row.category == entry.category)
                             .unwrap();
                         row.kept.push(Kept {
-                            bytes: allocated_bytes(&entry.path)?,
+                            bytes: entry.bytes_alone()?,
                             reason: native_mods::cache_error(error),
                         });
                         // A busy build may be using subsequent build-tool units too. Stop
@@ -780,7 +797,7 @@ fn allocated(entries: &[Entry], category: Category) -> Result<u64, Error> {
         .iter()
         .filter(|entry| entry.category == category)
         .try_fold(0u64, |bytes, entry| {
-            Ok(bytes.saturating_add(walk(&entry.path, &mut seen)?))
+            Ok(bytes.saturating_add(entry.bytes(&mut seen)?))
         })
 }
 
@@ -953,6 +970,42 @@ mod eviction_tests {
             assert_eq!(entry.leftover(), leftover, "{path}");
         }
     }
+    /// #17911: one link the game made in a game folder's cache refused the whole report.
+    #[test]
+    fn a_game_cache_with_a_link_is_reported() {
+        let home = crate::storage::tests::Home::new();
+        let outside = crate::storage::tests::Home::new();
+        let atlas = outside.seed("version/textures/atlas.png");
+        home.seed("instance/.horizon-cache/resourcepacks/0123456789abcdef/pack.json");
+        crate::storage::tests::link_dir(
+            atlas.parent().unwrap(),
+            &home
+                .0
+                .join("instance/.horizon-cache/resourcepacks/0123456789abcdef/textures"),
+        );
+        let storage = Storage::at(&home.0).unwrap();
+        let root = Root::open(&home.0).unwrap();
+        let cache = |links: Links| {
+            let relative = Path::new("instance/.horizon-cache");
+            let mut entry = Entry::fixed(&root, relative, Category::OtherCaches).unwrap();
+            entry.links = links;
+            vec![entry]
+        };
+
+        assert!(matches!(
+            storage.apply(cache(Links::Refused), None, false),
+            Err(Error::Unsafe(_))
+        ));
+        let report = storage.apply(cache(Links::GameMade), None, false).unwrap();
+        let row = report
+            .rows
+            .iter()
+            .find(|row| row.category == Category::OtherCaches)
+            .unwrap();
+        assert!(row.bytes > 0);
+        assert!(atlas.exists());
+    }
+
     #[test]
     fn refused_units_are_residual_with_bytes_and_reason() {
         let home = crate::storage::tests::Home::new();
