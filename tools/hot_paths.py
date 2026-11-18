@@ -199,10 +199,13 @@ def measure(args):
 
         def take(rows, mods, sample):
             for name, row in rows.items():
-                operations[name] = row['operations']
                 seen = checksums.setdefault(name, row['checksum'])
                 if seen != row['checksum']:
                     notes.append(f'{name}: sample {mods}/{sample} did different work (checksum differs)')
+                    continue
+                # Operations and checksum are one sample's identity. Overwriting operations on every
+                # sample while keeping the first checksum published a pair no run ever produced.
+                operations[name] = row['operations']
 
         for mods in ('none', 'native'):
             for sample in range(args.wall_samples):
@@ -260,7 +263,7 @@ def clean(result):
         raise ValueError('run: not a run number')
     workloads = {}
     for name, row in result.get('workloads', {}).items():
-        if not NAME.match(name) or not isinstance(row.get('operations'), int) \
+        if not NAME.match(name) or type(row.get('operations')) is not int or row['operations'] <= 0 \
                 or not re.fullmatch(r'[0-9a-f]{16}', str(row.get('checksum'))):
             raise ValueError(f'workload {name}: malformed')
         workloads[name] = {'operations': row['operations'], 'checksum': row['checksum']}
@@ -268,7 +271,7 @@ def clean(result):
     for name, values in result.get('metrics', {}).items():
         workload, _, metric = name.rpartition('.')
         if workload not in workloads or metric not in METRICS or not isinstance(values, list) or not values \
-                or len(values) > 32 or not all(isinstance(v, (int, float)) and 0 <= v < 1e15 for v in values):
+                or len(values) > 32 or not all(type(v) in (int, float) and 0 <= v < 1e15 for v in values):
             raise ValueError(f'metric {name}: malformed')
         metrics[name] = values
     notes = result.get('notes', [])

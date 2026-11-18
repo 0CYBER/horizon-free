@@ -1,8 +1,12 @@
 """tools/hot_paths.py: what a published record may hold, which runs a trend compares, and what a dump counts."""
 import copy
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 # Loaded by path: tools/ on sys.path would shadow tests/ modules that share a name with a tools/ harness.
 _spec = importlib.util.spec_from_file_location('hot_paths', Path(__file__).resolve().parents[1] / 'tools' / 'hot_paths.py')
@@ -37,6 +41,46 @@ class Record(unittest.TestCase):
             result = {**run('a', '2026-11-12T10:00:00Z', 5000.0), **change}
             with self.assertRaises(ValueError, msg=change):
                 hot_paths.clean(result)
+
+
+class InputIntegrity(unittest.TestCase):
+    def test_clean_refuses_zero_negative_operations_and_boolean_samples(self):
+        for change in ({'workloads': {'server.tick.mobs_128': {'operations': 0, 'checksum': '0' * 16}}},
+                       {'workloads': {'server.tick.mobs_128': {'operations': -5, 'checksum': '0' * 16}}},
+                       {'workloads': {'server.tick.mobs_128': {'operations': True, 'checksum': '0' * 16}}},
+                       {'metrics': {'server.tick.mobs_128.wall_ns': [True, False]}}):
+            result = {**run('a', '2026-11-12T10:00:00Z', 5000.0), **change}
+            with self.assertRaises(ValueError, msg=change):
+                hot_paths.clean(result)
+
+    def test_measure_keeps_an_operations_and_checksum_pair_a_sample_produced(self):
+        samples = [
+            {'name': 'server.tick.mobs_128', 'operations': 1000, 'checksum': 'a' * 16, 'wall_ns': 1_000_000.0},
+            {'name': 'server.tick.mobs_128', 'operations': 2000, 'checksum': 'b' * 16, 'wall_ns': 2_000_000.0},
+            {'name': 'server.tick.mobs_128', 'operations': 2000, 'checksum': 'b' * 16, 'wall_ns': 2_000_000.0},
+        ] * 2
+        sequence = iter(samples)
+        args = SimpleNamespace(game='client', resources='resources', valgrind='no-valgrind-here', work=None,
+                               wall_samples=3, count_samples=0, commit='c' * 40, run='1', host='host', only=None,
+                               out=None)
+        with tempfile.TemporaryDirectory(prefix='hot-provenance-') as folder:
+            args.work = folder
+            args.out = str(Path(folder) / 'result.json')
+            with mock.patch.object(hot_paths, 'install', side_effect=lambda game, work: game), \
+                    mock.patch.object(hot_paths, 'run_game',
+                                      side_effect=lambda game, resources, work, mods, only: _next_row(sequence)), \
+                    mock.patch.object(hot_paths, 'first_line', return_value=None), \
+                    mock.patch.object(hot_paths, 'cpu_model', return_value='CPU'):
+                hot_paths.measure(args)
+            result = json.loads(Path(args.out).read_text())
+        name = 'server.tick.mobs_128'
+        pair = (result['workloads'][name]['operations'], result['workloads'][name]['checksum'])
+        self.assertIn(pair, {(1000, 'a' * 16), (2000, 'b' * 16)})
+
+
+def _next_row(sequence):
+    row = next(sequence)
+    return {row['name']: row}
 
 
 class Trend(unittest.TestCase):
