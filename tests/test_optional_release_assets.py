@@ -13,10 +13,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
     "horizon-linux-x86_64.tar.gz", "horizon-windows-x64.zip", "horizon-macos-arm64.zip",
-    "horizon-macos-x64.zip", "horizon-server-linux-x86_64.tar.gz", "horizon-source.tar.gz",
-    "sdk.json",
+    "horizon-server-linux-x86_64.tar.gz", "horizon-source.tar.gz", "sdk.json",
 }
-OPTIONAL = ("horizon-windows-arm64.zip", "horizon-linux-musl-x86_64.tar.gz")
+OPTIONAL = ("horizon-windows-arm64.zip", "horizon-linux-musl-x86_64.tar.gz", "horizon-macos-x64.zip")
 # The bash on PATH, as in test_pr_ready: Windows' CreateProcess looks in System32 before PATH, so a bare "bash"
 # there is WSL's, which gets none of the steps' env and none of the host's paths. WSL from the Microsoft Store puts
 # its bash on PATH as an app alias in WindowsApps instead (#16860).
@@ -38,7 +37,7 @@ def run_step(containing):
                      "release shell checks require a bash that is not WSL's, OpenSSL and sha256sum")
 class OptionalReleaseAssetsTests(unittest.TestCase):
     def test_sign_and_publish_with_each_optional_archive_combination(self):
-        for mask in range(4):
+        for mask in range(1 << len(OPTIONAL)):
             with self.subTest(mask=mask), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 dist = root / "dist"
