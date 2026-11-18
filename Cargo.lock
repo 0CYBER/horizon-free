@@ -2172,6 +2172,8 @@ dependencies = [
  "horizon-client-lib",
  "horizon-core",
  "horizon-mod-runtime",
+ "horizon-mod-vocab",
+ "horizon-protocol",
  "horizon-threads",
  "horizon-world",
  "log",

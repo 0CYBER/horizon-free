@@ -29,7 +29,7 @@ AbstractBoat.modifyPassengerFluidInteractionBox	inline	crates/horizon-client/src
 AbstractChestBoat.remove	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::drop_vehicle_contents	Containers.dropContents on every destroying removal, whatever entity_drops says: the damage path's kill or a creative player's discard, and /kill after the open menu writes its slots back; a loot table still held drops the roll made on load
 AbstractChestBoat.openCustomInventoryScreen	inline	crates/horizon-client/src/game/entities/boats/mod.rs::Game::interact_boat	sneaking opens the chest; gap: minor: no piglin anger
 AbstractChestBoat.createMenu	inline	crates/horizon-client/src/game/entities/boats/mod.rs::Game::interact_boat	the chest container is set up there; gap: minor: no spectator or loot table check
-AbstractMinecart.setInitialPos	port	crates/horizon-client/src/game/entities/minecarts.rs::Minecart::new	spawn sets the position and its previous copy
+AbstractMinecart.setInitialPos	port	crates/horizon-gameplay/src/minecarts.rs::Minecart::new	spawn sets the position and its previous copy
 AbstractMinecart.createMinecart	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::place_minecart	placing on a rail: the rail offset for slopes and the item's kind; gap: minor: no rail snap, which only the experimental behaviour does
 AbstractMinecart.defineSynchedData	skip:java		synched display block and offset; Horizon keeps the kind and its display offset on the Minecart struct
 AbstractMinecart.getPassengerAttachmentPoint	missing		minor: a villager or wandering trader in a cart sits at a lowered seat in vanilla; Horizon seats only the player in a cart
@@ -42,8 +42,8 @@ AbstractMinecart.move	port	crates/horizon-client/src/game/entities/minecarts.rs:
 AbstractMinecart.applyEffectsFromBlocks	inline	crates/horizon-client/src/game/entities/minecarts.rs::Game::cart_lava_tick	lava is applied there; gap: minor: other block effects on a cart (cobweb, berry bush) are not applied; under minecart_improvements, NewMinecartBehavior.moveAlongTrack applies block effects twice per step, and Horizon keeps the old order
 AbstractMinecart.getRedstoneDirection	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::redstone_direction	the push a powered rail gives a resting cart: away from the powered conductor. move_along_track_new calls it when the minecart_improvements feature is on; the old track behaviour is the other path
 AbstractMinecart.applyNaturalSlowdown	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::natural_slowdown	slowdown per ride state, the furnace push and water
-AbstractMinecart.readAdditionalSaveData	port	crates/horizon-client/src/game/entities/minecarts.rs::Minecart::from_nbt	flipped and HasTicked read back; gap: minor: a custom display block and offset are not kept
-AbstractMinecart.addAdditionalSaveData	port	crates/horizon-client/src/game/entities/minecarts.rs::Minecart::to_nbt	flipped and HasTicked written; gap: minor: a custom display block and offset are not saved
+AbstractMinecart.readAdditionalSaveData	port	crates/horizon-gameplay/src/minecarts.rs::Minecart::from_nbt	flipped and HasTicked read back; gap: minor: a custom display block and offset are not kept
+AbstractMinecart.addAdditionalSaveData	port	crates/horizon-gameplay/src/minecarts.rs::Minecart::to_nbt	flipped and HasTicked written; gap: minor: a custom display block and offset are not saved
 AbstractMinecart.pushOtherMinecart	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::push_from_cart	cart against cart push with the furnace case; the old-movement facing check is used
 Minecart.interact	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::interact_cart	a plain rideable cart is boarded unless sneaking or already ridden
 Minecart.activateMinecart	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::activate_cart	a powered activator rail ejects the rider and hurts a rideable cart
@@ -59,8 +59,8 @@ MinecartTNT.handleEntityEvent	port	crates/horizon-client/src/game/entities/minec
 MinecartTNT.primeFuse	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::prime_cart	fuse 80, entity event 70 and the primed sound; gap: minor: no ignition source is recorded for who caused the blast
 MinecartTNT.getBlockExplosionResistance	port	crates/horizon-client/src/game/entities/explosion.rs::Game::exploded_positions	while the cart is primed (`combat.rail_proof_blast`, set from `fuse >= 0` in `minecarts.rs`) a rail, and a block with a rail above it, has no resistance to its blast
 MinecartTNT.shouldBlockExplode	inline	crates/horizon-client/src/game/entities/explosion.rs::Game::exploded_positions	the same ray march leaves a spared rail out of the destroyed set, so the blast goes through it
-MinecartTNT.readAdditionalSaveData	port	crates/horizon-client/src/game/entities/minecarts.rs::Minecart::from_nbt	fuse read back; gap: minor: explosion_power and explosion_speed_factor are not read
-MinecartTNT.addAdditionalSaveData	port	crates/horizon-client/src/game/entities/minecarts.rs::Minecart::to_nbt	fuse written; gap: minor: explosion_power and explosion_speed_factor are not written
+MinecartTNT.readAdditionalSaveData	port	crates/horizon-gameplay/src/minecarts.rs::Minecart::from_nbt	fuse read back; gap: minor: explosion_power and explosion_speed_factor are not read
+MinecartTNT.addAdditionalSaveData	port	crates/horizon-gameplay/src/minecarts.rs::Minecart::to_nbt	fuse written; gap: minor: explosion_power and explosion_speed_factor are not written
 MinecartTNT.damageSourceIgnitesTnt	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::hurt_cart	the fire flag from the caller primes the cart instead of breaking it
 OldMinecartBehavior.tick	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::tick_cart	gravity, track or off-track move, activator rail, yaw from motion and the flip
 OldMinecartBehavior.getMotionDirection	inline	crates/horizon-client/src/game/entities/minecarts.rs::Game::dismount_cart	the dismount side is the cart's facing, taken from its yaw

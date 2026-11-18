@@ -11,6 +11,7 @@ pub mod foxes;
 pub mod interaction_shapes;
 pub mod item_areas;
 pub mod lan;
+pub mod minecarts;
 pub mod mob_index;
 pub mod mob_level;
 pub mod mob_looting;

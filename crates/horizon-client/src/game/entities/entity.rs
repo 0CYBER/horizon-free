@@ -2754,15 +2754,6 @@ impl EntityRules for Boat {
         0.04
     }
 }
-impl EntityRules for Minecart {
-    fn is_no_gravity(&self) -> bool {
-        self.no_gravity
-    }
-    /// `AbstractMinecart.getDefaultGravity`.
-    fn get_default_gravity(&self) -> f64 {
-        if self.in_water { 0.005 } else { 0.04 }
-    }
-}
 impl EntityRules for PrimedTnt {
     fn is_no_gravity(&self) -> bool {
         self.no_gravity
