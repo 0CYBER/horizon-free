@@ -1114,6 +1114,19 @@ pub fn slot_locked(stack: &ItemStack) -> bool {
         .is_some_and(|d| d.other("minecraft:creative_slot_lock").is_some())
 }
 
+/// `ItemStack.getMaxStackSize` for a copy taken from the creative screen: the
+/// stack's `minecraft:max_stack_size` component, clamped to the codec's
+/// 1..=99, otherwise the item's own size.
+pub fn creative_stack_limit(stack: &ItemStack, item_max: u32) -> u32 {
+    match stack
+        .data()
+        .and_then(|data| data.other("minecraft:max_stack_size"))
+    {
+        Some(horizon_core::nbt::Tag::Int(n)) => (*n).clamp(1, 99) as u32,
+        _ => item_max,
+    }
+}
+
 /// `CreativeModeInventoryScreen.slotClicked` on a display slot
 /// (`slot.container == CONTAINER`): `shown` is the slot's item (None past
 /// the tab's end) and `max` gives an item's max stack size. The tab's items
@@ -1202,6 +1215,25 @@ mod tests {
             damage: 0,
             extra: None,
         }
+    }
+
+    /// A middle-click on a display item copies `getMaxStackSize`. The component
+    /// wins over the item's 64; a stack without one still copies the item's size.
+    #[test]
+    fn a_display_click_copies_the_stacks_own_max_stack_size() {
+        use crate::menu::Input;
+        let limit = |s: &ItemStack| creative_stack_limit(s, 64);
+        let mut plain = None;
+        click_display(&mut plain, Some(&stack("stone", 1)), limit, 0, Input::Clone);
+        assert_eq!(plain.unwrap().count, 64);
+
+        let mut shown = stack("stone", 1);
+        shown
+            .data_mut()
+            .set_other("minecraft:max_stack_size", Some(Tag::Int(16)));
+        let mut carried = None;
+        click_display(&mut carried, Some(&shown), limit, 0, Input::Clone);
+        assert_eq!(carried.unwrap().count, 16);
     }
 
     /// One click on a display slot showing one stone (max 64; pearls 16).

@@ -18,6 +18,10 @@ twice: as a player without permissions, then as an operator with the Operator It
 (CreativeModeInventoryScreen.hasPermissions), where the operator tab and its
 stacks in the search tab appear.
 
+Middle-click also copies a plain display stack and stacks with different
+max_stack_size components through each client's display-slot click handler.
+An explicitly removed max_stack_size component remains a known difference.
+
   test_creative_parity.py [--detail N]
 """
 import argparse
@@ -49,6 +53,15 @@ QUERIES = ['', 'anvil', 'Anvil', 'ANVIL', 'crafting', 'crafting table', 'smithin
 FRENCH_QUERIES = ['canalisation', 'CANALISATION', 'minecraft:canalisation', 'canalisation i', 'channeling',
                   'tranchant', 'tranchant v', 'raccommodage', 'mending', 'livre enchanté', '#logs']
 
+DISPLAY_COUNTS = {
+    '{id:"minecraft:stone",count:1}': 64,
+    '{id:"minecraft:ender_pearl",count:1}': 16,
+    '{id:"minecraft:totem_of_undying",count:1}': 1,
+    '{id:"minecraft:stone",count:1,components:{"minecraft:max_stack_size":16}}': 16,
+    '{id:"minecraft:stone",count:1,components:{"minecraft:max_stack_size":99}}': 99,
+}
+REMOVED_STACK_LIMIT = '{id:"minecraft:stone",count:1,components:{"!minecraft:max_stack_size":{}}}'
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -58,7 +71,8 @@ def main():
     libraries = baking.client_libraries()
     build = lab.LOCAL / 'creative-parity'; build.mkdir(parents=True, exist_ok=True)
     queries = build / 'queries.json'
-    queries.write_text(json.dumps({'english': QUERIES, 'french': FRENCH_QUERIES}), encoding='utf-8')
+    queries.write_text(json.dumps({'english': QUERIES, 'french': FRENCH_QUERIES,
+                                   'displayStacks': [*DISPLAY_COUNTS, REMOVED_STACK_LIMIT]}), encoding='utf-8')
     classes = build / 'classes'; classes.mkdir(exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['client'], *libraries]))
 
@@ -127,6 +141,30 @@ def compare(args, build, classes, dependencies, queries, run, mode):
         print(f'  search {q!r}: {len(hits)} results, ' + ', '.join(json.loads('"' + search[i].split('id:"')[1].split('"')[0] + '"')
                                                                       for i in hits[:6]))
     print(f'{len(shown)} tabs, {len(search)} search stacks')
+    return bad + compare_display_copies(vanilla['displayCopies'], rust['displayCopies'])
+
+
+def compare_display_copies(vanilla, rust):
+    """Check the input sequence, vanilla counts and complete canonical copies."""
+    stacks = [*DISPLAY_COUNTS, REMOVED_STACK_LIMIT]
+    if [v['stack'] for v in vanilla] != stacks or [r['stack'] for r in rust] != stacks:
+        print('DISPLAY COPIES: the probes did not replay all display stacks in order')
+        return 1
+    bad = 0
+    for v, r in zip(vanilla, rust):
+        stack = v['stack']
+        if stack == REMOVED_STACK_LIMIT:
+            if v['count'] != 1:
+                print(f'REMOVED STACK LIMIT: expected vanilla fallback 1, got {v["count"]}')
+                bad += 1
+            elif r != v:
+                print(f'REMOVED STACK LIMIT: vanilla {v["copy"]}, Horizon {r["copy"]} (known gap)')
+            continue
+        if v['count'] != DISPLAY_COUNTS[stack] or v != r:
+            print(f'DISPLAY COPY {stack}: vanilla {v["copy"]}, Horizon {r["copy"]}, expected count {DISPLAY_COUNTS[stack]}')
+            bad += 1
+    if not bad:
+        print(f'{len(DISPLAY_COUNTS)} display copies match')
     return bad
 
 

@@ -1,9 +1,15 @@
 package dev.horizonlab.parity;
 
 import com.google.gson.*;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.client.multiplayer.SessionSearchTrees;
 import net.minecraft.client.resources.language.ClientLanguage;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -14,7 +20,12 @@ import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.PathPackResources;
 import net.minecraft.server.packs.repository.PackSource;
 import net.minecraft.server.packs.resources.MultiPackResourceManager;
+import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.flag.FeatureFlags;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.ItemStack;
@@ -103,7 +114,50 @@ public final class VanillaCreativeSearchOracle {
             for (var q : querySets.getAsJsonArray("french")) french.add(q.getAsString());
             out.add("frenchSearches", queryResults(trees, index, french));
         }
+        out.add("displayCopies", displayCopies(querySets.getAsJsonArray("displayStacks")));
         Files.writeString(Path.of(args[2]), out.toString(), StandardCharsets.UTF_8);
+    }
+
+    /** Exercise the vanilla screen's display-slot branch without opening a window. */
+    private static JsonArray displayCopies(JsonArray stacks) throws Exception {
+        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+        var unsafe = field(unsafeClass, "theUnsafe").get(null);
+        var allocate = unsafeClass.getMethod("allocateInstance", Class.class);
+        var screenClass = CreativeModeInventoryScreen.class;
+        var screen = allocate.invoke(unsafe, screenClass);
+        var pickerType = Class.forName(screenClass.getName() + "$ItemPickerMenu");
+        var picker = (AbstractContainerMenu) allocate.invoke(unsafe, pickerType);
+        var inventory = allocate.invoke(unsafe, InventoryMenu.class);
+        field(pickerType, "inventoryMenu").set(picker, inventory);
+        field(AbstractContainerScreen.class, "menu").set(screen, picker);
+        field(AbstractContainerScreen.class, "itemSlotMouseActions").set(screen, List.of());
+        field(Screen.class, "minecraft").set(screen, allocate.invoke(unsafe, Minecraft.class));
+        field(screenClass, "searchBox").set(screen, new EditBox(null, Component.empty()));
+        var container = (SimpleContainer) field(screenClass, "CONTAINER").get(null);
+        var slot = new Slot(container, 0, 0, 0);
+        var click = screenClass.getDeclaredMethod("slotClicked", Slot.class, int.class, int.class, ContainerInput.class);
+        click.setAccessible(true);
+
+        var copies = new JsonArray();
+        for (var entry : stacks) {
+            String stack = entry.getAsString();
+            container.setItem(0, ParityData.stack(stack));
+            picker.setCarried(ItemStack.EMPTY);
+            click.invoke(screen, slot, 0, 2, ContainerInput.CLONE);
+            var copy = picker.getCarried();
+            var result = new JsonObject();
+            result.addProperty("stack", stack);
+            result.addProperty("copy", ParityData.canon(copy));
+            result.addProperty("count", copy.getCount());
+            copies.add(result);
+        }
+        return copies;
+    }
+
+    private static Field field(Class<?> owner, String name) throws ReflectiveOperationException {
+        Field field = owner.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
     }
 
     private static JsonArray queryResults(SessionSearchTrees trees, Map<ItemStack, Integer> index,

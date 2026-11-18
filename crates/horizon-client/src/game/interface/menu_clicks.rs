@@ -89,7 +89,14 @@ impl Game<'_> {
             .creative_screen
             .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY);
         let catalog = world_items!(self);
-        let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
+        // `ItemStack.getMaxStackSize`: the stack's own component before the item's,
+        // so a stack that says 16 is taken 16 at a time.
+        let max = |s: &ItemStack| {
+            horizon_client::creative::creative_stack_limit(
+                s,
+                catalog.get(&s.item).map_or(64, |i| i.max_stack),
+            )
+        };
         match click_display(&mut self.carried, shown.as_ref(), max, button, input) {
             DisplayClick::Hotbar(i, stack) if i < self.inventory.len() => {
                 self.inventory[i] = Some(stack);
