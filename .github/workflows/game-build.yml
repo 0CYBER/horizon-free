@@ -37,7 +37,8 @@ permissions:
   contents: read
 jobs:
   wasm-std:
-    # One host-independent shared std member, built without credentials or shared caches.
+    # One shared std member, built without credentials or shared caches. Its symbol names don't depend on the host
+    # (cargo-horizon-mod gives std crates a host-free disambiguator; wasm-std-hosts.yml checks Windows against Linux).
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:

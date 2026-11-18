@@ -4,7 +4,7 @@
 //! A wasm mod is a member of its dependency group, linked at load by the game
 //! (`horizon-mod-wasm`): one memory, one copy of std and of each library mod. So every member is
 //! a position-independent shared module built by one pinned toolchain, with std built from
-//! source (`-Zbuild-std`) so its symbols are the same in every member. This tool is also the
+//! source (`-Zbuild-std`) so its symbols are the same in every member, whichever host built it (the\n//! wrapper gives std crates a host-free disambiguator). This tool is also the
 //! link step (cargo calls it as the linker, with `HORIZON_MOD_LINK` set): the std member links
 //! std whole and exports it; a mod leaves std and its library mods out, to resolve to theirs.
 use horizon_mod_package::manifest::{MANIFEST, WASM, sha512_of};
@@ -24,7 +24,7 @@ const LLD_ENV: &str = "HORIZON_MOD_LLD";
 /// The library mods' crate names, comma-separated, that a member leaves out.
 const PROVIDED_ENV: &str = "HORIZON_MOD_PROVIDED";
 const PROFILE: &str = "horizon-wasm";
-const FLAGS: &str = "-Crelocation-model=pic -Zshare-generics=n -Zdefault-visibility=hidden --cfg=horizon_shared_artifacts_v2";
+const FLAGS: &str = "-Crelocation-model=pic -Zshare-generics=n -Zdefault-visibility=hidden --cfg=horizon_shared_artifacts_v3";
 
 /// Guest boundary exports, kept even though they originate in an rlib dependency.
 const GUEST_EXPORTS: &[&str] = &["horizon_layout", "horizon_in", "horizon_hook"];

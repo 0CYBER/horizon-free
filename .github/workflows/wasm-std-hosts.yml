@@ -1,0 +1,65 @@
+name: wasm std hosts
+# The game ships one horizon-wasm-std.wasm, built on Linux (game-build.yml), and every wasm mod links against it by
+# symbol name, wherever its author built the mod (#18261). This builds the std member with the pull request's tool on
+# Linux and on Windows, as game-build.yml does, and fails when their imported or exported names differ.
+on:
+  pull_request:
+    paths:
+      - 'crates/cargo-horizon-mod/**'
+      - 'crates/horizon-mod-wasm/**'
+      - 'tools/ci/rust-version'
+      - 'tools/ci/wasm_names.py'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.github/workflows/game-build.yml'
+      - '.github/workflows/wasm-std-hosts.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    name: build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: rust
+        shell: bash
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - name: Build the shared wasm standard library
+        shell: bash
+        run: |
+          mkdir -p wasm-std
+          cargo run --locked -p cargo-horizon-mod -- wasm-std wasm-std/horizon-wasm-std.wasm
+          sha256sum wasm-std/horizon-wasm-std.wasm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wasm-std-${{ matrix.os }}
+          path: wasm-std/horizon-wasm-std.wasm
+          if-no-files-found: error
+          retention-days: 3
+  compare:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wasm-std-*
+          path: wasm-std
+      - name: Both hosts name the std member's symbols the same
+        run: python3 -I tools/ci/wasm_names.py wasm-std/wasm-std-ubuntu-22.04/horizon-wasm-std.wasm wasm-std/wasm-std-windows-latest/horizon-wasm-std.wasm

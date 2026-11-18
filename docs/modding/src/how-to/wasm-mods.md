@@ -65,6 +65,16 @@ toolchain = "1.99.1 <commit>"     # every mod linked together needs the same one
 my_library = "…"
 ```
 
+Build with a `cargo-horizon-mod` from the game build your mod is made for. A tool installed
+before November 2026's fix for std symbol names (#18261) names std differently from the game's
+std member, so the game refuses the mod even when the Rust version matches. Reinstall the tool
+from the commit in your `[package.metadata.horizon] sdk`, then rebuild the mod and every library
+mod it depends on. An existing `.hmod` keeps its old imports until it's rebuilt:
+
+```sh
+cargo install --locked --git https://github.com/horizon-rust/horizon --rev <sdk commit> cargo-horizon-mod
+```
+
 A mod carries native code or wasm code, not both. A wasm mod has no `[native]` table.
 
 A mod with `[[inject]]` listeners builds against the game's staged point catalog. Pass
@@ -102,7 +112,9 @@ symbol interposition: duplicate definitions are refused, rather than overriding 
 Each member records its compiler, target, settings,
 rlib digest and dependency artifact identities in `horizon.build` metadata covered by its module
 hash. Mod crate disambiguators use the mod ID, version and resolved Cargo features rather than
-the temporary workspace path. A shared crate disambiguator alone is not an ABI guarantee:
+the temporary workspace path. Std crate disambiguators use only the pinned toolchain, the crate
+and its features, so a mod built on Windows, macOS or Linux links against the game's one std
+member, as long as the tool has that rule ([Build](#build) says how to reinstall it). A shared crate disambiguator alone is not an ABI guarantee:
 the loader checks the exact dependency build recorded in `[wasm.linked]`, including when the
 library and its consumers were built separately. Changing a library's source, toolchain,
 features or settings requires rebuilding its consumers.

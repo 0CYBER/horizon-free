@@ -566,12 +566,8 @@ pub fn rustc(mut args: Vec<String>) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     let package = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
     let config = &configs[&package];
-    if args.iter().any(|a| a == "feature=\"rustc-dep-of-std\"")
-        || std::env::var("CARGO_MANIFEST_DIR").is_ok_and(|p| {
-            p.replace('\\', "/")
-                .contains("/lib/rustlib/src/rust/library/")
-        })
-    {
+    let std_unit = std_unit(&args);
+    if std_unit {
         let krate = args
             .windows(2)
             .find(|a| a[0] == "--crate-name")
@@ -598,6 +594,10 @@ pub fn rustc(mut args: Vec<String>) -> Result<(), String> {
             .map_err(|e| e.to_string())?
             .display()
     ));
+    if std_unit {
+        let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+        std_identity(&mut args, &package, &version);
+    }
     let mut command = Command::new(compiler);
     command
         .env_remove("HORIZON_GUEST_REGISTRATIONS")
@@ -620,25 +620,13 @@ pub fn rustc(mut args: Vec<String>) -> Result<(), String> {
             );
         // Cargo's default disambiguator includes the staging package path. A mod's stable
         // identity must instead agree when its author and its dependents build separately.
-        let mut index = 0;
-        while index + 1 < args.len() {
-            if args[index] == "-C" && args[index + 1].starts_with("metadata=") {
-                args.drain(index..index + 2);
-            } else {
-                index += 1;
-            }
-        }
-        let mut features: Vec<_> = args
-            .windows(2)
-            .filter(|a| a[0] == "--cfg" && a[1].starts_with("feature="))
-            .map(|a| a[1].clone())
-            .collect();
-        features.sort();
+        strip_metadata(&mut args);
+        let features = features(&args);
         args.push(format!(
             "-Cmetadata={}@{}:{}",
             config["id"].as_str().ok_or("no id")?,
             config["version"].as_str().ok_or("no version")?,
-            sha512_of(features.join(",").as_bytes())
+            sha512_of(features.as_bytes())
         ));
         let stage = Path::new(config["stage"].as_str().ok_or("no stage")?);
         args.push(format!(
@@ -666,9 +654,159 @@ pub fn rustc(mut args: Vec<String>) -> Result<(), String> {
     }
 }
 
+/// A unit of the standard library built from source for the wasm target: a toolchain `library/`
+/// crate or one of its crates.io dependencies. Cargo passes `-Z force-unstable-if-unmarked` only
+/// to the units `-Zbuild-std` adds, so an ordinary dependency that enables a `rustc-dep-of-std`
+/// feature stays a mod's own crate. Host units (std's build scripts) don't count: their symbols
+/// never reach a member.
+fn std_unit(args: &[String]) -> bool {
+    let marked = args
+        .windows(2)
+        .any(|a| a[0] == "-Z" && a[1] == "force-unstable-if-unmarked")
+        || args.iter().any(|a| a == "-Zforce-unstable-if-unmarked");
+    let wasm = args
+        .windows(2)
+        .any(|a| a[0] == "--target" && a[1] == super::TARGET)
+        || args
+            .iter()
+            .any(|a| *a == format!("--target={}", super::TARGET));
+    marked && wasm
+}
+
+/// The unit's Cargo features, sorted and comma-joined.
+fn features(args: &[String]) -> String {
+    let mut features: Vec<_> = args
+        .windows(2)
+        .filter(|a| a[0] == "--cfg" && a[1].starts_with("feature="))
+        .map(|a| a[1].as_str())
+        .collect();
+    features.sort_unstable();
+    features.join(",")
+}
+
+fn strip_metadata(args: &mut Vec<String>) {
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "-C"
+            && args
+                .get(index + 1)
+                .is_some_and(|a| a.starts_with("metadata="))
+        {
+            args.drain(index..index + 2);
+        } else if args[index].starts_with("-Cmetadata=") {
+            args.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// Cargo's disambiguator for a std crate hashes the host's `rustc -vV` (its `host:` line), so
+/// std built on Windows and on Linux had different symbol names
+/// and members built on one host could not link against the other's std (#18261). A std unit
+/// gets one from the pinned toolchain, the package and its features instead.
+fn std_identity(args: &mut Vec<String>, package: &str, version: &str) {
+    let krate = args
+        .windows(2)
+        .find(|a| a[0] == "--crate-name")
+        .map(|a| a[1].clone())
+        .unwrap_or_default();
+    let features = features(args);
+    strip_metadata(args);
+    args.push(format!(
+        "-Cmetadata=horizon-std:{}:{package}@{version}:{krate}:{}",
+        super::TOOLCHAIN,
+        sha512_of(features.as_bytes())
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    #[test]
+    fn std_identity_ignores_the_host() {
+        let unit = |metadata: &str, target: &str| {
+            let mut args = strings(&[
+                "--crate-name",
+                "alloc",
+                "--edition=2024",
+                "--cfg",
+                "feature=\"compiler-builtins-mem\"",
+                "-C",
+                metadata,
+                "-C",
+                "extra-filename=-0b1c",
+                "--target",
+                target,
+            ]);
+            std_identity(&mut args, "alloc", "0.0.0");
+            args
+        };
+        let windows = unit("metadata=7d3e9a0c1b2f4e56", crate::wasm::TARGET);
+        let linux = unit("metadata=13f0a9be65c2d871", crate::wasm::TARGET);
+        assert_eq!(windows, linux);
+        assert!(!windows.iter().any(|a| a.starts_with("metadata=")));
+        let ours: Vec<_> = windows
+            .iter()
+            .filter(|a| a.starts_with("-Cmetadata=horizon-std:"))
+            .collect();
+        assert_eq!(ours.len(), 1);
+        assert!(ours[0].contains(&format!("{}:alloc@0.0.0:alloc:", crate::wasm::TOOLCHAIN)));
+        // Cargo's file names stay: the std-artifact markers and the link step key on them.
+        assert!(windows.contains(&"extra-filename=-0b1c".to_owned()));
+
+        let mut joined = strings(&["-Cmetadata=abc", "--target", crate::wasm::TARGET]);
+        std_identity(&mut joined, "core", "0.0.0");
+        assert_eq!(joined.len(), 3);
+        assert!(joined[2].starts_with("-Cmetadata=horizon-std:"));
+        let mut other = strings(&["-Cmetadata=abc", "--target", crate::wasm::TARGET]);
+        other.extend(strings(&["--cfg", "feature=\"x\""]));
+        std_identity(&mut other, "core", "0.0.0");
+        assert_ne!(joined.last(), other.last(), "features keep units apart");
+    }
+
+    #[test]
+    fn std_units_are_the_wasm_units_build_std_marks() {
+        let wasm = crate::wasm::TARGET;
+        let feature = "feature=\"rustc-dep-of-std\"";
+        // What cargo passes a `-Zbuild-std` unit, a crates.io dependency of std included.
+        assert!(std_unit(&strings(&[
+            "--crate-name",
+            "hashbrown",
+            "--cfg",
+            feature,
+            "-Z",
+            "force-unstable-if-unmarked",
+            "--target",
+            wasm,
+        ])));
+        assert!(std_unit(&strings(&[
+            "-Zforce-unstable-if-unmarked",
+            &format!("--target={wasm}"),
+        ])));
+        // A mod's ordinary dependency that enables `rustc-dep-of-std` keeps its own identity and
+        // stays in the mod's link.
+        assert!(!std_unit(&strings(&[
+            "--crate-name",
+            "hashbrown",
+            "--cfg",
+            feature,
+            "--target",
+            wasm,
+        ])));
+        // std's build scripts run on the host.
+        assert!(!std_unit(&strings(&[
+            "--crate-name",
+            "build_script_build",
+            "-Z",
+            "force-unstable-if-unmarked",
+        ])));
+    }
 
     #[test]
     fn staged_paths_keep_aliases_features_and_target_dependencies() {
