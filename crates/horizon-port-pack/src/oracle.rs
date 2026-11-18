@@ -372,6 +372,8 @@ impl Facts {
         let ours = block.default_state()?;
         let mut best: Option<(i64, &str, &Block)> = None;
         for (name, v) in &self.blocks {
+            // The oracle runs 1.21.1; the template is the block under its 26.3 id.
+            let name = crate::carry::renamed_id(name);
             if !name.starts_with("minecraft:")
                 || v.vanilla_class() != class
                 || v.custom_class()
@@ -405,7 +407,7 @@ impl Facts {
                 + (block.wood_type.is_some() && block.wood_type == v.wood_type) as i64 * 20
                 + (td.hardness == ours.hardness) as i64 * 5
                 + (td.map_color_id == ours.map_color_id) as i64;
-            if best.is_none_or(|(s, n, _)| score > s || (score == s && name.as_str() < n)) {
+            if best.is_none_or(|(s, n, _)| score > s || (score == s && name < n)) {
                 best = Some((score, name, v));
             }
         }
@@ -708,6 +710,28 @@ mod tests {
             .unwrap();
         assert_eq!(tile.template, "minecraft:stone");
         assert_eq!(tile.differences[0], "sounds: no vanilla block has them");
+    }
+
+    /// The oracle runs 1.21.1, whose chain 26.3 renamed: a chain-like block
+    /// still gets the chain as its template, under the id the game knows.
+    #[test]
+    fn templates_take_the_26_3_id_of_a_renamed_block() {
+        let rod = json!([[0.4, 0, 0.4, 0.6, 1, 0.6]]);
+        let chain_class = ["net.minecraft.world.level.block.ChainBlock"];
+        let props = json!({"axis": ["x", "y", "z"]});
+        let states = json!({"axis=x": state(5.0, "chain", rod.clone()),
+            "axis=y": state(5.0, "chain", rod.clone()), "axis=z": state(5.0, "chain", rod)});
+        let facts: Facts = serde_json::from_value(json!({
+            "blocks": {
+                "minecraft:chain": block(&chain_class, props.clone(), states.clone()),
+                "m:track": block(&chain_class, props, states),
+            },
+            "items": {}
+        }))
+        .unwrap();
+        let game_has = |b: &str| b != "minecraft:chain";
+        let track = facts.template("m:track", &game_has).unwrap();
+        assert_eq!(track.template, "minecraft:iron_chain");
     }
 
     #[test]

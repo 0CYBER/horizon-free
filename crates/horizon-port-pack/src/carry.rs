@@ -151,7 +151,7 @@ pub struct Pack<'a> {
     pub mods: &'a dyn Fn(&str) -> bool,
 }
 
-/// Vanilla blocks by their sorted property names.
+/// Vanilla blocks by their sorted property names, under their 26.3 ids.
 const TEMPLATES: &[(&str, &str)] = &[
     ("", "minecraft:stone"),
     ("axis", "minecraft:oak_log"),
@@ -174,7 +174,7 @@ const TEMPLATES: &[(&str, &str)] = &[
     ("facing", "minecraft:carved_pumpkin"),
     ("facing,lit", "minecraft:furnace"),
     ("lit", "minecraft:redstone_lamp"),
-    ("waterlogged", "minecraft:chain"),
+    ("waterlogged", "minecraft:iron_chain"),
     ("age", "minecraft:wheat"),
     ("distance,persistent,waterlogged", "minecraft:oak_leaves"),
     ("stage", "minecraft:oak_sapling"),
@@ -353,6 +353,15 @@ pub fn upgrade_recipe(recipe: &mut Value) -> bool {
 /// when copper chains came in). A data file naming the old id fails to load
 /// in 26.3: a recipe, a loot entry, a processor's block match.
 const RENAMED_IDS: [(&str, &str); 1] = [("minecraft:chain", "minecraft:iron_chain")];
+
+/// A 1.21.1 block or item id under its 26.3 name ([`RENAMED_IDS`]); other ids
+/// as they are.
+pub fn renamed_id(id: &str) -> &str {
+    RENAMED_IDS
+        .iter()
+        .find(|(old, _)| *old == id)
+        .map_or(id, |(_, new)| new)
+}
 
 /// Every string of a data file that is a renamed id ([`RENAMED_IDS`]) set to
 /// the new one, in place; whether any was.
@@ -873,6 +882,11 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// set, so they stay out of the carry.
 fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
     if let Err(e) = horizon_mod_package::content::check_path(name) {
+        return Some(e);
+    }
+    // A mod's helper script among its assets (a `#!` shell script that
+    // generated its textures) would have the game refuse the whole mod.
+    if let Err(e) = horizon_mod_package::content::check_bytes(name, bytes) {
         return Some(e);
     }
     if !(name.ends_with(".json") || name.ends_with(".mcmeta")) {
@@ -1471,9 +1485,15 @@ pub fn carry(
     } else {
         for (b, state) in &blockstates {
             match block_template(b, state) {
-                Some(t) => {
+                Some(t) if allowed(t) => {
                     write_decl("block", b, &json!({"template": t}))?;
                     report.blocks.insert(b.clone(), t.to_owned());
+                }
+                // A declaration naming a block the game lacks fails the whole
+                // content root at start.
+                Some(t) => {
+                    let why = format!("template {t} is not one of the game's blocks");
+                    report.blocks_unknown.insert(b.clone(), why);
                 }
                 None => {
                     let props: Vec<String> = properties(state).into_iter().collect();
@@ -2419,6 +2439,72 @@ mod tests {
         assert_eq!(block_template("gem_vine", &vine), Some("minecraft:vine"));
         let odd = json!({"variants": {"charge=1,mode=fast": {}}});
         assert_eq!(template("gem_core", &properties(&odd)), None);
+        // 26.3 calls 1.21.1's chain the iron chain; `minecraft:chain` is no block.
+        let chain = json!({"variants": {"waterlogged=false": {}}});
+        assert_eq!(
+            template("gem_track", &properties(&chain)),
+            Some("minecraft:iron_chain")
+        );
+    }
+
+    /// What the game would refuse in a content mod stays out of the carry, so
+    /// the rest of the mod loads: a helper script among the assets, and a block
+    /// whose template the game doesn't have.
+    #[test]
+    fn content_the_game_refuses_stays_out() {
+        let dir = temp_dir("refused");
+        let jar = dir.join("refused.jar");
+        write_jar(
+            &jar,
+            &[
+                (
+                    "assets/example/blockstates/track.json",
+                    br#"{"variants":{"waterlogged=false":{"model":"example:block/track"}}}"#,
+                ),
+                (
+                    "assets/example/blockstates/stone.json",
+                    br#"{"variants":{"":{"model":"example:block/stone"}}}"#,
+                ),
+                (
+                    "assets/example/textures/block/generate_colors.sh",
+                    b"#!/bin/sh\nmagick convert a.png b.png\n",
+                ),
+                ("assets/example/textures/block/stone.png", b"png"),
+            ],
+        );
+        let out = dir.join("work/mods/example");
+        let info = crate::jar::JarInfo {
+            mod_id: "example".into(),
+            ..Default::default()
+        };
+        let pack = Pack {
+            loaded: &|_| true,
+            mods: &|_| false,
+        };
+        let game_has = |b: &str| b != "minecraft:iron_chain";
+        let report = carry(&jar, &info, &out, None, &game_has, &pack, &BTreeMap::new()).unwrap();
+        let script = "assets/example/textures/block/generate_colors.sh";
+        assert!(
+            report.unreadable[script].contains("executable"),
+            "{:?}",
+            report.unreadable
+        );
+        assert!(!out.join("carry").join(script).exists());
+        assert!(
+            out.join("carry/assets/example/textures/block/stone.png")
+                .exists()
+        );
+        assert_eq!(report.blocks["stone"], "minecraft:stone");
+        assert!(
+            report.blocks_unknown["track"].contains("minecraft:iron_chain"),
+            "{:?}",
+            report.blocks_unknown
+        );
+        assert!(
+            !out.join("carry/data/example/horizon/block/track.json")
+                .exists()
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A small NeoForge jar carried over is a content mod Horizon loads.

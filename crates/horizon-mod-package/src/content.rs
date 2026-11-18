@@ -23,6 +23,15 @@ pub const MAX_FILES: usize = 65_536;
 pub const MAX_FILE: u64 = 16 << 20;
 pub const MAX_TOTAL: u64 = 512 << 20;
 
+/// Why the game would refuse a content file for what it is, not where it lies
+/// ([`check_path`]): an executable, by its extension or its first bytes (a `#!`
+/// script, an ELF, Mach-O, PE or wasm binary). A tool that writes content,
+/// such as a port of a Java mod, leaves such a file out; the game refuses the
+/// whole mod for one.
+pub fn check_bytes(name: &str, bytes: &[u8]) -> Result<(), String> {
+    crate::manifest::check_file(name, 0o100_644, || Ok(bytes)).map_err(|e| e.to_string())
+}
+
 /// Checks a content path: `assets/` or `data/`, then `/`-separated parts of
 /// `[a-z0-9_.-]`, none of them `.` or `..` (vanilla's resource-location
 /// characters, so the path means the same on every OS).
