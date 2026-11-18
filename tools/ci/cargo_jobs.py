@@ -49,6 +49,10 @@ def limits(cgroup: Path) -> tuple[int, int]:
 
 
 def jobs(cpus: int, memory: int, job_mib: int) -> int:
+    """The CPU quota bounded by memory, never below the floor. `job_mib` is the memory one
+    concurrent rustc may need, so it must be a positive number of MiB."""
+    if job_mib <= 0:
+        raise ValueError(f"job_mib must be positive, got {job_mib}")
     return max(FLOOR, min(cpus, memory // (job_mib << 20)))
 
 
@@ -67,6 +71,8 @@ if __name__ == "__main__":
     parser.add_argument("--cgroup", type=Path, default=Path("/sys/fs/cgroup"))
     parser.add_argument("--cap", action="store_true", help="apply the answer to every build and test of this job")
     args = parser.parse_args()
+    if args.job_mib <= 0:
+        parser.error(f"--job-mib must be positive, got {args.job_mib}")
     cpus, memory = limits(args.cgroup)
     chosen = jobs(cpus, memory, args.job_mib)
     if args.cap:
