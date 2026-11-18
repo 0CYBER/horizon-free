@@ -773,6 +773,19 @@ pub(crate) fn parse_releases(
     asset: Option<&str>,
     keep: fn(&str) -> bool,
 ) -> Vec<Release> {
+    parse_releases_from(REPO, list, asset, keep)
+}
+
+/// [`parse_releases`] for a list read from `repo`: its releases' files download from there, never
+/// from the provider URL the list names. Horizon's own builds live in [`REPO`]; the launcher's
+/// releases in the fork ([`LAUNCHER_REPO`]), so an update downloads the fork's file and not
+/// Horizon's launcher of the same version, which would replace the fork with the official build.
+fn parse_releases_from(
+    repo: &str,
+    list: &serde_json::Value,
+    asset: Option<&str>,
+    keep: fn(&str) -> bool,
+) -> Vec<Release> {
     let mut out = Vec::new();
     for r in list.as_array().into_iter().flatten() {
         let tag = r["tag_name"].as_str().unwrap_or_default();
@@ -781,8 +794,12 @@ pub(crate) fn parse_releases(
         }
         let found = r["assets"].as_array().into_iter().flatten().find_map(|a| {
             let name = a["name"].as_str()?;
-            (Some(name) == asset)
-                .then(|| Some((crate::signed::asset_url(tag, name), a["size"].as_u64()?)))?
+            (Some(name) == asset).then(|| {
+                Some((
+                    crate::signed::asset_url_in(repo, tag, name),
+                    a["size"].as_u64()?,
+                ))
+            })?
         });
         out.push(Release {
             tag: tag.into(),
@@ -877,7 +894,7 @@ fn launcher_releases_in_with(
     list: &serde_json::Value,
     json: impl Fn(String) -> Result<Option<serde_json::Value>, String>,
 ) -> Vec<Release> {
-    let found = parse_releases(list, launcher_asset(), is_launcher_tag);
+    let found = parse_releases_from(LAUNCHER_REPO, list, launcher_asset(), is_launcher_tag);
     if found.iter().any(|r| r.asset.is_some()) {
         return found;
     }
@@ -893,7 +910,8 @@ fn launcher_releases_in_with(
     }
     for tag in tags.into_iter().take(3) {
         if let Ok(Some(release)) = json(format!("{api}/releases/tags/{tag}")) {
-            let one = parse_releases(
+            let one = parse_releases_from(
+                LAUNCHER_REPO,
                 &serde_json::json!([release]),
                 launcher_asset(),
                 is_launcher_tag,
@@ -3964,16 +3982,31 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
     Ok(())
 }
 
+/// Whether `url` names a file of this fork's own releases: the only place this launcher takes a
+/// replacement from. Horizon publishes launchers under the same `launcher@X.Y.Z` tags, and one
+/// installed here updates itself away from the fork.
+fn from_this_fork(url: &str) -> bool {
+    url.starts_with(&format!(
+        "https://github.com/{LAUNCHER_REPO}/releases/download/"
+    ))
+}
+
 /// Downloads and unpacks a launcher release next to this one without putting it in place yet
 /// ([`place_checked`] does, in this process or in the installer `update_handoff` starts), in a new
 /// stage folder that no other launcher writes to. None when the file there already is that release
-/// or a newer one.
+/// or a newer one. A file outside this fork's releases is refused ([`from_this_fork`]).
 pub fn stage_update(release: &Release, progress: impl Fn(f32)) -> Result<Option<Staged>, String> {
     let (url, size) = release
         .asset
         .clone()
         .ok_or("This launcher release has no build for this platform.")?;
     let target = launcher_version(&release.tag).unwrap_or("0");
+    if !from_this_fork(&url) {
+        return Err(crate::i18n::trf(
+            "Not installing {url}: this launcher updates itself only from {repo}'s releases.",
+            &[("url", &url), ("repo", LAUNCHER_REPO)],
+        ));
+    }
     if installed_launcher_version(&update_target())
         .is_some_and(|v| v != VERSION && compare_versions(&v, target).is_ge())
     {
@@ -5817,6 +5850,20 @@ pub fn {f}("
             parse_version_output(&format!("horizon-launcher {VERSION}\n")),
             Some(VERSION)
         );
+    }
+
+    /// The fork and Horizon publish `launcher@X.Y.Z` releases under the same numbering: a
+    /// replacement may only come from the fork's own releases.
+    #[test]
+    fn a_launcher_replacement_comes_only_from_this_forks_releases() {
+        let fork = format!(
+            "https://github.com/{LAUNCHER_REPO}/releases/download/launcher@0.2.32/horizon-launcher.exe"
+        );
+        assert!(from_this_fork(&fork));
+        assert!(!from_this_fork(&fork.replace(LAUNCHER_REPO, REPO)));
+        assert!(!from_this_fork(&format!(
+            "https://example.test/{LAUNCHER_REPO}/releases/download/launcher@0.2.32/horizon-launcher.exe"
+        )));
     }
 
     #[test]

@@ -9,6 +9,12 @@ use horizon_release_sign::{Channel, PublicKey, SIGNATURE, SIGNATURE_V2, SUMS};
 
 /// Where a release's attached file downloads from (GitHub's fixed address for it).
 pub fn asset_url(tag: &str, name: &str) -> String {
+    asset_url_in(REPO, tag, name)
+}
+
+/// [`asset_url`] in `repo`, the repository the release was read from: Horizon's for its own
+/// builds, the fork's for the launcher's releases ([`crate::backend::LAUNCHER_REPO`]).
+pub fn asset_url_in(repo: &str, tag: &str, name: &str) -> String {
     // Metadata supplies path components, never URL syntax or another repository.
     let component = |text: &str| -> String {
         text.bytes()
@@ -21,7 +27,7 @@ pub fn asset_url(tag: &str, name: &str) -> String {
             .collect()
     };
     format!(
-        "https://github.com/{REPO}/releases/download/{}/{}",
+        "https://github.com/{repo}/releases/download/{}/{}",
         component(tag),
         component(name)
     )

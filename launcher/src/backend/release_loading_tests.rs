@@ -183,6 +183,28 @@ fn empty_or_prebuilt_only_fork_has_no_game_or_launcher_update() {
 }
 
 #[test]
+fn a_launcher_update_downloads_the_forks_file_not_horizons_of_the_same_version() {
+    let Some(asset) = launcher_asset() else {
+        return;
+    };
+    // The fork and Horizon both publish `launcher@0.2.31`: the fork's list must send the update
+    // to the fork's file, or the launcher replaces itself with Horizon's build of that version.
+    let list = serde_json::json!([{
+        "tag_name": "launcher@0.2.31",
+        "assets": [{"name": asset, "size": 42,
+                    "browser_download_url": "https://example.test/horizons"}]
+    }]);
+    let releases = launcher_releases_in(&list);
+    assert_eq!(
+        releases[0].asset,
+        Some((
+            format!("https://github.com/{LAUNCHER_REPO}/releases/download/launcher@0.2.31/{asset}"),
+            42
+        ))
+    );
+}
+
+#[test]
 fn each_platform_download_is_bound_to_the_fork_not_the_provider_url() {
     let platforms = [
         (

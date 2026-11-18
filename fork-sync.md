@@ -47,6 +47,11 @@ again.
 ## Launcher patches the fork keeps
 
 - `backend::LAUNCHER_REPO = "0CYBER/horizon-free"`: self-update reads the fork's releases.
+- The launcher's release files download from the fork too (`parse_releases_from(LAUNCHER_REPO, ...)`,
+  `signed::asset_url_in`): Horizon publishes `launcher@X.Y.Z` under the same numbering, so a list
+  read from the fork but an address built from `REPO` installed Horizon's launcher of the same
+  version, and that build updates itself to the newest official one. `stage_update` refuses any
+  launcher file whose URL is not in the fork's own releases.
 - `launcher_releases()` falls back to the fork's `releases.atom` when GitHub's API refuses
   (60 anonymous reads an hour; Horizon's mirror does not carry the fork), and a check that fails
   is reported (`Updates::launcher_error`) instead of reading as "up to date".
@@ -62,7 +67,7 @@ again.
   return [`SIGN_IN_HINT`](launcher/src/backend.rs) without an owner (`developer_offline.rs`), and
   launcher releases must come from `horizon-rust/horizon` (`release_loading_tests.rs`). Keep them
   green by testing the fork's truth: the same calls stop at the missing build and read
-  `LAUNCHER_REPO`, never at a sign-in.
+  `LAUNCHER_REPO` (list and file address), never at a sign-in.
 - CLI `account offline NAME`, `account select NAME` and `play` bypass the owner gate.
 - Offline names: upstream removed them in `1e789800af` ("launcher: remove offline names"), so
   every sync restores that commit (`git revert -n 1e789800af`) and resolves the conflicts in
