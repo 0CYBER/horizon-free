@@ -37,6 +37,7 @@ SPAWNS = Path(__file__).with_name("process-spawns.txt")
 SPAWN = re.compile(r"\.\s*spawn\s*\(\s*\)")
 FINISH = re.compile(r"\.\s*(?:output|status)\s*\(\s*\)")
 BUILDS = re.compile(r"\bCommand\b|\.\s*(?:args?|env|current_dir)\s*\(")
+COMMAND = re.compile(r"\bCommand\b")
 # Kept unblanked by rust_tests.functions(keep=...), so `#[cfg(target_os = "windows")]` is seen.
 WINDOWS = frozenset({"windows"})
 WINDOWS_ONLY = re.compile(r"#\s*\[\s*cfg\s*\(\s*(?:windows|target_os\s*=\s*\"windows\")\s*\)\s*\]")
@@ -68,7 +69,9 @@ def offenders_in(source, listed):
     # A listed helper imported under another name (`use crate::leases::isolated_test as isolated;`) is listed too.
     names = [*listed, *(alias for name in listed
                         for alias in re.findall(rf"\b{re.escape(name.rsplit('::', 1)[-1])}\s+as\s+(\w+)", source))]
-    command = "Command" in source
+    # A `Command` in a comment or a string literal is not a constructed process (the bodies checked below are
+    # already blanked by rust_tests.functions), so decide this on a comment/string-free view of the source.
+    command = bool(COMMAND.search(rust_tests.blank(source)))
     if not SPAWN.search(source) and not command and not any(
             all(part in source for part in name.split("::")) for name in names):
         return []

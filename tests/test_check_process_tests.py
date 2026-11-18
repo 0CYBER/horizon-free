@@ -42,6 +42,24 @@ class ProcessTests(unittest.TestCase):
             """
         self.assertEqual(names(source), [])
 
+    def test_a_command_in_a_comment_or_string_is_not_a_process(self):
+        # `Command` in a comment or a string is not a constructed process; a `.status()`/`.arg()` on another
+        # type must not turn such a mention into a "runs a Command" verdict (the false positive of finding t04).
+        source = """\
+            #[test] fn only_in_a_comment() {
+                // Command is only mentioned here; this test never constructs one.
+                let resp = client.get("/");
+                assert_eq!(resp.status(), 200);
+                parser.arg("ignored");
+            }
+            #[test] fn only_in_a_string() {
+                let text = "Command is just a word in this string";
+                assert_eq!(client.get("/").status(), 200);
+                parser.args(&["ignored"]);
+            }
+            """
+        self.assertEqual(names(source), [])
+
     def test_a_listed_helper_and_its_alias_start_a_process(self):
         source = """\
             use crate::runtime_leases::isolated_test as isolated;
