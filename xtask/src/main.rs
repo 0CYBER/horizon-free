@@ -43,12 +43,15 @@ use std::process::{Command, ExitCode};
 const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | mod-api [notes|coverage] | tokens | icons | perf-wasm | mixins-tool release | mixins-tool patch SOURCE | mixins-tool identity TARGET | sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
-const ARCHIVED: [&str; 5] = [
+/// `LICENSES/` holds the GPL text the LGPL in `LICENSE` builds on (LGPL-3.0 section 4b asks for
+/// both beside the program) and the MIT notice of the code released before the change.
+const ARCHIVED: [&str; 6] = [
     "tools",
     "mods/horizon/src/test/java",
     "crates/horizon-prepare",
     "research-lock.json",
     "LICENSE",
+    "LICENSES",
 ];
 
 // The programs that sit beside the client (horizon-ctl, the command line and MCP server that play
