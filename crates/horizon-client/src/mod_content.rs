@@ -2370,7 +2370,10 @@ const COMMAND_REGISTRIES: [(&str, &str); 7] = [
 
 /// A mod file that adds to a worldgen bundle: (bundle, id).
 fn worldgen_entry(file: &str) -> Option<(&'static str, String)> {
-    let (ns, rest) = file.strip_prefix("data/")?.split_once("/worldgen/")?;
+    // `data/<ns>/worldgen/...` only: NeoForge's data maps sit deeper
+    // (`data/<ns>/data_maps/worldgen/biome/`) and are no worldgen of their own.
+    let (ns, rest) = file.strip_prefix("data/")?.split_once('/')?;
+    let rest = rest.strip_prefix("worldgen/")?;
     let (kind, path) = rest.split_once('/')?;
     if kind == "biome" && ns == "minecraft" {
         return None;
