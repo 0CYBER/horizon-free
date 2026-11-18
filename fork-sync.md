@@ -76,7 +76,10 @@ again.
   `offline_rows` is wired there (after `account_rows`). Keep `OFFLINE_PLAY` doing the job
   `dev_offline` did upstream: the chips in Settings > Account, the top bar's quick switch,
   `account offline|select|forget-offline|skin` and the `--name`/`HORIZON_OFFLINE_SKIN*` the game
-  gets for them.
+  gets for them. The window gives the game the same two (`developer_play.rs`'s
+  `apply_offline_look`, called from `handle_game_session`): upstream's GUI never passed them (the
+  CLI did), so Play started the game's own made-up name and the default skin whatever the Accounts
+  page said (@0CYBER/horizon-free#20).
 - Signature check disabled for fork releases (`signed_digest` returns nothing, `download()`
   skips the check when the digest is empty). `fill_stage` then stores the archive's own SHA-256,
   so `place_checked` still refuses bytes that changed after the download; keep that.
