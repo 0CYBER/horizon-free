@@ -2761,6 +2761,41 @@ fn a_client_replays_a_pistons_block_event() {
     assert!(w.ticks.moving_pistons.is_empty());
 }
 
+/// MC-254385: a client that predicted a piston facing elsewhere than the
+/// server's replays the extension on its own piston, then takes the server's
+/// base without shape updates. The head it pushed can't survive there, but
+/// `Block.updateOrDestroy` destroys nothing on a client, so it stays.
+#[test]
+fn a_client_keeps_the_head_of_a_piston_the_server_turned() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    w.level.client_side = true;
+    let base = BlockPos::new(0, 1, 0);
+    let east = w.id("piston", &[("facing", "east")]);
+    let north = w.id("piston", &[("facing", "north"), ("extended", "true")]);
+    let block = w.id("redstone_block", &[]);
+    w.put(base, east);
+    w.put(BlockPos::new(-1, 1, 0), block);
+    assert!(w.f.behaviours.client_block_event(
+        &mut w.level,
+        &mut w.ticks,
+        base,
+        0,
+        Direction::North as i32,
+    ));
+    // The server's state on the acknowledgement (flags 19: no shape updates).
+    w.put(base, north);
+    for _ in 0..10 {
+        w.level.time += 1;
+        w.f.behaviours
+            .client_tick_block_entities(&mut w.level, &mut w.ticks);
+    }
+    assert_eq!(
+        w.name(BlockPos::new(1, 1, 0)),
+        "piston_head[facing=east,short=false,type=normal]"
+    );
+}
+
 /// A client's copy of a move doesn't start the pistons the moved block
 /// powers (`checkIfExtend` is server-only): their own block events come from
 /// the server.

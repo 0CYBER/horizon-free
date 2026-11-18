@@ -540,7 +540,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     ) {
         if new != old {
             if self.b.is_air(new) {
-                self.destroy_block(pos, update_flags & flags::UPDATE_SUPPRESS_DROPS == 0, limit);
+                // A client destroys nothing: the server's update removes the
+                // block, or it stays a ghost (MC-254385's second piston head).
+                if !self.level.is_client_side() {
+                    self.destroy_block(
+                        pos,
+                        update_flags & flags::UPDATE_SUPPRESS_DROPS == 0,
+                        limit,
+                    );
+                }
             } else {
                 self.set_block_limit(
                     pos,
