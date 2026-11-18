@@ -692,9 +692,9 @@ fn decode_icon(png: &[u8]) -> Option<winit::window::Icon> {
     winit::window::Icon::from_rgba(bytes, info.width, info.height).ok()
 }
 
-/// Apply the icon given to [`set_icon_png`] to a window. Windows has a separate taskbar icon slot
-/// from the small window icon; requiring a given icon to decode there prevents a generic taskbar
-/// icon from appearing.
+/// Apply the icon given to [`set_icon_png`] and the vanilla minimum inner size (320x240) to a window.
+/// Windows has a separate taskbar icon slot from the small window icon; requiring a given icon to
+/// decode there prevents a generic taskbar icon from appearing.
 pub fn with_icon(attributes: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
     #[cfg(not(target_os = "windows"))]
     let icon = icon();
@@ -702,6 +702,9 @@ pub fn with_icon(attributes: winit::window::WindowAttributes) -> winit::window::
     let icon =
         icon_png().map(|png| decode_icon(png).expect("the window icon must decode on Windows"));
 
+    // Vanilla 26.3 Window.createWindow: SDL_SetWindowMinimumSize(windowHandle, 320, 240).
+    let attributes =
+        attributes.with_min_inner_size(winit::dpi::LogicalSize::new(320.0f64, 240.0f64));
     let attributes = attributes.with_window_icon(icon.clone());
     #[cfg(target_os = "windows")]
     let attributes =
@@ -1108,5 +1111,16 @@ mod tests {
         assert_eq!(list.refresh(None, &mut modes), Some(vec![]));
         assert_eq!(list.refresh(Some(2), &mut modes), Some(vec![mode(2)]));
         assert_eq!(listings, 3);
+    }
+
+    #[test]
+    fn with_icon_enforces_vanilla_minimum_inner_size() {
+        let attrs = with_icon(winit::window::Window::default_attributes());
+        assert_eq!(
+            attrs.min_inner_size,
+            Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+                320.0f64, 240.0f64
+            )))
+        );
     }
 }
