@@ -648,6 +648,15 @@ impl ClientSession {
     ) -> Result<Option<(i32, Vec<u8>)>> {
         use packet_ids::play::serverbound as sb;
         let v = self.version;
+        // 1.21.2 named recipes by a display id; a 1.21.1 client sends the recipe's key (a string) in place_recipe
+        // and recipe_book_seen_recipe, which the pinned readers take for a VarInt. It gets no recipe book (see
+        // `older_layout_down`), so these are not passed on.
+        if v.at_most(ServerVersion::V1_21_1)
+            && state == State::Play
+            && matches!(pinned, sb::PLACE_RECIPE | sb::RECIPE_BOOK_SEEN_RECIPE)
+        {
+            return Ok(None);
+        }
         // 1.20.6 is the oldest release: its use_item is read first, with the client's last rotation.
         if v.at_most(ServerVersion::V1_20_6) {
             let (yaw, pitch) = {
@@ -1450,6 +1459,35 @@ mod tests {
     }
 
     #[test]
+    fn the_recipe_packets_of_a_1_21_1_client_are_not_passed_on() {
+        let s = ClientSession::new(ServerVersion::V1_21_1);
+        s.reading.store(to_u8(State::Play), Ordering::Release);
+        s.writing.store(to_u8(State::Play), Ordering::Release);
+        let key = |id: i32| {
+            let mut w = Writer::new();
+            if id == 34 {
+                w.varint(2);
+            }
+            w.string("minecraft:oak_planks");
+            if id == 34 {
+                w.bool(false);
+            }
+            w.data
+        };
+        // place_recipe is 34 and recipe_book_seen_recipe 41 in 1.21.1 (packets report); both name the recipe by key.
+        assert_eq!(s.serverbound(34, key(34)).unwrap(), None);
+        assert_eq!(s.serverbound(41, key(41)).unwrap(), None);
+        // The settings packet is laid out alike and goes on (40 in 1.21.1, 47 pinned).
+        assert_eq!(
+            s.serverbound(40, vec![0, 1, 0]).unwrap(),
+            Some((
+                packet_ids::play::serverbound::RECIPE_BOOK_CHANGE_SETTINGS,
+                vec![0, 1, 0]
+            ))
+        );
+    }
+
+    #[test]
     fn a_26_2_digging_action_past_0_is_one_up() {
         let s = in_play();
         let action = |n: i32| {
@@ -1996,5 +2034,30 @@ mod tests {
             let sent = s.clientbound(&data.encode()).unwrap().unwrap();
             assert!(sent.ends_with(tail), "{version:?}: {sent:?}");
         }
+    }
+
+    /// 26.1's `spectate_entity` is its id 62 (the packets report: sign_update 61, spectate_entity 62, swing 63);
+    /// 26.3 has it as `spectator_action` at 63 (by network id, sign_update at 62).
+    #[test]
+    fn a_26_1_client_spectating_an_entity_reaches_the_server_by_network_id() {
+        let s = ClientSession::new(ServerVersion::V26_1);
+        s.reading.store(to_u8(State::Play), Ordering::Release);
+        s.writing.store(to_u8(State::Play), Ordering::Release);
+        s.entities.lock().unwrap().insert(7, (0, 0x42));
+        let mut w = Writer::new();
+        w.uuid(0x42);
+        let (id, payload) = s.serverbound(62, w.data).unwrap().unwrap();
+        assert_eq!(id, 63);
+        // OptVarInt: the network id plus one.
+        assert_eq!(payload, [8]);
+        // An entity the client was never told of is dropped.
+        let mut w = Writer::new();
+        w.uuid(0x43);
+        assert_eq!(s.serverbound(62, w.data).unwrap(), None);
+        // The ids around it keep their numbers: 26.1's sign_update (61) is the pinned 62.
+        assert_eq!(
+            ServerVersion::V26_1.serverbound_id_up(State::Play, 61),
+            Some(62)
+        );
     }
 }

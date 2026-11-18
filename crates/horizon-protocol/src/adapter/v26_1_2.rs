@@ -60,7 +60,7 @@ const PLAY_SERVERBOUND: &[Option<u8>] = &[
     Some(24), Some(25), Some(26), Some(27), Some(28), Some(29), Some(30), Some(31), Some(32), Some(33), Some(34), Some(35),
     Some(36), Some(37), Some(38), Some(39), Some(40), Some(41), Some(42), Some(43), Some(44), Some(45), None, Some(46),
     Some(47), Some(48), Some(49), Some(50), Some(51), Some(52), Some(53), Some(54), Some(55), Some(56), Some(57), Some(58),
-    Some(59), Some(60), Some(61), None, Some(64), Some(65), Some(66), Some(67), Some(68),
+    Some(59), Some(60), Some(61), Some(62), Some(64), Some(65), Some(66), Some(67), Some(68),
 ];
 /// For each id a 26.1.2 server sends in `state`, the pinned version's id of that packet.
 pub fn clientbound(state: State) -> &'static [Option<u8>] {
