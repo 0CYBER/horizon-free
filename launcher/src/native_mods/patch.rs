@@ -56,6 +56,22 @@ fn target_refusal(
     )
 }
 
+/// Removes what a previous run staged at `path`: `horizon-mixins apply` refuses an `--out` that
+/// already exists, and a stale directory must not pass for this run's output. A symlink is removed
+/// as the link itself, never followed into the directory it names.
+fn clear_output_dir(path: &Path) -> Result<(), String> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    if meta.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| format!("{}: {e}", path.display()))
+    } else {
+        fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
 /// The support modules and bridges `bundles` add to the patch crate.
 fn extras(bundles: &[&Bundle]) -> Result<api_gen::patch::Extras, String> {
     let mut extras = api_gen::patch::Extras::default();
@@ -465,7 +481,7 @@ pub(super) fn prepare<'a>(
         .collect();
     // The workspace horizon-mixins plans against: one patch crate per game crate with copies.
     let workspace = out.join("patch-workspace");
-    let _ = fs::remove_dir_all(&workspace);
+    clear_output_dir(&workspace)?;
     let write = |path: PathBuf, text: &str| {
         fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
     };
@@ -508,7 +524,7 @@ pub(super) fn prepare<'a>(
     }
     // Each mod's rows, retargeted at the copies, as the tool's bundles.
     let mods = out.join("patch-mods");
-    let _ = fs::remove_dir_all(&mods);
+    clear_output_dir(&mods)?;
     for bundle in bundles
         .iter()
         .filter(|bundle| !bundle.native().mixin.is_empty())
@@ -544,9 +560,12 @@ pub(super) fn prepare<'a>(
         )?;
     }
     let copied = started.elapsed();
+    // A repeated build in one folder finds the last run's output: clear it unconditionally, so apply
+    // never stages into an existing `--out` and no stale copy survives a run with no tool.
+    let patched = out.join("patch-applied");
+    clear_output_dir(&patched)?;
     // With no rows (only modules or bridges), the crate compiles as generated.
     let patched = if let Some(tool) = &tool {
-        let patched = out.join("patch-applied");
         super::run(
             super::apply(rust, tool, &workspace, &mods, &patched),
             "Applying the mixins to their functions",
@@ -600,6 +619,36 @@ pub(super) fn prepare<'a>(
 
 #[cfg(test)]
 mod refusal_tests {
+    #[test]
+    fn a_stale_patch_applied_directory_is_cleared_before_apply() {
+        let out = tempfile::tempdir().unwrap();
+        let patched = out.path().join("patch-applied");
+        std::fs::create_dir_all(patched.join("nested")).unwrap();
+        std::fs::write(patched.join("stale.rs"), "fn stale() {}").unwrap();
+        std::fs::write(patched.join("nested").join("also-stale.rs"), "").unwrap();
+        super::clear_output_dir(&patched).unwrap();
+        assert!(
+            !patched.exists(),
+            "a stale patch-applied directory must not survive: apply refuses an existing --out"
+        );
+        // A fresh or already-cleared path is not an error, so every run can clear unconditionally.
+        super::clear_output_dir(&patched).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_patch_applied_symlink_is_removed_not_followed() {
+        let out = tempfile::tempdir().unwrap();
+        let target = out.path().join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.rs"), "keep").unwrap();
+        let patched = out.path().join("patch-applied");
+        std::os::unix::fs::symlink(&target, &patched).unwrap();
+        super::clear_output_dir(&patched).unwrap();
+        assert!(patched.symlink_metadata().is_err());
+        assert!(target.join("keep.rs").is_file(), "the link's target stays");
+    }
+
     #[test]
     fn a_missing_or_foreign_function_index_is_refused_by_name() {
         let game = tempfile::tempdir().unwrap();
