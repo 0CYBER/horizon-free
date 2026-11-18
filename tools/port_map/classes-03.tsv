@@ -34,12 +34,12 @@ TicketStorage.getTicketLevelAt	port	crates/horizon-client/src/ticket_levels.rs::
 TicketStorage.isTicketSameTypeAndLevel	skip:other		compares stored tickets; Horizon stores none, levels come from ticket_levels.rs
 TicketStorage.packTickets	skip:other		saves stored tickets; Horizon saves forced chunks as their own file (save.rs save_forced_chunks)
 TicketStorage.purgeStaleTickets	port	crates/horizon-client/src/ticket_levels.rs::ChunkTickets::tick_portal	the timed tickets are the PORTAL ones (`PORTAL_TIMEOUT` 300 ticks, dropped a tick later as `TicketType.PORTAL` does)
-TicketStorage.removeTicket	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_forceload	gap: minor: only the forced-chunk path; portal and teleport tickets are not modelled
+TicketStorage.removeTicket	inline	crates/horizon-gameplay/src/commands/forceload.rs::forceload	gap: minor: only the forced-chunk path; portal and teleport tickets are not modelled
 TicketStorage.removeTicketIf	skip:other		predicate removal over stored tickets; forced chunks are changed by cmd_forceload
 TicketStorage.removeTicketWithRadius	port	crates/horizon-client/src/ticket_levels.rs::ChunkTickets::update	the levels are rebuilt from the sources each tick, so the fight's arena ticket is held only while `EnderDragonFight.tick` reports a watcher (`Game::update_chunk_tickets` clears the source, which is the removal of the radius-9 DRAGON ticket)
 TicketStorage.replaceTicketLevelOfType	skip:other		re-levels stored tickets; ticket_levels.rs computes levels from positions
 TicketStorage.shouldKeepDimensionActive	port	crates/horizon-client/src/game/world/levels.rs::Game::levels_to_tick	a dimension with a portal ticket keeps ticking with no player in it
-TicketStorage.updateChunkForced	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_forceload	the per-chunk add or remove of a forced chunk
+TicketStorage.updateChunkForced	inline	crates/horizon-gameplay/src/commands/forceload.rs::forceload	the per-chunk add or remove of a forced chunk
 TicketStorage.updateForcedChunks	inline	crates/horizon-client/src/save.rs::SaveDir::load_forced_chunks	gap: minor: restores the saved forced set on load; no forced-chunk packet is sent here
 BiomeSpecialEffects.Builder.build	skip:java		builder for biome effects; Horizon reads the effects from biome data (biome.rs)
 CheckerboardColumnBiomeSource.getNoiseBiome	port	crates/horizon-world/src/worldgen/biome_source.rs::CheckerboardBiomeSource::noise_biome	checkerboard column pick

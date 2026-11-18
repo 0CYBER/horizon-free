@@ -3,6 +3,8 @@
 //! calls the `Game` code it names and adds no logic.
 pub(super) mod data;
 mod entity;
+mod fillbiome;
+mod forceload;
 mod gamerule;
 mod help;
 mod recipe;
@@ -12,6 +14,7 @@ mod swing;
 pub(super) mod tag;
 mod time;
 mod weather;
+mod worldborder;
 
 use super::Game;
 use horizon_client::{command::CommandError, text::Text};

@@ -11,10 +11,10 @@ BlockScanUtils.findBlocksInSection	inline	crates/horizon-client-render/src/light
 BlockScanUtils.findBlocksWithCache	inline	crates/horizon-client/src/mobs/world.rs::MobWorld::nearest_block	gap: minor: first match in Manhattan box order, used by mob goals; explicit position lists are not generalised
 WorldBorder.getDistanceToBorder	port	crates/horizon-core/src/geometry/border.rs::BorderGeometry::distance_to_border	-
 WorldBorder.lerpSizeBetween	port	crates/horizon-client-render/src/worldborder.rs::WorldBorder::lerp_between	-
-WorldBorder.setSafeZone	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder damage buffer arm; no listener notification
-WorldBorder.setDamagePerBlock	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder damage amount arm; no listener notification
-WorldBorder.setWarningTime	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder warning time arm; no listener notification
-WorldBorder.setWarningBlocks	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder warning distance arm; no listener notification
+WorldBorder.setSafeZone	port	crates/horizon-gameplay/src/commands/worldborder.rs::worldborder	plain field write in the /worldborder damage buffer arm; no listener notification
+WorldBorder.setDamagePerBlock	port	crates/horizon-gameplay/src/commands/worldborder.rs::worldborder	plain field write in the /worldborder damage amount arm; no listener notification
+WorldBorder.setWarningTime	port	crates/horizon-gameplay/src/commands/worldborder.rs::worldborder	plain field write in the /worldborder warning time arm; no listener notification
+WorldBorder.setWarningBlocks	port	crates/horizon-gameplay/src/commands/worldborder.rs::worldborder	plain field write in the /worldborder warning distance arm; no listener notification
 WorldBorder.applyInitialSettings	inline	crates/horizon-client-render/src/worldborder.rs::WorldBorder::unpack	saved settings restored on every load; no initialized flag
 WorldBorder.MovingBorderExtent.getMinX	port	crates/horizon-core/src/geometry/border.rs::BorderGeometry::bounds	bounds returns all four edges
 WorldBorder.MovingBorderExtent.getMinZ	port	crates/horizon-core/src/geometry/border.rs::BorderGeometry::bounds	bounds returns all four edges
@@ -72,7 +72,7 @@ LevelChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save/block_
 LevelChunk.removeGameEventListener	skip:java	-	listener registry bookkeeping; game events dispatch by position
 LevelChunk.removeBlockEntityTicker	skip:java	-	tickers are rebuilt from block state (block_entities.rs tickers)
 LevelChunk.runPostLoad	missing	-	minor: unsure: no post-load step for block entities found
-LevelChunk.replaceBiomes	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_fillbiome	the /fillbiome command replaces the biomes of a region
+LevelChunk.replaceBiomes	port	crates/horizon-gameplay/src/commands/fillbiome.rs::fillbiome	the /fillbiome command replaces the biomes of a region
 LevelChunk.postProcessGeneration	port	crates/horizon-client/src/game/world/postprocess.rs::Game::postprocess_chunks	the marked positions are updated once the chunk is live (aquifer fluids, shape-dependent blocks)
 LevelChunk.promotePendingBlockEntity	skip:java	-	pending NBT slot; Horizon decodes block entities when they load (save.rs decode_block_entity)
 LevelChunk.unregisterTickContainerFromLevel	skip:java	-	tick container bookkeeping; scheduled ticks live in level/update.rs

@@ -74,7 +74,7 @@ ChunkMap.sendToTrackingPlayersFiltered	port	crates/horizon-client/src/lan/contai
 ChunkMap.sendToTrackingPlayersAndSelf	port	crates/horizon-client/src/lan/containers.rs::Hub::critical_hit	the one caller, the crit animation, goes to the attacker and the clients tracking them
 ChunkMap.isTrackedByAnyPlayer	skip:debug		only the debug synchronizers ask
 ChunkMap.forEachEntityTrackedBy	skip:debug		only the debug synchronizers ask
-ChunkMap.resendBiomesForChunks	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_fillbiome	/fillbiome sends the changed columns' biomes to the guests that have them (Hub::resend_biomes, a ChunksBiomes packet), in the order the columns were gathered
+ChunkMap.resendBiomesForChunks	inline	crates/horizon-gameplay/src/commands/fillbiome.rs::fillbiome	/fillbiome sends the changed columns' biomes to the guests that have them (Hub::resend_biomes, a ChunksBiomes packet), in the order the columns were gathered
 ChunkMap.waitForLightBeforeSending	inline	crates/horizon-client/src/lan/hub.rs::Hub::next_batch	columns are sent only once lit
 ChunkMap.forEachReadyToSendChunk	skip:debug		only the debug synchronizers ask
 ChunkMap.TrackedEntity.equals	skip:java		identity by entity id; Horizon keys tracked entities by id

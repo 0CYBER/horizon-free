@@ -7,15 +7,15 @@ FetchProfileCommand.resolveId	port	crates/horizon-client/src/game/administration
 FetchProfileCommand.printForEntity	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_fetchprofile	entity branch: player profile links; other entities get no_profile error
 FetchProfileCommand.reportResolvedProfile	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::report_resolved_profile	the profile as ResolvableProfile.CODEC encodes it, four clickable actions and the head object, sent successfully without broadcasting
 FillBiomeCommand.register	port	crates/horizon-command/src/tree_world.rs::fillbiome	syntax of /fillbiome incl. replace filter
-FillBiomeCommand.quantize	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_fillbiome	quart snap (v >> 2) << 2 done in cmd_fillbiome
-FillBiomeCommand.makeResolver	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_fillbiome	biome cells inside the box set in cmd_fillbiome, filter honoured
+FillBiomeCommand.quantize	inline	crates/horizon-gameplay/src/commands/fillbiome.rs::fillbiome	quart snap (v >> 2) << 2 done in cmd_fillbiome
+FillBiomeCommand.makeResolver	inline	crates/horizon-gameplay/src/commands/fillbiome.rs::fillbiome	biome cells inside the box set in cmd_fillbiome, filter honoured
 FillCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	fill literal with replace/keep/filter/mode branches
 FillCommand.fillBlocks	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_fill	fill with area limit, hollow/outline/destroy/strict/keep modes
 FillCommand.wrapWithMode	port	crates/horizon-command/src/vanilla.rs::fill_modes	the mode literals outline, hollow, destroy and strict laid over the fill node
 ForceLoadCommand.register	port	crates/horizon-command/src/tree_world.rs::forceload	syntax of /forceload add|remove|query
-ForceLoadCommand.queryForceLoad	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_forceload	query branch of cmd_forceload
-ForceLoadCommand.removeAll	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_forceload	remove.all branch of cmd_forceload
-ForceLoadCommand.changeForceLoad	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_forceload	add/remove over a chunk box with the 256-chunk limit
+ForceLoadCommand.queryForceLoad	port	crates/horizon-gameplay/src/commands/forceload.rs::forceload	query branch of cmd_forceload
+ForceLoadCommand.removeAll	port	crates/horizon-gameplay/src/commands/forceload.rs::forceload	remove.all branch of cmd_forceload
+ForceLoadCommand.changeForceLoad	port	crates/horizon-gameplay/src/commands/forceload.rs::forceload	add/remove over a chunk box with the 256-chunk limit
 FunctionCommand.register	port	crates/horizon-command/src/tree_misc.rs::function	syntax of /function incl. with <source> [path]
 FunctionCommand.getArgumentTag	inline	crates/horizon-client/src/game/administration/functions.rs::Game::cmd_function	with <path> branch reads the tag and rejects non-compound
 FunctionCommand.queueFunctions	inline	crates/horizon-client/src/game/administration/functions.rs::Game::cmd_function	no-return path runs in cmd_function; return path goes through run_return_run

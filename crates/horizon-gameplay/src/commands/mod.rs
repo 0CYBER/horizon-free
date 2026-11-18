@@ -2,6 +2,8 @@
 //! it needs from the game (see [`host`]).
 pub mod data;
 pub mod entity;
+pub mod fillbiome;
+pub mod forceload;
 pub mod gamerule;
 pub mod help;
 pub mod host;
@@ -12,3 +14,4 @@ pub mod swing;
 pub mod tag;
 pub mod time;
 pub mod weather;
+pub mod worldborder;
