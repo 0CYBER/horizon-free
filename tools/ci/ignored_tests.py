@@ -275,7 +275,10 @@ def daily_tests(package, target):
 
 def shard_runs(package, target):
     """Whether `package`'s own shard runs the tests of `target` (`lib`, `bin:NAME`, `test:NAME`)."""
-    return package in ignored_shards.SHARDS and (target == "lib" or package in INTEGRATION_TESTS)
+    return package in ignored_shards.SHARDS and (
+        target == "lib"
+        or package in INTEGRATION_TESTS and target.startswith(("bin:", "test:"))
+    )
 
 
 @lru_cache(maxsize=None)

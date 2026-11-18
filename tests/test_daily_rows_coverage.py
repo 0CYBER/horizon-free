@@ -162,6 +162,18 @@ class RowlessIgnores(unittest.TestCase):
                 row("horizon-launcher", "e::tests::slow")]
         self.assertEqual(check.rowless_problems(rows, functions), [])
 
+    def test_integration_package_examples_and_benches_need_a_row(self):
+        uncovered = [self.ignored("crates/horizon-client/examples/a.rs", {"horizon-client"}, "example"),
+                     self.ignored("crates/horizon-client/benches/b.rs", {"horizon-client"}, "bench")]
+        problems = check.rowless_problems([], uncovered)
+        self.assertEqual([problem.split(":", 1)[0] for problem in problems],
+                         ["crates/horizon-client/examples/a.rs", "crates/horizon-client/benches/b.rs"])
+
+        covered = [self.ignored("crates/horizon-client/src/lib.rs", {"horizon-client"}, "lib"),
+                   self.ignored("crates/horizon-client/src/bin/a.rs", {"horizon-client"}, "bin"),
+                   self.ignored("crates/horizon-client/tests/b.rs", {"horizon-client"}, "test")]
+        self.assertEqual(check.rowless_problems([], covered), [])
+
     def test_where_a_source_file_builds(self):
         self.assertEqual([check.target_kind("crates/x", path) for path in (
             "crates/x/src/lib.rs", "crates/x/src/main.rs", "crates/x/src/bin/tool.rs", "crates/x/tests/it.rs",
