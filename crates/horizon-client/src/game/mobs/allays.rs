@@ -1,5 +1,6 @@
 //! Allays on the game side: the hand-over interaction (`Allay.mobInteract`)
-//! and its client prediction. Their tick runs in `horizon_gameplay::allays`.
+//! and its client prediction. Their tick runs in `horizon_gameplay::allays`, and
+//! reaches the delivery and the liked player through [`AllayLevel`].
 use super::Game;
 use super::level_sounds::LevelSound;
 use horizon_client::{
@@ -7,6 +8,7 @@ use horizon_client::{
     items::ItemStack,
     mobs::{Species, allay},
 };
+use horizon_gameplay::allays::AllayLevel;
 use mod_api::SoundSource;
 
 impl Game<'_> {
@@ -83,6 +85,23 @@ impl Game<'_> {
     pub(super) fn tick_allays(&mut self) {
         horizon_gameplay::allays::tick_allays(self);
     }
+    /// The UUID of the player an allay likes (`LIKED_PLAYER`).
+    fn allay_liked_uuid(&self, i: usize) -> [i32; 4] {
+        horizon_gameplay::allays::liked_uuid(self, i)
+    }
+    /// `AllayAi.getLikedPlayer`: the player the allay was given an item by,
+    /// found by UUID among the host and the guests of the level (the window
+    /// is a guest on the server thread), when they are not a spectator and
+    /// within 64 blocks.
+    fn allay_liked_player(&self, i: usize) -> Option<horizon_core::geometry::Vec3> {
+        horizon_gameplay::allays::liked_player(self, i)
+    }
+    /// `GoAndGiveItemsToTarget` / `AllayAi.throwItem`: within 3 blocks of
+    /// the deposit, one item a tick, each restarting the three-second pause
+    /// before it picks anything up again.
+    fn allay_deliver(&mut self, i: usize) {
+        horizon_gameplay::allays::deliver(self, i);
+    }
     /// `Allay.mobInteract`: duplicate when dancing with an amethyst shard,
     /// take the held item, or hand back what it holds.
     pub(super) fn interact_allay(&mut self, index: usize, item: Option<&ItemStack>) -> bool {
@@ -155,5 +174,17 @@ impl Game<'_> {
             return true;
         }
         false
+    }
+}
+
+impl AllayLevel for Game<'_> {
+    fn allay_deliver(&mut self, i: usize) {
+        Game::allay_deliver(self, i);
+    }
+    fn allay_liked_player(&self, i: usize) -> Option<horizon_core::geometry::Vec3> {
+        Game::allay_liked_player(self, i)
+    }
+    fn allay_liked_uuid(&self, i: usize) -> [i32; 4] {
+        Game::allay_liked_uuid(self, i)
     }
 }

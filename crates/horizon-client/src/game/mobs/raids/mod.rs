@@ -20,13 +20,14 @@ use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, LevelRandom, RandomSource},
 };
+use horizon_gameplay::village_siege::{SiegeLevel, VillageSiege};
 use std::collections::{HashMap, HashSet};
 
 /// Patrol and raid state owned by the game.
 #[derive(Default)]
 pub(super) struct Raiding {
     patrol: PatrolSpawner,
-    siege: horizon_gameplay::village_siege::VillageSiege,
+    siege: VillageSiege,
     /// The raids of the dimension the player is in, and that dimension.
     pub(super) raids: Raids,
     loaded: Option<Dim>,
@@ -1373,15 +1374,33 @@ impl Game<'_> {
             self.spawn_event_mob("minecraft:pillager", at, m.leader, raider::Reason::Patrol);
         }
     }
-    /// `VillageSiege.tick` (`horizon_gameplay::village_siege`) on the game level.
+    /// `VillageSiege.tick`: at midnight one night in ten, 20 zombies spawn
+    /// two ticks apart near a village 32 blocks from a player standing in it.
     pub(super) fn tick_village_siege(&mut self) {
-        let mut siege = std::mem::take(&mut self.raiding.siege);
-        siege.tick(self);
-        self.raiding.siege = siege;
+        horizon_gameplay::village_siege::tick(self);
     }
     /// `ServerLevel.isVillage`: within one section of a village.
     fn is_village(centers: &HashSet<(i32, i32, i32)>, pos: [i32; 3]) -> bool {
         horizon_gameplay::village_siege::is_village(centers, pos)
+    }
+    /// `VillageSiege.tryToSetupSiege`: the first player standing in a village
+    /// picks a spot 32 blocks away (ten tries); true when one stood in a
+    /// village, even if no spot was found.
+    fn try_to_setup_siege(&mut self) -> bool {
+        horizon_gameplay::village_siege::try_to_setup(self)
+    }
+    /// `VillageSiege.trySpawn`: one zombie, in a random yaw.
+    fn try_spawn_siege_zombie(&mut self) {
+        horizon_gameplay::village_siege::try_spawn(self);
+    }
+    /// `VillageSiege.findRandomSpawnPos`: ten tries within 8 blocks of the
+    /// spot for a village column where a zombie may spawn.
+    fn find_siege_spawn_pos(
+        &mut self,
+        centers: &HashSet<(i32, i32, i32)>,
+        spot: [i32; 3],
+    ) -> Option<[f64; 3]> {
+        horizon_gameplay::village_siege::find_spawn_pos(self, centers, spot)
     }
     /// A raider's ominous banner (drop chance 2.0: always dropped) and a
     /// patrol captain's ominous bottle (`entities/pillager`).
@@ -1416,6 +1435,28 @@ impl Game<'_> {
                 *self.stack_in_mut(slot) = None;
             }
         }
+    }
+}
+
+impl SiegeLevel for Game<'_> {
+    fn is_village(centers: &HashSet<(i32, i32, i32)>, pos: [i32; 3]) -> bool {
+        Game::is_village(centers, pos)
+    }
+    fn siege(&mut self) -> &mut VillageSiege {
+        &mut self.raiding.siege
+    }
+    fn try_to_setup_siege(&mut self) -> bool {
+        Game::try_to_setup_siege(self)
+    }
+    fn try_spawn_siege_zombie(&mut self) {
+        Game::try_spawn_siege_zombie(self);
+    }
+    fn find_siege_spawn_pos(
+        &mut self,
+        centers: &HashSet<(i32, i32, i32)>,
+        spot: [i32; 3],
+    ) -> Option<[f64; 3]> {
+        Game::find_siege_spawn_pos(self, centers, spot)
     }
 }
 

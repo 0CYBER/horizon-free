@@ -13,6 +13,21 @@ const MIN_CHANCE: i32 = 25;
 const MAX_CHANCE: i32 = 75;
 const ATTEMPTS: i32 = 10;
 
+/// What the spawner calls on its level beyond [`CustomSpawnerLevel`]: the game's own trader
+/// methods, which mods target. Each runs the function of this module of the same name.
+pub trait TraderLevel: CustomSpawnerLevel {
+    /// `WanderingTraderSpawner.spawn` ([`spawn`]).
+    fn spawn_trader(&mut self) -> bool;
+    /// `tryToSpawnLlamaFor` ([`spawn_llama`]).
+    fn spawn_trader_llama(&mut self, trader: u32, radius: i32);
+    /// `findSpawnPositionNear` ([`find_spawn_near`]).
+    fn find_trader_spawn_near(&mut self, reference: [i32; 3], radius: i32) -> Option<[i32; 3]>;
+    /// `hasEnoughSpace` ([`has_space`]).
+    fn trader_has_space(&self, pos: [i32; 3]) -> bool;
+    /// The closest bell within `range` blocks ([`nearest_bell`]).
+    fn nearest_bell(&self, from: [i32; 3], range: i32) -> Option<[i32; 3]>;
+}
+
 /// The spawner's clock and the `WanderingTraderData` saved with the world.
 pub struct Spawner {
     tick_delay: i32,
@@ -89,18 +104,18 @@ impl Spawner {
     }
     /// `WanderingTraderSpawner.tick` once its data is loaded: the clock,
     /// the chance, then the spawn.
-    pub fn tick(&mut self, l: &mut impl CustomSpawnerLevel) {
+    pub fn tick(&mut self, l: &mut impl TraderLevel) {
         let Some(chance) = self.due() else {
             return;
         };
-        if l.parts().world.random.next_int_bound(100).unwrap_or(100) <= chance && spawn(l) {
+        if l.parts().world.random.next_int_bound(100).unwrap_or(100) <= chance && l.spawn_trader() {
             self.spawned();
         }
     }
 }
 
 /// `WanderingTraderSpawner.spawn`.
-fn spawn(l: &mut impl CustomSpawnerLevel) -> bool {
+pub fn spawn(l: &mut impl TraderLevel) -> bool {
     // ServerLevel.getRandomPlayer: one of the living players, drawn
     // from the level random.
     let alive: Vec<Vec3> = l
@@ -119,13 +134,11 @@ fn spawn(l: &mut impl CustomSpawnerLevel) -> bool {
         return false;
     }
     let player_pos = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
-    let parts = l.parts();
-    let reference = nearest_bell(parts.world, parts.facts, player_pos, 48).unwrap_or(player_pos);
-    let Some(pos) = find_spawn_near(l, reference, 48) else {
+    let reference = l.nearest_bell(player_pos, 48).unwrap_or(player_pos);
+    let Some(pos) = l.find_trader_spawn_near(reference, 48) else {
         return false;
     };
-    let parts = l.parts();
-    if !has_space(parts.world, parts.facts, pos) {
+    if !l.trader_has_space(pos) {
         return false;
     }
     if l.chunk_biome_has("minecraft:without_wandering_trader_spawns", pos) {
@@ -145,7 +158,7 @@ fn spawn(l: &mut impl CustomSpawnerLevel) -> bool {
         return false;
     };
     for _ in 0..2 {
-        spawn_llama(l, id, 4);
+        l.spawn_trader_llama(id, 4);
     }
     if let Some(m) = l.parts().mobs.iter_mut().find(|m| m.id == id) {
         trader::start_visit(m, reference);
@@ -154,7 +167,7 @@ fn spawn(l: &mut impl CustomSpawnerLevel) -> bool {
 }
 
 /// `tryToSpawnLlamaFor`: a trader llama near the trader, on its lead.
-fn spawn_llama(l: &mut impl CustomSpawnerLevel, trader: u32, radius: i32) {
+pub fn spawn_llama(l: &mut impl TraderLevel, trader: u32, radius: i32) {
     let Some(at) = l.parts().mobs.iter().find(|m| m.id == trader).map(|m| {
         [
             m.position.x.floor() as i32,
@@ -164,7 +177,7 @@ fn spawn_llama(l: &mut impl CustomSpawnerLevel, trader: u32, radius: i32) {
     }) else {
         return;
     };
-    let Some(pos) = find_spawn_near(l, at, radius) else {
+    let Some(pos) = l.find_trader_spawn_near(at, radius) else {
         return;
     };
     let spot = [
@@ -187,7 +200,7 @@ fn spawn_llama(l: &mut impl CustomSpawnerLevel, trader: u32, radius: i32) {
 
 /// `findSpawnPositionNear`: ten tries at a column near the reference
 /// where the trader could stand.
-fn find_spawn_near(
+pub fn find_spawn_near(
     l: &mut impl CustomSpawnerLevel,
     reference: [i32; 3],
     radius: i32,
@@ -212,7 +225,7 @@ fn find_spawn_near(
 }
 
 /// `hasEnoughSpace`: no collision in the 2 by 3 by 2 box.
-fn has_space(world: &World, facts: &BlockFacts, pos: [i32; 3]) -> bool {
+pub fn has_space(world: &World, facts: &BlockFacts, pos: [i32; 3]) -> bool {
     (0..=1).all(|dx| {
         (0..=2).all(|dy| {
             (0..=1).all(|dz| {
@@ -225,7 +238,12 @@ fn has_space(world: &World, facts: &BlockFacts, pos: [i32; 3]) -> bool {
 }
 
 /// The closest bell (`PoiTypes.MEETING`) within `range` blocks.
-fn nearest_bell(world: &World, facts: &BlockFacts, from: [i32; 3], range: i32) -> Option<[i32; 3]> {
+pub fn nearest_bell(
+    world: &World,
+    facts: &BlockFacts,
+    from: [i32; 3],
+    range: i32,
+) -> Option<[i32; 3]> {
     let mut best: Option<([i32; 3], i32)> = None;
     for x in from[0] - range..=from[0] + range {
         for z in from[2] - range..=from[2] + range {

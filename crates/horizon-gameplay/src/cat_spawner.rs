@@ -7,6 +7,13 @@ use horizon_core::{geometry::Vec3, random::RandomSource};
 
 pub const TICK_DELAY: i32 = 1200;
 
+/// What the cat spawner calls on its level beyond [`CustomSpawnerLevel`]: the game's own
+/// `spawn_cat`, which mods target. It runs [`spawn_cat`].
+pub trait CatLevel: CustomSpawnerLevel {
+    /// `spawnCat`.
+    fn spawn_cat(&mut self, pos: [i32; 3], persistent: bool);
+}
+
 /// `CatSpawner.nextTick`.
 #[derive(Default)]
 pub struct CatSpawner {
@@ -24,7 +31,7 @@ impl CatSpawner {
     }
 
     /// `CatSpawner.tick` (the overworld's custom spawner).
-    pub fn tick(&mut self, l: &mut impl CustomSpawnerLevel) {
+    pub fn tick(&mut self, l: &mut impl CatLevel) {
         if !l.overworld() || !self.due() {
             return;
         }
@@ -44,14 +51,14 @@ impl CatSpawner {
         }
         if sections_to_village(&l.village_centers(), section(pos)) <= 2 {
             if village_takes_cat(l.parts().mobs, pos) {
-                spawn_cat(l, pos, false);
+                l.spawn_cat(pos, false);
             }
         } else {
             let hut = l.structure_tag("minecraft:cats_spawn_in");
             if l.structures_at(pos).iter().any(|s| hut.contains(s))
                 && hut_takes_cat(l.parts().mobs, pos)
             {
-                spawn_cat(l, pos, true);
+                l.spawn_cat(pos, true);
             }
         }
     }

@@ -16,6 +16,16 @@ use horizon_client::{
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
+/// What the looting code calls on its level beyond [`MobLevel`]: the game's own
+/// methods for the replace check and the attribute numbers, which mods target. Each runs
+/// the function of this module of the same name.
+pub trait LootingLevel: MobLevel {
+    /// `Mob.canReplaceCurrentItem` ([`can_replace`]).
+    fn can_replace(&self, index: usize, stack: &ItemStack, slot: Slot) -> bool;
+    /// `Mob.getApproximateAttributeWith` ([`attributes`]).
+    fn attributes(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> (f64, f64, f64);
+}
+
 /// `Mob.aiStep`'s looting block, once per mob per tick.
 pub fn tick_mob_looting<L: MobLevel + ?Sized>(l: &mut L) {
     let griefing = l.mob_griefing();
@@ -90,7 +100,7 @@ pub fn tick_mob_looting<L: MobLevel + ?Sized>(l: &mut L) {
 
 /// `Mob.equipItemIfPossible`: what `slot` would take of `stack`, and how
 /// many items that takes. `None` when the mob has no use for it.
-pub fn equip_item_if_possible<L: MobLevel + ?Sized>(
+pub fn equip_item_if_possible<L: LootingLevel + ?Sized>(
     l: &mut L,
     index: usize,
     stack: &ItemStack,
@@ -107,7 +117,7 @@ pub fn equip_item_if_possible<L: MobLevel + ?Sized>(
     if !l.equip_allows(&prepared, index, slot.name(), data) {
         return None;
     }
-    let mut replace = can_replace(l, index, stack, slot);
+    let mut replace = l.can_replace(index, stack, slot);
     let p = l.parts();
     // An armour piece that beats nothing it is worn with falls back to an
     // empty main hand.
@@ -152,8 +162,9 @@ pub fn equip_item_if_possible<L: MobLevel + ?Sized>(
 }
 
 /// `Mob.canReplaceCurrentItem` for what the mob `index` wears or holds in `slot`.
-fn can_replace<L: MobLevel + ?Sized>(
-    l: &mut L,
+pub fn can_replace<L: MobLevel + ?Sized>(
+    l: &L,
+    items: &Items,
     index: usize,
     stack: &ItemStack,
     slot: Slot,
@@ -170,7 +181,6 @@ fn can_replace<L: MobLevel + ?Sized>(
     }
     let new = l.stack_facts(m, stack, slot);
     let worn = l.stack_facts(m, &worn_stack, slot);
-    let items = l.parts().items;
     let preferred = equip::preferred_weapon_tag(species).map(|tag| {
         (
             items.item_in_tag(tag, &stack.item),
@@ -182,14 +192,14 @@ fn can_replace<L: MobLevel + ?Sized>(
 
 /// The numbers `Mob.compareArmor` and `compareWeapons` read off `stack`
 /// in `slot` for the mob `m`.
-pub fn stack_facts(
-    items: &Items,
+pub fn stack_facts<L: LootingLevel + ?Sized>(
+    l: &L,
     stations: &StationData,
     m: &Mob,
     stack: &ItemStack,
     slot: Slot,
 ) -> Facts {
-    let (armor, toughness, attack) = attributes(items, m, stack, slot);
+    let (armor, toughness, attack) = l.attributes(m, stack, slot);
     Facts {
         armor,
         armor_toughness: toughness,
@@ -203,7 +213,7 @@ pub fn stack_facts(
 
 /// `Mob.getApproximateAttributeWith` for `stack` in `slot`: each
 /// attribute starts from the mob's own value. (armour, toughness, damage)
-fn attributes(items: &Items, m: &Mob, stack: &ItemStack, slot: Slot) -> (f64, f64, f64) {
+pub fn attributes(items: &Items, m: &Mob, stack: &ItemStack, slot: Slot) -> (f64, f64, f64) {
     let modifiers = horizon_client::item_attributes::attribute_modifiers(stack, items);
     let modifiers = &*modifiers;
     (

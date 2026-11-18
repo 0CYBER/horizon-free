@@ -40,7 +40,7 @@ fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
         let coat = level.next_int_bound(coats.len() as i32).unwrap() as usize;
         let sound = level.next_int_bound(sound_count).unwrap() as u8;
         let before = game.mobs.len();
-        horizon_gameplay::cat_spawner::spawn_cat(&mut game, [4, 100, 8], false);
+        game.spawn_cat([4, 100, 8], false);
         assert_eq!(game.mobs.len(), before + 1, "one cat");
         let cat = game.mobs.last().expect("cat");
         assert_eq!(cat.species(), Species::Cat);

@@ -13,8 +13,17 @@ use horizon_client::{
 };
 use horizon_core::geometry::Vec3;
 
+/// What fox code calls on its level beyond [`MobLevel`]: the game's own fox
+/// methods, which mods target. Each runs the function of this module of the same name.
+pub trait FoxLevel: MobLevel {
+    /// `Fox.isConsumableFood` ([`fox_food`]).
+    fn fox_food(&self, item: &str) -> bool;
+    /// `Fox.pickUpItem` ([`fox_pick_up`]).
+    fn fox_pick_up(&mut self, fox_index: usize, item_index: usize);
+}
+
 /// `Fox.ALLOWED_ITEMS` and the looting block of `Mob.aiStep` for foxes, once a tick.
-pub fn tick_foxes<L: MobLevel + ?Sized>(l: &mut L) {
+pub fn tick_foxes<L: FoxLevel + ?Sized>(l: &mut L) {
     let griefing = l.mob_griefing();
     let mut near = ItemAreas::default();
     for i in 0..l.parts().mobs.len() {
@@ -31,23 +40,22 @@ pub fn tick_foxes<L: MobLevel + ?Sized>(l: &mut L) {
         if may_grief && near.may_meet(p.dropped, p.next_entity, reach) {
             let mut j = 0;
             while j < l.parts().dropped.len() {
-                let p = l.parts();
-                let e = &p.dropped[j];
+                let e = &l.dropped()[j];
                 if e.pickup_delay > 0 || e.stack.count == 0 || !reach.intersects(e.bounds()) {
                     j += 1;
                     continue;
                 }
-                let item_food = fox_food(p.items, &e.stack.item);
-                let held_food = p.mobs[i]
+                let item_food = l.fox_food(&e.stack.item);
+                let held_food = l.mobs()[i]
                     .extra
                     .main_hand_id()
-                    .is_some_and(|held| fox_food(p.items, held));
-                if !fox::can_hold_item(&p.mobs[i], item_food, held_food) {
+                    .is_some_and(|held| l.fox_food(held));
+                if !fox::can_hold_item(&l.mobs()[i], item_food, held_food) {
                     j += 1;
                     continue;
                 }
                 // The entity is discarded: the next one is at `j` now.
-                fox_pick_up(l, i, j);
+                l.fox_pick_up(i, j);
             }
         }
         // `FoxSearchForItemsGoal`: the first allowed item within 8 blocks.
@@ -134,7 +142,7 @@ pub fn tick_dolphins<L: MobLevel + ?Sized>(l: &mut L) {
 }
 
 /// `Fox.isConsumableFood`.
-fn fox_food(items: &Items, item: &str) -> bool {
+pub fn fox_food(items: &Items, item: &str) -> bool {
     items
         .get(item)
         .is_some_and(|i| i.food.is_some() && i.consumable.is_some())
@@ -142,7 +150,7 @@ fn fox_food(items: &Items, item: &str) -> bool {
 
 /// `Fox.pickUpItem`: the extra items drop where it stands, what it held is spat out
 /// ahead of it, and it holds one of the item.
-fn fox_pick_up<L: MobLevel + ?Sized>(l: &mut L, fox_index: usize, item_index: usize) {
+pub fn fox_pick_up<L: MobLevel + ?Sized>(l: &mut L, fox_index: usize, item_index: usize) {
     let p = l.parts();
     let before = p.dropped[item_index].clone();
     let mut stack = before.stack.clone();

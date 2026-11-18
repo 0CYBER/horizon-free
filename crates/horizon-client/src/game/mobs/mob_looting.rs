@@ -1,5 +1,6 @@
 //! `Mob.aiStep`'s looting loop runs in `horizon_gameplay::mob_looting` on the game's
-//! `MobLevel`; the pickup trigger and the equipment numbers piglins share stay here.
+//! `MobLevel`; the pickup trigger and the equipment numbers piglins share stay here, and
+//! the loop reaches the replace check and the attribute numbers through [`LootingLevel`].
 use super::Game;
 use horizon_client::{
     entities::ItemEntity,
@@ -9,6 +10,7 @@ use horizon_client::{
         equip::{Facts, Slot},
     },
 };
+use horizon_gameplay::mob_looting::LootingLevel;
 #[cfg(test)]
 use horizon_client::mobs::finalize;
 
@@ -24,16 +26,21 @@ impl Game<'_> {
         horizon_gameplay::mob_looting::equip_item_if_possible(self, index, stack)
     }
 
+    /// `Mob.canReplaceCurrentItem` for what `m` wears or holds in `slot`.
+    fn can_replace(&self, index: usize, stack: &ItemStack, slot: Slot) -> bool {
+        horizon_gameplay::mob_looting::can_replace(self, self.items(), index, stack, slot)
+    }
+
     /// The numbers `Mob.compareArmor` and `compareWeapons` read off `stack`
     /// in `slot` for the mob `m`.
     pub(super) fn stack_facts(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> Facts {
-        horizon_gameplay::mob_looting::stack_facts(
-            self.items(),
-            world_stations!(self),
-            m,
-            stack,
-            slot,
-        )
+        horizon_gameplay::mob_looting::stack_facts(self, world_stations!(self), m, stack, slot)
+    }
+
+    /// `Mob.getApproximateAttributeWith` for `stack` in `slot`: each
+    /// attribute starts from the mob's own value. (armour, toughness, damage)
+    fn attributes(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> (f64, f64, f64) {
+        horizon_gameplay::mob_looting::attributes(self.items(), m, stack, slot)
     }
 
     /// `LivingEntity.onItemPickup`: the advancement of whoever threw the item,
@@ -49,6 +56,15 @@ impl Game<'_> {
                 g.trigger_item_entity("minecraft:thrown_item_picked_up_by_entity", &stack, &target);
             }
         });
+    }
+}
+
+impl LootingLevel for Game<'_> {
+    fn can_replace(&self, index: usize, stack: &ItemStack, slot: Slot) -> bool {
+        Game::can_replace(self, index, stack, slot)
+    }
+    fn attributes(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> (f64, f64, f64) {
+        Game::attributes(self, m, stack, slot)
     }
 }
 

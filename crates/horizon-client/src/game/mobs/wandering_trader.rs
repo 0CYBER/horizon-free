@@ -3,6 +3,7 @@
 //! bell), bringing two llamas on leads, and wanders off after two days.
 use super::{Dim, Game, creatures::Creatures};
 use horizon_client::save::{read_dat, write_dat};
+use horizon_gameplay::wandering_trader::TraderLevel;
 
 pub(super) use horizon_gameplay::wandering_trader::Spawner;
 
@@ -51,5 +52,49 @@ impl Game<'_> {
         let mut trader = std::mem::take(&mut self.creatures.trader);
         trader.tick(self);
         self.creatures.trader = trader;
+    }
+    /// `WanderingTraderSpawner.spawn`.
+    fn spawn_trader(&mut self) -> bool {
+        horizon_gameplay::wandering_trader::spawn(self)
+    }
+    /// `tryToSpawnLlamaFor`: a trader llama near the trader, on its lead.
+    fn spawn_trader_llama(&mut self, trader: u32, radius: i32) {
+        horizon_gameplay::wandering_trader::spawn_llama(self, trader, radius);
+    }
+    /// `findSpawnPositionNear`: ten tries at a column near the reference
+    /// where the trader could stand.
+    fn find_trader_spawn_near(&mut self, reference: [i32; 3], radius: i32) -> Option<[i32; 3]> {
+        horizon_gameplay::wandering_trader::find_spawn_near(self, reference, radius)
+    }
+    /// `hasEnoughSpace`: no collision in the 2 by 3 by 2 box.
+    fn trader_has_space(&self, pos: [i32; 3]) -> bool {
+        horizon_gameplay::wandering_trader::has_space(&self.world, self.res.facts(), pos)
+    }
+    /// The closest bell (`PoiTypes.MEETING`) within `range` blocks.
+    fn nearest_bell(&self, from: [i32; 3], range: i32) -> Option<[i32; 3]> {
+        horizon_gameplay::wandering_trader::nearest_bell(
+            &self.world,
+            self.res.facts(),
+            from,
+            range,
+        )
+    }
+}
+
+impl TraderLevel for Game<'_> {
+    fn spawn_trader(&mut self) -> bool {
+        Game::spawn_trader(self)
+    }
+    fn spawn_trader_llama(&mut self, trader: u32, radius: i32) {
+        Game::spawn_trader_llama(self, trader, radius);
+    }
+    fn find_trader_spawn_near(&mut self, reference: [i32; 3], radius: i32) -> Option<[i32; 3]> {
+        Game::find_trader_spawn_near(self, reference, radius)
+    }
+    fn trader_has_space(&self, pos: [i32; 3]) -> bool {
+        Game::trader_has_space(self, pos)
+    }
+    fn nearest_bell(&self, from: [i32; 3], range: i32) -> Option<[i32; 3]> {
+        Game::nearest_bell(self, from, range)
     }
 }
