@@ -395,7 +395,13 @@ def rotate() -> None:
 
 
 def stale(tags: list[dict], today: dt.date, days: int) -> list[str]:
-    """The dated nightly pre-releases older than `days`: never a release, never `nightly` itself."""
+    """The dated nightly pre-releases older than `days`: never a release, never `nightly` itself.
+
+    `days` is a retention window and must be non-negative: a negative value would move the
+    cutoff past today and mark every dated nightly, including today's, for deletion.
+    """
+    if days < 0:
+        raise ValueError(f"--days must be non-negative, got {days}")
     cutoff = today - dt.timedelta(days=days)
     return [r["tagName"] for r in tags if r["isPrerelease"] and (m := DATED.match(r["tagName"]))
             and dt.date.fromisoformat(m.group(1)) < cutoff]

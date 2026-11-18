@@ -48,6 +48,16 @@ class NightlyTests(unittest.TestCase):
                 {"tagName": "nightly-2026-10-15-extra", "isPrerelease": True}]
         self.assertEqual(nightly.stale(tags, dt.date(2026, 10, 28), 7), ["nightly-2026-10-20"])
 
+    def test_a_negative_retention_window_is_refused_and_today_is_never_pruned(self):
+        tags = [{"tagName": f"nightly-2026-11-{day:02d}", "isPrerelease": True} for day in range(10, 18)]
+        today = dt.date(2026, 11, 17)
+        self.assertEqual(nightly.stale(tags, today, 7), [])
+        # Even at a zero-day window the cutoff is today, so today's nightly is never older than it.
+        self.assertNotIn("nightly-2026-11-17", nightly.stale(tags, today, 0))
+        # A negative window used to move the cutoff into the future and doom every tag, today's included.
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            nightly.stale(tags, today, -1)
+
     def test_notes_list_what_reached_main_as_a_release_did(self):
         merged = [merged_pr(1, "Fix pistons", ["feature"], issues=[7]), merged_pr(2, "Water flows", []),
                   merged_pr(3, "CI only", ["skip-release"]), merged_pr(4, "Docs", [], paths=[])]
