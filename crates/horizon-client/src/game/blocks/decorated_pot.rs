@@ -209,6 +209,8 @@ impl Game<'_> {
             count: 7,
             randomization: 0,
         });
+        // `DecoratedPotBlockEntity.setChanged()`: a comparator beside the pot re-reads it.
+        self.container_changed((pos[0], pos[1], pos[2]));
         self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
         Some(Answer::Success)
     }

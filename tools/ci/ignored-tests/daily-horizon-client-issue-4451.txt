@@ -964,8 +964,11 @@ horizon-client game::machines::part_front_tests::a_part_handing_a_crafters_outpu
 horizon-client game::machines::part_front_tests::a_part_handing_a_droppers_item_back_into_it_loses_none lib daily resources
 horizon-client game::machines::pot_hopper_insertion_tests::actual_hopper_pulls_from_the_saved_pot_slot lib daily resources
 horizon-client game::machines::pot_hopper_insertion_tests::actual_hopper_ticks_insert_into_the_saved_pot_slot lib daily resources
+horizon-client game::machines::pot_signal_tests::a_hand_inserted_item_raises_an_already_powered_comparator lib daily resources
+horizon-client game::machines::pot_signal_tests::a_hand_inserted_item_wakes_the_unpowered_comparator_beside_the_pot lib daily resources
 horizon-client game::machines::pot_signal_tests::a_hopper_inserted_item_updates_the_comparator_beside_the_pot lib daily resources
 horizon-client game::machines::pot_signal_tests::a_pot_feeds_a_comparator_from_its_saved_slot_like_a_chest lib daily resources
+horizon-client game::machines::pot_signal_tests::a_refused_hand_insert_leaves_the_comparator_beside_the_pot_alone lib daily resources
 horizon-client game::machines::tank_reopen_tests::a_committed_mod_tank_survives_a_world_save_close_and_reopen lib daily resources
 horizon-client game::machines::tests::a_container_writing_a_shelf_posts_block_activate lib daily resources
 horizon-client game::mannequin_save_tests::a_mannequin_reads_and_saves_from_its_own_state lib daily resources
