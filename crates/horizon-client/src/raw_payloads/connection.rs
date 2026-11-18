@@ -225,7 +225,12 @@ impl Connection {
         self.clear_payloads();
     }
     pub fn accept(&self, entries: &[Entry]) -> Result<(), String> {
+        self.accept_marked(entries, false)
+    }
+    /// `silent`: the peer is a Horizon server that never negotiated (`Peer::silent`).
+    pub fn accept_marked(&self, entries: &[Entry], silent: bool) -> Result<(), String> {
         let mut peer = self.local.freeze(entries, self.side)?;
+        peer.silent = silent;
         let bytes = peer.owned_snapshot_bytes();
         let physical = self
             .reserve_ingress(bytes)

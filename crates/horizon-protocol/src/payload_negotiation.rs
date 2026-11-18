@@ -336,6 +336,8 @@ pub struct Negotiation {
     /// Whether this end sent a Query.
     queried: bool,
     protocol_required: bool,
+    /// Whether the peer sent any control message.
+    heard: bool,
     frozen: Option<Vec<Entry>>,
 }
 impl Negotiation {
@@ -345,6 +347,7 @@ impl Negotiation {
             offered: false,
             queried: false,
             protocol_required: false,
+            heard: false,
             frozen: None,
         }
     }
@@ -368,6 +371,7 @@ impl Negotiation {
         self.frozen.as_deref()
     }
     pub fn receive(&mut self, control: Control) -> Result<Option<Control>, Error> {
+        self.heard = true;
         if self.frozen.is_some() {
             return Err(match control {
                 Control::Offer(_) => Error::UnexpectedOffer,
@@ -401,6 +405,19 @@ impl Negotiation {
             self.frozen = Some(intersect(&self.local, &Manifest::default())?);
         }
         Ok(())
+    }
+    /// [`Self::finish_without_offer`] for a client meeting a Horizon server that predates
+    /// this negotiation (servers before 2026-11-16 never send on [`CHANNEL`]). A required
+    /// peer that sent nothing at all is admitted like a vanilla peer, with only optional
+    /// declarations dropped, and this returns `true`. A peer that sent anything keeps every
+    /// check: without its Offer it is still `MissingProtocolResponse`.
+    pub fn finish_allowing_silent_peer(&mut self) -> Result<bool, Error> {
+        let silent = self.protocol_required && !self.heard && self.frozen.is_none();
+        if silent {
+            self.frozen = Some(intersect(&self.local, &Manifest::default())?);
+        }
+        self.finish_without_offer()?;
+        Ok(silent)
     }
 }
 fn intersect(local: &Manifest, peer: &Manifest) -> Result<Vec<Entry>, Error> {

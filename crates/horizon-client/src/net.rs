@@ -1137,6 +1137,7 @@ fn run(
         cookies,
         resources,
         payloads,
+        true,
     )?;
     let _ = send.send(Event::Joined {
         registries: Arc::new(registries),
@@ -1233,6 +1234,7 @@ fn receive_play(
                     cookies,
                     resources,
                     payloads,
+                    false,
                 )?;
                 let _ = send.send(Event::Reconfigured(Arc::new(registries)));
             }
@@ -1302,9 +1304,32 @@ fn receive_application(
     payload: cfg::CustomPayload,
     send: &ingress::Producer<Event>,
 ) -> Result<Option<cfg::CustomPayload>, Reason> {
-    match crate::raw_payloads::Incoming::classify(endpoint.transport(), phase, payload)
-        .map_err(|error| Reason::plain(error.to_string()))?
-    {
+    let classified =
+        match crate::raw_payloads::Incoming::classify(endpoint.transport(), phase, payload) {
+            Ok(classified) => classified,
+            // A Horizon server from before the negotiation may still send on a channel this
+            // side declares (attachment sync goes to every Horizon-branded client): skip it,
+            // since nothing was negotiated to read it with.
+            Err(failure) => {
+                let silent = endpoint
+                    .transport()
+                    .epoch()
+                    .filter(|epoch| epoch.peer.silent());
+                match (silent, &failure.error) {
+                    (Some(epoch), mod_api::PayloadSendError::UnsupportedPeer(_)) => {
+                        if epoch.peer.first_skip() {
+                            log::info!(
+                                "Skipping {}: the server did not negotiate it",
+                                failure.id.0
+                            );
+                        }
+                        return Ok(None);
+                    }
+                    _ => return Err(Reason::plain(failure.to_string())),
+                }
+            }
+        };
+    match classified {
         crate::raw_payloads::Classified::Other(payload) => Ok(Some(payload)),
         crate::raw_payloads::Classified::Application(incoming) => {
             crate::raw_payloads::dispatch(
@@ -1330,6 +1355,8 @@ fn configure(
     cookies: &Cookies,
     resources: &ItemData,
     payloads: &Arc<crate::raw_payloads::Transport>,
+    // The connection's first configuration, not a reconfiguration from play.
+    initial: bool,
 ) -> Result<Dynamic, Reason> {
     let mut registries = Dynamic::default();
     let mut content_verified = false;
@@ -1520,17 +1547,31 @@ fn configure(
             }
             cfg::Clientbound::Disconnect(d) => return Err(Reason::tag(&d.reason, lang)),
             cfg::Clientbound::FinishConfiguration(_) => {
-                negotiation
-                    .finish_without_offer()
-                    .map_err(|error| Reason::plain(error.to_string()))?;
+                // A Horizon server that never sent on horizon:payloads predates the
+                // negotiation: play on with nothing negotiated, as on a vanilla server.
+                // Only on the first configuration: a server that goes silent when it
+                // reconfigures is refused as before.
+                let silent = if initial {
+                    negotiation.finish_allowing_silent_peer()
+                } else {
+                    negotiation.finish_without_offer().map(|()| false)
+                }
+                .map_err(|error| Reason::plain(error.to_string()))?;
+                if silent {
+                    log::info!(
+                        "The server did not answer horizon:payloads: Horizon's negotiated extensions are off"
+                    );
+                }
                 if payloads.epoch().is_none() {
-                    payloads
-                        .accept(
-                            negotiation
-                                .accepted()
-                                .expect("configuration barrier freezes negotiation"),
-                        )
-                        .map_err(Reason::plain)?;
+                    let accepted = negotiation
+                        .accepted()
+                        .expect("configuration barrier freezes negotiation");
+                    if silent {
+                        payloads.accept_from_silent_server(accepted)
+                    } else {
+                        payloads.accept(accepted)
+                    }
+                    .map_err(Reason::plain)?;
                 }
                 crate::datapack_net::finish_transfer().map_err(Reason::plain)?;
                 registries.custom_components = content_verified;
@@ -1793,65 +1834,178 @@ mod tests {
         (root, data)
     }
 
-    #[test]
-    fn horizon_server_without_raw_protocol_is_refused_at_finish() {
-        for wrong_version in [false, true] {
-            let (root, data) = empty_item_data("raw-protocol-refusal");
-            let (client, server) = horizon_protocol::connection::Pipe::pair();
-            let (mut reader, writer) = Connection::local(client).split();
-            reader
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            let thread = std::thread::spawn(move || {
-                let (send, _events) = event_channel();
+    /// A Horizon-branded server's configuration: the brand, then `negotiation` on
+    /// `horizon:payloads`, then FinishConfiguration. Returns the client's result, its
+    /// transport (with the engine's declarations) and the pieces to receive play payloads.
+    fn configure_with_horizon_server(
+        name: &str,
+        negotiation: &[Vec<u8>],
+    ) -> (
+        Result<Dynamic, Reason>,
+        crate::raw_payloads::Endpoint,
+        ingress::Producer<Event>,
+    ) {
+        let payloads =
+            crate::raw_payloads::Transport::capture(crate::raw_payloads::Side::Client).unwrap();
+        configure_on(name, &payloads, true, negotiation)
+    }
+
+    /// One configuration pass of `payloads`' connection: `initial` for the first, else a
+    /// reconfiguration from play.
+    fn configure_on(
+        name: &str,
+        payloads: &Arc<crate::raw_payloads::Transport>,
+        initial: bool,
+        negotiation: &[Vec<u8>],
+    ) -> (
+        Result<Dynamic, Reason>,
+        crate::raw_payloads::Endpoint,
+        ingress::Producer<Event>,
+    ) {
+        let (root, data) = empty_item_data(name);
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let configuring = Arc::new(AtomicBool::new(true));
+        let payloads = payloads.clone();
+        let (send, _events) = event_channel();
+        let thread = std::thread::spawn({
+            let (writer, configuring, payloads, send) = (
+                writer.clone(),
+                configuring.clone(),
+                payloads.clone(),
+                send.clone(),
+            );
+            move || {
                 configure(
                     &mut reader,
-                    &Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap()))),
-                    &Arc::new(AtomicBool::new(true)),
+                    &writer,
+                    &configuring,
                     &Language::new(),
                     &send,
                     &Cookies::default(),
                     &data,
-                    &crate::raw_payloads::Transport::empty(),
+                    &payloads,
+                    initial,
                 )
-            });
-            let mut server = Connection::local(server);
-            let mut brand = horizon_protocol::buf::Writer::new();
-            brand.string("horizon");
-            server
-                .send(
-                    &cfg::Clientbound::CustomPayload(cfg::CustomPayload {
-                        channel: "minecraft:brand".into(),
-                        data: brand.data,
-                    })
-                    .encode(),
-                )
-                .unwrap();
-            if wrong_version {
-                server
-                    .send(
-                        &cfg::Clientbound::CustomPayload(cfg::CustomPayload {
-                            channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
-                            data: vec![0, horizon_protocol::payload_negotiation::RAW_PROTOCOL + 1],
-                        })
-                        .encode(),
-                    )
-                    .unwrap();
-            } else {
-                server
-                    .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
-                    .unwrap();
             }
-            let Err(error) = thread.join().unwrap() else {
-                panic!("old Horizon server admitted");
-            };
-            assert!(error.text.contains(if wrong_version {
-                "protocol version"
-            } else {
-                "missing response"
-            }));
-            std::fs::remove_dir_all(root).unwrap();
+        });
+        let mut server = Connection::local(server);
+        let mut brand = horizon_protocol::buf::Writer::new();
+        brand.string("horizon");
+        let custom = |channel: &str, data: Vec<u8>| {
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: channel.into(),
+                data,
+            })
+            .encode()
+        };
+        server.send(&custom("minecraft:brand", brand.data)).unwrap();
+        // The client may already have refused and hung up: later sends can fail.
+        for control in negotiation {
+            let _ = server.send(&custom(
+                horizon_protocol::payload_negotiation::CHANNEL,
+                control.clone(),
+            ));
         }
+        let _ = server.send(&cfg::Clientbound::FinishConfiguration(Empty).encode());
+        let result = thread.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        let endpoint =
+            crate::raw_payloads::Endpoint::client(writer, configuring, payloads, send.clone());
+        (result, endpoint, send)
+    }
+
+    fn attachment_sync() -> cfg::CustomPayload {
+        cfg::CustomPayload {
+            channel: horizon_protocol::attachment_sync::CHANNEL.into(),
+            data: vec![0],
+        }
+    }
+
+    /// #17892: a Horizon server from before the negotiation never sends on horizon:payloads.
+    #[test]
+    fn a_horizon_server_that_never_negotiates_is_joined_with_nothing_negotiated() {
+        let (result, endpoint, send) = configure_with_horizon_server("raw-protocol-silent", &[]);
+        if let Err(error) = result {
+            panic!("older Horizon server refused: {}", error.text);
+        }
+        let epoch = endpoint.transport().epoch().unwrap();
+        assert!(epoch.peer.silent());
+        // Attachment sync is clientbound: this client must not receive it.
+        assert!(!epoch.peer.engine_receives(
+            horizon_protocol::payload_negotiation::Phase::Play,
+            horizon_protocol::attachment_sync::CHANNEL
+        ));
+        // Such a server still sends attachment sync to Horizon-branded clients: skipped.
+        for _ in 0..2 {
+            assert!(matches!(
+                receive_application(
+                    &endpoint,
+                    horizon_protocol::payload_negotiation::Phase::Play,
+                    attachment_sync(),
+                    &send,
+                ),
+                Ok(None)
+            ));
+        }
+    }
+
+    /// The fallback is for the first configuration only: a negotiated connection whose
+    /// server sends the brand again on reconfiguration and then nothing is refused.
+    #[test]
+    fn a_negotiated_connection_that_reconfigures_silently_is_refused() {
+        use horizon_protocol::payload_negotiation::{Control, Manifest};
+        let payloads =
+            crate::raw_payloads::Transport::capture(crate::raw_payloads::Side::Client).unwrap();
+        let (result, ..) = configure_on(
+            "raw-protocol-reconfigure-first",
+            &payloads,
+            true,
+            &[Control::Offer(Manifest::default()).encode().unwrap()],
+        );
+        if let Err(error) = result {
+            panic!("current Horizon server refused: {}", error.text);
+        }
+        let (result, ..) = configure_on("raw-protocol-reconfigure-silent", &payloads, false, &[]);
+        assert!(result.err().unwrap().text.contains("missing response"));
+    }
+
+    #[test]
+    fn a_horizon_server_that_answers_keeps_every_check() {
+        use horizon_protocol::payload_negotiation::{Control, Manifest, RAW_PROTOCOL};
+        let (result, ..) = configure_with_horizon_server(
+            "raw-protocol-wrong-version",
+            &[vec![0, RAW_PROTOCOL + 1]],
+        );
+        assert!(result.err().unwrap().text.contains("protocol version"));
+        // A Query without its Offer is an answer that never finished.
+        let (result, ..) = configure_with_horizon_server(
+            "raw-protocol-query-only",
+            &[Control::Query.encode().unwrap()],
+        );
+        assert!(result.err().unwrap().text.contains("missing response"));
+        // A server that offered without attachment sync and sends it anyway is refused.
+        let (result, endpoint, send) = configure_with_horizon_server(
+            "raw-protocol-answered",
+            &[Control::Offer(Manifest::default()).encode().unwrap()],
+        );
+        if let Err(error) = result {
+            panic!("current Horizon server refused: {}", error.text);
+        }
+        assert!(!endpoint.transport().epoch().unwrap().peer.silent());
+        let Err(error) = receive_application(
+            &endpoint,
+            horizon_protocol::payload_negotiation::Phase::Play,
+            attachment_sync(),
+            &send,
+        ) else {
+            panic!("unnegotiated payload admitted from a server that answered");
+        };
+        assert!(error.text.contains("UnsupportedPeer"));
     }
 
     #[test]
@@ -1879,6 +2033,7 @@ mod tests {
                     &Cookies::default(),
                     &data,
                     &crate::raw_payloads::Transport::empty(),
+                    true,
                 )
             });
             let mut server = Connection::local(server);
@@ -2374,6 +2529,7 @@ mod tests {
                 &Cookies::default(),
                 &data,
                 &crate::raw_payloads::Transport::empty(),
+                true,
             )
         });
         let mut server = Connection::local(server);
@@ -2421,6 +2577,7 @@ mod tests {
                 &Cookies::default(),
                 &data,
                 &crate::raw_payloads::Transport::empty(),
+                true,
             )
         });
         let mut server = Connection::local(server);
@@ -2484,6 +2641,7 @@ mod tests {
                 &Cookies::default(),
                 &data,
                 &crate::raw_payloads::Transport::empty(),
+                true,
             )
         });
         let mut server = Connection::local(server);

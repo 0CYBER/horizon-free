@@ -259,6 +259,58 @@ fn horizon_protocol_mark_is_required_independently_of_declarations() {
     }
 }
 #[test]
+fn a_silent_horizon_server_is_admitted_with_nothing_negotiated() {
+    for local in [Manifest::default(), manifest(true, "v", Flow::ToServer)] {
+        let mut n = Negotiation::new(local);
+        n.require_protocol();
+        assert_eq!(n.finish_allowing_silent_peer(), Ok(true));
+        assert_eq!(n.accepted(), Some([].as_slice()));
+        // A vanilla peer is not reported as a silent Horizon one.
+        let mut n = Negotiation::new(manifest(true, "v", Flow::ToServer));
+        assert_eq!(n.finish_allowing_silent_peer(), Ok(false));
+        assert_eq!(n.accepted(), Some([].as_slice()));
+    }
+    // A required declaration still refuses, as with a vanilla peer.
+    let mut n = Negotiation::new(manifest(false, "v", Flow::ToServer));
+    n.require_protocol();
+    assert!(matches!(
+        n.finish_allowing_silent_peer(),
+        Err(Error::Incompatible {
+            reason: Mismatch::Missing,
+            ..
+        })
+    ));
+}
+#[test]
+fn a_server_that_answers_keeps_every_check() {
+    let local = manifest(true, "v", Flow::ToServer);
+    // Answered in full: the same intersection as without the fallback.
+    let mut n = Negotiation::new(local.clone());
+    n.require_protocol();
+    n.receive(Control::Offer(local.clone())).unwrap();
+    assert_eq!(n.finish_allowing_silent_peer(), Ok(false));
+    // One entry in each phase.
+    assert_eq!(n.accepted().unwrap().len(), 2);
+    // A Query without the Offer is still a missing response.
+    let mut n = Negotiation::new(local.clone());
+    n.require_protocol();
+    n.receive(Control::Query).unwrap();
+    assert_eq!(
+        n.finish_allowing_silent_peer(),
+        Err(Error::MissingProtocolResponse)
+    );
+    // A mismatched Offer is still refused.
+    let mut n = Negotiation::new(local);
+    n.require_protocol();
+    assert!(matches!(
+        n.receive(Control::Offer(manifest(true, "other", Flow::ToServer))),
+        Err(Error::Incompatible {
+            reason: Mismatch::Version,
+            ..
+        })
+    ));
+}
+#[test]
 fn another_typed_schema_is_refused_when_required_and_absent_when_optional() {
     let two = "1+payload-schema.0000000000000002";
     let one = "1+payload-schema.0000000000000001";

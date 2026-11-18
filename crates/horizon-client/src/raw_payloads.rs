@@ -47,7 +47,10 @@ use mod_api::__private::game::{PayloadReceiver, Payloads, installed_payloads};
 use mod_api::{PayloadDirection, PayloadId, PayloadProtocol, PayloadSendError};
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 pub use transport::Transport;
 
@@ -263,6 +266,8 @@ impl Local {
             local: self.clone(),
             side,
             phases,
+            silent: false,
+            skip_logged: AtomicBool::new(false),
             credit: None,
         })
     }
@@ -273,6 +278,9 @@ pub struct Peer {
     pub local: Arc<Local>,
     side: Side,
     phases: [HashMap<String, Option<PayloadReceiver>>; 2],
+    /// A Horizon server from before the negotiation: it never sent on `horizon:payloads`.
+    silent: bool,
+    skip_logged: AtomicBool,
     // Declared last so owned table storage is released before its credits.
     credit: Option<(
         connection::IngressLease,
@@ -280,6 +288,15 @@ pub struct Peer {
     )>,
 }
 impl Peer {
+    /// Whether this table came from a Horizon server that never negotiated
+    /// ([`Transport::accept_from_silent_server`]).
+    pub fn silent(&self) -> bool {
+        self.silent
+    }
+    /// True the first time a payload from a silent server is skipped, so it is logged once.
+    pub fn first_skip(&self) -> bool {
+        !self.skip_logged.swap(true, Ordering::Relaxed)
+    }
     fn owned_snapshot_bytes(&self) -> usize {
         // These immutable maps are constructed only by insertion in freeze: no
         // erasure/tombstones. Reuse the audited conservative fresh table model.

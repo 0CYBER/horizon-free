@@ -74,6 +74,14 @@ impl Transport {
         }
         Ok(())
     }
+    /// [`Self::accept`] for a Horizon server from before the negotiation: its unnegotiated
+    /// payloads on this side's declared channels are skipped, not refused.
+    pub fn accept_from_silent_server(&self, entries: &[Entry]) -> Result<(), String> {
+        if let Some(connection) = &self.connection {
+            connection.accept_marked(entries, true)?;
+        }
+        Ok(())
+    }
     pub fn finish_configuration(&self) -> Result<(), String> {
         if let Some(connection) = &self.connection {
             connection.finish_configuration()?;
