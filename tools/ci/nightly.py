@@ -386,7 +386,7 @@ def rotate() -> None:
     if not current:
         return
     m = TITLE_DATE.search(json.loads(current)["name"])
-    dated = f"nightly-{m.group(1)}" if m else f"nightly-{dt.date.today() - dt.timedelta(days=1)}"
+    dated = f"nightly-{m.group(1)}" if m else f"nightly-{dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)}"
     if gh("release", "view", dated, "--json", "tagName", check=False):
         gh("release", "delete", dated, "--cleanup-tag", "--yes")  # a second nightly the same day replaces the first
     gh("release", "edit", "nightly", "--tag", dated)

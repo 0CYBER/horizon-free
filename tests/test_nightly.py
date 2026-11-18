@@ -94,6 +94,46 @@ class NightlyTests(unittest.TestCase):
         self.assertIsNone(nightly.DATED.match(tag))
 
 
+class RotateTests(unittest.TestCase):
+    def test_fallback_tag_uses_utc_not_the_local_date(self):
+        # A runner west of UTC, after 17:00 UTC: the two calendars disagree by a day.
+        utc_today, local_today = dt.date(2026, 11, 17), dt.date(2026, 11, 16)
+        now_timezones = []
+
+        class FakeDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                now_timezones.append(tz)
+                return dt.datetime(utc_today.year, utc_today.month, utc_today.day, 12, 0, 0,
+                                   tzinfo=(tz or dt.timezone.utc))
+
+        class FakeDate(dt.date):
+            @classmethod
+            def today(cls):
+                return local_today
+
+        fake_dt = type("FakeDateTimeModule", (), {
+            "datetime": FakeDateTime, "date": FakeDate,
+            "timedelta": dt.timedelta, "timezone": dt.timezone,
+        })
+
+        calls = []
+        def fake_gh(*args, **kwargs):
+            calls.append(args)
+            if args[:3] == ("release", "view", "nightly"):
+                return json.dumps({"name": "Nightly - no date in this title"})
+            return ""
+
+        with mock.patch.object(nightly, "gh", fake_gh), \
+                mock.patch.object(nightly, "dt", fake_dt), \
+                mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}):
+            nightly.rotate()
+
+        rename = next(a for a in calls if a[:3] == ("release", "edit", "nightly"))
+        self.assertEqual(rename[-1], "nightly-" + str(utc_today - dt.timedelta(days=1)))
+        self.assertNotEqual(rename[-1], "nightly-" + str(local_today - dt.timedelta(days=1)))
+        self.assertEqual(now_timezones, [dt.timezone.utc])
+
 
 class ScheduledTests(unittest.TestCase):
     def test_the_scheduled_nightly_drops_merged_closed_and_refused_ones(self):
