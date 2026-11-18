@@ -3673,15 +3673,17 @@ impl Hub {
                 }));
             }
         });
-        // AbstractContainerMenu.broadcastChanges for the inventory menu.
+        // AbstractContainerMenu.broadcastChanges for the inventory menu: the
+        // slots are compared where they lie and only the changed ones copied.
         let mut changes = Vec::new();
         for slot in 0..46 {
-            let now = self.guests[i].menu_slot(slot);
-            if now != self.guests[i].menu_sent[slot] {
-                changes.push((slot, now));
+            let now = self.guests[i].menu_slot_ref(slot);
+            if now != self.guests[i].menu_sent[slot].as_ref() {
+                changes.push(slot);
             }
         }
-        for (slot, now) in changes {
+        for slot in changes {
+            let now = self.guests[i].menu_slot(slot);
             let net = self.stack(&now);
             self.guests.update(i, |g| {
                 g.menu_state = (g.menu_state + 1) & 0x7FFF;
@@ -5221,6 +5223,7 @@ mod tests {
     #[path = "../far_tests.rs"]
     mod far_tests;
     mod live_player_limit_tests;
+    mod menu_sync_tests;
     mod ordered_inbox_tests;
     mod pending_move_bound_tests;
     mod pending_move_scope_tests;

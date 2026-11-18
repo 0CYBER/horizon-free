@@ -2,7 +2,7 @@
 //! level events, animations and block containers with their clicks.
 use super::{
     hub::Hub,
-    menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
+    menu::{self, Menu, NativeMenuEvent, Rules, SlotRef, Slots, View},
 };
 use crate::{containers::BlockEntity, items::ItemStack, world::World};
 use horizon_core::nbt::Tag;
@@ -658,17 +658,23 @@ impl Hub {
         }
     }
 
-    fn view_slot(&self, i: usize, world: &World, slot: usize) -> Option<ItemStack> {
+    /// The slot's stack as the menu holds it: borrowed where its storage can
+    /// lend it, so a tick's comparison copies nothing.
+    fn view_slot_ref<'a>(&'a self, i: usize, world: &'a World, slot: usize) -> SlotRef<'a> {
         let g = &self.guests[i];
         match &g.menu {
-            Some(m) if slot < m.size => m.slots.get(world, g, slot),
-            Some(m) => g
-                .inventory
-                .get(player_slot(slot - m.size))
-                .cloned()
-                .flatten(),
-            None => g.menu_slot(slot),
+            Some(m) if slot < m.size => m.slots.get_ref(world, g, slot),
+            Some(m) => SlotRef::Borrowed(
+                g.inventory
+                    .get(player_slot(slot - m.size))
+                    .and_then(|s| s.as_ref()),
+            ),
+            None => SlotRef::Borrowed(g.menu_slot_ref(slot)),
         }
+    }
+
+    fn view_slot(&self, i: usize, world: &World, slot: usize) -> Option<ItemStack> {
+        self.view_slot_ref(i, world, slot).into_stack()
     }
 
     /// ServerGamePacketListenerImpl.handleContainerClick. Returns the stacks
@@ -1120,14 +1126,12 @@ impl Hub {
                 continue;
             }
             for slot in 0..size + 36 {
-                let now = self.view_slot(i, world, slot);
-                let sent = self.guests[i]
-                    .menu
-                    .as_ref()
-                    .and_then(|m| m.sent.get(slot).cloned());
-                if sent.as_ref() == Some(&now) {
+                let now = self.view_slot_ref(i, world, slot);
+                let sent = self.guests[i].menu.as_ref().and_then(|m| m.sent.get(slot));
+                if now.matches_sent(sent) {
                     continue;
                 }
+                let now = now.into_stack();
                 let net = self.stack(&now);
                 self.guests.update(i, |g| {
                     if let Some(m) = g.menu.as_mut() {

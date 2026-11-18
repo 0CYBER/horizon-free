@@ -213,6 +213,40 @@ pub enum SlotBacking {
     Native(usize),
 }
 
+/// A container slot's stack as the menu holds it, so a tick can compare it
+/// with the copy the client was last sent without copying it first.
+#[derive(Debug)]
+pub(super) enum SlotRef<'a> {
+    /// The slot of the menu's own storage (a block entity's, the ender
+    /// chest's, a mod's menu, the player's inventory): the stack where it
+    /// lies, `None` for an empty slot and for one the menu does not have.
+    Borrowed(Option<&'a ItemStack>),
+    /// A slot no storage holds as a list (`Menu::craft_result`, a mod menu
+    /// type's linked containers), read out and copied to be looked at.
+    Owned(Option<ItemStack>),
+}
+
+impl SlotRef<'_> {
+    /// Whether `sent` (the copy the menu keeps of what the client was last
+    /// told, none for a slot it never got) already holds this stack. Both
+    /// sides are compared by value: storages hand out a fresh `ItemStack`
+    /// every read, its `Box<StackData>` included, so the nested contents of
+    /// a shulker or a book are compared too.
+    pub(super) fn matches_sent(&self, sent: Option<&Option<ItemStack>>) -> bool {
+        match self {
+            SlotRef::Borrowed(now) => sent.is_some_and(|sent| sent.as_ref() == *now),
+            SlotRef::Owned(now) => sent == Some(now),
+        }
+    }
+    /// The slot's stack, copied if the menu lent it.
+    pub(super) fn into_stack(self) -> Option<ItemStack> {
+        match self {
+            SlotRef::Borrowed(now) => now.cloned(),
+            SlotRef::Owned(now) => now,
+        }
+    }
+}
+
 impl Slots {
     /// Optional persisted limits in the container's menu order.
     pub fn stack_limits(self, world: &World, size: usize) -> Vec<Option<u32>> {
@@ -308,35 +342,52 @@ impl Slots {
             .iter()
             .all(|k| k.1 == VEHICLE_KEY_Y || guest.within_block_range([k.0, k.1, k.2], 4.0))
     }
-    /// Container slot `n`.
-    pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {
+    /// Container slot `n`, borrowed where the menu's storage can lend it: the
+    /// ender chest, a mod's menu and the block entities are, a crafting result
+    /// and the linked containers read out and copied. An empty slot and one
+    /// the menu does not have are both `Borrowed(None)`, as both are `None`
+    /// for [`Self::get`].
+    pub(super) fn get_ref<'a>(
+        self,
+        world: &'a World,
+        guest: &'a Guest,
+        mut n: usize,
+    ) -> SlotRef<'a> {
         if self == Slots::Ender {
-            return guest.ender_items.get(n).cloned().flatten();
+            return SlotRef::Borrowed(guest.ender_items.get(n).and_then(|s| s.as_ref()));
         }
         if self == Slots::Native {
-            return guest.native_menu.get(n).cloned().flatten();
+            return SlotRef::Borrowed(guest.native_menu.get(n).and_then(|s| s.as_ref()));
         }
         if let Some((slot, result)) = guest.menu.as_ref().and_then(Menu::craft_result)
             && slot == n
         {
-            return result;
+            return SlotRef::Owned(result);
         }
         if let Some((range, links)) = self.links_of(guest)
             && range.contains(&n)
         {
-            return read_links(world, links, range.len())
-                .into_iter()
-                .nth(n - range.start)
-                .flatten();
+            return SlotRef::Owned(
+                read_links(world, links, range.len())
+                    .into_iter()
+                    .nth(n - range.start)
+                    .flatten(),
+            );
         }
         for k in self.halves() {
-            let slots = shown(world, k)?;
+            let Some(slots) = shown(world, k) else {
+                return SlotRef::Borrowed(None);
+            };
             if n < slots.len() {
-                return slots[n].clone();
+                return SlotRef::Borrowed(slots[n].as_ref());
             }
             n -= slots.len();
         }
-        None
+        SlotRef::Borrowed(None)
+    }
+    /// Container slot `n`.
+    pub fn get(self, world: &World, guest: &Guest, n: usize) -> Option<ItemStack> {
+        self.get_ref(world, guest, n).into_stack()
     }
     /// Every container slot, in menu order.
     pub fn read(self, world: &World, guest: &Guest) -> Option<Vec<Option<ItemStack>>> {
