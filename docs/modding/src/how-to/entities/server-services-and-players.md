@@ -75,6 +75,13 @@ UUID: you can use a retained handle after disconnection until its world epoch
 closes. You cannot target arbitrary offline UUIDs. Retain the handle value, not a
 borrowed service.
 
+To change only the name in the Tab list, use `player.set_list_name(host, Some(text))`.
+Everyone sees the new name at once, colours included; `None` shows the nickname or real
+name again. The name is kept by UUID until a mod sets it again or the server stops, also
+across a leave and rejoin. The `player_tab_list_name_format` hook still has the last word,
+and chat, name tags and commands keep the real name. The call returns `false` for a stale
+handle, an unavailable server list or a player who is not online.
+
 The reads `player.latency(host)`, `player.hidden(host)` and `player.nickname(host)`
 return what the calls above set. Latency is the Tab list ping in milliseconds
 (`Option<i32>`, `0` until the first keep-alive answer). `hidden` is the level

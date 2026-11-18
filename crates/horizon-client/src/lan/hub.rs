@@ -414,6 +414,9 @@ pub struct Hub {
     /// (`native_set_nickname`), by UUID. Their real name stays everywhere
     /// else: the log, commands, the hover of the shown name.
     pub nicknames: std::collections::HashMap<u128, String>,
+    /// Names a server mod shows for players in the Tab list only (`player_set_list_name`),
+    /// by UUID, over their nickname.
+    pub list_names: std::collections::HashMap<u128, crate::text::Text>,
     /// The name the server's user cache knew a joining player by, by UUID, looked up before the
     /// cache learns the new one (PlayerList.placeNewPlayer's `oldName`); taken by the join line.
     pub former_names: std::collections::HashMap<u128, String>,
@@ -856,6 +859,7 @@ impl Hub {
             hidden: Default::default(),
             teams: Vec::new(),
             nicknames: std::collections::HashMap::new(),
+            list_names: std::collections::HashMap::new(),
             former_names: std::collections::HashMap::new(),
             viewed: Default::default(),
         }
@@ -1429,9 +1433,17 @@ impl Hub {
             show_hat: Some(guest.is_none_or(|g| g.info.model_customisation & 0x40 != 0)),
         }
     }
-    /// ServerPlayer.getTabListDisplayName: the nickname, if any, as mods format it.
+    /// ServerPlayer.getTabListDisplayName: a mod's list name, else the nickname, if any, as
+    /// mods format it.
+    /// The Tab list name before the format hook: a mod's list name, else the nickname.
+    fn tab_list_base(&self, uuid: u128) -> Option<crate::text::Text> {
+        self.list_names
+            .get(&uuid)
+            .cloned()
+            .or_else(|| self.nicknames.get(&uuid).map(crate::text::Text::literal))
+    }
     fn tab_list_name(&self, uuid: u128, name: &str) -> Option<Tag> {
-        let mut display_name = self.nicknames.get(&uuid).map(crate::text::Text::literal);
+        let mut display_name = self.tab_list_base(uuid);
         native_player_tab_list_name_format(&self.loop_context, uuid, name, &mut display_name);
         display_name.map(|text| crate::scoreboard::component_tag(&text.component()))
     }
@@ -4720,6 +4732,45 @@ impl Hub {
         }));
     }
 
+    /// Paper's `Player.setPlayerListName`: `name` in place of the player's name in the Tab
+    /// list (None: the nickname or real name again), sent to everyone at once
+    /// (`ClientboundPlayerInfoUpdatePacket` `UPDATE_DISPLAY_NAME`) and kept for a rejoin.
+    pub fn set_list_name(&mut self, uuid: u128, name: Option<crate::text::Text>) {
+        match name {
+            Some(name) => self.list_names.insert(uuid, name),
+            None => self.list_names.remove(&uuid),
+        };
+        let Some(guest) = self
+            .guests
+            .iter()
+            .find(|g| g.uuid == uuid && g.participates_online())
+        else {
+            return;
+        };
+        let display_name = self.tab_list_name(uuid, &guest.name);
+        // The held players too: a client held for its hand-over already has this entry (the login sent
+        // it), and `place_arrival` sends only the newcomer's own. A viewer a mod hid the player from has no
+        // entry for them and is told nothing: the update would give away their UUID and name. The player's
+        // own client always has its entry.
+        let packet = C::PlayerInfoUpdate(play::PlayerInfoUpdate {
+            actions: 0x20,
+            entries: vec![play::PlayerInfo {
+                uuid,
+                display_name: Some(display_name),
+                ..Default::default()
+            }],
+        });
+        self.broadcast_to(
+            &packet,
+            self.guests.simulation_iter().filter(|g| {
+                g.participates_online()
+                    && (g.placed || g.held)
+                    && (g.uuid == uuid
+                        || (self.sees(g.permission, uuid) && !g.tab_hidden.contains(&uuid)))
+            }),
+        );
+    }
+
     pub fn disconnect_all(&mut self) {
         let reason = translatable("multiplayer.disconnect.server_shutdown", &[]);
         for g in &self.guests {
@@ -5791,6 +5842,94 @@ mod tests {
         let registry = hub.rule_registry.clone();
         hub.reload_resources(hub.sync.clone(), &mut Default::default());
         assert!(Arc::ptr_eq(&registry, &hub.rule_registry));
+    }
+
+    /// Every packet the guest was sent, decoded.
+    fn sent(rx: &std::sync::mpsc::Receiver<crate::lan::Out>) -> Vec<play::Clientbound> {
+        rx.try_iter()
+            .filter_map(|out| match out {
+                crate::lan::Out::Packet(body) => {
+                    let mut reader = horizon_protocol::buf::Reader::new(&body);
+                    let id = reader.varint().ok()?;
+                    play::Clientbound::decode(id, &body[reader.position()..]).ok()
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A second placed guest, Alice (uuid 2), whose receiver is returned.
+    fn add_alice(hub: &mut Hub) -> std::sync::mpsc::Receiver<crate::lan::Out> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut alice = Guest::new(
+            crate::lan::Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Alice".into(),
+                properties: Vec::new(),
+                info: horizon_protocol::packets::configuration::ClientInformation::new(8),
+                brand: "vanilla".into(),
+                sender: crate::lan::PlayerSender::new(tx, std::sync::Arc::default()),
+                latency: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+                address: "127.0.0.1:25566".parse().unwrap(),
+                expected: false,
+            },
+            2,
+            [0.5, 64.0, 0.5],
+            8,
+        );
+        alice.placed = true;
+        alice.dimension = "minecraft:overworld".into();
+        hub.guests.push(alice);
+        rx
+    }
+
+    /// A mod's list name is kept by UUID and goes to every client that has the player's Tab entry, and
+    /// None takes it away again; it is kept for the next Tab list entry too. The decoded packets hold the
+    /// exact names (the test format hook leaves the name alone without its setting), and a viewer the
+    /// player is hidden from is told nothing.
+    #[test]
+    fn a_list_name_replaces_the_tab_list_name_and_goes_back() {
+        let (mut hub, bob) = hub_with_a_guest();
+        let alice = add_alice(&mut hub);
+        hub.nicknames.insert(1, "Bobby".into());
+        let names = |rx: &std::sync::mpsc::Receiver<crate::lan::Out>| {
+            sent(rx)
+                .into_iter()
+                .filter_map(|p| match p {
+                    play::Clientbound::PlayerInfoUpdate(update) if update.actions == 0x20 => {
+                        Some((
+                            update.entries[0].uuid,
+                            update.entries[0].display_name.clone(),
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let red = crate::text::Text::legacy("\u{a7}cBob");
+        let red_tag = crate::scoreboard::component_tag(&red.component());
+        let bobby_tag =
+            crate::scoreboard::component_tag(&crate::text::Text::literal("Bobby").component());
+        hub.set_list_name(1, Some(red.clone()));
+        assert_eq!(hub.list_names.get(&1), Some(&red));
+        for rx in [&bob, &alice] {
+            assert_eq!(names(rx), [(1, Some(Some(red_tag.clone())))]);
+        }
+        hub.set_list_name(1, None);
+        assert!(!hub.list_names.contains_key(&1));
+        for rx in [&bob, &alice] {
+            assert_eq!(names(rx), [(1, Some(Some(bobby_tag.clone())))]);
+        }
+        // A viewer Bob is hidden from gets nothing; Bob's own client still does.
+        hub.hidden.insert(1, 3);
+        hub.set_list_name(1, Some(red.clone()));
+        assert_eq!(names(&bob), [(1, Some(Some(red_tag)))]);
+        assert!(names(&alice).is_empty(), "no entry, no update");
+        // A player who is not on keeps the name for their return, and nothing is sent.
+        hub.set_list_name(7, Some(red.clone()));
+        assert!(sent(&bob).is_empty() && sent(&alice).is_empty());
+        assert_eq!(hub.list_names.get(&7), Some(&red));
     }
 
     /// [`hub_with_a_guest`] over a sync the test built.

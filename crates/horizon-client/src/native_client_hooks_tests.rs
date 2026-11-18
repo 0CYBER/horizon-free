@@ -103,9 +103,10 @@ pub(crate) fn install() {
                 }
             },
             player_tab_list_name_format: |context, _, _, display_name| {
-                *display_name = context
-                    .setting("rules_mod", "stack")
-                    .map(|value| crate::text::Text::literal(&value));
+                // Without the setting the name is left as the game made it.
+                if let Some(value) = context.setting("rules_mod", "stack") {
+                    *display_name = Some(crate::text::Text::literal(&value));
+                }
             },
             living_drown: |context, _, _, drowning, damage, bubbles, _| {
                 if context.setting("rules_mod", "stack").is_some() {
