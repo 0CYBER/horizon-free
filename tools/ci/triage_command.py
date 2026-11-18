@@ -140,6 +140,11 @@ def gh(*args: str, check: bool = True) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def encode_label(name: str) -> str:
+    """One URL path segment: `/` would otherwise become a path segment of its own."""
+    return name.replace("/", "%2F").replace(" ", "%20")
+
+
 class Api:
     """The few GitHub calls this needs; tests replace it."""
 
@@ -152,7 +157,7 @@ class Api:
 
     def label(self, name: str) -> str | None:
         """The label's real name, or None when the repository has no such label."""
-        raw = gh("api", f"repos/{self.repo}/labels/{name.replace('/', '%2F').replace(' ', '%20')}", check=False)
+        raw = gh("api", f"repos/{self.repo}/labels/{encode_label(name)}", check=False)
         return json.loads(raw)["name"] if raw else None
 
     def add_labels(self, n: int, names: list[str]) -> None:
@@ -162,7 +167,7 @@ class Api:
         gh(*args)
 
     def remove_label(self, n: int, name: str) -> None:
-        gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/labels/{name.replace(' ', '%20')}")
+        gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/labels/{encode_label(name)}")
 
     def close(self, n: int, reason: str | None) -> None:
         args = ["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f", "state=closed"]

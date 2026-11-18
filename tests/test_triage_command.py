@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import nightly_set as ns
 from tools.ci import triage_command as tc
@@ -255,6 +256,23 @@ class LimitTests(unittest.TestCase):
 
     def test_ludovic_is_unlimited(self):
         do("/close", Fake(past=past("ludovic111", 100)), login="ludovic111")
+
+
+class ApiEncodingTests(unittest.TestCase):
+    def test_a_slashed_label_is_one_path_segment_for_get_and_delete(self):
+        calls = []
+
+        def fake_gh(*args, **options):
+            calls.append(args)
+            return '{"name": "area/foo"}' if args[:2] == ("api", calls[-1][1]) and len(args) == 2 else ""
+
+        with mock.patch.object(tc, "gh", fake_gh):
+            api = tc.Api("o/r")
+            api.remove_label(5, "area/foo")
+            api.label("area/foo")
+        delete, get = calls
+        self.assertTrue(delete[-1].endswith("/issues/5/labels/area%2Ffoo"), delete)
+        self.assertTrue(get[1].endswith("/labels/area%2Ffoo"), get)
 
 
 class WorkflowTests(unittest.TestCase):
