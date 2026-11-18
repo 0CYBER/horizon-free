@@ -85,6 +85,11 @@ class Cases:
         self.rows = {}
 
     def add(self, *inputs, label=""):
+        # generate() writes each input as `0x{value:016x}` into a u64 literal.
+        # around() can produce out-of-range neighbours (e.g. -1/-2 around 0.0),
+        # which would format into invalid Rust; keep only valid u64 bit patterns.
+        if not all(0 <= value <= MASK for value in inputs):
+            return
         self.rows.setdefault(tuple(inputs), label)
 
     def around(self, value, label, radius=2):
