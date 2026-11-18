@@ -2149,6 +2149,32 @@ mod tests {
     use crate::banner::BannerLayer;
     use std::fs;
 
+    /// A recipe type without a namespace, or with an empty one, is vanilla's, as
+    /// `Identifier.parse` reads it: `crafting_shapeless` and `:crafting_shapeless` are
+    /// `minecraft:crafting_shapeless`.
+    #[test]
+    fn a_recipe_type_without_a_namespace_is_vanillas() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("data/minecraft/recipe");
+        fs::create_dir_all(&folder).unwrap();
+        let recipe = |kind: &str| {
+            format!(
+                r#"{{"type":"{kind}","ingredients":["minecraft:stone"],"result":{{"id":"minecraft:stick","count":3}}}}"#
+            )
+        };
+        fs::write(folder.join("bare.json"), recipe("crafting_shapeless")).unwrap();
+        fs::write(folder.join("empty.json"), recipe(":crafting_shapeless")).unwrap();
+        let items = Items::for_tests(Default::default());
+        let load = crate::test_resources::server_load();
+        let recipes = Recipes::load(root.path(), &items, &PackOverlay::NONE, &load).unwrap();
+        assert_eq!(recipes.crafting.len(), 2);
+        let ids: Vec<&str> = recipes.by_type["minecraft:crafting"]
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(ids, ["minecraft:bare", "minecraft:empty"]);
+    }
+
     /// ItemStackTemplate.apply applies the result patch after the input patch.
     #[test]
     fn transmute_result_patch_preserves_inheritance_and_explicit_removals() {
