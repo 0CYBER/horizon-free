@@ -1,0 +1,3 @@
+# Prepared-resource daily test: PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::native_mob_goals::tests::resetting_goals_stops_the_running_ones_and_registers_as_a_new_mob lib daily resources
+horizon-client game::native_mob_goals::tests::resetting_warden_goals_preserves_anger lib daily resources

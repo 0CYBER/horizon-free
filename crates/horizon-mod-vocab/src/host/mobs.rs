@@ -291,6 +291,18 @@ pub trait MobsBackendMut {
     #[access(WorldOnly)]
     fn mob_remove_target_goal(&mut self, mob: MobRef, id: &str) -> Option<usize>;
     /// Side: server.
+    /// Gives the mob the goals a new mob of its kind gets, for a mod whose
+    /// goals changed while the mob lived (a hot reload, a new
+    /// configuration): `register_goals` is asked once, when a mob is made.
+    /// Every running goal is stopped, both selectors are emptied and the
+    /// mob's goals are registered again, the species' own and then each
+    /// part's, with the mob as it stands now. What was added to the mob since
+    /// it was made (`add_goal`, `add_target_goal`) is gone, and the flags a
+    /// rider disables stay. False for a stale or unavailable mob, a client,
+    /// and the dragon.
+    #[access(WorldOnly)]
+    fn mob_reset_goals(&mut self, mob: MobRef) -> bool;
+    /// Side: server.
     /// `PathNavigation.moveTo(x, y, z, speed)`: true if a path was started.
     /// Refuses a stale or unavailable mob, a client, non-finite arguments,
     /// and coordinates too large for safe block arithmetic. As in vanilla,

@@ -149,6 +149,68 @@ impl Game<'_> {
         Some(self.remove_from_selector(index, id, true))
     }
 
+    /// `Mob.registerGoals` again: every running goal is stopped, both
+    /// selectors are emptied and the species' goals, then the parts', are
+    /// registered as for a new mob. The flags a rider disables stay. False
+    /// for a stale or unavailable mob, a client, and the dragon.
+    pub(super) fn mob_reset_goals(&mut self, mob: MobRef) -> bool {
+        let Some(Target::Mob(entity)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let Some(index) = self.mobs.iter().position(|m| m.id == entity) else {
+            return false;
+        };
+        let snapshot: Vec<_> = self
+            .mobs
+            .iter()
+            .map(|m| super::creatures::seen(m, self.level.player_uuid, self.items()))
+            .collect();
+        let mut mobs = self.mobs.lift();
+        let mut lent = horizon_client::health::LentLevel::take(&mut self.world);
+        let mut w = self.mob_world_base(&snapshot);
+        let pos = mobs[index].position;
+        w.difficulty = self.local_difficulty([pos.x, pos.y, pos.z]);
+        let mut events = Vec::new();
+        {
+            let mut level = horizon_client::health::DamageLevel::lent(
+                &self.world,
+                self.pack.assets.registry,
+                &mut lent,
+                Some(world_items!(self)),
+                Some(&self.pack.block_registries),
+                &self.damage_hooks,
+            );
+            let m = &mut mobs[index];
+            // Out of the mob while they stop, as in its own tick.
+            let (mut goals, mut targets) = (
+                std::mem::take(&mut m.ai.goals),
+                std::mem::take(&mut m.ai.targets),
+            );
+            let mut cx = Cx {
+                w: &w,
+                level: &mut level,
+                events: &mut events,
+            };
+            goals.stop_all(m, &mut cx);
+            targets.stop_all(m, &mut cx);
+            // Registration also initializes species state. Run it on a detached
+            // copy so only the selectors replace state on the live mob.
+            let mut registration = m.clone();
+            mobs::ai::register(&mut registration);
+            mobs::part_goals::attach(&mut registration);
+            m.ai.goals = registration.ai.goals;
+            m.ai.targets = registration.ai.targets;
+            m.ai.goals.disabled = goals.disabled;
+            mobs::apply_brain_events(&mut mobs, &mut level, &mut events, 0);
+        }
+        drop(w);
+        lent.give_back(&mut self.world);
+        self.mobs
+            .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
+        self.handle_mob_events(events).ok();
+        true
+    }
+
     /// `GoalSelector.getRunningGoals` read wider: every goal of the goal
     /// selector as a `MobGoalEntry` (the priority, the kind id and
     /// whether it runs), in registration order. None for a stale or
@@ -664,6 +726,85 @@ mod tests {
             assert_eq!(game.mobs[0].extra.followers, 2);
             assert_eq!(game.mobs[0].health, draw as f32);
             assert_eq!(game.world.random.next_int_bound(1000).unwrap(), next);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn resetting_goals_stops_the_running_ones_and_registers_as_a_new_mob() {
+        use horizon_client::mobs::goals::{Cx, Goal};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        /// A goal that always starts and says when it was stopped.
+        #[derive(Clone, Debug)]
+        struct StopProbe(Arc<AtomicBool>);
+        impl Goal for StopProbe {
+            fn flags(&self) -> u8 {
+                0
+            }
+            fn can_use(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
+                true
+            }
+            fn box_clone(&self) -> Box<dyn Goal> {
+                Box::new(self.clone())
+            }
+            fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        with_game(|game| {
+            let handle = mob_in_game(game, "minecraft:zombie", 99);
+            let printed = |game: &super::super::Game<'_>| {
+                format!("{:?} / {:?}", game.mobs[0].ai.goals, game.mobs[0].ai.targets)
+            };
+            let fresh = printed(game);
+            let stopped = Arc::new(AtomicBool::new(false));
+            let mut mobs = game.mobs.lift();
+            let snapshot: Vec<_> = mobs
+                .iter()
+                .map(|m| super::super::creatures::seen(m, game.level.player_uuid, game.items()))
+                .collect();
+            let mut test_level = horizon_client::health::TestLevel::new(0);
+            let mut level = test_level.level();
+            let mut events = Vec::new();
+            let mut selector = std::mem::take(&mut mobs[0].ai.goals);
+            selector.add(0, StopProbe(stopped.clone()));
+            {
+                let world = game.mob_world_base(&snapshot);
+                let mut cx = Cx {
+                    w: &world,
+                    level: &mut level,
+                    events: &mut events,
+                };
+                selector.tick(&mut mobs[0], &mut cx);
+            }
+            assert!(selector.is_running("StopProbe"));
+            selector.disabled = 2;
+            mobs[0].ai.goals = selector;
+            mobs[0].ai.targets.add(1, StopProbe(stopped.clone()));
+            game.mobs
+                .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
+            assert_ne!(printed(game), fresh);
+            assert!(handle.reset_goals(game));
+            assert!(stopped.load(Ordering::SeqCst), "the running goal stopped");
+            assert_eq!(game.mobs[0].ai.goals.disabled, 2, "a rider's flags stay");
+            game.mobs[0].ai.goals.disabled = 0;
+            assert_eq!(printed(game), fresh, "the mob has a new mob's goals");
+            let stale = MobRef::new(EntityRef::new(WorldEpoch::new(999), 99));
+            assert!(!stale.reset_goals(game));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn resetting_warden_goals_preserves_anger() {
+        with_game(|game| {
+            let handle = mob_in_game(game, "minecraft:warden", 99);
+            let uuid = [1, 2, 3, 4];
+            game.mobs[0].extra.warden.as_mut().unwrap().anger =
+                horizon_client::mobs::warden::AngerManagement::from_saved([(uuid, 90)]);
+            assert!(handle.reset_goals(game));
+            let anger: Vec<_> = game.mobs[0].extra.warden.as_ref().unwrap().anger.unloaded().collect();
+            assert_eq!(anger, vec![(uuid, 90)]);
         });
     }
 
