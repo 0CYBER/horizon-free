@@ -1,11 +1,16 @@
+//! Checked write-back of a listener's block entity snapshot into the engine entity.
+use super::TryIntoEngine;
+use horizon_items::items::Items;
+
 #[derive(Debug, PartialEq, Eq)]
-pub(in crate::game) enum BlockEntitySnapshotError {
+pub enum BlockEntitySnapshotError {
     InvalidRevision,
     InvalidStack,
 }
 
-fn apply_block_entity_snapshot(
-    entity: &mut crate::containers::ModBlockEntity,
+#[doc(hidden)]
+pub fn apply_block_entity_snapshot(
+    entity: &mut horizon_client::containers::ModBlockEntity,
     snapshot: &mod_api::ModBlockEntity,
     before: mod_api::item::containers::ModRevision,
     items: &Items,
@@ -32,8 +37,8 @@ fn apply_block_entity_snapshot(
 
 // Validation runs after all listeners return; dispatch does not retain per-mod provenance.
 // Bound diagnostics even when mods register many entity types.
-pub(in crate::game) fn finish_block_entity_writeback<T>(
-    entity: &mut crate::containers::ModBlockEntity,
+pub fn finish_block_entity_writeback<T>(
+    entity: &mut horizon_client::containers::ModBlockEntity,
     snapshot: &mod_api::ModBlockEntity,
     before: mod_api::item::containers::ModRevision,
     items: &Items,

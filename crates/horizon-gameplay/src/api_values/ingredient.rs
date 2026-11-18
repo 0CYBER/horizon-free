@@ -1,6 +1,6 @@
 //! Ingredient conversions retain concrete predicates and slot displays.
 use super::*;
-impl TryIntoApi for crate::crafting::Ingredient {
+impl TryIntoApi for horizon_client::crafting::Ingredient {
     type Api = mod_api::Ingredient;
     type Error = StackReadError;
     fn try_into_api(&self) -> Result<Self::Api, Self::Error> {
@@ -19,16 +19,15 @@ impl TryIntoApi for crate::crafting::Ingredient {
     }
 }
 impl TryIntoEngine for mod_api::Ingredient {
-    type Engine = crate::crafting::Ingredient;
+    type Engine = horizon_client::crafting::Ingredient;
     type Error = StackWriteError;
     fn try_into_engine(&self, _items: &Items) -> Result<Self::Engine, Self::Error> {
-        let mut ingredient = crate::crafting::Ingredient {
+        let mut ingredient = horizon_client::crafting::Ingredient {
             compiled: None,
             component_defaults: _items.component_defaults.clone(),
-            shown: self
-                .display
-                .as_ref()
-                .and_then(|display| crate::crafting::Ingredient::resolve_display(display, _items)),
+            shown: self.display.as_ref().and_then(|display| {
+                horizon_client::crafting::Ingredient::resolve_display(display, _items)
+            }),
             items: self.items.clone(),
             order: self.order.clone(),
             custom: self.custom.clone(),

@@ -32,7 +32,7 @@ mod spawn_egg_mob_tests;
 #[path = "../../creatures/spectator_view_tests.rs"]
 mod spectator_view_tests;
 mod world_view;
-use super::api_values::{TryIntoApi, TryIntoEngine};
+use super::api_values::TryIntoApi;
 use super::level_sounds::LevelSound;
 use super::piston_push::Lid;
 use super::{
@@ -1874,7 +1874,9 @@ impl Game<'_> {
                 drops: &mut snapshots,
                 cancel: &mut cancel,
             });
-            if let Ok(mut next) = snapshots.try_into_engine(self.items()) {
+            if let Ok(mut next) =
+                super::api_values::item_drops_into_engine(&snapshots, self.items())
+            {
                 for (drop, original) in next.iter_mut().zip(&drops) {
                     drop.random = original.random;
                 }

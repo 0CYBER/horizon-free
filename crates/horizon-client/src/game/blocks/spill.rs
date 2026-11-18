@@ -3,7 +3,7 @@
 //! block drops (`Block.dropResources`), drawn from the level random at the
 //! moment vanilla draws them. The item entities they make are added to the
 //! world as soon as the behaviour returns, within the same tick.
-use super::api_values::{TryIntoApi, TryIntoEngine};
+use super::api_values::TryIntoApi;
 use super::{Game, GameLevel, Screen, storage::is_shulker_box};
 use horizon_client::{
     block_entity_item, block_entity_nbt,
@@ -811,7 +811,9 @@ impl GameLevel<'_> {
                 experience: &mut next_experience,
                 cancel: &mut next_canceled,
             });
-            if let Ok(mut next_items) = snapshots.try_into_engine(self.items) {
+            if let Ok(mut next_items) =
+                super::api_values::item_drops_into_engine(&snapshots, self.items)
+            {
                 for (next, original) in next_items.iter_mut().zip(&items) {
                     next.random = original.random;
                 }

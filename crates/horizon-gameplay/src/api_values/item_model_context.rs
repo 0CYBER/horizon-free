@@ -1,6 +1,6 @@
 //! The item model's surroundings (`item_model::Context`) as the values `item_model_update` gives a
 //! mod: where the item is drawn, its owner and its level, as `ItemModel.update` reads them.
-use super::api_values::TryIntoApi;
+use super::TryIntoApi;
 use horizon_assets::item_model::{
     DisplayContext, GlobalPos as EngineGlobalPos, LevelState, OwnerState,
 };

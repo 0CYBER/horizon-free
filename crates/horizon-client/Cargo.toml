@@ -187,6 +187,7 @@ mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", featu
 mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab", features = ["testing"] }
 horizon-client-render = { path = "../horizon-client-render", features = ["test-support"] }
 horizon-items = { path = "../horizon-items", features = ["test-support"] }
+horizon-gameplay = { path = "../horizon-gameplay", features = ["test-support"] }
 horizon-perf = { path = "../horizon-perf" }
 # Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "msl-out", "spv-out"] }

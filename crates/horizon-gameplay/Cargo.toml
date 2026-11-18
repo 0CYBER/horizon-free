@@ -7,19 +7,27 @@ rust-version.workspace = true
 description = "Vanilla's logical side: the gameplay the server jar holds, common code included"
 
 [dependencies]
+horizon-assets = { path = "../horizon-assets" }
+horizon-client-core = { path = "../horizon-client-core" }
 horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
+horizon-command = { path = "../horizon-command" }
 horizon-core = { path = "../horizon-core" }
+horizon-engine-slots = { path = "../horizon-engine-slots" }
+horizon-items = { path = "../horizon-items" }
+horizon-mod-package = { path = "../horizon-mod-package", default-features = false }
 horizon-mod-runtime = { path = "../horizon-mod-runtime" }
 horizon-protocol = { path = "../horizon-protocol" }
 horizon-threads = { path = "../horizon-threads" }
 horizon-world = { path = "../horizon-world" }
 log = "0.4"
 mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab" }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 
 [features]
 # Source retention only, as in horizon-client: the helper-thread profiling hooks.
 upstream-parallel-mobs = []
+# The conversion counters horizon-client's tests read (`api_values::damage`, `api_values::loot_values`).
+test-support = []
 
 [lints]
 workspace = true

@@ -2169,8 +2169,14 @@ dependencies = [
 name = "horizon-gameplay"
 version = "0.1.0"
 dependencies = [
+ "horizon-assets",
+ "horizon-client-core",
  "horizon-client-lib",
+ "horizon-command",
  "horizon-core",
+ "horizon-engine-slots",
+ "horizon-items",
+ "horizon-mod-package",
  "horizon-mod-runtime",
  "horizon-mod-vocab",
  "horizon-protocol",

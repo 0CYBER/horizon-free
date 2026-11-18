@@ -131,7 +131,7 @@ impl TryIntoApi for horizon_mod_package::packages::AdjacentManifest {
     }
 }
 
-pub(in crate::game) fn install_packages(
+pub fn install_packages(
     native: &[horizon_mod_package::packages::AdjacentManifest],
     content: &[horizon_mod_package::selection::SelectedPackage],
 ) -> Result<(), horizon_engine_slots::PlatformRefusal> {

@@ -6,7 +6,7 @@ impl TryIntoApi for engine::DamageContainer {
     type Api = DamageContainer;
     type Error = std::convert::Infallible;
     fn try_into_api(&self) -> Result<Self::Api, Self::Error> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         CONVERSIONS.with(|count| count.set(count.get() + 1));
         let v = engine::DamageValues::from(self);
         let mut values = DamageValues::from(&DamageContainer::new(v.original));
@@ -129,8 +129,8 @@ impl TryIntoEngine<()> for DamageContainer {
     }
 }
 
-#[cfg(test)]
-thread_local! { pub(in crate::game) static CONVERSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(any(test, feature = "test-support"))]
+thread_local! { pub static CONVERSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[cfg(test)]
 mod tests {
