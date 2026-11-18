@@ -407,6 +407,19 @@ impl Launcher {
         if let Some(e) = self.prepare_error.clone() {
             page = page.child(notice(e, &t));
         }
+        // Home's Stable Update failed, its one retry included: its offer is gone until the list
+        // is read again, so Home says why.
+        let stable_failed = self.install_error.as_ref().filter(|(tag, _)| {
+            self.stable_failed
+                .as_ref()
+                .is_some_and(|failed| failed.tag == *tag)
+        });
+        if let Some((_, e)) = stable_failed {
+            page = page.child(notice(
+                format!("{} {e}", tr("Couldn't download Horizon.")),
+                &t,
+            ));
+        }
         // On the instance, before its tabs: what crashed and the way back into the game.
         if let Some(crash) = self.crash.clone() {
             page = page.child(self.crash_notice(crash, cx));

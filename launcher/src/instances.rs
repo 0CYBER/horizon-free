@@ -310,7 +310,8 @@ impl Instance {
     }
 
     /// The installed version this instance plays: its pinned one, else `requested` (the
-    /// command line's `--version`) or the launcher's (`backend::resolve_version`).
+    /// command line's `--version`), else on Stable its channel's ([`crate::nightly::stable_latest`],
+    /// as Home's), else the launcher's (`backend::resolve_version`).
     pub fn resolve_version(&self, requested: Option<&str>) -> Result<String, String> {
         self.horizon()?;
         match (requested, &self.version) {
@@ -321,6 +322,11 @@ impl Instance {
                     self.name, self.name
                 )
             }),
+            (None, None) if self.channel == Channel::Stable => {
+                let selected = backend::Settings::load().selected;
+                crate::nightly::stable_latest(&backend::installed(), selected.as_deref())
+                    .map_or_else(|| backend::resolve_version(None), Ok)
+            }
             _ => backend::resolve_version(requested),
         }
     }

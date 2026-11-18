@@ -121,8 +121,16 @@ impl Launcher {
             .children(instance.map(|i| {
                 shell::text(night::UI, c(n.ink_soft)).child(instances_page::played_line(i))
             }));
-        // A Java instance (no Horizon tag) isn't offered Horizon's updates.
-        if let Some(release) = self.updates.horizon.as_ref().filter(|_| !tag.is_empty()) {
+        // A Java instance (no Horizon tag) isn't offered Horizon's updates; a Stable one is offered
+        // its channel's build, as in the glass look.
+        let stable = self
+            .selected_instance()
+            .is_some_and(|i| i.channel == horizon_launcher::instances::Channel::Stable);
+        let offer = match stable {
+            true => self.stable_update(tag),
+            false => self.updates.horizon.clone().filter(|_| !tag.is_empty()),
+        };
+        if let Some(release) = offer.clone() {
             let installing = self.installing.as_ref().filter(|(t, _)| *t == release.tag);
             let line = shell::text(night::CAPTION, c(n.muted))
                 .flex()
@@ -131,7 +139,7 @@ impl Launcher {
                 .child(div().size(px(6.)).bg(c(n.accent_hi)))
                 .child(trf(
                     "{version} available",
-                    &[("version", update_name(release))],
+                    &[("version", update_name(&release))],
                 ));
             hero = hero.child(match installing {
                 Some((_, p)) => line
@@ -142,6 +150,10 @@ impl Launcher {
                             .child(progress_bar(Some(self.bar), &t)),
                     )
                     .child(format!("{:.0}%", p * 100.)),
+                // A Stable update never replaces another download: it waits, and says so.
+                None if stable && self.stable_update_waits() => {
+                    line.child(tr("Waiting for another download"))
+                }
                 None => line.child(
                     div()
                         .id("install-update")
@@ -150,8 +162,11 @@ impl Launcher {
                         .cursor_pointer()
                         .hover(|s| s.opacity(0.8))
                         .child(tr("Install"))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.install_update();
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            match offer.clone().filter(|_| stable) {
+                                Some(release) => this.install_stable_update(release),
+                                None => this.install_update(),
+                            }
                             cx.notify();
                         })),
                 ),

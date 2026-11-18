@@ -392,13 +392,10 @@ impl Launcher {
         let stable = self
             .selected_instance()
             .is_some_and(|i| i.channel == horizon_launcher::instances::Channel::Stable);
-        // A Stable instance follows the newest stable build, not each Nightly: its update is
-        // that build when it isn't installed yet.
+        // A Stable instance follows the newest stable build, not each Nightly.
+        let stable_update = self.stable_update(tag);
         let update = if stable {
-            self.stable_builds()
-                .first()
-                .map(|b| b.tag.clone())
-                .filter(|next| follows && !tag.is_empty() && !self.installed.contains(next))
+            stable_update.as_ref().map(|r| r.tag.clone())
         } else {
             self.updates
                 .horizon
@@ -438,6 +435,10 @@ impl Launcher {
             match (installing, self.preparing, &self.starting_client) {
                 (Some(p), _, _) => Some((tr("Updating").into(), Some(p))),
                 (_, _, _) if own.is_some() => Some((tr("Installing").into(), own.flatten())),
+                // A Stable update never replaces another download: it waits, and says so.
+                _ if stable && update.is_some() && self.stable_update_waits() => {
+                    Some((tr("Waiting for another download").into(), None))
+                }
                 (_, true, _) => Some((
                     tr("Preparing").into(),
                     horizon_launcher::mojang::progress().map(|(d, n)| d as f32 / n.max(1) as f32),
@@ -656,15 +657,11 @@ impl Launcher {
                             cx.notify();
                         }))
                     }
-                    (Some(next), _) if stable => {
-                        let next = next.clone();
+                    (Some(_), _) if stable => {
+                        let release = stable_update.clone();
                         main.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            let release = match &this.releases {
-                                Load::Ready(list) => list.iter().find(|r| r.tag == next).cloned(),
-                                _ => None,
-                            };
-                            if let Some(release) = release {
-                                this.install(&release);
+                            if let Some(release) = release.clone() {
+                                this.install_stable_update(release);
                             }
                             cx.notify();
                         }))

@@ -5,6 +5,11 @@ pub enum Msg {
     OfficialPlayers(Option<u64>),
     Storage(Result<Box<crate::storage::Report>, String>),
     Releases(Result<Vec<Release>, String>),
+    /// The release list as GitHub (or its mirror) answered it just now, never a kept copy: a
+    /// failed Stable download may be offered again.
+    ReleasesFromNetwork(Vec<Release>),
+    /// Home's Stable update moved on to this build, `nightly` having moved on since the offer.
+    StableRetry(Release),
     Links(Links),
     Progress(String, f32),
     Installed(String, Result<(), String>),

@@ -1458,7 +1458,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
             download,
             version,
         } => {
-            let tag = backend::resolve_version(version.as_deref())?;
+            // What Play would start: the selected instance's version (a Java one has none).
+            let selected = instances::selected();
+            let tag = match selected.java {
+                None => selected.resolve_version(version.as_deref())?,
+                Some(_) => backend::resolve_version(version.as_deref())?,
+            };
             let minecraft = backend::minecraft_dir(minecraft)?;
             let from = if download {
                 backend::MinecraftFrom::Mojang

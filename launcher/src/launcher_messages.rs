@@ -41,6 +41,20 @@ impl Launcher {
                     self.releases = r.map_or_else(Load::Failed, Load::Ready);
                     self.notes.clear();
                 }
+                Msg::ReleasesFromNetwork(list) => {
+                    horizon_launcher::nightly::note_published(&list);
+                    self.stable_failed = None;
+                    self.releases = Load::Ready(list);
+                    self.notes.clear();
+                }
+                Msg::StableRetry(next) => {
+                    // The same download under its new build: it stays the instance's, and keeps
+                    // the version picked on Versions.
+                    if self.stable_install.take().is_some() {
+                        self.instance_install = Some(next.tag.clone());
+                        self.stable_install = Some(next);
+                    }
+                }
                 Msg::Links(links) => {
                     // The official server may have moved: its list entry and its count follow.
                     self.multiplayer.stale();
@@ -167,6 +181,7 @@ impl Launcher {
                     self.installed = backend::installed();
                     let as_update = self.update_install.take().filter(|t| *t == tag);
                     let for_instance = self.instance_install.take_if(|t| *t == tag).is_some();
+                    let stable = self.stable_install.take_if(|r| r.tag == tag);
                     if let (Ok(()), Some(started)) = (&result, self.install_started.take()) {
                         let name = if as_update.is_some() {
                             "launcher.update_ms"
@@ -214,7 +229,13 @@ impl Launcher {
                                 });
                             }
                         }
-                        Err(e) => self.install_error = Some((tag, e)),
+                        Err(e) => {
+                            // Home's Stable update already read the list again and retried
+                            // once: this build isn't offered again until the list is read
+                            // from the network, not from a kept copy.
+                            self.stable_failed = stable.or(self.stable_failed.take());
+                            self.install_error = Some((tag, e));
+                        }
                     }
                     if let Some(next) = self.install_next.take() {
                         self.install_for_instance(next);

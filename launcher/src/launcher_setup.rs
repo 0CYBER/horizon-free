@@ -119,6 +119,8 @@ impl Launcher {
             update_install: None,
             instance_install: None,
             install_next: None,
+            stable_install: None,
+            stable_failed: None,
             bar: (0., 0.),
             releases: Load::Loading,
             installed,
@@ -461,11 +463,26 @@ impl Launcher {
         self.account_menu = false;
     }
 
+    /// The periodic check: as at startup, the release list (which Stable reads) is refreshed with
+    /// the updates, but a failed read keeps the list shown.
     pub(crate) fn check_updates(&mut self) {
         self.checked = Some(Instant::now());
         let tx = self.tx.clone();
+        // A failed Stable download is offered again only after a list read from the network.
+        let failed = self.stable_failed.is_some();
         std::thread::spawn(move || {
-            let _ = tx.send(Msg::Updates(backend::check_updates().map(Box::new)));
+            if let Some(list) = failed
+                .then(backend::releases_from_network)
+                .and_then(Result::ok)
+            {
+                let _ = tx.send(Msg::ReleasesFromNetwork(list));
+            }
+            let updates = backend::releases_and_updates(|releases| {
+                if releases.is_ok() {
+                    let _ = tx.send(Msg::Releases(releases));
+                }
+            });
+            let _ = tx.send(Msg::Updates(updates.map(Box::new)));
         });
     }
 

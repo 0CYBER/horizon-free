@@ -7,6 +7,7 @@ use super::*;
 use crate::glass_ui::{self as ui, white};
 use horizon_launcher::instances::{self, Channel, Icon, Instance};
 use horizon_launcher::loaders::Kind as Loader;
+use horizon_launcher::nightly::{stable_builds, StableBuild};
 use horizon_theme::glass::{fill, ink, radius};
 use new_instance::{NewKind, VersionList};
 use servers_page::Field;
@@ -298,6 +299,37 @@ impl Launcher {
         }
     }
 
+    /// Whether Home's Stable update has to wait: another download runs or is queued, and the
+    /// update never replaces it.
+    pub(super) fn stable_update_waits(&self) -> bool {
+        self.installing.is_some() || self.install_next.is_some()
+    }
+
+    /// Home's Stable update: installed for the instance, so the version picked on Versions, which
+    /// Nightly instances follow, stays; never while another download runs or is queued.
+    pub(super) fn install_stable_update(&mut self, release: Release) {
+        if !self.stable_update_waits() {
+            self.stable_install = Some(release.clone());
+            self.install_for_instance(release);
+        }
+    }
+
+    /// The Stable build Home offers the selected instance (`tag`: what it plays, empty for a
+    /// Java instance): the newest one, when the instance is set to Latest on Stable and lacks it,
+    /// and it didn't fail since the list was last read from the network.
+    pub(super) fn stable_update(&self, tag: &str) -> Option<Release> {
+        self.selected_instance()
+            .filter(|i| i.channel == Channel::Stable && i.version.is_none() && !tag.is_empty())?;
+        match &self.releases {
+            Load::Ready(list) => horizon_launcher::nightly::stable_offer(
+                list,
+                &self.installed,
+                self.stable_failed.as_ref(),
+            ),
+            _ => None,
+        }
+    }
+
     /// The Horizon versions the dialog offers (the mockup's `data.nightlies`): see
     /// [`horizon_choices`].
     pub(super) fn horizon_choices(&self) -> Vec<String> {
@@ -583,64 +615,6 @@ impl Launcher {
             .child(div().flex_1().min_h(px(32.)))
             .children(import)
     }
-}
-
-/// A build on the Stable channel; `week` is the Monday of its week when it stands for one.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct StableBuild {
-    pub(super) tag: String,
-    pub(super) week: Option<String>,
-}
-
-/// The Stable channel's builds, newest first: the real (non-Nightly, non-pre-release) releases
-/// when any exist; until then the newest Nightly of each Monday to Sunday week. `releases` is
-/// newest first, as GitHub lists them.
-pub(super) fn stable_builds(releases: &[Release]) -> Vec<StableBuild> {
-    let real: Vec<_> = releases
-        .iter()
-        .filter(|r| {
-            r.nightly.is_none()
-                && r.asset.is_some()
-                && !r.prerelease
-                && horizon_launcher::backend::launcher_version(&r.tag).is_none()
-        })
-        .map(|r| StableBuild {
-            tag: r.tag.clone(),
-            week: None,
-        })
-        .collect();
-    if !real.is_empty() {
-        return real;
-    }
-    use chrono::Datelike;
-    // (monday, date, tag): the newest date of a week wins; the first listed on a tie.
-    let mut weeks: Vec<(String, String, String)> = Vec::new();
-    for r in releases
-        .iter()
-        .filter(|r| r.nightly.is_some() && r.asset.is_some())
-    {
-        let Some(date) = horizon_launcher::nightly::date_of(&r.tag) else {
-            continue;
-        };
-        let Ok(day) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
-            continue;
-        };
-        let monday =
-            (day - chrono::Duration::days(day.weekday().num_days_from_monday() as i64)).to_string();
-        match weeks.iter_mut().find(|w| w.0 == monday) {
-            Some(w) if w.1.as_str() < date => *w = (monday, date.into(), r.tag.clone()),
-            Some(_) => {}
-            None => weeks.push((monday, date.into(), r.tag.clone())),
-        }
-    }
-    weeks.sort_by(|a, b| b.0.cmp(&a.0));
-    weeks
-        .into_iter()
-        .map(|(monday, _, tag)| StableBuild {
-            tag,
-            week: Some(monday),
-        })
-        .collect()
 }
 
 /// Every Nightly published with a build for this platform, newest first, then the installed
@@ -1482,39 +1456,6 @@ mod tests {
             prerelease: false,
             nightly: nightly.then(|| "nightly".into()),
         }
-    }
-
-    #[test]
-    fn stable_is_a_build_a_week_until_real_releases_exist() {
-        // 2026-11-09 is a Monday, 2026-11-08 the Sunday before it.
-        let mut releases = vec![
-            release("nightly-2026-11-13-aaaaaaa", true, true),
-            release("nightly-2026-11-12-bbbbbbb", true, true),
-            release("nightly-2026-11-10-ccccccc", true, true),
-            release("nightly-2026-11-08-ddddddd", true, true),
-            release("nightly-2026-11-03-eeeeeee", true, true),
-            // No build for this platform: not a candidate.
-            release("nightly-2026-11-14-fffffff", true, false),
-        ];
-        let weekly = |tag: &str, week: &str| StableBuild {
-            tag: tag.into(),
-            week: Some(week.into()),
-        };
-        assert_eq!(
-            stable_builds(&releases),
-            [
-                weekly("nightly-2026-11-13-aaaaaaa", "2026-11-09"),
-                weekly("nightly-2026-11-08-ddddddd", "2026-11-02"),
-            ]
-        );
-        releases.insert(0, release("v0.3.0", false, true));
-        assert_eq!(
-            stable_builds(&releases),
-            [StableBuild {
-                tag: "v0.3.0".into(),
-                week: None
-            }]
-        );
     }
 
     #[test]

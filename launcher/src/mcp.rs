@@ -271,9 +271,13 @@ impl Session {
     /// The game's tools, starting the selected version's horizon-ctl the first time.
     fn game(&mut self) -> Option<&mut GameTools> {
         if self.game.is_none() {
-            self.game = backend::resolve_version(None)
-                .and_then(|tag| GameTools::start(&tag))
-                .ok();
+            // The selected instance's version, as Play starts it.
+            let selected = instances::selected();
+            let tag = match selected.java {
+                None => selected.resolve_version(None),
+                Some(_) => backend::resolve_version(None),
+            };
+            self.game = tag.and_then(|tag| GameTools::start(&tag)).ok();
         }
         self.game.as_mut()
     }

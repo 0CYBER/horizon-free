@@ -63,12 +63,35 @@ impl Launcher {
         self.install_started = Some(Instant::now());
         self.bar = (0., 0.);
         self.install_error = None;
+        let stable = self
+            .stable_install
+            .as_ref()
+            .is_some_and(|r| r.tag == release.tag);
         std::thread::spawn(move || {
-            let progress = |p| {
-                let _ = tx.send(Msg::Progress(tag.clone(), p));
+            let install = |r: &Release| {
+                backend::install(r, |p| {
+                    let _ = tx.send(Msg::Progress(r.tag.clone(), p));
+                })
             };
-            let result = backend::install(&release, progress);
-            let _ = tx.send(Msg::Installed(tag, result));
+            if !stable {
+                let result = install(&release);
+                let _ = tx.send(Msg::Installed(tag, result));
+                return;
+            }
+            // Home's Stable update: one press, even when `nightly` moved on since the offer.
+            let (done, result) = horizon_launcher::nightly::install_stable(
+                release,
+                backend::releases_from_network,
+                |list, next| {
+                    let _ = tx.send(Msg::ReleasesFromNetwork(list));
+                    if let Some(next) = next {
+                        let _ = tx.send(Msg::StableRetry(next.clone()));
+                    }
+                },
+                |tag| backend::installed().iter().any(|t| t == tag),
+                install,
+            );
+            let _ = tx.send(Msg::Installed(done.tag, result));
         });
     }
 

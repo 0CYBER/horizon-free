@@ -65,6 +65,15 @@ pub fn json_optional(url: &str) -> Result<Option<serde_json::Value>, String> {
     json_with(url, &cache_dir(), now, github, mirror)
 }
 
+/// [`json_optional`] as GitHub or the mirror answer it now, never a copy kept on disk (fresh or
+/// not): for a list that must be current, such as after a download that failed its check.
+pub fn json_from_network(url: &str) -> Result<Option<serde_json::Value>, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    json_with_mode(url, &cache_dir(), now, true, github, mirror)
+}
+
 /// [`json`] with its cache folder, the time (Unix seconds) and its two sources given (tests).
 pub(crate) fn json_with(
     url: &str,
@@ -73,9 +82,21 @@ pub(crate) fn json_with(
     github: impl Fn(&str, Option<&str>) -> Answer,
     mirror: impl Fn(&str) -> Answer,
 ) -> Result<Option<serde_json::Value>, String> {
+    json_with_mode(url, cache, now, false, github, mirror)
+}
+
+/// [`json_with`]; `network_only`: a copy on disk is never the answer, only its ETag is sent.
+pub(crate) fn json_with_mode(
+    url: &str,
+    cache: &Path,
+    now: u64,
+    network_only: bool,
+    github: impl Fn(&str, Option<&str>) -> Answer,
+    mirror: impl Fn(&str) -> Answer,
+) -> Result<Option<serde_json::Value>, String> {
     let file = cache.join(cache_name(url));
     let kept = read_kept(&file, url);
-    if let Some(k) = kept.as_ref() {
+    if let Some(k) = kept.as_ref().filter(|_| !network_only) {
         // A copy saved "later" than now (the clock was set back) is not trusted as fresh.
         if now >= k.saved && now - k.saved < FRESH_SECS {
             return Ok(Some(k.body.clone()));
@@ -115,7 +136,7 @@ pub(crate) fn json_with(
         },
         None => None,
     };
-    if let Some(k) = kept {
+    if let Some(k) = kept.filter(|_| !network_only) {
         return Ok(Some(k.body));
     }
     Err(match from_mirror {

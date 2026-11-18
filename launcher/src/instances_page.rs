@@ -113,14 +113,16 @@ impl Launcher {
     pub(super) fn version_of(&self, instance: &Instance) -> Option<&String> {
         match &instance.version {
             Some(own) => self.installed.iter().find(|t| *t == own),
-            // Latest of its channel: the newest installed Stable build, or the launcher's
-            // version (which follows the newest Nightly; also what is left offline).
+            // Latest of its channel: on Stable the rule `Instance::resolve_version` uses, from
+            // the installed builds; else the launcher's version (which follows the newest
+            // Nightly; also what is left offline).
             None => match instance.channel {
-                instances::Channel::Stable => self
-                    .stable_builds()
-                    .iter()
-                    .find_map(|b| self.installed.iter().find(|t| **t == b.tag))
-                    .or_else(|| self.launcher_version()),
+                instances::Channel::Stable => horizon_launcher::nightly::stable_latest(
+                    &self.installed,
+                    self.launcher_version().map(String::as_str),
+                )
+                .and_then(|tag| self.installed.iter().find(|t| **t == tag))
+                .or_else(|| self.launcher_version()),
                 instances::Channel::Nightly => self.launcher_version(),
             },
         }

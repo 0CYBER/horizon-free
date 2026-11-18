@@ -283,6 +283,11 @@ struct Launcher {
     instance_install: Option<String>,
     /// One for an instance waiting for the install running now to end.
     install_next: Option<Release>,
+    /// The Stable build Home's Update is installing (`nightly::install_stable`).
+    stable_install: Option<Release>,
+    /// A Stable build whose download failed: not offered again until the release list is read
+    /// from the network (`Msg::ReleasesFromNetwork`).
+    stable_failed: Option<Release>,
     /// The install bar's previous and current fraction, so it moves rather than jumps.
     bar: (f32, f32),
     releases: Load<Vec<Release>>,

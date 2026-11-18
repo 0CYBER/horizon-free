@@ -400,3 +400,45 @@ fn a_silent_source_gives_up_and_a_slow_one_is_read_whole() {
     }
     assert!(started.elapsed() > HEADERS * 2);
 }
+
+/// A read that must be current never takes the copy on disk: not a fresh one, and not one
+/// standing in when both sources fail.
+#[test]
+fn a_network_only_read_never_answers_from_the_kept_copy() {
+    let cache = scratch("network-only");
+    let fresh = |_: &str, _: Option<&str>| Answer::Fresh(list("kept"), None);
+    json_with(RELEASES, &cache, T0, fresh, no_mirror).unwrap();
+    let asked = RefCell::new(false);
+    let got = json_with_mode(
+        RELEASES,
+        &cache,
+        T0 + 1,
+        true,
+        |_, _| {
+            *asked.borrow_mut() = true;
+            Answer::Fresh(list("new"), None)
+        },
+        no_mirror,
+    );
+    assert!(*asked.borrow(), "a fresh copy is not the answer");
+    assert_eq!(got.unwrap(), Some(list("new")));
+    let failed = json_with_mode(
+        RELEASES,
+        &cache,
+        LATER,
+        true,
+        |_, _| Answer::Failed("offline".into()),
+        |_| Answer::Failed("offline".into()),
+    );
+    assert!(failed.is_err(), "the kept copy doesn't stand in");
+    // An ordinary read still falls back to it.
+    let kept = json_with(
+        RELEASES,
+        &cache,
+        LATER,
+        |_, _| Answer::Failed("offline".into()),
+        |_| Answer::Failed("offline".into()),
+    );
+    assert_eq!(kept.unwrap(), Some(list("new")));
+    let _ = fs::remove_dir_all(cache);
+}
