@@ -22,7 +22,9 @@ Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 *skipped* required check as passed, and labels used to start runs whose `verify` was skipped, which let
 auto-merge merge before the real `verify` finished. A pull request that changes no Rust (docs, tools) runs only its
 quick steps and finishes in about a minute. A pull request's public-tree check reads only
-its own commits (`--range base..head`); main's pushes read every ref's history.
+its own commits (`--range base..head`); a push to main that the merge queue didn't verify reads the whole history
+reachable from `HEAD` (`--history`), on a full clone, since reading old blobs through a partial clone takes over 30
+minutes.
 
 ### The parity job
 

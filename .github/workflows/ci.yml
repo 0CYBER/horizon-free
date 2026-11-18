@@ -63,7 +63,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          filter: blob:none
+          # A push reads every historical table's bytes (`--history`, #17605). Without them in the clone, git fetches
+          # each one on its own, which takes over 30 minutes; the full clone reads them in about 7.
+          filter: ${{ github.event_name != 'push' && 'blob:none' || '' }}
       # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
       # that commit's push run would repeat a finished, green verify. Only a green merge_group run of this very commit
       # counts; an admin merge never had one, and an API error counts as not tested, so the push then verifies in full.
@@ -84,8 +86,8 @@ jobs:
         if: startsWith(runner.name, 'blacksmith-')
         with:
           python-version: '3.12'
-      # A pull request or a merge group adds only its own commits to main, so it reads those; main's pushes read every
-      # ref's history.
+      # A pull request or a merge group adds only its own commits to main, so it reads those; a push to main that the
+      # merge queue didn't verify reads the whole history reachable from HEAD.
       - name: Keep game artifacts out of Git
         if: steps.queued.outputs.tested != 'true'
         env:
@@ -97,6 +99,10 @@ jobs:
           if [ "$EVENT" = pull_request ] || [ "$EVENT" = merge_group ]; then
             python tools/check_public_tree.py --range "$BASE_SHA..$HEAD_SHA"
           else
+            # Our own runners reuse their clone, which keeps its blob filter: fetch the blobs once in one pack.
+            if [ "$(git config --get remote.origin.promisor)" = true ]; then
+              git fetch --quiet --refetch --no-filter origin "$GITHUB_SHA"
+            fi
             python tools/check_public_tree.py --history
           fi
       # Some Python tests compile Rust with a bare `rustc` (GitHub's image has a default toolchain, our runners' own
