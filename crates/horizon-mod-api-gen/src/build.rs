@@ -1,6 +1,5 @@
 //! Cargo-facing generation: the mod API's and the game's generated files.
 use super::{Catalog, Target, free_function_source, host, sources};
-use quote::ToTokens;
 use std::{fs, path::Path};
 mod vocab_boundary;
 
@@ -335,14 +334,17 @@ pub fn generate_engine_points(root: &Path, out_dir: &Path) -> Result<(), String>
                 .transpose()?;
             let code = super::points::engine_records(&points, selected.as_ref());
             let generated = syn::parse_file(&code).map_err(|e| format!("engine points: {e}"))?;
-            let mut code = String::new();
-            for item in generated.items {
-                code.push_str(&item.to_token_stream().to_string());
-                code.push('\n');
-            }
-            write_if_changed(out_dir.join("engine_points.rs"), code).map_err(|e| e.to_string())
+            write_if_changed(out_dir.join("engine_points.rs"), short_lines(&generated))
+                .map_err(|e| e.to_string())
         })
     })
+}
+
+/// The generated points as formatted Rust. Finding a span's column scans its line from the start,
+/// so on a line of several megabytes every lint and incremental span lookup is slow: one item a
+/// line still left such lines (a `mod` holds thousands of items, a table thousands of entries).
+fn short_lines(file: &syn::File) -> String {
+    prettyplease::unparse(file)
 }
 
 pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), String> {
@@ -380,12 +382,7 @@ pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), S
         );
     phase("records");
     let generated = syn::parse_file(&code).map_err(|e| format!("generated Rust: points: {e}"))?;
-    // A single multi-megabyte line makes Clippy's source lookups prohibitively slow.
-    let mut code = String::new();
-    for item in generated.items {
-        code.push_str(&item.to_token_stream().to_string());
-        code.push('\n');
-    }
+    let code = short_lines(&generated);
     phase("format");
     write_if_changed(out_dir.join("points_generated.rs"), code).map_err(|e| e.to_string())?;
     phase("written");

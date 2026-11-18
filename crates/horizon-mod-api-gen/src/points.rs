@@ -1784,7 +1784,7 @@ name = 'horizon-mod-api-gen'
             crate::build::generate_points_inner(&root, &generated).unwrap();
             let code = std::fs::read_to_string(generated.join("points_generated.rs")).unwrap();
             assert_eq!(
-                code.contains("pub const STAGED : bool = true"),
+                code.contains("pub const STAGED: bool = true"),
                 staged || cfg!(feature = "listener-fixture")
             );
         }
