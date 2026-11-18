@@ -467,5 +467,20 @@ pub fn safe_name(name: &str) -> Option<&str> {
     (ok && !device && !disguised).then_some(name)
 }
 
+/// The name a source's file is saved under: its own name with the characters Windows reserves
+/// for paths (`: * ? " < > |`) made `-`, as Modrinth names a pack after a project whose title
+/// holds a `:`. Whatever else [`safe_name`] refuses (separators, devices, disguising marks) is
+/// still refused.
+pub fn plain_name(name: &str) -> Option<String> {
+    let mapped: String = name
+        .chars()
+        .map(|c| match c {
+            ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c => c,
+        })
+        .collect();
+    safe_name(&mapped).map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests;

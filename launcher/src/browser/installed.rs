@@ -4,7 +4,7 @@
 //! and each Java mod it ported into `horizon-mods/`: where it came from, its version and its
 //! checksum. Files the player put there themselves are never touched: the browser only replaces
 //! or removes what it lists.
-use super::{pick, safe_name, Kind, Project, Source, SourceId, Support, Version};
+use super::{pick, plain_name, Kind, Project, Source, SourceId, Support, Version};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -260,7 +260,8 @@ pub(super) fn put(
             .file()
             .expect("pick keeps versions with a file");
         let folder_name = folder(p.kind);
-        let name = safe_name(&file.name)
+        // The name the download is saved under (`download::save`).
+        let name = plain_name(&file.name)
             .ok_or_else(|| format!("{:?} isn't a plain file name.", file.name))?;
         let relative = format!("{folder_name}/{name}");
         let owner = installed.entries.iter().find(|e| e.file == relative);

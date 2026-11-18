@@ -236,6 +236,39 @@ fn modpacks_download_checked() {
     fs::remove_dir_all(&home).unwrap();
 }
 
+impl Fake {
+    /// Gives `id`'s newest file the name its source lists.
+    fn name_newest(&self, id: &str, name: &str) {
+        self.versions.lock().unwrap().get_mut(id).unwrap()[0].files[0].name = name.into();
+    }
+}
+
+#[test]
+fn a_source_name_with_a_colon_is_saved_and_recorded_under_a_plain_name() {
+    let home = home("colon");
+    let mut fake = Fake::default();
+    // Modrinth names a pack's file after its project: "Yet Another Bingo: Ultimate" (#18263).
+    fake.add(project("bingo", Kind::Modpack));
+    fake.release("bingo", "2.15.1", &[], b"mrpack", false);
+    fake.name_newest("bingo", "Yet Another Bingo: Ultimate-2.15.1.mrpack");
+    let downloads = home.join("downloads");
+    let path = fetch_modpack(&fake, &fake.project("bingo").unwrap(), &downloads, &|_| {}).unwrap();
+    assert_eq!(
+        path,
+        downloads.join("Yet Another Bingo- Ultimate-2.15.1.mrpack")
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"mrpack");
+
+    fake.add(project("tools", Kind::ResourcePack));
+    fake.release("tools", "1", &[], b"pack", false);
+    fake.name_newest("tools", "Tools: \"Extra\"?-1.zip");
+    let done = install(&fake, &fake.project("tools").unwrap(), false, &home, NONE).unwrap();
+    assert_eq!(done[0].file, "resourcepacks/Tools- -Extra---1.zip");
+    assert_eq!(fs::read(home.join(&done[0].file)).unwrap(), b"pack");
+    assert_eq!(Installed::load(&home).entries[0].file, done[0].file);
+    fs::remove_dir_all(&home).unwrap();
+}
+
 /// A NeoForge jar with `files` beside its `neoforge.mods.toml` for mod `id`.
 fn mod_jar(id: &str, files: &[(&str, &str)]) -> Vec<u8> {
     use std::io::Write;

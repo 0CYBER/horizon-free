@@ -1,5 +1,5 @@
 //! Downloads that reach the game folder only when their checksum matches the source's.
-use super::{safe_name, FileRef};
+use super::{plain_name, FileRef};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 use std::fs;
@@ -77,7 +77,7 @@ pub fn refuse(file: &FileRef) -> Option<String> {
 
 /// [`refuse`] without the host: the name, the checksum and the size.
 fn refuse_file(file: &FileRef) -> Option<String> {
-    if safe_name(&file.name).is_none() {
+    if plain_name(&file.name).is_none() {
         return Some(format!("{:?} isn't a plain file name.", file.name));
     }
     if file.checksum().is_none() {
@@ -121,8 +121,9 @@ impl Hasher {
     }
 }
 
-/// Copies `reader` into `<folder>/<file.name>`, hashing on the way, and keeps it only when the
-/// size and checksum match: until then it is `.<name>.part`, removed on any failure.
+/// Copies `reader` into `<folder>/<name>`, `name` being the file's [`plain_name`], hashing on the
+/// way, and keeps it only when the size and checksum match: until then it is `.<name>.part`,
+/// removed on any failure.
 /// `progress` gets the fraction done.
 pub fn save(
     file: &FileRef,
@@ -147,9 +148,10 @@ pub(super) fn save_from_anywhere(
         return Err(why);
     }
     let (algo, want) = file.checksum().expect("refuse checks for one");
+    let name = plain_name(&file.name).expect("refuse checks it");
     fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    let target = folder.join(&file.name);
-    let part = folder.join(format!(".{}.part", file.name));
+    let target = folder.join(&name);
+    let part = folder.join(format!(".{name}.part"));
     let result = (|| {
         let mut out = fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
         let mut hasher = Hasher::for_file(file);
