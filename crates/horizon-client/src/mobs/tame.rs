@@ -496,9 +496,6 @@ impl Goal for FollowOwner {
         let water = super::path::PathType::Water.malus();
         m.set_malus(super::path::PathType::Water, water);
     }
-    fn every_tick(&self) -> bool {
-        true
-    }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some((at, eye, _)) = owner(m, cx.w) else {
             return;
@@ -1470,7 +1467,10 @@ impl Goal for CatLieOnBlock {
         m.extra.tame
             && !m.extra.sitting
             && !m.extra.flag
-            && self.0.can_use(m, cx.w, reduced(40), can_lie_on)
+            // `CatLieOnBlockGoal.nextStartTick` is a flat 40: the base
+            // `MoveToBlockGoal.canUse` stores the override as it is, so it is
+            // not `reducedTickDelay(40)`.
+            && self.0.can_use(m, cx.w, 40, can_lie_on)
     }
     fn can_continue(&mut self, _: &mut Mob, cx: &mut Cx) -> bool {
         self.0.can_continue(cx.w, can_lie_on)
@@ -2658,6 +2658,72 @@ mod non_tame_tests {
 #[cfg(test)]
 #[path = "pet_pose_tests.rs"]
 mod pet_pose_tests;
+
+#[cfg(test)]
+mod goal_timing_tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use std::sync::Arc;
+
+    /// `FollowOwnerGoal` has no `requiresUpdateEveryTick`, so its `tick` runs on
+    /// the full selector updates only and `adjustedTickDelay(10)` is
+    /// `reducedTickDelay(10)` of them.
+    #[test]
+    fn a_pet_recalculates_its_path_on_full_updates_only() {
+        let goal = FollowOwner::new(1.0, 10.0, 2.0);
+        assert!(
+            !goal.every_tick(),
+            "FollowOwnerGoal has no requiresUpdateEveryTick override"
+        );
+    }
+
+    /// `CatLieOnBlockGoal.nextStartTick` is a flat 40: `MoveToBlockGoal.canUse`
+    /// stores the override as it is, not `reducedTickDelay(40)`. A cat with
+    /// nowhere to lie down waits 40 full updates, not 20, before searching
+    /// again.
+    #[test]
+    fn a_cat_waits_a_flat_forty_updates_before_lying_down_again() {
+        use crate::mobs::world::with_built_test_world;
+        let build = |world: &mut crate::world::World,
+                     registry: &horizon_world::registry::BlockRegistry| {
+            for cx in -1..=1 {
+                for cz in -1..=1 {
+                    world
+                        .chunks
+                        .insert((cx, cz), Arc::new(crate::chunk::Chunk::empty(cx, cz)));
+                }
+            }
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            for x in -8..=8 {
+                for z in -8..=8 {
+                    world.set(x, 64, z, stone).unwrap();
+                }
+            }
+        };
+        // Without game resources the world cannot be built, the closure never runs
+        // and there is nothing to assert: skip rather than fail.
+        let _ = with_built_test_world(&[], build, |w, _| {
+            let mut m = Mob::new(1, kind(), Vec3::new(0.5, 65.0, 0.5), 0.0);
+            m.extra.tame = true;
+            m.extra.sitting = false;
+            m.extra.flag = false;
+            let mut goal = CatLieOnBlock(super::super::goals::MoveToBlock {
+                vertical_start: -2,
+                ..super::super::goals::MoveToBlock::new(1.1, 8, 6)
+            });
+            let mut test_level = crate::health::TestLevel::new(0);
+            let mut events = Vec::new();
+            let mut cx = Cx {
+                w,
+                level: &mut test_level.level(),
+                events: &mut events,
+            };
+            assert!(!goal.can_use(&mut m, &mut cx), "nowhere to lie down");
+            assert_eq!(goal.0.next_start, 40, "CatLieOnBlockGoal.nextStartTick");
+        });
+    }
+}
+
 #[cfg(test)]
 #[path = "wolf_whine_tests.rs"]
 mod wolf_whine_tests;
