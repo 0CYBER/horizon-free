@@ -20,8 +20,7 @@ impl Game<'_> {
 
     /// `Mob.equipItemIfPossible`: what `slot` would take of `stack`, and how
     /// many items that takes. `None` when the mob has no use for it.
-    #[cfg(test)]
-    fn equip_item_if_possible(&mut self, index: usize, stack: &ItemStack) -> Option<u32> {
+    pub(super) fn equip_item_if_possible(&mut self, index: usize, stack: &ItemStack) -> Option<u32> {
         horizon_gameplay::mob_looting::equip_item_if_possible(self, index, stack)
     }
 

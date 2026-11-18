@@ -67,7 +67,7 @@ pub fn tick_mob_looting<L: MobLevel + ?Sized>(l: &mut L) {
                 continue;
             }
             // `Mob.pickUpItem`: nothing leaves the ground what it cannot use.
-            let Some(taken) = equip_item_if_possible(l, i, &stack) else {
+            let Some(taken) = l.equip_item_if_possible(i, &stack) else {
                 j += 1;
                 continue;
             };
@@ -107,8 +107,8 @@ pub fn equip_item_if_possible<L: MobLevel + ?Sized>(
     if !l.equip_allows(&prepared, index, slot.name(), data) {
         return None;
     }
+    let mut replace = can_replace(l, index, stack, slot);
     let p = l.parts();
-    let mut replace = can_replace(p.items, p.stations, &p.mobs[index], stack, slot);
     // An armour piece that beats nothing it is worn with falls back to an
     // empty main hand.
     if slot.is_armor() && !replace {
@@ -151,14 +151,14 @@ pub fn equip_item_if_possible<L: MobLevel + ?Sized>(
     Some(taken)
 }
 
-/// `Mob.canReplaceCurrentItem` for what `m` wears or holds in `slot`.
-fn can_replace(
-    items: &Items,
-    stations: &StationData,
-    m: &Mob,
+/// `Mob.canReplaceCurrentItem` for what the mob `index` wears or holds in `slot`.
+fn can_replace<L: MobLevel + ?Sized>(
+    l: &mut L,
+    index: usize,
     stack: &ItemStack,
     slot: Slot,
 ) -> bool {
+    let m = &l.mobs()[index];
     let Some(worn_stack) = finalize::item_stack(m, slot.index()) else {
         return true;
     };
@@ -168,8 +168,9 @@ fn can_replace(
     if species == Species::Drowned && &*current == "minecraft:nautilus_shell" {
         return false;
     }
-    let new = stack_facts(items, stations, m, stack, slot);
-    let worn = stack_facts(items, stations, m, &worn_stack, slot);
+    let new = l.stack_facts(m, stack, slot);
+    let worn = l.stack_facts(m, &worn_stack, slot);
+    let items = l.parts().items;
     let preferred = equip::preferred_weapon_tag(species).map(|tag| {
         (
             items.item_in_tag(tag, &stack.item),

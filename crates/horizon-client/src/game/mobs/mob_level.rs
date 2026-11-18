@@ -7,7 +7,10 @@ use crate::game::equip_answers::EquipStack;
 use horizon_client::{
     entities::ItemEntity,
     items::ItemStack,
-    mobs::{Mob, MobWorld, equip::EquipInput},
+    mobs::{
+        Mob, MobWorld,
+        equip::{EquipInput, Facts, Slot},
+    },
 };
 use horizon_core::geometry::Vec3;
 use horizon_gameplay::mob_level::{MobLevel, MobParts};
@@ -147,5 +150,11 @@ impl MobLevel for Game<'_> {
     }
     fn equip_can_apply(&self, prepared: &Prepared, id: u32) -> bool {
         Game::equip_can_apply(self, &prepared.stack, id)
+    }
+    fn equip_item_if_possible(&mut self, index: usize, stack: &ItemStack) -> Option<u32> {
+        Game::equip_item_if_possible(self, index, stack)
+    }
+    fn stack_facts(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> Facts {
+        Game::stack_facts(self, m, stack, slot)
     }
 }

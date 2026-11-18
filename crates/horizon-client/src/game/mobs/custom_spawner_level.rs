@@ -27,7 +27,8 @@ impl CustomSpawnerLevel for Game<'_> {
                 .bool_at(horizon_client::gamerules::vanilla::SPAWN_MONSTERS)
     }
     fn players(&self) -> Vec<SpawnerPlayer> {
-        self.level_players_iter()
+        self.level_players()
+            .into_iter()
             .map(|p| SpawnerPlayer {
                 uuid: p.uuid,
                 position: p.position,
