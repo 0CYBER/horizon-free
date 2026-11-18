@@ -2460,6 +2460,7 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        crate::game::dedicated::crash_fixture("hub", || host.hub.guests.iter().any(|g| g.placed));
         let holding = lan::Holding::start();
         // Last tick's tracked entities: enough for place collision and joins
         // before this tick moves anyone.

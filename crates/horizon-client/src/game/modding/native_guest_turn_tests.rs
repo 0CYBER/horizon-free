@@ -1667,3 +1667,49 @@ fn run_command_runs_from_the_players_own_place_inside_an_outer_command() {
         }
     });
 }
+
+/// A panic that leaves a guest's turn writes the half-done turn back into their record and
+/// restores the outer player, so `lan_acting` no longer names them. Crash teardown still keeps
+/// that player's last saved file (#18117), and only theirs.
+#[test]
+#[ignore = "daily"]
+fn crash_teardown_keeps_the_last_file_of_a_guest_whose_turn_panicked() {
+    with_guests(|game| {
+        let outer = game.lan_acting;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            game.as_guest(13, |_| std::panic::panic_any(18117_u32))
+        }))
+        .unwrap_err();
+        assert_eq!(panic.downcast_ref::<u32>(), Some(&18117));
+        assert_eq!(game.lan_acting, outer);
+        assert!(game.keep_interrupted_players().is_some());
+        let placed = |game: &super::Game<'_>, conn| {
+            game.lan.as_ref().unwrap().hub.guest(conn).unwrap().placed
+        };
+        assert!(!placed(game, 13), "the interrupted guest would be saved");
+        assert!(
+            placed(game, 12),
+            "a guest the panic did not interrupt is saved"
+        );
+    });
+}
+
+/// A panic inside nested turns that never reach `leave_guest` (a guest's command giving another
+/// guest an effect opens both swaps directly) leaves only the inner one in `lan_acting`. Crash
+/// teardown keeps both players' last saved files: the outer one's record holds another state.
+#[test]
+#[ignore = "daily"]
+fn crash_teardown_keeps_every_player_a_swap_still_displaces() {
+    with_guests(|game| {
+        let outer = game.enter_guest(13).unwrap();
+        let inner = game.enter_guest(12).unwrap();
+        assert!(game.keep_interrupted_players().is_some());
+        let placed = |game: &super::Game<'_>, conn| {
+            game.lan.as_ref().unwrap().hub.guest(conn).unwrap().placed
+        };
+        assert!(!placed(game, 12), "the inner turn's player would be saved");
+        assert!(!placed(game, 13), "the outer turn's player would be saved");
+        game.leave_guest(inner);
+        game.leave_guest(outer);
+    });
+}

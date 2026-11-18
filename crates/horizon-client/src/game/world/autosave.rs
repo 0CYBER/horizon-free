@@ -53,8 +53,10 @@ impl Game<'_> {
         self.save_fight();
         self.save_wandering_trader();
         self.save_portal_arrivals();
-        self.save_stats();
-        self.save_advancements();
+        if !self.keep_owner_files {
+            self.save_stats();
+            self.save_advancements();
+        }
         self.save_scoreboard();
         self.save_bossbars();
         self.save_schedule();
@@ -63,11 +65,17 @@ impl Game<'_> {
         // Level::write can synchronously replace the integrated owner file.
         let _ = self.finish_player_autosaves(true);
         let stored_owner = self.store_owner();
-        write_level_for_role(
-            &mut self.level,
-            &self.world_root,
-            self.options.execution_role,
-        )?;
+        if self.keep_owner_files {
+            // Crash teardown: `sync_level` filled the player from whatever is in place, not
+            // from the owner's last consistent state.
+            self.level.write_keeping_player(&self.world_root)?;
+        } else {
+            write_level_for_role(
+                &mut self.level,
+                &self.world_root,
+                self.options.execution_role,
+            )?;
+        }
         // PlayerEvent.SaveToFile for the owner, once level.dat is written.
         if let Some((uuid, name)) = stored_owner {
             let directory = horizon_client::lan::playerdata::directory(&self.world_root);

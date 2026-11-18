@@ -1,0 +1,3 @@
+# Crash teardown keeps the last saved files of players whose turn a panic interrupted (#18117).
+horizon-client game::native_guest_turn_tests::crash_teardown_keeps_every_player_a_swap_still_displaces lib daily resources
+horizon-client game::native_guest_turn_tests::crash_teardown_keeps_the_last_file_of_a_guest_whose_turn_panicked lib daily resources

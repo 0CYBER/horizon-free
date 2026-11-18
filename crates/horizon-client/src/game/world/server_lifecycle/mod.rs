@@ -45,6 +45,7 @@ impl Game<'_> {
             catch_unwind(AssertUnwindSafe(|| self.native_server_stopping(dedicated)))
         {
             remember_shutdown(&mut failure, shutdown_panic(payload.as_ref()));
+            self.keep_players_after_shutdown_panic();
         }
         if let Some(error) = run_error {
             let error = error.to_owned();
@@ -53,6 +54,7 @@ impl Game<'_> {
                 self.native_lifecycle_close_failed(&error);
             })) {
                 remember_shutdown(&mut failure, shutdown_panic(payload.as_ref()));
+                self.keep_players_after_shutdown_panic();
             }
         }
         match catch_unwind(AssertUnwindSafe(|| {
@@ -79,6 +81,7 @@ impl Game<'_> {
                 let _ = catch_unwind(AssertUnwindSafe(|| {
                     self.native_lifecycle_close_failed(&message);
                 }));
+                self.keep_players_after_shutdown_panic();
                 // A config/player callback may unwind before the stop path
                 // reaches its final save. Complete that same tail, not just
                 // the writes already queued, while retaining the first error.
@@ -98,26 +101,58 @@ impl Game<'_> {
         }
     }
 
-    /// A panic can interrupt `as_guest` with the player's current state swapped
-    /// into Game. Keep that player's last saved file rather than an older guest
-    /// record. If the network tick lost the hub, only world state can be saved.
+    /// A shutdown callback can panic inside a player's turn too: the players saved after it
+    /// leave that turn out, as a crash's save does.
+    fn keep_players_after_shutdown_panic(&mut self) {
+        if let Some(warning) = self.keep_interrupted_players() {
+            log::warn!("{warning}");
+        }
+    }
+
     fn prepare_server_crash(&mut self) {
-        let acting = self.lan_acting;
-        if let (Some(conn), Some(host)) = (acting, self.lan.as_mut()) {
+        if let Some(warning) = self.keep_interrupted_players() {
+            log::warn!("{warning}");
+        }
+    }
+
+    /// Before a crash's save: a player whose turn the panic interrupted keeps their last
+    /// saved file, not the half-done turn. That is the player still swapped in
+    /// (`lan_acting`), one whose record a swap still displaces (`lan_guest_swaps`: an outer
+    /// turn, or a turn the panic hit while it was being entered), or one whose turn wrote its
+    /// state back on the way out (`lan_interrupted_turns`). They are unplaced, so `save_guest`
+    /// skips them. If the network tick lost the hub, only world state can be saved. Returns
+    /// the warning to log.
+    pub(in crate::game) fn keep_interrupted_players(&mut self) -> Option<&'static str> {
+        let interrupted: Vec<u32> = self
+            .lan_acting
+            .into_iter()
+            .chain(self.lan_guest_swaps.iter().copied())
+            .chain(self.lan_interrupted_turns.drain(..))
+            .collect();
+        let Some(host) = self.lan.as_mut() else {
+            self.keep_owner_files = true;
+            return Some(
+                "The panic interrupted the network tick: players are not saved, only the world",
+            );
+        };
+        let owner = host.owner.as_ref().map(|o| o.uuid);
+        if host
+            .hub
+            .guests
+            .iter()
+            .any(|g| Some(g.uuid) == owner && interrupted.contains(&g.conn))
+        {
+            self.keep_owner_files = true;
+        }
+        for &conn in &interrupted {
             let _ = host
                 .hub
                 .guests
                 .update_connection(conn, |guest| guest.placed = false);
         }
-        if self.lan.is_none() {
-            log::warn!(
-                "The panic interrupted the network tick: players are not saved, only the world"
-            );
-        } else if acting.is_some() {
-            log::warn!(
-                "The panic interrupted a player's turn: that player keeps the last saved file"
-            );
-        }
+        (!interrupted.is_empty()).then_some(
+            "The panic interrupted a player's turn: that player keeps the last saved file",
+        )
     }
 
     /// Complete teardown even if freeing beds or the final save fails. A failed
@@ -137,7 +172,11 @@ impl Game<'_> {
             }
         })) {
             Ok(result) => result,
-            Err(payload) => Err(shutdown_panic(payload.as_ref()).into()),
+            Err(payload) => {
+                // A save listener can panic inside a turn: lan_close saves the leaving players.
+                self.keep_players_after_shutdown_panic();
+                Err(shutdown_panic(payload.as_ref()).into())
+            }
         };
         let saved = match catch_unwind(AssertUnwindSafe(|| {
             if self.world_adopted && self.session_lock.is_some() {
@@ -147,7 +186,11 @@ impl Game<'_> {
             }
         })) {
             Ok(result) => result,
-            Err(payload) => Err(shutdown_panic(payload.as_ref()).into()),
+            Err(payload) => {
+                // A save listener can panic inside a turn: lan_close saves the leaving players.
+                self.keep_players_after_shutdown_panic();
+                Err(shutdown_panic(payload.as_ref()).into())
+            }
         };
         result = result.and(saved);
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.lan_close(false))) {

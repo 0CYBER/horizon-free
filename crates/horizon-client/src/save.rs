@@ -4153,11 +4153,16 @@ impl Level {
     }
     /// Write every file; a world without a player UUID gets a random one.
     pub fn write(&mut self, dir: &Path) -> Result<()> {
-        self.write_internal(dir, true, false)
+        self.write_internal(dir, true, false, false)
     }
     /// Dedicated servers save connected players separately.
     pub fn write_without_player(&mut self, dir: &Path) -> Result<()> {
-        self.write_internal(dir, false, false)
+        self.write_internal(dir, false, false, false)
+    }
+    /// A crash's save that must leave the player as last saved: no player file, and a legacy
+    /// `Data.Player` stays, since before the first normal save it is the owner's only copy.
+    pub fn write_keeping_player(&mut self, dir: &Path) -> Result<()> {
+        self.write_internal(dir, false, false, true)
     }
     /// The temporary world a Realms upload packs
     /// (`RealmsCreateWorldFlow.createTemporaryWorldFolder`): level.dat as
@@ -4165,7 +4170,7 @@ impl Level {
     /// generation and game rules, and no player file or weather/clocks the server makes
     /// on its own. The caller writes the data packs and removes the folder.
     pub fn write_upload(&mut self, dir: &Path) -> Result<()> {
-        self.write_internal(dir, false, true)
+        self.write_internal(dir, false, true, false)
     }
 
     /// The player's file alone, `players/data/<singleplayer_uuid>.dat`
@@ -4180,7 +4185,13 @@ impl Level {
         write_dat(&player_file, self.player_tag())
     }
 
-    fn write_internal(&mut self, dir: &Path, write_player: bool, upload: bool) -> Result<()> {
+    fn write_internal(
+        &mut self,
+        dir: &Path,
+        write_player: bool,
+        upload: bool,
+        keep_legacy_player: bool,
+    ) -> Result<()> {
         fs::create_dir_all(dir)?;
         restore_level_dat(dir);
         let mut root = compound_or_empty(read_dat(&dir.join("level.dat")));
@@ -4224,6 +4235,9 @@ impl Level {
                 "CustomBossEvents",
                 "DragonFight",
             ] {
+                if keep_legacy_player && key == "Player" {
+                    continue;
+                }
                 map.remove(&JavaString::from(key));
             }
         }
@@ -7984,6 +7998,45 @@ mod tests {
         let reopened = Level::read(&dir).unwrap();
         assert_eq!(reopened.day_time, 12345);
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A crash's save before the first normal one keeps a legacy owner's only copy (#18117).
+    #[test]
+    fn a_crash_save_keeps_a_legacy_level_dat_player() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-crash-legacy-player-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let mut level = Level {
+            name: "Test".into(),
+            inventory: vec![(0, "minecraft:diamond".into(), 7, 0)],
+            ..Level::default()
+        };
+        level.write(&dir).unwrap();
+        // The owner's file moves into level.dat's Data.Player, as an older world keeps it.
+        let player_file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(level.player_uuid.unwrap())));
+        let player = read_dat(&player_file).unwrap();
+        fs::remove_file(&player_file).unwrap();
+        let mut root = read_dat(&dir.join("level.dat")).unwrap();
+        if let Some(data) = root.get_mut("Data") {
+            put(data, "Player", player);
+        }
+        write_dat(&dir.join("level.dat"), root).unwrap();
+
+        let mut crashed = Level::read(&dir).unwrap();
+        crashed.inventory.clear();
+        crashed.write_keeping_player(&dir).unwrap();
+
+        let reopened = Level::read(&dir).unwrap();
+        assert_eq!(
+            reopened.inventory,
+            vec![(0, "minecraft:diamond".to_owned(), 7, 0)]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

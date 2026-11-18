@@ -1350,6 +1350,8 @@ impl Game<'_> {
         record: impl FnOnce(TickTiming),
     ) -> Result<()> {
         let started = Instant::now();
+        // The game carried on past any turn a caught panic interrupted before this tick.
+        self.lan_interrupted_turns.clear();
         horizon_threads::work::tick_start();
         let result = self.tick_server_recorded(paused, record);
         horizon_threads::work::tick_end(started.elapsed().as_nanos() as u64);

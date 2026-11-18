@@ -38,7 +38,12 @@ impl Game<'_> {
         self.leave_guest(swap);
         match result {
             Ok(result) => Ok(result),
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                // The record now holds what the turn did before the panic; the restore above
+                // also hid the turn from `lan_acting`, so crash teardown is told here.
+                self.lan_interrupted_turns.push(conn);
+                std::panic::resume_unwind(payload)
+            }
         }
     }
 
@@ -76,7 +81,11 @@ impl Game<'_> {
         }
         match result {
             Ok(result) => self.lan.is_some().then_some(result),
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                // `as_guest` saw this turn end normally: the panic was caught inside it.
+                self.lan_interrupted_turns.push(conn);
+                std::panic::resume_unwind(payload)
+            }
         }
     }
 
@@ -543,6 +552,15 @@ impl Game<'_> {
             Ok(totem) => (totem, None),
             Err(payload) => (None, Some(payload)),
         };
+        // Crash teardown treats the turn as interrupted until it has been put back without a
+        // panic: the callbacks below run after the restore and can panic too.
+        self.lan_interrupted_turns.push(swap.conn);
+        // A turn opened inside this one by a raw `enter_guest` that a panic left open: its
+        // player's record is displaced too, and the pop below would forget them.
+        if let Some(at) = self.lan_guest_swaps.iter().rposition(|&c| c == swap.conn) {
+            let above = self.lan_guest_swaps[at + 1..].to_vec();
+            self.lan_interrupted_turns.extend(above);
+        }
         let GuestSwap {
             attachments,
             conn,
@@ -1046,6 +1064,9 @@ impl Game<'_> {
         }
         if let Some(payload) = panic {
             std::panic::resume_unwind(payload);
+        }
+        if let Some(i) = self.lan_interrupted_turns.iter().rposition(|&c| c == conn) {
+            self.lan_interrupted_turns.remove(i);
         }
     }
 

@@ -1843,8 +1843,7 @@ impl Game<'_> {
         self.console_broadcast = Some(inform);
         self.console_command(state, line);
         self.console_broadcast = None;
-        if let Some(host) = self.lan.as_ref() {
-            crash_fixture("hub", || host.hub.guests.iter().any(|g| g.placed));
+        if self.lan.is_some() {
             self.run_level_teleports();
             self.send_admin_feedback(None);
         }
@@ -2590,7 +2589,8 @@ impl Game<'_> {
 }
 
 /// `tools/test_dedicated_crash_save.py`'s fixture: with `HORIZON_CRASH_FIXTURE` naming `point`
-/// (`guest`: during a placed guest's turn, `hub`: after a console line while a player is in),
+/// (`guest`: during a placed guest's turn, `hub`: in the network tick, with the hub out of the
+/// game and a player in),
 /// the tick panics there, to see what crash teardown keeps.
 /// `armed` is asked only when the variable names `point`, so the tick pays one
 /// load of a `OnceLock` without it.
@@ -2645,17 +2645,8 @@ impl Game<'_> {
         } else {
             log("ERROR", &format!("The server thread panicked: {message}"));
         }
-        let acting = self.lan_acting;
-        let hub_lost = self.lan.is_none();
-        if let (Some(conn), Some(host)) = (acting, self.lan.as_mut()) {
-            host.hub
-                .guests
-                .update_connection(conn, |guest| guest.placed = false);
-        }
-        if hub_lost {
-            warn("The panic interrupted the network tick: players are not saved, only the world");
-        } else if acting.is_some() {
-            warn("The panic interrupted a player's turn: that player keeps the last saved file");
+        if let Some(warning) = self.keep_interrupted_players() {
+            warn(warning);
         }
         if integrated {
             // `IntegratedServer.stopServer`'s steps; `save_guest` skips the guest unplaced above.
