@@ -12,6 +12,8 @@ pub mod cache;
 mod detail;
 mod kept;
 mod mesh;
+#[cfg(test)]
+pub(crate) use mesh::far_look;
 pub mod packed;
 mod samples;
 use horizon_world::registry::BlockStateId;
@@ -1203,6 +1205,8 @@ struct Shared {
     stop: AtomicBool,
     /// Reduced far detail: samplers approximate wide cells.
     approximate: AtomicBool,
+    /// Tiles' quads get their looks: `mesh::Mesher::looks`.
+    looks: std::sync::atomic::AtomicU8,
     /// The reduction levels `Lod::apply_detail` reads, one bit each (level
     /// `i` is a cell `2 << i` blocks wide), so the far terrain thread builds
     /// them before it sends a chunk's columns on.
@@ -1343,6 +1347,12 @@ pub struct Lod {
     keeps_observed: bool,
 }
 impl Lod {
+    /// Tiles meshed from now on carry their quads' looks for a shader pack that reads them
+    /// (`Mesher::looks`), with the Nether's face shades where `nether`.
+    pub fn set_looks(&self, looks: bool, nether: bool) {
+        let mode = if looks { 1 + u8::from(nether) } else { 0 };
+        self.shared.looks.store(mode, Ordering::Relaxed);
+    }
     pub fn new(source: Arc<dyn LodSource>, context: Arc<WorkerContext>) -> Self {
         Self::assemble(Some(source), Some(context), true)
     }
@@ -1370,6 +1380,7 @@ impl Lod {
             mesh_wake: Condvar::new(),
             stop: AtomicBool::new(false),
             approximate: AtomicBool::new(false),
+            looks: Default::default(),
             detail_widths: std::sync::atomic::AtomicU8::new(0),
             mesh_held: AtomicBool::new(false),
             near_loading: AtomicBool::new(false),
@@ -1429,6 +1440,7 @@ impl Lod {
                                 let input = job.snapshot.mesh_input(job.key, job.finer);
                                 let columns = input.columns();
                                 let edges = input.edges();
+                                mesher.looks = shared.looks.load(Ordering::Relaxed);
                                 let mut mesh = mesher.mesh(
                                     job.key,
                                     &columns,

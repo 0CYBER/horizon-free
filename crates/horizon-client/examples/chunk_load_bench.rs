@@ -240,6 +240,7 @@ fn mesher<'a>(context: &'a WorkerContext, seed: i64) -> Mesher<'a> {
         shader_pack_lighting: false,
         separate_ao: false,
         shader_pack: false,
+        looks: false,
         zoom: BiomeZoom::new(obfuscate_seed(seed)),
         blend_radius: 2,
         smooth_lighting: true,

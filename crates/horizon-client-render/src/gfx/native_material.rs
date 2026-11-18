@@ -302,6 +302,8 @@ pub struct TerrainShape<'a> {
     pub weather_groups: [&'a wgpu::BindGroupLayout; 2],
     /// The resource packs' LabPBR maps (normals, specular), when they ship any.
     pub pbr: Option<&'a [wgpu::Texture; 2]>,
+    /// The arenas' quad looks' group (`looks`), while sections carry them (`looks::wanted`).
+    pub looks: Option<&'a wgpu::BindGroupLayout>,
 }
 
 /// The pack's terrain pipelines: solid (with the cutout test) and translucent, for the
@@ -561,6 +563,7 @@ impl NativeMaterial {
         (fog, vertex, writes_surface, coverage): (bool, bool, bool, horizon_shader_api::Coverage),
         linear: bool,
     ) -> Result<MaterialPipelines, String> {
+        let source = &(source.to_owned() + super::looks::wgsl(shape.looks.is_some()));
         let module = module(
             (source, &stage.file),
             shape.sprite_tags,
@@ -599,6 +602,7 @@ impl NativeMaterial {
                 Default::default();
             groups[0] = Some(shape.globals);
             groups[1] = flat;
+            groups[super::looks::GROUP as usize] = shape.looks;
             groups[GROUP as usize] = Some(frame_group);
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Native shader pack terrain"),

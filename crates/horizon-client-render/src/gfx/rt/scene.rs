@@ -117,6 +117,7 @@ impl Renderer {
             &self.device,
             super::query::wanted(super::query::switch(), traces),
         );
+        // The arenas' looks follow before the next frame (`follow_terrain_looks`).
         self.external = pack;
         self.executor = capabilities;
         self.pack_metadata = None;

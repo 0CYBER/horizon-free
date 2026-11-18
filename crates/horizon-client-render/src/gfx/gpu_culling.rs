@@ -1456,6 +1456,7 @@ impl GpuCulling {
         arena: &Arena,
         group: impl Fn(u32) -> Option<&'a wgpu::BindGroup>,
         phase: u64,
+        looks: Option<&super::looks::LookGroups>,
     ) {
         if self.pages.is_empty() {
             return;
@@ -1465,6 +1466,9 @@ impl GpuCulling {
             pass.set_vertex_buffer(0, arena.buffer(page).slice(..));
             if let Some(group) = group(page) {
                 pass.set_bind_group(1, group, &[]);
+            }
+            if let Some(looks) = looks {
+                pass.set_bind_group(super::looks::GROUP, looks.page(page, false), &[]);
             }
             pass.multi_draw_indexed_indirect_count(
                 &self.draws.buffer,
@@ -3579,7 +3583,7 @@ struct Quad {
             });
             pass.set_pipeline(&pipeline);
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-            gpu.draw(&mut pass, &arena, |_| None, 0);
+            gpu.draw(&mut pass, &arena, |_| None, 0, None);
             drop(pass);
             encoder.copy_texture_to_buffer(
                 target.as_image_copy(),

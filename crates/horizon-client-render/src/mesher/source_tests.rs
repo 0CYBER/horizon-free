@@ -204,6 +204,7 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
         shader_pack_lighting: false,
         separate_ao: false,
         shader_pack: true,
+        looks: false,
         assets: &assets,
         render: &render,
         tables: &tables,

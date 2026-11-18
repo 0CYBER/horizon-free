@@ -64,6 +64,10 @@ impl Renderer {
             light_revision,
             ray_scene,
             capture_copies,
+            // The arenas' pages hold their buffers of looks: their state goes with them.
+            terrain_looks,
+            look_groups,
+            looks_layout,
         );
         // The mesher makes the layout the sections are uploaded in.
         crate::mesher::packed::pack_quads(self.packed_quads);

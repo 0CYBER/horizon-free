@@ -331,6 +331,15 @@ impl Game<'_> {
             self.streaming.separate_ao = separate_ao;
             self.all_sections_changed();
         }
+        // A shader API 0.2 pack whose terrain takes the quads' looks (their tint, shade, ambient
+        // occlusion, face and light level apart): every quad carries its look, so the world
+        // meshes again once when the renderer's sections start or stop carrying them, and never
+        // otherwise.
+        let looks = self.renderer.as_ref().is_some_and(|r| r.terrain_looks());
+        if self.streaming.looks != looks {
+            self.streaming.looks = looks;
+            self.all_sections_changed();
+        }
         let selected = picked_pack(&self.settings).to_owned();
         let path = self.native_shaders.resolve_path(
             &Self::shader_packs_dir(),

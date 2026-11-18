@@ -11,15 +11,15 @@ use crate::{
     models,
 };
 
-struct Fixture {
-    assets: Assets,
-    biomes: Biomes,
-    render: RenderAssets,
-    visibility: horizon_world::block_render::FaceVisibility,
-    tables: MeshTables,
+pub(super) struct Fixture {
+    pub(super) assets: Assets,
+    pub(super) biomes: Biomes,
+    pub(super) render: RenderAssets,
+    pub(super) visibility: horizon_world::block_render::FaceVisibility,
+    pub(super) tables: MeshTables,
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let root = std::env::var_os("HORIZON_MESH_TEST_RESOURCES")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
@@ -59,6 +59,7 @@ fn mesh(f: &Fixture, chunk: &Chunk, opaque_ice: bool) -> SectionMesh {
         shader_pack_lighting: false,
         separate_ao: false,
         shader_pack: false,
+        looks: false,
         assets: &f.assets,
         render: &f.render,
         tables: &f.tables,

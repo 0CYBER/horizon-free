@@ -25,7 +25,7 @@
 //! cutout ones, so one pass over all of them draws the runs it drew before.
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{OPAQUE_LAYER, TerrainSource, TerrainVertex};
+use super::{OPAQUE_LAYER, QuadLook, TerrainSource, TerrainVertex};
 
 /// The buckets in mesh order: +X, +Z, other, +Y, -Z, -X, -Y. Seen from
 /// above (+Y, the commonest case), each pair of horizontal sides with a
@@ -264,26 +264,39 @@ fn sort(solid: &mut Vec<TerrainVertex>) -> Sides {
 /// `sort`, moving each quad's tint in `tints` (one per quad, or none) with it.
 #[cfg(test)]
 pub fn sort_tinted(solid: &mut Vec<TerrainVertex>, tints: &mut Vec<u32>) -> Sides {
-    sort_sourced(solid, tints, &mut Vec::new())
+    sort_sourced(solid, tints, &mut Vec::new(), &mut Vec::new())
 }
 
+/// `sort`, moving each quad's tint, source and look with it.
 pub(super) fn sort_sourced(
     solid: &mut Vec<TerrainVertex>,
     tints: &mut Vec<u32>,
     sources: &mut Vec<TerrainSource>,
+    looks: &mut Vec<QuadLook>,
 ) -> Sides {
     if !sources.is_empty() {
         sources.resize(solid.len() / 4, TerrainSource::default());
     }
+    if !looks.is_empty() {
+        looks.resize(solid.len() / 4, QuadLook::default());
+    }
     let grouped = GROUPED.load(Ordering::Relaxed);
-    SORT_SCRATCH.with_borrow_mut(|scratch| sort_with(solid, tints, sources, grouped, scratch))
+    SORT_SCRATCH
+        .with_borrow_mut(|scratch| sort_with(solid, tints, sources, looks, grouped, scratch))
 }
 
 /// `sort`, with all the opaque parts first when `grouped`.
 #[cfg(test)]
 fn sort_parts(solid: &mut Vec<TerrainVertex>, grouped: bool) -> Sides {
     SORT_SCRATCH.with_borrow_mut(|scratch| {
-        sort_with(solid, &mut Vec::new(), &mut Vec::new(), grouped, scratch)
+        sort_with(
+            solid,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            grouped,
+            scratch,
+        )
     })
 }
 
@@ -297,6 +310,7 @@ struct SortScratch {
     sorted: Vec<[TerrainVertex; 4]>,
     tints: Vec<u32>,
     sources: Vec<TerrainSource>,
+    looks: Vec<QuadLook>,
 }
 thread_local! {
     static SORT_SCRATCH: std::cell::RefCell<SortScratch> = Default::default();
@@ -312,6 +326,7 @@ fn sort_with(
     solid: &mut Vec<TerrainVertex>,
     tints: &mut Vec<u32>,
     sources: &mut Vec<TerrainSource>,
+    looks: &mut Vec<QuadLook>,
     grouped: bool,
     scratch: &mut SortScratch,
 ) -> Sides {
@@ -391,6 +406,11 @@ fn sort_with(
                 .sources
                 .extend(keys.iter().map(|&k| sources[(k & 0xFF_FFFF) as usize]));
             std::mem::swap(sources, &mut scratch.sources);
+        }
+        if looks.len() == quads_len {
+            scratch.looks.clear();
+            (scratch.looks).extend(keys.iter().map(|&k| looks[(k & 0xFF_FFFF) as usize]));
+            std::mem::swap(looks, &mut scratch.looks);
         }
     }
     Sides {

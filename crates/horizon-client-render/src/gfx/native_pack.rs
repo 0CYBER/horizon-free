@@ -36,6 +36,8 @@ pub struct NativePack {
     pub timing: Option<PassTiming>,
     /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_executor`).
     pub traces: bool,
+    /// Its terrain pipelines bind the arenas' quad looks (`looks::wanted`): sections carry them.
+    pub looks: bool,
     /// With kept resources, what lets a rebuild keep them (`carry`).
     kept: Option<super::native_post::kept::Signature>,
 }
@@ -327,6 +329,7 @@ impl NativePack {
                     steps,
                     &frame.pbr[0],
                     report.shadow.is_some(),
+                    terrain.looks,
                 )
             });
         let shadow = chosen
@@ -496,6 +499,7 @@ impl NativePack {
         labels.extend(post.labels().into_iter().map(str::to_owned));
         let pack = Self {
             traces: report.manifest.ray_tracing.is_some(),
+            looks: terrain.looks.is_some(),
             kept,
             frame,
             sky,
@@ -630,6 +634,7 @@ impl NativePack {
             ray_scene: self.traces,
             entities: self.entity.is_some(),
             ray_entities: self.traces_entities(),
+            looks: self.looks,
         }
     }
 
@@ -946,6 +951,192 @@ file = \"material.wgsl\"
             retained_entities: empty,
             weather_groups: [empty, empty],
             pbr: None,
+            looks: None,
+        }
+    }
+
+    /// A pack whose terrain takes the quads' looks (`TerrainShape::looks`): its material,
+    /// shadow and `[displacement]` grid pipelines build with the looks' group, and its material
+    /// and shadow terrain draw with a page's looks bound, all under wgpu's validation.
+    #[test]
+    fn a_pack_taking_the_looks_builds_and_draws_its_terrain_with_them() {
+        use wgpu::util::DeviceExt;
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+        // The adapter's own limits, as the game asks for: a sky and terrain take more sampled
+        // textures than the defaults' 16.
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let flags = adapter.get_downlevel_capabilities().flags;
+        if !flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE) {
+            eprintln!("no vertex storage: skipped");
+            return;
+        }
+        let (globals, empty) = terrain_layouts(&device);
+        let looks = super::super::looks::layout(&device);
+        let texture = |format, layers, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: layers,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let sampled = wgpu::TextureUsages::TEXTURE_BINDING;
+        let rgba = wgpu::TextureFormat::Rgba8Unorm;
+        let pbr = [texture(rgba, 2, sampled), texture(rgba, 2, sampled)];
+        // The shadow pass's entity draw reads the entities' atlas.
+        let entities = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &super::super::entity_binding_entries(),
+        });
+        let shape = TerrainShape {
+            pbr: Some(&pbr),
+            looks: Some(&looks),
+            entities: &entities,
+            ..terrain_shape(&globals, &empty)
+        };
+        let report = pack("[material]\nfile = \"material.wgsl\"\n[shadow]\n[displacement]\n");
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let (pack, _) =
+            NativePack::new(&device, &queue, &shape, report, &[], Default::default()).unwrap();
+        assert!(pack.looks);
+        let layers = pack.terrain_layers().unwrap();
+        let shadow = pack.shadow.as_ref().unwrap();
+        assert!(layers.displaced.is_some() && shadow.displaced.is_some());
+        // The terrain's group 0 (`terrain_layouts`) of blank resources.
+        let array = texture(rgba, 2, sampled).create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let plain = texture(rgba, 1, sampled).create_view(&Default::default());
+        let sampler = device.create_sampler(&Default::default());
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16384,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+        let resource = |binding: u32| match binding {
+            0 => uniform.as_entire_binding(),
+            2 | 4 => wgpu::BindingResource::Sampler(&sampler),
+            3 | 12 => wgpu::BindingResource::TextureView(&plain),
+            _ => wgpu::BindingResource::TextureView(&array),
+        };
+        let entries: Vec<_> = (0..=12)
+            .map(|binding| wgpu::BindGroupEntry {
+                binding,
+                resource: resource(binding),
+            })
+            .collect();
+        let terrain = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &globals,
+            entries: &entries,
+        });
+        // A page's looks: one quad's, at its four vertices' slots.
+        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 2, [1.0, 0.8, 0.6, 1.0], 15);
+        let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[look; 4]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let looks_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &looks,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: page_looks.as_entire_binding(),
+            }],
+        });
+        let corner = |x: f32, y: f32| {
+            crate::mesher::TerrainVertex::new([x, y, -2.0], [x, y], 0, u32::MAX, 0xf0f0)
+        };
+        let vertices = [corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0)];
+        let buffer = |contents: &[u8]| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents,
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        };
+        let vertices = buffer(bytemuck::cast_slice(&vertices));
+        let origins = buffer(bytemuck::cast_slice(&[0.0f32, 0.0, 0.0, 1.0]));
+        let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let view = |t: wgpu::Texture| t.create_view(&Default::default());
+        let color = view(texture(rgba, 1, attachment));
+        let shadow_color = view(texture(
+            super::super::native_post::INTERMEDIATE,
+            1,
+            attachment,
+        ));
+        let depth = view(texture(wgpu::TextureFormat::Depth32Float, 1, attachment));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        // Each terrain pipeline in a pass of its targets, the page's looks bound.
+        // The shadow's frame group, or the material's (`TerrainLayers::bind`).
+        type Draw<'a> = (
+            &'a wgpu::RenderPipeline,
+            Option<&'a wgpu::TextureView>,
+            Option<&'a wgpu::BindGroup>,
+        );
+        let draws: [Draw<'_>; 4] = [
+            (layers.solid, Some(&color), None),
+            (layers.translucent, Some(&color), None),
+            (&shadow.solid, None, Some(&shadow.group)),
+            (
+                &shadow.translucent,
+                Some(&shadow_color),
+                Some(&shadow.group),
+            ),
+        ];
+        for (pipeline, target, frame) in draws {
+            let colour: Vec<_> = (target.into_iter())
+                .map(|view| {
+                    Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Default::default(),
+                    })
+                })
+                .collect();
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: colour.as_slice(),
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(Default::default()),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &terrain, &[]);
+            pass.set_bind_group(super::super::looks::GROUP, &looks_group, &[]);
+            match frame {
+                Some(group) => pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]),
+                None => layers.bind(&mut pass),
+            }
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.set_vertex_buffer(1, origins.slice(..));
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit([encoder.finish()]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            panic!("{e}");
         }
     }
 

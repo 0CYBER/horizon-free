@@ -123,6 +123,9 @@ pub struct Flat {
     translucent_blocks_per_page: u64,
     /// Block tables by page key.
     pages: Vec<Option<PageTable>>,
+    /// Each page key's quad looks (`looks::LookGroups`), bound beside the page while a pack
+    /// reads them (`bind_looks`).
+    looks: Vec<wgpu::BindGroup>,
     free_ids: Vec<u32>,
     next_id: u32,
     origins: wgpu::Buffer,
@@ -491,6 +494,7 @@ impl Flat {
         let storage_usage = wgpu::BufferUsages::STORAGE;
         let back = Some(wgpu::Face::Back);
         Self {
+            looks: Vec::new(),
             // The solid draws read either layout of the solid quads (`mesher::packed`) from
             // the page; translucent ones keep their vertex buffer.
             solid: solid(
@@ -1023,6 +1027,14 @@ impl Flat {
             }));
         }
     }
+    /// Binds `looks`' group of each page with it from now on (none: no looks).
+    pub fn bind_looks(&mut self, looks: Option<&super::looks::LookGroups>) {
+        self.looks.clear();
+        if let Some(looks) = looks {
+            let keys = 0..self.pages.len() as u32;
+            self.looks.extend(keys.map(|k| looks.get(k).clone()));
+        }
+    }
     /// The bind group of the section arena's page `page` (`bind_pages`), which the solid
     /// draws read their vertices through.
     pub fn page_group(&self, page: u32) -> Option<&wgpu::BindGroup> {
@@ -1178,6 +1190,9 @@ impl Flat {
             .expect("prepared page");
         pass.set_vertex_buffer(0, vertices(page));
         pass.set_bind_group(1, table, &[]);
+        if let Some(looks) = self.looks.get(page as usize) {
+            pass.set_bind_group(super::looks::GROUP, looks, &[]);
+        }
     }
 }
 

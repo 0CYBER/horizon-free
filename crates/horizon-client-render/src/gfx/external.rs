@@ -181,6 +181,8 @@ pub struct Capabilities {
     pub entities: bool,
     /// Its rays read the scene's entity layer, which the engine then builds.
     pub ray_entities: bool,
+    /// Its terrain pipelines bind the arenas' quad looks (`looks::wanted`): sections carry them.
+    pub looks: bool,
 }
 
 /// What the renderer hands the pack's post stage (`ExternalPipeline::run_post`).

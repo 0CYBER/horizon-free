@@ -131,6 +131,7 @@ fn scene(
         shader_pack_lighting: false,
         separate_ao: false,
         shader_pack: false,
+        looks: false,
         assets,
         render,
         tables,

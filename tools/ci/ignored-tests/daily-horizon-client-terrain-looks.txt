@@ -1,0 +1,5 @@
+# The daily tests of the terrain look store (horizon-client): each is #[ignore = "daily"] in its source and runs once a day in
+# the daily run, where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::shader_pack_looks_tests::pages_past_the_look_limit_are_dropped_when_looks_turn_on lib daily resources
+horizon-client game::shader_pack_looks_tests::terrain_looks_go_with_the_world_to_a_new_renderer lib daily resources
+horizon-client game::shader_pack_looks_tests::terrain_looks_stay_with_their_quads_through_pack_changes lib daily resources

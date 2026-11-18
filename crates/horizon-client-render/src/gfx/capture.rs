@@ -41,6 +41,11 @@ impl Copies {
     pub(super) fn section(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.sections.insert(key, copy(mesh));
     }
+    /// The copy of section `key`'s mesh as it was handed over.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn held(&self, key: SectionKey) -> Option<&SectionMesh> {
+        self.sections.get(&key)
+    }
     /// Columns unloaded (`Renderer::remove_columns`).
     pub(super) fn remove_columns(&mut self, columns: &[(i32, i32)]) {
         if columns.is_empty() {
@@ -71,6 +76,8 @@ fn copy(mesh: &SectionMesh) -> SectionMesh {
         packed: mesh.packed.clone(),
         packed_far: mesh.packed_far,
         solid_tints: Vec::new(),
+        solid_looks: mesh.solid_looks.clone(),
+        translucent_looks: mesh.translucent_looks.clone(),
         visibility: mesh.visibility,
         block_entities: mesh.block_entities.clone(),
         lights: mesh.lights.clone(),

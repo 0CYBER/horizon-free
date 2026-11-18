@@ -281,6 +281,7 @@ struct MeshSettings {
     shader_pack_lighting: bool,
     separate_ao: bool,
     shader_pack: bool,
+    looks: bool,
     zoom: BiomeZoom,
     blend_radius: i32,
     smooth_lighting: bool,
@@ -628,6 +629,9 @@ pub struct Streaming {
     /// A `shaders/` pack draws the terrain: fluid tops split as Iris splits them
     /// (`Mesher::shader_pack`).
     pub shader_pack: bool,
+    /// A shader API 0.2 pack reads the terrain's own inputs: quads carry their looks
+    /// (`Mesher::looks`, `Renderer::terrain_looks`).
+    pub looks: bool,
     /// `BiomeManager`'s zoom seed (the hashed world seed) and `biomeBlendRadius`.
     pub biome_zoom: BiomeZoom,
     pub biome_blend: i32,
@@ -1231,6 +1235,7 @@ impl Streaming {
             shader_pack_lighting: false,
             separate_ao: false,
             shader_pack: false,
+            looks: false,
             biome_zoom: BiomeZoom::new(0),
             biome_blend: 2,
             smooth_lighting: true,

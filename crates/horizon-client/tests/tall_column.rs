@@ -144,6 +144,7 @@ fn a_tall_column_streams_lights_and_meshes_to_its_top() {
             shader_pack_lighting: false,
             separate_ao: false,
             shader_pack: false,
+            looks: false,
             zoom: BiomeZoom::new(0),
             blend_radius: 2,
             smooth_lighting: true,

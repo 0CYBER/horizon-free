@@ -321,6 +321,19 @@ fn emit(mesher: &Mesher<'_>, quad: &SectionQuad, layer: u16, out: &mut SectionMe
         translucent: quad.translucent,
         opaque: false,
     };
+    // A mod's quad says its colour only: unshaded, without ambient occlusion, facing the axis
+    // nearest its normal.
+    let look = match mesher.looks {
+        true => {
+            let [a, b, c] = [0, 1, 2].map(|i| glam::Vec3::from(quad.positions[i]));
+            let n = (b - a).cross(c - a);
+            let axis = n.abs().max_position();
+            // `Direction` order: down, up, north, south, west, east.
+            let face = [4, 0, 2][axis] + u32::from(n[axis] > 0.0);
+            super::QuadLook::new(quad.color & 0xFF_FFFF, 1.0, face, [1.0; 4], 0)
+        }
+        false => super::QuadLook::default(),
+    };
     mesher.quad_as(
         out,
         false,
@@ -328,6 +341,7 @@ fn emit(mesher: &Mesher<'_>, quad: &SectionQuad, layer: u16, out: &mut SectionMe
         vertices,
         false,
         Some(quad.color & 0xFF_FFFF),
+        look,
     );
 }
 

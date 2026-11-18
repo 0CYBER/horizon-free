@@ -136,7 +136,9 @@ impl Game<'_> {
             _ => Some(self.streaming.lod_source()),
         };
         if let Some(source) = source {
-            self.lod = Some(horizon_client::lod::Lod::new(source, self.worker_context()));
+            let lod = horizon_client::lod::Lod::new(source, self.worker_context());
+            lod.set_looks(self.streaming.looks, self.streaming.nether_shading);
+            self.lod = Some(lod);
             self.lod_observe.extend(self.world.chunks.keys().copied());
         }
     }

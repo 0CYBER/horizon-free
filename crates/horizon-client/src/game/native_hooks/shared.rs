@@ -5440,6 +5440,11 @@ pub(super) mod particle_count_tests {
             use winit::platform::x11::EventLoopBuilderExtX11;
             builder.with_x11().with_any_thread(true);
         }
+        #[cfg(target_os = "windows")]
+        {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        }
         let event_loop = builder.build().unwrap();
         #[allow(deprecated)]
         let window = std::sync::Arc::new(

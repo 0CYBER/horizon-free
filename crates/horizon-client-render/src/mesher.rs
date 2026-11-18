@@ -382,6 +382,61 @@ impl TerrainSource {
     }
 }
 
+/// What a shader pack's terrain inputs need beside the vertex, whose colour holds vanilla's
+/// product of them: one per quad while the running pack takes them (`Mesher::looks`), and in the
+/// arena one per slot (a compact record's, or each of a quad's four vertices).
+///
+/// - word 0: the tint (0xBBGGRR, as the vertex colour holds it), bits 24..27 the face's shade
+///   (`SHADES`' index + 1; 0: no look), bits 27..30 the face (`Direction` order);
+/// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low;
+/// - word 2: the light level the surface gives off, 0..15: its block's, raised to a model
+///   face's own, or a fluid's own (lava 15, water 0, also around a waterlogged light).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct QuadLook(pub [u32; 3]);
+/// The directional shades a face can have, by `QuadLook`'s code 1..5.
+/// (A fluid's side takes the top's shade times its own: 0.72 and 0.54 under Nether shading.)
+pub const SHADES: [f32; 7] = [0.5, 0.6, 0.8, 0.9, 1.0, 0.72, 0.54];
+impl QuadLook {
+    /// `tint` as 0xRRGGBB, `shade` one of `SHADES` (another reads as 1), `ao` each corner's
+    /// brightness 0..1.
+    pub(crate) fn new(tint: u32, shade: f32, face: u32, ao: [f32; 4], emission: u8) -> Self {
+        let code = SHADES
+            .iter()
+            .position(|&s| (s - shade).abs() < 1e-4)
+            .map_or(5, |i| i as u32 + 1);
+        let rgb = (tint >> 16 & 255) | (tint & 0xFF00) | (tint & 255) << 16;
+        let ao = ao
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (lighting::gray(b).clamp(0, 255) as u32) << (8 * i))
+            .sum();
+        Self([
+            rgb | code << 24 | (face & 7) << 27,
+            ao,
+            u32::from(emission.min(15)),
+        ])
+    }
+    /// This quad's look on a piece of it whose corners are at `(s, t)` of the quad (`bilinear`).
+    fn piece(self, at: [(f32, f32); 4]) -> Self {
+        let ao = |i: usize| (self.0[1] >> (8 * i) & 255) as f32;
+        let corners = at.map(|(s, t)| {
+            let w = bilinear_weights(s, t);
+            (0..4).map(|i| w[i] * ao(i)).sum::<f32>().round() as u32
+        });
+        let ao = corners
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| a.min(255) << (8 * i));
+        Self([self.0[0], ao.sum(), self.0[2]])
+    }
+    /// The same look with another tint (0xRRGGBB): an overlay's.
+    fn tinted(self, tint: u32) -> Self {
+        let rgb = (tint >> 16 & 255) | (tint & 0xFF00) | (tint & 255) << 16;
+        Self([self.0[0] & !0xFF_FFFF | rgb, self.0[1], self.0[2]])
+    }
+}
+
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
     /// One source per quad when a shader pack meshes terrain; independent of its sprite
@@ -393,6 +448,10 @@ pub struct SectionMesh {
     pub sides: Sides,
     pub translucent: Vec<TerrainVertex>,
     pub translucent_sources: Vec<TerrainSource>,
+    /// One look a quad (`QuadLook`) while the mesher writes them (`Mesher::looks`); empty
+    /// otherwise.
+    pub solid_looks: Vec<QuadLook>,
+    pub translucent_looks: Vec<QuadLook>,
     /// Whether `packed` holds far tile records (`lod::packed`) rather than
     /// section records (`mesher::packed`): the two are read apart, by the base
     /// vertex their draws use.
@@ -430,6 +489,8 @@ impl Default for SectionMesh {
             sides: Sides::default(),
             translucent: Vec::new(),
             translucent_sources: Vec::new(),
+            solid_looks: Vec::new(),
+            translucent_looks: Vec::new(),
             packed: Vec::new(),
             packed_far: false,
             solid_tints: Vec::new(),
@@ -467,6 +528,8 @@ impl SectionMesh {
         self.solid_sources.clear();
         self.translucent.clear();
         self.translucent_sources.clear();
+        self.solid_looks.clear();
+        self.translucent_looks.clear();
         self.packed.clear();
         self.packed_far = false;
         self.solid_tints.clear();
@@ -483,6 +546,8 @@ impl SectionMesh {
             + self.translucent.capacity() * std::mem::size_of::<TerrainVertex>()
             + (self.solid_sources.capacity() + self.translucent_sources.capacity())
                 * std::mem::size_of::<TerrainSource>()
+            + (self.solid_looks.capacity() + self.translucent_looks.capacity())
+                * std::mem::size_of::<QuadLook>()
             + self.packed.capacity() * std::mem::size_of::<[u32; 6]>()
             + self.solid_tints.capacity() * std::mem::size_of::<u32>()
             + self.block_entities.capacity() * std::mem::size_of::<([i32; 3], u32)>()
@@ -501,6 +566,7 @@ impl SectionMesh {
             &mut self.solid,
             &mut self.solid_tints,
             &mut self.solid_sources,
+            &mut self.solid_looks,
         );
         self.bounds = self.compute_bounds();
         self.packed.clear();
@@ -1607,6 +1673,8 @@ fn row_masks_match_cell_definition() {
 #[cfg(test)]
 mod leaf_culling_tests;
 #[cfg(test)]
+mod look_tests;
+#[cfg(test)]
 mod opaque_ice_tests;
 #[cfg(test)]
 mod reuse_tests;
@@ -2082,6 +2150,9 @@ pub struct Mesher<'a> {
     /// A `shaders/` pack draws the terrain (with or without its `oldLighting`): fluid tops are
     /// split into triangles as Iris splits them (`fluid::splits_north_east`).
     pub shader_pack: bool,
+    /// A shader API 0.2 pack reads the terrain's own inputs (`tint`, `shade`, `ao`, `face`,
+    /// `emission`): each quad gets its `QuadLook`.
+    pub looks: bool,
     pub assets: &'a Assets,
     pub render: &'a RenderAssets,
     pub tables: &'a MeshTables,
@@ -2209,6 +2280,7 @@ impl Mesher<'_> {
                             self.shader_pack_lighting,
                             self.separate_ao,
                             self.shader_pack,
+                            self.looks,
                         );
                         fluid::tesselate(
                             self.tables,
@@ -2425,6 +2497,16 @@ impl Mesher<'_> {
             }
             None => tint,
         };
+        let look = match self.looks {
+            true => QuadLook::new(
+                tint.unwrap_or(packed::WHITE),
+                directional,
+                q.facing as u32,
+                ao_factor,
+                state.emission.max(q.light_emission),
+            ),
+            false => QuadLook::default(),
+        };
         // Fusion's and then OptiFine's connected textures: another sprite, or one per quarter,
         // and the overlays drawn over it (a few per face at most; more are dropped).
         let (fusion, connected) = (&self.render.fusion, &self.render.connected);
@@ -2525,20 +2607,22 @@ impl Mesher<'_> {
         let own_translucent = self.translucent(own);
         let tile = |t: TileLayer| in_face_pass(t, own, own_translucent);
         match pick {
-            Pick::Keep => self.quad(out, force_solid, own, corners.map(|c| c.0), tint),
+            Pick::Keep => self.quad(out, force_solid, own, corners.map(|c| c.0), tint, look),
             Pick::Tile(t) => {
                 let v = corners.map(|c| c.0);
-                self.quad_as(out, force_solid, tile(t), v, false, tint);
+                self.quad_as(out, force_solid, tile(t), v, false, tint, look);
             }
             Pick::Quarters(tiles) => {
                 let cuts = cuts(&corners);
                 for s in cuts.windows(2) {
                     for t in cuts.windows(2) {
-                        let piece = [(s[0], t[0]), (s[1], t[0]), (s[1], t[1]), (s[0], t[1])]
-                            .map(|(s, t)| bilinear(&corners, s, t));
+                        let at = [(s[0], t[0]), (s[1], t[0]), (s[1], t[1]), (s[0], t[1])];
+                        let piece = at.map(|(s, t)| bilinear(&corners, s, t));
                         let quarter = quarter_of(&piece);
                         let piece = piece.map(|c| c.0);
-                        self.quad_as(out, force_solid, tile(tiles[quarter]), piece, false, tint);
+                        let tile = tile(tiles[quarter]);
+                        let look = look.piece(at);
+                        self.quad_as(out, force_solid, tile, piece, false, tint, look);
                     }
                 }
             }
@@ -2574,11 +2658,13 @@ impl Mesher<'_> {
                 opaque: false,
             };
             let whole = vertices(tint, standard());
+            let overlay_look = look.tinted(tint.unwrap_or(packed::WHITE));
             for s in cuts.windows(2) {
                 for t in cuts.windows(2) {
-                    let piece = [(s[0], t[0]), (s[1], t[0]), (s[1], t[1]), (s[0], t[1])]
-                        .map(|(s, t)| bilinear(&whole, s, t).0);
-                    self.quad_as(out, false, tile, piece, false, tint);
+                    let at = [(s[0], t[0]), (s[1], t[0]), (s[1], t[1]), (s[0], t[1])];
+                    let piece = at.map(|(s, t)| bilinear(&whole, s, t).0);
+                    let look = overlay_look.piece(at);
+                    self.quad_as(out, false, tile, piece, false, tint, look);
                 }
             }
         }
@@ -2592,8 +2678,9 @@ impl Mesher<'_> {
         tile: TileLayer,
         v: [TerrainVertex; 4],
         tint: Option<u32>,
+        look: QuadLook,
     ) {
-        self.quad_as(out, force_solid, tile, v, true, tint);
+        self.quad_as(out, force_solid, tile, v, true, tint, look);
     }
     /// Whether [`Mesher::quad`] draws `tile` in the translucent pass.
     fn translucent(&self, tile: TileLayer) -> bool {
@@ -2613,7 +2700,8 @@ impl Mesher<'_> {
     }
     /// [`Mesher::quad`], with the sprite's own translucency (`translucent_layers`) counted only
     /// when `by_sprite`: an overlay's pass is its rule's. `tint`: what its grey levels were
-    /// multiplied by, for the compact layout (`packed`).
+    /// multiplied by, for the compact layout (`packed`). `look`: kept while `looks`.
+    #[allow(clippy::too_many_arguments)]
     fn quad_as(
         &self,
         out: &mut SectionMesh,
@@ -2622,6 +2710,7 @@ impl Mesher<'_> {
         mut v: [TerrainVertex; 4],
         by_sprite: bool,
         tint: Option<u32>,
+        look: QuadLook,
     ) {
         let TileLayer::Layer {
             layer,
@@ -2657,6 +2746,14 @@ impl Mesher<'_> {
             vertex.layer = layer;
         }
         target.extend(v);
+        if self.looks {
+            let (looks, quads) = match translucent {
+                true => (&mut out.translucent_looks, out.translucent.len() / 4),
+                false => (&mut out.solid_looks, out.solid.len() / 4),
+            };
+            looks.resize(quads - 1, QuadLook::default());
+            looks.push(look);
+        }
         if !translucent {
             // Quads other code put in `solid` (lava) have no tint known.
             let quad = out.solid.len() / 4 - 1;
@@ -2740,11 +2837,7 @@ fn quarter_of(piece: &[(TerrainVertex, [f32; 2]); 4]) -> usize {
 /// two triangles (0-1-2 and 0-2-3), as the GPU blends the whole quad, so a split face shades
 /// like an unsplit one.
 fn bilinear(c: &[(TerrainVertex, [f32; 2]); 4], s: f32, t: f32) -> (TerrainVertex, [f32; 2]) {
-    let w = if s >= t {
-        [1.0 - s, s - t, t, 0.0]
-    } else {
-        [1.0 - t, 0.0, s, t - s]
-    };
+    let w = bilinear_weights(s, t);
     let mix = |f: &dyn Fn(&(TerrainVertex, [f32; 2])) -> f32| {
         (0..4).map(|i| w[i] * f(&c[i])).sum::<f32>()
     };
@@ -2759,6 +2852,19 @@ fn bilinear(c: &[(TerrainVertex, [f32; 2]); 4], s: f32, t: f32) -> (TerrainVerte
     let pos = [0, 1, 2].map(|k| mix(&|c| c.0.pos[k]));
     let uv = [0, 1].map(|k| mix(&|c| c.1[k]));
     (TerrainVertex::new(pos, uv, 0, color, light), uv)
+}
+/// Each corner's weight at `(s, t)` of a quad, on the triangle of its 0-2 diagonal the point is
+/// on, as the quad's triangles interpolate it.
+fn bilinear_weights(s: f32, t: f32) -> [f32; 4] {
+    if s >= t {
+        [1.0 - s, s - t, t, 0.0]
+    } else {
+        [1.0 - t, 0.0, s, t - s]
+    }
+}
+/// Vanilla's directional shade of a face pointing `face`, under Nether shading or not.
+pub(crate) fn cardinal_shade(nether: bool, face: ModelDirection) -> f32 {
+    lighting::cardinal(nether, face)
 }
 /// Snapshot of the 3x3 chunk neighbourhood used by a worker job.
 pub type Region = [[Option<Arc<Chunk>>; 3]; 3];

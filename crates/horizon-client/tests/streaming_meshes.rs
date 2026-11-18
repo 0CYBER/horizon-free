@@ -258,6 +258,7 @@ fn relit_columns_keep_every_mesh_current() {
             shader_pack_lighting: false,
             separate_ao: false,
             shader_pack: false,
+            looks: false,
             zoom: BiomeZoom::new(0),
             blend_radius: 2,
             smooth_lighting: true,

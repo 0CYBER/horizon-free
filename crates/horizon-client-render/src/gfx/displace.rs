@@ -412,6 +412,9 @@ pub struct Displacement {
     pub shadow: Option<Picks>,
     /// Group 1's layout for the grid's pipelines.
     pub draw_layout: wgpu::BindGroupLayout,
+    /// For a pack that reads the quads' looks, the picked quads' looks, one a quad, and
+    /// their group (`looks::GROUP`).
+    looks: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     /// CPU-side section table reused between displacement preparation passes.
     table: Vec<Section>,
     /// Sections the pick ran over this frame (0: nothing to draw).
@@ -459,6 +462,7 @@ impl Displacement {
         steps: bool,
         normals: &wgpu::TextureView,
         shadow: bool,
+        looks: Option<&wgpu::BindGroupLayout>,
     ) -> Self {
         let buffer = |label, size, usage| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -593,6 +597,16 @@ impl Displacement {
             compilation_options: Default::default(),
             cache: None,
         });
+        let looks = looks.map(|layout| {
+            let size = MAX_QUADS * super::arena::LOOK_BYTES;
+            let looks = buffer("Displacement looks", size, U::STORAGE | U::COPY_DST);
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Displacement looks"),
+                layout,
+                entries: &[entry(0, looks.as_entire_binding())],
+            });
+            (looks, group)
+        });
         Self {
             distance,
             vertices,
@@ -602,6 +616,7 @@ impl Displacement {
             view,
             shadow,
             draw_layout,
+            looks,
             table: Vec::new(),
             drawn: 0,
         }
@@ -717,6 +732,9 @@ impl Displacement {
         }
         pass.set_pipeline(pipeline);
         pass.set_bind_group(1, &picks.draw_group, &[]);
+        if let Some((_, group)) = &self.looks {
+            pass.set_bind_group(super::looks::GROUP, group, &[]);
+        }
         pass.draw_indirect(&picks.draw, 0);
     }
 }
@@ -762,7 +780,7 @@ mod tests {
             eprintln!("displacement pick on {} ({name})", adapter.get_info().name);
             let normals = normals(&device, &queue);
             let mut displacement =
-                super::Displacement::new(&device, 12.0, 16, false, &normals, true);
+                super::Displacement::new(&device, 12.0, 16, false, &normals, true, None);
             for (at, view) in [
                 ([0.0, 0.0], 1),
                 ([1.25, 0.0], 1),
@@ -876,7 +894,7 @@ mod tests {
             let (one, two) = (page(&one), page(&two));
             let normals = normals(&device, &queue);
             let mut displacement =
-                super::Displacement::new(&device, 12.0, 16, false, &normals, false);
+                super::Displacement::new(&device, 12.0, 16, false, &normals, false, None);
             let near = |buffer, base, v: &[TerrainVertex]| super::Near {
                 buffer,
                 base,

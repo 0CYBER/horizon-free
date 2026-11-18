@@ -540,7 +540,8 @@ impl NativeShadow {
         grid: Option<ShadowGrid<'_>>,
     ) -> Result<Self, String> {
         let text = shader_source(
-            &shadow_solid(shape.sprite_materials, solid_materials),
+            &(shadow_solid(shape.sprite_materials, solid_materials)
+                + super::looks::wgsl(shape.looks.is_some())),
             vertex.map(|s| s.source.as_str()),
             shape.sprite_materials,
             grid.as_ref().map(|g| g.material.source.as_str()),
@@ -611,6 +612,7 @@ impl NativeShadow {
                 Default::default();
             groups[0] = Some(shape.globals);
             groups[1] = flat;
+            groups[super::looks::GROUP as usize] = shape.looks;
             groups[GROUP as usize] = Some(&frame_layout);
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Native shader pack shadow"),
