@@ -781,6 +781,12 @@ impl Game<'_> {
         opening: Opening,
     ) -> Result<()> {
         self.integrated_open(&launch, &flags, tasks, ready, opening)?;
+        // Test-only: the dedicated scene queues `tick freeze` before the first tick; here no tick may run
+        // before the script's own freeze, or the world spawns mobs from an unsynced level random.
+        #[cfg(feature = "state-digest")]
+        if std::env::var_os("HORIZON_STATE_DIGEST_FREEZE").is_some_and(|v| v == "1") {
+            self.clock.set_frozen(true);
+        }
         // The server thread's `server_started` site, before the tick loop.
         self.native_lifecycle_world_ready();
         if let (Some(script), Some(output)) = (
@@ -1119,6 +1125,34 @@ impl Game<'_> {
     /// the owner's level, at the owner permission level. The feedback goes to
     /// the owner's chat and is returned.
     pub(super) fn owner_console_command(&mut self, command: &str) -> Vec<String> {
+        // Test-only, as on the dedicated console: sync the randoms on this server thread, in the owner's level.
+        #[cfg(feature = "state-digest")]
+        if let Some(rest) = command.trim_start_matches('/').strip_prefix("digest-sync")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            // The owner's level is the one to sync. It must be the level in place: syncing any other one, or
+            // the level in place after a failed switch, would report success for the wrong level.
+            let owner = self.serving.as_ref().map(|s| s.owner);
+            let owner_dim = self.lan.as_ref().and_then(|h| {
+                h.hub.guests.iter().find(|g| Some(g.uuid) == owner).map(|g| g.dimension.clone())
+            });
+            let Some(owner_dim) = owner_dim else {
+                return vec!["digest-sync: the owner is not in the world yet".to_owned()];
+            };
+            if super::Dim::from_id(&owner_dim) != self.dim {
+                return vec![format!(
+                    "digest-sync: the owner is in {owner_dim}, not the level in place; nothing changed"
+                )];
+            }
+            return vec![match self.state_digest_sync(&args) {
+                Ok(()) => {
+                    self.state_digest_rank_joins();
+                    "digest-sync done".to_owned()
+                }
+                Err(e) => format!("digest-sync: {e}"),
+            }];
+        }
         let Some(owner) = self.serving.as_ref().map(|s| s.owner) else {
             return Vec::new();
         };

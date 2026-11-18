@@ -214,7 +214,8 @@ def run_integrated(args, home, out, timings):
     shutil.copytree(template / 'world', work / 'game' / 'saves' / 'T')
     (work / 'game' / 'saves' / 'T' / 'session.lock').unlink(missing_ok=True)
     digest = None if '--no-digest' in sys.argv else out / 'digest.txt'
-    env = lab.game_env(base.scratch_env(home, digest, '--detail' in sys.argv), HORIZON_HOME=work / 'home')
+    # The server starts frozen (state-digest feature): ticks before the script's freeze would spawn mobs and differ run to run.
+    env = lab.game_env(base.scratch_env(home, digest, '--detail' in sys.argv), HORIZON_HOME=work / 'home', HORIZON_STATE_DIGEST_FREEZE='1')
     sock = work / 'c.sock'
 
     def run(*words, timeout=600):
@@ -235,11 +236,11 @@ def run_integrated(args, home, out, timings):
         port = run('lan', 'open', 0, 'commands')['port']
         try:
             reply = json.dumps(command('digest-sync ' + ' '.join(map(str, base.SYNC))))
-            if 'Unknown' in reply or 'Incorrect' in reply or 'rror' in reply:
+            if 'Unknown' in reply or 'Incorrect' in reply or 'rror' in reply or 'digest-sync:' in reply or 'digest-sync done' not in reply:
                 raise SystemExit(reply)
             timings['digest_sync'] = 'ok'
         except SystemExit as e:
-            timings['digest_sync'] = f'unavailable on the integrated server, so its digest is not comparable run to run: {e}'
+            timings['digest_sync'] = f'failed, so the digest is not comparable run to run: {e}'
         for line in base.scene_commands(False)[1:]:
             command(line)
         players.processes.append(subprocess.Popen(
@@ -254,6 +255,9 @@ def run_integrated(args, home, out, timings):
             command(line)
         host = run('lan', 'status').get('host', 'Player')
         command(f'tp {host} 40.5 {base.Y} 40.5')
+        # The host's player is moved by the window's own ticks, which a frozen server does not pace: a spectator stays put,
+        # so no mob pushes it and what looks at it sees the same place every run.
+        command(f'gamemode spectator {host}')
         command(f'give {host} minecraft:bread 4')
         time.sleep(3)
         before = game_time(command)
