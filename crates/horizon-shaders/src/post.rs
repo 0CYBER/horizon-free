@@ -571,6 +571,8 @@ pub struct Post {
     /// The shadowcolor buffers the shadow programs have: 2, or all 8 when the pack names the
     /// `HIGHER_SHADOWCOLOR` feature (`iris.features.required` or `.optional`).
     pub shadow_colors: usize,
+    /// Required independent attachment blending (spec 3.2); the renderer checks its adapter.
+    pub per_buffer_blending_required: bool,
     /// `bufferObject.*`, by binding.
     pub buffer_objects: std::collections::BTreeMap<u32, BufferObject>,
     /// `image.*`.
@@ -790,6 +792,11 @@ pub fn load_post(
             2
         },
         buffer_objects: Default::default(),
+        per_buffer_blending_required: properties
+            .get("iris.features.required")
+            .unwrap_or_default()
+            .split_whitespace()
+            .any(|name| name.eq_ignore_ascii_case("PER_BUFFER_BLENDING")),
         images: Vec::new(),
         shadow_culling: match properties.get("shadow.culling").map(str::trim) {
             Some("false") => ShadowCulling::Off,

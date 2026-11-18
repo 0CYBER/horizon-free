@@ -13,13 +13,15 @@ use std::collections::BTreeMap;
 /// sampler by the declared type (`sampler2DShadow`), so they always are. `HIGHER_SHADOWCOLOR`:
 /// `shadowcolor2` to `shadowcolor7` beside the first two. `FADE_VARIABLE`: terrain vertex
 /// programs can read the section's visibility transition as `mc_chunkFade`.
-const FEATURES: [&str; 9] = [
+// Device-dependent support is checked by the renderer before it builds pack pipelines.
+const FEATURES: [&str; 10] = [
     "BLOCK_EMISSION_ATTRIBUTE",
     "COMPUTE_SHADERS",
     "CUSTOM_IMAGES",
     "ENTITY_TRANSLUCENT",
     "FADE_VARIABLE",
     "HIGHER_SHADOWCOLOR",
+    "PER_BUFFER_BLENDING",
     "REVERSED_CULLING",
     "SEPARATE_HARDWARE_SAMPLERS",
     "SSBO",

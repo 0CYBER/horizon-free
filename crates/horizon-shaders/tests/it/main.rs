@@ -15,6 +15,7 @@ mod naga_hlsl_offsets;
 mod naga_hlsl_zero_lod;
 mod pack_compat;
 mod real_packs;
+mod required_blending;
 mod reversed_culling_feature;
 mod signed_builtin_indices;
 mod stage_local_reachability;
