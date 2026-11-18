@@ -42,9 +42,17 @@ def fixtures(path=FIXTURES):
 
 
 def call(name):
-    """A call of `name` (a function, a method or `Type::function`), with or without a turbofish."""
-    return re.compile(r"(?<![\w$])" + r"\s*::\s*".join(map(re.escape, name.split("::")))
-                      + r"\s*(?:::\s*<[^(){};]*>\s*)?\(")
+    """A call of `name` (a function, a method or `Type::function`), with or without a turbofish.
+
+    A generic-argument group may follow any path segment (`Game::<T>::new`), as well as the function itself
+    (`Game::new::<T>`), so a turbofish on the type cannot hide a fixture call from the guard."""
+    args = r"<[^(){};]*>"
+    # Between segments: `::`, optionally followed by a turbofish and another `::` (`Game::<T>::new`).
+    separator = r"\s*::\s*(?:" + args + r"\s*::\s*)?"
+    # On the final segment: an optional `::<...>` before the call's `(`.
+    function_turbofish = r"(?:::\s*" + args + r")?"
+    return re.compile(r"(?<![\w$])" + separator.join(map(re.escape, name.split("::")))
+                      + r"\s*" + function_turbofish + r"\s*\(")
 
 
 def offenders(source, names):
