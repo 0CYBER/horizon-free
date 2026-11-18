@@ -20,7 +20,8 @@ pub trait Hooks {
     /// selected slot is a `mainhand` change. Only their six slots `mainhand`,
     /// `offhand`, `feet`, `legs`, `chest` and `head` are told: a player's
     /// `body` and `saddle` slots are never told. Mobs and players are told
-    /// only while a mod sets `living_equipment_listened`. The world
+    /// only while an enabled mod subscribes to this hook: no other hook has
+    /// to be heard with it. The world
     /// host's own player, in single player or hosting a LAN world, isn't told
     /// here: `on_equip` hears it. Server-side.
     #[hook(

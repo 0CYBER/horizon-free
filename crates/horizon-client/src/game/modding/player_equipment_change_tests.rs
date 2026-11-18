@@ -1,6 +1,6 @@
 //! `living_equipment_change` for a server's players (arismoko/horizon#3417): a hotbar selection, a pickup into
-//! the selected slot and a helmet put on are each one change on the next tick, and nothing is
-//! told while no mod sets `living_equipment_listened`.
+//! the selected slot and a helmet put on are each one change on the next tick, and a mod hearing
+//! the change is told without also setting `living_equipment_listened`.
 use std::sync::{Arc, Mutex};
 
 use horizon_client::items::ItemStack;
@@ -121,15 +121,21 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
 
 #[test]
 #[ignore = "daily"]
-fn players_are_not_told_without_the_listened_opt_in() {
+fn a_mod_hearing_the_change_needs_no_listened_opt_in() {
     with_counter(false, |game, heard| {
+        let sword = ItemStack::new("minecraft:iron_sword", 1);
+        let helmet = ItemStack::new("minecraft:iron_helmet", 1);
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
-            g.inventory[1] = Some(ItemStack::new("minecraft:iron_sword", 1));
+            g.inventory[1] = Some(sword.clone());
             g.selected = 1;
-            g.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
+            g.armor[0] = Some(helmet.clone());
         });
+        // The first pass counts the player from empty.
         game.native_players_equipment();
-        assert_eq!(take(heard), Heard::new());
+        let mut told = take(heard);
+        told.sort_by(|a, b| a.2.cmp(&b.2));
+        let slots: Vec<_> = told.iter().map(|t| t.2.as_str()).collect();
+        assert_eq!(slots, ["head", "mainhand"]);
     });
 }
