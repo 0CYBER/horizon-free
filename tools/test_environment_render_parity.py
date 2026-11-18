@@ -24,6 +24,23 @@ except ImportError:
     import lab, test_rust_parity as base, test_model_baking_parity as baking
 
 
+def field_mismatch(expected, got, tolerance):
+    """True when one attribute value differs from the oracle value.
+
+    Numeric lists must agree entry for entry: a Rust list that is shorter than
+    vanilla's is a real difference, not a tail for zip() to silently discard.
+    """
+    if isinstance(expected, list):
+        if not isinstance(got, list) or len(expected) != len(got):
+            return True
+        pairs = zip(expected, got)
+    else:
+        if isinstance(got, list):
+            return True
+        pairs = [(expected, got)]
+    return any(abs(a - b) > tolerance * (1 + abs(a)) for a, b in pairs)
+
+
 def cases(resources):
     biomes = sorted(p.stem for p in (resources / 'data/minecraft/worldgen/biome').glob('*.json'))
     out = []
@@ -80,8 +97,7 @@ def main():
             if key not in r:
                 uncovered.add(key); continue
             got = r[key]
-            pairs = zip(expected, got) if isinstance(expected, list) else [(expected, got)]
-            if any(abs(a - b) > args.tolerance * (1 + abs(a)) for a, b in pairs):
+            if field_mismatch(expected, got, args.tolerance):
                 bad.setdefault(key, []).append((v['case'], expected, got))
     print(f'{len(vanilla)} cases compared')
     for key, items in sorted(bad.items()):

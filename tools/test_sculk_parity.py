@@ -333,6 +333,10 @@ def compare(vanilla, rust):
         if bad is None:
             clean += 1
             report.append(f'{name}: all {len(v)} ticks match')
+    # The comparison is symmetric: a scenario that only Horizon recorded is a
+    # difference too, not a silently accepted extra that passes as parity.
+    for name in sorted(set(rust) - set(vanilla)):
+        report.append(f'{name}: missing from vanilla')
     return report, clean
 
 
@@ -367,11 +371,13 @@ def main():
         return
     names = {s[0] for _, s in chosen}
     vanilla = {k: v for k, v in parse(build / 'vanilla.txt').items() if k in names}
-    report, clean = compare(vanilla, parse(build / 'horizon.txt'))
+    horizon = parse(build / 'horizon.txt')
+    report, clean = compare(vanilla, horizon)
     (build / 'report.txt').write_text('\n'.join(report) + '\n')
     print('\n'.join(line for line in report if not line.endswith('ticks match')))
-    print(f'{clean}/{len(vanilla)} scenarios match on every tick')
-    if not args.report_only and clean != len(vanilla):
+    total = len(set(vanilla) | set(horizon))
+    print(f'{clean}/{total} scenarios match on every tick')
+    if not args.report_only and clean != total:
         raise SystemExit(1)
 
 

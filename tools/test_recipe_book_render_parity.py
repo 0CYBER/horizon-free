@@ -100,10 +100,24 @@ def cases(count, seed):
 
 
 def same(a, b):
-    """Calls agree: every field exactly, poses within float printing."""
+    """Calls agree: every field exactly, poses within float printing.
+
+    List fields must have the same length: zip() alone would silently drop a
+    truncated tail, so a record with fewer poses than vanilla must not pass.
+    """
     if a is None or b is None or set(a) != set(b):
         return False
-    return all(all(abs(x - y) <= 1e-3 for x, y in zip(a[k], b[k])) if k == 'm' else a[k] == b[k] for k in a)
+    for k in a:
+        x, y = a[k], b[k]
+        if isinstance(x, list) or isinstance(y, list):
+            if not isinstance(x, list) or not isinstance(y, list) or len(x) != len(y):
+                return False
+        if k == 'm':
+            if not all(abs(p - q) <= 1e-3 for p, q in zip(x, y)):
+                return False
+        elif x != y:
+            return False
+    return True
 
 
 def main():

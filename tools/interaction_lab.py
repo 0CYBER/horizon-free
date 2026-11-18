@@ -59,12 +59,17 @@ def cargo_example(package, example, *args, profile=None):
 
 def compare(cases, native_path, rust_path, key, describe=None, limit=3):
     """Print differing cases grouped by key(case, native_line); returns the count."""
-    native = Path(native_path).read_text().split('\n')
-    rust = Path(rust_path).read_text().split('\n')
-    if len(native) != len(rust):
-        print(f'line counts differ: native {len(native)} rust {len(rust)}')
+    native = Path(native_path).read_text().splitlines()
+    rust = Path(rust_path).read_text().splitlines()
+    if len(native) != len(cases) or len(rust) != len(cases):
+        # One result line per case is required. A short (or long) output must be
+        # a real failure: do not let zip() silently drop the tail and then report
+        # the missing cases as matches. Count the whole run as differing so the
+        # driver exits non-zero.
+        print(f'line counts differ: cases {len(cases)} native {len(native)} rust {len(rust)}')
+        return max(1, len(cases))
     groups = {}
-    for case, a, b in zip(cases, native, rust):
+    for case, a, b in zip(cases, native, rust, strict=True):
         if a != b:
             groups.setdefault(key(case, a), []).append((case, a, b))
     describe = describe or (lambda case: case if isinstance(case, str) else json.dumps(case))

@@ -137,6 +137,21 @@ class WireStreamTest(unittest.TestCase):
                          ['    #0 move_player_pos.y: vanilla -60.0, Horizon -60.0000001'])
         self.assertEqual(wire_stream.compare([tick(-60.0)], [tick(-60.0)], 0), [])
 
+    def test_field_diff_explains_packets_present_on_only_one_side(self):
+        # compare() flags a longer packet list; the explanation must name the extra packet, not be empty.
+        v = [('move_player_pos', {'x': 1.0}), ('client_tick_end', {})]
+        h = v + [('chat_command', {'command': 'hi'})]
+        self.assertEqual([d[0] for d in wire_stream.compare([{'packets': v}], [{'packets': h}], 0)], [0])
+        self.assertEqual(wire_stream.field_diff(v, h),
+                         ["    #2: vanilla (no packet), Horizon chat_command {'command': 'hi'}"])
+        # The mirror case: the extra packet is on the vanilla side.
+        self.assertEqual(wire_stream.field_diff(h, v),
+                         ["    #2: vanilla chat_command {'command': 'hi'}, Horizon (no packet)"])
+        # A whole missing tick (None, as compare() can yield) still explains the surviving side's packets.
+        self.assertEqual(wire_stream.field_diff(None, v),
+                         ["    #0: vanilla (no packet), Horizon move_player_pos {'x': 1.0}",
+                          "    #1: vanilla (no packet), Horizon client_tick_end {}"])
+
 
 if __name__ == '__main__':
     unittest.main()

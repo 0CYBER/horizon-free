@@ -8,8 +8,6 @@ import unittest
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 # The CLI adds tools/ to sys.path; do not let it shadow unittest modules.
 with patch.object(sys, 'path', sys.path.copy()):
@@ -81,6 +79,81 @@ class SaveRoundtripTimersTests(unittest.TestCase):
         ]
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(roundtrip.summarize(report), 1)
+
+
+class SaveRoundtripDatFileSetTests(unittest.TestCase):
+    """compare_worlds() must enumerate .dat files from both worlds, not just vanilla's."""
+
+    def make_worlds(self, vanilla_files, horizon_files):
+        tmp = tempfile.TemporaryDirectory(prefix='save-roundtrip-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        worlds = []
+        for name, files in (('v', vanilla_files), ('h', horizon_files)):
+            world = root / name
+            for rel, payload in files.items():
+                path = world / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(gzip.compress(tag(10, '', payload)))
+            worlds.append(world)
+        return worlds
+
+    def compare(self, vanilla, horizon):
+        # These fixtures have no region entities or leash holders.
+        with patch.object(roundtrip.scene, 'LEADS', 0):
+            return roundtrip.compare_worlds(vanilla, horizon)
+
+    def rows(self, report, rel):
+        return [row for row in report if row[0] == rel or str(row[0]).startswith(rel + '.')]
+
+    def test_horizon_only_dat_file_is_reported_as_missing_from_vanilla(self):
+        shared = {'level.dat': compound(), 'data/shared.dat': compound(integer('x', 1))}
+        horizon = dict(shared)
+        horizon['data/horizon_only.dat'] = compound(integer('x', 1))
+        vanilla, h = self.make_worlds(shared, horizon)
+
+        report = self.compare(vanilla, h)
+
+        self.assertEqual(self.rows(report, 'data/horizon_only.dat'),
+                         [('data/horizon_only.dat', 'missing from vanilla', 'present')])
+        self.assertEqual(self.rows(report, 'data/shared.dat'), [])
+
+    def test_vanilla_only_dat_file_is_still_reported_as_missing_from_horizon(self):
+        vanilla, h = self.make_worlds(
+            {'level.dat': compound(), 'data/vanilla_only.dat': compound(integer('x', 1))},
+            {'level.dat': compound()})
+
+        report = self.compare(vanilla, h)
+
+        self.assertEqual(self.rows(report, 'data/vanilla_only.dat'),
+                         [('data/vanilla_only.dat', 'present', 'missing from Horizon')])
+
+    def test_matched_dat_files_still_have_their_nbt_compared(self):
+        vanilla, h = self.make_worlds(
+            {'level.dat': compound(), 'players/data/player.dat': compound(integer('score', 3))},
+            {'level.dat': compound(), 'players/data/player.dat': compound(integer('score', 4))})
+
+        report = self.compare(vanilla, h)
+
+        self.assertEqual(self.rows(report, 'players/data/player.dat.score'),
+                         [('players/data/player.dat.score', 3, 4)])
+
+    def test_horizon_only_level_dat_is_reported(self):
+        vanilla, h = self.make_worlds({}, {'level.dat': compound(integer('x', 1))})
+
+        report = self.compare(vanilla, h)
+
+        self.assertEqual(self.rows(report, 'level.dat'),
+                         [('level.dat', 'missing from vanilla', 'present')])
+
+    def test_identical_worlds_report_no_dat_file_differences(self):
+        files = {'level.dat': compound(), 'data/other.dat': compound(integer('x', 1))}
+        vanilla, h = self.make_worlds(files, files)
+
+        report = self.compare(vanilla, h)
+
+        self.assertEqual(self.rows(report, 'level.dat'), [])
+        self.assertEqual(self.rows(report, 'data/other.dat'), [])
 
 
 if __name__ == '__main__':
