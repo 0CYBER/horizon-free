@@ -148,13 +148,23 @@ impl Game<'_> {
         }
         // MouseHandler.grabMouse never captures an inactive window, and vanilla
         // grabs only on `setScreen(null)`: the pack prompt and server dialogs
-        // are screens over the world that keep the pointer.
-        if capture
-            && ((!self.focused && !self.unclaimed_window && !self.scripted_run())
-                || self.server_packs.prompt.is_some()
+        // are screens over the world that keep the pointer. The title screen is
+        // a screen too. `focused` starts true and only follows Focused events,
+        // so a window that opened in the background (never focused, so never
+        // told it lost the focus) is asked itself (`Minecraft.isWindowActive`).
+        let window_focused = self.window.as_ref().is_none_or(|window| window.has_focus());
+        if grab_refused(Grab {
+            capture,
+            title_open: self.title.is_some(),
+            game_focused: self.focused,
+            window_focused,
+            internal_grab: self.internal_grab(),
+            unclaimed_window: self.unclaimed_window,
+            scripted_run: self.scripted_run(),
+            keeps_pointer: self.server_packs.prompt.is_some()
                 || self.dialog_open()
-                || self.command_prompt.is_some())
-        {
+                || self.command_prompt.is_some(),
+        }) {
             return;
         }
         // The container screen's press state belongs to the screen: a screen
@@ -423,9 +433,69 @@ fn top_screen_pauses(dialog: Option<bool>, book: Option<bool>, screen: bool, win
     dialog.or(book).unwrap_or(screen || win)
 }
 
+/// What `MouseHandler.grabMouse` looks at before it takes the pointer.
+struct Grab {
+    capture: bool,
+    /// The title screen is up. `Gui.setScreen` grabs only for a null screen.
+    title_open: bool,
+    game_focused: bool,
+    /// `Minecraft.isWindowActive`: `window.isFocused`.
+    window_focused: bool,
+    /// Offscreen, unclaimed or scripted: nobody at the computer holds this pointer.
+    internal_grab: bool,
+    unclaimed_window: bool,
+    scripted_run: bool,
+    /// A pack prompt, a server dialog or the command prompt is a screen over the world.
+    keeps_pointer: bool,
+}
+
+/// Whether `MouseHandler.grabMouse` leaves the pointer free.
+fn grab_refused(grab: Grab) -> bool {
+    if !grab.capture {
+        return false;
+    }
+    if grab.title_open && !grab.internal_grab {
+        return true;
+    }
+    let focused = grab.game_focused && (grab.internal_grab || grab.window_focused);
+    (!focused && !grab.unclaimed_window && !grab.scripted_run) || grab.keeps_pointer
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{studio_suppresses_focus_pause, top_screen_pauses};
+    use super::{Grab, grab_refused, studio_suppresses_focus_pause, top_screen_pauses};
+
+    fn grab(
+        capture: bool,
+        title_open: bool,
+        game_focused: bool,
+        window_focused: bool,
+        internal_grab: bool,
+        keeps_pointer: bool,
+    ) -> Grab {
+        Grab {
+            capture,
+            title_open,
+            game_focused,
+            window_focused,
+            internal_grab,
+            unclaimed_window: false,
+            scripted_run: false,
+            keeps_pointer,
+        }
+    }
+
+    /// Closing options over the title screen, and a window that never had the
+    /// focus, must not hide the cursor. An in-game focused window still grabs.
+    #[test]
+    fn the_pointer_stays_free_on_the_title_screen_and_in_a_background_window() {
+        assert!(grab_refused(grab(true, true, true, true, false, false)));
+        assert!(grab_refused(grab(true, false, true, false, false, false)));
+        assert!(!grab_refused(grab(true, false, true, true, false, false)));
+        assert!(!grab_refused(grab(true, false, true, false, true, false)));
+        assert!(!grab_refused(grab(false, true, true, false, false, false)));
+        assert!(grab_refused(grab(true, false, true, true, false, true)));
+    }
 
     #[test]
     fn studio_replay_and_freecam_never_pause_on_focus_loss() {
