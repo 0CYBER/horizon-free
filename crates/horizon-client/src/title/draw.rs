@@ -1,6 +1,52 @@
 use super::*;
 
 impl Title {
+    /// The question of `Mode::WorldRequest`: its title, then the mod and the save in the message area, which
+    /// scrolls when the names are long. Yes and No sit below it, always inside the viewport.
+    fn draw_world_request(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        (w, h): (f32, f32),
+        world: &WorldEntry,
+        mods: &str,
+    ) {
+        let area = world_request_layout((w, h));
+        centered(
+            atlas,
+            batch,
+            &lang::get_or("horizon.world_request.title", "Open a world for a mod?"),
+            area.title_y,
+            u32::MAX,
+        );
+        let lines = wrapped(atlas, &world_request_text(mods, world), w - 50.0);
+        self.message_lines.set(lines.len());
+        let content = lines.len() as f32 * 9.0;
+        let mut scroll = self.scroll.get();
+        scroll.clamp(area.top, area.bottom, content);
+        self.scroll.set(scroll);
+        let first = batch.vertices.len();
+        for (i, line) in lines.iter().enumerate() {
+            centered(
+                atlas,
+                batch,
+                line,
+                area.top + i as f32 * 9.0 - world_request_offset(scroll.amount),
+                u32::MAX,
+            );
+        }
+        batch.clip_since(first, 0.0, area.top, w, area.bottom);
+        crate::ui::scrollbar(
+            batch,
+            atlas,
+            w - 10.0,
+            area.top,
+            area.bottom,
+            content,
+            scroll.amount,
+        );
+    }
+
     pub fn draw(
         &self,
         atlas: &HudAtlas,
@@ -558,6 +604,11 @@ impl Title {
                 for (i, line) in lines.iter().enumerate() {
                     centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
                 }
+            }
+            Mode::WorldRequest { world, mods } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                phases(crate::screen_draw::RenderPhase::Background, batch);
+                self.draw_world_request(atlas, batch, (w, h), world, mods)
             }
             Mode::MissingBiomeRegions { missing, .. } => {
                 self.draw_missing_biome_regions(atlas, batch, (w, h), missing, phases)

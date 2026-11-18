@@ -244,6 +244,11 @@ pub struct Native {
     /// Slots of published game loops, native only (`mod_api::loops`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r#loop: Vec<loops::Loop>,
+    /// Lets the mod ask the player to open an existing save from the title screen (`request_world`); the
+    /// question names the mod. Off unless declared. Only this mod's own declaration grants it: a request whose
+    /// caller is unidentified is refused with `NotPermitted`, whatever other mods declare.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub world_control: bool,
 }
 
 /// One declared game internal, as listed in the pinned game's `internals.json`.

@@ -311,7 +311,7 @@ impl Drop for Fixture {
 }
 
 impl Fixture {
-    fn finish_backup(&mut self) {
+    pub(super) fn finish_backup(&mut self) {
         self.title.backup_shown.set(true);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while matches!(self.title.mode, Mode::Backup { .. }) {

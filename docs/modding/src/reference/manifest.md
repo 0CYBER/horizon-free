@@ -70,6 +70,22 @@ file that receives it, a `name` that is a Rust module identifier, and a `source`
 use `[[native.mixin]]` with `id`, `target`, uppercase `kind`, `helper` and the other
 horizon-mixins options ([Mixins](../concepts/native-route/2-mixins.md)). `[[native.loop]]`, `[[native.bridge]]` and `[[native.module]]` complete the route; `[[native.state]]` is refused. See [The native route](../concepts/native-route.md) for every table, its fields and its refusals.
 
+Set `world_control` in the `[native]` section (default off) to let the mod ask to open one of its player's worlds from
+the title screen:
+
+```toml
+[native]
+world_control = true
+```
+
+With it, the host method `request_world(folder)` queues `saves/<folder>`, and the title's next frame shows a question that
+names the mod and the save, with Yes and No. Yes opens the world through the Play button's own checks (a locked world, links in
+the save, the session lock, recovery, an incompatible version, the backup before an upgrade or downgrade); No or Escape
+changes nothing. Only an existing save opens: a folder that is not one plain name, or that is empty or not a world, is
+refused with `InvalidRequest`, and nothing is created. The call answers a code (`NativeWorldResult`), not a message. Only
+the calling mod's own declaration grants it, and the question names that mod; a request whose caller is unidentified is
+refused with `NotPermitted`. Creating a world, and level create, unload or delete, are not part of it.
+
 A wasm mod adds `[wasm]` instead, written by `cargo horizon-mod build --wasm`
 ([Building to `mod.wasm`](../how-to/wasm-mods.md)):
 

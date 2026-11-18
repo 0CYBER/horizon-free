@@ -703,6 +703,9 @@ impl Game<'_> {
             Mode::LowDiskSpace { world } => {
                 json!({ "mode": "low-disk-space", "folder": world.folder, "name": world.name })
             }
+            Mode::WorldRequest { world, mods } => {
+                json!({ "mode": "world-request", "folder": world.folder, "name": world.name, "mods": mods })
+            }
             Mode::MissingBiomeRegions { world, missing } => {
                 json!({ "mode": "missing-biome-regions", "folder": world.folder, "name": world.name, "missing": missing.iter().map(|(owner, region)| json!({ "mod": owner, "region": region })).collect::<Vec<_>>() })
             }

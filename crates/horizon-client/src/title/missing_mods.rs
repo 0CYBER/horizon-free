@@ -69,21 +69,34 @@ impl Title {
         }
         self.scroll_worlds(delta, cursor, size);
     }
-    pub(super) fn drag_missing_mods(&mut self, cursor: (f32, f32), size: (f32, f32)) -> bool {
-        if !matches!(self.mode, Mode::MissingMods { .. }) {
-            return false;
+    /// The scrolling area of the bounded message the open screen shows (`top`, `bottom`): a missing-mods
+    /// prompt's list, or a world request's question. None on any other screen.
+    fn message_bounds(&self, (w, h): (f32, f32)) -> Option<(f32, f32)> {
+        match self.mode {
+            Mode::MissingMods { .. } => {
+                let (top, bottom, _) = layout(w, h);
+                Some((top, bottom))
+            }
+            Mode::WorldRequest { .. } => {
+                let area = crate::title::world_request_layout((w, h));
+                Some((area.top, area.bottom))
+            }
+            _ => None,
         }
-        let (top, bottom, _) = layout(size.0, size.1);
+    }
+    pub(super) fn drag_missing_mods(&mut self, cursor: (f32, f32), size: (f32, f32)) -> bool {
+        let Some((top, bottom)) = self.message_bounds(size) else {
+            return false;
+        };
         let mut scroll = self.scroll.get();
         scroll.drag(cursor.1, top, bottom, self.message_lines.get() as f32 * 9.0);
         self.scroll.set(scroll);
         true
     }
     pub(super) fn wheel_missing_mods(&mut self, delta: f32, size: (f32, f32)) -> bool {
-        if !matches!(self.mode, Mode::MissingMods { .. }) {
+        let Some((top, bottom)) = self.message_bounds(size) else {
             return false;
-        }
-        let (top, bottom, _) = layout(size.0, size.1);
+        };
         let mut scroll = self.scroll.get();
         scroll.wheel(
             delta,
@@ -96,7 +109,9 @@ impl Title {
         true
     }
     pub(super) fn press_missing_mods(&mut self, cursor: (f32, f32), size: (f32, f32)) -> Action {
-        let (top, bottom, _) = layout(size.0, size.1);
+        let Some((top, bottom)) = self.message_bounds(size) else {
+            return Action::None;
+        };
         self.scroll.get_mut().press(
             cursor,
             size.0 - 10.0,
@@ -124,14 +139,13 @@ impl Title {
         }
     }
 
-    /// Page keys scroll the complete warning regardless of which action has focus.
-    /// Arrow keys remain available for ordinary action navigation.
+    /// Page keys scroll the complete warning (or a world request's question) regardless of which action has
+    /// focus. Arrow keys remain available for ordinary action navigation.
     pub fn page_missing_mods(&mut self, key: winit::keyboard::KeyCode, (w, h): (f32, f32)) -> bool {
         use winit::keyboard::KeyCode;
-        if !matches!(self.mode, Mode::MissingMods { .. }) {
+        let Some((top, bottom)) = self.message_bounds((w, h)) else {
             return false;
-        }
-        let (top, bottom, _) = layout(w, h);
+        };
         let content = self.message_lines.get() as f32 * 9.0;
         let mut scroll = self.scroll.get();
         let page = (bottom - top).max(9.0);
@@ -241,7 +255,10 @@ impl Title {
             Mode::MissingMods { world, .. } => Some(world.folder.clone()),
             _ => None,
         };
-        self.return_to_list(folder.as_deref());
+        match folder {
+            Some(folder) => self.back_from_world(&folder),
+            None => self.return_to_list(None),
+        }
     }
 
     /// Back Up and Open: a full copy of the world first; it opens once the copy exists.

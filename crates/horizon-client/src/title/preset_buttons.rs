@@ -313,6 +313,27 @@ impl Title {
                     .does(crate::widgets::Action::Cancel),
                 ]
             }
+            Mode::WorldRequest { .. } => {
+                let area = world_request_layout((w, h));
+                vec![
+                    b(
+                        area.yes_x,
+                        area.buttons_y,
+                        area.button_w,
+                        &lang::get_or("gui.yes", "Yes"),
+                        true,
+                        104,
+                    ),
+                    b(
+                        area.no_x,
+                        area.buttons_y,
+                        area.button_w,
+                        &lang::get_or("gui.no", "No"),
+                        true,
+                        105,
+                    ),
+                ]
+            }
             Mode::LowDiskSpace { .. } => {
                 let y = confirm_top(h, self.message_lines.get())
                     + 41.0

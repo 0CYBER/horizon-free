@@ -44,7 +44,7 @@ impl Game<'_> {
                 use horizon_client::clipboard::Clipboard;
                 self.clipboard.set(&text);
             }
-            Action::Play { folder } => self.open_world(&folder, None, None, false, None)?,
+            Action::Play { folder } => self.open_existing_world(&folder)?,
             Action::Create {
                 folder,
                 name,
@@ -91,6 +91,32 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        self.open_world_as(folder, name, seed, creative, create, false)
+    }
+
+    /// A world the title listed (Play, or a native mod's request answered Yes): it opens only while the
+    /// save still exists, and nothing is created for a folder that is gone.
+    pub(super) fn open_existing_world(&mut self, folder: &str) -> Result<()> {
+        self.open_world_as(folder, None, None, false, None, true)
+    }
+
+    /// `open_world`, with `existing_only` set for a save that must already be there (see
+    /// `open_existing_world`). It is checked here, before anything is read or written, and again when a
+    /// deferred entry resumes, since the save may have gone in between.
+    pub(super) fn open_world_as(
+        &mut self,
+        folder: &str,
+        name: Option<&str>,
+        seed: Option<i64>,
+        creative: bool,
+        create: Option<&horizon_client::title::WorldOptions>,
+        existing_only: bool,
+    ) -> Result<()> {
+        let saves = std::env::current_dir()?.join("saves");
+        if refuses_missing_save(&saves, folder, existing_only) {
+            log::warn!("Horizon: \"{folder}\" is no longer a save; nothing opened");
+            return Ok(());
+        }
         // openWorldLoadLevelData: an existing world whose level data does not read opens
         // RecoverWorldDataScreen instead.
         if create.is_none()
@@ -106,6 +132,7 @@ impl Game<'_> {
             seed,
             creative,
             create: create.cloned().map(Box::new),
+            existing_only,
         })? {
             return Ok(());
         }
@@ -283,5 +310,63 @@ impl Game<'_> {
             return self.leave_server(None);
         }
         self.begin_closing_save(false)
+    }
+}
+
+/// Whether an open must refuse `saves/<folder>` because it must be an existing save and is not one: nothing
+/// is read or written for it. A save is one the title's list recognizes (`is_save_folder`), so an empty
+/// folder is not one either; a link out of `saves/` is left to Play's symlink alert, and a mod's request
+/// checks containment itself (`world_request_entry`).
+fn refuses_missing_save(saves: &std::path::Path, folder: &str, existing_only: bool) -> bool {
+    existing_only && !horizon_client::title::is_save_folder(saves, folder)
+}
+
+#[cfg(test)]
+mod existing_save_tests {
+    use super::refuses_missing_save;
+    use std::path::{Path, PathBuf};
+
+    /// Every entry under `root`, with its bytes, so a change to any file or folder shows.
+    fn tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let mut entries: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            entries.sort();
+            for path in entries {
+                let bytes = if path.is_dir() {
+                    None
+                } else {
+                    Some(std::fs::read(&path).unwrap())
+                };
+                if path.is_dir() {
+                    stack.push(path.clone());
+                }
+                out.push((path, bytes));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_save_that_is_gone_is_refused_and_the_saves_folder_is_left_as_it_was() {
+        let root = std::env::temp_dir().join(format!("existing-save-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let saves = root.join("saves");
+        std::fs::create_dir_all(saves.join("empty")).unwrap();
+        std::fs::create_dir_all(saves.join("other")).unwrap();
+        std::fs::write(saves.join("other").join("notes.txt"), b"keep").unwrap();
+        let before = tree(&saves);
+        // Missing, and present but without level.dat (an empty folder): both refused, and nothing created.
+        assert!(refuses_missing_save(&saves, "gone", true));
+        assert!(refuses_missing_save(&saves, "empty", true));
+        assert_eq!(tree(&saves), before);
+        assert!(!saves.join("gone").exists());
+        // The flag off keeps an open's behaviour for a folder that is not a save: nothing refused here.
+        assert!(!refuses_missing_save(&saves, "gone", false));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -1251,6 +1251,8 @@
   "horizon.biome_regions.missing.region": "Region %s of mod %s",
   "horizon.biome_regions.missing.title": "Biome mods are missing",
   "horizon.biome_regions.save_failed": "The world's choice could not be saved: %s",
+  "horizon.world_request.message": "%s asks to open the world \"%s\" (saves/%s).",
+  "horizon.world_request.title": "Open a world for a mod?",
   "horizon.datapack.required": "Pack %s is required and cannot be disabled",
   "horizon.developer_offline.single_player": "Offline developer session: single-player only.",
   "horizon.fluid.amount": "%s mB",

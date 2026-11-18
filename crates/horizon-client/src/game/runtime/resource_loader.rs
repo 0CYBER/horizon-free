@@ -199,6 +199,9 @@ pub(super) enum PendingWorldEntry {
         seed: Option<i64>,
         creative: bool,
         create: Option<Box<horizon_client::title::WorldOptions>>,
+        /// The save must still exist when the entry opens (a title's Play or a request's Yes): nothing is
+        /// created for a folder that has gone.
+        existing_only: bool,
     },
     Server {
         address: String,

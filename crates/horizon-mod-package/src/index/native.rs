@@ -18,6 +18,40 @@ pub fn holds(path: &Path) -> bool {
     crate::Package::read(path).is_ok_and(|package| package.is_native())
 }
 
+/// The manifest of the native package at `path` (a flat `.hmod` or a project folder), read alone: its code and
+/// resources stay unread. Meant for a bundle whose full read has passed already, such as the caller of a request;
+/// a bundle that is not native is refused.
+pub fn read_manifest(path: &Path) -> Result<crate::Manifest, String> {
+    let mut text = String::new();
+    if path.is_dir() {
+        std::fs::File::open(path.join(crate::manifest::MANIFEST))
+            .map_err(|e| format!("{}: {e}", crate::manifest::MANIFEST))?
+            .take(crate::manifest::MAX_MANIFEST + 1)
+            .read_to_string(&mut text)
+            .map_err(|e| format!("{}: {e}", crate::manifest::MANIFEST))?;
+    } else {
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+        zip.by_name(crate::manifest::MANIFEST)
+            .map_err(|e| format!("{}: {e}", crate::manifest::MANIFEST))?
+            .take(crate::manifest::MAX_MANIFEST + 1)
+            .read_to_string(&mut text)
+            .map_err(|e| format!("{}: {e}", crate::manifest::MANIFEST))?;
+    }
+    if text.len() as u64 > crate::manifest::MAX_MANIFEST {
+        return Err(format!(
+            "{}: over {} MiB",
+            crate::manifest::MANIFEST,
+            crate::manifest::MAX_MANIFEST >> 20
+        ));
+    }
+    let manifest = crate::Manifest::parse(&text)?;
+    if manifest.native.is_none() {
+        return Err("not a native package".into());
+    }
+    Ok(manifest)
+}
+
 /// A flat native mod and its checked, archive-relative files.
 pub struct Bundle {
     pub manifest: crate::Manifest,
@@ -166,6 +200,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn manifest_is_read_without_the_payload_that_fails_a_full_read() {
+        // A payload file the full read refuses (a blob under src/) leaves the manifest readable alone.
+        let path =
+            std::env::temp_dir().join(format!("native-manifest-only-{}.hmod", std::process::id()));
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in [
+            (crate::manifest::MANIFEST, manifest().into_bytes()),
+            ("Cargo.toml", b"[package]\nname='x'\nversion='1'\n".to_vec()),
+            ("src/lib.rs", b"fn hook() {}".to_vec()),
+            ("src/blob.bin", b"not code".to_vec()),
+        ] {
+            zip.start_file(name, options).unwrap();
+            std::io::Write::write_all(&mut zip, &bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        let manifest = read_manifest(&path);
+        let full = Bundle::read(&path);
+        std::fs::remove_file(&path).unwrap();
+        let manifest = manifest.unwrap();
+        assert_eq!(manifest.id, "veinminer");
+        assert_eq!(manifest.name, "Veinminer");
+        assert!(full.is_err());
     }
 
     #[test]

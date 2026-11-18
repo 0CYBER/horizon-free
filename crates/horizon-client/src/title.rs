@@ -36,6 +36,8 @@ mod splash;
 mod tests;
 mod world_folder;
 pub mod world_management;
+#[cfg(test)]
+mod world_request_tests;
 mod world_toast;
 pub use buffet::State as BuffetEditor;
 pub use create_world::{DIFFICULTIES, WorldOptions};
@@ -170,7 +172,7 @@ pub enum StemIssue {
     Experimental,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorldEntry {
     pub folder: String,
     pub name: String,
@@ -196,6 +198,18 @@ pub struct WorldEntry {
     pub experimental: bool,
 }
 impl WorldEntry {
+    /// Whether `other` is the same save as this one: its folder, and the level data that names and dates it
+    /// (name, version, modified time, game mode, hardcore, corrupted). Play's own state (locked, files to fix)
+    /// is not part of it.
+    pub fn is_same_save(&self, other: &WorldEntry) -> bool {
+        self.folder == other.folder
+            && self.name == other.name
+            && self.modified == other.modified
+            && self.game_mode == other.game_mode
+            && self.hardcore == other.hardcore
+            && self.version == other.version
+            && self.corrupted == other.corrupted
+    }
     /// `LevelSummary.isCompatible`: the saved series is this build's.
     fn compatible(&self) -> bool {
         self.incompatible.is_none()
@@ -294,6 +308,15 @@ pub enum Mode {
     /// `openWorldCheckDiskSpace`'s ConfirmScreen: little space is left on the device.
     LowDiskSpace {
         world: WorldEntry,
+    },
+    /// A native mod's `request_world`, asked of the player before anything opens: Yes goes through
+    /// Play's own checks (`play_from`) when the save is still the one shown, otherwise it is asked again with
+    /// the save as it is now; No or Escape returns to the main page with nothing touched.
+    WorldRequest {
+        /// The save as the question shows it: Yes compares it with the save on disk.
+        world: WorldEntry,
+        /// The calling mod, by its manifest name.
+        mods: String,
     },
     /// Edit World's opt-in to the installed mods' biome regions (`edit_world`).
     AdoptBiomeRegions {
@@ -462,12 +485,18 @@ pub struct Title {
     /// The backup `RecoverWorldDataScreen.attemptRestore` makes first; the restore runs when it
     /// is done, whether the backup worked or not.
     restore_after_backup: bool,
+    /// Where a native mod request's open returns to after a recovery (`Main`): set by Yes of
+    /// `Mode::WorldRequest`, used by Continue of `Mode::Recovered`, cleared by any ordinary Play.
+    recover_return: Option<Mode>,
     /// The running `WorldUpgrader` of `Mode::Optimize`.
     optimize: Option<WorldUpgrader>,
     /// The Erase Cached Data box as last drawn: x, y, width, height.
     erase_check: Cell<[f32; 4]>,
     /// The folder to open next, once that backup has finished.
     open_request: Option<String>,
+    /// The save a native mod's request is taking through Play's checks (Yes was answered): the alerts and the
+    /// backup questions of that open return to the main page, not to the world list.
+    request_folder: Option<String>,
     /// A Realm's checked address, once the Realms screen's join came back.
     connect_request: Option<String>,
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
@@ -578,46 +607,61 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
         .flatten()
         .flatten()
         .filter_map(|e| {
-            let path = e.path();
-            // findLevelCandidates: a folder with a level.dat or a level.dat_old.
-            let file = |name: &str| std::fs::metadata(path.join(name)).ok().filter(|m| m.is_file());
-            // getFileModificationTime: level.dat's, else level.dat_old's.
-            let file = file("level.dat").or_else(|| file("level.dat_old"))?;
-            let modified = file.modified().unwrap_or(std::time::UNIX_EPOCH);
             let folder = e.file_name().to_string_lossy().into_owned();
-            // readLevelSummary reads level.dat alone; when it fails the world is
-            // still listed, as a CorruptedLevelSummary named after its folder.
-            let level = Level::read_summary(&path);
-            let root = crate::save::read_dat(&path.join("level.dat"));
-            let (Some(level), Some(root)) = (level, root) else {
-                return Some(WorldEntry::corrupted(folder, modified));
-            };
-            let data = root.get("Data")?;
-            let modified = match data.get("LastPlayed") {
-                Some(horizon_core::nbt::Tag::Long(millis)) if *millis >= 0 => std::time::UNIX_EPOCH + std::time::Duration::from_millis(*millis as u64),
-                _ => modified,
-            };
-            Some(WorldEntry {
-                folder,
-                name: level.name,
-                game_mode: level.game_mode,
-                hardcore: level.hardcore,
-                modified,
-                commands: matches!(data.get("allowCommands"), Some(horizon_core::nbt::Tag::Byte(v)) if *v != 0),
-                version: data.get("Version").and_then(|v| v.get("Name"))
-                    .and_then(|v| match v { horizon_core::nbt::Tag::String(s) => Some(s.to_string_lossy()), _ => None })
-                    .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
-                locked: crate::save::SessionLock::is_locked(&path),
-                corrupted: false,
-                incompatible: crate::save::incompatible_version(&path),
-                file_fixing: crate::save::needs_file_fixes(&path),
-                downgrade: crate::save::downgraded_from(&path).is_some(),
-                experimental: experimental_features(data),
-            })
+            read_world(&e.path(), folder)
         })
         .collect();
     worlds.sort_by_key(|w| std::cmp::Reverse(w.modified));
     worlds
+}
+/// The save in `path` (a folder under `saves`, named `folder`) as the title's list shows it, read on its own:
+/// None unless the folder holds a level.dat or a level.dat_old.
+fn read_world(path: &Path, folder: String) -> Option<WorldEntry> {
+    // findLevelCandidates: a folder with a level.dat or a level.dat_old.
+    let file = |name: &str| {
+        std::fs::metadata(path.join(name))
+            .ok()
+            .filter(|m| m.is_file())
+    };
+    // getFileModificationTime: level.dat's, else level.dat_old's.
+    let file = file("level.dat").or_else(|| file("level.dat_old"))?;
+    let modified = file.modified().unwrap_or(std::time::UNIX_EPOCH);
+    // readLevelSummary reads level.dat alone; when it fails the world is
+    // still listed, as a CorruptedLevelSummary named after its folder.
+    let level = Level::read_summary(path);
+    let root = crate::save::read_dat(&path.join("level.dat"));
+    let (Some(level), Some(root)) = (level, root) else {
+        return Some(WorldEntry::corrupted(folder, modified));
+    };
+    let data = root.get("Data")?;
+    let modified = match data.get("LastPlayed") {
+        Some(horizon_core::nbt::Tag::Long(millis)) if *millis >= 0 => {
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(*millis as u64)
+        }
+        _ => modified,
+    };
+    Some(WorldEntry {
+        folder,
+        name: level.name,
+        game_mode: level.game_mode,
+        hardcore: level.hardcore,
+        modified,
+        commands: matches!(data.get("allowCommands"), Some(horizon_core::nbt::Tag::Byte(v)) if *v != 0),
+        version: data
+            .get("Version")
+            .and_then(|v| v.get("Name"))
+            .and_then(|v| match v {
+                horizon_core::nbt::Tag::String(s) => Some(s.to_string_lossy()),
+                _ => None,
+            })
+            .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
+        locked: crate::save::SessionLock::is_locked(path),
+        corrupted: false,
+        incompatible: crate::save::incompatible_version(path),
+        file_fixing: crate::save::needs_file_fixes(path),
+        downgrade: crate::save::downgraded_from(path).is_some(),
+        experimental: experimental_features(data),
+    })
 }
 /// `FeatureFlags.isExperimental` of `LevelStorageSource.parseFeatureFlagsFromSummary`:
 /// level.dat's `enabled_features` name a known flag other than `minecraft:vanilla`
@@ -762,6 +806,7 @@ impl Mode {
             Self::OptimizeConfirm { .. } => "world_optimize_confirm",
             Self::Optimize { .. } => "world_optimize",
             Self::LowDiskSpace { .. } => "low_disk_space",
+            Self::WorldRequest { .. } => "world_request",
             Self::MissingBiomeRegions { .. } => "missing_biome_regions",
             Self::MissingMods { .. } => "missing_mods",
             Self::AdoptBiomeRegions { .. } => "adopt_biome_regions",
@@ -782,6 +827,9 @@ impl Title {
     /// different id waits in `requested` for the game; the same screen again
     /// (its id unchanged) is applied at once.
     pub fn set_mode(&mut self, mut mode: Mode) {
+        if matches!(mode, Mode::Main) {
+            self.request_folder = None;
+        }
         if let Mode::Create { options, .. } = &mut mode {
             options.set_additional_data_packs(self.additional_data_packs.clone());
             options.refresh_presets(&self.resources, self.preset_data.as_deref());
@@ -871,9 +919,11 @@ impl Title {
             open_after_mods_backup: false,
             optimize_after_backup: None,
             restore_after_backup: false,
+            recover_return: None,
             optimize: None,
             erase_check: Cell::new([0.0; 4]),
             open_request: None,
+            request_folder: None,
             connect_request: None,
             toast: None,
             pending_toast: None,
@@ -1409,6 +1459,58 @@ impl Title {
     pub fn take_open_request(&mut self) -> Option<String> {
         self.open_request.take()
     }
+    /// The title's turn for a native mod's request (`request_world`) on the main page: asks the player
+    /// whether `mods` may open `folder`. Returns false, and changes nothing, when `folder` is not an
+    /// existing save any more or never was one.
+    pub fn ask_world_request(&mut self, folder: &str, mods: String) -> bool {
+        let Some(world) = world_request_entry(&self.saves, folder) else {
+            return false;
+        };
+        self.request_folder = None;
+        self.set_mode(Mode::WorldRequest { world, mods });
+        self.scroll.set(Default::default());
+        true
+    }
+    /// Yes of `Mode::WorldRequest`: the save is looked up again. The same save as the question named opens
+    /// through Play's own checks (`play_from`), whose alerts return to the main page. A save replaced since
+    /// the question is asked again with its fresh details, and one that is gone returns to the main page;
+    /// neither opens anything, and nothing is created.
+    fn answer_world_request(&mut self) -> Action {
+        let Mode::WorldRequest { world: shown, mods } = &self.mode else {
+            return Action::None;
+        };
+        let (shown, mods) = (shown.clone(), mods.clone());
+        match world_request_entry(&self.saves, &shown.folder) {
+            Some(fresh) if fresh.is_same_save(&shown) => {
+                self.set_mode(Mode::Main);
+                self.request_folder = Some(fresh.folder.clone());
+                self.recover_return = Some(Mode::Main);
+                let action = self.play_from(fresh, Mode::Main);
+                if matches!(action, Action::Play { .. }) {
+                    self.request_folder = None;
+                }
+                action
+            }
+            Some(fresh) => {
+                self.set_mode(Mode::WorldRequest { world: fresh, mods });
+                self.scroll.set(Default::default());
+                Action::None
+            }
+            None => {
+                self.set_mode(Mode::Main);
+                Action::None
+            }
+        }
+    }
+    /// Back from a world's question or recovery screen: the world list with the world selected, or, for the
+    /// save a native mod's request is taking through Play's checks, the main page.
+    fn back_from_world(&mut self, folder: &str) {
+        if self.request_folder.as_deref() == Some(folder) {
+            self.set_mode(Mode::Main);
+        } else {
+            self.return_to_list(Some(folder));
+        }
+    }
     /// `WorldOpenFlows.openWorldLoadLevelData` for a world opened without the list (the control
     /// socket): level data that does not read shows RecoverWorldDataScreen. False when the world
     /// reads and opens as usual.
@@ -1433,6 +1535,13 @@ impl Title {
     /// another series is an alert, one whose file fixes are due or that a newer version
     /// saved asks for a backup first; any other opens at once.
     fn play(&mut self, world: WorldEntry) -> Action {
+        self.recover_return = None;
+        let back = self.mode.clone();
+        self.play_from(world, back)
+    }
+    /// `play`, with `return_to` as the main page an alert returns to (a request's Yes returns to Main, not to
+    /// its question).
+    fn play_from(&mut self, world: WorldEntry, return_to: Mode) -> Action {
         // LevelSummary.primaryActionActive: a world another copy has open cannot be joined.
         if world.locked {
             return Action::None;
@@ -1449,7 +1558,7 @@ impl Title {
                     "symlink_warning.message.world",
                     "You are trying to open a world whose folder holds links to other files. That can be a risk to the rest of your files, so the world stays closed.",
                 ),
-                return_to: Box::new(self.mode.clone()),
+                return_to: Box::new(return_to.clone()),
                 alert: Some(Alert::Symlink),
             });
             return Action::None;
@@ -1478,7 +1587,7 @@ impl Title {
                     "This world cannot be opened in this version.\nIt was last played in version %s.",
                     &[&version],
                 ),
-                return_to: Box::new(self.mode.clone()),
+                return_to: Box::new(return_to),
                 alert: Some(Alert::Incompatible),
             });
             return Action::None;
@@ -1941,6 +2050,13 @@ impl Title {
                     "Optimizing World '%s'",
                     &[&world.name],
                 ),
+            ),
+            Mode::WorldRequest { world, mods } => ScreenInfo::new(
+                "world_request",
+                join(&[
+                    &get("horizon.world_request.title", "Open a world for a mod?"),
+                    &world_request_text(mods, world),
+                ]),
             ),
             // openWorldCheckDiskSpace's ConfirmScreen.
             Mode::LowDiskSpace { .. } => ScreenInfo::new(
@@ -2473,6 +2589,12 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 let (world, stem_asked) = (world.clone(), stem.is_some());
                 self.after_prompt(world, stem_asked)
             }
+            // A native mod's request (`request_world`): Yes runs Play's checks, No goes back.
+            (Mode::WorldRequest { .. }, Some(104)) => self.answer_world_request(),
+            (Mode::WorldRequest { .. }, Some(105)) => {
+                self.escape();
+                Action::None
+            }
             // ConfirmScreen: Continue loads the world, Back (or Escape) leaves it closed.
             (Mode::LowDiskSpace { world }, Some(94)) => Action::Play {
                 folder: world.folder.clone(),
@@ -2534,7 +2656,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             (Mode::BackupBeforeUpgrade { world, .. }, Some(42)) => {
                 let folder = world.folder.clone();
-                self.return_to_list(Some(&folder));
+                self.back_from_world(&folder);
                 Action::None
             }
             (Mode::Select { .. }, Some(11)) => {
@@ -2591,7 +2713,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 self.set_mode(Mode::Main);
                 Action::None
             }
-            (Mode::MissingMods { .. }, None) => self.press_missing_mods((x, y), (w, h)),
+            (Mode::MissingMods { .. } | Mode::WorldRequest { .. }, None) => {
+                self.press_missing_mods((x, y), (w, h))
+            }
             (Mode::Select { .. }, None) => {
                 self.search_focused =
                     (21.0..41.0).contains(&y) && (x - (w / 2.0).floor()).abs() < 100.0;
@@ -2689,7 +2813,11 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             (Mode::Recovered { world, .. }, Some(92)) => {
                 let world = world.clone();
-                self.play(world)
+                // A request's open keeps its return target through the recovery.
+                match self.recover_return.take() {
+                    Some(back) => self.play_from(world, back),
+                    None => self.play(world),
+                }
             }
             (Mode::Recover { .. } | Mode::Recovered { .. }, Some(91 | 93)) => {
                 self.escape();
@@ -3642,7 +3770,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             | Mode::MissingBiomeRegions { world, .. }
             | Mode::BackupBeforeUpgrade { world, .. } => {
                 let folder = world.folder.clone();
-                self.return_to_list(Some(&folder));
+                self.back_from_world(&folder);
             }
             Mode::Error { return_to, .. } => self.set_mode(*return_to.clone()),
             Mode::CreateFlat { .. } => {
@@ -3673,6 +3801,69 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             *screen = crate::multiplayer::Screen::list(&self.saves);
         }
     }
+}
+/// Whether `saves/<folder>` is a save as the title's list sees it (a level.dat or level.dat_old), with no
+/// containment check: ordinary Play meets a link out of `saves/` at its own symlink alert.
+pub fn is_save_folder(saves: &Path, folder: &str) -> bool {
+    read_world(&saves.join(folder), folder.to_owned()).is_some()
+}
+/// The save `folder` names under `saves`, for a native mod's request: a world as the title's list sees
+/// it (`list_worlds`: a level.dat or level.dat_old in the folder), whose folder resolves inside `saves`,
+/// so a link pointing out of it does not count. Nothing is created: a folder that is not a save is None.
+pub fn world_request_entry(saves: &Path, folder: &str) -> Option<WorldEntry> {
+    let (Ok(root), Ok(dir)) = (
+        std::fs::canonicalize(saves),
+        std::fs::canonicalize(saves.join(folder)),
+    ) else {
+        return None;
+    };
+    if !dir.is_dir() || dir == root || !dir.starts_with(&root) {
+        return None;
+    }
+    read_world(&saves.join(folder), folder.to_owned())
+}
+/// The question of `Mode::WorldRequest`: the mod, then the save by its name and folder.
+fn world_request_text(mods: &str, world: &WorldEntry) -> String {
+    translate(
+        "horizon.world_request.message",
+        "%s asks to open the world \"%s\" (saves/%s).",
+        &[&mods, &world.name, &world.folder],
+    )
+}
+/// Where the question of `Mode::WorldRequest` lays out in a viewport `w` by `h` GUI pixels: its title, the
+/// message in the `top..bottom` area (which scrolls when the message is longer), and the row of Yes and No at
+/// `buttons_y`, each `button_w` wide, left edges `yes_x` and `no_x`. The row stays inside the viewport whatever
+/// the message holds, and in a viewport narrower than two full buttons the buttons narrow instead of leaving it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WorldRequestLayout {
+    pub(crate) title_y: f32,
+    pub(crate) top: f32,
+    pub(crate) bottom: f32,
+    pub(crate) buttons_y: f32,
+    pub(crate) button_w: f32,
+    pub(crate) yes_x: f32,
+    pub(crate) no_x: f32,
+}
+pub(crate) fn world_request_layout((w, h): (f32, f32)) -> WorldRequestLayout {
+    let top = 36.0;
+    let buttons_y = h.ceil() - 52.0;
+    let centre = (w.ceil() / 2.0).floor();
+    // Two buttons 4 apart around the centre, 6 from the edges at the narrowest, 150 wide when there is room.
+    let button_w = (centre - 6.0).clamp(20.0, 150.0);
+    WorldRequestLayout {
+        title_y: 12.0,
+        top,
+        bottom: (buttons_y - 8.0).max(top + 9.0),
+        buttons_y,
+        button_w,
+        yes_x: centre - 2.0 - button_w,
+        no_x: centre + 2.0,
+    }
+}
+/// How far the question's message is drawn up, in pixels, for a scroll amount: exact, so that the last line
+/// of a message that does not fill whole lines still reaches the bottom of its area.
+pub(crate) fn world_request_offset(amount: f32) -> f32 {
+    amount.floor()
 }
 fn centered(atlas: &HudAtlas, batch: &mut HudBatch, text: &str, y: f32, color: u32) {
     batch.text(

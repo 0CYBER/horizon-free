@@ -452,6 +452,7 @@ pub(super) fn start_game<'a>(
                     seed: Some(seed),
                     creative,
                     create: None,
+                    existing_only: false,
                 });
             }
         }
