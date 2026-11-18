@@ -9,7 +9,9 @@ pub(super) fn reading() -> bool {
 pub(super) fn writing() -> bool {
     matches!(ids::active(),Some((ids,ids::Way::Down)) if ids.quirks.components_before_1_21_5)
 }
-pub(super) const TOOLTIP_FLAGS: &[i32] = &[4, 13, 14, 15, 16, 45, 47, 58, 64];
+// The components whose codec ends in a `show_in_tooltip` boolean until 1.21.4 (26.3 ids; the last is
+// jukebox_playable, whose flag 1.21.5 dropped like the others).
+pub(super) const TOOLTIP_FLAGS: &[i32] = &[4, 13, 14, 15, 16, 45, 47, 58, 64, 66];
 // The old hide_additional_tooltip hid item-specific tooltip providers.
 pub(super) const ADDITIONAL: &[i32] = &[
     74, 79, 62, 78, 52, 51, 77, 82, 70, 71, 63, 48, 109, 76, 53, 95, 57,
@@ -102,7 +104,13 @@ pub(super) fn read_added_legacy(raw: i32, r: &mut Reader) -> Result<Option<(i32,
         older_layout(kind, r)?
     };
     let component = match layout {
-        Older::Dropped => return Ok(None),
+        Older::Dropped => {
+            // The component goes, its trailing flag is still on the wire.
+            if TOOLTIP_FLAGS.contains(&kind) {
+                r.bool()?;
+            }
+            return Ok(None);
+        }
         Older::Rewritten(bytes) => {
             let _pinned = ids::pinned();
             Component::read(kind, &mut Reader::new(&bytes))?
@@ -294,6 +302,41 @@ mod tests {
                 Slot::write(&Some(stack), &mut down);
             }
             assert_eq!(down.data, old, "{version:?}");
+        }
+    }
+
+    /// 1.21.4's JukeboxPlayable.STREAM_CODEC (EitherHolder, then `showInTooltip`; read off the 1.21.4 client jar)
+    /// is the pinned holder with the flag after it, which the pinned patch keeps in tooltip_display.
+    #[test]
+    fn a_jukebox_playable_ends_in_its_tooltip_flag_until_1_21_4() {
+        // Item 879, one component (jukebox_playable, 52 in 1.21.4): holder flag 1, entry 1, then shown or hidden.
+        for (old, hidden) in [
+            ([1, 0xef, 6, 1, 0, 52, 1, 2, 1], Vec::new()),
+            (
+                [1, 0xef, 6, 1, 0, 52, 1, 2, 0],
+                vec![component::JUKEBOX_PLAYABLE],
+            ),
+        ] {
+            let mut r = Reader::new(&old);
+            let stack = {
+                let _up = ids::renumbering(ServerVersion::V1_21_4.ids().unwrap(), Way::Up);
+                Slot::read(&mut r).unwrap().unwrap()
+            };
+            assert_eq!(r.remaining(), 0, "{hidden:?}");
+            assert!(stack.component(component::JUKEBOX_PLAYABLE).is_some());
+            assert_eq!(
+                stack.component(component::TOOLTIP_DISPLAY),
+                (!hidden.is_empty()).then_some(&Component::TooltipDisplay {
+                    hide: false,
+                    hidden: hidden.clone()
+                }),
+            );
+            let mut w = Writer::new();
+            {
+                let _down = ids::renumbering(ServerVersion::V1_21_4.ids().unwrap(), Way::Down);
+                Slot::write(&Some(stack), &mut w);
+            }
+            assert_eq!(w.data, old, "{hidden:?}");
         }
     }
 
