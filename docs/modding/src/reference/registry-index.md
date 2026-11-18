@@ -1,8 +1,8 @@
 # The registry index and `.hpack`
 
-Use the registry to distribute content and native mods (`.hmod`), modpacks (`.hpack`),
+Use the registry to distribute content, WebAssembly and native mods (`.hmod`), modpacks (`.hpack`),
 resource packs, data packs, shaders-folder packs and Horizon shader packs (`.hshader`).
-Submit your project page and version file through the registry submission form.
+Submit your project page and version file in a pull request on horizon-mods ([Publishing your mod](../how-to/publish.md)).
 Versions are pinned by SHA-256. The launcher and website read schema 1 of `index.json`.
 The format is defined by `horizon_mod_package::index` and `horizon_mod_package::modpack`.
 
@@ -39,7 +39,7 @@ entry leaves out.
 | --- | --- |
 | `schema` | 1. A reader refuses a higher number with "update Horizon" rather than misread it. |
 | `projects[].id` | `[a-z0-9_]{1,64}`, unique; a mod's is its manifest's `id`. |
-| `kind` | `mod` (content), `native-mod`, `modpack`, `resourcepack`, `shader` (Horizon `.hshader`), `shaderpack` (a `shaders/`-folder zip), `datapack` (a data-pack zip). Other kinds (worlds, themes) may come without a new schema: a reader keeps a kind it doesn't know and doesn't offer it. |
+| `kind` | `mod` (a `.hmod` without `[native]`: content or WebAssembly), `native-mod` (a `.hmod` with `[native]`), `modpack`, `resourcepack`, `shader` (Horizon `.hshader`), `shaderpack` (a `shaders/`-folder zip), `datapack` (a data-pack zip). Other kinds (worlds, themes) may come without a new schema: a reader keeps a kind it doesn't know and doesn't offer it. |
 | `summary`, `description` | Required summary of at most 160 characters for lists; Markdown for the project's page, required for a listed project and 50–10,000 characters after trimming. |
 | `owners` | GitHub logins allowed to publish updates. |
 | `license`, `source` | An SPDX expression and an `https://` address of the source code: both required. |
@@ -85,8 +85,8 @@ game; registry-built native binaries are not used.
 1. Its size and SHA-256 are the ones the entry lists, and it isn't revoked.
 2. With a project key: its signature verifies with that key (minisign's prehashed and legacy signatures both).
 3. What the file says matches the entry: a mod's `horizon-mod.toml` (id, version, API, side, capabilities) and its
-   content's fence ([making a content mod](../how-to/content-mods.md#content-mods-api-02)); for code, the same manifest's `[native]`
-   (game, the exact Horizon and horizon-mixins revisions) and checked root Cargo project; a modpack's manifest (id, version, format, game,
+   content's fence ([making a content mod](../how-to/content-mods.md#content-mods-api-02)); for native code, the same manifest's `[native]`
+   (game, the exact Horizon and horizon-mixins revisions) and checked root Cargo project; for WebAssembly, its `[wasm]` table and `mod.wasm`; a modpack's manifest (id, version, format, game,
    mods); a resource pack's `pack.mcmeta`; a shader pack's `horizon_shader_api::check` and manifest (id, version,
    shader API).
 4. A kind this build can't install is refused with "this Horizon can't install a … yet".
@@ -119,8 +119,8 @@ them into the profile's game folder.
 
 ## Submitting a project
 
-Submit through [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit) ([Publishing your mod](../how-to/publish.md)); the service opens a pull request on
-[horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods). Your page needs:
+Submit a pull request on [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) ([Publishing your mod](../how-to/publish.md)); the
+submission form can't take `.hmod` files made with this SDK yet. Your page needs:
 
 - A description of 50–10,000 characters after trimming.
 - 1–3 categories from your project kind’s list and up to 10 lowercase tags.

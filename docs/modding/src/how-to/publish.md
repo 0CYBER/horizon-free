@@ -4,8 +4,8 @@ Horizon's registry lists mods, modpacks, resource packs and shader packs made fo
 [playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher. Each file is checked before installation.
 
 1. Run `cargo horizon-mod check target/horizon-mod/<id>.hmod` on your package and put its source in a public repository under a suitable licence.
-2. Open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub, and submit the page and version file. The service opens a pull request for review.
-3. Submit each new version's file through the same form. An update that changes only the version file merges once its checks pass; a change to the page waits for review. Published versions are pinned and never replaced: submit a new version instead.
+2. Attach the file to a GitHub release of that repository and open a pull request on [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) that adds your page and version record, as its README's [Publishing without the form](https://github.com/horizon-rust/horizon-mods#publishing-without-the-form) describes. A maintainer reviews it and stages the file. The form at [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit) can't take `.hmod` files made with this SDK yet.
+3. Publish each new version the same way, with a new `[[versions]]` record. Published versions are pinned and never replaced: submit a new version instead.
 
 Submit explicit version files; the registry refuses entries that follow repositories. The full rules are in [the registry index](../reference/registry-index.md).
 
