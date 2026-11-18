@@ -96,8 +96,8 @@ FriendlyByteBuf.readWithCount	skip:java		count loop; the List codec does it
 FriendlyByteBuf.writeEnumSet	port	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::write	action flags as one byte (8 actions fit)
 FriendlyByteBuf.readEnumSet	port	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::read	action flags as one byte (8 actions fit)
 FriendlyByteBuf.writeOptional	port	crates/horizon-protocol/src/buf.rs::Opt::write	boolean flag, then the value
-FriendlyByteBuf.writeEither	port	crates/horizon-protocol/src/packets/play.rs::TrackedWaypoint::write	gap: minor: only the waypoint identifier; no generic Either codec
-FriendlyByteBuf.readEither	port	crates/horizon-protocol/src/packets/play.rs::TrackedWaypoint::read	gap: minor: only the waypoint identifier; no generic Either codec
+FriendlyByteBuf.writeEither	port	crates/horizon-protocol/src/packets/play/waypoints.rs::TrackedWaypoint::write	gap: minor: only the waypoint identifier; no generic Either codec
+FriendlyByteBuf.readEither	port	crates/horizon-protocol/src/packets/play/waypoints.rs::TrackedWaypoint::read	gap: minor: only the waypoint identifier; no generic Either codec
 FriendlyByteBuf.readNullable	port	crates/horizon-protocol/src/buf.rs::Opt::read	boolean flag, then the value
 FriendlyByteBuf.writeNullable	port	crates/horizon-protocol/src/buf.rs::Opt::write	boolean flag, then the value
 FriendlyByteBuf.readByteArray	port	crates/horizon-protocol/src/buf.rs::Reader::byte_array	VarInt length, then bytes

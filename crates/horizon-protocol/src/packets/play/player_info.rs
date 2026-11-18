@@ -119,3 +119,41 @@ impl Codec<PlayerInfoUpdate> for PlayerInfoUpdate {
         }
     }
 }
+
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+impl crate::retained::OwnedHeap for PlayerInfo {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            uuid,
+            name,
+            properties,
+            chat_session,
+            game_mode,
+            listed,
+            latency,
+            display_name,
+            list_order,
+            show_hat,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(uuid))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(properties))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(chat_session))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(game_mode))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(listed))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(latency))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(display_name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(list_order))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(show_hat))
+    }
+}
+impl crate::retained::OwnedHeap for PlayerInfoUpdate {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self { actions, entries } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(actions))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(entries))
+    }
+}
+// End generated retained traversals.

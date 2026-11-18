@@ -132,7 +132,7 @@ TrackedWaypoint.ChunkWaypoint.update	port	crates/horizon-client/src/locator_bar.
 TrackedWaypoint.ChunkWaypoint.yawAngleToCamera	port	crates/horizon-client/src/locator_bar.rs::View::yaw_angle	-
 TrackedWaypoint.ChunkWaypoint.pitchDirectionToCamera	port	crates/horizon-client/src/locator_bar.rs::View::pitch_direction	-
 TrackedWaypoint.Vec3iWaypoint.update	port	crates/horizon-client/src/locator_bar.rs::ClientWaypoints::apply	only the same kind of waypoint moves
-TrackedWaypoint.Vec3iWaypoint.writeContents	port	crates/horizon-protocol/src/packets/play.rs::TrackedWaypoint::write	the block target is written as three varints
+TrackedWaypoint.Vec3iWaypoint.writeContents	port	crates/horizon-protocol/src/packets/play/waypoints.rs::TrackedWaypoint::write	the block target is written as three varints
 TrackedWaypoint.Vec3iWaypoint.yawAngleToCamera	port	crates/horizon-client/src/locator_bar.rs::View::yaw_angle	-
 TrackedWaypoint.Vec3iWaypoint.pitchDirectionToCamera	port	crates/horizon-client/src/locator_bar.rs::View::pitch_direction	-
 Waypoint.addHideAttribute	skip:data		item property for the waypoint item, set in item registration

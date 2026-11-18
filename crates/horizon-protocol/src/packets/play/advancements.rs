@@ -197,3 +197,73 @@ impl Codec<SeenAdvancements> for SeenAdvancements {
         }
     }
 }
+
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+impl crate::retained::OwnedHeap for AdvancementDisplay {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            title,
+            description,
+            icon,
+            frame,
+            show_toast,
+            hidden,
+            background,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(title))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(description))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(icon))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(frame))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(show_toast))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(hidden))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(background))
+    }
+}
+impl crate::retained::OwnedHeap for Advancement {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            id,
+            parent,
+            display,
+            requirements,
+            telemetry,
+            x,
+            y,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(id))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(parent))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(display))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(requirements))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(telemetry))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(x))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(y))
+    }
+}
+impl crate::retained::OwnedHeap for UpdateAdvancements {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            reset,
+            added,
+            removed,
+            progress,
+            show,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(reset))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(added))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(removed))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(progress))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(show))
+    }
+}
+impl crate::retained::OwnedHeap for SeenAdvancements {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self { action, tab } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(action))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(tab))
+    }
+}
+// End generated retained traversals.

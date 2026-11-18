@@ -293,3 +293,114 @@ impl Codec<SetPlayerTeam> for SetPlayerTeam {
         }
     }
 }
+
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+impl crate::retained::OwnedHeap for BossAction {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::Add {
+                name,
+                progress,
+                color,
+                overlay,
+                darken,
+                music,
+                fog,
+            } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(progress))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(color))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(overlay))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(darken))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(music))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(fog)),
+            Self::Remove => 0usize,
+            Self::UpdateProgress { progress } => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(progress))
+            }
+            Self::UpdateName { name } => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+            }
+            Self::UpdateStyle { color, overlay } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(color))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(overlay)),
+            Self::UpdateProperties { darken, music, fog } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(darken))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(music))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(fog)),
+        }
+    }
+}
+impl crate::retained::OwnedHeap for BossEvent {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self { id, action } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(id))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(action))
+    }
+}
+impl crate::retained::OwnedHeap for NumberFormat {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::Blank => 0usize,
+            Self::Styled(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Fixed(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+        }
+    }
+}
+impl crate::retained::OwnedHeap for SetObjective {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            name,
+            method,
+            display,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(method))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(display))
+    }
+}
+impl crate::retained::OwnedHeap for TeamParameters {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            display_name,
+            prefix,
+            suffix,
+            name_tag_visibility,
+            collision_rule,
+            color,
+            options,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(display_name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(prefix))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(suffix))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(
+                name_tag_visibility,
+            ))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(collision_rule))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(color))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(options))
+    }
+}
+impl crate::retained::OwnedHeap for SetPlayerTeam {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            name,
+            method,
+            parameters,
+            players,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(method))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(parameters))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(players))
+    }
+}
+// End generated retained traversals.
