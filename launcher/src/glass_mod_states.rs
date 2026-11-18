@@ -71,6 +71,7 @@ fn row(name: &str, kind: ModKind, error: Option<&str>) -> ModRow {
         entry: None,
         icon: None,
         error: error.map(str::to_owned),
+        missing: false,
         native: None,
         internals: Vec::new(),
         kind: Some((kind, name.into())),

@@ -16,7 +16,7 @@ impl Launcher {
     pub(super) fn glass_instance_mods(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let busy = self.mods.busy.is_some();
-        let updates = self.mods.updates.len();
+        let updates = self.mods_updatable().len();
         let name = self
             .selected_instance()
             .map(|i| i.name.clone())
@@ -62,6 +62,22 @@ impl Launcher {
                 cx.notify();
             }))
         });
+        let missing = self.missing_mods();
+        let remove_missing = (missing > 0 && !busy).then(|| {
+            ui::quiet(
+                "instance-mods-remove-missing",
+                trf(
+                    "Remove missing ({count})",
+                    &[("count", &missing.to_string())],
+                ),
+                36.,
+                &t,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.forget_missing_mods(None);
+                cx.notify();
+            }))
+        });
         body = body.child(
             ui::list_head(note).child(
                 div()
@@ -70,6 +86,7 @@ impl Launcher {
                     .gap(px(8.))
                     .child(field)
                     .children(update_all)
+                    .children(remove_missing)
                     .child(
                         ui::quiet_icon(
                             "instance-mods-add",
@@ -200,7 +217,9 @@ impl Launcher {
         } else {
             glass_home_lists::picture(None, "puzzle")
         };
-        let source = if let Some(error) = &row.error {
+        let source = if row.missing {
+            tr("File missing").to_string()
+        } else if let Some(error) = &row.error {
             error.clone()
         } else if let Some(origin) = row.native.as_ref().and_then(|n| n.origin.as_ref()) {
             trf("from GitHub: {source}", &[("source", &origin.label())])
@@ -218,7 +237,7 @@ impl Launcher {
             true => source,
             false => format!("{} · {source}", row.version),
         };
-        let update = row.entry.as_ref().and_then(|e| {
+        let update = row.entry.as_ref().filter(|_| !row.missing).and_then(|e| {
             let key = (e.source, e.project.clone());
             let number = self.mods.updates.get(&key)?.clone();
             let (source, id) = key;
@@ -245,22 +264,39 @@ impl Launcher {
             .map(|origin| self.github_actions(origin, busy || self.github.busy(), cx));
         let menu = self.mod_menu(&row, busy, cx);
         let switch_row = row.clone();
-        let controls = div().children(row.has_switch().then(|| {
-            ui::toggle(
-                SharedString::from(format!("mod-switch-{}", row.file)),
-                row.on,
-                self.look.accent,
-                self.look.on_accent,
+        // A missing file has nothing to switch: its one action is Remove.
+        let controls = if row.missing {
+            let chip = ui::quiet(
+                SharedString::from(format!("mod-remove-missing-{}", row.file)),
+                tr("Remove"),
+                32.,
                 &t,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                match &switch_row.native {
-                    Some(native) => this.switch_native_mod(native, switch_row.on),
-                    None => this.switch_mod(&switch_row),
-                }
-                cx.notify();
+            );
+            div().child(match busy {
+                true => chip.opacity(0.4).cursor_default(),
+                false => chip.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.forget_missing_mods(Some(&switch_row.file));
+                    cx.notify();
+                })),
+            })
+        } else {
+            div().children(row.has_switch().then(|| {
+                ui::toggle(
+                    SharedString::from(format!("mod-switch-{}", row.file)),
+                    row.on,
+                    self.look.accent,
+                    self.look.on_accent,
+                    &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    match &switch_row.native {
+                        Some(native) => this.switch_native_mod(native, switch_row.on),
+                        None => this.switch_mod(&switch_row),
+                    }
+                    cx.notify();
+                }))
             }))
-        }));
+        };
         ui::list_row(key, hovered, hover, &t)
             .child(icon)
             .child(ui::list_text(row.name.clone(), note))
@@ -302,6 +338,7 @@ impl Launcher {
             .as_deref()
             .and_then(|id| left_out.iter().find(|l| l.id == id));
         let (word, color) = match id.as_deref() {
+            _ if row.missing => (tr("File missing"), ui::warn()),
             _ if !row.on => (tr("Off"), white(ink::QUIET)),
             _ if row.error.is_some() => (tr("Failed"), ui::danger()),
             None => (tr("Ready"), ui::live()),
@@ -423,8 +460,14 @@ impl Launcher {
             .route_open
             .as_deref()
             .is_some_and(|o| o.starts_with(&id));
-        let confirming = self.mods.route_open.as_deref() == Some(format!("{id}:remove").as_str());
-        let again = format!("{id}:remove");
+        // The confirmation belongs to the row's state when it started: if a missing file comes
+        // back meanwhile, the row asks again before the ordinary Remove, which deletes the file.
+        let again = if row.missing {
+            format!("{id}:forget")
+        } else {
+            format!("{id}:remove")
+        };
+        let confirming = self.mods.route_open.as_deref() == Some(again.as_str());
         let button = ui::icon_button(
             format!("mod-more-{}", row.file),
             "more-vertical",
@@ -531,7 +574,10 @@ impl Launcher {
                 busy,
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if confirming {
+                if confirming && doomed.missing {
+                    this.forget_missing_mods(Some(&doomed.file));
+                    this.mods.route_open = None;
+                } else if confirming {
                     this.remove_mod_row(&doomed);
                     this.mods.route_open = None;
                 } else {

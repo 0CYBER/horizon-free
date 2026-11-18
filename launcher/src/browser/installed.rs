@@ -341,6 +341,32 @@ pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
     Ok(entry)
 }
 
+/// Whether `entry`'s file is not found. Any other error reading it is not this.
+pub fn file_missing(home: &Path, entry: &Entry) -> bool {
+    entry.path(home).is_some_and(|path| {
+        matches!(fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+/// Drops `entry` from the list only while it is listed exactly so and its file is still not
+/// found, both checked under the lock. It never touches a file. False, with nothing changed,
+/// when the row no longer says what it said (the file is back, or can't be read for another
+/// reason).
+pub fn forget_missing(home: &Path, entry: &Entry) -> Result<bool, String> {
+    // The lock would create the folder: a game folder that is gone has nothing to forget.
+    if !home.is_dir() {
+        return Ok(false);
+    }
+    let _lock = super::lock_home(home).map_err(|e| e.to_string())?;
+    let mut installed = Installed::load(home);
+    if !installed.entries.contains(entry) || !file_missing(home, entry) {
+        return Ok(false);
+    }
+    installed.entries.retain(|e| e != entry);
+    installed.save(home)?;
+    Ok(true)
+}
+
 /// The newer version `entry` can be updated to, if any.
 pub fn update_for(source: &dyn Source, entry: &Entry) -> Result<Option<Version>, String> {
     let project = source.project(&entry.project)?;

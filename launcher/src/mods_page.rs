@@ -746,9 +746,15 @@ impl Launcher {
         }
         let tx = self.mods.tx.clone();
         let java = self.mods.java.clone();
+        let home = self.mods.home();
         std::thread::spawn(move || {
             let mut found = HashMap::new();
             for e in entries {
+                // A Horizon row whose file is missing offers Remove, not an update. (A Java
+                // instance's jar turned off is renamed: its recorded file isn't there.)
+                if java.is_none() && installed::file_missing(&home, &e) {
+                    continue;
+                }
                 let Some(source) = browser::source(e.source) else {
                     continue;
                 };
@@ -764,24 +770,30 @@ impl Launcher {
         });
     }
 
-    /// Updates every installed pack a newer version was found for, one after the other on a
-    /// thread, each checked as an install is. One failing doesn't stop the others.
-    pub(super) fn mods_update_all(&mut self) {
-        if self.mods.busy.is_some() || self.mods.updates.is_empty() {
-            return;
-        }
-        let mut todo: Vec<(SourceId, String, String)> = self
-            .mods
-            .installed
-            .iter()
+    /// What Update all updates and what its button counts: each installed pack a newer version
+    /// was found for, but not a Horizon mod whose file is gone now (its row offers Remove).
+    pub(super) fn mods_updatable(&self) -> Vec<(SourceId, String, String)> {
+        let home = self.mods.home();
+        let mut todo: Vec<(SourceId, String, String)> = (self.mods.installed.iter())
             .filter(|e| {
                 self.mods
                     .updates
                     .contains_key(&(e.source, e.project.clone()))
             })
+            .filter(|e| self.mods.java.is_some() || !installed::file_missing(&home, e))
             .map(|e| (e.source, e.project.clone(), e.title.clone()))
             .collect();
         todo.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        todo
+    }
+
+    /// Updates every installed pack a newer version was found for, one after the other on a
+    /// thread, each checked as an install is. One failing doesn't stop the others.
+    pub(super) fn mods_update_all(&mut self) {
+        let todo = self.mods_updatable();
+        if self.mods.busy.is_some() || todo.is_empty() {
+            return;
+        }
         self.mods.message = None;
         self.mods.busy = Some(("all".into(), "Updating…".into(), 0.));
         self.mods.updates.clear();
@@ -1641,13 +1653,11 @@ impl Launcher {
             )
         };
         // Every kind's updates at once, whichever tab is open.
-        let update_all = (!self.mods.updates.is_empty()).then(|| {
+        let updatable = self.mods_updatable().len();
+        let update_all = (updatable > 0).then(|| {
             let b = button(
                 "mods-update-all",
-                trf(
-                    "Update all ({count})",
-                    &[("count", &self.mods.updates.len().to_string())],
-                ),
+                trf("Update all ({count})", &[("count", &updatable.to_string())]),
                 Kind::Secondary,
                 &t,
             );
