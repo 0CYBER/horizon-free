@@ -230,6 +230,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(cc.stale_claims(node(events=[assigned("dev", 9), {"__typename": "CrossReferencedEvent",
                                                                           "source": {}}]), NOW), ["dev"])
 
+    def test_a_saturated_timeline_window_keeps_the_claim(self):
+        # With `last: 100`, an open PR link older than the newest 100 events is invisible. Keep the claim
+        # rather than unassigning a contributor whose protection we cannot see.
+        full = [assigned("other", 1) for _ in range(cc.TIMELINE_WINDOW)]
+        self.assertEqual(cc.stale_claims(node(events=[assigned("dev", 6), *full]), NOW), [])
+
     def test_release_unassigns_and_says_why(self):
         class Api(Fake):
             def assigned_issues(self):

@@ -37,6 +37,9 @@ import nightly_set as ns  # noqa: E402  (the same trusted reviewers and owner)
 PREFIX = "🤖 Claims: "
 MAX_CLAIMS = 8
 STALE = timedelta(days=5)
+# ASSIGNED_ISSUES asks GitHub for `timelineItems(last: 100, ...)`; a saturated window is not evidence
+# that no older open pull request links the issue.
+TIMELINE_WINDOW = 100
 AUTHOR_GRACE = timedelta(hours=1)  # an issue's author alone may claim it for this long after filing it
 LOGIN = re.compile(r"^@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))$")
 USAGE = "Use `/claim` or `/unclaim` (the trusted reviewers: `/unclaim @login`)."
@@ -267,6 +270,11 @@ def stale_claims(issue: dict, now: datetime) -> list[str]:
     """The assignees of one issue (GraphQL node) whose claim this workflow made over 5 days ago, when no open pull
     request links the issue."""
     events = issue["timelineItems"]["nodes"]
+    if len(events) >= TIMELINE_WINDOW:
+        # ASSIGNED_ISSUES asks for `timelineItems(last: 100)`: a full window can hide an older open PR
+        # that links this issue. Failing closed keeps the claim rather than unassigning a contributor
+        # who is in fact covered by a pull request we can no longer see.
+        return []
     if issue["closedByPullRequestsReferences"]["nodes"] or any(
             e["__typename"] == "CrossReferencedEvent" and (e.get("source") or {}).get("state") == "OPEN"
             for e in events):
