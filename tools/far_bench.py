@@ -36,6 +36,10 @@ import lab  # noqa: E402
 from server_bench import DONE, Server, tick_query  # noqa: E402
 
 EXE = '.exe' if os.name == 'nt' else ''
+# The prepared resources the servers load (`--resources`).
+RESOURCES = lab.RESOURCES
+# Seconds after joining the bots start asking (a /tp spreads them first).
+FAR_AFTER = 8
 PROPERTIES = {
     'online-mode': 'false',
     'white-list': 'false',
@@ -70,7 +74,7 @@ def server(binary, folder, out, name, extra):
     props = dict(PROPERTIES, **extra, **{'server-port': str(lab.free_port())})
     (folder / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (folder / 'eula.txt').write_text('eula=true\n')
-    command = [binary / f'horizon-client{EXE}', '--resources', lab.RESOURCES, '--dedicated', '--nogui']
+    command = [binary / f'horizon-client{EXE}', '--resources', RESOURCES, '--dedicated', '--nogui']
     s = Server(command, folder, out / f'{name}.log')
     try:
         s.wait_for(DONE, 600)
@@ -102,8 +106,8 @@ def run(binary, label, bots, layout, distance, world, scratch, out, dump, bots_b
         dump_dir.mkdir(parents=True)
     s, port = server(binary, folder, out, name, {'horizon-lod-distance': str(distance)})
     command = [bots_bin, '--server', f'127.0.0.1:{port}', '--bots', bots, '--behaviour', 'idle',
-               '--brand', 'horizon', '--far', distance, '--far-after', 8, '--join-every', 0.25,
-               '--view-distance', 4, '--seconds', seconds, '--report', report, '--name', 'Bot']
+               '--brand', 'horizon', '--far', distance, '--far-after', FAR_AFTER, '--join-every', 0.25,
+               '--view-distance', 4, '--seconds', seconds + FAR_AFTER, '--report', report, '--name', 'Bot']
     if dump_dir:
         command += ['--far-dump', dump_dir]
     try:
@@ -129,7 +133,7 @@ def run(binary, label, bots, layout, distance, world, scratch, out, dump, bots_b
         if layout == 'apart':
             for i in range(bots):
                 s.console(f'tp Bot{i} {i * 10000} 200 0')
-        time.sleep(7)
+        time.sleep(FAR_AFTER - 1)
         ticks = []
         # Until every bot's pass is over (or the bots stop at --seconds): MSPT and CPU while tiles are served.
         while bots_proc.poll() is None and not done.is_set():
@@ -196,6 +200,150 @@ def compare(results):
     return {'tiles': len(seen), 'compared': compared, 'first_difference': first}
 
 
+def columns(body):
+    """A served tile's columns, from its body as horizon-bots dumps it (after the id and the status byte):
+    (surface height and state, or None, and spans)."""
+    at = 0
+
+    def varint():
+        nonlocal at
+        value = shift = 0
+        while True:
+            b = body[at]
+            at += 1
+            value |= (b & 0x7f) << shift
+            shift += 7
+            if not b & 0x80:
+                return value
+
+    def fixed(n, signed=True):
+        nonlocal at
+        at += n
+        return int.from_bytes(body[at - n:at], 'big', signed=signed)
+
+    for _ in range(varint()):
+        length = varint()  # read first: `at += varint()` would add to `at` from before the varint
+        at += length
+    out = []
+    for _ in range(varint()):
+        surface = None
+        if body[at]:
+            at += 1
+            height, state = fixed(4), varint()
+            if body[at]:
+                at += 1
+                fixed(4), varint()
+            else:
+                at += 1
+            varint()
+            surface = (height, state)
+        else:
+            at += 1
+        spans = tuple((fixed(2), fixed(2), varint(), varint(), fixed(2, False)) for _ in range(varint()))
+        out.append((surface, spans))
+    return out
+
+
+def solo(binary, world, scratch, out, bots_bin, name, distance, seconds, prepare=None, during=None):
+    """One server on a copy of `world` (changed by `prepare(folder)`), one bot's tiles; `during(server)` runs
+    while the bot asks, before a second bot asks again. Returns each bot's tiles."""
+    folder = scratch / name
+    folder.mkdir(parents=True)
+    shutil.copytree(world, folder / 'world')
+    if prepare:
+        prepare(folder / 'world')
+    s, port = server(binary, folder, out, name, {'horizon-lod-distance': str(distance)})
+    tiles = []
+    try:
+        for round_ in range(2 if during else 1):
+            dump = out / 'tiles' / f'{name}-{round_}'
+            dump.mkdir(parents=True, exist_ok=True)
+            command = [bots_bin, '--server', f'127.0.0.1:{port}', '--bots', 1, '--behaviour', 'idle', '--brand',
+                       'horizon', '--far', distance, '--far-after', 3, '--seconds', seconds, '--view-distance', 4,
+                       '--name', f'R{round_}x', '--far-dump', dump, '--report', out / f'{name}-{round_}.json']
+            bots = subprocess.Popen([str(c) for c in command], stdout=subprocess.DEVNULL)
+            if during and round_ == 0:
+                s.wait_for(r'R0x0 joined the game', 60)
+                time.sleep(5)
+                during(s)
+            bots.wait()
+            tiles.append(read_tiles(next(dump.glob('*.tiles'))))
+    finally:
+        s.stop()
+        shutil.rmtree(folder, ignore_errors=True)
+    return tiles
+
+
+def block_names():
+    """Block state id -> block name (properties dropped), from the prepared facts."""
+    facts = json.loads((Path(RESOURCES) / 'facts.json').read_text())
+    return [state[0] for state in facts['states']]
+
+
+def top(column):
+    """A column's top: the highest span's top and its state (coarse tiles have spans and no surface)."""
+    surface, spans = column
+    if spans:
+        span = max(spans, key=lambda s: s[1])
+        return span[1], span[2]
+    return (surface[0], surface[1]) if surface else None
+
+
+def compare_columns(saved, generated, names):
+    """Per stride: tiles and columns both have, and how many share their top's height (exactly, within 1 and
+    within 4 blocks) and their top block (by name: a leaf's distance or a log's axis aside)."""
+    by_stride = {}
+    for key in saved.keys() & generated.keys():
+        r = by_stride.setdefault(key[2], {'tiles': 0, 'columns': 0, 'same_columns': 0, 'top_height': 0,
+                                          'top_within_1': 0, 'top_within_4': 0, 'top_block': 0})
+        r['tiles'] += 1
+        for a, b in zip(columns(saved[key]), columns(generated[key])):
+            r['columns'] += 1
+            r['same_columns'] += a == b
+            ta, tb = top(a), top(b)
+            if ta is None or tb is None:
+                continue
+            r['top_height'] += ta[0] == tb[0]
+            r['top_within_1'] += abs(ta[0] - tb[0]) <= 1
+            r['top_within_4'] += abs(ta[0] - tb[0]) <= 4
+            r['top_block'] += names[ta[1]] == names[tb[1]]
+    return by_stride
+
+
+def identity(binary, world, scratch, out, bots_bin):
+    """The tiles of a world's saved chunks against the same seed's generator (the world with no saves)."""
+    def unsaved(w):
+        for d in list(w.rglob('region')) + list(w.rglob('horizon_far_*')) + list(w.rglob('horizon_lod*')):
+            shutil.rmtree(d, ignore_errors=True)
+    saved = solo(binary, world, scratch, out, bots_bin, 'identity-saved', 24, 40)[0]
+    generated = solo(binary, world, scratch, out, bots_bin, 'identity-generated', 24, 40, unsaved)[0]
+    return compare_columns(saved, generated, block_names())
+
+
+def tower(binary, world, scratch, out, bots_bin):
+    """A 16 x 16 tower built beside a bot and left to vanilla's eager save: the next bot's tiles show it."""
+    def build(s):
+        s.console('execute at R0x0 run fill ~32 70 ~32 ~47 190 ~47 minecraft:gold_block')
+        time.sleep(15)
+    before, after = solo(binary, world, scratch, out, bots_bin, 'tower', 16, 25, during=build)
+    names = block_names()
+
+    def gold_top(column):
+        # The tower's top: gold at y 191, as the surface (fine tiles) or the highest span (coarse ones).
+        surface, _ = column
+        tops = [t for t in (surface and (surface[0], surface[1]), top(column)) if t]
+        return any(h == 191 and names[state] == 'minecraft:gold_block' for h, state in tops)
+
+    changed = {}
+    for key in before.keys() & after.keys():
+        a, b = columns(before[key]), columns(after[key])
+        if a and b:
+            n = sum(1 for ca, cb in zip(a, b) if gold_top(cb) and not gold_top(ca))
+            if n:
+                changed[str(key)] = n
+    return changed
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--bins', required=True, help='label=folder,... with horizon-client in each')
@@ -204,16 +352,31 @@ def main():
     p.add_argument('--layouts', default='together,apart')
     p.add_argument('--runs', type=int, default=3)
     p.add_argument('--distance', type=int, default=256)
-    p.add_argument('--seconds', type=int, default=300, help='the longest a run lasts')
+    p.add_argument('--seconds', type=int, default=45, help='how long the bots ask for tiles')
     p.add_argument('--world', help='a saved world every run starts from a copy of')
     p.add_argument('--dump', action='store_true')
+    p.add_argument('--identity', action='store_true', help='saved chunks against the generator, then exit')
+    p.add_argument('--tower', action='store_true', help='a build shows once saved, then exit')
     p.add_argument('--out', default='far-bench')
+    p.add_argument('--resources', default=str(lab.RESOURCES), help='prepared resources for the servers')
     a = p.parse_args()
+    global RESOURCES
+    RESOURCES = Path(a.resources).resolve()
     out = Path(a.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     bins = [(label, Path(folder).resolve()) for label, folder in (b.split('=') for b in a.bins.split(','))]
     scratch = Path(tempfile.mkdtemp(prefix='far-bench-'))
     world = Path(a.world).resolve() if a.world else make_world(bins[0][1], scratch, out)
+    if a.identity or a.tower:
+        for label, binary in bins:
+            found = {}
+            if a.identity:
+                found['identity'] = identity(binary, world, scratch, out, a.bots_bin)
+            if a.tower:
+                found['tower'] = tower(binary, world, scratch, out, a.bots_bin)
+            print(json.dumps({label: found}, indent=1))
+        shutil.rmtree(scratch, ignore_errors=True)
+        return
     results = []
     try:
         for i in range(a.runs):
@@ -230,9 +393,9 @@ def main():
                         (out / 'results.json').write_text(json.dumps(results, indent=1))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    identity = compare(results)
-    print(json.dumps({'identity': identity}))
-    (out / 'results.json').write_text(json.dumps({'runs': results, 'identity': identity}, indent=1))
+    same = compare(results)
+    print(json.dumps({'identity': same}))
+    (out / 'results.json').write_text(json.dumps({'runs': results, 'identity': same}, indent=1))
 
 
 if __name__ == '__main__':
