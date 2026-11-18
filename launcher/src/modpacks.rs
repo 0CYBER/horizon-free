@@ -271,6 +271,8 @@ pub fn row_plain(row: &Row) -> String {
 
 /// Reads the pack in `work`.
 pub fn load(work: &Path) -> Result<Imported, String> {
+    #[cfg(test)]
+    tests::LOADS.with(|loads| loads.set(loads.get() + 1));
     let pack: Pack = pipeline::read_json(&work.join("pack.json"))?;
     let rows: Vec<Row> = pipeline::read_json(&work.join("coverage.json")).unwrap_or_default();
     let records: Vec<horizon_port_pack::inventory::Record> =
@@ -344,6 +346,36 @@ pub(crate) fn list_in(ports: &Path) -> Vec<Imported> {
         .filter_map(|e| load(&e.path()).ok())
         .collect();
     packs.sort_by_key(|p| p.title().to_ascii_lowercase());
+    packs
+}
+
+/// An imported pack as a list of instances names it.
+pub(crate) struct Listed {
+    pub slug: String,
+    pub title: String,
+    pub work: PathBuf,
+}
+
+/// The packs [`list_in`] loads, by their `pack.json` alone: an instance list is read on the
+/// window's thread, and a pack's reports and carried mods can be tens of thousands of files
+/// (#18074).
+pub(crate) fn listed_in(ports: &Path) -> Vec<Listed> {
+    let mut packs: Vec<Listed> = fs::read_dir(ports)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let work = e.path();
+            let pack: Pack = pipeline::read_json(&work.join("pack.json")).ok()?;
+            let slug = e.file_name().to_string_lossy().into_owned();
+            let title = match pack.name.is_empty() {
+                true => slug.clone(),
+                false => pack.name,
+            };
+            Some(Listed { slug, title, work })
+        })
+        .collect();
+    packs.sort_by_key(|p| p.title.to_ascii_lowercase());
     packs
 }
 
@@ -541,8 +573,13 @@ pub fn found_summary(found: &Found) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    thread_local! {
+        /// How many packs [`load`] read on this thread.
+        pub(crate) static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
 
     #[test]
     fn found_packs_are_other_launchers_instances_with_mods() {

@@ -47,6 +47,8 @@ pub enum Msg {
     PackLine(String),
     /// A modpack step ended: the pack as it now is.
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
+    /// The imported packs, read on a thread for the window's read of that number.
+    ImportedPacks(u64, Vec<crate::modpacks::Imported>),
     /// The modpacks other launchers keep on this computer (`modpacks::found_on_this_computer`).
     FoundPacks(Vec<crate::other_launchers::Found>),
     /// Where the native-mods build is (`native_mods::Step::label`), and how far along.

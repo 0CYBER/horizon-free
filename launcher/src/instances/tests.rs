@@ -186,6 +186,47 @@ fn existing_worlds_stay_where_they_are_and_every_folder_becomes_an_instance() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+/// An imported pack is listed as an instance from its `pack.json` alone: neither its reports nor
+/// its carried mods are read, however many files they hold (#18074). The Modpacks page reads them
+/// whole, on a thread.
+#[test]
+fn imported_packs_are_listed_without_reading_their_mods() {
+    let root = scratch("listed-ports");
+    let (home, data) = (root.join("horizon"), root.join("launcher"));
+    player_home(&home);
+    let carry = home.join("ports/small-pack/mods/chipped/carry");
+    put(
+        &carry.join("horizon-mod.toml"),
+        "id = \"chipped\"
+",
+    );
+    for i in 0..50 {
+        put(
+            &carry.join(format!("assets/chipped/models/block/b{i}.json")),
+            "{}",
+        );
+    }
+    // Not a pack: no `pack.json`.
+    put(&home.join("ports/half-imported/coverage.json"), "[]");
+    let loads = || crate::modpacks::tests::LOADS.with(std::cell::Cell::get);
+
+    let before = loads();
+    let all = list_in(&home, &data);
+    let ports: Vec<_> = all.iter().filter(|i| i.kind == Kind::Port).collect();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0].id, "port:small-pack");
+    assert_eq!(ports[0].name, "Small Pack");
+    assert_eq!(ports[0].home, home.join("ports/small-pack/home"));
+    assert_eq!(loads(), before, "listing the instances read a pack whole");
+
+    // The page's read does read it whole, and lists the same packs.
+    let read = crate::modpacks::list_in(&home.join("ports"));
+    assert!(loads() > before);
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].slug, "small-pack");
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn names_stay_unique_and_packs_are_not_copied() {
     let root = scratch("names");

@@ -535,6 +535,8 @@ struct Launcher {
     /// Modpacks installed from Horizon's registry, each its own profile.
     registry_packs: Vec<horizon_launcher::browser::horizon::pack::Installed>,
     packs_loaded: Option<Instant>,
+    /// The imported packs' read on a thread, and whether it may still apply (`load_packs`).
+    packs_reading: modpacks_page::PackReads,
     pack_open: Option<String>,
     pack_filter: Option<horizon_port_pack::report::Status>,
     pack_busy: bool,
@@ -546,6 +548,10 @@ struct Launcher {
     found_scanning: bool,
     /// The game starting now plays this pack's profile (its work folder).
     starting_pack: Option<std::path::PathBuf>,
+    /// The folder of the instance a start is preparing, while `starting_client` is set.
+    starting_work: Option<std::path::PathBuf>,
+    /// The pack folder a Port step is rebuilding now.
+    porting: Option<std::path::PathBuf>,
     /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
     mods: mods_page::Mods,
     github: github_mods_page::Github,

@@ -5,7 +5,7 @@ use horizon_launcher::browser::horizon::pack as horizon_pack;
 use horizon_launcher::modpacks::{self, Imported};
 use horizon_launcher::other_launchers::Found;
 use horizon_port_pack::report::Status;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The report's filter: every row, or one status.
 pub(super) const FILTERS: [(Option<Status>, &str); 5] = [
@@ -18,6 +18,58 @@ pub(super) const FILTERS: [(Option<Status>, &str); 5] = [
 
 /// Lines of the pipeline's log the page shows while it works.
 const LOG_SHOWN: usize = 6;
+
+/// Why pack folder `work` can't be ported or started now, given the folder a start is preparing
+/// and the one a Port step is rebuilding: Port rebuilds the carried mods a start reads (#18074).
+pub(super) fn folder_busy(
+    work: &Path,
+    starting: Option<&Path>,
+    porting: Option<&Path>,
+) -> Option<&'static str> {
+    if starting == Some(work) {
+        Some("This pack is starting. Port it once the game has started.")
+    } else if porting == Some(work) {
+        Some("This pack is being ported. Play it once the port ends.")
+    } else {
+        None
+    }
+}
+
+/// The imported packs' read on a thread (#18074): only the window's latest read applies, and
+/// only when the window changed no pack since asking for it.
+#[derive(Default)]
+pub(super) struct PackReads {
+    asked: u64,
+    running: Option<u64>,
+}
+
+impl PackReads {
+    /// A new read: its number, which its packs come back with.
+    fn ask(&mut self) -> u64 {
+        self.asked += 1;
+        self.running = Some(self.asked);
+        self.asked
+    }
+
+    fn running(&self) -> bool {
+        self.running.is_some()
+    }
+
+    /// The window changed its packs (a step ended, a pack was removed): a read running began
+    /// before and is out of date. True when one was, so a fresh one is to be asked for.
+    fn changed(&mut self) -> bool {
+        self.running.take().is_some()
+    }
+
+    /// Whether the packs of read `read` apply: the latest, with no change since.
+    fn arrived(&mut self, read: u64) -> bool {
+        let applies = self.running == Some(read);
+        if applies {
+            self.running = None;
+        }
+        applies
+    }
+}
 
 impl Launcher {
     fn open_pack(&self) -> Option<&Imported> {
@@ -53,6 +105,7 @@ impl Launcher {
     /// A finished step: the pack's new state, opened.
     pub(super) fn pack_done(&mut self, result: Result<Box<Imported>, String>) {
         self.pack_busy = false;
+        self.porting = None;
         match result {
             Ok(pack) => {
                 self.mods.report_list.reset();
@@ -60,6 +113,7 @@ impl Launcher {
                 self.packs.retain(|p| p.slug != pack.slug);
                 self.packs.push(*pack);
                 self.packs.sort_by_key(|p| p.title().to_ascii_lowercase());
+                self.packs_changed();
             }
             Err(e) => self.pack_error = Some(e),
         }
@@ -95,7 +149,10 @@ impl Launcher {
             .filter(|tag| backend::is_prepared(tag))
             .map(|tag| backend::resources(tag));
         if !ask {
-            self.pack_job(move |log| modpacks::port(&work, resources.as_deref(), None, log));
+            let job_work = work.clone();
+            self.port_job(work, move |log| {
+                modpacks::port(&job_work, resources.as_deref(), None, log)
+            });
             return;
         }
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -108,8 +165,9 @@ impl Launcher {
             if let Ok(Ok(Some(mut paths))) = paths.await {
                 if let Some(from) = paths.pop() {
                     let _ = this.update(cx, |this, cx| {
-                        this.pack_job(move |log| {
-                            modpacks::port(&work, resources.as_deref(), Some(&from), log)
+                        let job_work = work.clone();
+                        this.port_job(work, move |log| {
+                            modpacks::port(&job_work, resources.as_deref(), Some(&from), log)
                         });
                         cx.notify();
                     });
@@ -117,6 +175,32 @@ impl Launcher {
             }
         })
         .detach();
+    }
+
+    /// Why pack folder `work` can't be ported or started now ([`folder_busy`]).
+    pub(super) fn pack_folder_busy(&self, work: &Path) -> Option<&'static str> {
+        let starting = self
+            .starting_work
+            .as_deref()
+            .filter(|_| self.starting_client.is_some());
+        folder_busy(work, starting, self.porting.as_deref())
+    }
+
+    /// Ports pack folder `work` with `job`, unless a start of it is preparing.
+    fn port_job(
+        &mut self,
+        work: PathBuf,
+        job: impl FnOnce(&dyn Fn(String)) -> Result<Imported, String> + Send + 'static,
+    ) {
+        if let Some(why) = self.pack_folder_busy(&work) {
+            self.pack_error = Some(tr(why).into());
+            return;
+        }
+        if self.pack_busy {
+            return;
+        }
+        self.porting = Some(work);
+        self.pack_job(job);
     }
 
     fn play_pack(&mut self, work: PathBuf) {
@@ -158,14 +242,35 @@ impl Launcher {
     pub(super) fn load_packs(&mut self) {
         if self.packs_loaded.is_none() {
             self.scan_found_packs();
-            self.mods.report_list.reset();
-            self.packs = modpacks::list();
             self.registry_packs = horizon_pack::list();
             self.reload_instances();
-            if self.pack_open.is_none() {
-                self.pack_open = self.packs.first().map(|p| p.slug.clone());
-            }
+            // On a thread: a pack's reports and carried mods can be tens of thousands of files,
+            // and the sidebar asks for them on the first frame (#18074).
+            let read = self.packs_reading.ask();
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Msg::ImportedPacks(read, modpacks::list()));
+            });
             self.packs_loaded = Some(Instant::now());
+        }
+    }
+
+    /// The window changed its packs: a read still running is out of date, and is asked again.
+    fn packs_changed(&mut self) {
+        if self.packs_reading.changed() {
+            self.packs_loaded = None;
+        }
+    }
+
+    /// The imported packs of read `read`; one overtaken by a later read or a change is dropped.
+    pub(super) fn packs_read(&mut self, read: u64, packs: Vec<Imported>) {
+        if !self.packs_reading.arrived(read) {
+            return;
+        }
+        self.mods.report_list.reset();
+        self.packs = packs;
+        if self.pack_open.is_none() {
+            self.pack_open = self.packs.first().map(|p| p.slug.clone());
         }
     }
 
@@ -213,7 +318,9 @@ impl Launcher {
         if !self.registry_packs.is_empty() {
             page = page.child(self.registry_pack_rows(cx));
         }
-        if self.packs.is_empty() && !self.registry_packs.is_empty() {
+        if self.packs.is_empty()
+            && (!self.registry_packs.is_empty() || self.packs_reading.running())
+        {
             return page;
         }
         if self.packs.is_empty() {
@@ -447,7 +554,7 @@ impl Launcher {
         };
         let mut port = button("pack-port", port_label, Kind::Secondary, &t);
         let mut from = button("pack-from", "Use jars from my instance…", Kind::Ghost, &t);
-        if self.pack_busy || !p.can_port() {
+        if self.pack_busy || !p.can_port() || self.pack_folder_busy(&p.work).is_some() {
             port = disabled(port);
             from = disabled(from);
         } else {
@@ -489,6 +596,7 @@ impl Launcher {
                         this.packs.retain(|p| p.slug != slug);
                         this.pack_open = this.packs.first().map(|p| p.slug.clone());
                         this.mods.report_list.reset();
+                        this.packs_changed();
                     }
                     Err(e) => this.pack_error = Some(e),
                 }
@@ -636,4 +744,49 @@ fn found_detail(found: &Found, t: &Theme) -> Div {
     text(theme::CAPTION)
         .text_color(t.muted)
         .child(modpacks::found_summary(found))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{folder_busy, PackReads};
+    use std::path::Path;
+
+    /// A pack folder being started is not ported, and one being ported is not started; other
+    /// folders go on (#18074). Compared by folder, whatever the instance list holds.
+    #[test]
+    fn a_pack_is_never_started_and_ported_at_once() {
+        let (pack, other) = (Path::new("ports/bmc2"), Path::new("ports/other"));
+        assert_eq!(folder_busy(pack, None, None), None);
+        assert!(folder_busy(pack, Some(pack), None)
+            .unwrap()
+            .contains("starting"));
+        assert!(folder_busy(pack, None, Some(pack))
+            .unwrap()
+            .contains("ported"));
+        assert_eq!(folder_busy(pack, Some(other), Some(other)), None);
+    }
+
+    /// A read the window changed its packs after (a step ended, a pack was removed) never
+    /// replaces what the window has, even when its packs arrive right after the change, in the
+    /// same batch of messages; the fresh read asked then applies. A read with no change since
+    /// applies (#18074).
+    #[test]
+    fn a_read_from_before_a_change_never_applies() {
+        let mut reads = PackReads::default();
+        let first = reads.ask();
+        assert!(reads.changed(), "a fresh read is asked for");
+        assert!(!reads.arrived(first));
+        assert!(!reads.running());
+        let fresh = reads.ask();
+        assert!(!reads.arrived(first));
+        assert!(reads.arrived(fresh));
+        assert!(!reads.arrived(fresh), "applied once");
+
+        // A change with no read running asks for none; an overtaken read is dropped.
+        assert!(!reads.changed());
+        let older = reads.ask();
+        let newer = reads.ask();
+        assert!(!reads.arrived(older));
+        assert!(reads.arrived(newer));
+    }
 }

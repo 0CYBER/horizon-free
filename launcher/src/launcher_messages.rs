@@ -329,6 +329,7 @@ impl Launcher {
                     }
                 }
                 Msg::PackDone(result) => self.pack_done(result),
+                Msg::ImportedPacks(asked, packs) => self.packs_read(asked, packs),
                 Msg::FoundPacks(found) => {
                     self.found_scanning = false;
                     self.found_packs = found;
