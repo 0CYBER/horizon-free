@@ -214,11 +214,6 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   3 accepted, 4 downloaded, 5 invalid URL, 6 failed reload, 7 discarded). It only hears. The pack a dedicated server
   offers during the configuration is answered before the player has joined and is not heard. The player's state is
   swapped in, so `PlayerRef::tell` works.
-- **`native_projectile_hit(owner, kind, hit_entity, pos, cancel)`**: a projectile a server player launched (arrow,
-  snowball, egg, thrown trident, ender pearl, ...) hit an entity (`hit_entity`) or a block at `pos`, heard before any
-  of its effects (NeoForge's `ProjectileImpactEvent`). Set `cancel` and it does nothing: it vanishes, a thrown trident
-  flies on through. The shooter's state is swapped in, so `PlayerRef::tell` answers them. Mobs' and the host's
-  projectiles are not heard, nor are fishing bobbers and firework rockets.
 - **`tnt_primed(player, pos, cancel)`**: TNT at `pos` is about to be lit by a flint and steel or fire charge
   (`player` is whoever clicked, whose state is swapped in), fire, a redstone signal, an arrow or a dispenser (`player` is
   None). Set `cancel` and it is not primed: the block stays, or is put back if fire or a signal had already taken it
