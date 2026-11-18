@@ -1,13 +1,13 @@
 //! `/data` (DataCommands), `/tag` (TagCommand) and `/summon` with NBT: entity,
 //! block entity and storage data accessors over the game state.
+use super::command_host::{data::DataTarget, tag::TagTargets};
 use super::{Arg, Context, Game, R, Target, err};
 use horizon_client::{
     containers::BlockEntity,
-    data_cmd::{self, Op, path_error},
+    data_cmd::{self, path_error},
     entity_nbt,
     nbt_path::NbtPath,
     save::{self, random_uuid},
-    scoreboard_cmd::{Holder, Tracker, format_list},
     snbt,
     text::Text,
 };
@@ -1311,7 +1311,7 @@ impl Game<'_> {
             DataRef::Storage(id) => Text::literal(id.clone()),
         }
     }
-    fn modified_text(&self, r: &DataRef) -> Text {
+    pub(super) fn modified_text(&self, r: &DataRef) -> Text {
         match r {
             DataRef::Entity(_) => {
                 Text::translate("commands.data.entity.modified", &[self.data_name(r)])
@@ -1330,7 +1330,7 @@ impl Game<'_> {
             ),
         }
     }
-    fn query_text(&self, r: &DataRef, data: &Tag, path: Option<&NbtPath>) -> Text {
+    pub(super) fn query_text(&self, r: &DataRef, data: &Tag, path: Option<&NbtPath>) -> Text {
         // Only a block's writer supplies this provenance: the live piston's
         // fields, or any other block entity's saveWithFullMetadata. The same
         // compound in storage or an entity keeps default order.
@@ -1371,7 +1371,7 @@ impl Game<'_> {
             ),
         }
     }
-    fn get_text(&self, r: &DataRef, path: &NbtPath, scale: f64, value: i32) -> Text {
+    pub(super) fn get_text(&self, r: &DataRef, path: &NbtPath, scale: f64, value: i32) -> Text {
         let p = Text::literal(path.as_str());
         let (s, v) = (
             data_cmd::scale_text(scale),
@@ -1401,7 +1401,7 @@ impl Game<'_> {
 
     // ---- /data -----------------------------------------------------------
 
-    fn path_arg(&self, ctx: &Context, name: &str) -> R<NbtPath> {
+    pub(super) fn path_arg(&self, ctx: &Context, name: &str) -> R<NbtPath> {
         let Some(Arg::Str(text)) = ctx.get(name) else {
             return Err(err("command.failed", &[]));
         };
@@ -1424,310 +1424,26 @@ impl Game<'_> {
     /// `DataCommands.mergeData`: literal values keep the modern argument
     /// parser's decoded Tag contract through execution.
     fn cmd_data_in(&mut self, id: &str, ctx: &Context, target: DataRef) -> R<i32> {
-        match id {
-            "data.merge" => {
-                let Some(Arg::Str(nbt)) = ctx.get("nbt") else {
-                    return Ok(0);
-                };
-                let nbt = horizon_client::command::snbt::parse_fully(nbt)?;
-                let old = self.data_of(&target)?;
-                if horizon_client::nbt_path::too_deep(&nbt, 0) {
-                    return Err(err("arguments.nbtpath.too_deep", &[]));
-                }
-                let result = data_cmd::merged(&old, &nbt);
-                if old == result {
-                    return Err(err("commands.data.merge.failed", &[]));
-                }
-                self.set_data_of(&target, result)?;
-                let message = self.modified_text(&target);
-                self.feedback(message);
-                Ok(1)
-            }
-            "data.get" => {
-                let data = self.data_of(&target)?;
-                if ctx.get("path").is_none() {
-                    let message = self.query_text(&target, &data, None);
-                    self.system_feedback(message);
-                    return Ok(1);
-                }
-                let path = self.path_arg(ctx, "path")?;
-                let tag = data_cmd::single_tag(&path, &data)?;
-                if let Some(Arg::Double(scale)) = ctx.get("scale") {
-                    let value = data_cmd::scaled_value(&tag, &path, *scale)?;
-                    let message = self.get_text(&target, &path, *scale, value);
-                    self.system_feedback(message);
-                    return Ok(value);
-                }
-                let value = data_cmd::get_value(&tag, &path)?;
-                let message = self.query_text(&target, &tag, Some(&path));
-                self.system_feedback(message);
-                Ok(value)
-            }
-            "data.remove" => {
-                let path = self.path_arg(ctx, "path")?;
-                let mut data = self.data_of(&target)?;
-                let count = path.remove(&mut data);
-                if count == 0 {
-                    return Err(err("commands.data.merge.failed", &[]));
-                }
-                self.set_data_of(&target, data)?;
-                let message = self.modified_text(&target);
-                self.feedback(message);
-                Ok(count as i32)
-            }
-            "data.modify" => self.cmd_data_modify(ctx, target),
-            _ => Err(err("command.failed", &[])),
-        }
+        horizon_gameplay::commands::data::data_in(&mut DataTarget { game: self, target }, id, ctx)
     }
     /// A message sent without the feedback gamerule check (`sendSuccess(.., false)`).
-    fn system_feedback(&mut self, message: Text) {
+    pub(super) fn system_feedback(&mut self, message: Text) {
         self.feedback(message);
     }
     /// `DataCommands.manipulateData`: literal sources use the same SNBT
     /// decode contract as command admission; stored sources are unchanged.
-    fn cmd_data_modify(&mut self, ctx: &Context, target: DataRef) -> R<i32> {
-        let target_path = self.path_arg(ctx, "targetPath")?;
-        let after_modify: Vec<&String> = ctx
-            .literals
-            .iter()
-            .skip_while(|l| l.as_str() != "modify")
-            .collect();
-        let op = after_modify
-            .iter()
-            .find_map(|l| match l.as_str() {
-                "prepend" => Some(Op::Prepend),
-                "append" => Some(Op::Append),
-                "set" => Some(Op::Set),
-                "merge" => Some(Op::Merge),
-                "insert" => Some(Op::Insert(match ctx.get("index") {
-                    Some(Arg::Int(i)) => *i,
-                    _ => 0,
-                })),
-                _ => None,
-            })
-            .unwrap_or(Op::Set);
-        let sources: Vec<Tag> = if ctx.has("value") {
-            let Some(Arg::Str(text)) = ctx.get("value") else {
-                return Ok(0);
-            };
-            vec![horizon_client::command::snbt::parse_fully(text)?]
-        } else if ctx.get("provider").is_some() {
-            // `LootContextSources`' compute source: the provider's value in the
-            // command's loot context, as a one-tag source.
-            let compute = self.compute_context(ctx)?;
-            let integer = ctx.literals.iter().any(|l| l == "integer");
-            let registry = if integer {
-                "minecraft:context_int_provider"
-            } else {
-                "minecraft:context_float_provider"
-            };
-            let (_, provider) = self.provider_arg(ctx, registry)?;
-            if integer {
-                // ContextIntProvider.getInt: an ArithmeticException reads as 0.
-                let value = self.provider_int(&provider, &compute, 0).unwrap_or(0);
-                vec![Tag::Int(value)]
-            } else {
-                // ContextFloatProvider.getFloat: a failure or a non-finite
-                // value reads as 0.
-                let value = self.provider_float(&provider, &compute, 0).unwrap_or(0.0);
-                let value = if value.is_finite() { value } else { 0.0 };
-                vec![Tag::Float(value.to_bits())]
-            }
-        } else {
-            let source = self.data_ref(ctx, 1)?;
-            let data = self.data_of(&source)?;
-            let tags = if ctx.get("sourcePath").is_some() {
-                self.path_arg(ctx, "sourcePath")?
-                    .get(&data)
-                    .map_err(path_error)?
-            } else {
-                vec![data]
-            };
-            if ctx.has("string") {
-                let start = match ctx.get("start") {
-                    Some(Arg::Int(i)) => Some(*i),
-                    _ => None,
-                };
-                let end = match ctx.get("end") {
-                    Some(Arg::Int(i)) => Some(*i),
-                    _ => None,
-                };
-                let mut out = Vec::new();
-                for t in &tags {
-                    let text = data_cmd::as_text(t)?;
-                    let text = match start {
-                        Some(s) => data_cmd::substring(&text, s, end)?,
-                        None => text,
-                    };
-                    out.push(Tag::String(text.as_str().into()));
-                }
-                out
-            } else {
-                tags
-            }
-        };
-        let mut data = self.data_of(&target)?;
-        let changed = data_cmd::modify(op, &mut data, &target_path, &sources)?;
-        if changed == 0 {
-            // StorageDataAccessor.getData is the stored compound itself: an
-            // edit that changed it and still counted nothing (a wildcard set
-            // that clears an array, then rejects the value) stays. An entity's
-            // or a block's data is a copy.
-            if let DataRef::Storage(id) = &target {
-                self.score.storage.set_unsaved(id, data);
-            }
-            return Err(err("commands.data.merge.failed", &[]));
-        }
-        self.set_data_of(&target, data)?;
-        let message = self.modified_text(&target);
-        self.feedback(message);
-        Ok(changed as i32)
+    pub(super) fn cmd_data_modify(&mut self, ctx: &Context, target: DataRef) -> R<i32> {
+        horizon_gameplay::commands::data::data_modify(&mut DataTarget { game: self, target }, ctx)
     }
 
     // ---- /tag ------------------------------------------------------------
 
     pub(super) fn cmd_tag(&mut self, id: &str, ctx: &Context) -> R<i32> {
-        let targets = self.entities(ctx, "targets", false)?;
-        let name = match ctx.get("name") {
-            Some(Arg::Str(n)) => n.clone(),
-            _ => String::new(),
+        let mut host = TagTargets {
+            game: self,
+            targets: Vec::new(),
         };
-        let mut tracker = Tracker::default();
-        let holder = |g: &Self, t: Target| Holder {
-            name: String::new(),
-            text: g.target_name(t),
-            display: None,
-        };
-        // A natural knot is listed but keeps no tags yet: `tag add`/`remove` leave it out.
-        let targets = if matches!(id, "tag.add" | "tag.remove") {
-            super::without_knots(targets)?
-        } else {
-            targets
-        };
-        let mut all: Vec<String> = Vec::new();
-        for &t in &targets {
-            let mut tags = self.tags_of(t);
-            let h = holder(self, t);
-            match id {
-                "tag.add" => {
-                    let added = tags.len() < 1024 && !tags.contains(&name);
-                    if added {
-                        tags.push(name.clone());
-                        self.set_entity_tags(t, &tags);
-                    }
-                    tracker.track(&h, i32::from(added));
-                }
-                "tag.remove" => {
-                    let before = tags.len();
-                    tags.retain(|x| x != &name);
-                    let removed = tags.len() != before;
-                    if removed {
-                        self.set_entity_tags(t, &tags);
-                    }
-                    tracker.track(&h, i32::from(removed));
-                }
-                _ => {
-                    tracker.track(&h, tags.len() as i32);
-                    for tag in tags {
-                        if !all.contains(&tag) {
-                            all.push(tag);
-                        }
-                    }
-                }
-            }
-        }
-        let num = |n: usize| Text::literal(n.to_string());
-        let n = name.clone();
-        let (message, total) = match id {
-            "tag.add" => tracker.message(
-                false,
-                Some(err("commands.tag.add.failed", &[])),
-                |h, _| {
-                    Text::translate(
-                        "commands.tag.add.success.single",
-                        &[Text::literal(n.clone()), h.text.clone()],
-                    )
-                },
-                |c, _| {
-                    Text::translate(
-                        "commands.tag.add.success.multiple",
-                        &[Text::literal(n.clone()), num(c)],
-                    )
-                },
-            ),
-            "tag.remove" => tracker.message(
-                false,
-                Some(err("commands.tag.remove.failed", &[])),
-                |h, _| {
-                    Text::translate(
-                        "commands.tag.remove.success.single",
-                        &[Text::literal(n.clone()), h.text.clone()],
-                    )
-                },
-                |c, _| {
-                    Text::translate(
-                        "commands.tag.remove.success.multiple",
-                        &[Text::literal(n.clone()), num(c)],
-                    )
-                },
-            ),
-            _ => {
-                let count = all.len();
-                let message = if all.is_empty() {
-                    tracker
-                        .message(
-                            false,
-                            None,
-                            |h, _| {
-                                Text::translate(
-                                    "commands.tag.list.single.empty",
-                                    std::slice::from_ref(&h.text),
-                                )
-                            },
-                            |c, _| Text::translate("commands.tag.list.multiple.empty", &[num(c)]),
-                        )?
-                        .0
-                } else {
-                    let list = {
-                        let mut sorted = all.clone();
-                        sorted.sort();
-                        format_list(
-                            sorted
-                                .into_iter()
-                                .map(|s| Text::literal(s).with_color(horizon_client::text::GREEN))
-                                .collect(),
-                        )
-                    };
-                    // `TagCommand.listTags` tracks each entity's tag count and
-                    // sends with `sendFeedback`'s default element type, NON_ZERO:
-                    // the single form names the one entity that has tags.
-                    tracker
-                        .message(
-                            false,
-                            None,
-                            |h, _| {
-                                Text::translate(
-                                    "commands.tag.list.single.success",
-                                    &[h.text.clone(), num(count), list.clone()],
-                                )
-                            },
-                            |c, _| {
-                                Text::translate(
-                                    "commands.tag.list.multiple.success",
-                                    &[num(c), num(count), list.clone()],
-                                )
-                            },
-                        )?
-                        .0
-                };
-                // `TagCommand.listTags` reports with `sendFeedback(source, false, …)`:
-                // the operators are not told, unlike `addTag`/`removeTag` (`true`).
-                self.feedback_unbroadcast(message);
-                return Ok(count as i32);
-            }
-        }?;
-        self.feedback(message);
-        Ok(total)
+        horizon_gameplay::commands::tag::tag(&mut host, id, ctx)
     }
 
     // ---- /summon ---------------------------------------------------------

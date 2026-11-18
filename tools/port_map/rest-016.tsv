@@ -20,10 +20,10 @@ SummonCommand.createEntity	inline	crates/horizon-client/src/game/administration/
 SwingCommand.register	port	crates/horizon-command/src/tree_world.rs::rotate_swing	/swing command tree
 SwingCommand.handSwing	port	crates/horizon-command/src/tree_world.rs::rotate_swing	gap: minor: hand literal is parsed but cmd_swing ignores it; only the main-hand swing plays
 SwingCommand.swing	port	crates/horizon-gameplay/src/commands/swing.rs::swing	gap: minor: ignores hand, animation and duration; mobs get the swing flag, the player swings the main arm
-TagCommand.getTags	inline	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_tag	union of tags over targets for list
-TagCommand.addTag	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_tag	tag.add arm
-TagCommand.removeTag	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_tag	tag.remove arm
-TagCommand.listTags	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_tag	default arm: list
+TagCommand.getTags	inline	crates/horizon-gameplay/src/commands/tag.rs::tag	union of tags over targets for list
+TagCommand.addTag	port	crates/horizon-gameplay/src/commands/tag.rs::tag	tag.add arm
+TagCommand.removeTag	port	crates/horizon-gameplay/src/commands/tag.rs::tag	tag.remove arm
+TagCommand.listTags	port	crates/horizon-gameplay/src/commands/tag.rs::tag	default arm: list
 TeamCommand.leaveTeam	port	crates/horizon-client/src/scoreboard_cmd.rs::team	team.leave arm
 TeamCommand.joinTeam	port	crates/horizon-client/src/scoreboard_cmd.rs::team	team.join arm
 TeamCommand.setNameTagVisibility	port	crates/horizon-client/src/scoreboard_cmd.rs::team_modify	team.modify arm
@@ -93,14 +93,14 @@ WorldBorderCommand.formatTicksToSeconds	port	crates/horizon-client/src/game/admi
 BlockDataAccessor.setData	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::set_data_of	block arm
 BlockDataAccessor.getModifiedSuccess	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::modified_text	block message
 BlockDataAccessor.getPrintSuccess	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::query_text	block query message
-DataCommands.stringifyTagList	inline	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_data_modify	string branch of modify
+DataCommands.stringifyTagList	inline	crates/horizon-gameplay/src/commands/data.rs::data_modify	string branch of modify
 DataCommands.validatedSubstring	port	crates/horizon-client/src/data_cmd.rs::substring
-DataCommands.resolveSourcePath	inline	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_data_modify	sourcePath resolution
-DataCommands.manipulateData	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_data_modify	modify arm
-DataCommands.removeData	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_data_in	data.remove arm
+DataCommands.resolveSourcePath	inline	crates/horizon-gameplay/src/commands/data.rs::data_modify	sourcePath resolution
+DataCommands.manipulateData	port	crates/horizon-gameplay/src/commands/data.rs::data_modify	modify arm
+DataCommands.removeData	port	crates/horizon-gameplay/src/commands/data.rs::data_in	data.remove arm
 DataCommands.getData	port	crates/horizon-client/src/data_cmd.rs::get_value	count of list, compound, string or numeric
 DataCommands.getNumeric	port	crates/horizon-client/src/data_cmd.rs::scaled_value	floor of numeric times scale
-DataCommands.mergeData	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::cmd_data_in	data.merge arm
+DataCommands.mergeData	port	crates/horizon-gameplay/src/commands/data.rs::data_in	data.merge arm
 net/minecraft/server/commands/data/EntityDataAccessor#setData	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::apply_entity_nbt	refuses players
 net/minecraft/server/commands/data/EntityDataAccessor#getModifiedSuccess	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::modified_text	entity message
 net/minecraft/server/commands/data/EntityDataAccessor#getPrintSuccess	port	crates/horizon-client/src/game/administration/commands/data.rs::Game::query_text	entity query message
