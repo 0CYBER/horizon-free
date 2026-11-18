@@ -122,6 +122,15 @@ impl Launcher {
                     }
                 }
                 Msg::Session(session) => self.handle_game_session(session),
+                Msg::PlayStep(step) => {
+                    if let Some(line) = self.play_step.said(self.starting_client.is_some(), step) {
+                        console_page::keep_line(
+                            &mut self.prepare_log,
+                            &mut self.log_revision,
+                            line,
+                        );
+                    }
+                }
                 Msg::JarConsent { jars, reply } => jar_launch::consent(window, jars, reply, cx),
                 Msg::JarClient { run, prepared } => {
                     self.starting_client = None;
@@ -451,6 +460,8 @@ impl Launcher {
                 }
             }
         }
+        // A start that ended (the game started, or it failed) is on no step.
+        self.play_step.settle(self.starting_client.is_some());
         changed |= self.servers_tick();
         changed |= self.mods_tick();
         changed |= self.github_tick();

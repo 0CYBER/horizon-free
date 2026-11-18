@@ -79,6 +79,7 @@ mod partner;
 mod perf;
 mod picture_cache;
 mod plate;
+mod play_step;
 mod profile_heads;
 mod screenshots_page;
 mod scrollbar;
@@ -527,6 +528,8 @@ struct Launcher {
     /// Modrinth projects' icon URLs (`instance_mods.rs`).
     project_icons: instance_mods::ProjectIcons,
     play_pressed: Option<Instant>,
+    /// The step the start in progress said last (`play_step`).
+    play_step: play_step::PlayStep,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
     /// The Modpacks page: the imported packs (read when the page first opens), the one shown,

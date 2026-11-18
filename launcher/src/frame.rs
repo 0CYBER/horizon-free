@@ -219,7 +219,9 @@ impl Launcher {
             return (Tone::Live, tr("Running").into());
         }
         if phase == Some(RowPhase::Starting) {
-            return (Tone::Busy, tr("Starting").into());
+            // The step the start is on, once it said one.
+            let step = self.play_step.now().unwrap_or(tr("Starting"));
+            return (Tone::Busy, step.into());
         }
         match i.kind {
             InstanceKind::Default | InstanceKind::Own => {

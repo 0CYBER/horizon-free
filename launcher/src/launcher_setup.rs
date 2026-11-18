@@ -257,6 +257,7 @@ impl Launcher {
             mod_preview: Default::default(),
             project_icons: Default::default(),
             play_pressed: None,
+            play_step: Default::default(),
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
             registry_packs: Vec::new(),

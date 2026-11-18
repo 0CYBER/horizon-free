@@ -240,9 +240,11 @@ impl Launcher {
                     .relative()
                     .child(blocks::icon("play", 20., c(t.night.on_accent))),
             )
-            .child(label(
-                tr(if running { "Running" } else { "Play" }).to_string(),
-            ));
+            .child(label(match self.play_step.now() {
+                // The step a start is on, once it said one.
+                Some(step) if self.starting_client.is_some() => step.to_owned(),
+                _ => tr(if running { "Running" } else { "Play" }).to_string(),
+            }));
         match play_press(
             ready,
             if horizon_launcher::developer_offline::selected() {

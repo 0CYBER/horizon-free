@@ -321,23 +321,37 @@ impl Launcher {
         let mods_tx = self.mods.tx.clone();
         let auto_enabled = self.settings.auto_updates_mods();
         std::thread::spawn(move || {
-            // One line per step: a terminal run shows where Play stops (#12179).
-            backend::play_step("checking the game's assets");
+            // One step at a time, on stderr and in the window.
+            let say = |stderr: &str, shown: &str| play_step::say(&tx, stderr, shown.into());
+            say(
+                "checking the game's assets",
+                tr("Checking the game's assets…"),
+            );
             backend::complete_assets(&tag);
             if let Some(auto) = auto {
-                backend::play_step("updating registry mods");
-                let lines = mods_page::auto_update(&[auto], auto_enabled);
+                say("updating registry mods", tr("Updating registry mods…"));
+                // The project downloading now, once per project.
+                let last = std::cell::RefCell::new(String::new());
+                let progress = |project: &str| {
+                    if *last.borrow() != project {
+                        project.clone_into(&mut last.borrow_mut());
+                        let shown =
+                            trf("Updating registry mods: {project}", &[("project", project)]);
+                        play_step::say(&tx, &format!("updating {project}"), shown);
+                    }
+                };
+                let lines = mods_page::auto_update(&[auto], auto_enabled, &progress);
                 if !lines.is_empty() {
                     let _ = mods_tx.send(mods_page::Event::AutoUpdated(lines));
                 }
             }
-            backend::play_step("reading the sign-in");
+            say("reading the sign-in", tr("Reading the sign-in…"));
             let session = if horizon_launcher::developer_offline::enabled(&tag) {
                 Ok(None)
             } else {
                 account::session_for_game(&backend::game_home()).map(Some)
             };
-            backend::play_step("starting the game");
+            say("starting the game", tr("Starting the game…"));
             let _ = tx.send(Msg::Session(session));
         });
     }

@@ -442,7 +442,14 @@ impl Launcher {
                     tr("Preparing").into(),
                     horizon_launcher::mojang::progress().map(|(d, n)| d as f32 / n.max(1) as f32),
                 )),
-                (_, _, Some(_)) => Some((tr("Starting").into(), None)),
+                (_, _, Some(_)) => Some((
+                    self.play_step
+                        .now()
+                        .unwrap_or(tr("Starting"))
+                        .to_owned()
+                        .into(),
+                    None,
+                )),
                 // This instance's mods building (Build and play): the build's overall progress,
                 // the same figure as its card.
                 _ if building => Some((

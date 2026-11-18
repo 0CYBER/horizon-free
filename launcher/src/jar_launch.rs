@@ -22,7 +22,13 @@ pub fn client(
     tx: Sender<Msg>,
 ) {
     std::thread::spawn(move || {
+        let say = |stderr: &str, shown: &str| crate::play_step::say(&tx, stderr, shown.into());
+        say(
+            "applying the instance's profile",
+            tr("Applying the instance's profile…"),
+        );
         let prepared = profile(&mut command).and_then(|()| {
+            say("preparing Java jars", tr("Preparing Java jars…"));
             with_consent(&tx, |permission| {
                 jars::prepare_launch(&mut command, &launch, permission)
             })
@@ -107,8 +113,13 @@ mod tests {
         };
         let run = Some("port:big".to_owned());
         client(Command::new("game"), profile, Launch::default(), run, tx);
-        let message = rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
-        let Msg::JarClient { run, prepared } = message else {
+        let wait = std::time::Duration::from_secs(30);
+        // It says its step first, then ends.
+        let Msg::PlayStep(step) = rx.recv_timeout(wait).unwrap() else {
+            panic!("no step said");
+        };
+        assert_eq!(step, tr("Applying the instance's profile…"));
+        let Msg::JarClient { run, prepared } = rx.recv_timeout(wait).unwrap() else {
             panic!("not the start's end");
         };
         assert_eq!(run.as_deref(), Some("port:big"));

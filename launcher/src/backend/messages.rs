@@ -39,6 +39,8 @@ pub enum Msg {
         jars: Vec<horizon_platform::mod_package::manifest::JarRef>,
         reply: std::sync::mpsc::Sender<bool>,
     },
+    /// The step a start of the game is on (`play_step::say`), already in the launcher's language.
+    PlayStep(String),
     JarClient {
         run: Option<String>,
         prepared: Box<Result<Command, String>>,
