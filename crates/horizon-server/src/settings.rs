@@ -606,4 +606,42 @@ mod tests {
         assert_eq!(config::Config::load(&dir).unwrap(), cfg);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// `horizon-server help` says which settings `config set` gives a running server at once; every setting it
+    /// names has a way to apply it (`live_line`), and `view_distance`, which has none, is not named.
+    #[test]
+    fn the_help_names_what_config_set_applies_at_once() {
+        let help = crate::HELP;
+        let paragraph = &help[help.find("  config set").unwrap()..];
+        let paragraph = &paragraph[..paragraph.find("  import FILE").unwrap()];
+        let (text, number) = (
+            |s: &str| toml::Value::String(s.into()),
+            |n| toml::Value::Integer(n),
+        );
+        for (named, section, field, value) in [
+            ("difficulty", "world", "difficulty", text("hard")),
+            ("default game mode", "world", "game_mode", text("creative")),
+            (
+                "whitelist",
+                "server",
+                "whitelist",
+                toml::Value::Boolean(true),
+            ),
+            ("message of the day", "server", "motd", text("Hi")),
+            ("player limit", "server", "max_players", number(8)),
+            ("backup", "backups", "keep", number(3)),
+            ("update", "updates", "keep", number(2)),
+        ] {
+            assert!(
+                live_line(section, field, &value).is_some(),
+                "{section}.{field} is applied at once"
+            );
+            assert!(
+                paragraph.contains(named),
+                "the help names {named:?}: {paragraph}"
+            );
+        }
+        assert!(live_line("server", "view_distance", &number(8)).is_none());
+        assert!(!paragraph.contains("view distance"));
+    }
 }

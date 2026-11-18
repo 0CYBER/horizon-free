@@ -54,8 +54,8 @@ Usage: horizon-server [--dir DIR] <command>
               The settings in server.toml
   config set KEY=VALUE... [--json]
               Change settings (for example world.difficulty=hard server.max_players=10), checked first;
-              a running server takes the difficulty, default game mode and whitelist at once, the rest
-              at its next start
+              a running server takes the difficulty, default game mode, whitelist, message of the day,
+              player limit and the backup and update settings at once, the rest at its next start
   import FILE Write server.toml from a vanilla server.properties
   import-resources DIR
               Copy game files prepared elsewhere (by the launcher or horizon-prepare) into place, after
