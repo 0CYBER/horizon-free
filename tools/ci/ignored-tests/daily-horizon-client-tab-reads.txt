@@ -1,0 +1,4 @@
+# horizon-rust/horizon#17842: these mod-API tests read the prepared 26.3 data.
+horizon-client game::native_player_hidden::tests::player_hidden_reads_back_the_hide_level lib daily resources
+horizon-client game::native_player_latency::tests::player_latency_reads_the_connections_keep_alive_average lib daily resources
+horizon-client game::native_player_nickname::tests::player_nickname_reads_back_the_set_nickname lib daily resources

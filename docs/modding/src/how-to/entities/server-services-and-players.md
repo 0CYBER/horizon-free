@@ -69,6 +69,14 @@ UUID: you can use a retained handle after disconnection until its world epoch
 closes. You cannot target arbitrary offline UUIDs. Retain the handle value, not a
 borrowed service.
 
+The reads `player.latency(host)`, `player.hidden(host)` and `player.nickname(host)`
+return what the calls above set. Latency is the Tab list ping in milliseconds
+(`Option<i32>`, `0` until the first keep-alive answer). `hidden` is the level
+`hide` set, `None` when shown (`Option<Option<u8>>`). `nickname` is the nickname
+in place of the player's name, `None` when there is none (`Option<Option<String>>`).
+An outer `None` means a stale or unavailable player for all three, a client or an
+unjoinable world for `hidden`, and no server list for `nickname`.
+
 ## Chat lines and respawn
 
 Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`
