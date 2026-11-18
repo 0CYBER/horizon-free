@@ -140,7 +140,8 @@ def read_chunks(folder):
         if not name.endswith('.mca'):
             continue
         _, rx, rz, _ = name.split('.')
-        data = open(os.path.join(folder, name), 'rb').read()
+        with open(os.path.join(folder, name), 'rb') as stream:
+            data = stream.read()
         for i in range(1024):
             sector = int.from_bytes(data[4 * i:4 * i + 3], 'big')
             if sector == 0:
@@ -148,11 +149,15 @@ def read_chunks(folder):
             at = sector * 4096
             length = struct.unpack('>I', data[at:at + 4])[0]
             kind, body = data[at + 4], data[at + 5:at + 4 + length]
-            if kind == 2:
+            cx, cz = int(rx) * 32 + i % 32, int(rz) * 32 + i // 32
+            if kind == 1:
+                body = gzip.decompress(body)
+            elif kind == 2:
                 body = zlib.decompress(body)
             elif kind != 3:
-                continue
-            out[(int(rx) * 32 + i % 32, int(rz) * 32 + i // 32)] = parse_nbt(body)
+                raise ValueError('%s: chunk (%d, %d) has unsupported compression type %d' % (
+                    os.path.join(folder, name), cx, cz, kind))
+            out[(cx, cz)] = parse_nbt(body)
     return out
 
 
