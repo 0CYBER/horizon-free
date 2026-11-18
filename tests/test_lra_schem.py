@@ -73,6 +73,26 @@ class SpongeSchematicTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.read(schematic(2, {'minecraft:stone': 0}, [0, 0, 0], 2, 2, 1))
 
+    def test_varints_rejects_overlong_six_byte_encoding(self):
+        # Legal LEB128 for 1, but six bytes is overlong for a u32 block index (max five).
+        overlong = bytes([0x80, 0x80, 0x80, 0x80, 0x80, 0x01])
+        with self.assertRaisesRegex(ValueError, 'overlong varint'):
+            lra_schem._varints(overlong, 1)
+        # A five-byte value that overflows u32 is overlong too, not a valid index.
+        with self.assertRaisesRegex(ValueError, 'overlong varint'):
+            lra_schem._varints(bytes([0xFF, 0xFF, 0xFF, 0xFF, 0x7F]), 1)
+
+    def test_varints_rejects_unfinished_trailing_encoding(self):
+        for raw in (b'\x00\x80', b'\x00' + b'\x80' * 5):
+            with self.subTest(raw=raw.hex()):
+                with self.assertRaises(ValueError):
+                    lra_schem._varints(raw, 1)
+
+    def test_varints_keeps_valid_indices_identical(self):
+        self.assertEqual(lra_schem._varints(bytes([0x01]), 1), [1])
+        # Max u32 still fits in five bytes and must decode unchanged.
+        self.assertEqual(lra_schem._varints(bytes([0xFF, 0xFF, 0xFF, 0xFF, 0x0F]), 1), [0xFFFFFFFF])
+
     def test_state_strings_split_into_name_and_properties(self):
         self.assertEqual(lra_schem.parse_state('repeater[delay=2,facing=east]'),
                          ('minecraft:repeater', {'delay': '2', 'facing': 'east'}))

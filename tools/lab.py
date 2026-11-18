@@ -199,13 +199,14 @@ def varint(value):
 def parse_varint(data, pos):
     """The VarInt at data[pos]: (the position after it, its unsigned value)."""
     value = shift = 0
-    while True:
+    for _ in range(5):
         b = data[pos]
         pos += 1
         value |= (b & 0x7F) << shift
         shift += 7
         if not b & 0x80:
             return pos, value
+    raise ValueError("VarInt too big")
 
 
 def fbits(value):

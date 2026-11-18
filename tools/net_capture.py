@@ -46,6 +46,8 @@ def load_names(path=ROOT / "crates/horizon-protocol/src/ids.rs"):
 def read_varint(data, pos):
     value = shift = 0
     while True:
+        if shift > 28:  # VarInt is at most five 7-bit bytes; a fifth continuation byte is already invalid.
+            raise ValueError("varint too long")
         if pos >= len(data):
             raise IndexError("truncated varint")
         b = data[pos]
@@ -56,8 +58,6 @@ def read_varint(data, pos):
             if value & 0x80000000:
                 value -= 1 << 32
             return value, pos
-        if shift > 35:
-            raise ValueError("varint too long")
 
 
 class Session:
@@ -114,6 +114,11 @@ class Session:
                 s["serverbound"] = s["clientbound"] = "play"
             elif s["serverbound"] == "play" and name == "configuration_acknowledged":
                 s["serverbound"] = s["clientbound"] = "configuration"
+        elif direction == "clientbound" and s["clientbound"] == "play" and name == "start_configuration":
+            # The server starts sending configuration packets, but the client's
+            # acknowledgment is still a play packet. Switch its direction only
+            # after recording configuration_acknowledged above.
+            s["clientbound"] = "configuration"
         elif s["clientbound"] == "login" and name == "login_compression":
             self.pending_threshold = read_varint(payload, 0)[0]
 

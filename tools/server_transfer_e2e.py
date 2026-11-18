@@ -57,9 +57,11 @@ import threading
 import time
 import uuid as uuidlib
 
+_saved_path = sys.path[:]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lab  # noqa: E402
 from server_bench import DONE, Server  # noqa: E402
+sys.path[:] = _saved_path  # do not let tools/ shadow unittest discovery
 
 EXE = '.exe' if os.name == 'nt' else ''
 SECRET = b'server-transfer-e2e-secret'
@@ -105,14 +107,19 @@ def varint(n):
 
 
 def parse_varint(buf, i=0):
+    """Read one signed 32-bit VarInt, as Minecraft puts it on the wire: at most five bytes,
+    with the result interpreted as two's complement (``ffffffff0f`` is -1, not 4294967295).
+    """
     n = shift = 0
-    while True:
+    for _ in range(5):
         b = buf[i]
         i += 1
         n |= (b & 0x7F) << shift
         if not b & 0x80:
-            return n, i
+            n &= 0xFFFFFFFF
+            return (n - 0x100000000 if n & 0x80000000 else n), i
         shift += 7
+    raise ValueError('overlong VarInt: more than five bytes')
 
 
 def string(s):

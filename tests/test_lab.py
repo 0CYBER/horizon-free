@@ -403,6 +403,28 @@ class ScratchCleanupTests(unittest.TestCase):
             self.assertIn(path, stderr.getvalue())
             self.assertIn("locked", stderr.getvalue())
         shutil.rmtree(path)
+class VarIntTests(unittest.TestCase):
+    def test_overlong_varint_is_rejected(self):
+        # Five bytes with the continuation bit still set followed by 0x01: no
+        # vanilla client would read this (VarInt.read throws "VarInt too big").
+        overlong = bytes.fromhex("80 80 80 80 80 01")
+        with self.assertRaisesRegex(ValueError, "VarInt too big"):
+            lab.parse_varint(overlong, 0)
+
+    def test_valid_encodings_stay_byte_for_byte_identical(self):
+        # (wire bytes, position after, unsigned value) for legal 1-5 byte VarInts.
+        cases = [
+            (bytes.fromhex("00"), 1, 0),
+            (bytes.fromhex("7f"), 1, 127),
+            (bytes.fromhex("80 01"), 2, 128),
+            (bytes.fromhex("ff ff 7f"), 3, 2097151),
+            (bytes.fromhex("80 80 80 80 08"), 5, 0x80000000),
+            (bytes.fromhex("ff ff ff ff 0f"), 5, 0xFFFFFFFF),
+        ]
+        for data, expected_pos, expected_value in cases:
+            with self.subTest(data=data.hex()):
+                self.assertEqual(lab.parse_varint(data, 0), (expected_pos, expected_value))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,13 +27,16 @@ import zipfile
 import zlib
 from pathlib import Path
 
+_saved_path = sys.path[:]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datafix_scene as scene  # noqa: E402
 import datafix_scene_12 as scene12  # noqa: E402
 import lab  # noqa: E402
+import datafix_paths  # noqa: E402
+sys.path[:] = _saved_path  # importing must not leave tools/ shadowing unittest discovery
 
 ROOT = Path(__file__).resolve().parent.parent
-from datafix_paths import writable_root
+writable_root = datafix_paths.writable_root
 
 LOCAL = writable_root()
 LEGACY = {'1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5'}
@@ -284,7 +287,7 @@ class Bot:
                 return False
             pos, n = lab.parse_varint(data, pos)
             return data[pos:pos + n] == b'minecraft'
-        except IndexError:
+        except (IndexError, ValueError):
             return False
 
     def idle(self):
@@ -319,6 +322,8 @@ class Bot:
             shift += 7
             if not b & 0x80:
                 return value
+            if shift >= 35:  # five 7-bit groups: VarInt.read throws on a sixth
+                raise ValueError('VarInt too big')
 
     def send(self, packet_id, payload=b''):
         body = lab.varint(packet_id) + payload

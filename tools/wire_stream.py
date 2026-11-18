@@ -34,6 +34,11 @@ class Reader:
         value = shift = 0
         while True:
             b = self.take(1)[0]
+            # Java's VarInt.read caps a VarInt at five 7-bit groups: a continuation bit on the fifth group
+            # (shift 28) would need a sixth byte and is malformed. Reject it instead of silently desynchronising
+            # the compared stream. Every valid one-to-five-byte encoding keeps decoding identically.
+            if shift == 28 and b & 0x80:
+                raise ValueError('VarInt too big')
             value |= (b & 0x7F) << shift
             if not b & 0x80:
                 return value - (1 << 32) if value >= 1 << 31 else value

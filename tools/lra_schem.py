@@ -63,14 +63,22 @@ def _nbt(data):
 
 
 def _varints(raw, count):
-    out, value, shift = [], 0, 0
+    # Block indices are unsigned LEB128 varints of at most 5 bytes (a u32).
+    out, value, shift, used = [], 0, 0, 0
     for byte in raw:
+        used += 1
+        if used > 5 or (used == 5 and byte & 0x80):
+            raise ValueError('overlong varint')
         value |= (byte & 0x7F) << shift
         if byte & 0x80:
             shift += 7
             continue
+        if value > 0xFFFFFFFF:
+            raise ValueError('overlong varint')
         out.append(value)
-        value, shift = 0, 0
+        value, shift, used = 0, 0, 0
+    if used:
+        raise ValueError('truncated varint')
     if len(out) != count:
         raise ValueError(f'{len(out)} block indices for {count} cells')
     return out

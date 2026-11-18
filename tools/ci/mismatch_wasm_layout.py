@@ -13,14 +13,21 @@ from pathlib import Path
 
 
 def uint(data, offset):
+    # WebAssembly u32 values use unsigned LEB128: at most five 7-bit groups,
+    # with the fifth group contributing only bits 28..31 of the result.
     value = shift = 0
-    while True:
+    for group in range(5):
+        if offset >= len(data):
+            raise ValueError("truncated LEB128")
         byte = data[offset]
         offset += 1
         value |= (byte & 127) << shift
         if not byte & 128:
+            if group == 4 and byte & 0x70:
+                raise ValueError("LEB128 value out of range for u32")
             return value, offset
         shift += 7
+    raise ValueError("overlong LEB128")
 
 
 def encoded(value):
