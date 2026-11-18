@@ -300,7 +300,7 @@ pub fn migrate_current_with_prepare(
     let bootstrap = bootstrap_path()?;
     let deadline = Instant::now() + Duration::from_secs(10);
     let lease = loop {
-        match lock_at(&bootstrap, true) {
+        match MigrationLease::take(&bootstrap) {
             Ok(lease) => break lease,
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => return Err(e),
@@ -328,8 +328,26 @@ pub fn migrate_with_prepare(
     progress: impl FnMut(&str),
     prepare: impl FnOnce(&Roots, &Roots) -> Result<()>,
 ) -> Result<Roots> {
-    let lease = lock_at(bootstrap, true)?;
+    let lease = MigrationLease::take(bootstrap)?;
     migrate_locked(source, target, bootstrap, progress, prepare, &lease)
+}
+
+/// A migration's exclusive lock, released before its file closes. A child process spawned while
+/// it is held, by any thread, has a copy of the descriptor until its exec, and closing ours alone
+/// would leave the lock taken through that copy: the next migration would read "Cannot lock"
+/// (#18138). `horizon_platform::mod_package::locks::Locked` releases its locks the same way.
+struct MigrationLease(File);
+
+impl MigrationLease {
+    fn take(bootstrap: &Path) -> Result<Self> {
+        lock_at(bootstrap, true).map(Self)
+    }
+}
+
+impl Drop for MigrationLease {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 fn migrate_locked(
@@ -338,7 +356,7 @@ fn migrate_locked(
     bootstrap: &Path,
     mut progress: impl FnMut(&str),
     prepare: impl FnOnce(&Roots, &Roots) -> Result<()>,
-    _lease: &File,
+    _lease: &MigrationLease,
 ) -> Result<Roots> {
     let source = validate_roots(source)?;
     if let Some(current) = resolve_at(bootstrap)? {
