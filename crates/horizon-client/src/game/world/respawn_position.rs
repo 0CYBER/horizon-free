@@ -6,7 +6,6 @@
 use super::respawn_anchor::RespawnConfig;
 use super::server_travel::LevelTeleport;
 use super::{Dim, Game};
-use horizon_core::dimension::Dimension as LevelDimension;
 use horizon_core::geometry::Vec3;
 
 /// Where a respawn ends, as the server found it: a level, a point and the
@@ -29,20 +28,6 @@ pub(super) struct RespawnDecision {
     /// Whether the fresh player keeps its respawn point
     /// (`copyOriginalSpawnPosition`).
     pub copy: bool,
-}
-
-impl Dim {
-    /// The level the world has for `level`; None for a `Custom` level it lacks.
-    pub(super) fn from_level(level: LevelDimension) -> Option<Self> {
-        Some(match level {
-            LevelDimension::Overworld => Self::Overworld,
-            LevelDimension::Nether => Self::Nether,
-            LevelDimension::End => Self::End,
-            LevelDimension::Custom(key) => {
-                Self::exists(key.id()).then(|| Self::from_id(key.id()))?
-            }
-        })
-    }
 }
 
 impl Game<'_> {

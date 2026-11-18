@@ -17,7 +17,7 @@ fn flat() -> RuntimeLevel {
 /// player and per tick, and a write in progress (a level opening) must not stall it.
 #[test]
 fn a_built_in_dimension_id_does_not_read_the_extra_table() {
-    let held = super::EXTRA_DIMS.write().unwrap();
+    let held = super::Dim::hold_extras();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(

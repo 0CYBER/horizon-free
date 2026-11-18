@@ -80,7 +80,7 @@ pub(in crate::game) fn with_guests_at(
 #[ignore = "daily"]
 fn player_dimensions_validate_identity_on_both_server_roles() {
     use super::execution_role::ExecutionRole;
-    let previous_extra = super::EXTRA_DIMS.read().unwrap().clone();
+    let previous_extra = super::Dim::snapshot_extras();
     with_guests(|game| {
         super::Dim::add_extra("test:pocket");
         for role in [
@@ -164,7 +164,7 @@ fn player_dimensions_validate_identity_on_both_server_roles() {
             );
         }
     });
-    *super::EXTRA_DIMS.write().unwrap() = previous_extra;
+    super::Dim::restore_extras(previous_extra);
 }
 
 #[test]

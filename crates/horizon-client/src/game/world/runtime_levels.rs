@@ -559,17 +559,6 @@ impl Generate {
     }
 }
 
-impl Dim {
-    /// Drops the dimension `id` that [`Self::add_extra`] added: its level is closed, or a remote
-    /// server's level that its client left.
-    pub(in crate::game) fn remove_extra(id: &str) {
-        super::EXTRA_DIMS
-            .write()
-            .unwrap()
-            .retain(|key| mod_api::__private::dimension_id(*key) != Some(id));
-    }
-}
-
 impl Game<'_> {
     /// The cap on open runtime levels `server.properties` sets (`horizon-max-runtime-levels`,
     /// docs/hosting.md): the default, 64, for a missing or unreadable value.

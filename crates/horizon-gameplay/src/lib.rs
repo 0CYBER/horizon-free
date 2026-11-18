@@ -8,6 +8,8 @@ pub mod cat_spawner;
 pub mod commands;
 pub mod custom_spawner;
 pub mod dedicated;
+pub mod dim;
+pub mod execution_role;
 pub mod foxes;
 pub mod interaction_shapes;
 pub mod item_areas;
