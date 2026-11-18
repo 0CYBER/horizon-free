@@ -30,7 +30,19 @@ HEADER = """\
 
 
 def tag_key(tag):
-    return (0 if tag.startswith("v") else 1, [int(n) for n in re.findall(r"\d+", tag)])
+    # The numeric version is the leading run of dot-separated numbers; anything after it (e.g. "-rc.1")
+    # is a pre-release label and must sort before the final release of that same version. Folding the
+    # label's digits into the version made v1.2.3-rc.1 compare as a larger version than v1.2.3.
+    match = re.match(r"^(\D*)(\d+(?:\.\d+)*)(.*)$", tag)
+    if not match:
+        return (0 if tag.startswith("v") else 1, (), 1, ())
+    prefix = 0 if match.group(1).startswith("v") else 1
+    base = tuple(int(part) for part in match.group(2).split("."))
+    label = match.group(3).lstrip("-").lower()
+    # Keep candidate numbers numeric too: rc.2 precedes rc.10, not the other way around.
+    label_key = tuple((0, int(part)) if part.isdecimal() else (1, part)
+                      for part in re.findall(r"\d+|\D+", label))
+    return (prefix, base, 0 if label else 1, label_key)
 
 
 def entries(releases):

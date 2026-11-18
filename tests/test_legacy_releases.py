@@ -24,6 +24,14 @@ class TagKeyTests(unittest.TestCase):
     def test_the_launcher_versions_keep_their_own_order(self):
         self.assertLess(legacy.tag_key("launcher@0.2.9"), legacy.tag_key("launcher@0.2.10"))
 
+    def test_a_release_sorts_after_its_release_candidates(self):
+        tags = ["v1.2.3-rc.10", "v1.2.3", "v1.2.3-rc.2", "v1.9.0", "v1.10.0", "v1.2.3-rc.1"]
+        self.assertEqual(
+            sorted(tags, key=legacy.tag_key),
+            ["v1.2.3-rc.1", "v1.2.3-rc.2", "v1.2.3-rc.10", "v1.2.3", "v1.9.0", "v1.10.0"],
+        )
+        self.assertLess(legacy.tag_key("v1.2.3-rc.1"), legacy.tag_key("v1.2.3"))
+
 
 class EntriesTests(unittest.TestCase):
     def test_a_draft_is_left_out(self):
@@ -49,6 +57,22 @@ class EntriesTests(unittest.TestCase):
     def test_the_releases_come_out_in_order(self):
         releases = [release("v0.2.10", [asset("a")]), release("v0.2.9", [asset("b")])]
         self.assertEqual([line.split()[0] for line in legacy.entries(releases)], ["v0.2.9", "v0.2.10"])
+
+    def test_a_release_candidate_is_written_before_the_final_release(self):
+        releases = [release("v1.2.3", [asset("final")]), release("v1.2.3-rc.1", [asset("rc")])]
+        self.assertEqual(
+            [line.split()[0] for line in legacy.entries(releases)],
+            ["v1.2.3-rc.1", "v1.2.3"],
+        )
+
+    def test_non_decimal_label_digits_are_preserved_as_text(self):
+        releases = [release(tag, [asset("game")]) for tag in
+                    ["v1.2.3", "v1.2.3-rc.1²2", "v1.2.3-rc.1²1"]]
+        self.assertEqual(
+            legacy.entries(releases),
+            [f"{tag} game {'ab' * 32}" for tag in
+             ["v1.2.3-rc.1²1", "v1.2.3-rc.1²2", "v1.2.3"]],
+        )
 
 
 class RenderTests(unittest.TestCase):
