@@ -2,7 +2,50 @@
 use crate::Result;
 use horizon_world::loot::PackOverlay;
 use serde_json::Value;
-use std::path::Path;
+use std::{
+    cell::OnceCell,
+    collections::{HashMap, HashSet},
+    path::Path,
+};
+
+/// The items and item tags of the root a recipe load reads, for the
+/// `neoforge:item_exists` and `neoforge:tag_empty` conditions. Read on the
+/// first condition that asks, so a load without them never reads them.
+struct RootItems<'a> {
+    root: &'a Path,
+    overlay: PackOverlay<'a>,
+    facts: OnceCell<Option<(HashSet<String>, HashMap<String, HashSet<String>>)>>,
+}
+
+impl RootItems<'_> {
+    fn facts(&self) -> Option<&(HashSet<String>, HashMap<String, HashSet<String>>)> {
+        self.facts
+            .get_or_init(|| {
+                let bytes = std::fs::read(self.root.join("items.json")).ok()?;
+                let items: HashMap<String, serde::de::IgnoredAny> =
+                    serde_json::from_slice(&bytes).ok()?;
+                let items: HashSet<String> = items.into_keys().collect();
+                // A tag lists entries for items that may not be there (optional ones);
+                // vanilla's tag holds only the items that are, so `tag_empty` counts those.
+                let mut tags = crate::items::load_tags(self.root, "item", &self.overlay).ok()?;
+                for members in tags.values_mut() {
+                    members.retain(|id| items.contains(id));
+                }
+                Some((items, tags))
+            })
+            .as_ref()
+    }
+}
+
+impl horizon_world::conditions::ItemFacts for RootItems<'_> {
+    fn item_exists(&self, id: &str) -> Option<bool> {
+        Some(self.facts()?.0.contains(id))
+    }
+
+    fn item_tag_empty(&self, tag: &str) -> Option<bool> {
+        Some(self.facts()?.1.get(tag).is_none_or(HashSet::is_empty))
+    }
+}
 
 /// A recipe's whole id from its name in the tables: vanilla's are kept bare
 /// (`oak_planks`), everyone else's whole (`mymod:crusher/iron`). The book,
@@ -63,6 +106,11 @@ pub fn sources(root: &Path, overlay: &PackOverlay) -> Result<Vec<(String, Value)
         }
     }
     let filters = crate::recipe_filters::RecipeFilters::load(root, overlay);
+    let items = RootItems {
+        root,
+        overlay: *overlay,
+        facts: OnceCell::new(),
+    };
     let mut parsed = Vec::with_capacity(sources.len());
     for (name, bytes) in sources {
         // Vanilla's RecipeManager logs a file that does not parse and
@@ -84,7 +132,7 @@ pub fn sources(root: &Path, overlay: &PackOverlay) -> Result<Vec<(String, Value)
             }
         }
         // A file whose load conditions don't hold is silently absent.
-        if !conditions.allows_id(&v, "recipe", &qualified(&name)) {
+        if !conditions.allows_id_with_items(&v, "recipe", &qualified(&name), Some(&items)) {
             continue;
         }
         // The data's recipe filters, over the final set.
@@ -95,4 +143,96 @@ pub fn sources(root: &Path, overlay: &PackOverlay) -> Result<Vec<(String, Value)
     }
     conditions.check_resource_errors("recipe")?;
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+
+    /// A content mod's recipes guarded by NeoForge's item conditions are
+    /// answered from the root's items and item tags, and the load goes on.
+    #[test]
+    fn recipes_with_item_conditions_load() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-recipe-conditions-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let write = |path: &str, v: &Value| {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, serde_json::to_vec(v).unwrap()).unwrap();
+        };
+        let enabled = horizon_mod_package::enabled::EnabledMods::new([(
+            "gem".to_owned(),
+            horizon_mod_package::manifest::Side::Both,
+        )]);
+        write(
+            horizon_mod_package::enabled::MARKER,
+            &serde_json::to_value(&enabled).unwrap(),
+        );
+        write(crate::content_namespaces::MARKER, &json!(["gem"]));
+        write(
+            "items.json",
+            &json!({"minecraft:stick": {}, "gem:ruby": {}}),
+        );
+        write(
+            "data/c/tags/item/ingots/copper.json",
+            &json!({"values": ["minecraft:stick"]}),
+        );
+        write(
+            "data/c/tags/item/ingots/silver.json",
+            &json!({"values": [{"id": "gem:silver_ingot", "required": false}]}),
+        );
+        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        for (name, condition) in [
+            (
+                "ruby",
+                json!({"type": "neoforge:item_exists", "item": "gem:ruby"}),
+            ),
+            (
+                "topaz",
+                json!({"type": "neoforge:item_exists", "item": "gem:topaz"}),
+            ),
+            (
+                "from_copper",
+                json!({"type": "neoforge:not",
+                "value": {"type": "neoforge:tag_empty", "tag": "c:ingots/copper"}}),
+            ),
+            (
+                "copper_fallback",
+                json!({"type": "neoforge:tag_empty", "tag": "c:ingots/copper"}),
+            ),
+            (
+                "tin_fallback",
+                json!({"type": "neoforge:tag_empty", "tag": "c:ingots/tin"}),
+            ),
+            (
+                "silver_fallback",
+                json!({"type": "neoforge:tag_empty", "tag": "c:ingots/silver"}),
+            ),
+            ("never", json!({"type": "neoforge:false"})),
+        ] {
+            let recipe = json!({"type": "minecraft:crafting_shapeless",
+                "ingredients": ["minecraft:stick"], "result": {"id": "gem:ruby"},
+                "neoforge:conditions": [condition]});
+            write(&format!("data/gem/recipe/{name}.json"), &recipe);
+        }
+        let mut loaded: Vec<String> = sources(&root, &PackOverlay::NONE)
+            .unwrap()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        loaded.sort();
+        assert_eq!(
+            loaded,
+            [
+                "gem:from_copper",
+                "gem:ruby",
+                "gem:silver_fallback",
+                "gem:tin_fallback"
+            ]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 }

@@ -112,7 +112,7 @@ fn no_mod_conditions_do_not_construct_file_context_for_known_nodes() {
         ),
     ] {
         assert_eq!(
-            conditions.allows_context(&json!({"neoforge:conditions":[node]}), || panic!(
+            conditions.allows_context(&json!({"neoforge:conditions":[node]}), None, || panic!(
                 "fast path formatted a file context"
             )),
             expected
