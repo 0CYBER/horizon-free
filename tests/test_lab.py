@@ -188,7 +188,7 @@ class PublicationTests(unittest.TestCase):
         for path in ["tools/Minecraft.java", "tests/java/Client.java", ".local/tools/JfrSummary.java"]:
             self.assertTrue(check_public_tree.prohibited(path), path)
 
-    def test_copied_data_fixer_tables_are_rejected_in_the_tree_only(self):
+    def test_copied_data_fixer_tables_are_rejected_in_tree_and_history(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
@@ -211,7 +211,7 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(check().returncode, 0, check().stderr)
             for path, text in [("crates/a/src/items.rs", flattening), ("data/states.txt", states),
                                ("data/states.json", json.dumps(states.splitlines())),
-                               ("crates/horizon-world/src/datafix/block_state_data.txt", "retired\n")]:
+                               ("crates/horizon-world/src/datafix/block_state_data.txt", states + "# retired copy\n")]:
                 with self.subTest(path=path):
                     commit(path, text)
                     result = check()
@@ -219,9 +219,16 @@ class PublicationTests(unittest.TestCase):
                     self.assertIn(path, result.stderr)
                     git("rm", "-q", path)
                     git("commit", "-q", "-m", "remove")
-            # History keeps the old copies: only the tree is checked for them.
+            # The index is clean again, so the plain tree check passes. History now rejects blobs
+            # newly introduced by these commits even though they were later deleted: the legacy
+            # exception in table_blobs_in_revisions covers only the documented RETIRED_TABLES
+            # paths, not fresh copies of the tables at other paths.
             self.assertEqual(check().returncode, 0)
-            self.assertEqual(check("--history").returncode, 0)
+            history = check("--history")
+            self.assertEqual(history.returncode, 1)
+            for path in ("crates/a/src/items.rs", "data/states.txt", "data/states.json"):
+                self.assertIn(path, history.stderr)
+            self.assertNotIn("crates/horizon-world/src/datafix/block_state_data.txt", history.stderr)
 
     def test_force_added_ignored_file_is_detected_in_index_and_history(self):
         with tempfile.TemporaryDirectory() as temp:
