@@ -140,23 +140,34 @@ impl<'a> Server<'a> {
     where
         F: FnMut(&str, &Value) -> Result<Value, (i64, String)>,
     {
-        // A request has an id, a notification has none and gets no reply.
         let id = match message.get("id") {
-            None => return None,
-            Some(Value::Null) => {
+            None => None,
+            Some(id) if id.is_string() || id.is_i64() || id.is_u64() => Some(id.clone()),
+            Some(_) => {
                 return Some(error(
                     Value::Null,
                     -32600,
-                    "A request's id is a string or an integer, not null".into(),
+                    "A request's id is a string or an integer".into(),
                     None,
                 ));
             }
-            Some(id) => id.clone(),
         };
-        let method = message
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let method = message.get("method").and_then(Value::as_str);
+        if !message.is_object()
+            || message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || method.is_none()
+            || message.get("params").is_some_and(|p| !p.is_object())
+        {
+            return Some(error(
+                id.unwrap_or(Value::Null),
+                -32600,
+                "Invalid Request".into(),
+                None,
+            ));
+        }
+        // Only a valid notification (no id) gets no reply and does not dispatch a tool.
+        let id = id?;
+        let method = method?;
         let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
         Some(match self.dispatch(method, &params, app) {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
@@ -449,11 +460,71 @@ mod tests {
     }
 
     #[test]
-    fn a_request_whose_id_is_null_is_invalid() {
-        let mut app = |_: &str, _: &Value| Ok(json!({}));
-        let line = json!({ "jsonrpc": "2.0", "id": null, "method": "tools/list" });
-        let reply = SERVER.handle_line(&line.to_string(), &mut app).unwrap();
-        assert_eq!(reply["error"]["code"], json!(-32600));
+    fn malformed_envelopes_never_dispatch_tools() {
+        for (message, id) in [
+            (json!(42), Value::Null),
+            (json!(null), Value::Null),
+            (json!([]), Value::Null),
+            (json!({}), Value::Null),
+            (json!({ "id": 1, "method": "tools/call" }), json!(1)),
+            (
+                json!({ "jsonrpc": "1.0", "id": 1, "method": "tools/call" }),
+                json!(1),
+            ),
+            (
+                json!({ "jsonrpc": 2, "id": 1, "method": "tools/call" }),
+                json!(1),
+            ),
+            (json!({ "jsonrpc": "2.0", "id": 1 }), json!(1)),
+            (json!({ "jsonrpc": "2.0", "id": 1, "method": 7 }), json!(1)),
+            (request(1, "tools/call", json!(null)), json!(1)),
+            (request(1, "tools/call", json!(42)), json!(1)),
+            (request(1, "tools/call", json!([])), json!(1)),
+            (
+                json!({ "jsonrpc": "2.0", "id": null, "method": "tools/call" }),
+                Value::Null,
+            ),
+            (
+                json!({ "jsonrpc": "2.0", "id": true, "method": "tools/call" }),
+                Value::Null,
+            ),
+            (
+                json!({ "jsonrpc": "2.0", "id": 1.5, "method": "tools/call" }),
+                Value::Null,
+            ),
+            (
+                json!({ "jsonrpc": "2.0", "id": [], "method": "tools/call" }),
+                Value::Null,
+            ),
+            (
+                json!({ "jsonrpc": "2.0", "id": {}, "method": "tools/call" }),
+                Value::Null,
+            ),
+            (
+                json!({ "method": "notifications/initialized" }),
+                Value::Null,
+            ),
+            (json!({ "jsonrpc": "2.0", "method": 7 }), Value::Null),
+        ] {
+            let mut called = false;
+            let reply = SERVER
+                .handle_line(&message.to_string(), &mut |_: &str, _: &Value| {
+                    called = true;
+                    Ok(json!({ "content": [] }))
+                })
+                .unwrap();
+            assert!(!called, "{message}");
+            assert_eq!(reply["jsonrpc"], "2.0");
+            assert_eq!(reply["id"], id, "{message}");
+            assert_eq!(reply["error"]["code"], json!(-32600), "{message}");
+            assert!(reply.get("result").is_none(), "{reply}");
+        }
+        for id in [json!("call-1"), json!(0), json!(-1), json!(u64::MAX)] {
+            let message = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call" });
+            let reply = answer(message);
+            assert_eq!(reply["id"], id);
+            assert_eq!(reply["result"]["content"][0]["text"], "ok");
+        }
     }
 
     #[test]
