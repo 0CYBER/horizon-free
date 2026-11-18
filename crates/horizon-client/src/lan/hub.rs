@@ -3266,9 +3266,6 @@ impl Hub {
             pitch: rot.1,
             head_yaw: rot.2,
             on_ground,
-            velocity: [0.0; 3],
-            acceleration_power: None,
-            data: 0,
             meta,
             forced_meta: [0; 4],
             // What a client still holds goes back to its default: the effect
@@ -3281,15 +3278,7 @@ impl Hub {
             ],
             equipment,
             attributes,
-            precise: false,
-            vertical_collision: false,
-            horizontal_collision: false,
-            needs_sync: false,
-            sync_position: false,
-            stepped: false,
-            idle: false,
-            bare: false,
-            ..Default::default()
+            ..EntityState::default()
         }
     }
 
@@ -3353,6 +3342,10 @@ impl Hub {
                 state.hidden = self.hidden.get(&g.uuid).copied();
                 stuck_meta(&mut state.meta, &mut state.defaults, g.stuck);
                 frozen_meta(&mut state, g.motion.as_ref().map_or(0, |m| m.ticks_frozen));
+                // Entity.getDeltaMovement: the server copy's, which a glide sends.
+                if let Some(v) = g.motion.as_ref().map(|m| m.velocity) {
+                    state.velocity = [v.x, v.y, v.z];
+                }
                 shoulder_meta(&mut state, g.shoulders);
                 state
             })
@@ -5225,6 +5218,7 @@ mod tests {
     mod effect_meta_tests;
     #[path = "../far_tests.rs"]
     mod far_tests;
+    mod glide_motion_tests;
     mod live_player_limit_tests;
     mod menu_sync_tests;
     mod ordered_inbox_tests;

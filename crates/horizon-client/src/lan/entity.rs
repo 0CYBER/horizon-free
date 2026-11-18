@@ -201,6 +201,14 @@ fn is_arrow(kind: &str) -> bool {
     )
 }
 
+/// `LivingEntity.isFallFlying`: bit 7 of `DATA_SHARED_FLAGS_ID`, which only
+/// a living entity's glide sets.
+fn fall_flying(e: &EntityState) -> bool {
+    e.meta
+        .iter()
+        .any(|(index, _, v)| *index == 0 && matches!(v, Value::Byte(f) if *f as u8 & 0x80 != 0))
+}
+
 /// `AbstractHurtingProjectile.accelerationPower` by entity type (0.1, 0.0 for
 /// a wind charge), sent with each velocity update; what a state that carries
 /// none of its own falls back to.
@@ -610,7 +618,9 @@ impl ServerEntity {
             } else {
                 None
             };
-            if self.track_deltas || e.needs_sync {
+            // `|| entity instanceof LivingEntity l && l.isFallFlying()`: a
+            // gliding player's motion goes out though players don't track it.
+            if self.track_deltas || e.needs_sync || fall_flying(e) {
                 let diff: f64 = (0..3)
                     .map(|k| (e.velocity[k] - self.velocity[k]).powi(2))
                     .sum();
@@ -2044,6 +2054,41 @@ mod tests {
                 play::Clientbound::MoveEntityPos(_)
             ]
         ));
+    }
+
+    /// ServerEntity.sendChanges sends the motion of an entity that doesn't
+    /// track deltas (a player) while it glides: `entity.needsSync ||
+    /// trackDelta || entity instanceof LivingEntity l && l.isFallFlying()`,
+    /// on its update ticks (every 2nd for a player), when it moved away from
+    /// lastSentMovement by more than 1.0E-7 squared.
+    #[test]
+    fn a_gliding_player_sends_its_motion() {
+        let motion = |out: &[play::Clientbound]| -> Vec<[f64; 3]> {
+            out.iter()
+                .filter_map(|p| match p {
+                    play::Clientbound::SetEntityMotion(m) if m.id == 7 => Some(m.velocity),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut e = state(0.0);
+        e.kind = "minecraft:player".into();
+        e.on_ground = false;
+        let mut s = added(&e);
+        // Falling without the elytra open: no motion, due or not.
+        e.velocity = [0.5, -0.1, 0.0];
+        assert!(motion(&changes(&mut s, &e)).is_empty());
+        assert!(motion(&changes(&mut s, &e)).is_empty());
+        // Gliding (DATA_SHARED_FLAGS_ID bit 7): tick 2 is due.
+        e.meta = vec![(0, serializer::BYTE, Value::Byte(-0x80))];
+        assert_eq!(motion(&changes(&mut s, &e)), [[0.5, -0.1, 0.0]]);
+        // Tick 3 isn't due; tick 4 sends the new motion.
+        e.velocity = [0.6, -0.05, 0.1];
+        assert!(motion(&changes(&mut s, &e)).is_empty());
+        assert_eq!(motion(&changes(&mut s, &e)), [[0.6, -0.05, 0.1]]);
+        // Unchanged: nothing on tick 6.
+        changes(&mut s, &e);
+        assert!(motion(&changes(&mut s, &e)).is_empty());
     }
 
     /// `ServerEntity.getRequiresPrecisePosition` is false for an item, so a
