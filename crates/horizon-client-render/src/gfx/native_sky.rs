@@ -125,7 +125,7 @@ impl NativeSky {
     /// The pipeline of the pack's sky `stage` with the option values `constants`, drawing
     /// onto the world's target of `format`; `globals` is the terrain's group 0, and the frame
     /// with the kept resources the stage reads (`kept`) its group 3.
-    pub fn new(
+    pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         globals: &wgpu::BindGroupLayout,
         (frame, kept): (&NativeFrame, Option<StageReads>),

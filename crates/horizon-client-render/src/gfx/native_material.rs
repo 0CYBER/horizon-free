@@ -506,7 +506,7 @@ fn module(
 
 impl NativeMaterial {
     /// The pipelines of the pack's material `stage` with the option values `constants`.
-    pub fn new(
+    pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         shape: &TerrainShape<'_>,
         frame: &NativeFrame,
