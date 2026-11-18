@@ -22,7 +22,7 @@ pub(crate) fn module_files(
     every_build: bool,
 ) -> Result<Vec<ModuleFile>, String> {
     let key = (module.clone(), path.clone(), dir.clone(), every_build);
-    if let Some(files) = WALKS.with(|walks| walks.borrow().as_ref()?.get(&key).cloned()) {
+    if let Some(files) = WALKS.with(|walks| walks.borrow().as_ref()?.files.get(&key).cloned()) {
         return Ok(files);
     }
     let files = walk_module_files(
@@ -31,11 +31,11 @@ pub(crate) fn module_files(
         dir,
         every_build,
         false,
-        crate::game_modules::parse,
+        crate::game_modules::parse_layout,
     )?;
     WALKS.with(|walks| {
         if let Some(walks) = walks.borrow_mut().as_mut() {
-            walks.insert(key, files.clone());
+            walks.files.insert(key, files.clone());
         }
     });
     Ok(files)
@@ -43,8 +43,30 @@ pub(crate) fn module_files(
 
 type WalkKey = (String, PathBuf, PathBuf, bool);
 
+/// What [`with_walk_cache`] remembers: the walks, and each tree's marked functions
+/// ([`remember_marked`]).
+struct Walks {
+    files: HashMap<WalkKey, Vec<ModuleFile>>,
+    marked: HashMap<PathBuf, Vec<(String, String)>>,
+}
+
 thread_local! {
-    static WALKS: RefCell<Option<HashMap<WalkKey, Vec<ModuleFile>>>> = const { RefCell::new(None) };
+    static WALKS: RefCell<Option<Walks>> = const { RefCell::new(None) };
+}
+
+/// The marked functions of the tree at `root`, when this generation already listed them.
+pub(crate) fn recalled_marked(root: &Path) -> Option<Vec<(String, String)>> {
+    WALKS.with(|walks| walks.borrow().as_ref()?.marked.get(root).cloned())
+}
+
+/// Keeps the marked functions of the tree at `root` for the rest of the generation: the
+/// tracked-path listing and the point scan both ask for them.
+pub(crate) fn remember_marked(root: &Path, marked: &[(String, String)]) {
+    WALKS.with(|walks| {
+        if let Some(walks) = walks.borrow_mut().as_mut() {
+            walks.marked.insert(root.to_owned(), marked.to_vec());
+        }
+    });
 }
 
 /// Runs `run` with [`module_files`] remembering each walk, for one generation whose sources don't
@@ -52,13 +74,18 @@ thread_local! {
 /// times, once to list what to track and again to read them. Never around a pass that edits the
 /// files it walks, such as staging.
 pub(crate) fn with_walk_cache<T>(run: impl FnOnce() -> T) -> T {
-    struct Reset(Option<HashMap<WalkKey, Vec<ModuleFile>>>);
+    struct Reset(Option<Walks>);
     impl Drop for Reset {
         fn drop(&mut self) {
             WALKS.with(|walks| *walks.borrow_mut() = self.0.take());
         }
     }
-    let _reset = Reset(WALKS.with(|walks| walks.replace(Some(HashMap::new()))));
+    let _reset = Reset(WALKS.with(|walks| {
+        walks.replace(Some(Walks {
+            files: HashMap::new(),
+            marked: HashMap::new(),
+        }))
+    }));
     run()
 }
 

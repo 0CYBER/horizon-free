@@ -296,28 +296,72 @@ pub(super) fn wire_types_from_sources(
         ("mod_api_generated.rs", generated.hooks.as_str()),
         ("mod_api_generated_host.rs", generated.host.as_str()),
     ];
-    // The resolver recurses through the API's types: give it a deep stack.
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(64 << 20)
-            .spawn_scoped(scope, || super::wire::owned_types(root, &included))
-            .map_err(|e| e.to_string())?
-            .join()
-            .map_err(|_| "reading the wire types panicked".to_string())?
-    })
+    // The layouts follow from the generated sources above and from the crates the API's types
+    // come from, read whole: a change in either computes them again, one elsewhere does not
+    // (the game's own files reach them only through the generated sources). The whole crates
+    // include the Wire trait roles (`.import`/`.export` files), which the resolver lists.
+    let inputs: Vec<_> = {
+        let mut inputs = super::index::crate_folders(root);
+        inputs.push(root.join("crates/horizon-mod-api-macros"));
+        inputs
+    };
+    let key_for = |tree: &str| {
+        crate::incremental::digest(&[
+            included[0].1.as_bytes(),
+            included[1].1.as_bytes(),
+            included[2].1.as_bytes(),
+            tree.as_bytes(),
+        ])
+    };
+    // A tree that cannot be hashed (an unreadable file, a symlink cycle) is not an error of the
+    // build: the resolver runs without the cache and reports what it needs to read.
+    let tree = crate::incremental::active()
+        .then(|| crate::incremental::tree_digest(&inputs).ok())
+        .flatten();
+    let compute = || -> Result<std::collections::BTreeSet<String>, String> {
+        // The resolver recurses through the API's types: give it a deep stack.
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn_scoped(scope, || super::wire::owned_types(root, &included))
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "reading the wire types panicked".to_string())?
+        })
+    };
+    let Some(tree) = tree else {
+        return compute();
+    };
+    let outside = crate::incremental::outside_reads();
+    // The files are read after they are hashed. Hash them again afterwards and store only when
+    // nothing changed, and nothing outside the hashed folders was read. An edit that goes
+    // A to B to A inside that window is not seen; the value then belongs to B under A's key
+    // until the next successful run drops the entry. That needs two saves within one
+    // resolver run, and the build script reruns on the second one anyway.
+    crate::incremental::cached_checked(
+        "wire",
+        &key_for(&tree),
+        compute,
+        |types| serde_json::to_string(types).unwrap_or_default(),
+        |text| serde_json::from_str(text).ok(),
+        || {
+            crate::incremental::outside_reads() == outside
+                && crate::incremental::tree_digest(&inputs).is_ok_and(|after| after == tree)
+        },
+    )
 }
 
 /// `horizon-mod-points`' generated file: each point's record, `PointId` and typed function constructors,
 /// from the game's source, tracking the game module's files.
 pub fn generate_points(root: &Path, out_dir: &Path) -> Result<(), String> {
-    crate::interface_cache::with_cache(out_dir, || {
+    crate::incremental::with_cache(out_dir, || {
         crate::source::with_walk_cache(|| generate_points_inner(root, out_dir))
     })
 }
 
 /// Generate the engine-owned point vocabulary and typed dispatch.
 pub fn generate_engine_points(root: &Path, out_dir: &Path) -> Result<(), String> {
-    crate::interface_cache::with_cache(out_dir, || {
+    crate::incremental::with_cache(out_dir, || {
         crate::source::with_walk_cache(|| {
             for path in super::points::tracked(root)? {
                 crate::rerun_if_changed(&path.display());
@@ -333,9 +377,8 @@ pub fn generate_engine_points(root: &Path, out_dir: &Path) -> Result<(), String>
                 })
                 .transpose()?;
             let code = super::points::engine_records(&points, selected.as_ref());
-            let generated = syn::parse_file(&code).map_err(|e| format!("engine points: {e}"))?;
-            write_if_changed(out_dir.join("engine_points.rs"), short_lines(&generated))
-                .map_err(|e| e.to_string())
+            let code = formatted(&code, "engine points")?;
+            write_if_changed(out_dir.join("engine_points.rs"), code).map_err(|e| e.to_string())
         })
     })
 }
@@ -345,6 +388,21 @@ pub fn generate_engine_points(root: &Path, out_dir: &Path) -> Result<(), String>
 /// line still left such lines (a `mod` holds thousands of items, a table thousands of entries).
 fn short_lines(file: &syn::File) -> String {
     prettyplease::unparse(file)
+}
+
+/// `code` parsed and printed by [`short_lines`]. The result depends on the text alone, so a rerun
+/// whose points did not change (a body edit) reads it back instead of parsing megabytes again.
+fn formatted(code: &str, what: &str) -> Result<String, String> {
+    crate::incremental::cached(
+        "format",
+        &crate::incremental::digest(&[code.as_bytes()]),
+        || {
+            let generated = syn::parse_file(code).map_err(|e| format!("{what}: {e}"))?;
+            Ok(short_lines(&generated))
+        },
+        Clone::clone,
+        |text| Some(text.to_owned()),
+    )
 }
 
 pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), String> {
@@ -381,11 +439,12 @@ pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), S
             "/// Whether this build compiled the points' sites into the game: only the prebuilt game, built from a staged copy of the source, has them. A build without them refuses every listener at load.\npub const STAGED: bool = {staged};\n"
         );
     phase("records");
-    let generated = syn::parse_file(&code).map_err(|e| format!("generated Rust: points: {e}"))?;
-    let code = short_lines(&generated);
+    let code = formatted(&code, "generated Rust: points")?;
     phase("format");
     write_if_changed(out_dir.join("points_generated.rs"), code).map_err(|e| e.to_string())?;
     phase("written");
+    // Under the cache, the steps inside the phases above and how many entries each found.
+    timing.push_str(&crate::incremental::report());
     fs::write(out_dir.join("points-timing.txt"), timing).map_err(|e| e.to_string())
 }
 

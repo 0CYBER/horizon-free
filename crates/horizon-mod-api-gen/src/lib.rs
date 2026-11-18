@@ -3,7 +3,7 @@ mod catalog;
 mod dispatch_fixtures;
 mod exports;
 mod game_modules;
-mod interface_cache;
+mod incremental;
 #[cfg(test)]
 mod interface_cache_tests;
 #[cfg(test)]
@@ -574,7 +574,7 @@ fn sources(root: &Path, fill: FillMode) -> Result<Sources, String> {
         ));
     }
     for code in [&code, &host, &areas, &goal_view] {
-        syn::parse_file(code).map_err(|e| format!("generated Rust: {e}"))?;
+        incremental::parses(code)?;
     }
     if matches!(fill, FillMode::Fill) {
         let mut outputs = Vec::new();

@@ -1,6 +1,6 @@
 //! Capture generated hook artifacts for a byte-for-byte refactor comparison.
 //! Run with a destination directory argument (empty or new) before and after the split, then `diff -r`.
-//! The generator's interface cache (`interfaces-*`, keyed by this executable) and its phase timings
+//! The generator's cache (`incremental-*`, and `interfaces-*` from older builds, keyed by this executable) and its phase timings
 //! (`points-timing.txt`) are removed from the destination, so two runs of different builds compare equal.
 //! Every error names the step and the path that failed.
 use std::{fs, path::Path, path::PathBuf};
@@ -27,7 +27,7 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let out = PathBuf::from(std::env::args().nth(1).expect("destination directory"));
     fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    // The cleanup below removes `interfaces-*` folders: only ever ones this run made, in a destination that was empty.
+    // The cleanup below removes `incremental-*` and `interfaces-*` folders: only ever ones this run made, in a destination that was empty.
     let occupied = fs::read_dir(&out)
         .map_err(|e| format!("{}: {e}", out.display()))?
         .next()
@@ -89,7 +89,7 @@ fn main() -> Result<(), String> {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        if name.starts_with("interfaces-") && path.is_dir() {
+        if (name.starts_with("incremental-") || name.starts_with("interfaces-")) && path.is_dir() {
             fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         } else if name == "points-timing.txt" {
             fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;

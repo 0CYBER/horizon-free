@@ -390,9 +390,31 @@ struct Scanned {
 /// The `mod_api` types a record may hold ([`crate::build::wire_types`]), by path.
 pub type WireTypes = std::collections::BTreeSet<String>;
 
+/// A file to read for points, with its crate's package when it is a lower crate's.
+type Input = (mod_source::modules::ModuleFile, Option<PathBuf>);
+
 /// Every file with points: the game module's, then each marked lower crate's that is not built
 /// under the points' own crate.
 fn scan(root: &Path) -> Result<(Vec<Scanned>, Vec<(String, String)>), String> {
+    let (files, list) = inputs(root)?;
+    let mut scanned = Vec::new();
+    for (file, package) in files {
+        let source = fs::read_to_string(&file.path).map_err(|e| e.to_string())?;
+        let parsed =
+            syn::parse_file(&source).map_err(|e| format!("{}: {e}", file.path.display()))?;
+        scanned.push(Scanned {
+            path: file.path,
+            module: file.module,
+            source,
+            parsed,
+            package,
+        });
+    }
+    Ok((scanned, list))
+}
+
+/// The files [`scan`] reads, and the marked functions of the crates below the game.
+fn inputs(root: &Path) -> Result<(Vec<Input>, Vec<(String, String)>), String> {
     let mut files = Vec::new();
     for file in game_files(&root.join("crates/horizon-client/src"), true)? {
         files.push((file, None));
@@ -472,19 +494,7 @@ fn scan(root: &Path) -> Result<(Vec<Scanned>, Vec<(String, String)>), String> {
             files.push((file, Some(package.clone())));
         }
     }
-    let mut scanned = Vec::new();
-    for (file, package) in files {
-        let source = fs::read_to_string(&file.path).map_err(|e| e.to_string())?;
-        let parsed = crate::interface_cache::parse(&file.path, &source)?;
-        scanned.push(Scanned {
-            path: file.path,
-            module: file.module,
-            source,
-            parsed,
-            package,
-        });
-    }
-    Ok((scanned, list))
+    Ok((files, list))
 }
 
 impl Scanned {
@@ -671,11 +681,19 @@ fn all_points<'a>(
 /// The game's points, by name: every point function of the game module, and the marked ones of
 /// the crates below it. Unmarked targets have no compiled slot.
 pub fn game_points(root: &Path) -> Result<Vec<GamePoint>, String> {
-    points_with(root, &crate::build::wire_types(root)?)
+    crate::incremental::stamp("before the points");
+    let wire = crate::build::wire_types(root)?;
+    crate::incremental::stamp("wire types");
+    let points = points_with(root, &wire)?;
+    crate::incremental::stamp("scan");
+    Ok(points)
 }
 
 /// [`game_points`] with the `mod_api` types a record may hold.
 pub(crate) fn points_with(root: &Path, wire: &WireTypes) -> Result<Vec<GamePoint>, String> {
+    if crate::incremental::active() {
+        return incremental_points(root, wire);
+    }
     let (scanned, list) = scan(root)?;
     let mut points = all_points(&scanned, &list, wire)?
         .into_iter()
@@ -683,6 +701,184 @@ pub(crate) fn points_with(root: &Path, wire: &WireTypes) -> Result<Vec<GamePoint
         .collect::<Result<Vec<_>, _>>()?;
     points.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(points)
+}
+
+/// A file's points as the cache keeps them: each point, with what the check for two points of one
+/// name needs.
+struct Record {
+    /// The name its shape has, for the refusal.
+    name: String,
+    target: String,
+    /// The two variant names its shape declares.
+    variants: [String; 2],
+    point: GamePoint,
+}
+
+/// [`Record`] as stored: a [`GamePoint`] with the fields it does not serialize.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Stored {
+    name: String,
+    target: String,
+    variants: [String; 2],
+    api_refusal: Option<String>,
+    point_name: String,
+    point_target: String,
+    side: String,
+    host: String,
+    record: String,
+    args: Vec<(String, String)>,
+    returns: String,
+    return_ty: String,
+    at_return: bool,
+    signature_hash: String,
+    record_item: String,
+    api: [String; 3],
+}
+
+impl Stored {
+    fn of(record: &Record) -> Self {
+        let point = &record.point;
+        Stored {
+            name: record.name.clone(),
+            target: record.target.clone(),
+            variants: record.variants.clone(),
+            api_refusal: point.api_refusal.clone(),
+            point_name: point.name.clone(),
+            point_target: point.target.clone(),
+            side: point.side.to_owned(),
+            host: point.host.to_owned(),
+            record: point.record.clone(),
+            args: point.args.clone(),
+            returns: point.returns.to_owned(),
+            return_ty: point.return_ty.clone(),
+            at_return: point.at_return,
+            signature_hash: point.signature_hash.clone(),
+            record_item: point.record_item.clone(),
+            api: point.api.clone(),
+        }
+    }
+
+    /// The record, or none when a word is not one a point has (an entry from another layout).
+    fn restore(self) -> Option<Record> {
+        fn word(value: &str, words: &[&'static str]) -> Option<&'static str> {
+            words.iter().copied().find(|word| *word == value)
+        }
+        let sides = ["none", "server", "client", "both"];
+        Some(Record {
+            name: self.name,
+            target: self.target,
+            variants: self.variants,
+            point: GamePoint {
+                api_refusal: self.api_refusal,
+                name: self.point_name,
+                target: self.point_target,
+                side: word(&self.side, &sides)?,
+                host: word(&self.host, &["none", "host", "server", "client", "both"])?,
+                record: self.record,
+                args: self.args,
+                returns: word(&self.returns, &["none", "cancel", "result"])?,
+                return_ty: self.return_ty,
+                at_return: self.at_return,
+                signature_hash: self.signature_hash,
+                record_item: self.record_item,
+                api: self.api,
+            },
+        })
+    }
+}
+
+/// [`points_with`] for a generation that keeps per-file results ([`crate::incremental`]): each
+/// file's points are stored under its content, its module path, the wire types and, for a lower
+/// crate, the marked list: everything that decides them. A body edit changes one file's key;
+/// the others are read back without being parsed.
+fn incremental_points(root: &Path, wire: &WireTypes) -> Result<Vec<GamePoint>, String> {
+    use crate::incremental::{cached, digest};
+    let (files, list) = inputs(root)?;
+    let wire_key = digest(&wire.iter().map(|path| path.as_bytes()).collect::<Vec<_>>());
+    let list_key = digest(
+        &list
+            .iter()
+            .map(|(_, path)| path.as_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let mut names = std::collections::BTreeMap::new();
+    let mut points = Vec::new();
+    for (file, package) in files {
+        let source = fs::read_to_string(&file.path).map_err(|e| e.to_string())?;
+        let lower = package.is_some();
+        let key = digest(&[
+            file.module.as_bytes(),
+            source.as_bytes(),
+            &[u8::from(lower)][..],
+            wire_key.as_bytes(),
+            // Only a lower crate's points are chosen by the list.
+            if lower { list_key.as_bytes() } else { &b""[..] },
+        ]);
+        let records = cached(
+            "points",
+            &key,
+            || file_records(&file, package, source, &list, wire),
+            |records| {
+                let stored: Vec<_> = records.iter().map(Stored::of).collect();
+                serde_json::to_string(&stored).unwrap_or_default()
+            },
+            |text| {
+                serde_json::from_str::<Vec<Stored>>(text)
+                    .ok()?
+                    .into_iter()
+                    .map(Stored::restore)
+                    .collect::<Option<Vec<_>>>()
+            },
+        )?;
+        for record in records {
+            for variant in &record.variants {
+                if let Some(other) = names.insert(variant.clone(), record.target.clone()) {
+                    return Err(format!(
+                        "the points of {other} and {} have one name, {}: rename one",
+                        record.target, record.name
+                    ));
+                }
+            }
+            points.push(record.point);
+        }
+    }
+    points.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(points)
+}
+
+/// The points of one file, parsed in full.
+fn file_records(
+    file: &mod_source::modules::ModuleFile,
+    package: Option<PathBuf>,
+    source: String,
+    list: &[(String, String)],
+    wire: &WireTypes,
+) -> Result<Vec<Record>, String> {
+    let parsed = syn::parse_file(&source).map_err(|e| format!("{}: {e}", file.path.display()))?;
+    let scanned = Scanned {
+        path: file.path.clone(),
+        module: file.module.clone(),
+        source,
+        parsed,
+        package,
+    };
+    let mut records = Vec::new();
+    for found in scanned.points(list, wire) {
+        let shape = found.shape()?;
+        let variants = [
+            shape.variant().to_string(),
+            shape.return_variant().to_string(),
+        ];
+        let name = shape.name.to_string();
+        let target = found.target();
+        records.push(Record {
+            name,
+            target,
+            variants,
+            point: point_record(found)?,
+        });
+    }
+    Ok(records)
 }
 
 // Both standalone discovery and source staging retain the original API signature.

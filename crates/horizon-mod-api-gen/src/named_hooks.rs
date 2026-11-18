@@ -6,6 +6,11 @@ pub(super) fn resolve(root: &Path, target: &str, name: &str) -> Result<syn::Item
     let mut found = Vec::new();
     for file in source::game_files(&root.join("crates/horizon-client/src"), false)? {
         let source = fs::read_to_string(&file.path).map_err(|e| e.to_string())?;
+        // A method is found by the name it is written with, so a file without the name has none:
+        // parsing only the few files that mention it, not the whole game for each hook.
+        if !source.contains(&native) {
+            continue;
+        }
         let parsed = syn::parse_file(&source).map_err(|e| e.to_string())?;
         collect(&parsed.items, &file.module, &file.cfg, &native, &mut found);
     }

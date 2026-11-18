@@ -270,8 +270,8 @@ class CompareTests(unittest.TestCase):
 
     def test_generator_scratch_is_not_compared(self):
         base = {"interfaces-aaa/1.cache": "x", "points-timing.txt": "a 1.00s\n", "api.rs": "1"}
-        head = {"interfaces-bbb/2.cache": "y", "interfaces-bbb/3.cache": "z", "points-timing.txt": "a 2.00s\n",
-                "api.rs": "1"}
+        head = {"interfaces-bbb/2.cache": "y", "interfaces-bbb/3.cache": "z", "incremental-ccc/4.entry": "w",
+                "points-timing.txt": "a 2.00s\n", "api.rs": "1"}
         status, text = self.run_compare([point("a")], [point("a")], base, head)
         self.assertEqual(status, 0)
         self.assertIn("Mod points unchanged", text)

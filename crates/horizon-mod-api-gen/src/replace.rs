@@ -839,8 +839,18 @@ fn inventory(
     }
 }
 
-/// Marked lower-crate functions and their source locations.
+/// Marked lower-crate functions and their source locations. Within one generation
+/// ([`source::with_walk_cache`]) the tree is read once.
 pub(crate) fn marked(root: &Path) -> Result<Vec<(String, String)>, String> {
+    if let Some(found) = source::recalled_marked(root) {
+        return Ok(found);
+    }
+    let found = marked_in(root)?;
+    source::remember_marked(root, &found);
+    Ok(found)
+}
+
+fn marked_in(root: &Path) -> Result<Vec<(String, String)>, String> {
     fn scan(module: &str, items: &[Item], out: &mut Vec<(String, String)>) -> Result<(), String> {
         for item in items {
             match item {
@@ -939,9 +949,27 @@ pub(crate) fn marked(root: &Path) -> Result<Vec<(String, String)>, String> {
             if !text.contains("replaceable") {
                 continue;
             }
-            let parsed =
-                syn::parse_file(&text).map_err(|e| format!("{}: {e}", file.path.display()))?;
-            scan(&file.module, &parsed.items, &mut out)?;
+            // What a file marks follows from its text and module path alone.
+            let paths = crate::incremental::cached(
+                "marked",
+                &crate::incremental::digest(&[file.module.as_bytes(), text.as_bytes()]),
+                || {
+                    let parsed = syn::parse_file(&text)
+                        .map_err(|e| format!("{}: {e}", file.path.display()))?;
+                    let mut found = Vec::new();
+                    scan(&file.module, &parsed.items, &mut found)?;
+                    Ok(found.into_iter().map(|(_, path)| path).collect::<Vec<_>>())
+                },
+                |paths| serde_json::to_string(paths).unwrap_or_default(),
+                |text| serde_json::from_str::<Vec<String>>(text).ok(),
+            )?;
+            // Every entry's label is its path in the same words.
+            out.extend(paths.into_iter().map(|path| {
+                (
+                    format!("#[horizon_mod_api_macros::replaceable] on {path}"),
+                    path,
+                )
+            }));
         }
     }
     out.sort();
