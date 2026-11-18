@@ -31,20 +31,41 @@ The local vanilla references show that both `TitleScreen.init` and
 `PauseScreen.createPauseMenu` call `CommonButtons.friends`, then
 `OnlineOptionsScreen.confirmFriendsListEnabled`, then `FriendsOverlayScreen(parent)`.
 However, #14167's migration uses those existing Horizon icon slots for Play with Friends and
-Join a Friend. **Maintainers must agree how to preserve the vanilla account entry while keeping
-those extension entries accessible.** This is a UI integration decision, not a reason to move
-the account overlay into the Horizon layer.
+Join a Friend. **The allocation below is proposed, not approved.** This is a UI integration
+decision, not a reason to move the account overlay into the Horizon layer.
 
-Until that decision and the relevant migration steps land:
+| Action | Proposed entry and owner |
+| --- | --- |
+| Manage Minecraft account friends and requests | The engine owns the existing vanilla Friends icon on Title and Pause. Both open the account overlay through the vanilla consent path, independent of the Horizon extension. |
+| Host or share a world with an invite code | The Horizon extension owns a separate **Play with Friends** row in Pause, using the existing `Place::Pause` registration. Keep the same sharing page and availability rules; do not add another icon. |
+| Join a world with an invite code | The Horizon extension owns a **Join a Friend** button on the Multiplayer screen, present only when the extension provides the join form and resolver. Open the same form, preserving full codes, short codes and the Relay field. Direct Connection's full-code support does not replace the form. |
 
-- Do not replace the host/share `Place::PauseFriends` page with the account overlay.
-- Do not silently invent a fifth vanilla pause icon, duplicate an entry, or displace the title
-  Join a Friend page. A new extension location requires maintainer agreement.
-- Do not implement the account tab/list UI as generic options-page rows; the current main
-  `Page`/`Row` API is not a tabbed, scrollable overlay/focus contract.
-- Do not edit host/share state or commands in `game/friends.rs`/`game/control.rs`.
-- Treat #14334 -> #14380 -> #14405 -> #14411/#14419 and title-side #14439/#14452/#14470 as
-  integration dependencies, not as already merged capabilities. Requery before implementation.
+`Place::Title` still names the existing title icon slot, not a Multiplayer entry. The Multiplayer
+registration point is a proposed extension interface, not an API the current engine offers.
+The engine must not name a Horizon crate or page ID to draw either extension entry. The account
+UI remains an engine overlay, not a generic `Page`/`Row` form.
+
+### Migration and acceptance
+
+1. Confirm the entry allocation with the maintainers and coordinate with #14167 before changing
+   either route. Recheck the pause migration (#14405/#15548) and join form migration (#15587)
+   against `main`; a merge into another stack branch does not establish availability in `main`.
+2. Implement and verify each replacement extension route before switching its icon to the account
+   overlay. Keep both current icon routes until their respective replacement is ready. Use the
+   same page implementation during the transition, not a second form; retire its old icon route
+   at the corresponding cutover. Do not change sharing state, commands or tunnel behaviour.
+3. Before the title cutover, review non-join `Place::Title` pages too: `title_entry()` can open
+   any page registered there, not just Join a Friend. Maintainers must approve a replacement
+   entry for those pages or explicitly approve and document ending support for that use of
+   `Place::Title`. Keep the current title route until that decision is made and, if retained,
+   a representative non-join page can be opened and closed through the replacement. The
+   proposed Multiplayer entry is for Join a Friend, not an implicit fallback for other pages.
+4. Verify the official build can still host from Pause and join from Multiplayer with full and
+   short codes, including Relay, and that Escape returns to the invoking menu. Check the existing
+   sharing gates, including splitscreen. With no Horizon extension, neither invite-code entry is
+   present, while the account icon follows vanilla's demo/offline and consent gates rather than
+   invite resolver availability. Check layout, keyboard/controller navigation, and narration in
+   each affected menu before switching its icon.
 
 Backend, widget and rendering preparations can be designed separately. Their PRs still require
 approval of this spec; no public partially implemented account overlay is enabled along the way.

@@ -217,10 +217,13 @@ Screen. Test/preview consumers must exercise the actual modules without exposing
 
 ## Host adapters: independently reviewable, separate from UI logic
 
-These are engine integration PRs, not Play with Friends host code. Require U1..U8 plus T2 and
-an agreed entry-placement decision; remain blocked while the overlapping migration interface
-or icon ownership is unsettled. Each must say which public behaviour it enables and must not
-ship disabled buttons or placeholder flows as completed parity.
+These are engine integration PRs, not Play with Friends host code. They require U1..U8 plus T2
+and approval of the [entry allocation](friends-overlay-part2.md#ownership-and-entry-decisions).
+I1 also requires the replacement Play with Friends pause row; I2 requires the replacement Join a
+Friend Multiplayer entry and the approved disposition of non-join `Place::Title` pages.
+Implement and verify each replacement extension route before its icon switch. Until then,
+preserve the current routes. Each integration PR must say which public behaviour it enables
+and must not ship disabled buttons or placeholder flows as completed parity.
 
 | ID / budget | Allowed files and reference | Acceptance / non-goals |
 | --- | --- | --- |
