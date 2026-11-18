@@ -30,6 +30,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Horizon is MIT licensed. Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.</string>
+	<string>Horizon is licensed under the GNU Lesser General Public License, version 3 or later. Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.</string>
 </dict>
 </plist>
