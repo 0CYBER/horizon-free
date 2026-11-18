@@ -726,10 +726,14 @@ impl Launcher {
                 .flex()
                 .items_center()
                 .gap(px(12.))
+                .min_w_0()
                 .cursor_pointer()
                 .child(tickbox)
                 .child(
+                    // Narrow foot (a long EULA wording, or the Prepare button as well): the
+                    // wording shortens with an ellipsis instead of running under the buttons.
                     ui::text(14., FontWeight::NORMAL, ink::FULL)
+                        .truncate()
                         .when(missing, |d| d.text_color(ui::danger()))
                         .child(tr("I agree to the Minecraft EULA")),
                 ),
@@ -757,17 +761,12 @@ impl Launcher {
             let last = self.servers.job_log.back().cloned().unwrap_or_default();
             Some(ui::card_note(format!("{} {last}", tr("Creating…"))).truncate())
         } else if let Some(p) = &self.servers.problem {
-            Some(
-                ui::text(13., FontWeight::NORMAL, ink::FULL)
-                    .text_color(ui::danger())
-                    .child(p.message.clone()),
-            )
+            Some(foot_status(p.message.clone().into(), ui::danger()))
         } else if missing {
-            Some(
-                ui::text(13., FontWeight::NORMAL, ink::FULL)
-                    .text_color(ui::danger())
-                    .child(tr("Tick the EULA box to create the server.")),
-            )
+            Some(foot_status(
+                tr("Tick the EULA box to create the server.").into(),
+                ui::danger(),
+            ))
         } else {
             None
         };
@@ -844,28 +843,62 @@ impl Launcher {
                     cx.notify();
                 })))
         };
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .gap(px(16.))
-            .px(px(36.))
-            .py(px(20.))
-            .rounded_br(px(radius::MODAL))
-            .bg(white(0.03))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .min_w_0()
-                    .child(agree)
-                    .child(read)
-                    .children(status.map(|s| s.flex_1().min_w_0())),
-            )
-            .child(buttons)
+        create_foot_row(agree, read.flex_none(), status, buttons)
     }
+}
+
+/// A message in the foot (a problem, or why the EULA still has to be ticked): a row of its own
+/// across the foot, wrapping over at most two lines with an ellipsis, so however long the
+/// message is the foot keeps its height (#16086: sharing the EULA's row squeezed the message
+/// into a column a word wide, and its wrap swallowed the dialog's body).
+fn foot_status(message: SharedString, color: Hsla) -> Div {
+    ui::text(13., FontWeight::NORMAL, ink::FULL)
+        .text_color(color)
+        .debug_selector(|| "create-foot-status".into())
+        .w_full()
+        .line_clamp(2)
+        .text_ellipsis()
+        .child(message)
+}
+
+/// The foot: the message on its own row, then the EULA and its link on the left, the buttons on
+/// the right. The message takes the foot's whole width, so the EULA's wording and the buttons'
+/// labels can never squeeze it; the buttons keep their own size (#16086).
+fn create_foot_row(
+    agree: impl IntoElement,
+    read: impl IntoElement,
+    status: Option<Div>,
+    buttons: impl IntoElement,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap(px(8.))
+        .px(px(36.))
+        .py(px(20.))
+        .rounded_br(px(radius::MODAL))
+        .bg(white(0.03))
+        .debug_selector(|| "create-foot".into())
+        .children(status)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(16.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .flex_1()
+                        .min_w_0()
+                        .child(agree)
+                        .child(read),
+                )
+                .child(div().flex_none().child(buttons)),
+        )
 }
 
 #[cfg(test)]
@@ -880,5 +913,67 @@ mod tests {
         assert!(!valid_name("seventeen_letters"));
         assert!(!valid_name("no spaces"));
         assert!(!valid_name("dash-name"));
+    }
+}
+
+/// #16086: the foot's message used to get whatever width the row's shrink left, down to a
+/// single word per line, and its wrap stretched the foot past the dialog's body. These bounds
+/// come from GPUI's own layout on its test platform (no GPU, no real window); NoopTextSystem
+/// gives every character the same advance, so they are exact on any machine.
+#[cfg(test)]
+mod foot_layout {
+    use super::*;
+    use gpui::TestAppContext;
+
+    struct Foot {
+        message: SharedString,
+    }
+
+    impl Render for Foot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // The EULA row, its link and the buttons take fixed slices of the 760 px row; the
+            // message owns what they leave.
+            let agree = div().flex_none().w(px(220.)).h(px(22.));
+            let read = div().flex_none().w(px(40.)).h(px(18.));
+            let buttons = div().flex_none().w(px(200.)).h(px(48.));
+            div().w(px(760.)).child(create_foot_row(
+                agree,
+                read,
+                Some(foot_status(self.message.clone(), ui::danger())),
+                buttons,
+            ))
+        }
+    }
+
+    #[gpui::test]
+    async fn a_long_message_wraps_in_two_lines_on_its_own_foot_row(cx: &mut TestAppContext) {
+        // The reporter's message: a nightly's tag alone is a word longer than the foot's room.
+        let message: SharedString = "Horizon nightly-2026-11-13-9f42064 isn't prepared yet: press Prepare on the Play page (it uses your own Minecraft 26.3)".into();
+        let (view, cx) = cx.add_window_view(|_, _| Foot { message });
+        cx.run_until_parked();
+        let status = cx.debug_bounds("create-foot-status").unwrap();
+        // The message spans the foot's 760 px, less the 36 px sides.
+        assert_eq!(status.size.width, px(688.), "the message owns the width");
+        // Two lines at 13 px with an 18 px line height: not one line per word.
+        assert_eq!(status.size.height, px(36.), "clamped to two lines");
+        let row = cx.debug_bounds("create-foot").unwrap();
+        // 20 + 20 padding, the message's 36, the 8 px gap and the buttons' 48.
+        assert_eq!(
+            row.size.height,
+            px(132.),
+            "the foot grows by the two clamped lines, no more"
+        );
+        // A message that fits on one line takes one.
+        view.update(cx, |foot, cx| {
+            foot.message = "Ready".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let status = cx.debug_bounds("create-foot-status").unwrap();
+        assert_eq!(status.size.height, px(18.));
+        assert_eq!(
+            cx.debug_bounds("create-foot").unwrap().size.height,
+            px(114.)
+        );
     }
 }

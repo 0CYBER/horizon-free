@@ -124,6 +124,9 @@ horizon-mod-api-gen = { path = "../crates/horizon-mod-api-gen", features = ["lis
 libc = "0.2"
 # Tokenize source strings for the translation completeness test, including multiline calls.
 syn = "2"
+# Headless layout tests: GPUI's test platform draws without a GPU or a real window, and its
+# NoopTextSystem shapes deterministically (glass_server_dialog.rs's foot tests).
+gpui = { package = "gpui-fast", version = "0.1.13", features = ["test-support"] }
 
 [profile.release]
 strip = true
