@@ -24,6 +24,17 @@ pub struct BuriedTreasurePiece {
     /// Where the chest went: the box vanilla saves once placed.
     pub found: Mutex<Option<[i32; 3]>>,
 }
+impl BuriedTreasurePiece {
+    /// `BuriedTreasurePiece(StructurePieceType, CompoundTag)`: only the box is
+    /// saved, at the chest post-process found; loading starts the piece there.
+    pub(crate) fn from_saved(frame: PieceFrame) -> Self {
+        let at = frame.bounding_box.min;
+        Self {
+            position: at,
+            found: Mutex::new(Some(at)),
+        }
+    }
+}
 impl LegacyPiece for BuriedTreasurePiece {
     fn bounding_box(&self) -> BoundingBox {
         BoundingBox::new(self.position, self.position)
@@ -453,6 +464,18 @@ impl Scattered {
             height_position: Mutex::new(-1),
         }
     }
+    /// `ScatteredFeaturePiece(StructurePieceType, CompoundTag)`: the saved
+    /// box stays as saved; the dimensions and the settled height are read.
+    pub(crate) fn from_saved(tag: &horizon_core::nbt::Tag, frame: PieceFrame) -> Self {
+        let int = |key| super::saved_legacy::int(tag, key);
+        Self {
+            frame: Mutex::new(frame),
+            width: int("Width"),
+            height: int("Height"),
+            depth: int("Depth"),
+            height_position: Mutex::new(int("HPos")),
+        }
+    }
     pub fn frame(&self) -> PieceFrame {
         *self.frame.lock().unwrap()
     }
@@ -546,16 +569,9 @@ impl SwampHutPiece {
     /// witch's and the cat's flags collapse onto this piece's one spawned
     /// flag (vanilla sets both in the same post-process call).
     pub(crate) fn from_saved(tag: &horizon_core::nbt::Tag, frame: PieceFrame) -> Self {
-        let int = |key| super::saved_legacy::int(tag, key);
         let flag = |key| super::saved_legacy::flag(tag, key);
         Self {
-            base: Scattered {
-                frame: Mutex::new(frame),
-                width: int("Width"),
-                height: int("Height"),
-                depth: int("Depth"),
-                height_position: Mutex::new(int("HPos")),
-            },
+            base: Scattered::from_saved(tag, frame),
             spawned: Mutex::new(flag("Witch") || flag("Cat")),
         }
     }

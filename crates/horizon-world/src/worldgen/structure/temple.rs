@@ -8,7 +8,7 @@ use horizon_core::{
 use std::sync::Mutex;
 use {
     super::{
-        legacy::{HORIZONTAL, LegacyPiece, PieceContext, Result, random_horizontal},
+        legacy::{HORIZONTAL, LegacyPiece, PieceContext, PieceFrame, Result, random_horizontal},
         simple::Scattered,
     },
     horizon_core::bounding_box::BoundingBox,
@@ -25,6 +25,15 @@ impl DesertPyramidPiece {
         Self {
             base: Scattered::new(west, 64, north, 21, 15, 21, direction),
             placed_chest: Mutex::new([false; 4]),
+        }
+    }
+    /// `DesertPyramidPiece(StructurePieceType, CompoundTag)`: the scattered
+    /// fields and the four chest flags.
+    pub(crate) fn from_saved(tag: &Tag, frame: PieceFrame) -> Self {
+        let flag = |i: usize| super::saved_legacy::flag(tag, &format!("hasPlacedChest{i}"));
+        Self {
+            base: Scattered::from_saved(tag, frame),
+            placed_chest: Mutex::new([flag(0), flag(1), flag(2), flag(3)]),
         }
     }
     /// getPotentialSuspiciousSandWorldPositions, in placement order.
@@ -453,6 +462,22 @@ impl JungleTemplePiece {
         Self {
             base: Scattered::new(west, 64, north, 12, 10, 15, direction),
             placed: Mutex::new([false; 4]),
+        }
+    }
+}
+impl JungleTemplePiece {
+    /// `JungleTemplePiece(CompoundTag)`: the scattered fields and the four
+    /// placed flags.
+    pub(crate) fn from_saved(tag: &Tag, frame: PieceFrame) -> Self {
+        let flag = |key: &str| super::saved_legacy::flag(tag, key);
+        Self {
+            base: Scattered::from_saved(tag, frame),
+            placed: Mutex::new([
+                flag("placedMainChest"),
+                flag("placedHiddenChest"),
+                flag("placedTrap1"),
+                flag("placedTrap2"),
+            ]),
         }
     }
 }

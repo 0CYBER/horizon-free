@@ -364,8 +364,9 @@ mod tests {
             original.save(),
             "rebuild box and NORTH orientation"
         );
-        // `tejp` is a piece type Horizon cannot read yet.
-        for (key, value) in [("id", "minecraft:tejp"), ("Rot", "broken")] {
+        // An id no piece type binds rejects the entire start, and so does a
+        // readable id whose own fields are broken (the shipwreck's rotation).
+        for (key, value) in [("id", "minecraft:unknown_piece"), ("Rot", "broken")] {
             let mut broken = tag.clone();
             let Some(Tag::List(children)) = broken.get_mut("Children") else {
                 unreachable!()

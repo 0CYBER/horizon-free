@@ -1228,7 +1228,7 @@ mod tests {
             assert_eq!(read(&legacy).unwrap().save(), Some(tag.clone()));
         }
         for (key, value) in [
-            ("id", Tag::String("minecraft:tejp".into())),
+            ("id", Tag::String("minecraft:not_a_piece".into())),
             ("rotation", Tag::String("broken".into())),
             ("O", Tag::Int(2)),
             ("GD", Tag::Int(1)),
@@ -1250,6 +1250,139 @@ mod tests {
             );
         }
         assert!(read(&Tag::compound([("id", Tag::String("INVALID".into()))])).is_none());
+    }
+
+    /// The saved pieces of a desert pyramid, a jungle temple and a buried
+    /// treasure read back with their state instead of leaving the whole start
+    /// to the generator's rebuild.
+    #[test]
+    fn saved_scattered_pieces_and_a_buried_treasure_load_with_their_state() {
+        use crate::{
+            registry::BlockRegistry,
+            worldgen::structure::{StateTransforms, saved_legacy, start::StructureKind},
+        };
+        use horizon_core::{density::TerrainAdjustment, nbt::Tag};
+        let names = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
+        let registry = Box::leak(Box::new(
+            BlockRegistry::from_nbt(&Tag::compound([
+                ("DataVersion", Tag::Int(crate::DATA_VERSION)),
+                (
+                    "states",
+                    Tag::List(
+                        names
+                            .iter()
+                            .map(|n| Tag::compound([("id", Tag::String((*n).into()))]))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "defaults",
+                    Tag::Compound(
+                        names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, n)| ((*n).into(), Tag::Int(i as i32)))
+                            .collect(),
+                    ),
+                ),
+            ]))
+            .unwrap(),
+        ));
+        let transforms = StateTransforms::from_json(
+            r#"{"rotate":[[0,0,0],[1,1,1],[2,2,2]],"mirror":[[0,0],[1,1],[2,2]],"full_block":[false,false,false]}"#,
+            3,
+        )
+        .unwrap();
+        let resources = StructureResources::new(
+            registry,
+            transforms,
+            std::path::Path::new("unused"),
+            BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let bindings = FeatureBlockBindings::new(registry, BTreeSet::new()).unwrap();
+        let def = StructureDef {
+            name: "test:saved-pieces".into(),
+            kind: StructureKind::Unsupported("test".into()),
+            biomes: BTreeSet::new(),
+            step: 0,
+            terrain: TerrainAdjustment::None,
+            enhanced_terrain: None,
+        };
+        let piece = |id: &str, at: [i32; 3], extra: Vec<(&str, Tag)>| {
+            let mut entries = vec![
+                ("id", Tag::String(id.into())),
+                (
+                    "BB",
+                    Tag::IntArray(vec![at[0], at[1], at[2], at[0], at[1], at[2]]),
+                ),
+                ("O", Tag::Int(-1)),
+                ("GD", Tag::Int(0)),
+            ];
+            entries.extend(extra);
+            Tag::compound(entries)
+        };
+        let tedp = piece(
+            "minecraft:tedp",
+            [3, 64, 5],
+            vec![
+                ("Width", Tag::Int(21)),
+                ("Height", Tag::Int(15)),
+                ("Depth", Tag::Int(21)),
+                ("HPos", Tag::Int(62)),
+                ("hasPlacedChest0", Tag::Byte(1)),
+                ("hasPlacedChest1", Tag::Byte(0)),
+                ("hasPlacedChest2", Tag::Byte(0)),
+                ("hasPlacedChest3", Tag::Byte(1)),
+            ],
+        );
+        let tejp = piece(
+            "minecraft:tejp",
+            [40, 64, 5],
+            vec![
+                ("Width", Tag::Int(12)),
+                ("Height", Tag::Int(10)),
+                ("Depth", Tag::Int(15)),
+                ("HPos", Tag::Int(61)),
+                ("placedMainChest", Tag::Byte(1)),
+                ("placedHiddenChest", Tag::Byte(0)),
+                ("placedTrap1", Tag::Byte(0)),
+                ("placedTrap2", Tag::Byte(1)),
+            ],
+        );
+        let btp = piece("minecraft:btp", [80, 40, 5], vec![]);
+        for (id, tag) in [("tedp", &tedp), ("tejp", &tejp), ("btp", &btp)] {
+            let piece = saved_legacy::read(id, tag, &def)
+                .unwrap_or_else(|| panic!("{id} binds its tag constructor"));
+            let Tag::Compound(compound) = tag else {
+                unreachable!()
+            };
+            assert_eq!(piece.save(), Some(compound.clone()), "{id}");
+        }
+        // The same tags inside a saved start now give pieces instead of the
+        // generator's rebuild (or an empty start).
+        let start = Tag::compound([
+            ("id", Tag::String(def.name.as_str().into())),
+            ("ChunkX", Tag::Int(0)),
+            ("ChunkZ", Tag::Int(0)),
+            ("BB", Tag::IntArray(vec![0, 30, 0, 90, 70, 20])),
+            ("Children", Tag::List(vec![tedp.clone(), tejp, btp])),
+        ]);
+        let loaded = read_saved_start(
+            0,
+            &def,
+            ChunkPos::new(0, 0),
+            &start,
+            1234,
+            &resources,
+            &bindings,
+        )
+        .expect("the saved pieces load");
+        assert_eq!(loaded.pieces.len(), 3);
+        let Tag::Compound(tedp) = tedp else {
+            unreachable!()
+        };
+        assert_eq!(loaded.pieces[0].save(), Some(tedp));
     }
 
     /// A template piece a save wrote (the shipwreck and ocean ruin families write
