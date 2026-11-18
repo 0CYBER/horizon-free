@@ -2162,9 +2162,10 @@ fn download_for(
             "\n  • No signed-in account owns Minecraft: Java Edition, so Horizon can't download it."
                 .into(),
         ),
-        Err(_) => Err(format!(
-            "\n  • Or sign in with the Microsoft account that owns Minecraft: Horizon then \
-             downloads {v} from Mojang itself."
+        Err(_) => Err(crate::i18n::trf(
+            "\n  • Sign in with a Microsoft account that owns Minecraft: Java Edition to download \
+             {version} from Mojang.",
+            &[("version", v)],
         )),
     }
 }
@@ -4605,9 +4606,29 @@ mod tests {
             Err("no network in tests".into())
         };
         let log = |_: String| {};
+        let refused = download_for(
+            &pins,
+            &dir,
+            Err(account::NoOwner::default()),
+            false,
+            &fetch,
+            &log,
+        )
+        .unwrap_err();
+        // Ordinary prepare appends the refusal to the missing-Minecraft diagnostic.
+        let diagnostic = sources::not_found(&pins.version, &[], Path::new("chosen")) + &refused;
+        let (_, remedies) = diagnostic.split_once("\nTo fix it:").unwrap();
+        assert_eq!(
+            remedies,
+            "\n  • Play 26.3 once in the official Minecraft launcher, or in Prism Launcher, \
+             MultiMC, the Modrinth App, ATLauncher, GDLauncher or Dawn Client, then prepare again.\
+             \n  • Or choose the folder where your launcher keeps Minecraft 26.3 (Minecraft \
+             folder › Choose… in the launcher, --minecraft on the command line).\
+             \n  • Sign in with a Microsoft account that owns Minecraft: Java Edition to download \
+             26.3 from Mojang."
+        );
         let no_owner = || Ok(account::Launch::default());
         for (pass, signed_in) in [
-            (Err(account::NoOwner::default()), false),
             (Err(account::NoOwner::default()), true),
             (no_owner(), false),
             (no_owner(), true),
