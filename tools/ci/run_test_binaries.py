@@ -281,9 +281,17 @@ def main(argv: list[str]) -> int:
     command, test_args = (command[:command.index("--")], command[command.index("--") + 1:]) if "--" in command \
         else (command, [])
     limits = None
-    if args.time_limits:
-        warn, _, fail = args.time_limits.partition(",")
-        limits = float(warn), float(fail)
+    if args.time_limits is not None:
+        warn, sep, fail = args.time_limits.partition(",")
+        error = "--time-limits needs WARN,FAIL (e.g. 2,5)"
+        if not sep or not warn or not fail:
+            parser.error(error)
+        try:
+            limits = float(warn), float(fail)
+        except ValueError:
+            parser.error(error)
+        if any(not (value >= 0) for value in limits):
+            parser.error("--time-limits needs non-negative WARN,FAIL (e.g. 2,5)")
         test_args = ["-Z", "unstable-options", "--report-time", *test_args]
     listing = subprocess.run([*command, "--no-run", "--message-format=json-render-diagnostics"],
                              stdout=subprocess.PIPE, text=True)
