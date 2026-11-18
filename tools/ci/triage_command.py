@@ -186,10 +186,10 @@ class Api:
 def actions_by(api, login: str, now: datetime) -> int:
     """Actions this workflow answered for `login` in the last 24 h, counted from its own comments."""
     since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    tag = f"on behalf of @{login.lower()}"
+    tag = re.compile(rf"on behalf of @{re.escape(login.lower())}(?![a-z0-9-])")
     return sum(1 for c in api.recent_comments(since)
                if c["user"] == "github-actions[bot]" and c["body"].startswith(PREFIX)
-               and c["body"].split("\n", 1)[0].lower().count(tag))
+               and tag.search(c["body"].split("\n", 1)[0].lower()))
 
 
 def say(action: str, login: str, url: str) -> str:

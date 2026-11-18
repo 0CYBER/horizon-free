@@ -248,6 +248,11 @@ class LimitTests(unittest.TestCase):
         with self.assertRaises(tc.Refused):
             do("/close", Fake(past=past("kacpherek", 60)), login="Kacpherek")
 
+    def test_prefix_login_is_not_charged(self):
+        api = Fake(past=past("bobby", 60))
+        self.assertEqual(tc.actions_by(api, "bob", NOW), 0)
+        self.assertEqual(tc.actions_by(api, "bobby", NOW), 60)
+
     def test_ludovic_is_unlimited(self):
         do("/close", Fake(past=past("ludovic111", 100)), login="ludovic111")
 
