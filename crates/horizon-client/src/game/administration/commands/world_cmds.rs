@@ -1790,9 +1790,9 @@ impl Game<'_> {
     /// existing command helper (the separate Guest repair owns that method).
     pub(in crate::game) fn passenger_vehicle_target(&self, target: Target) -> Option<Target> {
         match super::super::native_entities::target_id(target) {
-            Some(id) => self
-                .passenger_vehicle(id)
-                .and_then(|parent| self.level_entity(parent as i32)),
+            Some(id) => self.passenger_vehicle(id).and_then(|parent| {
+                self.level_entity(parent as i32).or_else(|| self.ride_vehicle(target))
+            }),
             None => self.ride_vehicle(target),
         }
     }
@@ -1805,9 +1805,9 @@ impl Game<'_> {
             Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.extra.mount?,
             _ => return None,
         };
-        Some(if self.boats.iter().any(|b| b.id == id) {
+        Some(if self.boat_object(id).is_some() {
             Target::Boat(id)
-        } else if self.carts.iter().any(|c| c.id == id) {
+        } else if self.cart_object(id).is_some() {
             Target::Cart(id)
         } else if self.armor_stands.iter().any(|a| a.id == id) {
             Target::Stand(id)

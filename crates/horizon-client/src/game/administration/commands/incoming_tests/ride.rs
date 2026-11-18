@@ -12,7 +12,7 @@ const HOGLIN: &str = "0000609a-0000-0000-0000-000000000004";
 /// A server-side game on a stone floor at y=200 with an oak fence at 8 201 0
 /// to tie a lead to, or None when the prepared resources are missing (CI has
 /// no vanilla data).
-fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -> Option<Game<'a>> {
+fn with_game(test: impl FnOnce(&mut Game<'_>)) {
     let root = std::env::var_os("HORIZON_TEST_RESOURCES")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
@@ -21,7 +21,7 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
                 .join(horizon_core::VANILLA_VERSION)
         });
     if !root.join("movement-properties.nbt").exists() {
-        return None;
+        return;
     }
     let settings = Settings::default();
     let loaded = load_resources(
@@ -36,15 +36,14 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
         &Progress::new(),
         &mut |_, _| unreachable!(),
     )
-    .ok()?;
-    let mut options = Options::parse(std::iter::empty()).ok()??;
+    .expect("load resources");
+    let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
     options.resources = root.clone();
     options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
-    let res = resources.insert(loaded.resources);
     let mut game = Game::new(
-        res,
+        &loaded.resources,
         loaded.pack,
-        loaded.gui?,
+        loaded.gui.unwrap(),
         options,
         settings,
         Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
@@ -52,7 +51,10 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
         )),
         None,
     )
-    .ok()?;
+    .expect("construct game");
+    game.reset_entity_residency();
+    game.native_lifecycle
+        .begin_open(mod_api::Authority::IntegratedServer);
     game.build_registries();
     game.set_allow_commands(true);
     for x in 0..2 {
@@ -76,7 +78,7 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
     ] {
         assert!(game.run_command(command), "{command}");
     }
-    Some(game)
+    test(&mut game);
 }
 
 /// Runs `command`: whether it succeeded and what the issuer was told.
@@ -126,139 +128,134 @@ fn step(game: &mut Game<'_>) {
 
 #[test]
 fn a_selector_matching_two_entities_mounts_nothing() {
-    let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
-        return;
-    };
-    summon(&mut game, "minecraft:pig", 4.5, [24730, 0, 0, 1], false);
-    summon(&mut game, "minecraft:pig", 6.5, [24730, 0, 0, 2], false);
-    // `EntityArgument.parse` refuses a selector whose `getMaxResults` is over
-    // one for a single entity argument (`argument.entity.toomany`), before
-    // `EntitySelector.findSingleEntity` can see two matches.
-    let (ok, said) = run(&mut game, "ride @e[type=minecraft:pig] mount @s");
-    assert!(!ok, "two pigs match the target selector");
-    // The chat carries vanilla's translated message when the language data is
-    // loaded, the key otherwise (another test in the same process may leave it
-    // unloaded).
-    assert!(
-        said.iter().any(|line| {
-            line.contains("Only one entity is allowed") || line.contains("argument.entity.toomany")
-        }),
-        "{said:?}"
-    );
-    assert!(
-        game.mobs.iter().all(|m| m.extra.mount.is_none()),
-        "no pig rides"
-    );
-    // A selector that matches one entity still mounts it: the near pig
-    // rides the far one.
-    let (ok, said) = run(
-        &mut game,
-        "ride @e[type=minecraft:pig,limit=1,sort=nearest] mount @e[type=minecraft:pig,limit=1,sort=furthest]",
-    );
-    assert!(ok, "{said:?}");
-    assert_eq!(
-        game.mobs.iter().filter(|m| m.extra.mount.is_some()).count(),
-        1,
-        "one pig rides the other"
-    );
+    with_game(|game| {
+        summon(game, "minecraft:pig", 4.5, [24730, 0, 0, 1], false);
+        summon(game, "minecraft:pig", 6.5, [24730, 0, 0, 2], false);
+        // `EntityArgument.parse` refuses a selector whose `getMaxResults` is over
+        // one for a single entity argument (`argument.entity.toomany`), before
+        // `EntitySelector.findSingleEntity` can see two matches.
+        let (ok, said) = run(game, "ride @e[type=minecraft:pig] mount @s");
+        assert!(!ok, "two pigs match the target selector");
+        // The chat carries vanilla's translated message when the language data is
+        // loaded, the key otherwise (another test in the same process may leave it
+        // unloaded).
+        assert!(
+            said.iter().any(|line| {
+                line.contains("Only one entity is allowed")
+                    || line.contains("argument.entity.toomany")
+            }),
+            "{said:?}"
+        );
+        assert!(
+            game.mobs.iter().all(|m| m.extra.mount.is_none()),
+            "no pig rides"
+        );
+        // A selector that matches one entity still mounts it: the near pig
+        // rides the far one.
+        let (ok, said) = run(
+            game,
+            "ride @e[type=minecraft:pig,limit=1,sort=nearest] mount @e[type=minecraft:pig,limit=1,sort=furthest]",
+        );
+        assert!(ok, "{said:?}");
+        assert_eq!(
+            game.mobs.iter().filter(|m| m.extra.mount.is_some()).count(),
+            1,
+            "one pig rides the other"
+        );
+    });
 }
 
 #[test]
 fn a_mounting_mob_drops_its_lead() {
-    let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
-        return;
-    };
-    summon(&mut game, "minecraft:pig", 6.5, [24730, 0, 0, 1], true);
-    summon(&mut game, "minecraft:cow", 5.5, [24730, 0, 0, 2], false);
-    // The lead read from the save becomes the fence's knot.
-    step(&mut game);
-    let pig = mob(&game, PIG);
-    let cow = mob(&game, COW);
-    assert_eq!(game.mobs[pig].extra.leash, Some(Holder::Knot([8, 201, 0])));
-    let at = game.mobs[pig].position;
-    let (ok, said) = run(
-        &mut game,
-        "ride @e[type=minecraft:pig,limit=1] mount @e[type=minecraft:cow,limit=1]",
-    );
-    assert!(ok, "{said:?}");
-    // Mob.startRiding: the pig rides the cow, and its lead is dropped
-    // (`dropLeash()`: the lead falls as an item at the pig's feet).
-    assert_eq!(game.mobs[pig].extra.mount, Some(game.mobs[cow].id));
-    assert_eq!(game.mobs[pig].extra.leash, None, "the lead went");
-    let leads: Vec<_> = game
-        .dropped
-        .iter()
-        .filter(|d| &*d.stack.item == "minecraft:lead")
-        .collect();
-    assert_eq!(leads.len(), 1, "one lead fell");
-    assert_eq!(leads[0].position, at, "at the pig's feet");
+    with_game(|game| {
+        summon(game, "minecraft:pig", 6.5, [24730, 0, 0, 1], true);
+        summon(game, "minecraft:cow", 5.5, [24730, 0, 0, 2], false);
+        // The lead read from the save becomes the fence's knot.
+        step(game);
+        let pig = mob(game, PIG);
+        let cow = mob(game, COW);
+        assert_eq!(game.mobs[pig].extra.leash, Some(Holder::Knot([8, 201, 0])));
+        let at = game.mobs[pig].position;
+        let (ok, said) = run(
+            game,
+            "ride @e[type=minecraft:pig,limit=1] mount @e[type=minecraft:cow,limit=1]",
+        );
+        assert!(ok, "{said:?}");
+        // Mob.startRiding: the pig rides the cow, and its lead is dropped
+        // (`dropLeash()`: the lead falls as an item at the pig's feet).
+        assert_eq!(game.mobs[pig].extra.mount, Some(game.mobs[cow].id));
+        assert_eq!(game.mobs[pig].extra.leash, None, "the lead went");
+        let leads: Vec<_> = game
+            .dropped
+            .iter()
+            .filter(|d| &*d.stack.item == "minecraft:lead")
+            .collect();
+        assert_eq!(leads.len(), 1, "one lead fell");
+        assert_eq!(leads[0].position, at, "at the pig's feet");
+    });
 }
 
 #[test]
 fn a_brain_boarding_mob_drops_its_lead() {
-    let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
-        return;
-    };
-    // A hoglin is a monster: Peaceful refuses to summon it.
-    assert!(game.run_command("difficulty normal"));
-    summon(&mut game, "minecraft:piglin", 6.5, [24730, 0, 0, 3], true);
-    summon_with(
-        &mut game,
-        "minecraft:hoglin",
-        5.5,
-        [24730, 0, 0, 4],
-        ",IsImmuneToZombification:1b",
-    );
-    // The lead read from the save becomes the fence's knot.
-    step(&mut game);
-    let piglin = mob(&game, PIGLIN);
-    let hoglin = mob(&game, HOGLIN);
-    assert_eq!(
-        game.mobs[piglin].extra.leash,
-        Some(Holder::Knot([8, 201, 0]))
-    );
-    let at = game.mobs[piglin].position;
-    // `PiglinAi.startRiding` queues the mount during the mob's tick; the
-    // group loop applies brain events through `mobs::apply_brain_events`,
-    // then `tick_mobs` seats the riders (`sync_riders`) before it handles
-    // the rest. `Mob.startRiding` drops the lead where the piglin stood,
-    // before `positionRider` moves it onto the hoglin.
-    let mut events = vec![horizon_client::mobs::MobEvent::StartRiding {
-        rider: game.mobs[piglin].id,
-        vehicle: game.mobs[hoglin].id,
-    }];
-    let mut mobs = game.mobs.lift();
-    let mut lent = horizon_client::health::LentLevel::take(&mut game.world);
-    {
-        let mut level = horizon_client::health::DamageLevel::lent(
-            &game.world,
-            game.pack.assets.registry,
-            &mut lent,
-            Some(world_items!(game)),
-            Some(&game.pack.block_registries),
-            &game.damage_hooks,
+    with_game(|game| {
+        // A hoglin is a monster: Peaceful refuses to summon it.
+        assert!(game.run_command("difficulty normal"));
+        summon(game, "minecraft:piglin", 6.5, [24730, 0, 0, 3], true);
+        summon_with(
+            game,
+            "minecraft:hoglin",
+            5.5,
+            [24730, 0, 0, 4],
+            ",IsImmuneToZombification:1b",
         );
-        horizon_client::mobs::apply_brain_events(&mut mobs, &mut level, &mut events, 0);
-    }
-    lent.give_back(&mut game.world);
-    game.mobs
-        .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
-    game.sync_riders();
-    assert_ne!(
-        game.mobs[piglin].position, at,
-        "the piglin sits on the hoglin"
-    );
-    game.handle_mob_events(events).unwrap();
-    assert_eq!(game.mobs[piglin].extra.mount, Some(game.mobs[hoglin].id));
-    assert_eq!(game.mobs[piglin].extra.leash, None, "the lead went");
-    let leads: Vec<_> = game
-        .dropped
-        .iter()
-        .filter(|d| &*d.stack.item == "minecraft:lead")
-        .collect();
-    assert_eq!(leads.len(), 1, "one lead fell");
-    assert_eq!(leads[0].position, at, "at the piglin's feet");
+        // The lead read from the save becomes the fence's knot.
+        step(game);
+        let piglin = mob(game, PIGLIN);
+        let hoglin = mob(game, HOGLIN);
+        assert_eq!(
+            game.mobs[piglin].extra.leash,
+            Some(Holder::Knot([8, 201, 0]))
+        );
+        let at = game.mobs[piglin].position;
+        // `PiglinAi.startRiding` queues the mount during the mob's tick; the
+        // group loop applies brain events through `mobs::apply_brain_events`,
+        // then `tick_mobs` seats the riders (`sync_riders`) before it handles
+        // the rest. `Mob.startRiding` drops the lead where the piglin stood,
+        // before `positionRider` moves it onto the hoglin.
+        let mut events = vec![horizon_client::mobs::MobEvent::StartRiding {
+            rider: game.mobs[piglin].id,
+            vehicle: game.mobs[hoglin].id,
+        }];
+        let mut mobs = game.mobs.lift();
+        let mut lent = horizon_client::health::LentLevel::take(&mut game.world);
+        {
+            let mut level = horizon_client::health::DamageLevel::lent(
+                &game.world,
+                game.pack.assets.registry,
+                &mut lent,
+                Some(world_items!(game)),
+                Some(&game.pack.block_registries),
+                &game.damage_hooks,
+            );
+            horizon_client::mobs::apply_brain_events(&mut mobs, &mut level, &mut events, 0);
+        }
+        lent.give_back(&mut game.world);
+        game.mobs
+            .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
+        game.sync_riders();
+        assert_ne!(
+            game.mobs[piglin].position, at,
+            "the piglin sits on the hoglin"
+        );
+        game.handle_mob_events(events).unwrap();
+        assert_eq!(game.mobs[piglin].extra.mount, Some(game.mobs[hoglin].id));
+        assert_eq!(game.mobs[piglin].extra.leash, None, "the lead went");
+        let leads: Vec<_> = game
+            .dropped
+            .iter()
+            .filter(|d| &*d.stack.item == "minecraft:lead")
+            .collect();
+        assert_eq!(leads.len(), 1, "one lead fell");
+        assert_eq!(leads[0].position, at, "at the piglin's feet");
+    });
 }
