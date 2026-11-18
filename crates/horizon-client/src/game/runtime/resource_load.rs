@@ -258,7 +258,13 @@ pub(super) fn load_core(
             });
             let biomes = Step::spawn(scope, parallel, "biomes", || {
                 let biomes = Arc::new(
-                    startup::time("core.biomes", || Biomes::load(resources))
+                    startup::time("core.biomes", || {
+                        if headless {
+                            Biomes::load_for_server(resources)
+                        } else {
+                            Biomes::load(resources)
+                        }
+                    })
                         .map_err(|e| e.to_string())?,
                 );
                 // A launch that names a world: its data preload needs only the

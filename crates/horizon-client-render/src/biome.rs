@@ -194,9 +194,28 @@ fn color(v: &Value) -> Option<u32> {
         _ => None,
     }
 }
+/// `textures/colormap/<name>.png` as `GrassColor`/`FoliageColor` read it. An error names the file.
 fn colormap(root: &ResourceSource, name: &str) -> Result<Vec<u32>> {
     let path = format!("assets/minecraft/textures/colormap/{name}.png");
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(root.read(&path)?));
+    let bytes = root.read(&path).map_err(|e| format!("{path}: {e}"))?;
+    decode_colormap(bytes).map_err(|e| format!("{path}: {e}").into())
+}
+/// [`colormap`], or vanilla's server's table when the file is missing: a dedicated server tints
+/// nothing, and one prepared from `server.jar` alone has no client textures. Vanilla's server never
+/// reads the colormaps, so `GrassColor` and `FoliageColor` keep their 65,536 zeros there.
+fn server_colormap(root: &ResourceSource, name: &str) -> Result<Vec<u32>> {
+    let path = format!("assets/minecraft/textures/colormap/{name}.png");
+    match root.read(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log::info!("Horizon: no {path}: this server's biome colours are 0, as vanilla's");
+            Ok(vec![0; 256 * 256])
+        }
+        Err(e) => Err(format!("{path}: {e}").into()),
+        Ok(bytes) => decode_colormap(bytes).map_err(|e| format!("{path}: {e}").into()),
+    }
+}
+fn decode_colormap(bytes: Vec<u8>) -> Result<Vec<u32>> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.ignore_checksums(true);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info()?;
@@ -327,6 +346,18 @@ pub fn mod_biome_files(prepared: &std::path::Path) -> Vec<(String, Value)> {
 }
 impl Biomes {
     pub fn load(root: &ResourceRoot) -> Result<Self> {
+        Self::load_with(root, colormap)
+    }
+    /// [`Self::load`] for a dedicated server: it starts without the colormaps, which only tint
+    /// what a client draws. When the folder has them they are read as the client reads them, so
+    /// the colours a native mod reads on the server (`block_edits`) don't change.
+    pub fn load_for_server(root: &ResourceRoot) -> Result<Self> {
+        Self::load_with(root, server_colormap)
+    }
+    fn load_with(
+        root: &ResourceRoot,
+        colormap: fn(&ResourceSource, &str) -> Result<Vec<u32>>,
+    ) -> Result<Self> {
         let maps = Colormaps {
             grass: colormap(root.source(), "grass")?,
             foliage: colormap(root.source(), "foliage")?,
@@ -1024,6 +1055,44 @@ mod source_tests {
         )]));
         assert_eq!(colormap(&source, "grass").unwrap(), [0x0c2238]);
         assert!(colormap(&source, "missing").is_err());
+    }
+
+    /// A folder with one biome file and no textures: a server prepared from `server.jar` alone.
+    fn server_only_folder() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let biomes = dir.path().join("data/minecraft/worldgen/biome");
+        std::fs::create_dir_all(&biomes).unwrap();
+        std::fs::write(
+            biomes.join("plains.json"),
+            r#"{"temperature": 0.8, "downfall": 0.4, "effects": {"water_color": 4159204}}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_server_loads_its_biomes_without_the_colormaps_as_vanillas_server() {
+        let dir = server_only_folder();
+        let root = ResourceRoot::directory(dir.path().to_path_buf());
+        let biomes = Biomes::load_for_server(&root).unwrap();
+        let plains = biomes.get(biomes.index["minecraft:plains"]);
+        // GrassColor/FoliageColor on vanilla's server: tables never filled, so 0 everywhere.
+        assert_eq!(
+            (plains.grass, plains.foliage, plains.dry_foliage),
+            (0, 0, 0)
+        );
+        assert_eq!(plains.water, 0x3F76E4);
+    }
+
+    #[test]
+    fn a_client_without_a_colormap_names_the_file() {
+        let dir = server_only_folder();
+        let root = ResourceRoot::directory(dir.path().to_path_buf());
+        let error = Biomes::load(&root).err().unwrap().to_string();
+        assert!(
+            error.contains("assets/minecraft/textures/colormap/grass.png"),
+            "{error}"
+        );
     }
 }
 
