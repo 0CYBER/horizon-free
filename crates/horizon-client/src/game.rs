@@ -1716,17 +1716,8 @@ struct Game<'a> {
     upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::JoinedFrusta>,
-    /// Whether the renderer's section-occlusion graph is active for this view.
-    entity_section_visibility_valid: bool,
-    /// The camera section in the current world layout.
-    entity_section_camera: Option<(i32, i32, i32)>,
-    sync_occlusion_culler: Option<horizon_client::voxel_occlusion::Culler>,
-    async_occlusion_culler: Option<Box<occlusion_culling::AsyncOcclusionCuller>>,
-    async_occlusion_culling_failed: bool,
+    occlusion: entity_culling::EntityOcclusion,
     async_particle_culler: RefCell<particle_culling::ParticleAsyncState>,
-    /// `Renderer::pack_shadow_casters` for this frame's entities: (keep what the culler hides,
-    /// build the player's model in first person); (false, false) without a shader pack.
-    pack_shadow_casters: (bool, bool),
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/runtime/agent/mod.rs).
@@ -5714,7 +5705,7 @@ impl Game<'_> {
             // in the view or not (`Renderer::shadow_pass_block_entities`, #8464): those the
             // view leaves out go in hidden from the camera.
             let shadow_only: Vec<&([i32; 3], u32)> =
-                if self.pack_ids.is_some() && self.pack_shadow_casters.0 {
+                if self.pack_ids.is_some() && self.occlusion.shadow_casters.0 {
                     let listed: HashSet<[i32; 3]> = camera_list.iter().map(|b| b.0).collect();
                     r.shadow_pass_block_entities(camera)
                         .filter(|(pos, state)| {
@@ -5739,7 +5730,7 @@ impl Game<'_> {
                 }
                 let name = &*self.res.facts().get(BlockStateId(state)).name;
                 if self.settings.horizon.entity_culling == EntityCullingMode::Off
-                    || self.pack_shadow_casters.0
+                    || self.occlusion.shadow_casters.0
                     || name == "minecraft:end_portal"
                     || name == "minecraft:end_gateway"
                     || hi.y - lo.y > 2.0
@@ -11028,13 +11019,8 @@ impl<'a> Game<'a> {
             tick_script: tick_script::TickScript::from_env(),
             agent: agent::Agent::default(),
             view_frustum: None,
-            entity_section_visibility_valid: false,
-            entity_section_camera: None,
-            sync_occlusion_culler: None,
-            async_occlusion_culler: None,
-            async_occlusion_culling_failed: false,
+            occlusion: Default::default(),
             async_particle_culler: RefCell::new(Default::default()),
-            pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
             upload_pace: Default::default(),
             frame_graph: Default::default(),

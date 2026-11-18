@@ -2171,7 +2171,11 @@ version = "0.1.0"
 dependencies = [
  "horizon-client-lib",
  "horizon-core",
+ "horizon-mod-runtime",
  "horizon-threads",
+ "horizon-world",
+ "log",
+ "serde_json",
 ]
 
 [[package]]

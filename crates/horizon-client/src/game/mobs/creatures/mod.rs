@@ -7812,7 +7812,7 @@ impl Game<'_> {
                 && self.cull_entity_camera_bounds(lo, hi)
                 && let Some((mark, _)) = skinned
             {
-                if self.pack_shadow_casters.0 {
+                if self.occlusion.shadow_casters.0 {
                     let mut frame = self.skin_frame.borrow_mut();
                     let end = frame.vertices as usize;
                     horizon_client::gfx::pack_draw::EntitySpan::hide(
@@ -7870,12 +7870,12 @@ impl Game<'_> {
         // keep the existing exact mesh-culling path.
         if self.settings.horizon.entity_culling == EntityCullingMode::Asynchronous
             && self
-                .async_occlusion_culler
-                .as_ref()
+                .occlusion
+                .asynchronous()
                 .is_some_and(|culler| culler.camera_is_stationary())
             && self.settings.horizon.entity_culling_precheck != 0
             && self.mobs.len() >= self.settings.horizon.entity_culling_precheck as usize
-            && !self.pack_shadow_casters.0
+            && !self.occlusion.shadow_casters.0
             && mod_api::__private::mods().is_empty()
         {
             self.mob_geometry_inner::<true>(camera, alpha, out);

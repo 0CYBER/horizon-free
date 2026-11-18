@@ -18,6 +18,7 @@ macro_rules! section_scene {
         }
     };
 }
+pub(super) use section_scene;
 
 impl Game<'_> {
     pub(super) fn particle_occlusion_context(

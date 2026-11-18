@@ -602,7 +602,7 @@ impl Game<'_> {
         let shadow_sections = self
             .renderer
             .as_ref()
-            .filter(|_| self.pack_ids.is_some() && self.pack_shadow_casters.0);
+            .filter(|_| self.pack_ids.is_some() && self.occlusion.shadow_casters.0);
         for (key, (_, mob)) in &self.spawners.displays {
             let at = glam::DVec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
             if at.distance_squared(camera) >= 64.0 * 64.0 {

@@ -14,9 +14,9 @@ Fox.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_fro
 Fox.clearTrusted	port	crates/horizon-client/src/mobs/fox.rs::clear_trusted	both trusted slots emptied, before a load reads Trusted
 Fox.getFlag	port	crates/horizon-client/src/mobs/fox.rs::flag	flags byte in extra.ints[0]
 Fox.canHoldItem	port	crates/horizon-client/src/mobs/fox.rs::can_hold_item	an empty mouth, or consumable food when the mouth holds something that is not
-Fox.spitOutItem	inline	crates/horizon-client/src/game/mobs/foxes.rs::fox_pick_up	the old mouthful is thrown out at eye level plus the look direction, pickup delay 40, entity.fox.spit
-Fox.dropItemStack	inline	crates/horizon-client/src/game/mobs/foxes.rs::fox_pick_up	the rest of the stack is dropped at the fox's feet with the default pickup delay
-Fox.pickUpItem	port	crates/horizon-client/src/game/mobs/foxes.rs::fox_pick_up	the game's pickup loop takes one item of the stack and marks the mouth as full
+Fox.spitOutItem	inline	crates/horizon-gameplay/src/foxes.rs::fox_pick_up	the old mouthful is thrown out at eye level plus the look direction, pickup delay 40, entity.fox.spit
+Fox.dropItemStack	inline	crates/horizon-gameplay/src/foxes.rs::fox_pick_up	the rest of the stack is dropped at the fox's feet with the default pickup delay
+Fox.pickUpItem	port	crates/horizon-gameplay/src/foxes.rs::fox_pick_up	the game's pickup loop takes one item of the stack and marks the mouth as full
 Fox.getHeadRollAngle	port	crates/horizon-client/src/mobs/fox.rs::pose	head_roll_angle from the interested angle at the partial tick
 Fox.setTarget	missing		minor: only clears the defending flag, which is never set
 Fox.playAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::play_ambient	ticked in #3512; `Fox.playAmbientSound` is cited at crates/horizon-client/src/mobs/ai.rs:1095 (in a comment, so `where` names the enclosing fn)

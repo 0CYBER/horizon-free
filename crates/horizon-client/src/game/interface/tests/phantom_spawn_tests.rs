@@ -100,7 +100,7 @@ fn attempt(game: &mut Game<'_>, tables: &LightTables, roof: Option<&str>) -> (i3
     // `random.nextInt(timeSinceRest) >= 72000` almost always passes at
     // `i32::MAX`; 64 attempts leave no room for the draw to decide the test.
     for _ in 0..64 {
-        game.stats.phantom_tick = 0;
+        game.stats.set_phantom_tick(0);
         game.spawn_phantoms();
         spawned = game
             .mobs

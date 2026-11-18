@@ -9,7 +9,11 @@ description = "Vanilla's logical side: the gameplay the server jar holds, common
 [dependencies]
 horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
 horizon-core = { path = "../horizon-core" }
+horizon-mod-runtime = { path = "../horizon-mod-runtime" }
 horizon-threads = { path = "../horizon-threads" }
+horizon-world = { path = "../horizon-world" }
+log = "0.4"
+serde_json = "1.0.151"
 
 [features]
 # Source retention only, as in horizon-client: the helper-thread profiling hooks.

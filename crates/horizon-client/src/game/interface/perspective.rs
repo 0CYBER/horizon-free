@@ -757,7 +757,7 @@ impl Game<'_> {
     pub(super) fn player_model_shown(&self) -> bool {
         (self.own_body_in_view()
             || shadow_pass_takes_own_model(
-                self.pack_shadow_casters.1,
+                self.occlusion.shadow_casters.1,
                 self.pack_ids.is_some(),
                 self.spectator(),
             ))

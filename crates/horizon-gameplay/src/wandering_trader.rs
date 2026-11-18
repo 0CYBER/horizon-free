@@ -1,10 +1,17 @@
 //! `WanderingTraderSpawner`'s clock and the `WanderingTraderData` saved with the world.
-use horizon_core::nbt::Tag;
+use crate::custom_spawner::CustomSpawnerLevel;
+use horizon_client::{
+    blocks::BlockFacts,
+    mobs::{Species, leash::Holder, spawn_rules, trader},
+    world::World,
+};
+use horizon_core::{geometry::Vec3, nbt::Tag, random::RandomSource};
 
 const TICK_DELAY: i32 = 1200;
 const SPAWN_DELAY: i32 = 24000;
 const MIN_CHANCE: i32 = 25;
 const MAX_CHANCE: i32 = 75;
+const ATTEMPTS: i32 = 10;
 
 /// The spawner's clock and the `WanderingTraderData` saved with the world.
 pub struct Spawner {
@@ -80,6 +87,163 @@ impl Spawner {
     pub fn spawned(&mut self) {
         self.chance = MIN_CHANCE;
     }
+    /// `WanderingTraderSpawner.tick` once its data is loaded: the clock,
+    /// the chance, then the spawn.
+    pub fn tick(&mut self, l: &mut impl CustomSpawnerLevel) {
+        let Some(chance) = self.due() else {
+            return;
+        };
+        if l.parts().world.random.next_int_bound(100).unwrap_or(100) <= chance && spawn(l) {
+            self.spawned();
+        }
+    }
+}
+
+/// `WanderingTraderSpawner.spawn`.
+fn spawn(l: &mut impl CustomSpawnerLevel) -> bool {
+    // ServerLevel.getRandomPlayer: one of the living players, drawn
+    // from the level random.
+    let alive: Vec<Vec3> = l
+        .players()
+        .into_iter()
+        .filter(|p| p.alive)
+        .map(|p| p.position)
+        .collect();
+    if alive.is_empty() {
+        return true;
+    }
+    let random = &mut l.parts().world.random;
+    let pick = random.next_int_bound(alive.len() as i32).unwrap_or(0);
+    let p = alive[pick as usize];
+    if random.next_int_bound(10).unwrap_or(1) != 0 {
+        return false;
+    }
+    let player_pos = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
+    let parts = l.parts();
+    let reference = nearest_bell(parts.world, parts.facts, player_pos, 48).unwrap_or(player_pos);
+    let Some(pos) = find_spawn_near(l, reference, 48) else {
+        return false;
+    };
+    let parts = l.parts();
+    if !has_space(parts.world, parts.facts, pos) {
+        return false;
+    }
+    if l.chunk_biome_has("minecraft:without_wandering_trader_spawns", pos) {
+        return false;
+    }
+    let at = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + 0.5,
+    ];
+    let Some(id) = l.spawn_mob(
+        "minecraft:wandering_trader",
+        at,
+        true,
+        spawn_rules::Reason::Event,
+    ) else {
+        return false;
+    };
+    for _ in 0..2 {
+        spawn_llama(l, id, 4);
+    }
+    if let Some(m) = l.parts().mobs.iter_mut().find(|m| m.id == id) {
+        trader::start_visit(m, reference);
+    }
+    true
+}
+
+/// `tryToSpawnLlamaFor`: a trader llama near the trader, on its lead.
+fn spawn_llama(l: &mut impl CustomSpawnerLevel, trader: u32, radius: i32) {
+    let Some(at) = l.parts().mobs.iter().find(|m| m.id == trader).map(|m| {
+        [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ]
+    }) else {
+        return;
+    };
+    let Some(pos) = find_spawn_near(l, at, radius) else {
+        return;
+    };
+    let spot = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + 0.5,
+    ];
+    if let Some(id) = l.spawn_mob(
+        "minecraft:trader_llama",
+        spot,
+        false,
+        spawn_rules::Reason::Event,
+    ) && let Some(m) = l.parts().mobs.iter_mut().find(|m| m.id == id)
+    {
+        // EntitySpawnReason.EVENT: grown up.
+        m.extra.age = 0;
+        m.extra.leash = Some(Holder::Mob(trader));
+    }
+}
+
+/// `findSpawnPositionNear`: ten tries at a column near the reference
+/// where the trader could stand.
+fn find_spawn_near(
+    l: &mut impl CustomSpawnerLevel,
+    reference: [i32; 3],
+    radius: i32,
+) -> Option<[i32; 3]> {
+    for _ in 0..ATTEMPTS {
+        let world = l.parts().world;
+        let x = reference[0] + world.random.next_int_bound(radius * 2).unwrap_or(0) - radius;
+        let z = reference[2] + world.random.next_int_bound(radius * 2).unwrap_or(0) - radius;
+        if !world.loaded(x, z) {
+            continue;
+        }
+        let y = l.motion_top(x, z);
+        if l.is_spawn_position_ok(
+            "minecraft:wandering_trader",
+            Species::WanderingTrader,
+            [x, y, z],
+        ) {
+            return Some([x, y, z]);
+        }
+    }
+    None
+}
+
+/// `hasEnoughSpace`: no collision in the 2 by 3 by 2 box.
+fn has_space(world: &World, facts: &BlockFacts, pos: [i32; 3]) -> bool {
+    (0..=1).all(|dx| {
+        (0..=2).all(|dy| {
+            (0..=1).all(|dz| {
+                !facts
+                    .get(world.block(pos[0] + dx, pos[1] + dy, pos[2] + dz))
+                    .full_collision
+            })
+        })
+    })
+}
+
+/// The closest bell (`PoiTypes.MEETING`) within `range` blocks.
+fn nearest_bell(world: &World, facts: &BlockFacts, from: [i32; 3], range: i32) -> Option<[i32; 3]> {
+    let mut best: Option<([i32; 3], i32)> = None;
+    for x in from[0] - range..=from[0] + range {
+        for z in from[2] - range..=from[2] + range {
+            if !world.loaded(x, z) {
+                continue;
+            }
+            for y in (from[1] - range).max(world.bottom_y())..=from[1] + range {
+                if &*facts.get(world.block(x, y, z)).name != "minecraft:bell" {
+                    continue;
+                }
+                let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);
+                if best.is_none_or(|b| d < b.1) {
+                    best = Some(([x, y, z], d));
+                }
+            }
+        }
+    }
+    best.map(|b| b.0)
 }
 
 #[cfg(test)]
