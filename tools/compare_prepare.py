@@ -18,6 +18,10 @@ Rust tree): the manifests are read the same way, so nothing is exported again an
 changes. Success requires no port differences, every recorded digest to be the hash of its own
 run's file, and both cross-reruns to leave resources untouched and print no re-export marker.
 Development tool: it needs Python 3.11+, Java and git. Report: <work>/report.json.
+
+--work must be absent or empty: this tool never clears a directory it did not create. Inputs are
+validated first, so a bad jar/archive/binary fails before anything under --work is touched. --keep
+leaves the three prepared folders in place; without it only those folders are removed.
 """
 import argparse
 import hashlib
@@ -35,6 +39,34 @@ PYTHON_REF = '66ce394d2d6dc19ed5f5c53a97b650741af9be76'
 # Written by tools the comparison is not about: the decompiler only lab.py fetches, logs with
 # times in them, compiled classes, and the data generator's own dated cache.
 IGNORED_PARTS = {'classes', 'client-classes', 'logs', '.cache'}
+
+
+def require_path(label, path, *, directory=False):
+    """Fail early on a missing input, before --work is examined or modified."""
+    p = Path(path)
+    if not p.exists():
+        raise SystemExit(f'error: {label} does not exist: {p}')
+    if directory and not p.is_dir():
+        raise SystemExit(f'error: {label} is not a directory: {p}')
+    if not directory and not p.is_file():
+        raise SystemExit(f'error: {label} is not a regular file: {p}')
+
+
+def owned_work(path):
+    """Return an empty work directory we may create into, deleting nothing the caller supplied."""
+    if path.is_symlink():
+        raise SystemExit(f'error: --work is a symlink; refusing to follow it: {path}')
+    work = path.resolve()
+    if work.exists():
+        if not work.is_dir():
+            raise SystemExit(f'error: --work is not a directory: {path}')
+        if any(work.iterdir()):
+            raise SystemExit(f'error: --work is not empty: {path}\n'
+                             '       choose a fresh path or clear it yourself; '
+                             'this tool never deletes an existing directory')
+        return work
+    work.mkdir(parents=True)
+    return work
 
 
 def tree(ref, destination, archive=None):
@@ -87,9 +119,16 @@ def main():
         binary = Path(metadata['target_directory']) / 'release' / (
             'horizon-prepare.exe' if os.name == 'nt' else 'horizon-prepare')
     binary = binary.resolve()
-    work = args.work.resolve()
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
+    # Validate every input before touching --work: a bad jar, archive or binary must not
+    # cost the caller a single pre-existing file (issue #17299).
+    require_path('--server-jar', args.server_jar)
+    require_path('--minecraft-dir', args.minecraft_dir, directory=True)
+    if args.python_tree is not None:
+        require_path('--python-tree', args.python_tree)
+    require_path('--binary', binary)
+    work = owned_work(args.work)
+    print(f'work: {work}', flush=True)
+    print(f'keep: {args.keep}', flush=True)
     game = ['--prepare', '--server-jar', str(args.server_jar.resolve()),
             '--minecraft-dir', str(args.minecraft_dir.resolve())]
     python = [sys.executable, '-u', 'tools/prepare_native_client.py', *game]
