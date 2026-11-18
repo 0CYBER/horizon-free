@@ -82,6 +82,15 @@ class MoveToDaily(unittest.TestCase):
         self.assertEqual(restored, [])
         self.assertEqual(skipped[0][1], "no daily mark above the fn")
 
+    def test_restore_drops_the_row_of_every_target_a_function_was_moved_for(self):
+        rows = [self.row("slow_one"), self.row("slow_one", target="test:extra")]
+        self.apply(rows)
+        restored, skipped = move_to_daily.restore(rows, root=self.root, folder=self.policy)
+        self.assertEqual((len(restored), skipped), (2, []))
+        kept = [line for line in (self.policy / "daily-pkg.txt").read_text().splitlines() if not line.startswith("#")]
+        self.assertEqual(kept, [])
+        self.assertEqual(self.source.read_text().count('#[ignore = "daily"]'), 0)
+
     def test_running_again_changes_nothing(self):
         rows = [self.row("slow_one"), self.row("async_one")]
         self.apply(rows)

@@ -206,16 +206,32 @@ def restore(rows, root=ROOT, folder=POLICY):
         source = root / path
         text = source.read_text()
         lines = text.splitlines()
+        placed = []
         for row in file_rows:
-            package, target, test, location, reason = row
-            index, why = place(lines, path, int(location.rpartition(":")[2]), test.rsplit("::", 1)[-1])
-            k = index - 1 if index is not None else -1
-            while k >= 0 and lines[k].strip() != MARK and lines[k].strip().startswith(("#[", "//")):
-                k -= 1
-            if why or k < 0 or lines[k].strip() != MARK:
-                skipped.append((row, why or "no daily mark above the fn"))
+            test = row[2]
+            index, why = place(lines, path, int(row[3].rpartition(":")[2]), test.rsplit("::", 1)[-1])
+            if why:
+                skipped.append((row, why))
                 continue
-            del lines[k]
+            placed.append((index, row))
+        # One mark per function: a source file compiled into two targets has a row per target, so the
+        # second row finds the mark already gone (mirrors `apply`). Bottom first, so the deletions never
+        # shift a line still to look at.
+        outcomes = {}
+        for index, row in sorted(placed, reverse=True):
+            if index not in outcomes:
+                k = index - 1
+                while k >= 0 and lines[k].strip() != MARK and lines[k].strip().startswith(("#[", "//")):
+                    k -= 1
+                if k < 0 or lines[k].strip() != MARK:
+                    outcomes[index] = "no daily mark above the fn"
+                else:
+                    del lines[k]
+                    outcomes[index] = "restored"
+            if outcomes[index] != "restored":
+                skipped.append((row, outcomes[index]))
+                continue
+            package, target, test, _location, reason = row
             policy = folder / f"daily-{package}.txt"
             kept = [line for line in policy.read_text().splitlines()
                     if line != f"{package} {test} {target} daily {reason}"]
