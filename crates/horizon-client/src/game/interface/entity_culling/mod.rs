@@ -2,11 +2,12 @@
 use super::{
     Game, Vertex,
     entity::RenderEntityBounds,
-    occlusion_culling::{QuerySource, SyncOccluder},
+    occlusion_culling::{AsyncOcclusionCuller, QuerySource, SyncOccluder, opaque},
 };
 use horizon_client::gfx::native_entity::EntityKind;
 use horizon_client::graphics::EntityCullingMode;
 use horizon_client::mobs::Species;
+use horizon_client::voxel_occlusion::Culler as OcclusionCuller;
 use horizon_core::geometry::{Aabb, Vec3};
 
 const MAX_ENTITY_SECTION_COVERAGE: i64 = 50;
@@ -620,6 +621,169 @@ impl Game<'_> {
         let lo = p - half;
         let hi = p + glam::DVec3::new(half.x, height + grow, half.z);
         self.entity_sight(camera, position, range, lo, hi)
+    }
+}
+
+impl Game<'_> {
+    pub(super) fn prepare_occlusion_culling(&mut self, camera: glam::DVec3) {
+        self.entity_section_camera = None;
+        self.entity_section_visibility_valid = false;
+        let entity_mode = self.settings.horizon.entity_culling;
+        let requested = entity_mode != EntityCullingMode::Off;
+        let eligible = requested
+            // Packs can replace opaque models, so their terrain is not a safe occluder.
+            && self.model_packs_are_vanilla()
+            && self.player.is_some()
+            && !self.spectator();
+        if !eligible {
+            self.sync_occlusion_culler = None;
+            self.async_occlusion_culler = None;
+            self.async_occlusion_culling_failed = false;
+            return;
+        }
+        let at = camera.to_array().map(|v| v.floor() as i32);
+        self.entity_section_camera = at[1]
+            .checked_sub(self.world.bottom_y())
+            .map(|y| (at[0] >> 4, y >> 4, at[2] >> 4));
+        let camera_facts = self.res.facts().get(self.world.block(at[0], at[1], at[2]));
+        if opaque(camera_facts) {
+            self.sync_occlusion_culler = None;
+            self.async_occlusion_culler = None;
+            self.async_occlusion_culling_failed = false;
+            return;
+        }
+        self.entity_section_visibility_valid = self.settings.horizon.cave_culling
+            && !camera_facts.solid_render
+            && self.entity_section_camera.is_some();
+
+        let wants_async = entity_mode == EntityCullingMode::Asynchronous;
+        let wants_sync = entity_mode == EntityCullingMode::Synchronous;
+        if wants_async {
+            if self.async_occlusion_culler.is_none() && !self.async_occlusion_culling_failed {
+                match AsyncOcclusionCuller::new() {
+                    Ok(culler) => self.async_occlusion_culler = Some(Box::new(culler)),
+                    Err(error) => {
+                        log::warn!("Horizon: cannot start world-occlusion-culling worker: {error}");
+                        self.async_occlusion_culling_failed = true;
+                    }
+                }
+            }
+            if let Some(culler) = &mut self.async_occlusion_culler {
+                culler.begin_frame(camera, &self.world);
+            }
+        } else {
+            self.async_occlusion_culler = None;
+            self.async_occlusion_culling_failed = false;
+        }
+
+        let async_unavailable = wants_async && self.async_occlusion_culler.is_none();
+        self.sync_occlusion_culler = (wants_sync || async_unavailable)
+            .then(|| OcclusionCuller::new(camera.to_array(), 8_192));
+    }
+
+    pub(super) fn finish_async_occlusion_culling(&mut self) {
+        if let Some(culler) = &mut self.async_occlusion_culler {
+            culler.finish_frame(&self.world, self.res.facts());
+        }
+    }
+}
+
+#[cfg(test)]
+mod precheck_envelope_tests {
+    use super::super::entity::RenderEntityBounds;
+    use horizon_client::mobs::{Mob, MobData, MobTypes, Species, render};
+    use horizon_core::geometry::Vec3;
+    use std::{path::Path, sync::Arc};
+
+    #[test]
+    fn vanilla_models_and_animations_stay_inside_the_precheck_envelope() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            eprintln!("no prepared resources: skipped model coverage");
+            return;
+        }
+        let types = MobTypes::load(&root).unwrap();
+        let data = MobData {
+            resolved: Default::default(),
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: MobData::load_animations(&root),
+            villager_hats: Default::default(),
+            cem: Default::default(),
+            random_textures: Default::default(),
+            emissive: Default::default(),
+            blinks: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            pois: Default::default(),
+            species_placements: Default::default(),
+            mod_spawns: Default::default(),
+        };
+        let camera = glam::DVec3::new(3.0, 62.0, -4.0);
+        let mut checked = 0;
+        for kind in types.types.values() {
+            for sample in 0..12 {
+                let mut mob = Mob::new(1, Arc::new(kind.clone()), Vec3::new(1.5, 64.0, 3.25), 37.0);
+                mob.previous = Vec3::new(1.25, 64.25, 3.0);
+                mob.age = sample * 37;
+                mob.limb_speed = 0.8;
+                mob.limb_position = sample as f32 * 1.7;
+                mob.head_pitch = if sample % 2 == 0 { 85.0 } else { -85.0 };
+                mob.extra.age = if sample >= 6 { -100 } else { 0 };
+                mob.death_time = if sample % 3 == 0 { 10 } else { 0 };
+                mob.extra.flag = sample % 2 == 0;
+                mob.extra.size = match mob.species() {
+                    Species::Slime
+                    | Species::MagmaCube
+                    | Species::SulfurCube
+                    | Species::Phantom => {
+                        if sample % 2 == 0 {
+                            1
+                        } else {
+                            4
+                        }
+                    }
+                    _ => mob.extra.size,
+                };
+                if sample % 3 == 1 {
+                    mob.custom_name = Some("Dinnerbone".into());
+                }
+                for partial in [0.0, 0.4, 1.0] {
+                    let bounds = mob.render_bounds(f64::from(partial));
+                    let lo = bounds.min_position();
+                    let hi = bounds.max_position();
+                    let lo = [lo.x, lo.y, lo.z];
+                    let hi = [hi.x, hi.y, hi.z];
+                    let mut vertices = Vec::new();
+                    render::render_with(
+                        &mob,
+                        partial,
+                        camera,
+                        &|_| Some([0.0, 0.0, 1.0, 1.0]),
+                        0xF0F0,
+                        &data,
+                        &[],
+                        &mut vertices,
+                    );
+                    for vertex in &vertices {
+                        for axis in 0..3 {
+                            let world = f64::from(vertex.pos[axis]) + camera[axis];
+                            assert!(
+                                world >= lo[axis] - 1.0e-4 && world <= hi[axis] + 1.0e-4,
+                                "{} sample {sample} partial {partial}: {world} outside {lo:?}..{hi:?}",
+                                kind.id,
+                            );
+                        }
+                    }
+                    checked += usize::from(!vertices.is_empty());
+                }
+            }
+        }
+        assert!(
+            checked > 1_000,
+            "insufficient real model coverage: {checked}"
+        );
     }
 }
 

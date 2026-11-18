@@ -6,34 +6,12 @@ use horizon_client::{
     mobs::{Species, leash::Holder, spawning, trader},
     save::{read_dat, write_dat},
 };
-use horizon_core::nbt::Tag;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
-const TICK_DELAY: i32 = 1200;
-const SPAWN_DELAY: i32 = 24000;
-const MIN_CHANCE: i32 = 25;
-const MAX_CHANCE: i32 = 75;
 const ATTEMPTS: i32 = 10;
 
-/// The spawner's clock and the `WanderingTraderData` saved with the world.
-pub(super) struct Spawner {
-    tick_delay: i32,
-    spawn_delay: i32,
-    chance: i32,
-    loaded: bool,
-    dirty: bool,
-}
-impl Default for Spawner {
-    fn default() -> Self {
-        Self {
-            tick_delay: TICK_DELAY,
-            spawn_delay: SPAWN_DELAY,
-            chance: MIN_CHANCE,
-            loaded: false,
-            dirty: false,
-        }
-    }
-}
+pub(super) use horizon_gameplay::wandering_trader::Spawner;
+
 impl Creatures {
     /// A fresh spawner for a newly opened world.
     pub(super) fn reset_trader(&mut self) {
@@ -48,37 +26,20 @@ impl Game<'_> {
             .join("wandering_trader.dat")
     }
     fn load_trader_data(&mut self) {
-        if self.creatures.trader.loaded {
+        if self.creatures.trader.is_loaded() {
             return;
         }
         let tag = read_dat(&self.trader_path());
-        let data = tag.as_ref().and_then(|t| t.get("data"));
-        let get = |k: &str, d: i32| match data.and_then(|d| d.get(k)) {
-            Some(Tag::Int(v)) => *v,
-            _ => d,
-        };
-        let t = &mut self.creatures.trader;
-        t.spawn_delay = get("spawn_delay", SPAWN_DELAY);
-        t.chance = get("spawn_chance", MIN_CHANCE);
-        t.loaded = true;
+        self.creatures
+            .trader
+            .load(tag.as_ref().and_then(|t| t.get("data")));
     }
     pub(super) fn save_wandering_trader(&mut self) {
-        if !self.creatures.trader.loaded || !self.creatures.trader.dirty {
+        let Some(tag) = self.creatures.trader.to_save() else {
             return;
-        }
-        let t = &self.creatures.trader;
-        let tag = Tag::compound([
-            (
-                "data",
-                Tag::compound([
-                    ("spawn_delay", Tag::Int(t.spawn_delay)),
-                    ("spawn_chance", Tag::Int(t.chance)),
-                ]),
-            ),
-            ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
-        ]);
+        };
         if write_dat(&self.trader_path(), tag).is_ok() {
-            self.creatures.trader.dirty = false;
+            self.creatures.trader.saved();
         }
     }
     /// `WanderingTraderSpawner.tick`.
@@ -92,22 +53,11 @@ impl Game<'_> {
             return;
         }
         self.load_trader_data();
-        self.creatures.trader.tick_delay -= 1;
-        if self.creatures.trader.tick_delay > 0 {
+        let Some(chance) = self.creatures.trader.due() else {
             return;
-        }
-        self.creatures.trader.tick_delay = TICK_DELAY;
-        let t = &mut self.creatures.trader;
-        t.spawn_delay -= TICK_DELAY;
-        t.dirty = true;
-        if t.spawn_delay > 0 {
-            return;
-        }
-        t.spawn_delay = SPAWN_DELAY;
-        let chance = t.chance;
-        t.chance = (chance + 25).clamp(MIN_CHANCE, MAX_CHANCE);
+        };
         if self.world.random.next_int_bound(100).unwrap_or(100) <= chance && self.spawn_trader() {
-            self.creatures.trader.chance = MIN_CHANCE;
+            self.creatures.trader.spawned();
         }
     }
     /// `WanderingTraderSpawner.spawn`.

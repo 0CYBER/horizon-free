@@ -8,6 +8,12 @@ description = "Vanilla's logical side: the gameplay the server jar holds, common
 
 [dependencies]
 horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
+horizon-core = { path = "../horizon-core" }
+horizon-threads = { path = "../horizon-threads" }
+
+[features]
+# Source retention only, as in horizon-client: the helper-thread profiling hooks.
+upstream-parallel-mobs = []
 
 [lints]
 workspace = true

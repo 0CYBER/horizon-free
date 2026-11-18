@@ -6527,7 +6527,7 @@ impl Game<'_> {
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
         self.creatures.reset_trader();
-        self.creatures.cat_tick = 0;
+        self.creatures.cat = Default::default();
         self.creatures.custom_spawners.clear();
         self.portals = Default::default();
         self.experience = Experience {

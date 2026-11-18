@@ -130,7 +130,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 [features]
 # Source retention only: not compiled/tested on the fork; incompatible with typed residency.
 # Do not enable (including via --all-features); integration is tracked in arismoko/horizon#3491.
-upstream-parallel-mobs = []
+upstream-parallel-mobs = ["horizon-gameplay/upstream-parallel-mobs"]
 default = ["audio", "controllers", "horizon-extras"]
 # Scoped trait-mod installation for a mod's own tests.
 testing = []

@@ -8,6 +8,11 @@ description = "Client-only gameplay: what vanilla's client jar adds to the logic
 
 [dependencies]
 horizon-client-lib = { path = "../horizon-client-lib", default-features = false }
+horizon-world = { path = "../horizon-world" }
+horizon-core = { path = "../horizon-core" }
+glam = "0.30"
+log = "0.4"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 
 [lints]
 workspace = true

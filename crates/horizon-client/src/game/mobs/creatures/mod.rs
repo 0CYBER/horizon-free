@@ -253,7 +253,7 @@ pub(super) struct Creatures {
     /// When each player last put a parrot on a shoulder (`timeEntitySatOnShoulder`).
     pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
-    pub cat_tick: i32,
+    pub cat: super::cat_spawner::CatSpawner,
     /// Each level's custom spawners, built when its first tick asks (game/mobs/custom_spawners.rs).
     pub custom_spawners: std::collections::HashMap<super::Dim, mod_api::CustomSpawners>,
     /// Native sounds waiting for the server host to be available.
