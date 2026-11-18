@@ -1362,11 +1362,170 @@ fn builtin_component(
             }
         }
         "minecraft:tool" => write_tool(value, ids, &mut w)?,
+        "minecraft:consumable" => write_consumable(value, ids, &mut w)?,
         "minecraft:bees" => write_bees(value, ids, &mut w)?,
         "minecraft:block_state" => write_block_state(value, &mut w)?,
         _ => return None,
     }
     Some(horizon_protocol::item::Component::Raw(w.data))
+}
+
+/// `ItemUseAnimation`'s network id (`ItemUseAnimation.STREAM_CODEC`, by ordinal).
+fn use_animation_id(name: &str) -> Option<i32> {
+    const NAMES: [&str; 12] = [
+        "none",
+        "eat",
+        "drink",
+        "block",
+        "bow",
+        "trident",
+        "crossbow",
+        "spyglass",
+        "toot_horn",
+        "brush",
+        "bundle",
+        "spear",
+    ];
+    NAMES.iter().position(|n| *n == name).map(|i| i as i32)
+}
+
+/// A string tag's text.
+fn tag_text(value: &horizon_core::nbt::Tag) -> Option<String> {
+    match value {
+        horizon_core::nbt::Tag::String(text) => text.to_string().ok(),
+        _ => None,
+    }
+}
+
+/// `SoundEvent.STREAM_CODEC` (a holder) from its saved form: a registered event's
+/// name, or an event of its own (`sound_id`, optional `range`).
+fn write_sound(
+    value: &horizon_core::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_world::datafix::dynamic::{as_number, namespaced};
+    if let Some(name) = tag_text(value) {
+        let name = namespaced(&name);
+        match ids("minecraft:sound_event", &name) {
+            Some(id) => w.varint(id.checked_add(1)?),
+            None => {
+                w.varint(0);
+                w.string(&name);
+                w.bool(false);
+            }
+        }
+        return Some(());
+    }
+    w.varint(0);
+    w.string(&namespaced(&tag_text(value.get("sound_id")?)?));
+    match value.get("range") {
+        Some(range) => {
+            w.bool(true);
+            w.f32(as_number(range)?.float_value());
+        }
+        None => w.bool(false),
+    }
+    Some(())
+}
+
+/// `ConsumeEffect.STREAM_CODEC` from its saved form: the type's id, then its fields.
+fn write_consume_effect(
+    value: &horizon_core::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_core::nbt::Tag;
+    use horizon_world::datafix::dynamic::{as_bool_opt, as_number, namespaced};
+    match namespaced(&tag_text(value.get("type")?)?).as_str() {
+        "minecraft:apply_effects" => {
+            w.varint(0);
+            let effects = match value.get("effects")? {
+                Tag::List(list) => list.as_slice(),
+                single @ Tag::Compound(_) => std::slice::from_ref(single),
+                _ => return None,
+            };
+            w.varint(i32::try_from(effects.len()).ok()?);
+            for effect in effects {
+                w.varint(ids(
+                    "minecraft:mob_effect",
+                    &namespaced(&tag_text(effect.get("id")?)?),
+                )?);
+                write_effect_details(effect, w);
+            }
+            w.f32(
+                value
+                    .get("probability")
+                    .map_or(Some(1.0), |p| Some(as_number(p)?.float_value()))?,
+            );
+        }
+        "minecraft:remove_effects" => {
+            w.varint(1);
+            write_holder_set("minecraft:mob_effect", value.get("effects")?, ids, w)?;
+        }
+        "minecraft:clear_all_effects" => w.varint(2),
+        "minecraft:teleport_randomly" => {
+            w.varint(3);
+            w.f32(
+                value
+                    .get("diameter")
+                    .map_or(Some(16.0), |d| Some(as_number(d)?.float_value()))?,
+            );
+            w.bool(
+                value
+                    .get("directional_particles")
+                    .map_or(Some(true), |d| as_bool_opt(Some(d)))?,
+            );
+        }
+        "minecraft:play_sound" => {
+            w.varint(4);
+            write_sound(value.get("sound")?, ids, w)?;
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+/// `Consumable.STREAM_CODEC` from `Consumable.CODEC`'s saved form. A field the
+/// stack leaves out is written at its codec default: 1.6 seconds, eat, the
+/// generic eat sound, particles, no effects.
+fn write_consumable(
+    value: &horizon_core::nbt::Tag,
+    ids: &dyn Fn(&str, &str) -> Option<i32>,
+    w: &mut horizon_protocol::buf::Writer,
+) -> Option<()> {
+    use horizon_core::nbt::{Tag, Tag::Compound};
+    use horizon_world::datafix::dynamic::{as_bool_opt, as_number};
+    let Compound(_) = value else { return None };
+    w.f32(
+        value
+            .get("consume_seconds")
+            .map_or(Some(1.6), |s| Some(as_number(s)?.float_value()))?,
+    );
+    w.varint(use_animation_id(
+        &value
+            .get("animation")
+            .map_or(Some("eat".to_owned()), tag_text)?,
+    )?);
+    match value.get("sound") {
+        Some(sound) => write_sound(sound, ids, w)?,
+        None => write_sound(&Tag::String("minecraft:entity.generic.eat".into()), ids, w)?,
+    }
+    w.bool(
+        value
+            .get("has_consume_particles")
+            .map_or(Some(true), |p| as_bool_opt(Some(p)))?,
+    );
+    let effects = match value.get("on_consume_effects") {
+        Some(Tag::List(list)) => list.as_slice(),
+        Some(_) => return None,
+        None => &[],
+    };
+    w.varint(i32::try_from(effects.len()).ok()?);
+    for effect in effects {
+        write_consume_effect(effect, ids, w)?;
+    }
+    Some(())
 }
 
 /// `Bees.STREAM_CODEC` from the saved list: each `Occupant` as its
@@ -1907,6 +2066,10 @@ pub(super) fn network_stack(
             // the stack's own attribute modifiers (#14641).
             ("minecraft:tool", horizon_protocol::item::component::TOOL),
             (
+                "minecraft:consumable",
+                horizon_protocol::item::component::CONSUMABLE,
+            ),
+            (
                 "minecraft:attribute_modifiers",
                 horizon_protocol::item::component::ATTRIBUTE_MODIFIERS,
             ),
@@ -2427,6 +2590,48 @@ mod tests {
     use horizon_core::nbt::Tag;
     use horizon_protocol::buf::{Codec, Reader, Writer};
     use horizon_protocol::item::{Component, component};
+
+    /// A consumable a client made goes out as `Consumable.STREAM_CODEC`. A byte
+    /// flag is `Codec.BOOL` (non-zero is true). An unknown animation is refused.
+    #[test]
+    fn a_saved_consumable_is_written_as_the_stream_codec() {
+        use horizon_core::nbt::parse_snbt;
+        let (value, _) = parse_snbt(
+            r#"{consume_seconds:3.2f,animation:"toot_horn",sound:"minecraft:block.fire.ambient",has_consume_particles:0b,on_consume_effects:[{type:"minecraft:apply_effects",effects:[{id:"minecraft:nausea",amplifier:7b,duration:2400,show_particles:0b,show_icon:0b}]}]}"#,
+        )
+        .unwrap();
+        let ids = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:sound_event", "minecraft:block.fire.ambient") => Some(300),
+            ("minecraft:mob_effect", "minecraft:nausea") => Some(8),
+            _ => None,
+        };
+        let Some(horizon_protocol::item::Component::Raw(bytes)) =
+            builtin_component("minecraft:consumable", &value, &ids)
+        else {
+            panic!("not written");
+        };
+        let mut w = horizon_protocol::buf::Writer::new();
+        w.f32(3.2);
+        w.varint(8);
+        w.varint(301);
+        w.bool(false);
+        w.varint(1);
+        w.varint(0);
+        w.varint(1);
+        w.varint(8);
+        w.varint(7);
+        w.varint(2400);
+        w.bool(false);
+        w.bool(false);
+        w.bool(false);
+        w.bool(false);
+        w.f32(1.0);
+        assert_eq!(bytes, w.data);
+        let (defaults, _) = parse_snbt("{}").unwrap();
+        assert!(builtin_component("minecraft:consumable", &defaults, &ids).is_some());
+        let (unknown, _) = parse_snbt(r#"{animation:"juggle"}"#).unwrap();
+        assert!(builtin_component("minecraft:consumable", &unknown, &ids).is_none());
+    }
 
     #[test]
     fn builtin_predicate_streams_keep_typed_conjunctions_and_reject_whole_unknown_forms() {

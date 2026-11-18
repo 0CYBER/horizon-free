@@ -377,10 +377,7 @@ pub fn decode_consumable_bytes_with(
     let mut r = Reader::new(bytes);
     let seconds = r.f32().ok()?;
     let animation_id = r.varint().ok()?;
-    let animation = match animation_id {
-        2 => UseAnimation::Drink,
-        _ => UseAnimation::Eat,
-    };
+    let animation = use_animation(animation_id);
     let sound_holder = r.varint().ok()?;
     let sound = match sound_holder {
         0 => {
@@ -1159,15 +1156,53 @@ fn death_protection_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
     }))
 }
 
+/// `ItemUseAnimation.STREAM_CODEC`, by ordinal. `ByIdMap.OutOfBoundsStrategy.ZERO`
+/// maps an unknown id to none (id zero), not the saved codec's eat default.
+fn use_animation(id: i32) -> UseAnimation {
+    match id {
+        0 => UseAnimation::None,
+        1 => UseAnimation::Eat,
+        2 => UseAnimation::Drink,
+        3 => UseAnimation::Block,
+        4 => UseAnimation::Bow,
+        5 => UseAnimation::Trident,
+        6 => UseAnimation::Crossbow,
+        7 => UseAnimation::Spyglass,
+        8 => UseAnimation::TootHorn,
+        9 => UseAnimation::Brush,
+        10 => UseAnimation::Bundle,
+        11 => UseAnimation::Spear,
+        _ => UseAnimation::None,
+    }
+}
+
+fn use_animation_name(id: i32) -> &'static str {
+    const NAMES: [&str; 12] = [
+        "none",
+        "eat",
+        "drink",
+        "block",
+        "bow",
+        "trident",
+        "crossbow",
+        "spyglass",
+        "toot_horn",
+        "brush",
+        "bundle",
+        "spear",
+    ];
+    usize::try_from(id)
+        .ok()
+        .and_then(|i| NAMES.get(i).copied())
+        .unwrap_or("none")
+}
+
 /// `Consumable.STREAM_CODEC` (component 45) as `Consumable.CODEC` saves it.
 fn consumable_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
     let mut r = Reader::new(bytes);
     let seconds = r.f32().ok()?;
     let animation_id = r.varint().ok()?;
-    let animation = match animation_id {
-        2 => "drink",
-        _ => "eat",
-    };
+    let animation = use_animation_name(animation_id);
     let sound = sound_tag(&mut r, builtin)?;
     let particles = r.bool().ok()?;
     let n = r.count(r.remaining()).ok()?;
@@ -1600,6 +1635,58 @@ mod tests {
             Tag::Compound(Default::default()),
         )];
         assert!(consumable(&stack, &items).is_none());
+    }
+
+    /// `ItemUseAnimation.STREAM_CODEC` is the ordinal, not eat-or-drink.
+    #[test]
+    fn every_use_animation_id_is_read_back() {
+        use horizon_protocol::buf::Writer;
+        for (id, animation) in [
+            (0, UseAnimation::None),
+            (8, UseAnimation::TootHorn),
+            (11, UseAnimation::Spear),
+        ] {
+            let mut w = Writer::new();
+            w.f32(1.6);
+            w.varint(id);
+            w.varint(0);
+            w.string("minecraft:entity.generic.eat");
+            w.bool(false);
+            w.bool(true);
+            w.varint(0);
+            assert_eq!(
+                decode_consumable_bytes(&w.data).unwrap().animation,
+                animation
+            );
+        }
+    }
+
+    /// `ItemUseAnimation.STREAM_CODEC` uses `ByIdMap.OutOfBoundsStrategy.ZERO`:
+    /// invalid wire IDs decode as none, unlike an omitted saved animation's eat.
+    #[test]
+    fn invalid_use_animation_ids_decode_as_none() {
+        use horizon_protocol::buf::Writer;
+        for id in [i32::MIN, -1, 12, i32::MAX] {
+            let mut w = Writer::new();
+            w.f32(1.6);
+            w.varint(id);
+            w.varint(0);
+            w.string("minecraft:entity.generic.eat");
+            w.bool(false);
+            w.bool(true);
+            w.varint(0);
+            assert_eq!(
+                decode_consumable_bytes(&w.data).unwrap().animation,
+                UseAnimation::None,
+                "wire animation ID {id}"
+            );
+            let tag = consumable_tag(&w.data, &Builtin::default()).unwrap();
+            assert_eq!(
+                tag.get("animation"),
+                Some(&Tag::String("none".into())),
+                "saved animation for wire ID {id}"
+            );
+        }
     }
 
     /// A server's component patch adding or removing consumable.

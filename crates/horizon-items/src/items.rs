@@ -101,7 +101,7 @@ pub fn parse_consumable(
             .or_else(|| cons["sound"]["sound_id"].as_str())
             .unwrap_or("minecraft:entity.generic.eat")
             .to_owned(),
-        particles: cons["has_consume_particles"].as_bool().unwrap_or(true),
+        particles: json_flag(&cons["has_consume_particles"]).unwrap_or(true),
         effects: cons["on_consume_effects"]
             .as_array()
             .into_iter()
@@ -178,7 +178,7 @@ pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect>
                     .map_or(16.0, |d| d as f32),
                 directional_particles: effect
                     .get("directional_particles")
-                    .and_then(serde_json::Value::as_bool)
+                    .and_then(json_flag)
                     .unwrap_or(true),
             },
         )),
@@ -2894,10 +2894,35 @@ mod death_effects_tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn effect_flags_read_as_bytes_too() {
+        let spec = consume_effect_spec(&serde_json::json!({
+            "id": "minecraft:nausea",
+            "duration": 40,
+            "show_particles": 0,
+            "show_icon": 0
+        }))
+        .unwrap();
+        assert!(!spec.show_particles && !spec.show_icon);
+        let spec = consume_effect_spec(
+            &serde_json::json!({"id": "minecraft:nausea", "show_particles": 1}),
+        )
+        .unwrap();
+        assert!(spec.show_particles && spec.show_icon);
+        assert_eq!(json_flag(&serde_json::json!(true)), Some(true));
+        assert_eq!(json_flag(&serde_json::json!("x")), None);
+    }
+}
+
+/// A flag as `Codec.BOOL` reads it: a boolean, or a number (a component's
+/// `0b`/`1b` arrives as a number through NBT), non-zero being true.
+fn json_flag(v: &Value) -> Option<bool> {
+    v.as_bool().or_else(|| v.as_f64().map(|n| n != 0.0))
 }
 
 fn consume_effect_spec(e: &Value) -> Option<ConsumeEffectSpec> {
-    let flag = |key: &str, default: bool| e.get(key).and_then(|v| v.as_bool()).unwrap_or(default);
+    let flag = |key: &str, default: bool| e.get(key).and_then(json_flag).unwrap_or(default);
     Some(ConsumeEffectSpec {
         id: e.get("id")?.as_str()?.to_string(),
         duration: e.get("duration").and_then(|d| d.as_i64()).unwrap_or(0) as i32,
@@ -2962,6 +2987,26 @@ pub(crate) fn prepared_items() -> Option<Items> {
 #[cfg(test)]
 mod consume_effect_tests {
     use super::*;
+
+    #[test]
+    fn teleport_effect_keeps_numeric_particle_flags() {
+        let mut effect = serde_json::json!({"type": "minecraft:teleport_randomly"});
+        let particles = |effect: &Value| {
+            let Some(ConsumeEffect::TeleportRandomly(teleport)) = parse_consume_effect(effect)
+            else {
+                panic!("expected a teleport consume effect");
+            };
+            teleport.directional_particles
+        };
+
+        assert!(particles(&effect));
+        effect["directional_particles"] = serde_json::json!(0);
+        assert!(!particles(&effect));
+        effect["directional_particles"] = serde_json::json!(1);
+        assert!(particles(&effect));
+        effect["directional_particles"] = serde_json::json!(false);
+        assert!(!particles(&effect));
+    }
 
     #[test]
     fn effects_keep_their_ambient_and_particle_flags() {
