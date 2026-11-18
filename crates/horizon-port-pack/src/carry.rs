@@ -946,7 +946,34 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
         o.remove("replace");
         *bytes = serde_json::to_vec_pretty(&value).expect("a parsed value serializes");
     }
+    // Vanilla refuses an advancement whose item predicates name a component or sub-predicate
+    // nothing registered (a mod's own, from its Java); the game would match it on any item and
+    // grant the advancement at once.
+    if name.starts_with("data/")
+        && name.contains("/advancement/")
+        && let Some(key) = mod_item_predicate(&value["criteria"])
+    {
+        return Some(format!(
+            "its criteria name {key}, an item component or predicate of the mod's Java"
+        ));
+    }
     None
+}
+
+/// The first data component or item sub-predicate outside `minecraft:` that an item
+/// predicate in `v` names (`"components"` or `"predicates"` keys).
+fn mod_item_predicate(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(o) => ["components", "predicates"]
+            .iter()
+            .filter_map(|key| o.get(*key)?.as_object())
+            .flat_map(|m| m.keys())
+            .find(|k| k.split_once(':').is_some_and(|(ns, _)| ns != "minecraft"))
+            .cloned()
+            .or_else(|| o.values().find_map(mod_item_predicate)),
+        Value::Array(a) => a.iter().find_map(mod_item_predicate),
+        _ => None,
+    }
 }
 
 /// JSON text without the comments Gson's lenient reader skips: `//` and
@@ -2257,6 +2284,28 @@ mod tests {
         assert_eq!(both["terms"][0]["type"], "minecraft:random_chance");
         assert_eq!(both["terms"][1]["type"], "minecraft:survives_explosion");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An advancement whose item predicate names a mod's own component or sub-predicate
+    /// stays outside, as vanilla refuses it; one with vanilla's alone is carried.
+    #[test]
+    fn advancements_naming_a_mods_item_predicates_stay_outside() {
+        let mut canteen = br#"{"criteria": {"full": {"trigger": "minecraft:inventory_changed",
+            "conditions": {"items": [{"predicates": {"m:full_canteen": {}}}]}}}}"#
+            .to_vec();
+        let why = unreadable("data/m/advancement/full_canteen.json", &mut canteen).unwrap();
+        assert!(why.contains("m:full_canteen"), "{why}");
+        let mut book = br#"{"criteria": {"book": {"trigger": "minecraft:inventory_changed",
+            "conditions": {"items": [{"items": "m:guide", "components": {"m:book": "m:x"}}]}}}}"#
+            .to_vec();
+        assert!(unreadable("data/m/advancement/book.json", &mut book).is_some());
+        let mut damaged = br#"{"criteria": {"worn": {"trigger": "minecraft:inventory_changed",
+            "conditions": {"items": [{"predicates": {"minecraft:damage": {"durability": 1}}}]}}}}"#
+            .to_vec();
+        assert_eq!(
+            unreadable("data/m/advancement/worn.json", &mut damaged),
+            None
+        );
     }
 
     #[test]
