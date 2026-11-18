@@ -85,10 +85,13 @@ def join(host, port, name, seconds):
         elif pid == 0:
             raise RuntimeError(f'login refused: {data!r}')
     c.send(3)  # login acknowledged -> configuration
+    # Configuration packet ids below are from crates/horizon-protocol/src/ids.rs.
     while True:
         pid, data = c.receive()
         if pid == 15:  # select known packs: claim none, receive full registries
             c.send(7, lab.varint(0))
+        elif pid == 0:  # cookie request: this client has no stored cookie payload
+            c.send(1, data + b'\x00')  # preserve the key, then encode an absent payload
         elif pid == 4:  # keep alive
             c.send(4, data)
         elif pid == 5:  # ping
@@ -98,18 +101,36 @@ def join(host, port, name, seconds):
             break
         elif pid == 2:
             raise RuntimeError(f'disconnected during configuration: {data!r}')
+        elif pid == 20:  # code of conduct: the server waits for packet 9 acceptance
+            raise RuntimeError(
+                'unhandled configuration packet 20 (code_of_conduct): cannot accept server terms')
+        elif pid in (8, 9):  # resource pack pop/push
+            # Answering a push needs a pack UUID and an acceptance code; this
+            # bare client cannot make one up, so fail instead of hanging.
+            name = 'resource_pack_pop' if pid == 8 else 'resource_pack_push'
+            raise RuntimeError(f'unhandled configuration packet {pid} ({name}): cannot answer it')
+        elif pid == 1:  # custom payload: brand needs no answer; others might
+            try:
+                pos, size = lab.parse_varint(data, 0)
+                channel = data[pos:pos + size].decode('utf-8', 'replace')
+            except IndexError:
+                channel = ''
+            if channel != 'minecraft:brand':
+                raise RuntimeError(
+                    f'unhandled configuration packet 1 (custom_payload) on channel {channel!r}')
+        # Registry data, tags, feature flags, server links, etc. need no answer.
     deadline = time.time() + seconds
     c.sock.settimeout(1.0)
     while time.time() < deadline:
         try:
-            c.receive()
+            pid, data = c.receive()
         except socket.timeout:
             continue
         except EOFError:
             break  # the server stopped
-        # Play packets are not decoded: the server's first keep-alive comes
-        # after 15 seconds and it waits 15 more for the answer, so a session
-        # under 30 seconds needs none.
+        if pid == 45:  # play keep alive: echo the payload so we are not kicked
+            c.send(28, data)
+        # Every other play packet is irrelevant to this bare client.
     c.sock.close()
 
 
@@ -118,12 +139,15 @@ def main():
     p.add_argument('name')
     p.add_argument('--host', default='127.0.0.1')
     p.add_argument('--port', type=int, default=25565)
-    p.add_argument('--seconds', type=float, default=5, help='at most 25')
+    p.add_argument('--seconds', type=float, default=5,
+                   help='seconds to stay connected, at most 25 (default: 5)')
     p.add_argument('--uuid', action='store_true')
     args = p.parse_args()
     if args.uuid:
         print(lab.offline_uuid(args.name))
         return 0
+    if args.seconds > 25:
+        p.error('--seconds must be at most 25 (got %s)' % args.seconds)
     join(args.host, args.port, args.name, args.seconds)
     return 0
 
