@@ -7,14 +7,19 @@ use horizon_client::chunk::Chunk;
 use horizon_client::mesher::{Mesher, SectionMesh};
 use std::time::Duration;
 
-/// A 0.2 pack with a material stage, and `[shadow]` where `shadow`.
-fn pack(shadow: bool) -> horizon_shader_api::Report {
-    use horizon_shader_api::{MANIFEST, Pack, check};
-    let manifest = format!(
+/// The manifest of a 0.2 pack with a material stage, and `[shadow]` where `shadow`.
+fn manifest(shadow: bool) -> String {
+    format!(
         "schema = 1\nid = \"looks\"\nname = \"Looks\"\nversion = \"1\"\napi = \"0.2\"\n\
          [material]\nfile = \"material.wgsl\"\n{}",
         if shadow { "[shadow]\n" } else { "" }
-    );
+    )
+}
+
+/// That pack, checked.
+fn pack(shadow: bool) -> horizon_shader_api::Report {
+    use horizon_shader_api::{MANIFEST, Pack, check};
+    let manifest = manifest(shadow);
     let material = "fn material(input: MaterialInput) -> Surface { return Surface(input.albedo); }\n";
     let files = [(MANIFEST, manifest.as_str()), ("material.wgsl", material)]
         .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()));
@@ -179,7 +184,9 @@ fn terrain_looks_stay_with_their_quads_through_pack_changes() {
 
 /// A renderer made again on the same device for another frame takes the world
 /// (`Renderer::take_world`, the game's `rebuild_renderer`): the sections' looks go with it,
-/// and the pack loaded in it, which takes them too, keeps them as they are.
+/// stay, with the layouts the pack had, through the frames drawn before the game loads its
+/// pack again, and the pack, which takes them too, keeps them as they are: the world isn't
+/// meshed again.
 #[test]
 #[ignore = "daily"]
 fn terrain_looks_go_with_the_world_to_a_new_renderer() {
@@ -191,22 +198,86 @@ fn terrain_looks_go_with_the_world_to_a_new_renderer() {
         let (event_loop, key) = scene(game);
         install_and_upload(game, key, true);
         held_as_handed(game, key, "the first renderer");
-        #[allow(deprecated)]
-        let window = event_loop
-            .create_window(
-                winit::window::Window::default_attributes()
-                    .with_visible(false)
-                    .with_inner_size(winit::dpi::PhysicalSize::new(320, 240)),
-            )
-            .unwrap();
-        let mut renderer = game.new_renderer(std::sync::Arc::new(window)).unwrap();
-        assert!(renderer.take_world(game.renderer.as_mut().unwrap()));
-        game.renderer = Some(renderer);
+        make_again(game, &event_loop);
+        frame(game);
+        frame(game);
+        assert!(!game.renderer.as_mut().unwrap().take_dropped_sections(), "kept for the pack");
+        assert!(game.renderer.as_ref().unwrap().terrain_looks(), "held for the pack");
+        assert!(game.streaming.looks, "the game meshes with looks still");
         install(game, true);
         frame(game);
         frame(game);
         assert!(!game.renderer.as_mut().unwrap().take_dropped_sections());
         held_as_handed(game, key, "the renderer made again");
+    });
+}
+
+/// The game's renderer made again on the same device, taking the world (`rebuild_renderer`).
+fn make_again(game: &mut super::Game<'_>, event_loop: &winit::event_loop::EventLoop<()>) {
+    #[allow(deprecated)]
+    let window = event_loop
+        .create_window(
+            winit::window::Window::default_attributes()
+                .with_visible(false)
+                .with_inner_size(winit::dpi::PhysicalSize::new(320, 240)),
+        )
+        .unwrap();
+    let mut renderer = game.new_renderer(std::sync::Arc::new(window)).unwrap();
+    assert!(renderer.take_world(game.renderer.as_mut().unwrap()));
+    game.renderer = Some(renderer);
+}
+
+/// A world held for its pack by a renderer made again stops waiting when the game's load of
+/// that pack fails (its files changed and no longer build): it follows no pack again, its
+/// looks off.
+#[test]
+#[ignore = "daily"]
+fn a_world_held_for_a_pack_that_no_longer_builds_follows_no_pack() {
+    let name = "game::shader_pack_looks_tests::a_world_held_for_a_pack_that_no_longer_builds_follows_no_pack";
+    if run_fresh_cases(name, "HORIZON_TERRAIN_LOOKS", &["1"]) {
+        return;
+    }
+    with_client_game(|game| {
+        let (event_loop, key) = scene(game);
+        install_and_upload(game, key, false);
+        make_again(game, &event_loop);
+        frame(game);
+        assert!(game.renderer.as_ref().unwrap().terrain_looks(), "held for the pack");
+        let files = tempfile::tempdir().unwrap();
+        let file = |name: &str, text: &str| std::fs::write(files.path().join(name), text).unwrap();
+        file(horizon_shader_api::MANIFEST, &manifest(false));
+        file("material.wgsl", "fn material(input: MaterialInput) -> Surface {");
+        game.tick_native_shader_pack(files.path());
+        frame(game);
+        frame(game);
+        let renderer = game.renderer.as_ref().unwrap();
+        assert!(!renderer.terrain_looks(), "no pack to hold it for");
+        assert!(!game.streaming.looks, "the game meshes without looks");
+    });
+}
+
+/// A world held for its pack by a renderer made again stops waiting when the pack's folder is
+/// gone: the game never reads it (no files, no stamp), so the world follows no pack again.
+#[test]
+#[ignore = "daily"]
+fn a_world_held_for_a_pack_whose_folder_is_gone_follows_no_pack() {
+    let name = "game::shader_pack_looks_tests::a_world_held_for_a_pack_whose_folder_is_gone_follows_no_pack";
+    if run_fresh_cases(name, "HORIZON_TERRAIN_LOOKS", &["1"]) {
+        return;
+    }
+    with_client_game(|game| {
+        let (event_loop, key) = scene(game);
+        install_and_upload(game, key, false);
+        make_again(game, &event_loop);
+        frame(game);
+        assert!(game.renderer.as_ref().unwrap().terrain_looks(), "held for the pack");
+        let files = tempfile::tempdir().unwrap();
+        game.tick_native_shader_pack(&files.path().join("gone"));
+        frame(game);
+        frame(game);
+        let renderer = game.renderer.as_ref().unwrap();
+        assert!(!renderer.terrain_looks(), "no pack to hold it for");
+        assert!(!game.streaming.looks, "the game meshes without looks");
     });
 }
 
@@ -236,10 +307,10 @@ fn pages_past_the_look_limit_are_dropped_when_looks_turn_on() {
         // Without `[shadow]`, as without a pack: the same layout of translucent quads.
         install(game, false);
         frame(game);
-        let renderer = game.renderer.as_mut().unwrap();
-        assert!(renderer.take_dropped_sections(), "dropped when looks turned on");
-        assert!(renderer.section_looks(key).is_none());
-        frame(game);
+        assert!(game.renderer.as_mut().unwrap().section_looks(key).is_none(), "dropped");
+        // The game meshes them again with the looks at once, not without and then again.
+        assert!(!game.streaming.looks);
+        game.update_world();
         assert!(game.streaming.looks, "the game meshes with looks");
         upload(game, key);
         held_as_handed(game, key, "pages within the limit");

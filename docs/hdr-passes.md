@@ -58,7 +58,7 @@ curve, the HUD's layer and the last pass as the real one does.
    10 to 18 PQ code values, for 1 to 6% more detail inside lit textures.
 3. **Blend linear light tone-weighted, gamma light as stored.** What counts is the encoding of the values a pass
    accumulates, not the frame's format. Linear light is what a 0.2 pack's post passes read (`color`, `previous`,
-   `history`, under either `[frame] blend`) and what the world's frame holds under `blend = "linear"`. There TAA, a
+   kept resources, under either `[frame] blend`) and what the world's frame holds under `blend = "linear"`. There TAA, a
    temporal upscaler and anything else that keeps a history blends `c / (1 + m)`, where `m` is the largest of `c`'s
    channels, clamps the history in that space too, and turns the result back with `c / (1 - m)`. Raw linear light
    lets a few very bright pixels win the history: torches and the sun's edge sparkle, and smear when the camera

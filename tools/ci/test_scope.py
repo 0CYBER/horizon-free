@@ -94,7 +94,7 @@ READERS = {
         "crates/horizon-theme/fonts", "crates/horizon-theme/icons", "docs/api/server-reference.md",
         "packaging/executable_link.rs",
     ],
-    "horizon-shader-api": ["docs/api/shaders-reference-0.2.md"],
+    "horizon-shader-api": ["docs/api/shaders-reference-0.2.md", "tools/fixtures/shaderpacks"],
     "horizon-world": ["crates/horizon-core", "Cargo.lock"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.
     "xtask": [

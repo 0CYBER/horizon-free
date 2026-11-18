@@ -188,7 +188,7 @@ impl Game<'_> {
     }
 
     /// Builds the pack at `path` when its files changed since it was last read.
-    pub(super) fn tick_native_shader_pack(&mut self, path: &Path) {
+    pub(in crate::game) fn tick_native_shader_pack(&mut self, path: &Path) {
         // A reload would replace the pack a `screenshot-sequence` draws: it waits for the reply.
         if self.screenshot_sequence.is_some() {
             return;
@@ -200,7 +200,21 @@ impl Game<'_> {
         }
         state.looked = Some(now);
         let stamp = fingerprint(path);
-        if stamp == state.stamp || refused(path, stamp) {
+        if stamp == state.stamp {
+            // A pack gone (no stamp) is never read: a renderer made again holds the world for
+            // nothing (`release_world`, which leaves a running pack's alone).
+            if stamp.is_none()
+                && let Some(renderer) = &mut self.renderer
+            {
+                renderer.release_world();
+            }
+            return;
+        }
+        if refused(path, stamp) {
+            // A renderer made again for this pack holds the world for it (`release_world`).
+            if let Some(renderer) = &mut self.renderer {
+                renderer.release_world();
+            }
             return;
         }
         let reload = state.stamp.is_some();
@@ -300,6 +314,8 @@ impl Game<'_> {
                         renderer.drop_shader_packs();
                     }
                     self.set_translucent_layers(Vec::new());
+                } else if let Some(renderer) = &mut self.renderer {
+                    renderer.release_world();
                 }
                 log::warn!("shader pack {name} refused: {}", problems.join("; "));
                 self.system_message(Text::colored(format!("Shader pack {name} refused:"), RED));

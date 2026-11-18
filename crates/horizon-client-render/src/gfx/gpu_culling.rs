@@ -544,6 +544,13 @@ pub(super) fn loses_base_vertex(info: &wgpu::AdapterInfo, flat_page_groups: bool
     info.backend == wgpu::Backend::Dx12 && flat_page_groups
 }
 
+/// DX12's count draws also leave the quads' looks out of reach: a pack's terrain finds its quad's
+/// look by `vertex_index` (`looks`), so with looks on, the frame draws the CPU's lists, whose
+/// draws carry their base vertex.
+pub(super) fn looks_lose_base_vertex(info: &wgpu::AdapterInfo, looks: bool) -> bool {
+    looks && info.backend == wgpu::Backend::Dx12
+}
+
 /// What the settings offer (`graphics::GpuCullingOffer`): where `supported`
 /// holds, but not on a software adapter (WARP, lavapipe), whose pass would run
 /// on the CPU beside the frame, as occlusion culling's default has it; where it

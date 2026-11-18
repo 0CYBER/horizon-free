@@ -29,7 +29,8 @@ struct HorizonShadowOut {
     @location(4) base: vec3<f32>,
 }
 // `color` is the vertex colour: the tint, and the fluid flag in its alpha's high nibble
-// (mesher.rs's `fluid_face`).
+// (mesher.rs's `fluid_face`). What the light passes through is that colour, whether or not the
+// sections carry their quads' looks: a pack's `shadow_color` doesn't depend on its other inputs.
 fn horizon_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>)
     -> HorizonShadowOut {
     let clip = frame.shadow_view_proj * vec4(pos, 1.0);
@@ -44,16 +45,21 @@ fn horizon_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<
     out.base = pos;
     return out;
 }
-fn horizon_shadow_terrain(c: HorizonCorner, origin: vec4<f32>) -> HorizonShadowOut {
+// `slot`: the corner's in the arena page, whose look is its quad's; `corner` its index there.
+fn horizon_shadow_terrain(c: HorizonCorner, origin: vec4<f32>, slot: u32, corner: u32)
+    -> HorizonShadowOut {
     let atlas = horizon_terrain_terrain_uv(c.uv, origin.w);
-    let pos = horizon_material_displace(c.position + origin.xyz, atlas, c.layer, c.color, c.light);
+    let look = horizon_look(slot);
+    let pos = horizon_material_displace(c.position + origin.xyz, atlas, c.layer, c.color, c.light,
+        look, horizon_look_ao(look, corner));
     return horizon_shadow_vertex(pos, atlas, c.layer, c.color);
 }
-@vertex fn horizon_shadow_vs(
+@vertex fn horizon_shadow_vs(@builtin(vertex_index) vertex: u32,
     @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> HorizonShadowOut {
-    return horizon_shadow_terrain(HorizonCorner(position, uv, layer, color, light), origin);
+    return horizon_shadow_terrain(HorizonCorner(position, uv, layer, color, light), origin, vertex,
+        vertex & 3u);
 }
 @vertex fn horizon_shadow_vs_flat(
     @builtin(vertex_index) index: u32,
@@ -61,18 +67,19 @@ fn horizon_shadow_terrain(c: HorizonCorner, origin: vec4<f32>) -> HorizonShadowO
     @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> HorizonShadowOut {
     let origin = horizon_terrain_slot_origins[horizon_terrain_block_slots[index >> 8u]];
-    return horizon_shadow_terrain(HorizonCorner(position, uv, layer, color, light), origin);
+    return horizon_shadow_terrain(HorizonCorner(position, uv, layer, color, light), origin, index,
+        index & 3u);
 }
 // Solid draws reading the arena page (`SECTION_CORNER`), in either layout of the solid quads.
 @vertex fn horizon_shadow_vs_section(@builtin(vertex_index) vertex: u32,
     @location(5) origin: vec4<f32>) -> HorizonShadowOut {
     let s = horizon_terrain_section_corner(vertex);
-    return horizon_shadow_terrain(horizon_terrain_corner_inputs(s.c), origin);
+    return horizon_shadow_terrain(horizon_terrain_corner_inputs(s.c), origin, s.slot, vertex & 3u);
 }
 @vertex fn horizon_shadow_vs_section_flat(@builtin(vertex_index) vertex: u32) -> HorizonShadowOut {
     let s = horizon_terrain_section_corner(vertex);
     let origin = horizon_corner_origin(s);
-    return horizon_shadow_terrain(horizon_terrain_corner_inputs(s.c), origin);
+    return horizon_shadow_terrain(horizon_terrain_corner_inputs(s.c), origin, s.slot, vertex & 3u);
 }
 @fragment fn horizon_shadow_fs(in: HorizonShadowOut) {
     if horizon_shadow_taken(in.base, in.layer) { discard; }
@@ -391,11 +398,11 @@ pub struct NativeShadow {
 }
 
 /// The entity draw's shader. Like the terrain's (`shader_source`), it declares `Frame` without
-/// the fields only some packs' preludes have (`[frame] fog = "pack"`'s, `moon_phase`).
+/// the field only some packs' preludes have (`moon_phase`).
 fn entity_source() -> String {
     format!(
         "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{ENTITY_ENTRIES}",
-        FrameInputs::declared_wgsl(true, true, false, false),
+        FrameInputs::declared_wgsl(true, true, false),
         horizon_shader_api::stages::SHADOW_HELPERS,
     )
 }
@@ -511,7 +518,7 @@ fn shader_source(
         (None, None) => (
             format!(
                 "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{UNTAKEN}",
-                FrameInputs::declared_wgsl(true, true, false, false),
+                FrameInputs::declared_wgsl(true, true, false),
                 horizon_shader_api::stages::SHADOW_HELPERS,
             ),
             super::native_material::DISPLACE_VANILLA,
@@ -546,6 +553,10 @@ impl NativeShadow {
             shape.sprite_materials,
             grid.as_ref().map(|g| g.material.source.as_str()),
         );
+        // The vertex stage's call (`DISPLACE_PACK`) passes `shaded_tint` where its input has it.
+        let shaded = vertex.is_some_and(horizon_shader_api::check::CheckedStage::shaded_tint);
+        let text = horizon_shader_api::stages::shaded_entries(&text, shaded);
+        let staged = vertex.is_some();
         let module = naga::front::wgsl::parse_str(&text)
             .map_err(|e| format!("shadow pass: {}", e.emit_to_string(&text)))?;
         let mut constants = super::native_post::present_constants(&module, constants);
@@ -641,6 +652,14 @@ impl NativeShadow {
                              buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
                              fragment: &str| {
             let translucent = fragment == "horizon_shadow_fs_translucent";
+            // The vertex stage's (`DISPLACE_PACK`): a fluid of this pass is water.
+            let mut constants = constants.clone();
+            if staged {
+                constants.push((
+                    "horizon_material_translucent",
+                    f64::from(u8::from(translucent)),
+                ));
+            }
             let options = wgpu::PipelineCompilationOptions {
                 constants: &constants,
                 ..Default::default()
@@ -858,7 +877,12 @@ mod tests {
     #[test]
     fn the_shadow_shader_validates() {
         for materials in [&[][..], &[(3, 7), (4, 8), (9, 7)][..]] {
-            let text = shader_source(&shadow_solid(materials, &[7]), None, materials, None);
+            let text = shader_source(
+                &(shadow_solid(materials, &[7]) + crate::gfx::looks::NO_LOOK_WGSL),
+                None,
+                materials,
+                None,
+            );
             let module = naga::front::wgsl::parse_str(&text).unwrap();
             naga::valid::Validator::new(
                 naga::valid::ValidationFlags::all(),
@@ -869,15 +893,15 @@ mod tests {
         }
     }
 
-    /// The shadow shaders declare the frame as before `[frame] fog`, whose fields no shadow
-    /// reads: the SHA-256 of `Frame` then, so every pack's shadow pass is the same WGSL.
+    /// The shadow shaders declare the whole frame, whatever the pack's keys: the SHA-256 of
+    /// `Frame`'s WGSL, so every pack's shadow pass is the same WGSL.
     #[test]
     fn the_shadow_shaders_declare_the_frame_as_before() {
         use sha2::{Digest, Sha256};
-        let frame = FrameInputs::declared_wgsl(true, true, false, false);
+        let frame = FrameInputs::declared_wgsl(true, true, false);
         assert_eq!(
             format!("{:x}", Sha256::digest(&frame)),
-            "9218b8f0da2c1af28ace7bc402e44701448011acee478c9cef34277b2ab5e034"
+            "88afec7c6709091383bffd26f431131ac68e2f6fd5d1079dd7febb591209211a"
         );
         assert!(entity_source().starts_with(&frame));
         let solid = shader_source(&shadow_solid(&[], &[7]), None, &[], None);
@@ -904,7 +928,7 @@ mod tests {
             .unwrap();
         let materials = [(3, 7)];
         let text = shader_source(
-            &shadow_solid(&materials, &[7]),
+            &(shadow_solid(&materials, &[7]) + crate::gfx::looks::NO_LOOK_WGSL),
             None,
             &materials,
             Some(&stage.source),

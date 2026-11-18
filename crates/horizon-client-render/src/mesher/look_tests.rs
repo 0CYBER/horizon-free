@@ -54,11 +54,21 @@ const BASE: i32 = MIN_Y + 4;
 
 /// The blocks of the emission table, each with vanilla's light level (`None`: drawn as a block
 /// entity, so no terrain quad), one every other block along x and z. The water of a
-/// waterlogged one gives off what water does, nothing.
-const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 16] = [
+/// waterlogged one gives off what water does, nothing. A lit candle gives 3 a candle.
+const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 23] = [
     ("minecraft:torch", &[], Some(14)),
     ("minecraft:lantern", &[], Some(15)),
     ("minecraft:lantern", &[("waterlogged", "true")], Some(15)),
+    ("minecraft:lantern", &[("hanging", "true")], Some(15)),
+    ("minecraft:candle", &[("lit", "true")], Some(3)),
+    (
+        "minecraft:candle",
+        &[("lit", "true"), ("candles", "4")],
+        Some(12),
+    ),
+    ("minecraft:candle", &[("candles", "4")], Some(0)),
+    ("minecraft:candle_cake", &[("lit", "true")], Some(3)),
+    ("minecraft:fire", &[], Some(15)),
     ("minecraft:sea_lantern", &[], Some(15)),
     ("minecraft:glowstone", &[], Some(15)),
     ("minecraft:ochre_froglight", &[], Some(15)),
@@ -72,6 +82,8 @@ const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 16] = [
     ("minecraft:ender_chest", &[], None),
     ("minecraft:stone", &[], Some(0)),
     ("minecraft:water", &[], Some(0)),
+    // Its petals' faces have their own `light_emission` (`cross_emissive`).
+    ("minecraft:open_eyeblossom", &[], Some(0)),
 ];
 
 fn place(i: usize) -> (i32, i32) {
@@ -202,6 +214,19 @@ fn emission_is_the_blocks_light_level() {
             None => assert!(levels.is_empty(), "{name} has terrain quads"),
         }
     }
+    // A face's own `light_emission` reaches its vertices' block light instead (`light`): the
+    // eyeblossom's petals have 15, its other faces the light around them.
+    let (x, z) = place(BLOCKS.len() - 1);
+    let middle =
+        |q: &[TerrainVertex; 4], axis: usize| q.iter().map(|v| v.pos[axis]).sum::<f32>() / 4.0;
+    let blocks: Vec<u16> = (mesh.solid.as_chunks::<4>().0.iter())
+        .filter(|q| middle(q, 0).floor() == x as f32 && middle(q, 2).floor() == z as f32)
+        .map(|q| q[0].light >> 8)
+        .collect();
+    assert!(
+        blocks.contains(&240) && blocks.iter().any(|&b| b < 240),
+        "the eyeblossom's quads' block light: {blocks:?}"
+    );
 }
 
 /// `shade` is the shade the mesher gave the quad, not one of its normal: a torch's element
@@ -248,4 +273,50 @@ fn shade_is_the_shade_the_quad_was_given() {
             );
         }
     }
+}
+
+/// `blocks` (each its name and place in the section) alone in the world's lowest section,
+/// meshed and sorted as a shader pack's terrain is, and its solid quads' compact records (as
+/// the arena holds them while every pass reads that layout): what the ray scene unpacks and
+/// traces (`gfx/rt/terrain_tests.rs`).
+pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u32; 6]>) {
+    let f = fixture();
+    let mut chunk = Chunk::empty(0, 0);
+    for &(name, [x, y, z]) in blocks {
+        chunk.set(x, MIN_Y + y, z, state(&f, name, &[]));
+    }
+    let region = [[Some(&chunk); 3]; 3];
+    let mut mesher = Mesher {
+        nether_shading: false,
+        shader_pack_lighting: false,
+        separate_ao: false,
+        shader_pack: true,
+        looks: false,
+        assets: &f.assets,
+        render: &f.render,
+        tables: &f.tables,
+        biomes: &f.biomes,
+        visibility: f.visibility.clone(),
+        zoom: BiomeZoom::new(0),
+        blend_radius: 0,
+        smooth_lighting: true,
+        cutout_leaves: true,
+        opaque_ice: false,
+        translucent_layers: &[],
+        leaf_culling: LeafCullingMode::Off,
+        hidden_states: &[],
+        part_tables: Default::default(),
+    };
+    let mut mesh = mesher.mesh(&region, 0);
+    // `sort_solid`'s order, keeping the tints it drops when the renderer doesn't read records.
+    mesh.solid_tints
+        .resize(mesh.solid.len() / 4, packed::UNKNOWN_TINT);
+    sides::sort_sourced(
+        &mut mesh.solid,
+        &mut mesh.solid_tints,
+        &mut mesh.solid_sources,
+        &mut mesh.solid_looks,
+    );
+    let records = packed::layout(&mesh.solid, &mesh.solid_tints);
+    (mesh, records)
 }

@@ -2,7 +2,8 @@
 // (water) is half the water mirror (`reflection`) plus what lies behind it (`opaque_color`, by
 // `opaque_depth`); solid terrain stores its normal and sky light for the post pass (`set_surface`).
 fn material(input: MaterialInput) -> Surface {
-    let lit = input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0);
+    let tint = input.tint.rgb * input.shade * input.ao;
+    let lit = input.albedo * vec4<f32>(tint * input.lightmap, 1.0);
     if input.translucent {
         let texel = vec2<i32>(input.screen * frame.resolution);
         let behind = textureLoad(opaque_color, texel, 0).rgb;

@@ -438,7 +438,7 @@ of the frame ([#8750](https://github.com/horizon-rust/horizon/issues/8750)).
   using an item, riding, running out of air.
 - A shader pack's own buffers, kept from frame to frame, take `horizon-ctl screenshot-sequence
   FRAMES STEP_MS PATH`: the pack starts over (its buffers, images, shadow maps, smoothed values and
-  custom uniforms, or a Horizon pack's `history` and eased values) and draws FRAMES frames on a set
+  custom uniforms, or a Horizon pack's kept resources and eased values) and draws FRAMES frames on a set
   clock, frame n at n frames and (n - 1) × STEP_MS milliseconds (0 since the frame before on frame
   1, STEP_MS after; a decimal, `16.666667` for 60 fps). The last is written as `screenshot PATH`
   writes it (with its `-hdr.png` under HDR output), and the reply, once it is, names the pack and

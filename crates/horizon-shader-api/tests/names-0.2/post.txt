@@ -3,7 +3,6 @@ PostInput
 SurfaceData
 depth_at
 frame
-history
 linear_sampler
 nearest_sampler
 previous

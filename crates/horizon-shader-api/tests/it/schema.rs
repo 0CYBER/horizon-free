@@ -432,17 +432,18 @@ fn refuses_files_a_pack_does_not_use() {
 }
 
 #[test]
-fn fog_is_a_key_of_the_material_stage() {
+fn fog_is_no_stage_s_key() {
     let with_fog = |stage: &str| {
         format!(
             "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1.0.0\"\napi = \"0.2\"\n\n{stage}\nfile = \"a.wgsl\"\nfog = false\n"
         )
     };
-    let material = horizon_shader_api::Manifest::parse(&with_fog("[material]")).unwrap();
-    assert_eq!(material.material.unwrap().fog, Some(false));
-    for stage in ["[sky]", "[[post]]"] {
+    for stage in ["[material]", "[sky]", "[[post]]"] {
         let e = horizon_shader_api::Manifest::parse(&with_fog(stage)).unwrap_err();
-        assert!(e.contains("`fog`"), "{e}");
+        assert!(
+            e.contains("[material] fog is gone: [frame] fog = \"pack\""),
+            "{e}"
+        );
     }
 }
 
@@ -890,11 +891,11 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
             format!(
                 "{SMALLEST}[material]\nfile = \"m.wgsl\"\nfog = false\n[frame]\nfog = \"pack\"\n"
             ),
-            "[material] fog and [frame] fog both set: keep [frame] fog",
+            "[material] fog is gone",
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),
-            "`fog` is a key of [material] only",
+            "[material] fog is gone",
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nscale = 0.5\n"),
@@ -915,7 +916,7 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         ),
         (
             format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nfog = false\n"),
-            "`fog` is a key of [material] only",
+            "[material] fog is gone",
         ),
         (
             format!("{SMALLEST}[tonemap]\nfile = \"../t.wgsl\"\n"),

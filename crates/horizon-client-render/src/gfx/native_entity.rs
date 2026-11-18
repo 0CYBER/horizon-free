@@ -237,7 +237,7 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
         // Vanilla's texel says how much of the surface is kept, the stage's how much goes.
         vec4(horizon_decode(in.overlay_color.rgb), 1.0 - in.overlay_color.a),
         horizon_decode(lightmap), horizon_decode(vec3(shade)).x, position,
-        f32((in.flags >> 1u) & 1u), horizon_entity_normal(position), kind - 1u,
+        ((in.flags >> 1u) & 1u) != 0u, horizon_entity_normal(position), kind - 1u,
         horizon_decode(colored), (in.flags & 4u) != 0u, min(light / 240.0, vec2(1.0)),
         in.uv, in.clip.xy / frame.resolution)).color;
     // `entity_color`'s alpha test and blend weight: the texture's alpha times the layer's

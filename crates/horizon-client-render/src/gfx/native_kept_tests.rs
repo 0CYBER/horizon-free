@@ -552,7 +552,7 @@ impl Screen {
         let mut encoder = device.create_command_encoder(&Default::default());
         let world = (&self.color, &self.depth, surface);
         let view = self.screen.create_view(&Default::default());
-        post.run(device, &mut encoder, world, &view, size, false, None, None);
+        post.run(device, &mut encoder, world, &view, size, None, None);
         let buffer = crate::gfx::copy_frame(device, &mut encoder, &self.screen, [4, 4]);
         queue.submit([encoder.finish()]);
         (buffer.slice(..)).map_async(wgpu::MapMode::Read, |r| r.unwrap());
@@ -1623,7 +1623,6 @@ fn a_timed_frame_times_each_compute_pass_under_its_name() {
             world,
             &view,
             [4, 4],
-            false,
             Some(&mut timing),
             None,
         );

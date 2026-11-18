@@ -1,7 +1,7 @@
 override reflections: bool = true;
 
 fn material(input: MaterialInput) -> Surface {
-    let lit = input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0);
+    let lit = input.albedo * input.shaded_tint * vec4<f32>(input.lightmap, 1.0);
     var color = lit.rgb * (0.9 + 0.1 * luminance(lit.rgb));
     // Water's top mirrors the world while the option is on.
     if reflections && input.fluid == 1u && input.face == 1u && frame.has_reflection == 1u {

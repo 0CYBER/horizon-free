@@ -155,6 +155,7 @@ impl Scene {
             entities: None,
             generation: self.generation,
             camera: [0.0; 3],
+            nether: false,
             distance: 64.0,
         }
     }
@@ -251,16 +252,8 @@ fn frame(
     let screen = &world.screen;
     let view = screen.create_view(&Default::default());
     let world = (&world.color, &world.depth, &pack.frame.surface_view);
-    pack.post.run(
-        device,
-        &mut encoder,
-        world,
-        &view,
-        [4, 4],
-        false,
-        None,
-        scene,
-    );
+    pack.post
+        .run(device, &mut encoder, world, &view, [4, 4], None, scene);
     let buffer = crate::gfx::copy_frame(device, &mut encoder, screen, [4, 4]);
     queue.submit([encoder.finish()]);
     (buffer.slice(..)).map_async(wgpu::MapMode::Read, |r| r.unwrap());
@@ -396,8 +389,7 @@ fn a_kept_post_pass_reads_its_previous_and_traces() {
 /// frames: three with a scene, two with another (a TLAS regrown). A `[ray_tracing]` pack without
 /// kept resources makes what it made before them: the frame's layout, the chain's and the one
 /// with the scene; its passes' pipelines twice, the decode's and the tonemap's; its groups (a
-/// pass's and the tonemap's) on the first frame, again on the second, whose history is no longer
-/// blank, and again for the other scene. One that keeps resources and traces from a
+/// pass's and the tonemap's) on the first frame, and again for the other scene. One that keeps resources and traces from a
 /// `[[before_world]]` pass and a compute pass makes a layout a pass, each again with the scene,
 /// and its groups for both parities once, then once for the other scene. Nothing else, ever.
 #[test]
@@ -434,11 +426,7 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
                 n as u32 + 1,
                 Some(scene),
             );
-            let chain = pack
-                .post
-                .groups
-                .iter()
-                .flat_map(|(_, _, g)| g.iter().cloned());
+            let chain = pack.post.groups.iter().flat_map(|(_, g)| g.iter().cloned());
             let worlds = pack.post.kept.iter().flat_map(|k| k.worlds.iter().cloned());
             held.extend(chain.chain(worlds));
             counts.push(count()?);
@@ -472,7 +460,7 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
         [
             [3, 1, 6, 0],
             [0, 3, 0, 0],
-            [0, 3, 0, 0],
+            [0, 0, 0, 0],
             [0, 0, 0, 0],
             [0, 3, 0, 0],
             [0, 0, 0, 0]

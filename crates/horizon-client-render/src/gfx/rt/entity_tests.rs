@@ -138,7 +138,7 @@ fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
 }
 
 /// A device with ray queries, if this machine has one.
-fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(super) fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     let features = adapter.features() & wgpu::Features::EXPERIMENTAL_RAY_QUERY;
@@ -194,27 +194,36 @@ const PROBE: &str = "
 }
 ";
 
-/// The scene's WGSL for a pack whose post pass names `RAY_ENTITY`, as the check builds it.
-fn scene_source() -> String {
+/// The scene's WGSL for a pack whose post pass names `RAY_ENTITY` (`entities`) or only the
+/// terrain's layers, and `shaded_tint`, as the check builds it.
+fn scene_source(entities: bool) -> String {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                     [[post]]\nfile = \"post.wgsl\"\n[ray_tracing]\n";
-    let post = "fn post(input: PostInput) -> vec4<f32> {\n    \
-                return input.color * f32(trace_any_layers(vec3<f32>(0.0), vec3<f32>(1.0, 0.0, 0.0), 1.0, RAY_ENTITY));\n}\n";
+    let layers = if entities { "RAY_ENTITY" } else { "RAY_SOLID" };
+    let post = format!(
+        "fn post(input: PostInput) -> vec4<f32> {{\n    \
+         let x = vec3<f32>(1.0, 0.0, 0.0);\n    \
+         let hit = trace_layers(vec3<f32>(0.0), x, 1.0, {layers});\n    \
+         return input.color * f32(trace_any_layers(vec3<f32>(0.0), x, 1.0, {layers})) * hit.shaded_tint;\n}}\n"
+    );
     let files = [
         (horizon_shader_api::MANIFEST, manifest),
-        ("post.wgsl", post),
+        ("post.wgsl", post.as_str()),
     ]
     .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
     .into();
     let pack = horizon_shader_api::Pack::from_files(files).unwrap();
     let report = horizon_shader_api::check(&pack).unwrap();
     let post = &report.stages[0];
-    assert!(post.traces_entities());
+    assert_eq!(post.traces_entities(), entities);
     post.scene_source.clone().unwrap()
 }
 
 /// A 1×1 white texture: the atlas as a 2D view, the sprite arrays as an array view.
-fn white(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::TextureView) {
+pub(super) fn white(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::TextureView, wgpu::TextureView) {
     use wgpu::util::DeviceExt;
     let white = device.create_texture_with_data(
         queue,
@@ -244,7 +253,7 @@ fn white(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu
 }
 
 /// A storage buffer of `size` bytes, zeros.
-fn empty(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+pub(super) fn empty(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size,
@@ -254,9 +263,9 @@ fn empty(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 }
 
 /// Runs `probe` (writing `outputs` vec4s to `probe_out`) after the scene's WGSL against
-/// `traced`, whose terrain store and sprite tables are empty (`store`, `layers`, `sprites`), once
+/// `traced` with its terrain store and sprite tables (`store`, `layers`, `sprites`), once
 /// `encoder`'s builds are done. What it wrote.
-fn run_probe(
+pub(super) fn run_probe(
     (device, queue): (&wgpu::Device, &wgpu::Queue),
     mut encoder: wgpu::CommandEncoder,
     traced: &Traced<'_>,
@@ -278,7 +287,7 @@ fn run_probe(
     });
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
-        source: wgpu::ShaderSource::Wgsl((scene_source() + probe).into()),
+        source: wgpu::ShaderSource::Wgsl((scene_source(traced.entities.is_some()) + probe).into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -288,18 +297,21 @@ fn run_probe(
         compilation_options: Default::default(),
         cache: None,
     });
-    let e = traced.entities.as_ref().unwrap();
     let mut scene = vec![
         (48, traced.tlas.as_binding()),
         (49, store.as_entire_binding()),
         (50, space.as_entire_binding()),
         (51, layers.as_entire_binding()),
-        (60, wgpu::BindingResource::Buffer(e.vertices.clone())),
-        (61, wgpu::BindingResource::TextureView(e.atlas)),
-        (62, wgpu::BindingResource::Sampler(e.sampler)),
-        (63, e.retained.as_entire_binding()),
     ];
     scene.extend((52..60).map(|b| (b, wgpu::BindingResource::TextureView(sprites))));
+    if let Some(e) = traced.entities.as_ref() {
+        scene.extend([
+            (60, wgpu::BindingResource::Buffer(e.vertices.clone())),
+            (61, wgpu::BindingResource::TextureView(e.atlas)),
+            (62, wgpu::BindingResource::Sampler(e.sampler)),
+            (63, e.retained.as_entire_binding()),
+        ]);
+    }
     let group = |index: u32, entries: Vec<(u32, wgpu::BindingResource<'_>)>| {
         let entries: Vec<_> = entries
             .into_iter()
@@ -405,6 +417,7 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
         }),
         generation: 0,
         camera: [0.0; 3],
+        nether: false,
         distance: 100.0,
     };
     let device_queue = (&device, &queue);
@@ -552,6 +565,7 @@ fn rays_reach_retained_block_entities_through_their_sections() {
             }),
             generation: 0,
             camera: [0.0; 3],
+            nether: false,
             distance: 100.0,
         };
         let device_queue = (&device, &queue);
@@ -582,4 +596,151 @@ fn rays_reach_retained_block_entities_through_their_sections() {
     assert_eq!((built, instances), (0, 1));
     assert_eq!(gone[2][0], -1.0);
     assert_eq!(gone[..2], got[..2]);
+}
+
+/// Rays toward +z at x 0.3, 10.3, 20.3 and 30.3: each hit's `shade`, `ao`, `back` and `entity`,
+/// then each one's `shaded_tint`.
+const SHADE_PROBE: &str = "
+@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 8>;
+@compute @workgroup_size(1) fn probe() {
+    for (var i = 0u; i < 4u; i++) {
+        let at = vec3<f32>(f32(i) * 10.0 + 0.3, 0.6, 0.0);
+        let hit = trace_layers(at, vec3<f32>(0.0, 0.0, 1.0), 100.0, RAY_ENTITY);
+        probe_out[i] = vec4<f32>(hit.shade, hit.ao, f32(hit.back), f32(hit.entity));
+        probe_out[i + 4u] = hit.shaded_tint;
+    }
+}
+";
+
+/// An entity hit's `shade` is vanilla's entity shade for the face's normal (entity.wgsl's
+/// `entity_light`, linear), lit as in the Nether when the frame is, its `ao` 1, and `back` says
+/// the ray met the face from behind: a quad shaded by its normal met from behind, one facing the
+/// ray, a two-sided one met from behind (shaded for its back, as vanilla draws that side), and
+/// one that keeps its colour (normal w 1: culled, not shaded). Its `shaded_tint` is `tint`
+/// times that shade, as a terrain hit's is the product.
+#[test]
+fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
+    let Some((device, queue)) = ray_device() else {
+        eprintln!("no GPU with ray queries: skipped");
+        return;
+    };
+    // `reversed`: wound the other way, so the face looks toward the rays (-z).
+    let face = |x: f32, normal: [i8; 4], reversed: bool| {
+        let mut q = quad(x, 2.0, RAY_ENTITY_QUAD, 0xffff_ffff);
+        if reversed {
+            q.reverse();
+        }
+        for v in &mut q {
+            v.normal = normal;
+        }
+        q
+    };
+    let normals = [
+        [0, 0, 127, 127],
+        [0, 127, 0, 127],
+        [0, 76, 102, -127],
+        [0, 0, 127, 1],
+    ];
+    let stream: Vec<Vertex> = [
+        face(0.0, normals[0], false),
+        face(10.0, normals[1], true),
+        face(20.0, normals[2], false),
+        face(30.0, normals[3], false),
+    ]
+    .concat();
+    use wgpu::util::DeviceExt;
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&stream),
+        usage: wgpu::BufferUsages::VERTEX | ENTITY_INPUT,
+    });
+    let (atlas, sprites) = white(&device, &queue);
+    let stream = Stream {
+        buffer: &buffer,
+        atlas: &atlas,
+        ranges: [(0, 2), (2, 1), (3, 1)],
+        retained: &[],
+    };
+    let mut entities = Entities::new(&device, &stream);
+    assert!(!entities.fit(&device, &stream));
+    let indices = crate::gfx::rt::query::quad_indices(&device, 4);
+    let mut tlas = create_tlas(&device, 1);
+    let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    tlas[0] = Some(wgpu::TlasInstance::new(
+        &entities.blas,
+        identity,
+        0,
+        RAY_ENTITY as u8,
+    ));
+    let mut encoder = Some(device.create_command_encoder(&Default::default()));
+    let sizes = entities.built_sizes();
+    let builds = [entities.build(&sizes, &indices)];
+    (encoder.as_mut().unwrap())
+        .build_acceleration_structures(builds.iter(), std::iter::once(&tlas));
+    let (store, layers) = (empty(&device, 24), empty(&device, 8));
+    // entity.wgsl's `entity_light` for unit normal `n`, decoded as the stage's colours are.
+    let light = |n: [f32; 3], nether: bool| {
+        let unit = |v: [f32; 3]| v.map(|c| c / v.iter().map(|c| c * c).sum::<f32>().sqrt());
+        let dot = |a: [f32; 3]| a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
+        let l0 = unit([0.2, 1.0, -0.7]);
+        let l1 = unit([-0.2, if nether { -1.0 } else { 1.0 }, 0.7]);
+        let shade = (dot(l0).max(0.0) + dot(l1).max(0.0)) * 0.6 + 0.4;
+        shade.min(1.0).powf(2.2)
+    };
+    let normal = |n: [i8; 4], sign: f32| [n[0], n[1], n[2]].map(|c| sign * f32::from(c) / 127.0);
+    for nether in [false, true] {
+        let traced = Traced {
+            tlas: &tlas,
+            solid_instances: 0,
+            store: &store,
+            translucent_instances: 0,
+            entities: Some(TracedEntities {
+                vertices: buffer.as_entire_buffer_binding(),
+                atlas: &atlas,
+                sampler: &entities.sampler,
+                bases: entities.ranges.map(|r| r.0),
+                retained: entities.retained.store(),
+                retained_instances: 1,
+            }),
+            generation: 0,
+            camera: [0.0; 3],
+            nether,
+            distance: 100.0,
+        };
+        let encoder = encoder
+            .take()
+            .unwrap_or_else(|| device.create_command_encoder(&Default::default()));
+        let got = run_probe(
+            (&device, &queue),
+            encoder,
+            &traced,
+            (&store, &layers, &sprites),
+            SHADE_PROBE,
+            8,
+        );
+        let want = [
+            (light(normal(normals[0], 1.0), nether), true),
+            (light(normal(normals[1], 1.0), nether), false),
+            // Met from behind, a two-sided face is shaded for its back: the normal turned.
+            (light(normal(normals[2], -1.0), nether), true),
+            (1.0, true),
+        ];
+        for (i, (got, (shade, back))) in got.iter().zip(want).enumerate() {
+            let case = format!("quad {i}, nether {nether}: {got:?}");
+            assert!((got[0] - shade).abs() < 1e-4, "{case}, shade not {shade}");
+            assert_eq!(got[1..], [1.0, f32::from(u8::from(back)), 1.0], "{case}");
+        }
+        // `shaded_tint` is `tint * shade * ao` (white quads, `ao` 1), alpha the tint's.
+        for (i, (shaded, (shade, _))) in got[4..].iter().zip(want).enumerate() {
+            let case = format!("quad {i}, nether {nether}: shaded_tint {shaded:?}");
+            assert!(
+                shaded[..3].iter().all(|c| (c - shade).abs() < 1e-4),
+                "{case}, not {shade}"
+            );
+            assert_eq!(shaded[3], 1.0, "{case}");
+        }
+    }
+    // The cases tell the two lights and the two sides apart.
+    assert!(light(normal(normals[1], 1.0), true) < 0.9);
+    assert!(light(normal(normals[2], -1.0), false) < light(normal(normals[2], 1.0), false) - 0.3);
 }

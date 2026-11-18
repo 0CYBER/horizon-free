@@ -395,8 +395,8 @@ impl Rays {
 }
 
 /// `horizon_RaySpace`'s twelve words for `scene`, its sprite arrays holding `split` layers each:
-/// the retained block entities' first instance at word 6, and the entity layer's bases from word
-/// 8, where WGSL aligns a `vec3<u32>`.
+/// the retained block entities' first instance at word 6, the Nether at word 7, and the entity
+/// layer's bases from word 8, where WGSL aligns a `vec3<u32>`.
 pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
     let [x, y, z] = scene.camera.map(f32::to_bits);
     let [a, b, c] = scene.entities.as_ref().map_or([0; 3], |e| e.bases);
@@ -410,7 +410,7 @@ pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
         instances[0],
         instances[1],
         retained,
-        0,
+        u32::from(scene.nether),
         a,
         b,
         c,

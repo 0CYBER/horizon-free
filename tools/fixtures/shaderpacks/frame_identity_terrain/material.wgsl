@@ -35,5 +35,6 @@ fn material(input: MaterialInput) -> Surface {
     let direct = max(dot(normal, frame.light_direction), 0.0) * lit(input.position, input.normal);
     // Vanilla's light at a third, plus the direct light; the map's ambient occlusion on both.
     let light = (input.lightmap * 0.35 + vec3<f32>(1.2, 1.1, 0.9) * body * direct) * map.b;
-    return Surface(vec4<f32>(input.albedo.rgb * input.tint.rgb * light, input.albedo.a * input.tint.a));
+    let tint = input.tint.rgb * input.shade * input.ao;
+    return Surface(vec4<f32>(input.albedo.rgb * tint * light, input.albedo.a));
 }

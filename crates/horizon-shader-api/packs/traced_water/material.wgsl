@@ -8,8 +8,8 @@ const MIRROR: f32 = 0.5;
 const REACH: f32 = 64.0;
 
 fn material(input: MaterialInput) -> Surface {
-    // Vanilla's own colour: the texture, the tint, the light.
-    let lit = input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0);
+    // Vanilla's own colour: the texture, the tint with its shade, the light.
+    let lit = input.albedo * input.shaded_tint * vec4<f32>(input.lightmap, 1.0);
     // Water alone traces: solid terrain is a post pass's to light, once a pixel.
     if !input.translucent || input.fluid != 1u || frame.has_ray_tracing == 0u {
         return Surface(lit);
@@ -18,7 +18,7 @@ fn material(input: MaterialInput) -> Surface {
     let hit = trace(input.position + input.normal * 0.01, away, REACH);
     var seen = frame.sky_color.rgb;
     if hit.distance >= 0.0 {
-        seen = hit.albedo.rgb * hit.tint.rgb;
+        seen = hit.albedo.rgb * hit.shaded_tint.rgb;
     }
     // In the water's own light, so it doesn't glow at night.
     return Surface(vec4<f32>(mix(lit.rgb, seen * input.lightmap, MIRROR), lit.a));

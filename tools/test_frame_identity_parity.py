@@ -43,8 +43,9 @@ Sessions, each a fresh game and world (seed 7) per build:
   has ray queries, the material's pipelines read the frame's group joined with the ray scene and the entity stage's
   the frame's own: the water drawn after the entities must find the material's group again (#13780).
 
-Shader packs are read from the change's tree for both builds (tools/fixtures/shaderpacks, else the SDK's
-crates/horizon-shader-api/packs), so a base from before a fixture was added draws it too.
+Each build draws its own tree's shader packs (tools/fixtures/shaderpacks, else the SDK's
+crates/horizon-shader-api/packs, and the SDK's test samples), so a change that ports a pack to a new API draws its port
+and the base the original; a base from before a fixture was added draws the change's.
 
 The float frame's HDR shots are also held to their SDR ones in each build (hdr_gates, Tests 3 and 4): with the
 Vanilla look the picture is HDR off's, and with Horizon's the SDR screenshot is the HDR shot with light above white
@@ -67,6 +68,7 @@ On a difference it writes diff-<scene>.png beside the two shots: the base dimmed
   test_frame_identity_parity.py [--base REV] [--build-base] [--bin-dir DIR] [--base-bin-dir DIR] [--sessions a,b]
 """
 import argparse
+import io
 import json
 import math
 import os
@@ -74,6 +76,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import tomllib
@@ -582,10 +585,31 @@ RELIEF_PACKS = ('frame_identity_terrain',)
 GRAPHICS = 'hdrPaperWhite:203\nhdrPeak:1000\ntaa:false\nfxaa:false\nframeGeneration:off\n'
 
 
-def pack_dir(pack):
-    if pack in SAMPLE_PACKS:
-        return SAMPLE_PACKS[pack][0]
-    return next(d / pack for d in PACK_DIRS if (d / pack).is_dir())
+# 🤖 Agent: The base's own copies of PACK_DIRS and SAMPLES (base_packs).
+BASE_PACKS = RUN / 'base-packs'
+
+
+def base_packs(base):
+    """Writes the shader packs as `base` has them into BASE_PACKS, where pack_dir finds the base's."""
+    shutil.rmtree(BASE_PACKS, ignore_errors=True)
+    BASE_PACKS.mkdir(parents=True)
+    folders = [d.relative_to(ROOT).as_posix() for d in (*PACK_DIRS, SAMPLES)]
+    present = [f for f in folders if git('ls-tree', '-d', '--name-only', base, f)]
+    if present:
+        tar = subprocess.run(['git', 'archive', base, *present], cwd=ROOT, check=True, capture_output=True).stdout
+        with tarfile.open(fileobj=io.BytesIO(tar)) as archive:
+            archive.extractall(BASE_PACKS, filter='data')
+
+
+def pack_dir(pack, label='change'):
+    """The folder of `pack` that the `label` build draws: the base's own where it has one, else the change's."""
+    def find(root):
+        if pack in SAMPLE_PACKS:
+            folder = root / SAMPLE_PACKS[pack][0].relative_to(ROOT)
+            return folder if folder.is_dir() else None
+        return next((root / d.relative_to(ROOT) / pack for d in PACK_DIRS
+                     if (root / d.relative_to(ROOT) / pack).is_dir()), None)
+    return (label == 'base' and find(BASE_PACKS)) or find(ROOT)
 
 
 # 🤖 Agent: relief_pack's heights, 0..1 at texel (x, y) of a 16-texel block texture: round bumps on stone, ripples
@@ -637,8 +661,8 @@ def run_session(name, label, bin_dir, out, env_base, args):
         # 🤖 Agent: The items scene's light.
         (folder / 'horizon-extras.txt').write_text('dynamicLights:true\n')
     if pack:
-        source, cut, unused = SAMPLE_PACKS.get(pack) or (pack_dir(pack), None, None)
-        shutil.copytree(source, folder / 'shaderpacks' / pack)
+        _, cut, unused = SAMPLE_PACKS.get(pack) or (None, None, None)
+        shutil.copytree(pack_dir(pack, label), folder / 'shaderpacks' / pack)
         if cut:
             manifest = folder / 'shaderpacks' / pack / 'horizon-shaders.toml'
             manifest.write_text(manifest.read_text(encoding='utf-8').split(cut)[0], encoding='utf-8')
@@ -691,9 +715,10 @@ def save_log(game, path):
     Path(path).write_text(str(game.ctl('logs', '--lines', 10 ** 9, check=False)), encoding='utf-8')
 
 
-def session_checks(shots, sessions):
+def session_checks(shots, sessions, label='change'):
     """That each session drew what it is for, so a pack that fails to load, or HDR that doesn't turn on, in both
-    builds can't pass as identical: HDR shots have their -hdr.png and only they do, and the pack changes the picture."""
+    builds can't pass as identical: HDR shots have their -hdr.png and only they do, and the pack changes the picture.
+    `label` is the build that drew them: its log names the version of the pack that build draws (`pack_dir`)."""
     problems = []
     for name in sessions:
         graphics, extra, scenes, toggle = SESSIONS[name]
@@ -727,7 +752,7 @@ def session_checks(shots, sessions):
         # 🤖 Agent: and whether the pack loaded (scenes no session without it shoots have nothing to compare with),
         # and the LabPBR maps its displacement needs.
         pack = extra.get('HORIZON_SHADER_PACK')
-        manifest = pack_dir(pack) / 'horizon-shaders.toml' if pack else None
+        manifest = pack_dir(pack, label) / 'horizon-shaders.toml' if pack else None
         if manifest and manifest.exists():
             meta = tomllib.loads(manifest.read_text(encoding='utf-8'))
             if f'shader pack {meta["id"]} {meta["version"]}: ' not in text:
@@ -984,7 +1009,7 @@ def build_checks(shots, sessions, base_sessions=None):
     is checked on `base_sessions` (the ones it drew with the pack), by default the same as the change."""
     base_sessions = sessions if base_sessions is None else base_sessions
     return [f'{label}: {p}' for label, drawn in (('base', base_sessions), ('change', sessions))
-            for p in session_checks(shots / label, drawn) + hdr_gates(shots / label, drawn)
+            for p in session_checks(shots / label, drawn, label) + hdr_gates(shots / label, drawn)
             + entity_gates(shots / label, drawn)]
 
 
@@ -1005,6 +1030,7 @@ def main():
     base = base_revision(args.base)
     head = git('rev-parse', 'HEAD')
     print(f'base {base[:10]}, change {head[:10]}', flush=True)
+    base_packs(base)
 
     timings = {}
     started = time.monotonic()

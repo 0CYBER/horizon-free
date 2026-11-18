@@ -142,7 +142,7 @@ impl Game<'_> {
             self.lod_observe.extend(self.world.chunks.keys().copied());
         }
     }
-    pub(super) fn update_world(&mut self) {
+    pub(in crate::game) fn update_world(&mut self) {
         if let Err(e) = horizon_client::spans::time("poll_remote", || self.poll_remote()) {
             log::warn!("Horizon: {e}");
         }
@@ -150,12 +150,15 @@ impl Game<'_> {
             log::warn!("Horizon Studio replay: {e}");
         }
         // The renderer laid translucent quads out again (a shader pack's flat terrain came
-        // or went) and dropped every section and far tile: meshed again, as for a new one.
+        // or went), or its pages couldn't take the quads' looks it turned on, and dropped every
+        // section and far tile: meshed again, as for a new one, with the looks it takes now
+        // (`shader_pack_inputs` would otherwise mesh them all again for the looks).
         if self
             .renderer
             .as_mut()
             .is_some_and(Renderer::take_dropped_sections)
         {
+            self.streaming.looks = self.renderer.as_ref().is_some_and(|r| r.terrain_looks());
             self.clear_lod();
             self.all_sections_changed();
         }

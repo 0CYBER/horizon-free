@@ -307,14 +307,10 @@ pub struct NativePost {
         wgpu::TextureView,
         wgpu::TextureView,
     ),
-    /// Last frame's input to the last pass (`history`, binding 8), made with the targets,
-    /// and a black 1×1 in its place before then.
-    history: Option<wgpu::Texture>,
-    history_blank: wgpu::Texture,
-    /// One bind group per pass, for these world views and either the valid history or black.
-    groups: Option<(WorldViews, bool, Vec<wgpu::BindGroup>)>,
-    /// Whether `history` contains the last frame's input to the last pass.
-    history_valid: bool,
+    /// A black 1×1, in place of the pack's target a pass writes.
+    blank: wgpu::Texture,
+    /// One bind group per pass, for these world views.
+    groups: Option<(WorldViews, Vec<wgpu::BindGroup>)>,
     /// What each pass writes and reads (`[[post]] output`).
     plan: Vec<PassPlan>,
     /// The pack's targets' scales (`Manifest::post_targets`), and their views for the world's
@@ -374,8 +370,6 @@ pub struct NativeFrame {
     /// The eased eye light (block, sky) and being in water and lava (`write`); NaN until the
     /// first frame sets them.
     eye: [f32; 4],
-    /// A post stage must use black history after a long gap until it has rendered a frame.
-    history_reset: bool,
     /// `frame.ray_distance` while the pack traces this frame's scene (`NativePack::write`),
     /// set before `write`: `frame.has_ray_tracing` is 1 then.
     pub(super) ray_distance: Option<f32>,
@@ -609,7 +603,6 @@ impl NativeFrame {
             mirror: None,
             last: None,
             eye: [f32::NAN; 4],
-            history_reset: true,
             ray_distance: None,
             epochs: None,
             start: std::time::Instant::now(),
@@ -887,7 +880,6 @@ impl NativeFrame {
             _ => {
                 paused = last.is_some();
                 self.eye = [f32::NAN; 4];
-                self.history_reset = true;
             }
         }
         self.last = Some((view_proj, frame.camera, now));
@@ -921,8 +913,8 @@ impl NativeFrame {
         inputs
     }
 
-    /// Forgets the frames before, as a freshly loaded pack: the post stage's next `history` is
-    /// black, eased values start at their targets, wetness dry, the frame count at 0.
+    /// Forgets the frames before, as a freshly loaded pack: eased values start at their
+    /// targets, wetness dry, the frame count at 0.
     pub(super) fn reset_history(&mut self) {
         if let Some(epochs) = &mut self.epochs {
             epochs.note(horizon_shader_api::kept::REASON_RESET);
@@ -931,14 +923,6 @@ impl NativeFrame {
         self.frames = 0;
         self.wetness = (0.0, None);
         self.start = std::time::Instant::now();
-    }
-
-    /// Takes the post stage's pending history reset. It stays pending if post rendering is
-    /// skipped for a frame, so the first frame it does render still sees black history.
-    pub(super) fn take_history_reset(&mut self) -> bool {
-        let reset = self.history_reset;
-        self.history_reset = false;
-        reset
     }
 }
 
@@ -1096,7 +1080,6 @@ impl NativePost {
             sampler_entry(5),
             texture_entry(6, wgpu::TextureSampleType::Depth),
             comparison_entry(7),
-            texture_entry(8, float),
             texture_entry(9, wgpu::TextureSampleType::Depth),
             texture_entry(10, float),
             texture_entry(11, wgpu::TextureSampleType::Uint),
@@ -1184,10 +1167,8 @@ impl NativePost {
             linear: sampler("Native shader pack linear", wgpu::FilterMode::Linear),
             nearest: sampler("Native shader pack nearest", wgpu::FilterMode::Nearest),
             targets: None,
-            history: None,
-            history_blank: history_target(device, "Native shader pack history blank", [1, 1]),
+            blank: blank_target(device),
             groups: None,
-            history_valid: false,
             scales: targets.iter().map(|t| t.1).collect(),
             named: None,
             plan,
@@ -1225,7 +1206,6 @@ impl NativePost {
         world: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
         size: [u32; 2],
         window: [u32; 2],
-        history_reset: bool,
         scene: Option<&trace::Traced<'_>>,
     ) {
         let d = &mut self.display;
@@ -1290,10 +1270,8 @@ impl NativePost {
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: INTERMEDIATE,
-                        // COPY_SRC: the last pass's input is kept as next frame's `history`.
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::TEXTURE_BINDING
-                            | wgpu::TextureUsages::COPY_SRC,
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     })
                     .create_view(&Default::default())
@@ -1305,36 +1283,24 @@ impl NativePost {
                     target("Native shader pack B"),
                 ],
             ));
-            self.history = Some(history_target(device, "Native shader pack history", size));
-            self.history_valid = false;
             self.groups = None;
         }
-        let blank_history = history_reset || !self.history_valid;
         // The scene's TLAS and store are replaced as they grow: groups holding old ones go.
         let traced = self.trace.as_ref().zip(scene);
         let generation = traced.map(|(_, scene)| scene.generation);
         if self
             .groups
             .as_ref()
-            .is_some_and(|((color, depth, surface), blank, _)| {
+            .is_some_and(|((color, depth, surface), _)| {
                 color == world.0
                     && depth == world.1
                     && surface == world.2
-                    && *blank == blank_history
                     && self.traced == generation
             })
         {
             return;
         }
-        let history = if blank_history {
-            &self.history_blank
-        } else {
-            self.history
-                .as_ref()
-                .expect("history exists after a post stage has more than one pass")
-        }
-        .create_view(&Default::default());
-        let blank = self.history_blank.create_view(&Default::default());
+        let blank = self.blank.create_view(&Default::default());
         // The passes read the world decoded.
         let scene = &self.display.scene.as_ref().expect("made above").1;
         let group = |previous: &wgpu::TextureView, pass: Option<usize>, parity| {
@@ -1371,10 +1337,6 @@ impl NativePost {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::Sampler(&self.shadow.1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&history),
                 },
                 wgpu::BindGroupEntry {
                     binding: 9,
@@ -1435,11 +1397,7 @@ impl NativePost {
             let picture = self.display.picture.as_ref().map_or(scene, |p| &p.1);
             groups.push(group(picture, None, parity));
         }
-        self.groups = Some((
-            (world.0.clone(), world.1.clone(), world.2.clone()),
-            blank_history,
-            groups,
-        ));
+        self.groups = Some(((world.0.clone(), world.1.clone(), world.2.clone()), groups));
         self.traced = generation;
     }
 
@@ -1455,17 +1413,16 @@ impl NativePost {
         world: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
         screen: &wgpu::TextureView,
         size: [u32; 2],
-        history_reset: bool,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
         scene: Option<&trace::Traced<'_>>,
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
         self.begin_kept(device, encoder, size);
-        self.prepare(device, world, size, window, history_reset, scene);
+        self.prepare(device, world, size, window, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
         }
-        let Some((_, _, groups)) = &self.groups else {
+        let Some((_, groups)) = &self.groups else {
             return;
         };
         let groups = kept::current(&self.kept, groups);
@@ -1510,39 +1467,23 @@ impl NativePost {
         }
         let label = d.label.as_deref().unwrap_or("Tonemap");
         fullscreen_pass(encoder, label, screen, &d.tonemap, (GROUP, group), timing);
-        // The chain's last picture becomes next frame's `history`, once every pass has read
-        // this frame's.
-        let before_last = &self.plan[..self.plan.len().saturating_sub(1)];
-        if let Some(Writes::Chain(slot)) = before_last
-            .iter()
-            .rfind(|p| matches!(p.writes, Writes::Chain(_)))
-            .map(|p| p.writes)
-            && let (Some(history), Some((_, targets))) = (&self.history, &self.targets)
-        {
-            encoder.copy_texture_to_texture(
-                targets[slot].texture().as_image_copy(),
-                history.as_image_copy(),
-                history.size(),
-            );
-            self.history_valid = true;
-        }
     }
 }
 
-/// A target of `size` the post stage's `history` is copied into.
-fn history_target(device: &wgpu::Device, label: &str, size: [u32; 2]) -> wgpu::Texture {
+/// A black 1×1 of the pack's targets' format (`NativePost::blank`).
+fn blank_target(device: &wgpu::Device) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
+        label: Some("Native shader pack blank"),
         size: wgpu::Extent3d {
-            width: size[0].max(1),
-            height: size[1].max(1),
+            width: 1,
+            height: 1,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: INTERMEDIATE,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
@@ -1578,13 +1519,9 @@ pub fn frame_inputs(
         let a = angle.to_radians();
         Vec3::new(-a.sin(), a.cos(), 0.0)
     };
-    let (fog_color, fog_start, fog_end) = match &frame.fog {
-        Some(f) => (
-            [f.color[0], f.color[1], f.color[2]],
-            f.environmental_start.min(f.render_distance_start),
-            f.environmental_end.min(f.render_distance_end),
-        ),
-        None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
+    let fog_color = match &frame.fog {
+        Some(f) => [f.color[0], f.color[1], f.color[2]],
+        None => frame.sky.fog_color,
     };
     // The two terms terrain.wgsl's `apply_fog` takes the larger of, as the renderer has them.
     let (_, fog) = super::fog_uniform(frame);
@@ -1608,8 +1545,7 @@ pub fn frame_inputs(
         thunder: pack.thunder,
         resolution: [size[0] as f32, size[1] as f32],
         eye_light: [level(pack.eye_light[0]), level(pack.eye_light[1])],
-        fog_start,
-        fog_end,
+        fog_gap: [0.0; 2],
         render_distance: frame.distance,
         far: frame.depth_far,
         night_vision: frame.night_vision,
@@ -1876,7 +1812,6 @@ mod tests {
         );
         // Wetness starts dry, as on a fresh pack; frame 1's delta of 0 leaves it there.
         assert_eq!((first.eye_light_smooth[1], first.wetness), (1.0, 0.0));
-        assert!(native.take_history_reset());
         native.last.as_mut().unwrap().2 -= std::time::Duration::from_secs(5);
         frame.pack.eye_light = [0, 0];
         frame.pack.frame_timing = Some(FrameTiming::nth(2, 2000.0));
@@ -1893,7 +1828,6 @@ mod tests {
             "{}",
             second.wetness
         );
-        assert!(!native.take_history_reset());
     }
 
     /// After a reset, the same frames give the same inputs, to the bit, as a pack just made,
@@ -1933,7 +1867,6 @@ mod tests {
                 bytemuck::bytes_of(&inputs[1]),
                 "frame {n}"
             );
-            assert_eq!(used.take_history_reset(), fresh.take_history_reset());
         }
     }
 
@@ -2002,16 +1935,7 @@ api = \"0.2\"
         let red = |post: &mut NativePost| {
             let mut encoder = device.create_command_encoder(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(
-                &device,
-                &mut encoder,
-                world,
-                &view,
-                [4, 4],
-                false,
-                None,
-                None,
-            );
+            post.run(&device, &mut encoder, world, &view, [4, 4], None, None);
             encoder.copy_texture_to_buffer(
                 screen.as_image_copy(),
                 wgpu::TexelCopyBufferInfo {
@@ -2162,7 +2086,6 @@ api = \"0.2\"
             (&color, &depth, &frame.surface_view),
             &view,
             [4, 4],
-            true,
             None,
             None,
         );
@@ -2195,124 +2118,6 @@ api = \"0.2\"
         assert!(
             near(pixel[0], 204) && near(pixel[1], 102) && near(pixel[2], 186) && pixel[3] == 255,
             "{pixel:?}"
-        );
-    }
-
-    /// `history` is black on the first frame, then what the pass before the last wrote the
-    /// frame before: half of white in linear light, 186 encoded.
-    #[test]
-    fn the_last_pass_reads_last_frames_input_as_history() {
-        let _gpu = crate::gfx::test_gpu::lock();
-        let Some((device, queue)) = device(true) else {
-            return;
-        };
-        let manifest = "schema = 1
-id = \"t\"
-name = \"T\"
-version = \"1\"
-api = \"0.2\"
-            [[post]]
-    file = \"a.wgsl\"
-    [[post]]
-    file = \"b.wgsl\"
-    ";
-        let a = "fn post(input: PostInput) -> vec4<f32> { return vec4<f32>(input.color.rgb * 0.5, 1.0); }
-    ";
-        let b = "fn post(input: PostInput) -> vec4<f32> { return textureLoad(history, vec2<i32>(input.pixel), 0); }
-    ";
-        let files = [(MANIFEST, manifest), ("a.wgsl", a), ("b.wgsl", b)]
-            .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
-            .into();
-        let report = check(&Pack::from_files(files).unwrap()).unwrap();
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-        let frame = sdr_frame(&device, &queue);
-        let mut post = NativePost::new(
-            &device,
-            report.stages,
-            &report.manifest,
-            &[],
-            format,
-            &frame,
-            None,
-        )
-        .unwrap();
-        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-        let color = texture(&device, format, usage).create_view(&Default::default());
-        let depth = texture(&device, wgpu::TextureFormat::Depth32Float, usage)
-            .create_view(&Default::default());
-        let screen = texture(
-            &device,
-            format,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        );
-        let view = screen.create_view(&Default::default());
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT * 4),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut frame_pixel = |history_reset| {
-            let mut encoder = device.create_command_encoder(&Default::default());
-            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            post.run(
-                &device,
-                &mut encoder,
-                (&color, &depth, &frame.surface_view),
-                &view,
-                [4, 4],
-                history_reset,
-                None,
-                None,
-            );
-            encoder.copy_texture_to_buffer(
-                screen.as_image_copy(),
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
-                        rows_per_image: Some(4),
-                    },
-                },
-                screen.size(),
-            );
-            queue.submit([encoder.finish()]);
-            buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
-            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            let pixel = buffer.slice(..).get_mapped_range().unwrap()[..4].to_vec();
-            buffer.unmap();
-            pixel
-        };
-        assert_eq!(
-            frame_pixel(true)[..3],
-            [0, 0, 0],
-            "black on the first frame"
-        );
-        let second = frame_pixel(false);
-        assert!(
-            second[..3].iter().all(|&v| v.abs_diff(186) <= 1),
-            "{second:?}"
-        );
-        assert_eq!(frame_pixel(true)[..3], [0, 0, 0], "black after a frame gap");
-        let fourth = frame_pixel(false);
-        assert!(
-            fourth[..3].iter().all(|&v| v.abs_diff(186) <= 1),
-            "{fourth:?}"
         );
     }
 
@@ -2453,7 +2258,6 @@ api = \"0.2\"
                 (&color, &depth, &frame.surface_view),
                 &view,
                 [4, 4],
-                true,
                 None,
                 None,
             );
@@ -2722,16 +2526,7 @@ api = \"0.2\"
             }));
             let view = screen.create_view(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(
-                &device,
-                &mut encoder,
-                world,
-                &view,
-                [4, 4],
-                true,
-                None,
-                None,
-            );
+            post.run(&device, &mut encoder, world, &view, [4, 4], None, None);
             let buffer = crate::gfx::copy_frame(&device, &mut encoder, &screen, [4, 4]);
             queue.submit([encoder.finish()]);
             buffer
@@ -2886,16 +2681,7 @@ api = \"0.2\"
             }));
             let view = screen.create_view(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(
-                &device,
-                &mut encoder,
-                world,
-                &view,
-                [4, 4],
-                true,
-                None,
-                None,
-            );
+            post.run(&device, &mut encoder, world, &view, [4, 4], None, None);
             // The renderer's rule, then its curve, as it runs them after the pack's chain.
             if crate::gfx::horizon_tone_curve(hdr, true, post.tonemaps()) {
                 display.begin(&queue, true);

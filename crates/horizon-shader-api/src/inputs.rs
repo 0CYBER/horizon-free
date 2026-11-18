@@ -125,10 +125,7 @@ uniform! {
         resolution: [f32; 2],
         /// Block and sky light at the camera, 0..1 (level / 15).
         eye_light: [f32; 2],
-        /// Where vanilla's fog starts, in blocks from the camera.
-        fog_start: f32,
-        /// Where vanilla's fog is full, in blocks.
-        fog_end: f32,
+        @pad fog_gap: [f32; 2],
         /// The render distance, in blocks.
         render_distance: f32,
         /// The far plane, in blocks.
@@ -241,12 +238,11 @@ uniform! {
         reset_reasons: u32,
         /// Where the fog of where the camera is starts and where it is full (x, y), in blocks
         /// along the straight line from the camera: the dimension's and the biome's, thickened by
-        /// rain, or that of water, lava, powder snow, blindness, darkness or a boss. Only a pack
-        /// with `[frame] fog = "pack"` has this field.
+        /// rain, or that of water, lava, powder snow, blindness, darkness or a boss.
         fog_environment: [f32; 2],
         /// Where the render distance's fog starts and where it is full (x, y), in blocks along the
-        /// larger of the horizontal distance and the height difference from the camera. Only a
-        /// pack with `[frame] fog = "pack"` has this field.
+        /// larger of the horizontal distance and the height difference from the camera. Vanilla's
+        /// fog is the larger of the two (`vanilla_fog`, under `[frame] fog = "pack"`).
         fog_render: [f32; 2],
         /// The moon's phase, as Horizon draws the moon: 0 full, 1 waning gibbous, 2 third
         /// quarter, 3 waning crescent, 4 new, 5 waxing crescent, 6 first quarter, 7 waxing
@@ -260,36 +256,23 @@ uniform! {
 impl Frame {
     /// Where `has_ray_tracing` and `ray_distance` are among the fields: in what was a gap of
     /// the layout before `luminance`, so no other field moves with or without them.
-    pub const RAY_FIELDS: std::ops::Range<usize> = 55..57;
+    pub const RAY_FIELDS: std::ops::Range<usize> = 53..55;
 
     /// Where `view_epoch`, `world_epoch` and `reset_reasons` are among the fields: after
     /// `luminance`, so a pack without `[[resource]]` declares a prefix and no other field moves.
-    pub const KEPT_FIELDS: std::ops::Range<usize> = 58..61;
-
-    /// Where `fog_environment` and `fog_render` are among the fields: the last, after the
-    /// epochs, so that no field before them moves.
-    pub const FOG_FIELDS: std::ops::Range<usize> = 61..63;
+    pub const KEPT_FIELDS: std::ops::Range<usize> = 56..59;
 
     /// Where `moon_phase` is among the fields: the last, in what was padding at the end, so the
     /// uploaded struct keeps its size and no field moves.
-    pub const MOON_FIELDS: std::ops::Range<usize> = 63..64;
+    pub const MOON_FIELDS: std::ops::Range<usize> = 61..62;
 
-    /// The fields the prelude declares, for a pack that asks for the scene (`[ray_tracing]`)
-    /// or not, keeps resources (`[[resource]]`) or not, fogs its stages itself
-    /// (`[frame] fog = "pack"`) or not, and whose files name `moon_phase` or not.
-    pub fn declared(ray_tracing: bool, kept: bool, fog: bool, moon_phase: bool) -> Vec<Field> {
-        Self::declared_at(ray_tracing, kept, fog, moon_phase)
-            .into_iter()
-            .map(|i| Self::WGSL.fields[i])
-            .collect()
-    }
-
-    /// `declared`'s fields, by their index among all of them.
-    fn declared_at(ray_tracing: bool, kept: bool, fog: bool, moon_phase: bool) -> Vec<usize> {
+    /// The fields the prelude declares, by index, for a pack that asks for the scene
+    /// (`[ray_tracing]`) or not, keeps resources (`[[resource]]`) or not, and whose files name
+    /// `moon_phase` or not.
+    fn declared_at(ray_tracing: bool, kept: bool, moon_phase: bool) -> Vec<usize> {
         let skipped = |i: usize| {
             (!ray_tracing && Self::RAY_FIELDS.contains(&i))
                 || (!kept && Self::KEPT_FIELDS.contains(&i))
-                || (!fog && Self::FOG_FIELDS.contains(&i))
                 || (!moon_phase && Self::MOON_FIELDS.contains(&i))
         };
         (0..Self::WGSL.fields.len())
@@ -297,19 +280,26 @@ impl Frame {
             .collect()
     }
 
-    /// `declared` as WGSL. Where the fields left out would bring the next one closer than the
-    /// uploaded struct has it (the epochs or the fog's, before a later field), the field before
-    /// them keeps their bytes (`@size`), so every field stays at its uploaded offset.
-    pub fn declared_wgsl(ray_tracing: bool, kept: bool, fog: bool, moon_phase: bool) -> String {
+    /// The fields the prelude declares (`declared_at`).
+    pub fn declared(ray_tracing: bool, kept: bool, moon_phase: bool) -> Vec<Field> {
+        let at = Self::declared_at(ray_tracing, kept, moon_phase).into_iter();
+        at.map(|i| Self::WGSL.fields[i]).collect()
+    }
+
+    /// `declared` as WGSL, each field at the offset the uploaded struct has it: a field followed
+    /// by bytes WGSL's layout wouldn't leave (a removed field's, or the epochs' without
+    /// `[[resource]]`) keeps them (`@size`).
+    pub fn declared_wgsl(ray_tracing: bool, kept: bool, moon_phase: bool) -> String {
         let mut out = format!("struct {} {{\n", Self::WGSL.name);
-        let at = Self::declared_at(ray_tracing, kept, fog, moon_phase);
+        let at = Self::declared_at(ray_tracing, kept, moon_phase);
         for (n, &i) in at.iter().enumerate() {
             let f = Self::WGSL.fields[i];
             out += "    ";
             if let Some(&next) = at.get(n + 1) {
                 let (size, _) = layout(f.ty);
                 let (_, align) = layout(Self::WGSL.fields[next].ty);
-                if (Self::OFFSETS[i] + size).next_multiple_of(align) != Self::OFFSETS[next] {
+                let placed = (Self::OFFSETS[i] + size).next_multiple_of(align);
+                if placed != Self::OFFSETS[next] {
                     out += &format!("@size({}) ", Self::OFFSETS[next] - Self::OFFSETS[i]);
                 }
             }
@@ -319,7 +309,7 @@ impl Frame {
     }
 }
 
-/// The size and alignment of a uniform field's WGSL type (`wgsl_types!`).
+/// The size and alignment WGSL's uniform layout gives a `Frame` field's type.
 fn layout(ty: &str) -> (usize, usize) {
     match ty {
         "f32" | "u32" | "i32" => (4, 4),
@@ -328,7 +318,7 @@ fn layout(ty: &str) -> (usize, usize) {
         "vec4<f32>" => (16, 16),
         "mat4x4<f32>" => (64, 16),
         "array<vec4<f32>, 8>" => (128, 16),
-        _ => unreachable!("not a uniform field's type: {ty}"),
+        _ => panic!("no layout for {ty}"),
     }
 }
 
@@ -368,8 +358,10 @@ pub const MATERIAL_INPUT: Struct = Struct {
     doc: "One point of a block's surface, for `fn material(input: MaterialInput) -> Surface`.",
     fields: fields! {
         albedo: "vec4<f32>" = "The block texture's colour here (alpha 0..1).",
-        tint: "vec4<f32>" = "The vertex colour: biome tint, face shade and ambient occlusion.",
-        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face.",
+        tint: "vec4<f32>" = "The colour vanilla multiplies the block's texture by: the biome's tint (grass, leaves, water), a model's own colour, else white; alpha 1. Without the face's shade and ambient occlusion (`shade`, `ao`).",
+        shade: "f32" = "Vanilla's directional shade for this face as a factor on linear light, 0..1 (vanilla's value decoded with the 2.2 power, as `EntityInput.shade`): the shade the face was given, 1 on top, 0.8 north and south, 0.6 east and west, 0.5 below, 0.9 above and below in the Nether. A face with `shade_direction_override` is shaded as that face (a torch is 1 all round, 0.9 in the Nether), one vanilla doesn't shade (a model element with `\"shade\": false`) is 1, and a fluid's side has the side's shade times the top's.",
+        ao: "f32" = "Vanilla's ambient occlusion here as a factor on linear light, 0..1 (decoded with the 2.2 power), smoothed over the face: how much the blocks around each corner darken it. 1 where vanilla applies none: Smooth Lighting off, a block that gives off light, a model without ambient occlusion, fluids, distant terrain.",
+        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face: vanilla's smooth light, without ambient occlusion (`ao`), and Horizon's dynamic block light.",
         lightmap: "vec3<f32>" = "Vanilla's light colour for that light this frame.",
         position: "vec3<f32>" = "The point, camera-relative, in blocks.",
         uv: "vec2<f32>" = "The texture coordinate inside the block atlas.",
@@ -377,9 +369,9 @@ pub const MATERIAL_INPUT: Struct = Struct {
         tags: "u32" = "The pack's sprite tags this surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
         material: "u32" = "The `[[materials]]` id of this surface's sprite (0 when no entry names it).",
         screen: "vec2<f32>" = "Where the point is on the screen, 0..1 from the top left (`opaque_depth` and `opaque_color` at `screen * frame.resolution`).",
-        face: "u32" = "For a fluid, which face of the block the point is on, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east. 0 elsewhere.",
+        face: "u32" = "Which way the surface faces, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east (a model face's own direction; a fluid's face of its block).",
         fluid: "u32" = "0 not a fluid, 1 water, 2 lava.",
-        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks.",
+        emission: "f32" = "How much light the surface gives off, 0..1: its block's light level over 15 (a torch 14/15; a lantern, glowstone, a froglight or lava 1; a redstone torch or glow lichen 7/15; one lit candle 3/15), 0 for a block that gives none. The same on every face of the block: a model face's own light level (`light_emission`, as the open eyeblossom's petals) doesn't count: it raises that face's block light in `light` (and `lightmap` with it), as vanilla does. A fluid's surface has the fluid's own (lava 1, water 0, also around a waterlogged lantern). It says how much light the block gives, not which of its texels glow: the resource packs' LabPBR maps say that where they ship (`block_specular_map(uv).a`).",
         normal: "vec3<f32>" = "The surface's geometric normal, a unit vector in world axes, facing the camera. A normal within about 3.6 degrees of an axis is that axis exactly, so distant block faces do not shimmer; flowing water's slopes are steeper and keep theirs.",
         tangent: "vec4<f32>" = "The surface's tangent: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). With `normal` it turns a normal map's normals into world axes.",
         colored_light: "vec3<f32>" = "The frame's coloured lights at this point (`[[particle_lights]]`, held and dropped items in their `[[lights]]` colour while dynamic lights are on, and mods' visual lights), 0..1, to light the surface with as the pack likes; 0 where none reaches.",
@@ -390,7 +382,9 @@ pub const MATERIAL_INPUT: Struct = Struct {
 /// What the material stage returns.
 pub const SURFACE: Struct = Struct {
     name: "Surface",
-    doc: "What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; \
+    doc: "What `material` returns. Vanilla's own is \
+          `albedo * vec4(tint.rgb * shade * ao * lightmap, 1.0)`, which \
+          `albedo * vec4(shaded_tint.rgb * lightmap, 1.0)` gives within two steps of 255 for nothing; \
           Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
           unless `[material] coverage = \"pack\"`) and fog (unless `[frame] fog = \"pack\"`).",
     fields: fields! {
@@ -404,12 +398,12 @@ pub const ENTITY_INPUT: Struct = Struct {
     doc: "One point of the surface of an entity, a block entity, an item or a particle, for `fn entity(input: EntityInput) -> Surface`.",
     fields: fields! {
         albedo: "vec4<f32>" = "The texture's colour here.",
-        tint: "vec4<f32>" = "The vertex colour without vanilla's directional shade (dyes, particle colours, fades).",
+        tint: "vec4<f32>" = "The vertex colour without vanilla's directional shade (dyes, particle colours, fades). A block drawn as an entity (a falling block, a block in a minecart, a block display, a block item) keeps its faces' shade in it, and will: its `shade` is 1.",
         overlay: "vec4<f32>" = "The flash vanilla lays over the surface (hurt, TNT, a creeper's swelling): rgb its colour, alpha how much of the surface it replaces. Alpha 0 without one.",
         lightmap: "vec3<f32>" = "Vanilla's light colour for `light` this frame.",
         shade: "f32" = "Vanilla's directional shade for this face as a factor on linear light, 0..1 (vanilla's value decoded with the 2.2 power, as every 0.2 colour is). 1 where vanilla applies none.",
         position: "vec3<f32>" = "The point, camera-relative, in blocks.",
-        emission: "f32" = "1 on a layer vanilla draws at full brightness (spider and enderman eyes, the warden's glow), else 0. There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes.",
+        full_light: "bool" = "The surface's light is full, block and sky light both 15 as the vertices carry them (before dynamic light): so are the layers vanilla draws at full brightness (spider and enderman eyes, the warden's glow), and any surface standing in full block and sky light (a blaze in daylight). There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes. Ender chests and other block entities have no terrain `emission`.",
         normal: "vec3<f32>" = "The surface's geometric normal, a unit vector in world axes, facing the camera, from the position's screen derivatives (as `MaterialInput.normal`, without its snap to the axes).",
         kind: "u32" = "What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, banners, bells, shulker boxes), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle.",
         colored_light: "vec3<f32>" = "As `MaterialInput.colored_light`: the frame's coloured lights at this point, 0..1; 0 where none reaches.",
@@ -453,9 +447,11 @@ pub const VERTEX_INPUT: Struct = Struct {
         uv: "vec2<f32>" = "The texture coordinate inside the block's sprite.",
         material: "u32" = "The `[[materials]]` id of the block's sprite (0 when none matches).",
         light: "vec2<f32>" = "Block and sky light, 0..1.",
-        tint: "vec4<f32>" = "The vertex colour (biome tint, face shade, ambient occlusion); alpha 1.",
-        face: "u32" = "For a fluid, the face of the block the corner is on (as `MaterialInput.face`), else 0.",
-        fluid: "u32" = "1 on a fluid's surface (water or lava), else 0.",
+        tint: "vec4<f32>" = "As `MaterialInput.tint`: the colour vanilla multiplies the texture by (biome tint, a model's colour), without the shade and ambient occlusion; alpha 1.",
+        shade: "f32" = "As `MaterialInput.shade`.",
+        ao: "f32" = "As `MaterialInput.ao`, at this corner.",
+        face: "u32" = "As `MaterialInput.face`.",
+        fluid: "u32" = "As `MaterialInput.fluid`: 0 not a fluid, 1 water, 2 lava.",
     },
 };
 
@@ -475,33 +471,36 @@ pub const WEATHER_INPUT: Struct = Struct {
 /// What `trace` and `trace_layers` return (`[ray_tracing]`): the nearest surface along a ray.
 pub const RAY_HIT: Struct = Struct {
     name: "RayHit",
-    doc: "The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).",
+    doc: "The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, and its `light` is too without dynamic light (see it), so one function can shade both; a terrain hit's `tint`, `shade`, `ao` and `emission` are not yet (see each). What stays is the product `tint.rgb * shade * ao`: `shaded_tint` is that product on every hit, a terrain hit's now and once the three are apart. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).",
     fields: fields! {
         distance: "f32" = "How far along the ray the surface is, in blocks; negative on a miss.",
         position: "vec3<f32>" = "The point, camera-relative, in blocks (as `view_position`).",
         normal: "vec3<f32>" = "The face's normal, a unit vector in world axes, turned toward the ray's origin.",
         uv: "vec2<f32>" = "The texture coordinate inside the block's sprite (as `MaterialInput.uv`).",
         albedo: "vec4<f32>" = "The block texture's colour at the point, at full size (mip level 0), linear light; alpha the texture's.",
-        tint: "vec4<f32>" = "The vertex colour: biome tint, face shade and ambient occlusion, linear light; alpha 1.",
-        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face.",
+        tint: "vec4<f32>" = "The colour vanilla multiplies the texture by, linear light; alpha 1. On a terrain hit, for now, with the face's shade and ambient occlusion in it, as `MaterialInput.shaded_tint` (`shade` and `ao` are then 1); an entity hit's is its vertices' (`entity`).",
+        shade: "f32" = "The face's directional shade, linear: vanilla's entity shade on an entity hit (`entity`); 1 on a terrain hit for now, its shade being in `tint`.",
+        ao: "f32" = "Ambient occlusion at the point, linear: 1 for now, a terrain hit's being in `tint` and an entity having none.",
+        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face, as the world stores it: without the dynamic light (a held torch, a burning entity) that `MaterialInput.light` adds.",
         material: "u32" = "The `[[materials]]` id of the surface's sprite (0 when no entry names it).",
         tags: "u32" = "The pack's sprite tags the surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
-        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks (as `MaterialInput.emission`).",
+        emission: "f32" = "For now the face's brightness class, which Horizon gives the faces of blocks it draws as shining, rather than its light level (`MaterialInput.emission`): 0 for a face without one, 7/15 for the dimmest class, 14/15 for the next, 1 for the brightest. Some blocks that give light have none (glow lichen, sea pickles) and read 0; a model face with its own `light_emission` can have one though its block gives no light.",
         fluid: "u32" = "0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`). Water is in the `RAY_TRANSLUCENT` layer, lava in `RAY_SOLID`.",
         translucent: "bool" = "A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`: a hit in the `RAY_TRANSLUCENT` layer, so false for every hit of `trace`.",
-        entity: "bool" = "Only in a pack whose files name `RAY_ENTITY`: a hit in that layer, an entity's surface. Its `albedo` is the entity texture's texel and `tint`, `light` and `uv` are its vertices' (the colour vanilla multiplies in, alpha included; the atlas position); `material`, `tags`, `emission` and `fluid` are 0, `hit_normal_map` and `hit_specular_map` give their defaults.",
+        back: "bool" = "The ray met the face from behind, against the way it faces (its normal before `normal` is turned toward the ray's origin): every hit from inside a full block, none from outside. A face drawn on both sides, as a cross-model plant's, is two quads in one place facing opposite ways, met at the same distance; which one a ray takes is the GPU's choice, so `back` there says nothing of the side (on the GPUs tried it takes the same quad from both sides, and one of the two directions reads back).",
+        entity: "bool" = "Only in a pack whose files name `RAY_ENTITY`: a hit in that layer, an entity's surface. Its `albedo` is the entity texture's texel and `tint`, `light` and `uv` are its vertices' (the colour vanilla multiplies in, alpha included; the atlas position); `shade` is vanilla's entity shade for the face's normal (as `EntityInput.shade`), `ao` 1; `material`, `tags`, `emission` and `fluid` are 0, `hit_normal_map` and `hit_specular_map` give their defaults.",
         tangent: "vec4<f32>" = "The surface's tangent, as `MaterialInput.tangent`: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). It follows `normal`, which faces the ray's origin. With `normal` it turns `hit_normal_map`'s normals into world axes.",
         horizon_sprite: "u32" = "Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer.",
     },
 };
 
 /// Where `RayHit.entity` is: a pack that doesn't name `RAY_ENTITY` has `RayHit` without it.
-const RAY_HIT_ENTITY: usize = 12;
+const RAY_HIT_ENTITY: usize = 15;
 
 /// `RAY_HIT` without `entity`.
-const RAY_HIT_PLAIN: [Field; 14] = {
+const RAY_HIT_PLAIN: [Field; 17] = {
     let all = RAY_HIT.fields;
-    let mut out = [all[0]; 14];
+    let mut out = [all[0]; 17];
     let mut i = 0;
     while i < out.len() {
         out[i] = all[i + (i >= RAY_HIT_ENTITY) as usize];
@@ -518,6 +517,29 @@ pub fn ray_hit(entities: bool) -> Struct {
         true => RAY_HIT.fields,
     };
     Struct { fields, ..RAY_HIT }
+}
+
+/// `shaded_tint`, the last field of `MaterialInput`, `VertexInput` and `RayHit` in a pack whose
+/// files name it (`stages::names_shaded_tint`): the vertex holds it, so it costs nothing.
+pub const SHADED_TINT: Field = Field {
+    name: "shaded_tint",
+    ty: "vec4<f32>",
+    doc: "Only in a pack whose files name `shaded_tint`: the colour vanilla multiplies the texture by with the face's shade and ambient occlusion in it, `tint.rgb * shade * ao` as vanilla's vertex carries it (vanilla multiplies them at each corner in 8-bit integers, so it is within two steps of 255 of that product); alpha 1. Draw vanilla's colour with it; `tint`, `shade` and `ao` are for lighting faces yourself, and reading them makes the world load again when the pack starts and terrain take half again its memory. On `RayHit` it is linear light, `tint.rgb * shade * ao` on every hit (an entity hit keeps its `tint`'s alpha), and 0 on a miss.",
+};
+
+/// `input` with `SHADED_TINT` last where `shaded`.
+pub fn shaded(input: &Struct, shaded: bool) -> String {
+    let mut out = input.wgsl();
+    if shaded {
+        out.truncate(out.len() - 2);
+        out += &format!(
+            "    {}: {},
+}}
+",
+            SHADED_TINT.name, SHADED_TINT.ty
+        );
+    }
+    out
 }
 
 /// The tonemap stage's input: one pixel of the window.
@@ -538,14 +560,14 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 64);
+        assert_eq!(wgsl.fields.len(), 62);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
         // `luminance` is a `vec3`, on the next 16 bytes, the epochs after it, then the fog's
         // two pairs and the moon's phase, to the end of the next 16.
         let size = std::mem::size_of::<Frame>();
         assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 5 * 16);
         assert_eq!(
-            Frame::OFFSETS[57..],
+            Frame::OFFSETS[55..],
             [
                 size - 48,
                 size - 36,
@@ -557,31 +579,36 @@ mod tests {
             ]
         );
         // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
-        // `[[resource]]` pack's, the fog's only a `[frame] fog = "pack"` pack's.
+        // `[[resource]]` pack's; the fog's every pack's; the moon's phase, last, only a pack's
+        // that names it.
         let names = |s: Vec<Field>| s.iter().map(|f| f.name).collect::<Vec<_>>();
-        let traced = names(Frame::declared(true, false, false, false));
+        let traced = names(Frame::declared(true, false, false));
         assert_eq!(
             traced[Frame::RAY_FIELDS],
             ["has_ray_tracing", "ray_distance"]
         );
-        assert_eq!(traced.last(), Some(&"luminance"));
-        let untraced = names(Frame::declared(false, false, false, false));
+        let untraced = names(Frame::declared(false, false, false));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
-        assert_eq!(untraced.last(), Some(&"luminance"));
+        assert!(
+            !untraced
+                .iter()
+                .any(|n| *n == "fog_start" || *n == "fog_end")
+        );
         let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
         let fog = ["fog_environment", "fog_render"];
         for ray_tracing in [false, true] {
-            let kept = names(Frame::declared(ray_tracing, true, false, false));
-            assert_eq!(kept[kept.len() - 3..], epochs);
-            let fogged = names(Frame::declared(ray_tracing, false, true, false));
-            assert_eq!(fogged[fogged.len() - 3..], ["luminance", fog[0], fog[1]]);
+            let kept = names(Frame::declared(ray_tracing, true, false));
+            assert_eq!(kept[kept.len() - 5..kept.len() - 2], epochs);
+            let plain = names(Frame::declared(ray_tracing, false, false));
+            assert_eq!(plain[plain.len() - 3..], ["luminance", fog[0], fog[1]]);
+            let mooned = names(Frame::declared(ray_tracing, false, true));
+            assert_eq!(mooned[mooned.len() - 3..], [fog[0], fog[1], "moon_phase"]);
         }
         assert_eq!(
             names(Frame::WGSL.fields.to_vec())[Frame::KEPT_FIELDS],
             epochs
         );
-        assert_eq!(names(Frame::WGSL.fields.to_vec())[Frame::FOG_FIELDS], fog);
         assert_eq!(
             names(Frame::WGSL.fields.to_vec())[Frame::MOON_FIELDS],
             ["moon_phase"]

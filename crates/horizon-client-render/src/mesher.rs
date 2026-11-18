@@ -389,8 +389,9 @@ impl TerrainSource {
 /// - word 0: the tint (0xBBGGRR, as the vertex colour holds it), bits 24..27 the face's shade
 ///   (`SHADES`' index + 1; 0: no look), bits 27..30 the face (`Direction` order);
 /// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low;
-/// - word 2: the light level the surface gives off, 0..15: its block's, raised to a model
-///   face's own, or a fluid's own (lava 15, water 0, also around a waterlogged light).
+/// - word 2: the light level the surface gives off, 0..15: its block state's (a model face's
+///   own `light_emission` doesn't count), or a fluid's own (lava 15, water 0, also around a
+///   waterlogged light).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct QuadLook(pub [u32; 3]);
@@ -1673,7 +1674,7 @@ fn row_masks_match_cell_definition() {
 #[cfg(test)]
 mod leaf_culling_tests;
 #[cfg(test)]
-mod look_tests;
+pub(crate) mod look_tests;
 #[cfg(test)]
 mod opaque_ice_tests;
 #[cfg(test)]
@@ -2503,7 +2504,7 @@ impl Mesher<'_> {
                 directional,
                 q.facing as u32,
                 ao_factor,
-                state.emission.max(q.light_emission),
+                state.emission,
             ),
             false => QuadLook::default(),
         };

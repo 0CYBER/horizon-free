@@ -61,8 +61,8 @@ below); where HDR's settings live (a later note).
   multiplicative, vanilla's lit colour `albedo * tint * lightmap` is the same in linear: decoding the product is the
   product of the decoded terms.
 - **What converts:** `MaterialInput` `albedo`, `tint`, `lightmap` and `colored_light`; `SkyInput.color`;
-  `WeatherInput.color`; `Frame` `sky_color` and `fog_color`; `block_texture` and `block_texture_level`; every
-  colour texture a stage samples (`scene_color`, `previous`, `history`, pack targets, `opaque_color`, `reflection`,
+  `WeatherInput.color`; `Frame` `sky_color` and `fog_color`; `block_texture` and `block_texture_level`; every colour
+  texture a stage samples (`scene_color`, `previous`, pack targets and kept resources, `opaque_color`, `reflection`,
   `shadow_color`, `block_light_colors`). Data stays data: depth, normals, `light` levels, `emission`, and every
   channel of the LabPBR maps (`block_normal_map`, `block_specular_map` and their `_level` forms).
 - **Alpha is coverage only.** The rule to return `input.color.a` goes; a 0.2 post pass's alpha is ignored.

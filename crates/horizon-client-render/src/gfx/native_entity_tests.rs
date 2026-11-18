@@ -123,7 +123,7 @@ fn the_entries_around_a_stage_horizon_fogs_are_unchanged() {
     let engine = entries("");
     assert_eq!(
         format!("{:x}", Sha256::digest(&engine)),
-        "7d86c6ceaae8c0b0625105a16c3b0ea43d3ce34c8edb6d1afdbb8f78059d6f76"
+        "ebd9010e458b0a778bb0ba6852736233788906a4f7890e5160cc287375f51c5a"
     );
     assert!(!engine.contains("vanilla_fog"));
     let own = entries(OWN_FOG);

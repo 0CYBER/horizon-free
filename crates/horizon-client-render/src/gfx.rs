@@ -1392,6 +1392,12 @@ pub struct Renderer {
     /// with (`looks`), made for the first pack that takes them.
     look_groups: Option<looks::LookGroups>,
     looks_layout: Option<wgpu::BindGroupLayout>,
+    /// The world taken from a renderer that ran one of Horizon's packs (`take_world`) keeps
+    /// the looks and layouts that pack had until the game gives this renderer a pack again,
+    /// drops it or fails to load it (`set_native_shader_pack`, `drop_shader_packs`,
+    /// `release_world`): a renderer made again for another frame draws before its pack is back,
+    /// and following no pack then would mesh the world twice.
+    world_held: bool,
     /// The terrain's acceleration structures, with ray tracing on (`rt::scene`).
     ray_scene: Option<rt::scene::RayScene>,
     /// The compact layout is allowed (`HORIZON_PACKED_QUADS`, `set_packed_layout`).
@@ -4334,6 +4340,7 @@ impl Renderer {
             packed_quads,
             terrain_looks: false,
             look_groups: None,
+            world_held: false,
             packed_on: packed_wanted(),
             cull_on: cull.is_some(),
             sides_on: true,
@@ -5744,6 +5751,9 @@ impl Renderer {
     /// them (large pages beside the translucent arena, else pages flat draws bind):
     /// the game meshes them again (`take_dropped_sections`).
     fn follow_translucent_layout(&mut self) {
+        if self.world_held {
+            return;
+        }
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref());
         let split = translucent_split(
             self.translucent_batching,
@@ -5774,6 +5784,9 @@ impl Renderer {
     /// programs outside flat draws (flat ones unpack the records, `pack_atlas::PULL_FLAT`).
     /// Leaving it drops every section and far tile for the game to mesh again.
     fn follow_packed_layout(&mut self) {
+        if self.world_held {
+            return;
+        }
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref()).is_some();
         let want = self.flat.is_some() && (!pack || self.pack_terrain_flat) && self.packed_on;
         if want == self.packed_quads {
@@ -6333,6 +6346,9 @@ impl Renderer {
     /// another that takes them too (the picker drops one and loads the other in a frame) leaves
     /// them as they are.
     fn follow_terrain_looks(&mut self) {
+        if self.world_held {
+            return;
+        }
         let want = self.native_looks();
         if want != self.terrain_looks {
             self.set_terrain_looks(want);
@@ -6528,8 +6544,16 @@ impl Renderer {
     pub fn shader_pack_loading(&self) -> bool {
         self.pack_loading.is_some()
     }
+    /// The game won't give this renderer the pack whose world it holds (`world_held`): its
+    /// load failed. Unless a pack of Horizon's runs, the world follows no pack again.
+    pub fn release_world(&mut self) {
+        if self.external.is_none() {
+            self.world_held = false;
+        }
+    }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
+        self.world_held = false;
         self.pack_loading = None;
         self.pack_post = None;
         self.replace_executor(None);
@@ -6562,6 +6586,7 @@ impl Renderer {
             block_light::LightTable,
         )>,
     ) -> std::result::Result<Vec<String>, String> {
+        self.world_held = false;
         let linear = pack.is_some();
         if (linear || self.output.frame.format == LINEAR_FRAME)
             && linear != (self.output.frame.format == LINEAR_FRAME)
@@ -6576,7 +6601,7 @@ impl Renderer {
             self.replace_executor(None);
             return Ok(Vec::new());
         };
-        let terrain_looks = looks::wanted(&self.adapter);
+        let terrain_looks = looks::wanted(&self.adapter, report.looks())?;
         if terrain_looks && self.looks_layout.is_none() {
             self.looks_layout = Some(looks::layout(&self.device));
         }
@@ -7647,7 +7672,8 @@ impl Renderer {
             && !pack_terrain
             && shadow_view.is_none()
             && mirror_plane.is_none()
-            && !displaced;
+            && !displaced
+            && !gpu_culling::looks_lose_base_vertex(&self.info, self.terrain_looks);
         #[cfg(debug_assertions)]
         if gpu_frame {
             if self.gpu_checks.is_multiple_of(64) {
@@ -7917,6 +7943,7 @@ impl Renderer {
                 let s = self.sections.get(v.slot);
                 (s.solid > 0).then(|| external::Near {
                     buffer: self.arena.buffer(s.page),
+                    looks: self.arena.looks(s.page),
                     base: s.solid_base(),
                     quads: s.solid,
                     origin: v.origin,

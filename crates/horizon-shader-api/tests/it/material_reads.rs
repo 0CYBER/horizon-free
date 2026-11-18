@@ -219,8 +219,8 @@ fn a_material_without_reads_composes_as_before() {
     assert_eq!(
         hashes,
         [
-            "b5a77abc05a6b2034dbf8f127d71f94bc56e1f6cdad1bf52f1bb3403a271cff0",
-            "742466625a0a11b9eb6b1ef73e672167be29e44f9e35e7cd9961349c2e817f1f",
+            "3603cefa770143294f4a0fe1a9d799cd0daa52c95fd11ef9dad28a93d1619458",
+            "86506beb825be2112126bce1eb81ddc11bd0366ee875a73f45e1f0b069dc8089",
         ]
     );
     let plain = pack(&material(""), &[("w.wgsl", WRITE), ("m.wgsl", PLAIN)]);

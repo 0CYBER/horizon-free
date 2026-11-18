@@ -53,7 +53,11 @@ type Section = (i32, i32, i32);
 
 /// What a viewed section is meshed with.
 #[derive(Clone)]
-pub struct MeshSource(Kind);
+pub struct MeshSource {
+    kind: Kind,
+    /// Its quads carry their looks (`MeshSettings::looks`): sets meshed otherwise go.
+    looks: bool,
+}
 
 #[derive(Clone)]
 enum Kind {
@@ -66,23 +70,29 @@ enum Kind {
 impl MeshSource {
     /// Meshes with `mesh` instead of the block mesher.
     pub fn custom(mesh: impl Fn(&Region, i32) -> SectionMesh + Send + Sync + 'static) -> Self {
-        Self(Kind::Custom(Arc::new(mesh)))
+        Self {
+            kind: Kind::Custom(Arc::new(mesh)),
+            looks: false,
+        }
     }
     /// The same, shaded as a level with the Nether's cardinal light or not.
     fn for_level(&self, nether_shading: bool) -> Self {
-        match &self.0 {
-            Kind::Mesher(context, settings) => Self(Kind::Mesher(
-                context.clone(),
-                MeshSettings {
-                    nether: nether_shading,
-                    ..settings.clone()
-                },
-            )),
+        match &self.kind {
+            Kind::Mesher(context, settings) => Self {
+                kind: Kind::Mesher(
+                    context.clone(),
+                    MeshSettings {
+                        nether: nether_shading,
+                        ..settings.clone()
+                    },
+                ),
+                looks: self.looks,
+            },
             Kind::Custom(_) => self.clone(),
         }
     }
     fn mesh(&self, local: &mut (Faces, MeshScratch), region: &Region, sy: i32) -> SectionMesh {
-        match &self.0 {
+        match &self.kind {
             Kind::Mesher(context, settings) => {
                 let (faces, scratch) = local;
                 mesh_section(
@@ -105,7 +115,11 @@ impl Streaming {
     /// dimension's shading.
     pub fn viewed_mesh_source(&self) -> MeshSource {
         let context = self.shared.context.read().unwrap().clone();
-        MeshSource(Kind::Mesher(context, self.mesh_settings()))
+        let settings = self.mesh_settings();
+        MeshSource {
+            looks: settings.looks,
+            kind: Kind::Mesher(context, settings),
+        }
     }
 }
 
@@ -217,6 +231,8 @@ pub struct ViewedMeshing {
     registration: Registration,
     sets: FxHashMap<u64, LevelSet>,
     sequence: u64,
+    /// The sets' quads carry their looks (`MeshSource::looks`).
+    looks: bool,
 }
 
 impl Default for ViewedMeshing {
@@ -240,6 +256,7 @@ impl ViewedMeshing {
             jobs,
             sets: FxHashMap::default(),
             sequence: 0,
+            looks: false,
         }
     }
 
@@ -283,6 +300,15 @@ impl ViewedMeshing {
         now: Instant,
     ) {
         let mut levels: Vec<ViewedLevel<'a>> = levels.into_iter().collect();
+        // Quads with their looks or without: every set meshes again, as the player's level
+        // does (`Renderer::terrain_looks`).
+        if source.looks != self.looks {
+            self.looks = source.looks;
+            let all: Vec<u64> = self.sets.keys().copied().collect();
+            for id in all {
+                self.forget(id);
+            }
+        }
         let closed: Vec<u64> = self
             .sets
             .keys()
@@ -583,6 +609,23 @@ mod tests {
             mesh_until(&mut meshing, &source, &mut world, sections);
             assert_eq!(busy[1].load(Ordering::SeqCst), 1);
         }
+    }
+
+    /// A level meshed without the quads' looks meshes again, whole, once the source takes them
+    /// (a shader API 0.2 pack that reads them), its sections meshed before dropped.
+    #[test]
+    fn a_viewed_set_meshes_again_when_quads_take_their_looks() {
+        let pool = Pool::new(2, "viewed-looks");
+        let mut meshing = ViewedMeshing::in_pool(&pool);
+        let mut source = MeshSource::custom(|_, _| drawn());
+        let mut world = level();
+        let sections = world.layout().sections();
+        mesh_until(&mut meshing, &source, &mut world, sections);
+        source.looks = true;
+        frame(&mut meshing, &source, &mut world, true);
+        assert_eq!(count(&meshing), Some(0));
+        assert!(meshing.jobs.outstanding.load(Ordering::Relaxed) > 0);
+        mesh_until(&mut meshing, &source, &mut world, sections);
     }
 
     /// Nothing is meshed for a level no view names; a wanted one's finished sections enter its

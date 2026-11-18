@@ -592,7 +592,7 @@ impl NativePack {
     }
 
     /// The post stage in place of the renderer's own finish of the world: its passes over the
-    /// world's scaled target, the last onto the screen, with the history reset still pending.
+    /// world's scaled target, the last onto the screen.
     pub fn run_post(&mut self, post: WorldPost<'_>) {
         let WorldPost {
             device,
@@ -602,7 +602,6 @@ impl NativePack {
             size,
             scene,
         } = post;
-        let history_reset = self.frame.take_history_reset();
         let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
         self.post.run(
             device,
@@ -610,7 +609,6 @@ impl NativePack {
             (color, depth, &self.frame.surface_view),
             screen,
             size,
-            history_reset,
             self.timing.as_mut(),
             scene.as_ref(),
         );

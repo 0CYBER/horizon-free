@@ -185,16 +185,7 @@ fn frame(
     if let Some(world) = world {
         let view = world.screen.create_view(&Default::default());
         let targets = (&world.color, &world.depth, &pack.frame.surface_view);
-        (pack.post).run(
-            device,
-            &mut encoder,
-            targets,
-            &view,
-            [4, 4],
-            false,
-            None,
-            scene,
-        );
+        (pack.post).run(device, &mut encoder, targets, &view, [4, 4], None, scene);
     }
     texel((device, queue), encoder, &target)
 }

@@ -61,7 +61,7 @@ pub enum Fog {
     #[default]
     Engine,
     /// The pack fogs them itself: Horizon skips its fog there, and every stage's prelude has
-    /// `vanilla_fog` and the frame's `fog_environment` and `fog_render`.
+    /// `vanilla_fog`.
     Pack,
 }
 
@@ -415,8 +415,7 @@ pub struct Stage {
     /// Shown in the GPU time overlay; the file name when absent.
     #[serde(default)]
     pub name: Option<String>,
-    /// The material stage only: whether Horizon applies its fog after the pack's colour
-    /// (true when absent); false for a pack that fogs its surfaces itself.
+    /// No longer a key (`[frame] fog` replaced `[material] fog`): read only to say so.
     #[serde(default)]
     pub fog: Option<bool>,
     /// The material and entity stages only: `"engine"` (when absent) or `"pack"`,
@@ -800,14 +799,6 @@ impl Manifest {
             Some("pack") => Fog::Pack,
             Some(f) => return Err(err(format!("frame.fog {f:?}: engine or pack"))),
         };
-        if raw.frame.as_ref().is_some_and(|f| f.fog.is_some())
-            && raw.material.as_ref().is_some_and(|m| m.fog.is_some())
-        {
-            return Err(err(
-                "[material] fog and [frame] fog both set: keep [frame] fog, which covers every stage"
-                    .into(),
-            ));
-        }
         let id_ok = (1..=64).contains(&raw.id.len())
             && raw
                 .id
@@ -840,13 +831,19 @@ impl Manifest {
             .sky
             .iter()
             .chain(&raw.vertex)
+            .chain(&raw.material)
+            .chain(&raw.weather)
             .chain(&raw.post)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
             .chain(&raw.before_world)
             .any(|s| s.fog.is_some())
         {
-            return Err(err("`fog` is a key of [material] only".into()));
+            return Err(err(
+                "[material] fog is gone: [frame] fog = \"pack\" for a pack that fogs its stages \
+                 itself (the entity stage too), else leave it out and Horizon fogs them"
+                    .into(),
+            ));
         }
         if raw
             .sky

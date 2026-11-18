@@ -10,18 +10,16 @@ use crate::mesher::QuadLook;
 /// The group of a pack's terrain pipelines that holds the looks.
 pub const GROUP: u32 = 2;
 
-/// Whether sections carry their quads' looks while a Horizon pack runs. Only
-/// `HORIZON_TERRAIN_LOOKS=1` asks, for the engine's own tests (no pack input reads them yet),
-/// and only on a device whose vertex stage binds storage buffers; on another the switch says
-/// so once and does nothing.
-pub fn wanted(adapter: &wgpu::Adapter) -> bool {
+/// Whether sections carry their quads' looks while a Horizon pack runs: for a pack that reads
+/// them (`pack`, `Report::looks`), and for `HORIZON_TERRAIN_LOOKS=1`, the engine's own tests'
+/// switch (`decide`).
+pub fn wanted(adapter: &wgpu::Adapter, pack: bool) -> Result<bool, String> {
     static ASKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ASKED.get_or_init(|| std::env::var("HORIZON_TERRAIN_LOOKS").as_deref() == Ok("1")) {
-        return false;
-    }
+    let switch =
+        *ASKED.get_or_init(|| std::env::var("HORIZON_TERRAIN_LOOKS").as_deref() == Ok("1"));
     let flags = adapter.get_downlevel_capabilities().flags;
-    let bound = flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE);
-    if !bound {
+    let storage = flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE);
+    if switch && !pack && !storage {
         static SAID: std::sync::Once = std::sync::Once::new();
         SAID.call_once(|| {
             log::warn!(
@@ -29,7 +27,21 @@ pub fn wanted(adapter: &wgpu::Adapter) -> bool {
             )
         });
     }
-    bound
+    decide(pack, switch, storage)
+}
+
+/// `wanted` for a pack that reads the looks or not, the switch on or off, on a device whose
+/// vertex stage binds storage buffers (`storage`) or not: where it doesn't, a pack that reads
+/// them is refused, and the switch alone does nothing.
+pub fn decide(pack: bool, switch: bool, storage: bool) -> Result<bool, String> {
+    if pack && !storage {
+        return Err(
+            "the device's vertex stage reads no storage buffers, which the terrain's \
+                    `tint`, `shade`, `ao`, `face` and `emission` need (`shaded_tint` doesn't)"
+                .into(),
+        );
+    }
+    Ok((pack || switch) && storage)
 }
 
 /// The looks as the material and shadow wrappers read them: `horizon_look(slot)`, a slot's
@@ -245,6 +257,19 @@ const LOOK_BYTES: u64 = std::mem::size_of::<QuadLook>() as u64;
 mod tests {
     use super::*;
     use crate::mesher::{TerrainVertex, packed};
+
+    /// A pack that reads the looks gets them, or on a device whose vertex stage binds no
+    /// storage buffers is refused with the reason; the engine's switch alone does nothing there.
+    #[test]
+    fn a_pack_that_reads_the_looks_needs_vertex_storage() {
+        assert_eq!(decide(true, false, true), Ok(true));
+        assert_eq!(decide(false, true, true), Ok(true));
+        assert_eq!(decide(false, false, true), Ok(false));
+        assert_eq!(decide(false, true, false), Ok(false));
+        let refused = decide(true, true, false).unwrap_err();
+        assert!(refused.starts_with("the device's vertex stage reads no storage buffers"));
+        assert!(refused.contains("(`shaded_tint` doesn't)"));
+    }
 
     /// A mesh's looks as the renderer uploads them (`per_slot`, `Arena::write_looks`) sit at
     /// its quads' slots, compact record by record or wide vertex by vertex, with none past

@@ -203,8 +203,8 @@ fn entity_and_sky_stages_without_reads_compose_as_before() {
     assert_eq!(
         hashes,
         [
-            "bd61824c6b2e78d5597e660d3bf613709605efe9bdc7ef97196c51df16b9ef27",
-            "c117b03fc94824440ac38aebad9481acdb4471407e41d96108c2779e811b3c3d",
+            "55df808f942c1c0a850671c5adaffee7da01f650dbb768ea0a3a59bff8d1770b",
+            "67ebc24cf069ef475060bdf97decd6afefb777475c8f0f0e404bcfe05f2fc71e",
         ]
     );
 }

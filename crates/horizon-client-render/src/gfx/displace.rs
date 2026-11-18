@@ -56,8 +56,10 @@ struct HorizonDisplaceSection {
     origin: vec4<f32>,
     first: u32,
     quads: u32,
-    pad0: u32,
-    pad1: u32,
+    // Quad q's look is the grid's copy's `looks + q * stride` (`horizon_look`, group 2 bound to
+    // `Displacement::looks`): 4 a quad from a section of vertices, 1 from compact records.
+    looks: u32,
+    stride: u32,
 }
 @group(1) @binding(8) var<storage, read> horizon_displace_vertices: array<u32>;
 @group(1) @binding(9) var<storage, read> horizon_displace_picked: array<vec2<u32>>;
@@ -116,11 +118,14 @@ struct HorizonDisplacePoint {
     layer: u32,
     light: vec2<f32>,
     color: vec4<f32>,
+    // The quad's look (`horizon_look`), and the point's ambient occlusion (`horizon_look_ao`).
+    look: vec3<u32>,
+    ao: f32,
     // The face's normal, and how much of the relief the point has by its distance.
     normal: vec3<f32>,
     near: f32,
 }
-// A quad's corners, for the steps.
+// A quad's corners and look, for the steps.
 struct HorizonDisplaceQuad {
     c0: HorizonDisplaceCorner,
     c1: HorizonDisplaceCorner,
@@ -128,6 +133,13 @@ struct HorizonDisplaceQuad {
     c3: HorizonDisplaceCorner,
     origin: vec3<f32>,
     normal: vec3<f32>,
+    look: vec3<u32>,
+}
+// The ambient occlusion at (`s`, `t`) of a quad of `look`, between its corners' as the
+// colour is.
+fn horizon_displace_ao(look: vec3<u32>, s: f32, t: f32) -> f32 {
+    return mix(mix(horizon_look_ao(look, 0u), horizon_look_ao(look, 1u), s),
+        mix(horizon_look_ao(look, 3u), horizon_look_ao(look, 2u), s), t);
 }
 fn horizon_displace_at(q: HorizonDisplaceQuad, s: f32, t: f32) -> vec3<f32> {
     return mix(mix(q.c0.position, q.c1.position, s), mix(q.c3.position, q.c2.position, s), t)
@@ -218,8 +230,10 @@ fn horizon_displace_step(v: u32, q: HorizonDisplaceQuad) -> HorizonDisplacePoint
     p.color = mix(mix(q.c0.color, q.c1.color, s), mix(q.c3.color, q.c2.color, s), t);
     p.layer = q.c0.layer;
     p.normal = q.normal;
+    p.look = q.look;
+    p.ao = horizon_displace_ao(q.look, s, t);
     p.base = horizon_material_displace(position, p.uv, q.c0.layer, p.color,
-        vec2<u32>(p.light + 0.5));
+        vec2<u32>(p.light + 0.5), p.look, p.ao);
     p.near = 1.0 - smoothstep(0.75 * horizon_displace_distance, horizon_displace_distance - 0.1,
         length(p.base));
     p.position = p.base - p.normal * depth;
@@ -233,9 +247,10 @@ fn horizon_displace_point(v: u32, instance: u32) -> HorizonDisplacePoint {
     let c1 = horizon_displace_corner(pick.x, 1u, section.origin.w);
     let c2 = horizon_displace_corner(pick.x, 2u, section.origin.w);
     let c3 = horizon_displace_corner(pick.x, 3u, section.origin.w);
+    let look = horizon_look(section.looks + (pick.x - section.first) * section.stride);
     if horizon_displace_steps {
         return horizon_displace_step(v, HorizonDisplaceQuad(c0, c1, c2, c3, section.origin.xyz,
-            normalize(cross(c1.position - c0.position, c2.position - c0.position))));
+            normalize(cross(c1.position - c0.position, c2.position - c0.position)), look));
     }
     // The cell's two triangles wind as the quad's (0, 1, 2) and (0, 2, 3).
     let g = horizon_displace_cells;
@@ -250,8 +265,10 @@ fn horizon_displace_point(v: u32, instance: u32) -> HorizonDisplacePoint {
     p.color = mix(mix(c0.color, c1.color, s), mix(c3.color, c2.color, s), t);
     p.layer = c0.layer;
     p.normal = normalize(cross(c1.position - c0.position, c2.position - c0.position));
+    p.look = look;
+    p.ao = horizon_displace_ao(look, s, t);
     p.base = horizon_material_displace(position + section.origin.xyz, p.uv, c0.layer, p.color,
-        vec2<u32>(p.light + 0.5));
+        vec2<u32>(p.light + 0.5), p.look, p.ao);
     let layer = c0.layer & 0x7fffu;
     // The heights at about a texel a cell.
     let lods = i32(textureNumLevels(horizon_pbr_normals)) - 1;
@@ -382,8 +399,13 @@ struct Section {
     origin: [f32; 4],
     first: u32,
     quads: u32,
-    pad: [u32; 2],
+    /// Where its quads' looks start in `Displacement::looks`, and how many a quad has there.
+    looks: u32,
+    stride: u32,
 }
+
+/// The looks a grid copies a frame: a section of vertices has one a vertex.
+const MAX_LOOKS: u64 = 4 * MAX_QUADS;
 
 /// One list of picked quads and its indirect draw.
 pub struct Picks {
@@ -412,8 +434,8 @@ pub struct Displacement {
     pub shadow: Option<Picks>,
     /// Group 1's layout for the grid's pipelines.
     pub draw_layout: wgpu::BindGroupLayout,
-    /// For a pack that reads the quads' looks, the picked quads' looks, one a quad, and
-    /// their group (`looks::GROUP`).
+    /// For a pack that reads the quads' looks, the near sections' looks as their pages hold
+    /// them, one a slot (`Section::looks`), and their group (`looks::GROUP`).
     looks: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     /// CPU-side section table reused between displacement preparation passes.
     table: Vec<Section>,
@@ -598,8 +620,12 @@ impl Displacement {
             cache: None,
         });
         let looks = looks.map(|layout| {
-            let size = MAX_QUADS * super::arena::LOOK_BYTES;
-            let looks = buffer("Displacement looks", size, U::STORAGE | U::COPY_DST);
+            let size = MAX_LOOKS * super::arena::LOOK_BYTES;
+            let looks = buffer(
+                "Displacement looks",
+                size,
+                U::STORAGE | U::COPY_DST | U::COPY_SRC,
+            );
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Displacement looks"),
                 layout,
@@ -634,6 +660,7 @@ impl Displacement {
         self.table.clear();
         self.table.reserve(near.len().min(MAX_SECTIONS));
         let mut first = 0u64;
+        let mut looked = 0u64;
         let mut most = 0u32;
         // Compact sections' quads, by page.
         let mut unpacks: Vec<(&wgpu::Buffer, RtJob)> = Vec::new();
@@ -660,6 +687,29 @@ impl Displacement {
                     quads * QUAD_BYTES,
                 );
             }
+            // Its quads' looks: a compact record's slot is its quad's, a vertex's its own.
+            let packed = n.base >= crate::mesher::packed::PACKED_BASE;
+            let (slot, stride) = match packed {
+                true => ((n.base - crate::mesher::packed::PACKED_BASE) >> 2, 1),
+                false => (n.base, 4),
+            };
+            let (looks, stride) = match (&self.looks, n.looks) {
+                (Some((to, _)), Some(from)) => {
+                    let bytes = super::arena::LOOK_BYTES;
+                    let count = quads * stride;
+                    encoder.copy_buffer_to_buffer(
+                        from,
+                        u64::from(slot) * bytes,
+                        to,
+                        looked * bytes,
+                        count * bytes,
+                    );
+                    looked += count;
+                    ((looked - count) as u32, stride as u32)
+                }
+                // Past the copy: no look.
+                _ => (MAX_LOOKS as u32, 0),
+            };
             self.table.push(Section {
                 origin: [
                     n.origin[0],
@@ -669,7 +719,8 @@ impl Displacement {
                 ],
                 first: first as u32,
                 quads: quads as u32,
-                pad: [0; 2],
+                looks,
+                stride,
             });
             first += quads;
             most = most.max(quads as u32);
@@ -793,6 +844,7 @@ mod tests {
                 let quad = quad(&device, at);
                 let near = [super::Near {
                     buffer: &quad,
+                    looks: None,
                     base: 0,
                     quads: 1,
                     origin: [0.0; 3],
@@ -821,7 +873,8 @@ mod tests {
 
     /// The grid's quads, on each device here: those of sections in the compact layout (records
     /// and a quad spilled to its own vertices, on two pages) are written out as the very words
-    /// of their vertices, as a wide section's are copied (#16127).
+    /// of their vertices, as a wide section's are copied (#16127). Where the vertex stage reads
+    /// storage, each quad's look is where the section table says (`looks + q * stride`).
     #[test]
     fn compact_sections_give_the_grid_the_words_of_their_vertices_on_every_backend() {
         use crate::mesher::{TerrainVertex, packed};
@@ -872,6 +925,29 @@ mod tests {
         );
         let base = |slot: u32| packed::PACKED_BASE + 4 * slot;
         let expected: Vec<TerrainVertex> = [&a, &b, &c].into_iter().flatten().copied().collect();
+        // A look a quad, in the order the grid takes them, laid out on the pages as the arena
+        // holds them.
+        use crate::mesher::QuadLook;
+        let look = |q: u32| QuadLook([0x0300_0000 | (q * 0x10101), 0x0102_0304 * (q + 1), q]);
+        let all: Vec<QuadLook> = (0..expected.len() as u32 / 4).map(look).collect();
+        let (na, nb) = (a.len() / 4, b.len() / 4);
+        let mut looks_one = vec![QuadLook::default(); 8];
+        looks_one.extend(super::super::looks::per_slot(
+            &all[..na],
+            true,
+            compact(&a).len() as u64,
+        ));
+        looks_one.extend(super::super::looks::per_slot(
+            &all[na + nb..],
+            true,
+            compact(&c).len() as u64,
+        ));
+        let mut looks_two = vec![QuadLook::default(); 4];
+        looks_two.extend(super::super::looks::per_slot(
+            &all[na..na + nb],
+            false,
+            b.len() as u64,
+        ));
         let mut tested = false;
         for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
             let (device, queue) =
@@ -892,19 +968,39 @@ mod tests {
                 })
             };
             let (one, two) = (page(&one), page(&two));
+            let storage = adapter.get_downlevel_capabilities().flags;
+            let storage = storage.contains(wgpu::DownlevelFlags::VERTEX_STORAGE);
+            let looks = |looks: &[QuadLook]| {
+                use wgpu::util::DeviceExt;
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(looks),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                })
+            };
+            let (looks_one, looks_two) = (looks(&looks_one), looks(&looks_two));
+            let layout = storage.then(|| super::super::looks::layout(&device));
             let normals = normals(&device, &queue);
-            let mut displacement =
-                super::Displacement::new(&device, 12.0, 16, false, &normals, false, None);
-            let near = |buffer, base, v: &[TerrainVertex]| super::Near {
+            let mut displacement = super::Displacement::new(
+                &device,
+                12.0,
+                16,
+                false,
+                &normals,
+                false,
+                layout.as_ref(),
+            );
+            let near = |buffer, looks, base, v: &[TerrainVertex]| super::Near {
                 buffer,
+                looks: storage.then_some(looks),
                 base,
                 quads: v.len() as u32 / 4,
                 origin: [0.0; 3],
             };
             let near = [
-                near(&one, base(8), &a),
-                near(&two, 4, &b),
-                near(&one, base(c_at), &c),
+                near(&one, &looks_one, base(8), &a),
+                near(&two, &looks_two, 4, &b),
+                near(&one, &looks_one, base(c_at), &c),
             ];
             let mut encoder = device.create_command_encoder(&Default::default());
             displacement.prepare(&device, &queue, &mut encoder, &near, glam::Mat4::IDENTITY);
@@ -919,6 +1015,16 @@ mod tests {
                     bytemuck::bytes_of(want),
                     "vertex {i} on {name}"
                 );
+            }
+            if let Some((copy, _)) = &displacement.looks {
+                let got = read_bytes(&device, &queue, &copy.slice(..));
+                let got: Vec<QuadLook> = bytemuck::pod_collect_to_vec(&got);
+                let quads = displacement.table.iter().flat_map(|s| {
+                    (0..s.quads).map(move |q| (s.first + q, (s.looks + q * s.stride) as usize))
+                });
+                for (quad, at) in quads {
+                    assert_eq!(got[at], all[quad as usize], "quad {quad}'s look on {name}");
+                }
             }
             tested = true;
         }
