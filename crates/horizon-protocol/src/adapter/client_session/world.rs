@@ -12,6 +12,7 @@ use crate::{
     ids as packet_ids,
     packets::play,
 };
+use horizon_core::nbt::{JavaString, Tag};
 
 /// `SoundEvents.EMPTY`: what a 26.2 client is told to play for a blast 26.3 keeps silent.
 const SILENT: &str = "minecraft:intentionally_empty";
@@ -49,6 +50,7 @@ fn level_chunk(ids: &'static Ids, payload: &[u8]) -> Result<Vec<u8>> {
     p.chunk.buffer = chunk::ChunkData::from_sections(&sections);
     // A block entity type 26.2 lacks goes; its block still draws.
     p.chunk.block_entities.retain_mut(|b| {
+        pot_sherds_down(ids, &mut b.tag);
         ids.block_entity_type
             .down(b.kind)
             .map(|kind| b.kind = kind)
@@ -60,6 +62,32 @@ fn level_chunk(ids: &'static Ids, payload: &[u8]) -> Result<Vec<u8>> {
     chunk::ChunkData::write(&p.chunk, &mut w);
     light_down(&p.light, &mut w);
     Ok(w.data)
+}
+
+/// 26.3 saves a decorated pot's `sherds` as a compound of item stack templates by side (`back`, `left`, `right`,
+/// `front`); 26.2 and every older release read a list of the four item ids in that order, a brick for a side
+/// with no sherd (`PotDecorations.CODEC` in the 26.1 and 26.2 client jars: `ITEM.byNameCodec().sizeLimitedListOf(4)`).
+/// A real 26.1 client logged "Failed to decode value ... from field 'sherds': Not a list".
+pub(super) fn pot_sherds_down(ids: &Ids, tag: &mut Tag) {
+    if !ids.quirks.pot_decorations_are_items {
+        return;
+    }
+    let Tag::Compound(root) = tag else {
+        return;
+    };
+    let sherds = JavaString::from("sherds");
+    let Some(Tag::Compound(sides)) = root.get(&sherds) else {
+        return;
+    };
+    let list =
+        ["back", "left", "right", "front"].map(|side| match sides.get(&JavaString::from(side)) {
+            Some(Tag::Compound(stack)) => match stack.get(&JavaString::from("id")) {
+                Some(id @ Tag::String(_)) => id.clone(),
+                _ => Tag::String(JavaString::from("minecraft:brick")),
+            },
+            _ => Tag::String(JavaString::from("minecraft:brick")),
+        });
+    root.insert(sherds, Tag::List(list.to_vec()));
 }
 
 /// A section's states in 26.2's numbering: a palette's entries renumbered, or the global palette repacked
@@ -407,6 +435,86 @@ mod tests {
             }
             assert_eq!(a.biomes, b.biomes);
         }
+    }
+
+    /// A decorated pot's sherds are a list of four item ids, bricks for the bare sides, in 26.2 (and older):
+    /// in a chunk's block entities as in block_entity_data.
+    #[test]
+    fn a_decorated_pots_sherds_are_a_list_of_items_for_26_2() {
+        let ids = ids();
+        let stack = |id: &str| {
+            let mut c = horizon_core::nbt::Compound::new();
+            c.insert(JavaString::from("id"), Tag::String(JavaString::from(id)));
+            Tag::Compound(c)
+        };
+        let mut sides = horizon_core::nbt::Compound::new();
+        sides.insert(JavaString::from("back"), stack("minecraft:brick"));
+        sides.insert(
+            JavaString::from("front"),
+            stack("minecraft:angler_pottery_sherd"),
+        );
+        sides.insert(
+            JavaString::from("right"),
+            stack("minecraft:arms_up_pottery_sherd"),
+        );
+        let mut root = horizon_core::nbt::Compound::new();
+        root.insert(JavaString::from("sherds"), Tag::Compound(sides));
+        let list = |names: [&str; 4]| {
+            let items = names.map(|n| Tag::String(JavaString::from(n))).to_vec();
+            let mut c = horizon_core::nbt::Compound::new();
+            c.insert(JavaString::from("sherds"), Tag::List(items));
+            Tag::Compound(c)
+        };
+        let expected = list([
+            "minecraft:brick",
+            "minecraft:brick",
+            "minecraft:arms_up_pottery_sherd",
+            "minecraft:angler_pottery_sherd",
+        ]);
+        // block_entity_data
+        let mut data = Tag::Compound(root.clone());
+        pot_sherds_down(ids, &mut data);
+        assert_eq!(data, expected);
+        // a block entity with no sherds, or one a 26.3 client reads, is left as it is
+        let mut other = Tag::Compound(Default::default());
+        pot_sherds_down(ids, &mut other);
+        assert_eq!(other, Tag::Compound(Default::default()));
+        // a chunk's block entities
+        let plains = Paletted::from_values(&[1; chunk::BIOMES], Strategy::Biomes, 0);
+        let section = Section {
+            non_empty: 4096,
+            fluids: 0,
+            states: Paletted::from_values(&[8; chunk::BLOCKS], Strategy::Blocks, 16),
+            biomes: plains,
+        };
+        let p = play::LevelChunkWithLight {
+            x: 0,
+            z: 0,
+            chunk: chunk::ChunkData {
+                heightmaps: vec![(1, vec![0x0101; 37])],
+                buffer: chunk::ChunkData::from_sections(&[section]),
+                block_entities: vec![chunk::BlockEntityInfo {
+                    packed_xz: 0,
+                    y: 64,
+                    kind: ids.block_entity_type.up(0).unwrap(),
+                    tag: Tag::Compound(root),
+                }],
+            },
+            light: light(),
+        };
+        let old = rewritten(
+            down(
+                ids,
+                packet_ids::play::clientbound::LEVEL_CHUNK_WITH_LIGHT,
+                &encode(&p),
+            )
+            .unwrap(),
+        );
+        let mut r = Reader::new(&old);
+        r.i32().unwrap();
+        r.i32().unwrap();
+        let c = chunk::ChunkData::read(&mut r).unwrap();
+        assert_eq!(c.block_entities[0].tag, expected);
     }
 
     #[test]

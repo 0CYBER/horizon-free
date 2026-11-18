@@ -62,9 +62,9 @@ RELEASES = {
     "1.21.5": ("1.21.6", True, False, [], "", False),
     "1.21.6": ("1.21.8", True, False, [], "", False),
     "1.21.8": (None, True, False, [], "", False),
-    "1.21.10": (None, False, False, [], "", False),
-    "1.21.11": (None, False, False, [], "", False),
-    "26.1.2": (None, False, False, [], "", False),
+    "1.21.10": (None, True, False, [], "", False),
+    "1.21.11": (None, True, False, [], "", False),
+    "26.1.2": (None, True, False, [], "", False),
     "26.2": (None, True, False, [], "", False),
 }
 
