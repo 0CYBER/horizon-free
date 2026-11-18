@@ -98,7 +98,7 @@ MinecraftServer.findRespawnDimension	inline	crates/horizon-client/src/game/world
 MinecraftServer.setRespawnData	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_setworldspawn	gap: minor: the new spawn is not sent to guests here; they get it on join
 MinecraftServer.getCommandStorage	skip:java		getter for the command storage
 MinecraftServer.getStopwatches	skip:java		getter for the stopwatches
-MinecraftServer.setWeatherParameters	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_weather	sets the weather timers and state
+MinecraftServer.setWeatherParameters	port	crates/horizon-gameplay/src/commands/weather.rs::weather	sets the weather timers and state
 MinecraftServer.getAverageTickTimeNanos	port	crates/horizon-client/src/clock.rs::FixedStep::average_nanos	average of the recent tick times
 MinecraftServer.saveDebugReport	skip:debug		debug report output
 MinecraftServer.dumpMiscStats	skip:debug		debug report output

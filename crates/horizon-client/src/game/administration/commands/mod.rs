@@ -2,6 +2,7 @@
 //! entity selectors resolved against the game, vanilla feedback and errors.
 mod admin;
 mod clone_payload;
+mod command_host;
 pub(super) mod compute;
 mod data;
 mod difficulty;
@@ -1115,35 +1116,7 @@ impl Game<'_> {
         }
     }
     fn cmd_help(&mut self, ctx: &Context) -> R<i32> {
-        let d = self.ui.dispatcher.0.clone();
-        let level = self.ui.registries.permission;
-        match ctx.get("command") {
-            None => {
-                let usage = d.smart_usage(0, level);
-                let n = usage.len() as i32;
-                for (_, line) in usage {
-                    self.feedback_unbroadcast(Text::literal(format!("/{line}")));
-                }
-                Ok(n)
-            }
-            Some(Arg::Str(command)) => {
-                let parse = d.parse(command, &self.ui.registries);
-                if parse.context.nodes.is_empty() {
-                    return Err(err("commands.help.failed", &[]));
-                }
-                let last = parse.context.nodes.last().map(|n| n.0).unwrap_or(0);
-                let usage = d.smart_usage(last, level);
-                let prefix = &command[..parse.context.range.1.min(command.len())];
-                for (_, line) in &usage {
-                    self.feedback_unbroadcast(Text::literal(format!("/{prefix} {line}")));
-                }
-                if usage.is_empty() {
-                    self.feedback_unbroadcast(Text::literal(format!("/{prefix}")));
-                }
-                Ok(usage.len().max(1) as i32)
-            }
-            _ => Ok(0),
-        }
+        horizon_gameplay::commands::help::help(self, ctx)
     }
     pub(super) fn set_game_mode(&mut self, mut mode: GameMode) -> bool {
         if self.mode == mode {
@@ -2073,192 +2046,10 @@ impl Game<'_> {
     /// `TimeCommand.getDefaultClock`: explicit registered clocks and dimension defaults are
     /// separate; built-in timelines and markers belong only to Overworld.
     fn cmd_time(&mut self, id: &str, ctx: &Context) -> R<i32> {
-        if id == "time.query.gametime" {
-            let t = self.world.game_time;
-            self.feedback_unbroadcast(Text::tr("commands.time.query.gametime", &[&t]));
-            return Ok((t % i64::from(i32::MAX)) as i32);
-        }
-        // `time of <clock>` names the clock; otherwise the dimension's default clock.
-        let clock = match ctx.get("clock") {
-            Some(Arg::Resource(c)) => c.clone(),
-            _ => match self.dimension_type().default_clock.clone() {
-                Some(clock) => clock,
-                None => return Err(err("commands.time.no_default_clock", &[&self.dim.id()])),
-            },
-        };
-        let total = self.command_clock_time(&clock);
-        match id {
-            "time.set" => {
-                let t = i64::from(Self::int(ctx, "time").unwrap_or(0));
-                if total == t {
-                    return Err(err("commands.time.set.already_at_time", &[&clock, &t]));
-                }
-                let mut cancel = false;
-                self.native_time_skip(self.dim.id(), total, t, "command", &mut cancel);
-                if !cancel {
-                    self.set_command_clock_time(&clock, t);
-                    self.command_clock_state(&clock).partial = 0.0;
-                }
-                self.feedback(Text::tr("commands.time.set.absolute", &[&clock, &t]));
-                Ok(t as i32)
-            }
-            "time.set.marker" => {
-                let Some(Arg::Resource(marker)) = ctx.get("timemarker").cloned() else {
-                    return Ok(0);
-                };
-                let Some((m, target)) = (clock == "minecraft:overworld")
-                    .then(|| self.ui.markers.get(&marker).copied())
-                    .flatten()
-                    .and_then(|m| Some((m, m.resolve(total)?)))
-                else {
-                    return Err(err(
-                        "commands.time.no_time_marker_found",
-                        &[&marker, &clock],
-                    ));
-                };
-                if m.occurs_at(total) {
-                    return Err(err(
-                        "commands.time.set.already_at_time_marker",
-                        &[&clock, &marker],
-                    ));
-                }
-                let mut cancel = false;
-                self.native_time_skip(self.dim.id(), total, target, "command", &mut cancel);
-                if !cancel {
-                    self.set_command_clock_time(&clock, target);
-                    self.command_clock_state(&clock).partial = 0.0;
-                }
-                self.feedback(Text::tr(
-                    "commands.time.set.time_marker",
-                    &[&clock, &marker],
-                ));
-                Ok((self.command_clock_time(&clock) % i64::from(i32::MAX)) as i32)
-            }
-            "time.add" => {
-                let t = i64::from(Self::int(ctx, "time").unwrap_or(0));
-                let target = (total + t).max(0);
-                let mut cancel = false;
-                self.native_time_skip(self.dim.id(), total, target, "command", &mut cancel);
-                if !cancel {
-                    self.set_command_clock_time(&clock, target);
-                }
-                let now = self.command_clock_time(&clock);
-                self.feedback(Text::tr("commands.time.set.absolute", &[&clock, &now]));
-                Ok((now % i64::from(i32::MAX)) as i32)
-            }
-            "time.pause" | "time.resume" => {
-                let pause = id == "time.pause";
-                if self.command_clock_state(&clock).paused == pause {
-                    return Err(err(
-                        if pause {
-                            "commands.time.pause.already_paused"
-                        } else {
-                            "commands.time.pause.already_running"
-                        },
-                        &[&clock],
-                    ));
-                }
-                self.command_clock_state(&clock).paused = pause;
-                self.feedback(Text::tr(
-                    if pause {
-                        "commands.time.pause"
-                    } else {
-                        "commands.time.resume"
-                    },
-                    &[&clock],
-                ));
-                Ok(1)
-            }
-            "time.rate" => {
-                let rate = match ctx.get("rate") {
-                    Some(Arg::Float(r)) => *r,
-                    _ => 1.0,
-                };
-                if self.command_clock_state(&clock).rate == rate {
-                    return Err(err(
-                        "commands.time.rate.already_same",
-                        &[&clock, &float_to_string(rate)],
-                    ));
-                }
-                self.command_clock_state(&clock).rate = rate;
-                self.feedback(Text::tr(
-                    "commands.time.rate",
-                    &[&clock, &float_to_string(rate)],
-                ));
-                Ok(1)
-            }
-            "time.query.time" => {
-                self.feedback_unbroadcast(Text::tr(
-                    "commands.time.query.absolute",
-                    &[&clock, &total],
-                ));
-                Ok((total % i64::from(i32::MAX)) as i32)
-            }
-            "time.query.timeline" | "time.query.repetition" => {
-                let Some(Arg::Resource(timeline)) = ctx.get("timeline").cloned() else {
-                    return Ok(0);
-                };
-                let Some(period) = (clock == "minecraft:overworld")
-                    .then(|| self.ui.timelines.get(&timeline).copied())
-                    .flatten()
-                else {
-                    return Err(err(
-                        "commands.time.wrong_timeline_for_clock",
-                        &[&timeline, &clock],
-                    ));
-                };
-                if id == "time.query.timeline" {
-                    let ticks = period.map_or(total, |p| total.rem_euclid(p));
-                    self.feedback_unbroadcast(Text::tr(
-                        "commands.time.query.timeline",
-                        &[&timeline, &ticks],
-                    ));
-                    Ok(ticks as i32)
-                } else {
-                    let reps = period.map_or(0, |p| total / p);
-                    self.feedback_unbroadcast(Text::tr(
-                        "commands.time.query.timeline.repetitions",
-                        &[&timeline, &reps],
-                    ));
-                    Ok(reps as i32)
-                }
-            }
-            _ => Ok(0),
-        }
+        horizon_gameplay::commands::time::time(self, id, ctx)
     }
     fn cmd_weather(&mut self, ctx: &Context) -> R<i32> {
-        let duration = Self::int(ctx, "duration");
-        let sample = |min: i32, max: i32, r: &mut horizon_core::random::LegacyRandom| {
-            min + r.next_int_bound(max - min + 1).unwrap_or(0)
-        };
-        let (key, clear, time, raining, thundering) = if ctx.has("clear") {
-            (
-                "commands.weather.set.clear",
-                duration.unwrap_or_else(|| sample(12_000, 180_000, &mut self.world.random)),
-                0,
-                false,
-                false,
-            )
-        } else if ctx.has("rain") {
-            (
-                "commands.weather.set.rain",
-                0,
-                duration.unwrap_or_else(|| sample(12_000, 24_000, &mut self.world.random)),
-                true,
-                false,
-            )
-        } else {
-            (
-                "commands.weather.set.thunder",
-                0,
-                duration.unwrap_or_else(|| sample(3_600, 15_600, &mut self.world.random)),
-                true,
-                true,
-            )
-        };
-        self.set_weather_parameters(clear, time, raining, thundering);
-        self.feedback(Text::translate(key, &[]));
-        Ok(duration.unwrap_or(-1))
+        horizon_gameplay::commands::weather::weather(self, ctx)
     }
     pub(super) fn kill_target(&mut self, t: Target) {
         // An entity in another level is killed in the level that holds it.
@@ -3431,51 +3222,7 @@ impl Game<'_> {
         }
     }
     fn cmd_gamerule(&mut self, ctx: &Context) -> R<i32> {
-        let Some(name) = ctx.literals.get(1).cloned() else {
-            return Ok(0);
-        };
-        let Some(rule) = self.ui.rules.rule(&name).cloned() else {
-            return Ok(0);
-        };
-        // GameRule.id(): only the default namespace is omitted in messages.
-        let rule_id = rule.name.strip_prefix("minecraft:").unwrap_or(&rule.name);
-        let current = self.ui.rules.get(&rule.name).unwrap_or(rule.default);
-        let value = match ctx.get("value") {
-            Some(Arg::Bool(b)) => Value::Bool(*b),
-            Some(Arg::Int(i)) => Value::Int(*i),
-            _ => {
-                self.feedback_unbroadcast(Text::tr(
-                    "commands.gamerule.query",
-                    &[&rule_id, &current],
-                ));
-                return Ok(match current {
-                    Value::Bool(b) => i32::from(b),
-                    Value::Int(i) => i,
-                });
-            }
-        };
-        if current == value {
-            return Err(err("commands.gamerule.not_set", &[&rule_id, &value]));
-        }
-        let name = self.lan_acting_name.clone();
-        let actor = match (
-            self.lan_acting_uuid,
-            self.lan_acting_entity,
-            name.as_deref(),
-        ) {
-            (Some(uuid), Some(entity_id), Some(name)) => Some(mod_api::GameRuleActor {
-                uuid,
-                entity_id: entity_id as i32,
-                name,
-            }),
-            _ => None,
-        };
-        self.set_game_rule(&rule, value, actor.as_ref());
-        self.feedback(Text::tr("commands.gamerule.set", &[&rule_id, &value]));
-        Ok(match value {
-            Value::Bool(b) => i32::from(b),
-            Value::Int(i) => i,
-        })
+        horizon_gameplay::commands::gamerule::gamerule(self, ctx)
     }
     fn cmd_spawnpoint(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {

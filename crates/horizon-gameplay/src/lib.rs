@@ -5,6 +5,7 @@ extern crate horizon_client_lib as horizon_client;
 pub mod allays;
 pub mod block_entity_ticks;
 pub mod cat_spawner;
+pub mod commands;
 pub mod custom_spawner;
 pub mod dedicated;
 pub mod foxes;

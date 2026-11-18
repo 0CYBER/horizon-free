@@ -49,15 +49,15 @@ TickCommand.step	port	crates/horizon-client/src/game/administration/commands/mis
 TickCommand.stopStepping	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_tick	tick.step.stop default arm
 TickCommand.stopSprinting	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_tick	tick.sprint.stop arm
 TimeCommand.suggestTimelines	port	crates/horizon-command/src/args.rs::ArgType::suggest	gap: minor: lists every timeline id, not only the ids of the parsed clock
-TimeCommand.queryGameTime	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.query.gametime arm
-TimeCommand.queryTime	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.query.time arm
-TimeCommand.queryTimelineTicks	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.query.timeline arm
-TimeCommand.queryTimelineRepetitions	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.query.repetition arm
-TimeCommand.setTotalTicks	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.set arm
-TimeCommand.addTime	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.add arm
-TimeCommand.setTimeToTimeMarker	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.set.marker arm
-TimeCommand.setRate	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	time.rate arm
-TimeCommand.getDefaultClock	inline	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_time	built-in dimension defaults: Overworld and End select their own clocks; Nether has none
+TimeCommand.queryGameTime	port	crates/horizon-gameplay/src/commands/time.rs::time	time.query.gametime arm
+TimeCommand.queryTime	port	crates/horizon-gameplay/src/commands/time.rs::time	time.query.time arm
+TimeCommand.queryTimelineTicks	port	crates/horizon-gameplay/src/commands/time.rs::time	time.query.timeline arm
+TimeCommand.queryTimelineRepetitions	port	crates/horizon-gameplay/src/commands/time.rs::time	time.query.repetition arm
+TimeCommand.setTotalTicks	port	crates/horizon-gameplay/src/commands/time.rs::time	time.set arm
+TimeCommand.addTime	port	crates/horizon-gameplay/src/commands/time.rs::time	time.add arm
+TimeCommand.setTimeToTimeMarker	port	crates/horizon-gameplay/src/commands/time.rs::time	time.set.marker arm
+TimeCommand.setRate	port	crates/horizon-gameplay/src/commands/time.rs::time	time.rate arm
+TimeCommand.getDefaultClock	inline	crates/horizon-gameplay/src/commands/time.rs::time	built-in dimension defaults: Overworld and End select their own clocks; Nether has none
 TitleCommand.sendPacketToPlayers	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::titles_or_packet	per-player send
 TitleCommand.showTitle	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::cmd_title	title, subtitle and actionbar
 TitleCommand.setTimes	port	crates/horizon-client/src/game/administration/commands/text_commands.rs::Game::cmd_title	times arm
@@ -74,10 +74,10 @@ WardenSpawnTrackerCommand.resetTracker	port	crates/horizon-client/src/game/block
 WaypointCommand.setWaypointStyle	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_waypoint	style arm of the modify branch
 WaypointCommand.setWaypointColor	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_waypoint	color arm of the modify branch
 WaypointCommand.resetWaypointColor	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_waypoint	color reset arm
-WeatherCommand.getDuration	inline	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_weather	default duration sample
-WeatherCommand.setClear	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_weather	clear branch
-WeatherCommand.setRain	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_weather	rain branch
-WeatherCommand.setThunder	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_weather	thunder branch
+WeatherCommand.getDuration	inline	crates/horizon-gameplay/src/commands/weather.rs::weather	default duration sample
+WeatherCommand.setClear	port	crates/horizon-gameplay/src/commands/weather.rs::weather	clear branch
+WeatherCommand.setRain	port	crates/horizon-gameplay/src/commands/weather.rs::weather	rain branch
+WeatherCommand.setThunder	port	crates/horizon-gameplay/src/commands/weather.rs::weather	thunder branch
 WhitelistCommand.register	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	gap: minor: console only; no in-game /whitelist node
 WhitelistCommand.reload	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_whitelist	reload arm
 WhitelistCommand.addPlayers	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_whitelist	gap: minor: one name per command, not a target list

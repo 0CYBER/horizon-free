@@ -26,11 +26,11 @@ FunctionCommand.queueFunctionsNoReturn	inline	crates/horizon-client/src/game/adm
 GameModeCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	gamemode literal with gamemode and target arguments
 GameModeCommand.setMode	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_gamemode	sets each target's mode and counts changes
 GameRuleCommand.buildRuleArguments	port	crates/horizon-command/src/vanilla.rs::registered	one literal per rule (name and minecraft: id) with a value argument
-GameRuleCommand.setRule	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_gamerule	set branch: refuses an unchanged value
-GameRuleCommand.queryRule	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_gamerule	query branch of cmd_gamerule
+GameRuleCommand.setRule	port	crates/horizon-gameplay/src/commands/gamerule.rs::gamerule	set branch: refuses an unchanged value
+GameRuleCommand.queryRule	port	crates/horizon-gameplay/src/commands/gamerule.rs::gamerule	query branch of cmd_gamerule
 GiveCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	give literal with targets, item and count
 GiveCommand.giveItem	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_give	stack limit x100, overflow dropped at the player, pickup sound
-HelpCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	help literal; usage text is Game::cmd_help
+HelpCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	help literal; usage text is commands::help::help in horizon-gameplay
 JfrCommand.startJfr	skip:server		JVM flight recorder profiler; Horizon has its own /jfr in extra.rs
 KillCommand.register	port	crates/horizon-command/src/vanilla.rs::registered	kill literal with optional targets
 KillCommand.kill	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_kill	kills each target and reports the count
