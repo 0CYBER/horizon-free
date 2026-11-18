@@ -524,4 +524,34 @@ mod tooltip_tests {
         assert_eq!(layout.bar, [4.0, 8.0 + 3.0 * 9.0 + 4.0]);
         assert_eq!(layout.empty_description, Some([4.0, 8.0]));
     }
+
+    #[test]
+    fn bundle_removes_selected_item_or_defaults_to_last_inserted() {
+        let Some(items) = items() else { return };
+        let bundle = bundle_with(&[
+            ("minecraft:dirt", 5),
+            ("minecraft:stone", 10),
+            ("minecraft:apple", 2),
+        ]);
+        // Initially, selected is -1. remove_one takes index 0 (dirt, first stack).
+        let mut contents = Contents::of(&items, &bundle).unwrap();
+        assert_eq!(contents.selected(), -1);
+        let removed = contents.remove_one(&items).unwrap();
+        assert_eq!(&*removed.item, "minecraft:dirt");
+        assert_eq!(removed.count, 5);
+
+        // When an item is explicitly selected (e.g. index 2: apple):
+        let mut bundle = bundle_with(&[
+            ("minecraft:dirt", 5),
+            ("minecraft:stone", 10),
+            ("minecraft:apple", 2),
+        ]);
+        toggle_selected(&mut bundle, 2);
+        let mut contents = Contents::of(&items, &bundle).unwrap();
+        assert_eq!(contents.selected(), 2);
+        let removed = contents.remove_one(&items).unwrap();
+        assert_eq!(&*removed.item, "minecraft:apple");
+        assert_eq!(removed.count, 2);
+        assert_eq!(contents.selected(), -1);
+    }
 }
