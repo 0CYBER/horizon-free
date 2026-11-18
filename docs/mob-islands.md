@@ -179,18 +179,37 @@ serial: `unbounded_state` (a mob's position or velocity is not finite), `unbound
 
 ## Native mods and the profiler
 
-What a mod can run in a mob's turn: `native_living_change_target`, `native_living_heal`,
-`native_living_breathe`, `native_living_drown`, `native_living_fall`, `native_living_death_message`,
-`native_register_goals` (its goals), the incoming damage hooks, `native_living_damage_pre`,
-`native_living_knockback`, `native_trample` (a mob falling on farmland), `native_block_step_on`,
-`native_block_entity_inside` and `native_block_fall_on` (a content mod's blocks), a content mod
-effect's ticks, `native_living_jump` and `native_living_damage_post`, and mixins into them. The
-parallel build finds which using its static trait-package scanner: its loop stays serial
-when a mixin injects into one of those or into anything but a `native_*` hook point, or a trait
-package defines a function named for a hook the turn waits on (all but the last two). A game built
-without that finding, with trait mods, stays serial too. While no mod hooks, grouped turns skip the hooks that
-hand something back (no mod listens) and keep the two notifications, which the server thread tells
-at the join, ordered by turn. A mob carrying a content mod's effect keeps the tick serial while mods
+What a mod can run in a mob's turn: the hooks of its tick, `native_living_change_target`,
+`native_living_heal`, `native_living_breathe`, `native_living_drown`, `native_living_fall`,
+`native_living_death_message`, `native_living_incoming_damage`, `native_living_damage_pre` and
+`native_living_knockback`; the hooks of its move, `native_trample` (farmland it falls on),
+`native_block_step_on` (a content mod's block it touches), and the block parts it asks there,
+`native_fall_on`, `native_bounce_on` and `native_entity_inside` (the block it lands on, the one it
+bounces off, and the ones its sweep crosses); the physics of that move,
+`native_friction`, `native_block_speed_factor`, `native_block_jump_factor`, `native_is_ladder`,
+`native_makes_open_trapdoor_above_climbable`, `native_living_speed`, `native_living_jump_power`,
+`native_living_flying_speed`, `native_fluid_flow` and `native_sound_type` (the surface under it,
+the speeds it travels with, the fluid that pushes it, the ladder it climbs and the sound its step
+makes); the questions its AI asks while it ticks, `native_block_path_type` and
+`native_adjacent_block_path_type` (how it types the blocks of the path it finds),
+`native_living_visibility` and `native_enderman_anger` (what may see it, and an enderman a mod
+keeps calm), and `native_can_entity_destroy` and `native_entity_mob_griefing` (what it may break,
+and whether it may change the world at all); `native_ender_entity_teleport` (an enderman's or a
+shulker's own teleport, in its AI step); a content mod effect's ticks; and the two it calls without
+waiting, `native_living_jump` and `native_living_damage_post`. The parallel build finds which using
+its static scanner: the loop stays serial when a mixin injects into one of those hook points, into
+any other function of a module a turn can reach, or a trait package defines a function named for a
+hook the turn waits on (all but the last two). The rule for modules: a target lies outside a turn
+only when it names a module inside the window's own drawing — the renderer, the HUD, widgets and
+shared screen drawing, the options screens — or inside the wire's codecs, framing and packets.
+The rest of the render crate lies inside: a turn reads its world data, collides through it and
+draws the level's random with it, and every part hook's forwarder reads its `api_context`, so a
+mixin there, like one into any module the scanner cannot place, keeps the tick serial. That is the
+side to err on: an unknown module costs parallelism, a module the turn does run would cost the
+order of the simulation. A game built without that finding, with trait mods, stays
+serial too. While no mod hooks, grouped turns skip the hooks that hand something back (no mod
+listens) and keep the two notifications, which the server thread tells at the join, ordered by
+turn. A mob carrying a content mod's effect keeps the tick serial while mods
 are loaded. The entity tick Pre's cancellations are heard before the loop and passed to every group.
 
 The tick profiler samples on whichever thread runs a mob: each helper samples for whoever
