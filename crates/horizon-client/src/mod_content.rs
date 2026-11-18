@@ -2805,6 +2805,10 @@ impl Overlay<'_> {
                 continue;
             }
             if meta.is_ok() {
+                // A junction (Windows) is removed as a directory, its target untouched.
+                #[cfg(windows)]
+                horizon_mod_package::junction::remove_link(&path)?;
+                #[cfg(not(windows))]
                 fs::remove_file(&path)?;
             }
             fs::create_dir(&path)?;
@@ -2841,6 +2845,11 @@ fn link(target: &Path, at: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn link(target: &Path, at: &Path) -> std::io::Result<()> {
     if target.is_dir() {
+        // A whole directory in one junction, as unix links it with one symlink.
+        #[cfg(windows)]
+        if !at.exists() && horizon_mod_package::junction::junction(target, at).is_ok() {
+            return Ok(());
+        }
         fs::create_dir_all(at)?;
         for entry in fs::read_dir(target)?.flatten() {
             link(&entry.path(), &at.join(entry.file_name()))?;
@@ -2870,6 +2879,7 @@ fn link_file(
 
 mod root_lifetime;
 use root_lifetime::prune_roots;
+
 pub use root_lifetime::retain_root;
 mod load_conditions;
 use load_conditions::{TagLayers, TagMerge, merge_tag, tag_list};

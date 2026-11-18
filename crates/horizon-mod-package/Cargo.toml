@@ -45,7 +45,7 @@ socket2 = { version = "0.6", optional = true }
 rustix = { version = "1.1", features = ["fs", "net"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading"], optional = true }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading", "Win32_System_Ioctl"], optional = true }
 
 [[example]]
 name = "holder_actor"
@@ -58,6 +58,8 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 [features]
 runtime-process = ["dep:cap-std", "dep:cap-fs-ext", "dep:os_pipe", "dep:libc", "dep:windows-sys", "dep:getrandom", "dep:subtle", "dep:socket2", "dep:rustix"]
 prebuilt = ["dep:cap-std", "dep:tar", "dep:xz4rust"]
+# Directory junctions on Windows, for a mod content root's overlay (`junction`).
+junction = ["dep:windows-sys"]
 # The mod registry's index (docs/modding/src/reference/registry-index.md): the launcher, the registry server and its CI.
 index = ["dep:minisign-verify", "dep:horizon-shader-api"]
 

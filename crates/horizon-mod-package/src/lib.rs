@@ -15,6 +15,8 @@ pub mod icon;
 pub mod index;
 pub mod install_lock;
 pub mod internals;
+#[cfg(all(windows, feature = "junction"))]
+pub mod junction;
 pub mod layouts;
 #[cfg(all(
     feature = "runtime-process",
