@@ -1163,4 +1163,15 @@ pub trait PlayersBackendMut {
         player: PlayerRef,
         data: Compound,
     ) -> Result<(), PlayerDataRefusal>;
+    /// Side: server.
+    /// Sets a server player's velocity in blocks a tick and tells their
+    /// client (`Entity.setDeltaMovement` with `hurtMarked`, which sends
+    /// `ClientboundSetEntityMotionPacket` about the player themselves; Paper's
+    /// `Player.setVelocity`). The client owns a player's motion, so it moves
+    /// by the new value from its next tick. `entity_push` adds to the
+    /// velocity instead; `entity_set_velocity` refuses players. False for a
+    /// stale or unavailable player, a displaced outer player, and a value
+    /// that is not finite.
+    #[access(WorldOnly)]
+    fn player_set_velocity(&mut self, player: PlayerRef, velocity: [f64; 3]) -> bool;
 }

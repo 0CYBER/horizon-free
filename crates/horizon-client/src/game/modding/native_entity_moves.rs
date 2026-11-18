@@ -10,7 +10,7 @@ use super::{
     vehicle_teleport::TeleportMotion,
 };
 use horizon_core::geometry::Vec3;
-use mod_api::EntityRef;
+use mod_api::{EntityRef, PlayerRef};
 
 /// `Level.isInSpawnableBounds` and `/tp`'s limits: 30,000,000 blocks out,
 /// 20,000,000 up or down.
@@ -239,42 +239,9 @@ impl Game<'_> {
             return false;
         };
         if matches!(target, Target::Player | Target::Guest(_)) {
-            let conn = match target {
-                Target::Player => self.lan_acting,
-                Target::Guest(conn) => Some(conn),
-                _ => None,
-            };
-            let Some(conn) = conn else {
-                return false;
-            };
-            let Some(host) = self.lan.as_mut() else {
-                return false;
-            };
-            return host
-                .hub
-                .update_guest(conn, |g| {
-                    let motion = if matches!(target, Target::Player) {
-                        self.player.as_mut()
-                    } else {
-                        g.motion.as_deref_mut()
-                    };
-                    let Some(motion) = motion else {
-                        return false;
-                    };
-                    let v = motion.velocity;
-                    motion.velocity = Vec3::new(v.x + delta[0], v.y + delta[1], v.z + delta[2]);
-                    let v = motion.velocity;
-                    g.send(
-                        &horizon_protocol::packets::play::Clientbound::SetEntityMotion(
-                            horizon_protocol::packets::play::SetEntityMotion {
-                                id: g.entity_id,
-                                velocity: [v.x, v.y, v.z],
-                            },
-                        ),
-                    );
-                    true
-                })
-                .unwrap_or(false);
+            return self.native_player_motion(target, |v| {
+                Vec3::new(v.x + delta[0], v.y + delta[1], v.z + delta[2])
+            });
         }
         let Some(h) = self.native_walk_entity(entity.id()) else {
             return false;
@@ -288,6 +255,60 @@ impl Game<'_> {
             self.mobs[i].needs_sync = true;
         }
         true
+    }
+    /// Sets a server player's velocity and tells their client
+    /// (`ClientboundSetEntityMotionPacket` about themselves, as Paper's
+    /// `Player.setVelocity`). False for a stale or unavailable player, an
+    /// entity that is not a player, or a value that isn't finite.
+    pub(super) fn player_set_velocity(&mut self, player: PlayerRef, velocity: [f64; 3]) -> bool {
+        if !velocity.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        match self.native_entity_target(player.entity()) {
+            Some(target @ (Target::Player | Target::Guest(_))) => {
+                let [x, y, z] = velocity;
+                self.native_player_motion(target, |_| Vec3::new(x, y, z))
+            }
+            _ => false,
+        }
+    }
+    /// Changes a player's velocity with `change` and sends their client the
+    /// result: the acting player's record (`Target::Player`) or a guest's.
+    fn native_player_motion(&mut self, target: Target, change: impl FnOnce(Vec3) -> Vec3) -> bool {
+        let conn = match target {
+            Target::Player => self.lan_acting,
+            Target::Guest(conn) => Some(conn),
+            _ => None,
+        };
+        let Some(conn) = conn else {
+            return false;
+        };
+        let Some(host) = self.lan.as_mut() else {
+            return false;
+        };
+        host.hub
+            .update_guest(conn, |g| {
+                let motion = if matches!(target, Target::Player) {
+                    self.player.as_mut()
+                } else {
+                    g.motion.as_deref_mut()
+                };
+                let Some(motion) = motion else {
+                    return false;
+                };
+                motion.velocity = change(motion.velocity);
+                let v = motion.velocity;
+                g.send(
+                    &horizon_protocol::packets::play::Clientbound::SetEntityMotion(
+                        horizon_protocol::packets::play::SetEntityMotion {
+                            id: g.entity_id,
+                            velocity: [v.x, v.y, v.z],
+                        },
+                    ),
+                );
+                true
+            })
+            .unwrap_or(false)
     }
 }
 

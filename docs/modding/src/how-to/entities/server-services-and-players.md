@@ -102,6 +102,12 @@ this order: `Client`, `InPlayerHook` (a player's state is swapped in), `Stale` (
 handle), `NoConnection` (a fake player, or the world's own player in a single-player world, which respawns through its
 own screen) and `Alive` (health above 0 and the game not won: the case the button ignores; a player who has won the game and is watching the End poem is respawned even alive, on the next server tick, as the button does).
 
+`player.set_velocity(host, [x, y, z])` sets a server player's velocity in blocks a tick and sends it to their client, as
+Paper's `Player.setVelocity` does (`player_set_velocity`, `WorldOnly` access). The value replaces the player's velocity,
+where `entity_push` adds to it, and the client moves by it from its next tick. It returns `false`, with the velocity
+unchanged, for a stale or unavailable player, a displaced outer player or a component that is not finite.
+`entity_set_velocity` refuses players.
+
 ## Player rules and sleep
 
 Reads accept `Host`; writes accept `ServerHost`.

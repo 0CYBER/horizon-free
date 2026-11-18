@@ -1,0 +1,2 @@
+# horizon-rust/horizon#17886: these tests read the prepared 26.3 data.
+horizon-client game::native_guest_turn_tests::player_set_velocity_replaces_a_guests_motion lib daily resources
