@@ -11,8 +11,10 @@ added, removed (accepted and failing) and changed, and fails on:
   a published loop, and no fixture (tools/ci/fn-replace-check, the wasm host's), doc or mod manifest names it;
 - a changed point (name kept, target or hash different) unless the same file lists it;
 - an added point, unless --allow-added;
-- a difference in loops.json or internals.json, and a difference in the other generated files that no accepted point
-  change explains (the generated API differs whenever a point does).
+- a difference in loops.json, and a difference in the other generated files that no accepted point change explains (the
+  generated API differs whenever a point does);
+- a removed internals.json entry (one becoming `shape_only` too), and with --allow-added only that: added and changed
+  entries are listed and pass (`cargo horizon-mod update` reports signature-hash changes for declared internals).
 Moving code out of `game/` removes its points: list them in the file. A method of `Game` keeps its name, module path and
 signature, and only its body delegates. A mod that needs a moved function asks for `#[replaceable]` in the lower crate.
 
@@ -47,8 +49,10 @@ LIST = "tools/mod_points_removed.txt"
 # Files the generator writes into the output folder that are not output: phase timings (and incremental-*/ or, from
 # older builds, interfaces-*/, its cache).
 SCRATCH_FILES = {"points-timing.txt"}
-# Files whose difference never passes: the published loops and the exposed internals.
-STRICT_FILES = {"loops.json", "internals.json"}
+# Files the head has to write, compared exactly: the published loops and the exposed internals (internals.json passes an
+# addition or a change with --allow-added; see internals_diff).
+INTERNALS = "internals.json"
+STRICT_FILES = {"loops.json", INTERNALS}
 # Where a mod, a fixture or a doc may name a point.
 REFERENCE_PATHS = ("tools/ci/fn-replace-check", "crates/horizon-mod-wasm/tests/fixture", "docs", "*horizon-mod.toml")
 
@@ -113,6 +117,46 @@ def diff_files(base_dir, head_dir, base_root=None, head_root=None):
             diffs.append((name, list(difflib.unified_diff(
                 old.splitlines(), new.splitlines(), f"base/{name}", f"head/{name}", lineterm="", n=1))))
     return sorted(head_files - base_files), sorted(base_files - head_files), diffs
+
+
+def internal_entries(text):
+    """The entries of an internals.json text, each checked to have what the generator always writes (`path`, `kind`,
+    `signature`, `hash`) and the optional `cfg` and `shape_only` with their types. A malformed catalog is a ValueError:
+    a dropped field would otherwise pass as a change."""
+    catalog = json.loads(text)
+    entries = catalog.get("internals") if isinstance(catalog, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("no `internals` array")
+    for number, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"entry {number} is not an object")
+        for field, kind, required in (("path", str, True), ("kind", str, True), ("signature", str, True),
+                                      ("hash", str, True), ("cfg", str, False), ("shape_only", bool, False)):
+            if (required or field in entry) and not isinstance(entry.get(field), kind):
+                raise ValueError(f"entry {number} ({entry.get('path')!r}) has no {kind.__name__} `{field}`")
+    return entries
+
+
+def internals_diff(base_text, head_text):
+    """(added, removed, changed) between two internals.json texts, each a sorted list of (path, kind, cfg). `path` is
+    not unique (a field and a method share one, and `cfg` alternatives repeat both), so entries are keyed as the
+    generator writes them apart, with an absent `cfg` as "". A key the head has fewer entries of, or fewer that are not
+    `shape_only` (a native mod cannot resolve a shape-only type), counts as removed."""
+    def groups(text):
+        out = {}
+        for entry in internal_entries(text):
+            out.setdefault((entry["path"], entry["kind"], entry.get("cfg") or ""), []).append(entry)
+        return {key: sorted(json.dumps(entry, sort_keys=True) for entry in entries) for key, entries in out.items()}
+
+    def resolvable(entries):
+        return sum(not json.loads(entry).get("shape_only") for entry in entries)
+
+    base, head = groups(base_text), groups(head_text)
+    removed = sorted(key for key in base if len(head.get(key, ())) < len(base[key])
+                     or resolvable(head.get(key, ())) < resolvable(base[key]))
+    added = sorted(set(head) - set(base))
+    changed = sorted(key for key in set(base) & set(head) if key not in removed and base[key] != head[key])
+    return added, removed, changed
 
 
 def short(value):
@@ -219,8 +263,9 @@ def classify(removed, changed, base_points, accepted, loops, files):
 
 
 def summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, files_removed, diffs, base_points,
-            head_points, max_lines=MAX_DIFF_LINES, max_listed=MAX_LISTED):
-    """The report as a list of lines."""
+            head_points, max_lines=MAX_DIFF_LINES, max_listed=MAX_LISTED, internals=None):
+    """The report as a list of lines. `internals` is internals_diff's result, or None when internals.json is the
+    same."""
     out = []
 
     def listing(title, names, show):
@@ -249,6 +294,12 @@ def summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, fi
                 out.append(f"    {key}: {short(before)} -> {short(after)}")
         if len(changed) > max_listed:
             out.append(f"  ... and {len(changed) - max_listed} more")
+    if internals is not None:
+        for title, keys in zip(("added", "removed", "changed"), internals):
+            listing(f"Internals {title}", keys,
+                    lambda key: f"{key[0]} ({key[1]}" + (f", cfg {key[2]})" if key[2] else ")"))
+        if not any(internals):
+            out.append("internals.json differs, with the same entries.")
     listing("Generated files added", files_added, str)
     listing("Generated files removed", files_removed, str)
     if diffs:
@@ -265,12 +316,16 @@ def summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, fi
     return out
 
 
-def verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added=False):
+def verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added=False,
+            internals=None):
     """0 when the catalog and the API are as they were, or differ only in ways accepted: points added (with
     allow_added), removals and changes the removal file lists. A failing removal or change always fails. The generated
     API differs whenever a point does, so those diffs pass when `explained` (a point difference was accepted), except
-    loops.json and internals.json, which always have to match."""
+    loops.json, which always has to match. `internals` (internals_diff's result, internals.json left out of `diffs`)
+    passes with allow_added when it removes nothing, and never explains another file's diff."""
     if removed_bad or changed_bad or (added and not allow_added):
+        return 1
+    if internals is not None and (internals[1] or not allow_added):
         return 1
     if any(name in STRICT_FILES for name, _ in diffs):
         return 1
@@ -295,6 +350,18 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
     files_added = [n for n in files_added if n not in STRICT_FILES]
     for name in skipped:
         print(f"note: {name} exists on one side only, not compared.")
+    internals = None
+    if any(name == INTERNALS for name, _ in diffs):
+        # Listed by entry instead of as a diff: the file is one line of several megabytes. One that does not parse as
+        # entries stays a strict file difference, in one line.
+        try:
+            internals = internals_diff(read_text(base_dir / INTERNALS, [base_root] if base_root else []),
+                                       read_text(head_dir / INTERNALS, [head_root] if head_root else []))
+            unreadable = None
+        except (ValueError, KeyError, TypeError) as error:
+            unreadable = [f"internals.json differs and does not parse as entries ({type(error).__name__}: {error})"]
+        diffs = [(name, unreadable if name == INTERNALS else lines) for name, lines in diffs
+                 if name != INTERNALS or unreadable]
     if removed and files is None:
         files = repo_texts
     if accepted is None:
@@ -302,9 +369,10 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
     removed_ok, removed_bad, changed_ok, changed_bad = classify(
         removed, changed, base_points, accepted, loop_targets(base_dir / "loops.json"), files() if removed else {})
     explained = bool((added and allow_added) or removed_ok or changed_ok)
-    status = verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added)
+    status = verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added,
+                     internals)
     lines = summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, files_removed, diffs,
-                    base_points, head_points)
+                    base_points, head_points, internals=internals)
     counts = (f"Mod points: {len(added)} added, {len(removed)} removed ({len(removed_ok)} accepted, "
               f"{len(removed_bad)} failing), {len(changed)} changed ({len(changed_ok)} accepted, "
               f"{len(changed_bad)} failing).")
@@ -323,8 +391,10 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
                   "`Game` method or a loop, and no fixture, doc or mod manifest names it. A mod that needs one "
                   "asks for `#[horizon_mod_api_macros::replaceable]` in the lower crate.")
         if any(name in STRICT_FILES for name, _ in diffs) or any(name in STRICT_FILES for name in files_removed):
-            print("loops.json and internals.json have to match the base exactly, and the head has to write them.")
-        if not (removed_bad or changed_bad or (added and not allow_added)):
+            print("loops.json has to match the base exactly, and the head has to write it and internals.json.")
+        if internals is not None and (internals[1] or not allow_added):
+            print("internals.json may add or change entries with --allow-added, never remove one.")
+        if (diffs or files_added or files_removed) and not explained:
             print("The generated API differs from the base with no accepted point change.")
     return status
 
@@ -375,7 +445,8 @@ def resolve_target(option, env_value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="the git ref to compare with (default: the merge base of HEAD and origin/main)")
-    parser.add_argument("--allow-added", action="store_true", help="accept a change that only adds points")
+    parser.add_argument("--allow-added", action="store_true",
+                        help="accept added points, and added or changed internals")
     parser.add_argument("--target-dir", type=Path,
                         help="Cargo build folder for both runs (default: $CARGO_TARGET_DIR, else the repository's target)")
     parser.add_argument("--compare", nargs=2, metavar=("OLD", "NEW"), type=Path,

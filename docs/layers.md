@@ -620,7 +620,10 @@ prints how many points were added, removed (accepted and failing) and changed. I
 - a point is removed and is not listed in `tools/mod_points_removed.txt`, is a `Game` method or a published loop, or is
   named by a fixture (`tools/ci/fn-replace-check`, the wasm host's), a doc or a mod manifest;
 - a point changes (same name, new target or signature hash) and is not listed in that file;
-- the generated API differs with no accepted point change behind it, or `loops.json` or `internals.json` differs at all.
+- the generated API differs with no accepted point change behind it, or `loops.json` differs at all;
+- `internals.json` loses an entry, or, without `--allow-added`, differs at all. With the flag, added and changed entries
+  are listed and pass: `cargo horizon-mod update` already reports signature-hash changes for declared internals.
+  Becoming `shape_only`, or losing a `cfg` variant, counts as a removal.
 
 CI runs it, with `--allow-added`, on a pull request that can reach the points: a change to `crates/horizon-client/src/game/`
 or `game.rs`, to the generator's crates (`crates/horizon-mod-*`), to the check itself, to a `Cargo.toml` or `Cargo.lock`,
