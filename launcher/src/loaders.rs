@@ -132,8 +132,22 @@ pub fn versions(kind: Kind, minecraft: &str, fetch: Fetch) -> Result<Vec<Listed>
     let listed = match kind {
         Kind::Forge | Kind::NeoForge => forge::versions(kind, minecraft, fetch)?,
         _ => {
-            let body = fetch(&format!("{}/versions/loader/{minecraft}", kind.meta()))?;
-            parse_versions(&String::from_utf8_lossy(&body))?
+            let url = format!("{}/versions/loader/{minecraft}", kind.meta());
+            match fetch(&url) {
+                Ok(body) => parse_versions(&String::from_utf8_lossy(&body))?,
+                // A Minecraft version the loader never supported (Fabric starts at 1.14):
+                // Fabric's service answers 400, Quilt's 404. Its game list tells that apart
+                // from an outage answering the same.
+                Err(e)
+                    if [400, 404]
+                        .iter()
+                        .any(|c| e == format!("{url} answered {c}"))
+                        && never_supported(kind, minecraft, fetch) =>
+                {
+                    Vec::new()
+                }
+                Err(e) => return Err(e),
+            }
         }
     };
     if listed.is_empty() {
@@ -143,6 +157,22 @@ pub fn versions(kind: Kind, minecraft: &str, fetch: Fetch) -> Result<Vec<Listed>
         ));
     }
     Ok(listed)
+}
+
+/// Whether Fabric's or Quilt's service lists its game versions (`[{"version"}]`) without
+/// `minecraft`. False when the list can't be read, so the first error stands.
+fn never_supported(kind: Kind, minecraft: &str, fetch: Fetch) -> bool {
+    let Ok(body) = fetch(&format!("{}/versions/game", kind.meta())) else {
+        return false;
+    };
+    let Ok(Value::Array(games)) = serde_json::from_slice::<Value>(&body) else {
+        return false;
+    };
+    let versions: Option<Vec<&str>> = games
+        .iter()
+        .map(|g| g["version"].as_str().filter(|v| !v.trim().is_empty()))
+        .collect();
+    versions.is_some_and(|v| !v.is_empty() && !v.contains(&minecraft))
 }
 
 /// The loader `kind` names at `version` (none or `latest`: the newest stable one) for
