@@ -526,6 +526,8 @@ impl Launcher {
             .kind
             .as_ref()
             .filter(|(kind, _)| *kind == ModKind::Native)
+            // Its menu can turn the mod off: not from a row that may not switch that id.
+            .filter(|_| row.has_switch())
             .and_then(|(_, id)| self.route_chip(id, cx));
         let controls = if let Some(native) = &row.native {
             self.native_mod_actions(native, busy, cx)
@@ -767,6 +769,8 @@ mod tests {
         assert!(!native_status::asks_for_build(
             rows.iter().filter_map(|r| r.native.as_ref())
         ));
+        // No switch, permission prompt or route menu: each could switch `mod.teem_client-0.1.0`.
+        assert!(!rows[0].has_switch());
     }
 
     #[test]
@@ -853,13 +857,16 @@ mod tests {
         let home = &scratch.0;
         let folder = home.join(horizon_platform::mod_package::mod_list::DIR);
         std::fs::create_dir_all(&folder).unwrap();
-        // The file name isn't the id: the on/off list is keyed by the manifest's. Two copies
-        // carry the id of another mod: a tracked one and a native one.
+        // The file name isn't the id: the on/off list is keyed by the manifest's. A copy with a
+        // tracked mod's id and two copies with one id switch nothing; the unreadable native
+        // `ruby.hmod` below gives no id, so the valid `ruby` copy keeps its switch.
         for (file, id) in [
             ("tracked", "tracked"),
             ("my-build", "handmade"),
             ("copy-of-tracked", "tracked"),
-            ("copy-of-native", "ruby"),
+            ("valid-ruby", "ruby"),
+            ("twin-a", "twin"),
+            ("twin-b", "twin"),
         ] {
             let mut zip = zip::ZipWriter::new(
                 std::fs::File::create(folder.join(format!("{file}.hmod"))).unwrap(),
@@ -914,11 +921,11 @@ mod tests {
                     false
                 ),
                 (
-                    "horizon-mods/copy-of-native.hmod",
+                    "horizon-mods/valid-ruby.hmod",
                     false,
                     Some(ModKind::Content),
                     None,
-                    false
+                    true
                 ),
                 (
                     "horizon-mods/copy-of-tracked.hmod",
@@ -933,6 +940,20 @@ mod tests {
                     Some(ModKind::Content),
                     None,
                     true
+                ),
+                (
+                    "horizon-mods/twin-a.hmod",
+                    false,
+                    Some(ModKind::Content),
+                    None,
+                    false
+                ),
+                (
+                    "horizon-mods/twin-b.hmod",
+                    false,
+                    Some(ModKind::Content),
+                    None,
+                    false
                 ),
             ]
         );

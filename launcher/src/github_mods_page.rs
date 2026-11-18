@@ -470,12 +470,11 @@ impl Launcher {
         // backup that keeps its worlds' content.
         let named = self.stop_names(&id);
         let reason = tr("Choose what to do about your worlds first");
-        // A retired file can't load: Remove is all its row offers (Installed::retired).
-        let retired = row.retired();
         // A wasm or content `.hmod` copied into `horizon-mods/` by hand needs no native consent.
         let native = row.native();
         let flip = switch(format!("native-switch-{id}"), on, &t);
-        // A retired file can't be read, so it has no switch either (`Installed::switch`).
+        // A retired file can't load: Remove is all its row offers. It can't be read, so it has
+        // no switch (`Installed::switch`).
         right = right.when(row.switch, |right| {
             right.child(if named {
                 self.with_reason(disabled(flip), reason)
@@ -506,7 +505,8 @@ impl Launcher {
         if native {
             right = right.child(blocks::badge(tr("NATIVE"), t.muted, &t));
         }
-        if native && !retired && self.settings.native_mods_allowed_at.is_none() {
+        // Canceling its prompt turns `mod.<id>` off: only a row that may switch it asks.
+        if native && row.switch && self.settings.native_mods_allowed_at.is_none() {
             let id = row.id.clone();
             right = right
                 .child(blocks::badge(tr("Needs permission"), t.muted, &t))

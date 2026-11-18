@@ -352,7 +352,8 @@ impl Launcher {
         // (fits, exact build only, does not fit, did not build) and what can be done.
         let facts = id
             .as_deref()
-            .filter(|_| row.on)
+            // Its menu can turn the mod off: not from a row that may not switch that id.
+            .filter(|_| row.on && row.has_switch())
             .and_then(|id| self.route_facts(id, cx).map(|facts| (id.to_owned(), facts)));
         let Some((id, facts)) = facts else {
             return div().child(shown);
