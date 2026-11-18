@@ -637,23 +637,17 @@ Two cases the oracle fills in:
     is the spawners' mobs. Moog's and Repurposed Structures' spawner randomizing processors
     become `horizon:spawner_mobs` (a weighted mob per spawner, picked with the placement's
     random as theirs do, and the spawner NBT they write; Repurposed's `rs_spawners` lists are
-    written in). YUNG's Better Dungeons and Better Desert Temples turn a spawner or a
-    placeholder block (gravel, bone block, yellow wool...) into a spawner of a fixed mob: that
-    is vanilla's `rule` processor with an `append_static` block entity. Moog's vanilla loot
-    swap acts only when a "replace vanilla" preset is on, and they ship off. Moog's trial
+    written in). Moog's vanilla loot swap acts only when a "replace vanilla" preset is on, and
+    they ship off. Moog's trial
     spawner and vault processors keep the block and change its block entity: one `rule` per
     block state, with the game's `horizon:edit` modifier, which takes out the state the
     template was saved with (a vault saved with `state_updating_resumes_at` far in the future
     never opens; a spawner's saved `spawn_data` blocks its own mobs) and merges in the
     spawner's normal and ominous configs (by id: the carry upgrades `trial_spawner/` files'
-    mobs to 26.3's `equipment`) or the vault's loot table and key. Better Desert Temples'
-    placeholder blocks (orange, red and white glass, blue and yellow concrete, red wool,
-    polished diorite, blank pots) become what its processors make of them: the fixed swaps as
-    vanilla's `rule`, the random ones (suspicious sand, sand and sandstone, upside-down stairs,
-    cobwebs, sherds on the pots) as the game's `horizon:pick`, on the same `nextFloat` as the
-    mod. Better Dungeons' small dungeons keep one chest and each other one with a fifth's
-    chance, two at most (the game's `horizon:count_cap`, counted per placement as the mod's
-    DungeonContext is): 12 chests in five small dungeons at seed 1234 become 6.
+    mobs to 26.3's `equipment`) or the vault's loot table and key. YUNG's own processors
+    (Better Dungeons' spawners and chests, Better Desert Temples' placeholder blocks, YUNG's
+    pillars, Better Ocean Monuments' ten) are not carried: they stay Java and are dropped until
+    the specification of YUNG's API covers them (see YUNG's API below).
     Lithostitched's processors (all in ChoiceTheorem's Overhauled Village in ATM10) are the
     game's own types, read as the mod writes them. `block_swap` keeps the properties the new
     block can have: a farm's ripe wheat becomes ripe carrots, but beetroot, whose age stops at
@@ -680,29 +674,12 @@ Two cases the oracle fills in:
     block down to the ground, with the processor list they run on each of its blocks written
     in), Repurposed's bottom pillars `horizon:bottom_pillar`, their fluid fix (a wall of the
     structure's block over water and lava sources next to its open blocks)
-    `horizon:close_off_fluid_sources`, and YUNG's pillars (Better Fortresses, Better Jungle
-    Temples) and Better Fortresses' stair supports `horizon:yung_pillar` and
-    `horizon:stair_pillar`. They write only in the chunk being generated, as the mods do.
-    Dropped processors went from 570 to 456 in Repurposed Structures (its pillars, bottom
-    pillars and fluid fixes: 242 lists), 14 to 1 in Moog's, 10 to 5 in Better Fortresses and
-    52 to 50 in Better Jungle Temples; the structure starts are the same (382 starts, 37,451
-    pieces in chunks -64..63, seed 1234). Around spawn at seed 1234, 1,515 blocks change: the
+    `horizon:close_off_fluid_sources`. They write only in the chunk being generated, as the mods
+    do. Dropped processors went from 570 to 456 in Repurposed Structures (its pillars, bottom
+    pillars and fluid fixes: 242 lists) and 14 to 1 in Moog's; the structure starts are the
+    same. Around spawn at seed 1234, 1,515 blocks change: the
     382 red glass placeholders under Repurposed's ocean outpost and pyramids become prismarine
-    columns, and their gravel and prismarine pillars reach the sea floor. In the Nether, the
-    Better Fortresses fortress at chunk (-23, 9) stands on its pillars: its terracotta
-    placeholders become nether bricks and 41,487 blocks of air (and 2,163 of lava) under it
-    become brick and magma columns down to the netherrack, 64,568 blocks changed in its 180
-    chunks (the huge fungi there grow around the columns).
-    Better Ocean Monuments' ten processors are carried as well, so its monuments are no longer
-    dry: its templates are mostly air, which its air processor turns to water below the sea
-    level (the game's `horizon:flood_air`); its waterlog processor (`horizon:waterlog`)
-    waterlogs what can be and marks the water on the chunk's edges for postprocessing, its
-    structure void keeps the world's block (`horizon:keep_world_block`), its placeholder
-    blocks become slabs, sponges, seagrass, gravel and aged copper (vanilla's `rule`, and
-    `horizon:pick` with a new `nextFloat` for each chance, as the mod draws), and its legs and
-    Better Witch Huts' log and fence legs are `horizon:yung_pillar`. In the monument at chunk
-    (2, 8) (seed 1234), 318,512 blocks of air become water and none is left between y 30 and
-    60 (227,034 before); its 5,142 placeholder blocks are gone.
+    columns, and their gravel and prismarine pillars reach the sea floor.
     Repurposed's opposite fix, which walls off the air and other liquids beside its ocean
     mineshafts' water, is `horizon:close_off_air_sources` (its 4 lists). It runs in the mod's
     order, so the walls it builds keep the later blocks of the template from the mod's "where
@@ -715,12 +692,10 @@ Two cases the oracle fills in:
     plain rails over a block that can occlude, which stay (waterlogged where the world holds
     water). Repurposed's dropped processors go from 253 to 182.
     Still taken out: Formations' biome replacements, blocks aged or propped up.
-    In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
-    in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
-    Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
-    in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
-    and 1,405 with a loot table. The game read loot tables from `data/minecraft/` only, so every one of
-    those chests naming a mod's table opened empty; it now reads every namespace, and an
+    In the Nether of the 128×128-chunk square (seed 1234), the 52 empty spawners of Moog's
+    Nether Structures are filled (162, up from 110). Chests are unchanged. The game read loot
+    tables from `data/minecraft/` only, so every chest naming a mod's table opened empty; it
+    now reads every namespace, and an
     integer field written as a float (`"rolls": {"min": 3.0, ...}`, as Towns and Towers
     writes them) counts as vanilla's int codecs count it. Of the 675 chest and other
     non-block tables in ATM10's carried mods, 534 now fill a chest (seed 1; none before).
@@ -774,20 +749,18 @@ Two cases the oracle fills in:
     `add_template_pool_elements` modifiers whose load conditions hold for the mods ported
     along, and from CTOV's Java registration: its 21 village types and 11 outposts join
     vanilla's `villages` and `pillager_outposts` with the mod's default weights.
-  - **YUNG's API** (#839, #846 in the game; #840, #847 in carry). `yungsapi:yung_jigsaw` and its
-    elements become vanilla's jigsaw and single element, with their rules under
-    `horizon:yungsapi`. The game assembles them as YUNG's `JigsawManager` does: priority
-    pieces, caps by name, depth ranges, `ignore_bounds` and the conditions tree, with
-    `piece_in_range`. Dead-end pools swap a piece that got no child for one of its dead-end
-    pool, and once the layout is done each piece's modifiers can turn it into another template
-    (`transform`) or place it last (`delay_generation`). Better Fortresses' bridges need all
-    three: over seed 1234's Nether chunks -64..63 it goes from 3,765 to 4,106 pieces. YUNG's
-    placements become `horizon:` keys on a random spread: `horizon:exclusion_zone` for the
-    enhanced exclusion zone, `horizon:avoid_biomes` for the temples' ocean and river search,
-    `horizon:ring_sections` for Better Strongholds' rings. `horizon:disables` on a YUNG
-    structure turns off the vanilla type its mod's mixin turns off. It is written only when
-    the game can start the replacement, so vanilla mineshafts stay while Better Mineshafts (a
-    Java type) can't.
+  - **YUNG's API** (first #839, #846 in the game and #840, #847 in carry; redone from a
+    clean-room specification in `379692f355`). `horizon-port-pack` carries
+    `yungsapi:yung_jigsaw` structures and `yungsapi:yung_single_element` pool elements as the
+    mods write them (`yung.rs`), and the game draws from their pools the way YUNG's API does:
+    `is_priority` entries first, then weighted picks, an element's `name` capped at its
+    `max_count` (the start not counted), `min_required_depth`, and `ignore_bounds` placing
+    without the free-space test. What it does not run yet is counted by name in the carry
+    report: a structure's `adapt_noise`, `max_y`, `min_y` and `enhanced_terrain_adaptation`, and
+    an element's `condition`, `enhanced_terrain_adaptation` and `modifiers`. YUNG's other
+    structure, placement and processor types are left to the general code, which lists them as
+    unsupported or drops them: nothing writes the `horizon:yungsapi` and `horizon:disables`
+    keys any more, and no YUNG placement becomes a `horizon:` key.
   - **Repurposed Structures' and Moog's own assembler** (#850 in the game, #851 in carry). Both
     lay out their jigsaws with `PieceLimitedJigsawManager`, not vanilla's. Their structures, the
     Nether variants too, get `horizon:piece_limited`: `y_allowance`, burying, the pools whose
@@ -795,14 +768,13 @@ Two cases the oracle fills in:
     structure's piece caps and required pieces from the mod's `*_pieces_spawn_counts` files.
     The game assembles them the mods' way and runs their post-layout steps (centring,
     burying, the Nether land search).
-  - **Enhanced terrain adaptation.** YUNG's API and MoogsStructureLib add a kernel of their
+  - **Enhanced terrain adaptation.** MoogsStructureLib adds a kernel of its
     own to the Beardifier: its own size and falloff, carving or burying above and below each
     piece's floor. Carry writes it as `horizon:enhanced_terrain_adaptation` on the structure
     and on pool elements with their own (docs/modding/src/how-to/content-mods.md), and the game sums it after vanilla's
-    terrain density. In seed 1234's terrain before structures are placed, Better Fortresses'
-    pieces held 39 to 41 % netherrack and now 3 to 7 %, the mod's open bridges; Moog's mega
-    fortress band 45 % and now 30 %; Better Strongholds' pieces, buried, go from 92 to 97 %
-    solid to 99 %, closing the caves that cut through them.
+    terrain density. In seed 1234's terrain before structures are placed, Moog's mega
+    fortress band held 45 % netherrack and now 30 %. YUNG's API has a kernel too, which carry
+    does not write: it is counted as lost in the carry report (see YUNG's API above).
 
 
   Each mod's `carry-report.json` lists what was mapped, the rules and processors lost by name,
