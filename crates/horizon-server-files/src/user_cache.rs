@@ -110,10 +110,23 @@ impl UserCache {
     fn safe_add(&mut self, mut info: Info) -> usize {
         self.operations += 1;
         info.last_access = self.operations;
-        let index = self.infos.len();
-        self.by_name.insert(info.user.name.to_lowercase(), index);
-        self.by_uuid.insert(info.user.id, index);
-        self.infos.push(info);
+        // The same player under the same name: their slot is reused, as vanilla's maps drop the
+        // old object, so a rejoin is not a new entry for good. A renamed player gets a new entry
+        // and the old name keeps finding the old one until it expires, as in vanilla's safeAdd.
+        let name = info.user.name.to_lowercase();
+        let index = match self.by_uuid.get(&info.user.id) {
+            Some(&i) if self.infos[i].user.name.to_lowercase() == name => {
+                self.infos[i] = info;
+                i
+            }
+            _ => {
+                self.infos.push(info);
+                self.infos.len() - 1
+            }
+        };
+        self.by_name
+            .insert(self.infos[index].user.name.to_lowercase(), index);
+        self.by_uuid.insert(self.infos[index].user.id, index);
         index
     }
 
@@ -245,6 +258,33 @@ mod tests {
         let file = dir.join("usercache.json");
         std::fs::write(&file, text).unwrap();
         UserCache::load(file)
+    }
+
+    #[test]
+    fn the_same_player_joining_again_takes_no_new_entry() {
+        let (mut c, _) = cache("[]");
+        let kim = |name: &str| NameAndId {
+            id: 7,
+            name: name.into(),
+        };
+        for _ in 0..100 {
+            c.add_internal(kim("Kim"), 0);
+        }
+        assert_eq!(c.infos.len(), 1);
+        // Renamed, as vanilla's safeAdd: the new name and the id find the new entry, and the old
+        // name still finds the old one (until it expires).
+        c.add_internal(kim("Kimberly"), 0);
+        assert_eq!(c.infos.len(), 2);
+        let name_at =
+            |c: &UserCache, n: &str| c.by_name.get(n).map(|&i| c.infos[i].user.name.clone());
+        assert_eq!(name_at(&c, "kim").as_deref(), Some("Kim"));
+        assert_eq!(name_at(&c, "kimberly").as_deref(), Some("Kimberly"));
+        assert_eq!(c.by_uuid.get(&7), Some(&1));
+        // Rejoining under the new name takes no new entry either.
+        for _ in 0..10 {
+            c.add_internal(kim("Kimberly"), 0);
+        }
+        assert_eq!(c.infos.len(), 2);
     }
 
     #[test]
