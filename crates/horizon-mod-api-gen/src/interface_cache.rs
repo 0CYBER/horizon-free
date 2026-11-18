@@ -20,9 +20,11 @@ pub(crate) fn with_cache<T>(
 ) -> Result<T, String> {
     // A new generator executable invalidates all summaries, including after parser upgrades.
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let identity = Sha256::digest(fs::read(executable).map_err(|e| e.to_string())?);
+    let identity = Sha256::digest(
+        fs::read(&executable).map_err(|e| format!("{}: {e}", executable.display()))?,
+    );
     let directory = out.join(format!("interfaces-{identity:x}"));
-    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&directory).map_err(|e| format!("{}: {e}", directory.display()))?;
     struct Reset(Option<PathBuf>);
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -56,7 +58,7 @@ pub(crate) fn parse(path: &Path, source: &str) -> Result<syn::File, String> {
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(format!("{}: {error}", cached.display())),
     }
     let mut file = syn::parse_file(source).map_err(|e| format!("{}: {e}", path.display()))?;
     struct Signatures;

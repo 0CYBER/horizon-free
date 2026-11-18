@@ -69,6 +69,39 @@ def needs_tooling(changes):
     )
 
 
+# What the mod point check (tools/check_mod_points_unchanged.py, verify's `mod points` part) reads: the game module and
+# the generator's crates, the check itself, and what decides the set of crates it walks (manifests and the lockfile; the
+# unknown-change stand-in is Cargo.lock). The generator also reads every `#[replaceable]` function in a lower crate, so a
+# changed Rust file under crates/ that mentions the attribute, before or after, counts too (mentions_replaceable).
+MOD_POINT_PREFIXES = ("crates/horizon-client/src/game/", "crates/horizon-mod-")
+MOD_POINT_FILES = {"crates/horizon-client/src/game.rs", "tools/check_mod_points_unchanged.py", "Cargo.lock",
+                   ".github/workflows/ci.yml", "tools/ci/rust_changes.py"}
+PATHS_PER_GREP = 200
+
+
+def mentions_replaceable(base, head, paths):
+    """Whether any of the Rust files `paths` has the word `replaceable` in `base` or in `head`. Fail closed: a git
+    error counts as a mention."""
+    for start in range(0, len(paths), PATHS_PER_GREP):
+        chunk = paths[start:start + PATHS_PER_GREP]
+        for revision in (base, head):
+            found = subprocess.run(["git", "grep", "-q", "-e", "replaceable", revision, "--", *chunk],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if found.returncode != 1:
+                return True
+    return False
+
+
+def needs_mod_points(paths, mentions=lambda rust_files: False):
+    """Whether a change can alter the mod point catalog or the generated mod API. `mentions` answers for the changed
+    Rust files under crates/ that no listed path already covers."""
+    if any(path.startswith(MOD_POINT_PREFIXES) and not path.endswith(".md") or path in MOD_POINT_FILES
+           or path.startswith("crates/") and path.endswith("Cargo.toml") or path == "Cargo.toml" for path in paths):
+        return True
+    rust_files = [path for path in paths if path.startswith("crates/") and path.endswith(".rs")]
+    return bool(rust_files) and mentions(rust_files)
+
+
 def selections(changes):
     paths = [path for _, path in changes]
     return {"rust_required": needs_rust(paths),
@@ -114,3 +147,6 @@ if __name__ == "__main__":
         needs = needs_launcher if args.launcher else needs_rust
         print(f"required={str(needs(paths)).lower()}")
         print(f"server_build={str(needs_server_build(paths)).lower()}")
+        if not args.launcher:
+            mod_points = needs_mod_points(paths, lambda files: mentions_replaceable(args.base, args.head, files))
+            print(f"mod_points={str(mod_points).lower()}")

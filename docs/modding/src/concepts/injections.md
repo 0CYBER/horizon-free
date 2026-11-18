@@ -36,6 +36,8 @@ enabled mod, native or wasm, declares an `[[inject]]` row. Each point is a repla
 engine function with an API record: its head loads one replacement cell, and the
 dispatcher for a listened point is installed through that cell.
 
+Points exist for the eligible functions in `horizon-client`'s `game/` module (the methods of `Game` and its other functions and types) and for functions marked `#[horizon_mod_api_macros::replaceable]` in the crates below it. Moving code out of `game/` into a lower crate removes its points, and the removal is listed in `tools/mod_points_removed.txt`. A mod that needs a moved function asks for `#[replaceable]` on it in an issue. A Wasm mod with `[[inject]]` rows is built against the whole point catalog: its point layout must equal the game's (`POINT_LAYOUT`), and any point added or removed anywhere, as most changes to `game/` do, changes that layout (so can a change to a point's host, record or return handling; a changed signature alone may not). Rebuild such a mod for each new game build, not only when a point it names changed.
+
 ## Ordering
 
 Head cancellation skips the body and return point, but every head listener runs and may clear cancellation. Return listeners run only after the body. Replacement listeners run after other API listeners; otherwise priority descends, then dependency registration order, with inject ID breaking ties within a mod. Only one replacement may own a point; disabling it restores the original body. Calling the replaced function from its replacement re-enters the point, not the original body.

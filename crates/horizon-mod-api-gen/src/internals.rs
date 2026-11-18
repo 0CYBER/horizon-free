@@ -407,8 +407,11 @@ struct Shapes {
 impl Shapes {
     fn new(root: &Path) -> Result<Self, String> {
         let mut roots = BTreeMap::new();
-        for package in fs::read_dir(root.join("crates")).map_err(|e| e.to_string())? {
-            let package = package.map_err(|e| e.to_string())?.path();
+        let crates = root.join("crates");
+        for package in fs::read_dir(&crates).map_err(|e| format!("{}: {e}", crates.display()))? {
+            let package = package
+                .map_err(|e| format!("{}: {e}", crates.display()))?
+                .path();
             let Some(name) = package.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
@@ -419,8 +422,11 @@ impl Shapes {
             if !lib.is_file() {
                 continue;
             }
-            let text = fs::read_to_string(package.join("Cargo.toml")).map_err(|e| e.to_string())?;
-            let manifest: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
+            let manifest_path = package.join("Cargo.toml");
+            let text = fs::read_to_string(&manifest_path)
+                .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+            let manifest: toml::Value =
+                toml::from_str(&text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
             let name = manifest
                 .get("lib")
                 .and_then(|lib| lib.get("name"))
@@ -1313,8 +1319,10 @@ impl Pass {
             .map(|entry| entry.path.clone())
             .collect();
         let manifest = root.join("crates/horizon-client/Cargo.toml");
-        let text = fs::read_to_string(&manifest).map_err(|e| e.to_string())?;
-        let manifest: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
+        let text =
+            fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+        let manifest: toml::Value =
+            toml::from_str(&text).map_err(|e| format!("{}: {e}", manifest.display()))?;
         // The table lives in the game crate. A transitive or optional dependency's name is
         // not available in every game build, even if an unconditional layout was discovered.
         let dependencies: BTreeSet<String> = manifest

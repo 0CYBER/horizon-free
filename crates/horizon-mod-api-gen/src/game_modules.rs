@@ -34,19 +34,20 @@ pub(crate) fn expand(path: &Path, source: &str) -> Result<String, String> {
                     let directory = path.parent().ok_or("LAN actions source has no parent")?;
                     horizon_game_discovery::lan_action_modules(
                         directory,
-                        Catalog::modules(directory).map_err(|e| e.to_string())?,
+                        Catalog::modules(directory)
+                            .map_err(|e| format!("{}: {e}", directory.display()))?,
                     )?
                 }
                 HOST => crate::build::game_host_modules(
                     path.canonicalize()
-                        .map_err(|e| e.to_string())?
+                        .map_err(|e| format!("{}: {e}", path.display()))?
                         .ancestors()
                         .nth(6)
                         .ok_or("game host source outside the game tree")?,
                 )?,
                 NATIVE => horizon_game_discovery::native_hook_modules(
                     path.canonicalize()
-                        .map_err(|e| e.to_string())?
+                        .map_err(|e| format!("{}: {e}", path.display()))?
                         .ancestors()
                         .nth(6)
                         .ok_or("native hook source outside the game tree")?,
@@ -59,7 +60,7 @@ pub(crate) fn expand(path: &Path, source: &str) -> Result<String, String> {
                 .parent()
                 .ok_or("game source has no parent")?
                 .canonicalize()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("{}: {e}", path.display()))?;
             let mut declarations = syn::parse_file(&declarations).map_err(|e| e.to_string())?;
             for item in &mut declarations.items {
                 let syn::Item::Mod(item) = item else { continue };

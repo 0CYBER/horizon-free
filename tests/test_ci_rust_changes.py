@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from tools.ci.rust_changes import (
-    UNKNOWN_CHANGE, changed_entries, changed_paths, needs_launcher, needs_rust, needs_server_build, needs_tooling,
+    UNKNOWN_CHANGE, changed_entries, changed_paths, mentions_replaceable, needs_launcher, needs_mod_points, needs_rust, needs_server_build, needs_tooling,
     selections,
 )
 
@@ -180,6 +180,54 @@ class RustChangesTests(unittest.TestCase):
             self.assertEqual(paths, [UNKNOWN_CHANGE])
             self.assertTrue(needs_rust(paths))
             self.assertTrue(needs_launcher(paths))
+
+
+class ModPointSelectionTests(unittest.TestCase):
+    def test_the_game_the_generator_and_the_check_select_it(self):
+        for path in ["crates/horizon-client/src/game/tick.rs", "crates/horizon-client/src/game.rs",
+                     "crates/horizon-mod-api-gen/src/points.rs", "crates/horizon-mod-api-macros/src/lib.rs",
+                     "tools/check_mod_points_unchanged.py", "crates/horizon-world/Cargo.toml", "Cargo.lock",
+                     UNKNOWN_CHANGE, ".github/workflows/ci.yml"]:
+            with self.subTest(path=path):
+                self.assertTrue(needs_mod_points(["README.md", path]))
+
+    def test_documentation_and_unrelated_changes_do_not(self):
+        for path in ["docs/layers.md", "crates/horizon-mod-api/README.md", "tools/parity.py", "launcher/src/main.rs",
+                     "crates/horizon-world/README.md"]:
+            with self.subTest(path=path):
+                self.assertFalse(needs_mod_points([path]))
+        self.assertFalse(needs_mod_points([]))
+
+    def test_a_lower_crate_file_counts_only_when_it_mentions_replaceable(self):
+        self.assertFalse(needs_mod_points(["crates/horizon-world/src/lib.rs"]))
+        self.assertTrue(needs_mod_points(["crates/horizon-world/src/lib.rs"], lambda files: True))
+        self.assertFalse(needs_mod_points(["docs/a.md"], lambda files: True))
+
+    def test_replaceable_is_looked_for_before_and_after_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def git(*args):
+                return subprocess.check_output(["git", "-C", directory, *args]).decode().strip()
+
+            git("init", "--quiet")
+            Path(directory, "a.rs").write_text("#[horizon_mod_api_macros::replaceable]\npub fn a() {}\n")
+            Path(directory, "b.rs").write_text("pub fn b() {}\n")
+            git("add", ".")
+            commit = ["-c", "user.name=CI test", "-c", "user.email=ci@example.invalid",
+                      "-c", "commit.gpgsign=false", "commit", "--quiet", "-m"]
+            git(*commit, "base")
+            base = git("rev-parse", "HEAD")
+            Path(directory, "a.rs").write_text("pub fn a() {}\n")
+            git("add", ".")
+            git(*commit, "head")
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                # The attribute was removed: only the base has the word.
+                self.assertTrue(mentions_replaceable(base, "HEAD", ["a.rs"]))
+                self.assertFalse(mentions_replaceable(base, "HEAD", ["b.rs"]))
+                self.assertTrue(mentions_replaceable("no-such-revision", "HEAD", ["b.rs"]))
+            finally:
+                os.chdir(previous)
 
 
 if __name__ == "__main__":

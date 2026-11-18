@@ -402,8 +402,76 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR || 'target' }}/cargo-timings/cargo-timing-*.html
           if-no-files-found: warn
           retention-days: 30
+  # docs/layers.md#mod-points-stay-put: every eligible `Game` method is a mod injection point, so a change to `Game`'s
+  # source or to the generator must leave the point catalog and the generated API as they were. A point's name,
+  # target and signature are part of the mod API: a removed or changed point or any other change to the generated API
+  # fails, and a new hook adds points and passes (--allow-added). It builds horizon-mod-api-gen's hook_snapshot example
+  # for the pull request's tree (the merge commit) and for HEAD^1 (main, as in verify-tree): the generator's few
+  # crates and their dependencies, not the game. A pull request runs it when tools/ci/rust_changes.py says its change
+  # can reach the points (`mod_points`: the game module, the generator's crates, the check, manifests, or a Rust file
+  # that mentions `replaceable` before or after); the rest skip the setup and the check.
+  # It is its own job beside verify-test, with a build folder of its own, so it adds no time to the slowest job (as a
+  # step of verify-test it came after the tests and added ~2.5 min to every pull request that touches game/). Like
+  # verify-test it runs on every event, because only main's pushes and the merge queue save a build folder's disk:
+  # there it only warms the folder (below), and pull requests compare. It needs the history for HEAD^1, so the
+  # checkout is whole, as the other parts'.
+  verify-mod-points:
+    name: verify (mod points)
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          # Nothing later pushes, and the pull request's code runs from here on: it needs no token.
+          persist-credentials: false
+      - name: Does this pull request change the mod points?
+        if: github.event_name == 'pull_request'
+        id: rust
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Our runners as GitHub's (a default Rust toolchain)
+        if: steps.rust.outputs.mod_points != 'false'
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
+        if: steps.rust.outputs.mod_points != 'false'
+        env:
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
+        run: |
+          if [ "$HOSTED" = true ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev mold
+          fi
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Mount the build folder
+        if: steps.rust.outputs.mod_points != 'false' && startsWith(runner.name, 'blacksmith-')
+        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+        with:
+          key: ${{ github.repository }}-verify-mod-points-own
+          path: ~/horizon-target
+          commit: ${{ env.SAVE_BUILD_DISK }}
+      - name: Build in it, rebuilding only what changed
+        if: steps.rust.outputs.mod_points != 'false' && startsWith(runner.name, 'blacksmith-')
+        run: tools/ci/build_folder.sh ~/horizon-target
+      # The same mold flags as verify-test's.
+      - name: Link with mold
+        if: steps.rust.outputs.mod_points != 'false' && startsWith(runner.name, 'blacksmith-')
+        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold -Zthreads=8" >> "$GITHUB_ENV"
+      # On main's pushes and in the merge queue, where the build folder's disk is saved (SAVE_BUILD_DISK), the job only
+      # builds what the check builds: the same cargo package, example, profile and features, in this folder, so a pull
+      # request's run finds the generator's crates and dependencies built. A pull request does the comparison.
+      - name: Warm the build folder with the generator
+        if: github.event_name != 'pull_request'
+        run: cargo build --locked -p horizon-mod-api-gen --example hook_snapshot
+      - name: Mod points and the generated API stay as they were
+        if: github.event_name == 'pull_request' && steps.rust.outputs.mod_points != 'false'
+        run: python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added
   verify:
-    needs: [verify-tree, verify-lint, verify-server, verify-launcher, verify-test]
+    needs: [verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-points]
     if: always()
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
@@ -415,9 +483,10 @@ jobs:
           SERVER: ${{ needs.verify-server.result }}
           LAUNCHER: ${{ needs.verify-launcher.result }}
           TEST: ${{ needs.verify-test.result }}
+          MODPOINTS: ${{ needs.verify-mod-points.result }}
         run: |
-          echo "tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST"
-          for result in "$TREE" "$LINT" "$SERVER" "$LAUNCHER" "$TEST"; do
+          echo "tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST, mod points: $MODPOINTS"
+          for result in "$TREE" "$LINT" "$SERVER" "$LAUNCHER" "$TEST" "$MODPOINTS"; do
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only

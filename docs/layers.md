@@ -599,6 +599,34 @@ left.
 `python3 tools/check_addresses.py` (horizon-rust/horizon#12990) checks the built-in addresses
 ([below](#built-in-addresses)); it runs in CI's verify job and in `tools/pr_ready.py` too.
 
+### Mod points stay put
+
+Every function under `horizon_client::game::` that the point generator admits is a mod injection point: the `&self` and
+`&mut self` methods of `Game`, its free functions and the methods of its other types. So is each function marked
+`#[horizon_mod_api_macros::replaceable]` in a lower crate. A point's name, module path and signature are part of the
+mod API ([agent rules](mod-api/agent-rules.md), rule 7), and a mod's `[[inject]]` row names it by that path and a hash
+of its signature.
+
+When you move code out of `impl Game` into a lower crate, a `Game` method keeps its name, module path and signature,
+and only its body changes to call the new function. No wrapper is needed for the other functions: moving one out of
+`game/` removes its point, and callers inside the new crate would skip a wrapper anyway, so its hooks would stop firing
+without a sign. List each removed point in `tools/mod_points_removed.txt` (`name | #PR | reason`). A mod that needs a
+moved function asks for `#[replaceable]` on it in the lower crate, which keeps its point.
+
+`python3 tools/check_mod_points_unchanged.py` checks this. It runs the `hook_snapshot` example of
+`horizon-mod-api-gen` on the base (the merge base with `origin/main`, in a temporary worktree) and on your tree, and
+prints how many points were added, removed (accepted and failing) and changed. It fails when:
+
+- a point is removed and is not listed in `tools/mod_points_removed.txt`, is a `Game` method or a published loop, or is
+  named by a fixture (`tools/ci/fn-replace-check`, the wasm host's), a doc or a mod manifest;
+- a point changes (same name, new target or signature hash) and is not listed in that file;
+- the generated API differs with no accepted point change behind it, or `loops.json` or `internals.json` differs at all.
+
+CI runs it, with `--allow-added`, on a pull request that can reach the points: a change to `crates/horizon-client/src/game/`
+or `game.rs`, to the generator's crates (`crates/horizon-mod-*`), to the check itself, to a `Cargo.toml` or `Cargo.lock`,
+or to a Rust file under `crates/` that mentions `replaceable` before or after (`needs_mod_points` in
+`tools/ci/rust_changes.py`). A new hook on purpose adds points and passes with that flag.
+
 ### Today's exceptions
 
 The current dependency inventory is in `tools/layers.json`, with fork-specific classifications and reasons in

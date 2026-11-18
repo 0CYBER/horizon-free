@@ -1,0 +1,315 @@
+import contextlib
+import io
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from tools import check_mod_points_unchanged as gate
+
+
+def point(name, target=None, hash_="aa", **extra):
+    return {"name": name, "target": target or f"game::{name}", "signature_hash": hash_, **extra}
+
+
+class Snapshots:
+    """Two snapshot folders in a temporary folder, filled from points and file maps."""
+
+    def __init__(self, test):
+        self.tmp = tempfile.TemporaryDirectory()
+        test.addCleanup(self.tmp.cleanup)
+        self.base, self.head = Path(self.tmp.name, "base"), Path(self.tmp.name, "head")
+
+    def write(self, folder, points, files=None):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "points.json").write_text(json.dumps(points))
+        for name, text in (files or {}).items():
+            (folder / name).parent.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_text(text)
+
+    def run(self, base, head, base_files=None, head_files=None, **kwargs):
+        self.write(self.base, base, base_files)
+        self.write(self.head, head, head_files)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = gate.compare(self.base, self.head, **kwargs)
+        return status, out.getvalue()
+
+
+class DiffPointsTests(unittest.TestCase):
+    def test_added_removed_and_changed(self):
+        base = {"a": point("a"), "b": point("b"), "c": point("c", hash_="01")}
+        head = {"a": point("a"), "c": point("c", hash_="02"), "d": point("d")}
+        added, removed, changed = gate.diff_points(base, head)
+        self.assertEqual(added, ["d"])
+        self.assertEqual(removed, ["b"])
+        self.assertEqual(changed, [("c", {"signature_hash": ("01", "02")})])
+
+    def test_equal_catalogs(self):
+        both = {"a": point("a", args=[["x", "i32"]])}
+        self.assertEqual(gate.diff_points(both, dict(both)), ([], [], []))
+
+    def test_a_moved_target_is_a_change(self):
+        _, _, changed = gate.diff_points({"a": point("a", "game::old::a")}, {"a": point("a", "game::new::a")})
+        self.assertEqual(changed, [("a", {"target": ("game::old::a", "game::new::a")})])
+
+    def test_duplicate_names_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "points.json")
+            path.write_text(json.dumps([point("a"), point("a")]))
+            with self.assertRaises(ValueError):
+                gate.load_points(path)
+
+
+GAME = "horizon_client::game::Game<'_>::"
+FREE = "horizon_client::game::helpers::"
+
+
+class ClassifyTests(unittest.TestCase):
+    def classify(self, removed, base, accepted=None, loops=(), files=None, changed=()):
+        return gate.classify(removed, list(changed), base, accepted or {}, None if loops is None else set(loops), files or {})
+
+    def test_a_listed_free_function_is_accepted(self):
+        base = {"helper": point("helper", FREE + "helper")}
+        ok, bad, _, _ = self.classify(["helper"], base, {"helper": ("#1", "moved to gameplay")})
+        self.assertEqual((ok, bad), ({"helper": ("#1", "moved to gameplay")}, {}))
+
+    def test_an_unlisted_removal_fails(self):
+        base = {"helper": point("helper", FREE + "helper")}
+        _, bad, _, _ = self.classify(["helper"], base)
+        self.assertIn("not listed", bad["helper"])
+
+    def test_a_game_method_fails_even_when_listed(self):
+        for target in (GAME + "tick", "horizon_client::game::Game::tick"):
+            base = {"tick": point("tick", target)}
+            _, bad, _, _ = self.classify(["tick"], base, {"tick": ("#1", "x")})
+            self.assertIn("`Game` method", bad["tick"])
+
+    def test_a_type_that_only_starts_with_game_is_not_game(self):
+        self.assertFalse(gate.is_game_method("horizon_client::game::GameRules::tick"))
+
+    def test_a_loop_fails_even_when_listed(self):
+        base = {"tick": point("tick", FREE + "tick_things")}
+        _, bad, _, _ = self.classify(["tick"], base, {"tick": ("#1", "x")}, loops={gate.normalized(FREE + "tick_things")})
+        self.assertIn("published loop", bad["tick"])
+
+    def test_unknown_base_loops_fail_every_removal(self):
+        base = {"helper": point("helper", FREE + "helper")}
+        _, bad, _, _ = self.classify(["helper"], base, {"helper": ("#1", "x")}, loops=None)
+        self.assertIn("no loops.json", bad["helper"])
+
+    def test_a_longer_path_is_not_a_mention_of_the_target(self):
+        base = {"helper": point("helper", FREE + "helper")}
+        ok, bad, _, _ = self.classify(["helper"], base, {"helper": ("#1", "x")},
+                                      files={"docs/x.md": f"see {FREE}helper_two"})
+        self.assertEqual((list(ok), bad), (["helper"], {}))
+        _, bad, _, _ = self.classify(["helper"], base, {"helper": ("#1", "x")}, files={"docs/x.md": f"see {FREE}helper."})
+        self.assertIn("named in docs/x.md", bad["helper"])
+
+    def test_a_fixture_doc_or_manifest_that_names_it_fails(self):
+        base = {"helper_point": point("helper_point", FREE + "helper")}
+        for text in ("listen at helper_point here", f"target = \"{FREE}helper\""):
+            _, bad, _, _ = self.classify(["helper_point"], base, {"helper_point": ("#1", "x")},
+                                         files={"docs/x.md": text})
+            self.assertIn("named in docs/x.md", bad["helper_point"])
+
+    def test_a_longer_name_is_not_a_mention(self):
+        base = {"helper": point("helper", FREE + "helper")}
+        ok, bad, _, _ = self.classify(["helper"], base, {"helper": ("#1", "x")},
+                                      files={"docs/x.md": "the helper_two point and other::helper"})
+        self.assertEqual((list(ok), bad), (["helper"], {}))
+
+    def test_a_changed_point_passes_only_when_listed(self):
+        fields = {"signature_hash": ("01", "02")}
+        _, _, ok, bad = self.classify([], {}, {"a": ("#2", "arg renamed")}, changed=[("a", fields), ("b", fields)])
+        self.assertEqual((list(ok), list(bad)), (["a"], ["b"]))
+
+
+class AcceptedFileTests(unittest.TestCase):
+    def read(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "list.txt")
+            path.write_text(text)
+            return gate.load_accepted(path)
+
+    def test_lines_and_comments(self):
+        got = self.read("# header\n\nhelper | #18198 | moved to gameplay\nother|#2|why | with a bar\n")
+        self.assertEqual(got, {"helper": ("#18198", "moved to gameplay"), "other": ("#2", "why | with a bar")})
+
+    def test_a_line_without_reason_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.read("helper | #1\n")
+
+    def test_the_checked_in_file_parses(self):
+        self.assertIsInstance(gate.load_accepted(gate.ROOT / gate.LIST), dict)
+
+
+class VerdictTests(unittest.TestCase):
+    def verdict(self, added=(), removed_bad=None, changed_bad=None, files_added=(), files_removed=(), diffs=(),
+                explained=False, allow_added=False):
+        return gate.verdict(list(added), removed_bad or {}, changed_bad or {}, list(files_added), list(files_removed),
+                            list(diffs), explained, allow_added)
+
+    def test_no_difference_passes(self):
+        self.assertEqual(self.verdict(), 0)
+
+    def test_a_generated_diff_needs_an_accepted_point_change(self):
+        self.assertEqual(self.verdict(diffs=[("lib.rs", ["-x"])]), 1)
+        self.assertEqual(self.verdict(diffs=[("lib.rs", ["-x"])], explained=True), 0)
+
+    def test_added_points_need_the_flag(self):
+        self.assertEqual(self.verdict(added=["a"]), 1)
+        self.assertEqual(self.verdict(added=["a"], diffs=[("lib.rs", ["+x"])], explained=True, allow_added=True), 0)
+
+    def test_failures_always_fail(self):
+        self.assertEqual(self.verdict(removed_bad={"a": "x"}, explained=True, allow_added=True), 1)
+        self.assertEqual(self.verdict(changed_bad={"a": "x"}, explained=True, allow_added=True), 1)
+
+    def test_a_strict_file_the_head_dropped_fails_even_when_explained(self):
+        self.assertEqual(self.verdict(files_removed=["internals.json"], explained=True, allow_added=True), 1)
+
+    def test_loops_and_internals_are_strict(self):
+        self.assertEqual(self.verdict(diffs=[("loops.json", ["-x"])], explained=True), 1)
+        self.assertEqual(self.verdict(diffs=[("internals.json", ["-x"])], explained=True), 1)
+
+
+NO_LOOPS = json.dumps({"loops": []})
+
+
+class CompareTests(unittest.TestCase):
+    def run_compare(self, base, head, base_files=None, head_files=None, accepted=None, files=None, **kwargs):
+        snaps = Snapshots(self)
+        return snaps.run(base, head, base_files, head_files, accepted=accepted or {},
+                         files=lambda: files or {}, **kwargs)
+
+    def test_same_output_passes_and_prints_counts(self):
+        status, text = self.run_compare([point("a")], [point("a")], {"api/lib.rs": "x"}, {"api/lib.rs": "x"})
+        self.assertEqual(status, 0)
+        self.assertIn("Mod points unchanged: 1 points", text)
+        self.assertIn("0 added, 0 removed (0 accepted, 0 failing), 0 changed (0 accepted, 0 failing)", text)
+
+    def test_unlisted_removal_fails_with_its_name_and_hash(self):
+        status, text = self.run_compare([point("a"), point("b", FREE + "b", hash_="beef")], [point("a")])
+        self.assertEqual(status, 1)
+        self.assertIn("Points removed and failing (1):", text)
+        self.assertIn("b  target " + FREE + "b  hash beef", text)
+        self.assertIn("1 removed (0 accepted, 1 failing)", text)
+
+    def test_listed_removal_passes_with_its_generated_diff(self):
+        status, text = self.run_compare([point("a"), point("b", FREE + "b")], [point("a")],
+                                        {"api.rs": "1", "loops.json": NO_LOOPS}, {"api.rs": "2", "loops.json": NO_LOOPS},
+                                        accepted={"b": ("#9", "moved")})
+        self.assertEqual(status, 0)
+        self.assertIn("Points removed and listed (accepted) (1):", text)
+        self.assertIn("1 removed (1 accepted, 0 failing)", text)
+
+    def test_a_removal_fails_when_the_base_wrote_no_loops_json(self):
+        status, text = self.run_compare([point("a"), point("b", FREE + "b")], [point("a")], {"api.rs": "1"},
+                                        {"api.rs": "2", "loops.json": NO_LOOPS}, accepted={"b": ("#9", "moved")})
+        self.assertEqual(status, 1)
+        self.assertIn("no loops.json", text)
+
+    def test_a_strict_file_the_head_dropped_fails_with_an_allowed_point(self):
+        status, text = self.run_compare([point("a")], [point("a"), point("b")], {"internals.json": "{}"}, {"x": "1"},
+                                        allow_added=True)
+        self.assertEqual(status, 1)
+        self.assertIn("have to match the base exactly", text)
+
+    def test_removed_game_method_fails_though_listed(self):
+        status, text = self.run_compare([point("a", GAME + "a")], [], accepted={"a": ("#9", "moved")})
+        self.assertEqual(status, 1)
+        self.assertIn("a `Game` method", text)
+
+    def test_removed_loop_entry_fails(self):
+        loops = json.dumps({"loops": [{"name": "x.tick", "entry": FREE + "tick", "generic": "tick_with",
+                                       "slot": "S", "side": "client"}]})
+        status, _ = self.run_compare([point("t", FREE + "tick")], [], {"loops.json": loops}, {"loops.json": loops},
+                                     accepted={"t": ("#9", "moved")})
+        self.assertEqual(status, 1)
+
+    def test_a_loops_json_difference_fails_even_with_an_accepted_removal(self):
+        status, _ = self.run_compare([point("b", FREE + "b")], [], {"loops.json": "{}"}, {"loops.json": "{ }"},
+                                     accepted={"b": ("#9", "moved")})
+        self.assertEqual(status, 1)
+
+    def test_a_strict_file_only_the_head_wrote_is_not_compared(self):
+        status, text = self.run_compare([point("a")], [point("a")], None, {"loops.json": "{}"})
+        self.assertEqual(status, 0)
+        self.assertIn("loops.json exists on one side only", text)
+
+    def test_changed_hash_is_shown_old_to_new_and_fails_unlisted(self):
+        status, text = self.run_compare([point("a", hash_="01")], [point("a", hash_="02")])
+        self.assertEqual(status, 1)
+        self.assertIn("signature_hash: 01 -> 02", text)
+
+    def test_listed_change_passes(self):
+        status, text = self.run_compare([point("a", hash_="01")], [point("a", hash_="02")],
+                                        accepted={"a": ("#3", "renamed argument")})
+        self.assertEqual(status, 0)
+        self.assertIn("1 changed (1 accepted, 0 failing)", text)
+
+    def test_file_diff_is_printed_and_capped(self):
+        old = "\n".join(f"line {i}" for i in range(500))
+        new = "\n".join(f"other {i}" for i in range(500))
+        status, text = self.run_compare([point("a")], [point("a")], {"catalog.json": old}, {"catalog.json": new})
+        self.assertEqual(status, 1)
+        self.assertIn("Generated files changed (1): catalog.json", text)
+        self.assertIn("more lines of catalog.json left out", text)
+        self.assertLess(len(text.splitlines()), gate.MAX_DIFF_LINES + 25)
+
+    def test_allow_added_passes_with_a_new_point_and_its_generated_code(self):
+        status, text = self.run_compare([point("a")], [point("a"), point("b")], {"api.rs": "1"}, {"api.rs": "2"},
+                                        allow_added=True)
+        self.assertEqual(status, 0)
+        self.assertIn("1 added, 0 removed", text)
+
+    def test_added_points_fail_without_the_flag(self):
+        status, text = self.run_compare([point("a")], [point("a"), point("b")])
+        self.assertEqual(status, 1)
+        self.assertIn("without --allow-added", text)
+
+    def test_generator_scratch_is_not_compared(self):
+        base = {"interfaces-aaa/1.cache": "x", "points-timing.txt": "a 1.00s\n", "api.rs": "1"}
+        head = {"interfaces-bbb/2.cache": "y", "interfaces-bbb/3.cache": "z", "points-timing.txt": "a 2.00s\n",
+                "api.rs": "1"}
+        status, text = self.run_compare([point("a")], [point("a")], base, head)
+        self.assertEqual(status, 0)
+        self.assertIn("Mod points unchanged", text)
+
+    def test_only_the_cache_folder_and_timing_file_are_scratch(self):
+        status, _ = self.run_compare([point("a")], [point("a")], {"api/points-timing.txt": "1"},
+                                     {"api/points-timing.txt": "2"})
+        self.assertEqual(status, 0)
+        status, _ = self.run_compare([point("a")], [point("a")], {"interfaces.rs": "1"}, {"interfaces.rs": "2"})
+        self.assertEqual(status, 1)
+
+    def test_source_folder_paths_do_not_count_as_a_difference(self):
+        status, _ = self.run_compare([point("a")], [point("a")], {"hook-notes.md": "see /tmp/base/x"},
+                                     {"hook-notes.md": "see /work/head/x"}, base_root="/tmp/base",
+                                     head_root="/work/head")
+        self.assertEqual(status, 0)
+
+    def test_summary_lists_are_capped(self):
+        head = {f"p{i:03}": point(f"p{i:03}") for i in range(100)}
+        lines = gate.summary(sorted(head), {}, {}, [], {}, [], [], [], {}, head)
+        self.assertIn("Points added (100):", lines[0])
+        self.assertIn(f"... and {100 - gate.MAX_LISTED} more", lines[-1])
+
+
+class RepoTextsTests(unittest.TestCase):
+    def test_a_failed_git_listing_is_an_error_not_an_empty_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                gate.repo_texts(tmp)
+
+
+class TargetFolderTests(unittest.TestCase):
+    def test_a_relative_folder_becomes_one_absolute_path(self):
+        for option, env in ((Path("target/mod-points"), None), (None, "target/x")):
+            self.assertTrue(gate.resolve_target(option, env).is_absolute())
+        self.assertEqual(gate.resolve_target(Path("a"), "b"), Path("a").resolve())
+        self.assertEqual(gate.resolve_target(None, None), (gate.ROOT / "target").resolve())
+
+
+if __name__ == "__main__":
+    unittest.main()
