@@ -66,9 +66,11 @@ impl CompressionPool {
         });
         for i in 0..workers {
             let worker_weak = Arc::downgrade(&inner);
-            let _ = std::thread::Builder::new()
-                .name(format!("horizon-save-compression-{i}"))
-                .spawn(move || worker_loop(worker_weak));
+            // `Record::tag()` can enter a wasm mod, which needs the guest stack.
+            let _ =
+                horizon_guest_stack::spawn(format!("horizon-save-compression-{i}"), move || {
+                    worker_loop(worker_weak)
+                });
         }
         Self { inner, workers }
     }
