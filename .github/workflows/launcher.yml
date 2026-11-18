@@ -262,11 +262,13 @@ jobs:
           "$launcher" links --json
           # The Intel Mac launcher can come out before any game build has its asset (#1161): then there is nothing
           # to install yet. Only that entry skips, and only on a version list that parsed and had no build here
-          # (exit 3); a launcher or a script that fails still fails the step. The Windows ARM64 launcher always has
+          # (exit 3); a launcher or a script that fails still fails the step. "Here" is what `install latest` takes:
+          # a release that isn't a pre-release (backend.rs, install_tag), so an older pre-release with an Intel
+          # build doesn't count. The Windows ARM64 launcher always has
           # one: it installs the x64 build where a release has no ARM64 one (backend.rs, GAME_FALLBACK).
           if [[ "${{ matrix.name }}" == macos-x64 ]]; then
             versions=$(retry "$launcher" --json versions)
-            no_build='import json, sys; sys.exit(3 if not any(r["available_here"] for r in json.load(sys.stdin)) else 0)'
+            no_build='import json, sys; sys.exit(3 if not any(r["available_here"] and not r["prerelease"] for r in json.load(sys.stdin)) else 0)'
             status=0
             python3 -c "$no_build" <<<"$versions" || status=$?
             if [[ $status == 3 ]]; then

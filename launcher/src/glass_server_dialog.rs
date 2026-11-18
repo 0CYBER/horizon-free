@@ -920,7 +920,9 @@ mod tests {
 /// single word per line, and its wrap stretched the foot past the dialog's body. These bounds
 /// come from GPUI's own layout on its test platform (no GPU, no real window); NoopTextSystem
 /// gives every character the same advance, so they are exact on any machine.
-#[cfg(test)]
+// Debug builds only: gpui-fast records `debug_selector` bounds only with debug assertions, and the
+// release workflow runs `cargo test --release` (launcher.yml), where every lookup is None.
+#[cfg(all(test, debug_assertions))]
 mod foot_layout {
     use super::*;
     use gpui::TestAppContext;
