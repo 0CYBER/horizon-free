@@ -361,9 +361,10 @@ jobs:
       # The mold linker, Blacksmith's runners only (installed above): linking the test binaries was a large part of this
       # job. Rust uses its own lld on x86_64 Linux by default; -linker-features=-lld turns that off so mold's
       # -fuse-ld applies. The same on every event, so the build folder's artifacts match between main and pull requests.
+      # The variable replaces .cargo/config.toml's rustflags, so it repeats the parallel front end (-Zthreads=8).
       - name: Link with mold
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
-        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold -Zthreads=8" >> "$GITHUB_ENV"
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
       # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on

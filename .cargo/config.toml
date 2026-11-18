@@ -5,3 +5,15 @@ xtask = "run --package xtask --"
 # Portable fast rebuild. The native release build is tools/build-runtime.sh,
 # because a cargo alias cannot set RUSTFLAGS.
 dev = "build --locked --profile fast -p horizon-game -p horizon-prepare"
+
+# rustc's parallel front end: one crate's type checking and borrow checking spread over 8 threads.
+# horizon-client is one large crate, and its front end ran on one core: on an M1 Pro, clippy on it
+# from scratch took 30 s (lib) and 63 s (unit tests) with one thread, 10 s and 23 s with eight.
+# The flag is unstable, so the stable compiler accepts it only with RUSTC_BOOTSTRAP. A RUSTFLAGS
+# variable replaces these flags: the release builds set their own (game-build.yml, launcher.yml,
+# tools/build-runtime.sh) and so build without it.
+[env]
+RUSTC_BOOTSTRAP = "1"
+
+[build]
+rustflags = ["-Zthreads=8"]
