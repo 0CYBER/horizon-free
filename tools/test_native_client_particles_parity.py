@@ -24,6 +24,7 @@ SOURCES = [
     'crates/horizon-client/src/game.rs',
     'crates/horizon-client/src/game/modding/native_client_particles.rs',
     'crates/horizon-client/src/game/modding/native_client_particles_fixture.rs',
+    'crates/horizon-client/src/game/runtime/loading_window.rs',  # Starts the fixture in the World phase.
     'crates/horizon-client-render/src/particles.rs',
     'tools/test_native_client_particles_parity.py',
 ]
