@@ -97,6 +97,15 @@ pub fn what(file: &Path) -> Result<Dropped, String> {
         // A build for Linux or macOS is named `horizon-client` with no
         // extension, so a file nothing else claims is read before giving up.
         _ if is_build(file) => return Ok(Dropped::Build),
+        // Native mods in the retired format (#17934), e.g. Zoom 2.0.0 downloaded by hand. Without
+        // this, players read the generic list below as "the launcher can't take mods at all".
+        // After the build check, which still takes a game build whatever its name.
+        Some("hnmod") => {
+            return Err(crate::i18n::trf(
+                "{name} is a native mod in the old .hnmod format, which this Horizon no longer loads. Install its current version from the Mods page, or ask its author to republish it as .hmod.",
+                &[("name", &name)],
+            ));
+        }
         _ => {
             let kinds = "a .mrpack, a .zip, a .hshader or a Horizon game build";
             return Err(format!("{name} can't be imported: drop {kinds}."));

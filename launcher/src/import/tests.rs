@@ -227,6 +227,22 @@ fn a_dropped_zip_reports_the_central_directory_limit() {
     }
 }
 
+/// A retired `.hnmod` dropped on the window says what it is and where its current version is,
+/// not the generic list of what can be dropped. Any letter case, without reading the file.
+#[test]
+fn a_dropped_hnmod_is_named_as_the_retired_format() {
+    let scratch = tempfile::tempdir().unwrap();
+    for name in ["zoom-2.0.0.hnmod", "Zoom.HNMOD"] {
+        let path = scratch.path().join(name);
+        fs::write(&path, b"not even a zip").unwrap();
+        let error = what(&path).unwrap_err();
+        assert!(error.starts_with(name), "{error}");
+        assert!(error.contains("old .hnmod format"), "{error}");
+        assert!(error.contains("Mods page"), "{error}");
+        assert!(!error.contains("can't be imported"), "{error}");
+    }
+}
+
 #[test]
 fn an_export_comes_back_as_an_instance_and_nothing_escapes_its_folder() {
     let dir = scratch("roundtrip");
