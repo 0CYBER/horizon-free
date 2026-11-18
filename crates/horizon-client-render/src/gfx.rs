@@ -1682,6 +1682,10 @@ pub struct Renderer {
     /// change. Empty-section tombstones remain until that section unloads so
     /// the static cache can remove deleted models without a global flush.
     block_entity_membership_revisions: FxHashMap<SectionKey, u64>,
+    /// Each section's block-entity marks (`visible_block_entities_in_frustum`) put together,
+    /// by the section's membership revision and the marks table they were worked out for.
+    /// A frame asks this of every section within 256 blocks, and the lists hardly change.
+    block_entity_marks: std::cell::RefCell<BlockEntityMarks>,
     /// When each section was first uploaded (`RenderSection.uploadedTime`): kept across meshing
     /// it again, gone with its column. Sections that fade in over far terrain are not in it.
     section_uploaded: FxHashMap<SectionKey, std::time::Instant>,
@@ -4519,6 +4523,7 @@ impl Renderer {
             block_entities: Default::default(),
             block_entity_section_revisions: Default::default(),
             block_entity_membership_revisions: Default::default(),
+            block_entity_marks: Default::default(),
             section_uploaded: Default::default(),
             newest_upload: None,
             newest_lod_fade: None,
@@ -5603,14 +5608,25 @@ impl Renderer {
     /// check in the game. Sections wholly inside the frustum skip that finer
     /// check; sections outside it are kept only when a renderer needs to draw
     /// geometry extending beyond its block (beacon beams, gateways, outlines).
+    ///
+    /// `marks` holds each state's flags: 1, drawn off screen (a section holding one is kept
+    /// wherever it is); 2, drawn as far as 256 blocks (a section holding one is kept that far).
+    /// States past its end have none. An empty or absent table keeps nothing for either.
+    /// The cache retains the immutable allocation, so editing with `Arc::make_mut` or replacing
+    /// the table always changes its identity; a dropped table's address cannot be reused.
     pub fn visible_block_entities_in_frustum<'a>(
         &'a self,
         fade_seconds: f32,
         camera: DVec3,
         frustum: Option<JoinedFrusta>,
-        keep_section: impl Fn(u32) -> bool + 'a,
-        keep_long_range: impl Fn(u32) -> bool + 'a,
+        marks: Option<&'a Arc<[u8]>>,
     ) -> impl Iterator<Item = (&'a ([i32; 3], u32), bool)> + 'a {
+        let section_count = self.block_entities.len();
+        let marks_cache = &self.block_entity_marks;
+        let revisions = &self.block_entity_membership_revisions;
+        let section_marks = move |key: &SectionKey, blocks: &[([i32; 3], u32)]| -> u8 {
+            cached_section_mark(marks_cache, revisions, section_count, key, blocks, marks)
+        };
         let fade = fade_millis(fade_seconds);
         let now = Instant::now();
         // No section uploaded within the fade: all are whole, none is looked up.
@@ -5633,8 +5649,7 @@ impl Renderer {
                 let max = min + Vec3::splat(18.0);
                 let distance_squared = Vec3::ZERO.max(min).min(max).length_squared();
                 let in_range = distance_squared <= 64.0 * 64.0
-                    || (distance_squared <= 256.0 * 256.0
-                        && blocks.iter().any(|(_, state)| keep_long_range(*state)));
+                    || (distance_squared <= 256.0 * 256.0 && section_marks(key, blocks) & 2 != 0);
                 if !in_range {
                     return None;
                 }
@@ -5642,7 +5657,7 @@ impl Renderer {
                     let fully_inside = view.contains(min, max);
                     (fully_inside || view.intersects(min, max), fully_inside)
                 });
-                (intersects || blocks.iter().any(|(_, state)| keep_section(*state)))
+                (intersects || section_marks(key, blocks) & 1 != 0)
                     .then_some((blocks, fully_inside))
             })
             .flat_map(|(blocks, fully_inside)| {
@@ -5708,6 +5723,7 @@ impl Renderer {
         self.block_entities.clear();
         self.block_entity_section_revisions.clear();
         self.block_entity_membership_revisions.clear();
+        self.block_entity_marks.borrow_mut().sections.clear();
         self.section_uploaded.clear();
         self.newest_upload = None;
         self.newest_lod_fade = None;
@@ -5947,6 +5963,7 @@ impl Renderer {
                 block_entities |= self.block_entities.remove(&key).is_some();
                 self.block_entity_section_revisions.remove(&key);
                 self.block_entity_membership_revisions.remove(&key);
+                self.block_entity_marks.borrow_mut().sections.remove(&key);
                 if self.light_blocks.remove(&key).is_some() {
                     self.light_revision += 1;
                 }
@@ -13788,5 +13805,243 @@ struct CancelOnDrop(std::sync::Arc<std::sync::atomic::AtomicBool>);
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// `Renderer::block_entity_marks`: the immutable marks table they were worked out for and each
+/// section's (membership revision, marks). Keeping the allocation alive prevents address reuse.
+#[derive(Default)]
+struct BlockEntityMarks {
+    table: Option<Arc<[u8]>>,
+    sections: FxHashMap<SectionKey, (u64, u8)>,
+}
+
+/// The OR of `marks` over `blocks`, remembered while `key`'s membership revision is unchanged.
+fn cached_section_mark(
+    cache: &std::cell::RefCell<BlockEntityMarks>,
+    revisions: &FxHashMap<SectionKey, u64>,
+    section_count: usize,
+    key: &SectionKey,
+    blocks: &[([i32; 3], u32)],
+    marks: Option<&Arc<[u8]>>,
+) -> u8 {
+    let Some(marks) = marks else {
+        return 0;
+    };
+    if marks.is_empty() {
+        return 0;
+    }
+    let worked = || {
+        blocks.iter().fold(0u8, |all, (_, state)| {
+            all | marks.get(*state as usize).copied().unwrap_or(0)
+        })
+    };
+    let Some(&revision) = revisions.get(key) else {
+        return worked();
+    };
+    let mut cache = cache.borrow_mut();
+    if !cache
+        .table
+        .as_ref()
+        .is_some_and(|table| Arc::ptr_eq(table, marks))
+        || cache.sections.len() > 2 * section_count + 64
+    {
+        cache.table = Some(marks.clone());
+        cache.sections.clear();
+    }
+    match cache.sections.get(key) {
+        Some(&(kept, mark)) if kept == revision => mark,
+        _ => {
+            let mark = worked();
+            cache.sections.insert(*key, (revision, mark));
+            mark
+        }
+    }
+}
+
+#[cfg(test)]
+mod block_entity_mark_tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn or_scan(blocks: &[([i32; 3], u32)], marks: &[u8]) -> u8 {
+        blocks.iter().fold(0u8, |all, (_, state)| {
+            all | marks.get(*state as usize).copied().unwrap_or(0)
+        })
+    }
+
+    #[test]
+    fn a_sections_marks_are_remembered_until_its_revision_changes() {
+        let cache = std::cell::RefCell::new(BlockEntityMarks::default());
+        let mut revisions = FxHashMap::default();
+        let key = (1, 2, 3);
+        revisions.insert(key, 7);
+        let marks: Arc<[u8]> = Arc::from([0u8, 1, 2, 3]);
+        let blocks = vec![([0, 0, 0], 1u32), ([1, 0, 0], 2)];
+        let first = cached_section_mark(&cache, &revisions, 1, &key, &blocks, Some(&marks));
+        assert_eq!(first, or_scan(&blocks, &marks));
+        assert_eq!(first, 3);
+        // A second ask with the same revision does not depend on a new walk matching: the stored
+        // mark is what comes back even if the caller would now fold something else.
+        let stale = vec![([0, 0, 0], 0u32)];
+        assert_eq!(
+            cached_section_mark(&cache, &revisions, 1, &key, &stale, Some(&marks)),
+            first
+        );
+        revisions.insert(key, 8);
+        assert_eq!(
+            cached_section_mark(&cache, &revisions, 1, &key, &stale, Some(&marks)),
+            0
+        );
+        assert_eq!(
+            cached_section_mark(&cache, &revisions, 1, &key, &blocks, None),
+            0
+        );
+    }
+
+    #[test]
+    fn replacing_or_editing_the_marks_table_invalidates_section_marks() {
+        let cache = std::cell::RefCell::new(BlockEntityMarks::default());
+        let key = (1, 2, 3);
+        let revisions = FxHashMap::from_iter([(key, 7)]);
+        let blocks = [([0, 0, 0], 1u32)];
+        let mut marks: Arc<[u8]> = Arc::from([0u8, 1]);
+        assert_eq!(
+            cached_section_mark(&cache, &revisions, 1, &key, &blocks, Some(&marks)),
+            1
+        );
+        // The retained table makes mutation copy-on-write even when the caller is its only owner.
+        assert!(Arc::get_mut(&mut marks).is_none());
+        Arc::make_mut(&mut marks)[1] = 2;
+        assert!(!Arc::ptr_eq(cache.borrow().table.as_ref().unwrap(), &marks));
+        assert_eq!(
+            cached_section_mark(&cache, &revisions, 1, &key, &blocks, Some(&marks)),
+            2
+        );
+        drop(marks);
+        let replacement: Arc<[u8]> = Arc::from([0u8, 3]);
+        assert_eq!(
+            cached_section_mark(&cache, &revisions, 1, &key, &blocks, Some(&replacement)),
+            3
+        );
+    }
+
+    const SECTIONS: usize = 400;
+    const BLOCKS: usize = 64;
+
+    type SectionBlocks = (SectionKey, Vec<([i32; 3], u32)>);
+
+    fn mark_scene() -> (Arc<[u8]>, FxHashMap<SectionKey, u64>, Vec<SectionBlocks>) {
+        let marks = (0..20_000).map(|i| if i == 1500 { 2 } else { 0 }).collect();
+        let mut revisions = FxHashMap::default();
+        let mut sections = Vec::with_capacity(SECTIONS);
+        for s in 0..SECTIONS {
+            let key = (s as i32, 0, 1);
+            revisions.insert(key, 1);
+            let blocks = (0..BLOCKS)
+                .map(|i| ([i as i32, 0, 0], if i == 3 { 1500 } else { i as u32 }))
+                .collect();
+            sections.push((key, blocks));
+        }
+        (marks, revisions, sections)
+    }
+
+    #[test]
+    fn filled_and_cached_section_marks_match_a_full_scan() {
+        let (marks, revisions, sections) = mark_scene();
+        let cache = std::cell::RefCell::new(BlockEntityMarks::default());
+        for _ in 0..2 {
+            for (key, blocks) in &sections {
+                assert_eq!(
+                    cached_section_mark(
+                        &cache,
+                        &revisions,
+                        sections.len(),
+                        key,
+                        blocks,
+                        Some(&marks)
+                    ),
+                    or_scan(blocks, &marks),
+                );
+            }
+        }
+    }
+
+    // Set HORIZON_MEASURE_SECTION_MARKS=1 and run the measure_section_marks test with --nocapture.
+    #[test]
+    fn measure_section_marks() {
+        if std::env::var("HORIZON_MEASURE_SECTION_MARKS").as_deref() != Ok("1") {
+            return;
+        }
+        const RUNS: usize = 11;
+        let (marks, revisions, sections) = mark_scene();
+        let cache = std::cell::RefCell::new(BlockEntityMarks::default());
+        let fold = || {
+            let start = Instant::now();
+            let mut n = 0u32;
+            for (_, blocks) in &sections {
+                n += u32::from(or_scan(blocks, &marks));
+            }
+            (start.elapsed().as_nanos(), n)
+        };
+        let cached = || {
+            let start = Instant::now();
+            let mut n = 0u32;
+            for (key, blocks) in &sections {
+                n += u32::from(cached_section_mark(
+                    &cache,
+                    &revisions,
+                    sections.len(),
+                    key,
+                    blocks,
+                    Some(&marks),
+                ));
+            }
+            (start.elapsed().as_nanos(), n)
+        };
+        // Fill the cache, then time repeats. The first cached pass is the fill and is not a sample.
+        let (_, fill_n) = cached();
+        assert_eq!(fill_n, (SECTIONS * 2) as u32);
+        let mut samples = Vec::with_capacity(RUNS);
+        for run in 0..RUNS {
+            let (order, (fold_ns, fold_n), (cached_ns, cached_n)) = if run % 2 == 0 {
+                ("fold,cached", fold(), cached())
+            } else {
+                let hit = cached();
+                ("cached,fold", fold(), hit)
+            };
+            assert_eq!(fold_n, fill_n);
+            assert_eq!(cached_n, fill_n);
+            samples.push((order, fold_ns, cached_ns));
+        }
+        let mut scans: Vec<_> = samples.iter().map(|&(_, fold, _)| fold).collect();
+        let mut hits: Vec<_> = samples.iter().map(|&(_, _, cached)| cached).collect();
+        scans.sort_unstable();
+        hits.sort_unstable();
+        let med = |s: &[u128]| s[s.len() / 2];
+        let p95 = |s: &[u128]| s[((s.len() as f64) * 0.95).ceil() as usize - 1];
+        let mut report = format!(
+            "scene sections={SECTIONS} blocks_per_section={BLOCKS} states={} runs={RUNS}\n\
+             fold_ns median={} p95={} worst={}\n\
+             cached_ns median={} p95={} worst={}\n",
+            marks.len(),
+            med(&scans),
+            p95(&scans),
+            scans[scans.len() - 1],
+            med(&hits),
+            p95(&hits),
+            hits[hits.len() - 1],
+        );
+        use std::fmt::Write as _;
+        for (index, (order, fold_ns, cached_ns)) in samples.into_iter().enumerate() {
+            writeln!(
+                report,
+                "sample={} order={order} fold_ns={fold_ns} cached_ns={cached_ns}",
+                index + 1,
+            )
+            .unwrap();
+        }
+        std::fs::write(std::env::temp_dir().join("hz-measure-frustum.txt"), &report).unwrap();
+        println!("{report}");
     }
 }

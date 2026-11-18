@@ -57,6 +57,7 @@ impl Renderer {
             block_entities,
             block_entity_section_revisions,
             block_entity_membership_revisions,
+            block_entity_marks,
             section_uploaded,
             newest_upload,
             newest_lod_fade,
