@@ -4,6 +4,10 @@ use crate::hud::{HudAtlas, HudBatch};
 use crate::text::Text;
 use std::time::Instant;
 
+/// `SystemToast.LINE_SPACING` and `MARGIN`, in GUI px.
+const LINE_SPACING: f32 = 12.0;
+const MARGIN: f32 = 10.0;
+
 /// `ToastManager.ToastInstance`: slides a toast in and out over 600 ms,
 /// eased by the square, and counts how long it has been fully shown.
 #[derive(Default)]
@@ -78,6 +82,8 @@ pub struct SystemToast {
     title_color: u32,
 }
 impl SystemToast {
+    /// `SystemToast.MAX_LINE_SIZE`: the title and message wrap at 200 GUI px.
+    const MAX_LINE_SIZE: f32 = 200.0;
     /// `SystemToastId.displayTime`'s default, in milliseconds.
     const DISPLAY_TIME: f64 = 5000.0;
     /// `SystemToastId.LOW_DISK_SPACE`'s and `UNSECURE_SERVER_WARNING`'s display time.
@@ -135,60 +141,75 @@ impl SystemToast {
         })
     }
     /// `extractRenderState` at `y`, in from the right edge by the visible
-    /// portion (`Toast.xPos`).
+    /// portion (`Toast.xPos`): the title and message wrap at 200 GUI px
+    /// (`splitToLength`), and the background is as tall as their rows.
     pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, y: f32) {
-        let width = std::iter::once(&self.title)
-            .chain(&self.message)
+        // `Font.split` uses the formatted splitter, which keeps no row for empty text.
+        let title = atlas.font.split_formatted(&self.title, Self::MAX_LINE_SIZE);
+        let message = self.message.as_ref().map_or_else(Vec::new, |message| {
+            atlas.font.split_formatted(message, Self::MAX_LINE_SIZE)
+        });
+        let width = title
+            .iter()
+            .chain(&message)
             .map(|line| atlas.font.width_text(line))
-            .fold(0.0, f32::max)
+            // `SystemToast.recalculateWidth`: an empty stream uses 200, not 0.
+            .reduce(f32::max)
+            .unwrap_or(Self::MAX_LINE_SIZE)
             .ceil()
             .max(160.0)
             + 30.0;
+        let height = 2.0 * MARGIN
+            + (title.len() as f32 - 1.0) * LINE_SPACING
+            + message.len().max(1) as f32 * LINE_SPACING;
         let x = batch.width - width * self.slide.portion;
-        background(atlas, batch, x, y, width);
+        crate::ui::blit_sprite(
+            batch,
+            atlas,
+            "gui/sprites/toast/system",
+            x,
+            y,
+            width,
+            height,
+            u32::MAX,
+        );
         let yellow = self.title_color;
-        match &self.message {
-            Some(message) => {
-                batch.text_styled(atlas, &self.title, x + 18.0, y + 7.0, yellow, false);
-                batch.text_styled(atlas, message, x + 18.0, y + 19.0, u32::MAX, false);
+        if message.is_empty() {
+            for (i, line) in title.iter().enumerate() {
+                batch.text_styled(
+                    atlas,
+                    line,
+                    x + 18.0,
+                    y + 12.0 + LINE_SPACING * i as f32,
+                    yellow,
+                    false,
+                );
             }
-            None => {
-                batch.text_styled(atlas, &self.title, x + 18.0, y + 12.0, yellow, false);
+        } else {
+            for (i, line) in title.iter().enumerate() {
+                batch.text_styled(
+                    atlas,
+                    line,
+                    x + 18.0,
+                    y + 7.0 + LINE_SPACING * i as f32,
+                    yellow,
+                    false,
+                );
+            }
+            let message_top = y + 7.0 + LINE_SPACING * title.len() as f32;
+            for (i, line) in message.iter().enumerate() {
+                batch.text_styled(
+                    atlas,
+                    line,
+                    x + 18.0,
+                    message_top + LINE_SPACING * i as f32,
+                    u32::MAX,
+                    false,
+                );
             }
         }
     }
 }
-/// SystemToast's 32-pixel background keeps the notice icon and borders intact.
-pub fn background(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, y: f32, width: f32) {
-    let Some(rect) = atlas.sprites.get("gui/sprites/toast/system").copied() else {
-        return;
-    };
-    let source_x = [0.0, 17.0, rect.w as f32 - 4.0, rect.w as f32];
-    let target_x = [x, x + 17.0, x + width - 4.0, x + width];
-    for col in 0..3 {
-        for (sy, sh, y, h) in [
-            (0.0, 28.0, y, 28.0),
-            (rect.h as f32 - 4.0, 4.0, y + 28.0, 4.0),
-        ] {
-            let mut piece = rect;
-            let du = (rect.u1 - rect.u0) / rect.w as f32;
-            let dv = (rect.v1 - rect.v0) / rect.h as f32;
-            piece.u0 = rect.u0 + source_x[col] * du;
-            piece.u1 = rect.u0 + source_x[col + 1] * du;
-            piece.v0 = rect.v0 + sy * dv;
-            piece.v1 = rect.v0 + (sy + sh) * dv;
-            batch.rect_uv(
-                target_x[col],
-                y,
-                target_x[col + 1] - target_x[col],
-                h,
-                piece,
-                u32::MAX,
-            );
-        }
-    }
-}
-
 /// `NowPlayingToast`'s `musicNoteColorTick`, `lastMusicNoteColorChange` and
 /// `musicNoteColor`: the notes change colour every 25 ms, while a song plays.
 pub struct MusicNotes {
@@ -383,5 +404,87 @@ fn draw_now_playing_text(
     );
     if let Some(description) = description {
         batch.text_styled(atlas, description, x + 30.0, 17.0, 0xFFD3_D3D3, true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hud::Rect;
+
+    /// `SystemToast.recalculateWidth`: no split rows uses 200 px before the
+    /// 30-px margin. `height` still removes the absent title row.
+    #[test]
+    fn an_empty_toast_uses_vanillas_fallback_width() {
+        let mut atlas = HudAtlas::fonts(&crate::resource_source::ResourceSource::indexed(
+            Default::default(),
+        ))
+        .unwrap();
+        atlas.sprites.insert(
+            "gui/sprites/toast/system".into(),
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 160,
+                h: 64,
+            },
+        );
+        for message in [None, Some(Text::empty())] {
+            let mut batch = HudBatch::scratch([1000, 500]);
+            let toast = SystemToast::new(Text::empty(), message);
+            toast.draw(&atlas, &mut batch, 0.0);
+            let extent = |axis: usize| {
+                batch
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos[axis])
+                    .fold(f32::MIN, f32::max)
+            };
+            assert_eq!((extent(0) - batch.width, extent(1)), (230.0, 20.0));
+        }
+    }
+
+    /// `SystemToast.splitToLength`: a title or message wider than 200 GUI px
+    /// wraps, the toast grows a 12-px row per line (`height`), and its width
+    /// follows the wrapped line rather than the whole text.
+    #[test]
+    fn a_long_message_wraps_and_grows_the_toast() {
+        let mut atlas = HudAtlas::build(&crate::resource_source::ResourceSource::indexed(
+            Default::default(),
+        ))
+        .unwrap();
+        atlas.sprites.insert(
+            "gui/sprites/toast/system".into(),
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 160,
+                h: 64,
+            },
+        );
+        let mut batch = HudBatch::scratch([1000, 500]);
+        let right = batch.width;
+        let toast = SystemToast::new(
+            Text::literal("Chunk save failure"),
+            Some(Text::literal(
+                "the quick brown fox jumps over the lazy dog ".repeat(6),
+            )),
+        );
+        toast.draw(&atlas, &mut batch, 0.0);
+        let extent = |axis: usize| {
+            batch
+                .vertices
+                .iter()
+                .map(|v| v.pos[axis])
+                .fold(f32::MIN, f32::max)
+        };
+        let width = extent(0) - right;
+        let height = extent(1);
+        assert!(height > 32.0, "the wrapped message adds rows: {height}");
+        assert!(width <= 230.0, "the widest line is wrapped: {width}");
     }
 }
