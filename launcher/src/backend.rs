@@ -2170,6 +2170,14 @@ fn download_for(
     }
 }
 
+/// The folder of the Microsoft Store's Minecraft Launcher (the one Windows offers, and the Xbox
+/// app's) under `local`, `%LOCALAPPDATA%`. Its game files are in `%APPDATA%\.minecraft` like the
+/// other launcher's, but the Java it downloads is in this folder's `runtime`, so a preparation
+/// found none and downloaded the same runtime from Mojang again (411 files, 100 MB for 26.3).
+fn store_launcher_folder(local: &Path) -> PathBuf {
+    local.join(r"Packages\Microsoft.4297127D64EC6_8wekyb3d8bbwe\LocalCache\Local")
+}
+
 /// The Java home for this version: a runtime for precompiled exporters, a JDK for older
 /// preparers or changed sources. Forward the selection to external preparers too.
 /// Else try the official launcher's Java in `games`, then download the runtime named by
@@ -2404,6 +2412,9 @@ pub fn preparer(
             .into_iter()
             .map(|(_, dir)| dir),
     );
+    if cfg!(windows) {
+        games.extend(dirs::data_local_dir().map(|local| store_launcher_folder(&local)));
+    }
     set_prepare_step(PrepareStep::Java);
     let java_home = java(
         major,
