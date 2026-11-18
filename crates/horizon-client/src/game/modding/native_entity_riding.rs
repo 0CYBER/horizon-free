@@ -1048,6 +1048,46 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn a_rider_boards_another_cart_or_boat_straight_from_its_vehicle() {
+        use super::super::{
+            InteractTarget,
+            boats::Boat,
+            minecarts::{CartKind, Minecart},
+        };
+        use horizon_client::motion::PlayerMotion;
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.carts
+                .push(Minecart::new(61, CartKind::Rideable, Vec3::ZERO));
+            game.carts
+                .push(Minecart::new(62, CartKind::Rideable, Vec3::ZERO));
+            let mut chest_boat = Boat::new(63, "oak".into(), Vec3::ZERO, 0.0);
+            chest_boat.chest = true;
+            game.boats.push(chest_boat);
+            let at = |id| {
+                Some(InteractTarget {
+                    id,
+                    location: [0.0; 3],
+                })
+            };
+            assert!(game.interact_cart(at(61)));
+            assert_eq!(game.riding, Some(61));
+            // Minecart.interact -> Entity.startRiding, which leaves the old
+            // vehicle first: the rider changes carts in one click.
+            assert!(game.interact_cart(at(62)));
+            assert_eq!(game.riding, Some(62));
+            // AbstractChestBoat.interact tries AbstractBoat.interact's
+            // boarding first; the chest only opens when that passes.
+            assert!(game.interact_boat(at(63)));
+            assert_eq!(game.riding, Some(63));
+            assert_eq!(game.container, None, "the chest stays closed");
+            assert!(game.interact_cart(at(61)));
+            assert_eq!(game.riding, Some(61), "and from a boat into a cart");
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn handles_reject_held_out_and_stale_entities() {
         super::super::native_entity_refs::tests::with_game(|game| {
             for id in [50, 51] {

@@ -1356,15 +1356,16 @@ impl Game<'_> {
             self.swing_arm();
             return true;
         }
-        // ChestBoat.interact: sneaking (or a full seat) opens the chest.
-        if self.boats[i].chest && (sneaking || self.riding.is_some() || !self.boat_has_room(i)) {
+        // ChestBoat.interact: sneaking (or a full seat) opens the chest. A
+        // player in another vehicle boards instead (`Entity.startRiding`
+        // leaves the old one first).
+        if self.boats[i].chest && (sneaking || !self.boat_has_room(i)) {
             self.open_chest_boat_container(i);
             self.swing_arm();
             return true;
         }
         if sneaking
             || self.boats[i].out_of_control >= 60.0
-            || self.riding.is_some()
             || self.ridden_by_guest(self.boats[i].id)
             || !self.boat_has_room(i)
         {

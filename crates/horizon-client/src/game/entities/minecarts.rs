@@ -1760,9 +1760,10 @@ impl Game<'_> {
         match self.carts[i].kind {
             CartKind::Rideable => {
                 let id = self.carts[i].id;
-                // isVehicle: a mob already sits in it.
+                // isVehicle: a mob already sits in it. A player in another
+                // vehicle may board: `Entity.startRiding` leaves the old one.
                 let has_mob = !self.seated_passengers(id).is_empty();
-                if sneaking || self.riding.is_some() || self.ridden_by_guest(id) || has_mob {
+                if sneaking || self.ridden_by_guest(id) || has_mob {
                     return false;
                 }
                 self.start_riding_target(

@@ -1284,6 +1284,7 @@ horizon-client game::native_entity_renderers_tests::an_unregistered_thrown_type_
 horizon-client game::native_entity_riding::tests::a_nested_tree_lists_passengers_depth_first_and_shares_its_root lib daily resources
 horizon-client game::native_entity_riding::tests::a_player_boards_ahead_of_a_mob_and_behind_a_player_as_add_passenger_says lib daily resources
 horizon-client game::native_entity_riding::tests::a_player_gets_off_along_their_own_yaw_on_their_turn_or_not lib daily resources
+horizon-client game::native_entity_riding::tests::a_rider_boards_another_cart_or_boat_straight_from_its_vehicle lib daily resources
 horizon-client game::native_entity_riding::tests::boat_and_cart_interactions_use_shared_mount_path lib daily resources
 horizon-client game::native_entity_riding::tests::camel_admits_multiple_mob_passengers_but_not_a_fourth lib daily resources
 horizon-client game::native_entity_riding::tests::canceled_dismount_keeps_old_mount_and_mount_hook_fires_once lib daily resources
