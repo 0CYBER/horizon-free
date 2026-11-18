@@ -642,7 +642,16 @@ impl Game<'_> {
         Some((TrackingTarget::Entity(id), mob_tracking_body(mob)))
     }
 
+    /// The particle tick. A server has no window: it drops its pickups and ticks only the
+    /// engine, so its fireworks' and drips' sounds still play and reach the guests. A window
+    /// also spawns what the level shows around the camera.
     pub(super) fn tick_particles(&mut self) {
+        if self.is_logical_server() {
+            self.particles.particle_level = self.settings.particles;
+            self.pickups.clear();
+            self.tick_particle_engine();
+            return;
+        }
         // A client mod's `clear_particles`, before this tick adds any.
         self.apply_mod_particle_clear();
         self.tick_particle_spawns();

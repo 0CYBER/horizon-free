@@ -143,6 +143,13 @@ impl Game<'_> {
             .unwrap_or(otherwise)
     }
 
+    /// `Player.entityInteractionRange`/`blockInteractionRange` for the tick's picks:
+    /// the attribute carries creative's and a server's modifiers.
+    pub(super) fn update_interaction_ranges(&mut self) {
+        self.entity_reach = self.interaction_range("minecraft:entity_interaction_range", 3.0, 5.0);
+        self.block_reach = self.interaction_range("minecraft:block_interaction_range", 4.5, 5.0);
+    }
+
     /// A stack's `minecraft:attack_range` component, falling back to the spear's
     /// default reach (`spear::REACH`) for spear items unless explicitly removed.
     fn attack_range_component(&self, stack: &ItemStack) -> Option<serde_json::Value> {

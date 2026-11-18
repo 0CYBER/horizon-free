@@ -375,16 +375,20 @@ impl Game<'_> {
         }
     }
 
+    /// The server tickers of bells and conduits, which a server runs without a window.
+    pub(super) fn tick_block_entity_servers(&mut self) {
+        self.tick_conduit_servers();
+        self.tick_bell_servers();
+    }
+
     /// The client tickers of the loaded animated and mod block entities, once
     /// per client tick (`ClientLevel.tickBlockEntities`).
     pub(super) fn tick_block_entity_anims(&mut self) {
         // A client's mod block entities with a client ticker (none off a server's client).
         self.client_tick_mod_block_entities();
-        // A server has no window, but its bells, gateways and conduits still run
-        // their server tickers; a client of one only animates what it is sent.
+        // A client of a server only animates what it is sent.
         if self.remote.is_none() {
-            self.tick_conduit_servers();
-            self.tick_bell_servers();
+            self.tick_block_entity_servers();
         }
         let Some(r) = &self.renderer else {
             return;
