@@ -129,11 +129,27 @@ class ReloadWitnessTests(unittest.TestCase):
         self.assertEqual(fuzz.witness('persist', entity, gone, gone), (None, None))
         self.assertEqual(fuzz.witness('persist', entity, kept, kept)[0],
                          'vanilla kept the entity loaded: [[True, 1]]')
-        self.assertEqual(fuzz.witness('persist', entity, gone, kept)[1][0], 'persist|chunk|<unload>')
+        self.assertEqual(fuzz.witness('persist', entity, gone, kept)[1][0], 'persist|entity|<unload>')
         chunk_op = {'cmd': chunk, 'guard': 'chunk'}
         chunk_stayed = {'cmd': chunk, 'results': [[False, 0]]}  # `/execute unless loaded` failed
         self.assertEqual(fuzz.witness('persist', chunk_op, chunk_stayed, chunk_stayed)[0],
                          'vanilla kept the chunk loaded: [[False, 0]]')
+
+    def test_each_guard_names_its_signature_so_divergences_do_not_merge(self):
+        # An entity guard and a chunk guard diverge the same way, but must not be grouped as one bug.
+        entity = {'cmd': '/execute if entity 00000000-0000-0000-0000-000000000001', 'guard': 'entity'}
+        chunk = {'cmd': '/execute unless loaded 4096 300 4096', 'guard': 'chunk'}
+        gone, kept = {'results': [[False, 0]]}, {'results': [[True, 1]]}
+        entity_invalid, entity_failure = fuzz.witness('spawn', entity, gone, kept)
+        chunk_invalid, chunk_failure = fuzz.witness('spawn', chunk, gone, kept)
+        self.assertIsNone(entity_invalid)  # [[False, 0]] is the valid reload for an entity guard
+        self.assertEqual(entity_failure[0], 'spawn|entity|<unload>')
+        self.assertEqual(chunk_failure[0], 'spawn|chunk|<unload>')  # chunk behavior is unchanged
+        self.assertNotEqual(entity_failure[0], chunk_failure[0])
+        self.assertEqual(fuzz.signatures({'invalid': None, 'failures': [entity_failure]}),
+                         ['spawn|entity|<unload>'])
+        self.assertEqual(fuzz.signatures({'invalid': None, 'failures': [chunk_failure]}),
+                         ['spawn|chunk|<unload>'])
 
 
 if __name__ == '__main__':

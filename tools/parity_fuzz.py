@@ -263,7 +263,7 @@ def witness(family, op, vanilla, rust):
     """
     invalid = (f'vanilla kept the {op["guard"]} loaded: {vanilla["results"]}'
                if vanilla['results'] != GUARDS[op['guard']] else None)
-    failure = ((f'{family}|chunk|<unload>', op['cmd'], [('<unload>', vanilla['results'], rust['results'])])
+    failure = ((f'{family}|{op["guard"]}|<unload>', op['cmd'], [('<unload>', vanilla['results'], rust['results'])])
                if rust['results'] != vanilla['results'] else None)
     return invalid, failure
 
