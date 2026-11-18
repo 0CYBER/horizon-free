@@ -111,6 +111,11 @@ class FamilyTests(unittest.TestCase):
 
 
 class ReloadWitnessTests(unittest.TestCase):
+    def test_a_reload_gives_the_oracle_time_to_unload_the_chunk(self):
+        scenario = {'family': 'persist', 'seed': 1, 'steps': [{'k': 'reload'}, {'k': 'tick', 'n': 4}]}
+        ticks = [op for op in fuzz.render(scenario, 0) if op.get('op') == 'tick']
+        self.assertEqual([op.get('allow_chunk_io') for op in ticks], [True, None])  # only the reload's wait
+
     def test_a_reload_witnesses_the_chunk_and_every_entity_summoned_before_it(self):
         scenario = {'family': 'persist', 'seed': 1, 'steps': [
             {'k': 'summon', 'type': 'pig', 'at': [1.5, 0, 1.5], 'n': 0, 'nbt': {}},
