@@ -1,0 +1,1 @@
+horizon-client game::recipe_book::tests::a_servers_crafting_table_has_the_book lib daily resources

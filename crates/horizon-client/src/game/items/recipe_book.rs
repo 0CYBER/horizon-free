@@ -209,11 +209,14 @@ impl Game<'_> {
             return None;
         }
         match self.container_kind() {
+            // The inventory's grid, or a crafting table's (`CraftingScreen`);
+            // a server's other menus without a container have no book.
             None if self.container.is_none()
-                && self
-                    .remote
-                    .as_ref()
-                    .is_none_or(|r| r.menu.as_ref().is_none()) =>
+                && self.remote.as_ref().is_none_or(|r| {
+                    r.menu
+                        .as_ref()
+                        .is_none_or(|(_, menu)| menu == "minecraft:crafting")
+                }) =>
             {
                 Some(BookType::Crafting)
             }
@@ -2362,6 +2365,29 @@ mod tests {
         assert!(super::escape_closes_book(super::NARROW - 1.0, true));
         assert!(!super::escape_closes_book(super::NARROW, true));
         assert!(!super::escape_closes_book(super::NARROW - 1.0, false));
+    }
+
+    /// `CraftingScreen` has the book; a server's menu without a grid has none.
+    #[test]
+    #[ignore = "daily"]
+    fn a_servers_crafting_table_has_the_book() {
+        use super::*;
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let (pipe, _server) = horizon_protocol::connection::Pipe::pair();
+            game.connect_local(pipe, "Crafter").unwrap();
+            game.screen = Screen::Inventory;
+            game.container = None;
+            let open = |game: &mut Game<'_>, menu: &str| {
+                game.remote
+                    .as_mut()
+                    .unwrap()
+                    .menu
+                    .set(Some((3, menu.into())));
+                game.active_book()
+            };
+            assert_eq!(open(game, "minecraft:crafting"), Some(BookType::Crafting));
+            assert_eq!(open(game, "minecraft:cartography_table"), None);
+        });
     }
 }
 
