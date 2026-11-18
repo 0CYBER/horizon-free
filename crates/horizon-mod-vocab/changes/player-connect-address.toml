@@ -1,0 +1,3 @@
+ids = ["handle:PlayerRef::connect_address", "type:ConnectAddress"]
+why = "PlayerRef::connect_address gives the host and port the player's client typed in its handshake, where PlayerRef::address gives the IP they connect from only. A server with several names, or a mod that announces a resource pack URL the client can reach, can tell which name the player used."
+migrate = "Additive. None for a player with no connection of their own or a client that typed no host."

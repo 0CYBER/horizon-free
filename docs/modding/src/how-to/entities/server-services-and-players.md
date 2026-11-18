@@ -37,6 +37,12 @@ Read identity through `player.uuid()`, `player.name(host)`,
 connection IP without a port, including the forwarded address behind a Velocity
 proxy. An acting player without a known connection has an empty address.
 
+`player.connect_address(host)` gives the host and port the client typed to connect (`play.example.com`, 25570): the
+name a server with several was reached by, which is not the IP in `address`. It is the handshake's own, cut at its first
+NUL (where a proxy appends its data), and a transfer's is the one the transferring server gave. It is `None` for a
+fake player, the single-player owner and a client that typed nothing. A mod can announce a resource pack URL under it
+that this client can reach.
+
 The online list includes connected players during nested player turns. Name,
 permission and address reads work for connected players whose bodies are displaced
 by another player's turn; stale handles are refused. Entity and living handles

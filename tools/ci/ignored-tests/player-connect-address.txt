@@ -1,0 +1,2 @@
+# A player's typed connect address needs prepared resources.
+horizon-client game::native_player_connect_tests::a_player_has_the_address_their_client_typed lib daily resources

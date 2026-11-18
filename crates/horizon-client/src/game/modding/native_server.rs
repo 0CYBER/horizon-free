@@ -1230,6 +1230,16 @@ impl Game<'_> {
         (self.native_acting_player() == Some(player)).then(String::new)
     }
 
+    /// The host and port the player's client typed in its handshake: the connection's
+    /// `PlayerSender` carries them from the login. None for a stale player and one with none.
+    pub(super) fn player_connect_address(
+        &self,
+        player: PlayerRef,
+    ) -> Option<mod_api::ConnectAddress> {
+        let (host, port) = self.online_player_record(player)?.sender.connect.as_ref()?;
+        Some(mod_api::ConnectAddress::new(&**host, *port))
+    }
+
     /// The brand the player's client announced when it connected (`ServerPlayer.clientBrand`),
     /// empty when it sent none. Displaced connected players keep theirs; an acting player with
     /// no known connection has an empty one. None for a stale or unavailable player.
