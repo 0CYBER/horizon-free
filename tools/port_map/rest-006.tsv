@@ -36,7 +36,7 @@ ResourceArgument.getResource	port	crates/horizon-command/src/args.rs::ArgType::p
 ResourceKeyArgument.key	skip:java		builder: Horizon names the registry in the ArgType::ResKey variant
 ResourceKeyArgument.getRegistryKey	port	crates/horizon-command/src/args.rs::ArgType::parse	gap: minor: ResKey arm does not check membership; consumers do
 ResourceKeyArgument.resolveKey	port	crates/horizon-command/src/args.rs::ArgType::parse	gap: minor: registry lookup is done by the consumer (cmd_recipe, cmd_advancement)
-ResourceKeyArgument.getRecipe	port	crates/horizon-client/src/game/administration/commands/world_cmds.rs::Game::cmd_recipe	gap: minor: checks learnable recipes, not every non-special recipe
+ResourceKeyArgument.getRecipe	port	crates/horizon-gameplay/src/commands/recipe.rs::recipe	gap: minor: checks learnable recipes, not every non-special recipe
 ResourceKeyArgument.getAdvancement	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_advancement	advancementNotFound lookup
 ResourceOrIdArgument.createGrammar	port	crates/horizon-command/src/codec.rs::resource_or_id	id or inline value
 ResourceOrTagArgument.getResourceOrTag	port	crates/horizon-command/src/args.rs::ArgType::parse	ArgType::ResOrTag arm

@@ -105,7 +105,7 @@ ServerPlayer.hurtServer	port	crates/horizon-client/src/game/network/lan_pvp.rs::
 ServerPlayer.addPostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	each target keeps its own list (change_post_effects: the player's here, a guest's on its record); the client builds its post chain from the player's, and a guest's is sent when it changes (Hub::send_post_effects)
 ServerPlayer.clearPostEffects	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	the same per-target lists; clearing empties the target's
 ServerPlayer.removePostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	the same per-target lists; removing takes the one effect out
-ServerPlayer.forceSetRotation	inline	crates/horizon-client/src/game/administration/commands/world_cmds.rs::Game::cmd_rotate	/rotate turns a guest through a teleport packet with the new rotation
+ServerPlayer.forceSetRotation	inline	crates/horizon-gameplay/src/commands/rotate.rs::rotate	/rotate turns a guest through a teleport packet with the new rotation
 ServerPlayer.triggerDimensionChangeTriggers	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::trigger_dimension	nether_travel fires on the way back to the Overworld from the position the Nether was entered at (adv.marks.nether); gap: minor: that position is not restored from entered_nether_pos after a reload
 ServerPlayer.broadcastToPlayer	port	crates/horizon-client/src/lan/entity.rs::broadcast_to_player	a spectator viewer sees a player only while its camera is that player; anyone else never sees a spectator
 ServerPlayer.startSleeping	port	crates/horizon-client/src/game.rs::Game::try_sleep

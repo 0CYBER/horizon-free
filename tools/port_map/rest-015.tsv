@@ -41,7 +41,7 @@ LocateCommand.getHolders	port	crates/horizon-client/src/game/administration/comm
 LocateCommand.showLocateResult	inline	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_locate	distance (2D for structures, 3D for biomes) and the success message
 LocateCommand.dist	inline	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_locate	floored horizontal distance computed in cmd_locate
 LocateCommand.locatePoi	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::cmd_locate_poi	PoiManager.findClosestWithType within 256 blocks of the source, over the loaded chunks
-LookAt.LookAtEntity.perform	port	crates/horizon-client/src/game/administration/commands/world_cmds.rs::Game::cmd_rotate	facing-entity branch of cmd_rotate; look_at does the yaw and pitch math
+LookAt.LookAtEntity.perform	port	crates/horizon-gameplay/src/commands/rotate.rs::rotate	facing-entity branch of cmd_rotate; look_at does the yaw and pitch math
 LootCommand.register	port	crates/horizon-command/src/tree_world.rs::loot	loot literal with loot/mine/kill/fish/replace/insert/give/spawn
 LootCommand.addTargets	port	crates/horizon-command/src/tree_world.rs::loot	replace entity|block, insert, give, spawn subcommands
 LootCommand.blockDistribute	inline	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_loot	insert branch of cmd_loot
@@ -81,7 +81,7 @@ PlaceCommand.checkLoaded	port	crates/horizon-client/src/game/administration/comm
 PlaceCommand.placeFeature	port	crates/horizon-client/src/game/administration/commands/place.rs::Game::cmd_place_generated	the feature, jigsaw and structure branches share the generation path
 PlaySoundCommand.register	port	crates/horizon-command/src/tree_world.rs::sounds	playsound literal with a sound-source literal per source
 PlaySoundCommand.source	port	crates/horizon-command/src/tree_world.rs::sounds	per-source literal with targets, pos, volume, pitch, minVolume
-PlaySoundCommand.playSound	port	crates/horizon-client/src/game/administration/commands/world_cmds.rs::Game::cmd_playsound	range 16 (16 x volume above 1), minVolume fallback, one seed for all players
+PlaySoundCommand.playSound	port	crates/horizon-gameplay/src/commands/sound.rs::playsound	range 16 (16 x volume above 1), minVolume fallback, one seed for all players
 PostEffectCommand.addPostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	gap: player: the effect is stored and listed, but nothing draws it
 PostEffectCommand.clearPostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	gap: player: the cleared list is never drawn anyway
 PostEffectCommand.removePostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	gap: player: the removed effect was never drawn
@@ -101,8 +101,8 @@ RandomCommand.resetSequence	port	crates/horizon-client/src/game/administration/c
 RandomCommand.resetAllSequences	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_random	reset.* branch without seed
 RandomCommand.resetAllSequencesAndSetNewDefaults	port	crates/horizon-client/src/game/administration/commands/misc.rs::Game::cmd_random	reset.* branch with a seed sets the defaults then clears
 RecipeCommand.register	port	crates/horizon-command/src/tree_world.rs::recipe	recipe give|take literals with recipe and * arguments
-RecipeCommand.giveRecipes	port	crates/horizon-client/src/game/administration/commands/world_cmds.rs::Game::cmd_recipe	give branch; recipes added through change_recipes
-RecipeCommand.takeRecipes	port	crates/horizon-client/src/game/administration/commands/world_cmds.rs::Game::cmd_recipe	take branch; recipes removed through change_recipes
+RecipeCommand.giveRecipes	port	crates/horizon-gameplay/src/commands/recipe.rs::recipe	give branch; recipes added through change_recipes
+RecipeCommand.takeRecipes	port	crates/horizon-gameplay/src/commands/recipe.rs::recipe	take branch; recipes removed through change_recipes
 ReloadCommand.discoverNewPacks	port	crates/horizon-client/src/game/administration/functions.rs::Game::reload_datapacks	gap: minor: enables newly found packs that are not disabled; no NeoForge reorder of new packs
 ReloadCommand.register	port	crates/horizon-command/src/tree_misc.rs::register	reload literal
 ReloadCommand.reloadPacks	port	crates/horizon-client/src/game/administration/functions.rs::Game::apply_pack_change	no message of its own; the content tables are reloaded with the functions

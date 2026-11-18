@@ -1,8 +1,13 @@
 //! `Game` as the host of the commands that moved to `horizon_gameplay::commands`. Each command
 //! family has its trait there and its impl in a file of `command_host/`; every method
 //! calls the `Game` code it names and adds no logic.
+mod entity;
 mod gamerule;
 mod help;
+mod recipe;
+mod rotate;
+mod sound;
+mod swing;
 mod time;
 mod weather;
 

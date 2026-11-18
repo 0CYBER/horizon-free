@@ -5,8 +5,6 @@ use crate::game::living_attributes::AttributeWrite;
 use crate::game::minecarts::CartHit;
 use horizon_client::{
     mobs::{Damage, DamageKind, MobEvent, NamedDamage, Who, finalize},
-    scoreboard_cmd::{Holder, Tracker},
-    settings::SOUND_SOURCES,
     text::Text,
 };
 use horizon_core::nbt::Tag;
@@ -36,13 +34,6 @@ fn take_new_reinforcements(events: &mut Vec<MobEvent>, queued: usize) -> Vec<(u3
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
 }
-fn holder(text: Text) -> Holder {
-    Holder {
-        name: String::new(),
-        text,
-        display: None,
-    }
-}
 /// `ChatFormatting`-free float text as `Component.translatable` prints a `double`.
 fn java_double_text(v: f64) -> Text {
     Text::literal(horizon_core::java_number::double_to_string(v))
@@ -67,47 +58,7 @@ impl Game<'_> {
             .collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
-        let targets = self.entities(ctx, "targets", true)?;
-        let give = id == "recipe.give";
-        let recipes: Vec<String> = match ctx.get("recipe") {
-            Some(Arg::Resource(r)) => {
-                if !self.learnable_recipes().contains(r) {
-                    return Err(err("recipe.notFound", &[r]));
-                }
-                vec![r.clone()]
-            }
-            _ => self.learnable_recipes(),
-        };
-        let mut tracker = Tracker::default();
-        for &t in &targets {
-            let h = holder(self.target_name(t));
-            // ServerPlayer.awardRecipes / resetRecipes on the target's own
-            // ServerRecipeBook: a guest's is swapped in for the call, and the
-            // packets go to its client.
-            let n = self
-                .for_player(t, |g| g.change_recipes(give, &recipes))
-                .unwrap_or(0);
-            tracker.track(&h, n);
-        }
-        let verb = if give { "give" } else { "take" };
-        let (message, total) = tracker.message(
-            false,
-            Some(err(&format!("commands.recipe.{verb}.failed"), &[])),
-            |h, total| {
-                Text::translate(
-                    &format!("commands.recipe.{verb}.success.single"),
-                    &[num(total), h.text.clone()],
-                )
-            },
-            |count, total| {
-                Text::translate(
-                    &format!("commands.recipe.{verb}.success.multiple"),
-                    &[num(total), num(count)],
-                )
-            },
-        )?;
-        self.feedback(message);
-        Ok(total)
+        horizon_gameplay::commands::recipe::recipe(self, id, ctx)
     }
 
     /// ServerRecipeBook.addRecipes/removeRecipes for the player in place: how
@@ -534,169 +485,16 @@ impl Game<'_> {
     // ---- /rotate and /swing -----------------------------------------------------------
 
     pub(super) fn cmd_rotate(&mut self, ctx: &Context) -> R<i32> {
-        let targets = super::without_knots(self.entities(ctx, "target", false)?)?;
-        let Some(t) = targets.first().copied() else {
-            return Ok(0);
-        };
-        let Some(pos) = self.target_position(t) else {
-            return Ok(0);
-        };
-        let mut look_at_target = None;
-        let rot = if let Some(Arg::Coords(c)) = ctx.get("rotation") {
-            // RotateCommand.rotate: relative parts are offsets from the command
-            // source's rotation (WorldCoordinates.getRotation); the entity's own
-            // rotation cancels out in Entity.forceSetRotation.
-            c.rotation(self.source_rotation())
-        } else {
-            let mut faced_entity = None;
-            let to = if ctx.has("entity") {
-                let faced = self.entities(ctx, "facingEntity", false)?;
-                let Some(f) = faced.first().copied() else {
-                    return Ok(0);
-                };
-                let mut p = self.target_position(f).unwrap_or(pos);
-                let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
-                if eyes {
-                    p[1] += self.target_eye_height(f);
-                }
-                faced_entity = Some((f, eyes));
-                p
-            } else {
-                self.position_arg(ctx, "facingLocation").unwrap_or(pos)
-            };
-            // LookAt.perform: Entity.lookAt from the source's anchor (the
-            // feet, unless `anchored eyes`).
-            let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
-            let eye = if anchored_eyes {
-                self.target_eye_height(t)
-            } else {
-                0.0
-            };
-            let from = [pos[0], pos[1] + eye, pos[2]];
-            look_at_target = Some((anchored_eyes, to, faced_entity));
-            look_at(from, to)
-        };
-        // RotateCommand: Entity.forceSetRotation, not a teleport.
-        self.set_rotation(t, rot);
-        if let Some((eyes, to, entity)) = look_at_target {
-            self.send_player_look_at(t, eyes, to, entity);
-        }
-        if t == Target::Player {
-            self.pitch = rot[1].clamp(-90.0, 90.0);
-        }
-        let name = self.target_name(t);
-        self.feedback(Text::translate("commands.rotate.success", &[name]));
-        Ok(1)
+        horizon_gameplay::commands::rotate::rotate(self, ctx)
     }
     pub(super) fn cmd_swing(&mut self, ctx: &Context) -> R<i32> {
-        let targets = if ctx.get("targets").is_some() {
-            self.entities(ctx, "targets", false)?
-        } else {
-            vec![self.implied(false)?]
-        };
-        let mut tracker = Tracker::default();
-        for t in targets {
-            match t {
-                Target::Player => self.swing_arm(),
-                Target::Mob(id) => {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                        m.ai.swinging = true;
-                        m.ai.swing_time = -1;
-                    }
-                }
-                // An armor stand is a LivingEntity: it swings (invisibly).
-                Target::Stand(_) => {}
-                _ => continue,
-            }
-            let h = holder(self.target_name(t));
-            tracker.mark(&h);
-        }
-        let (message, total) = tracker.message(
-            false,
-            Some(err("commands.swing.failed.notliving", &[])),
-            |h, _| {
-                Text::translate(
-                    "commands.swing.success.single",
-                    std::slice::from_ref(&h.text),
-                )
-            },
-            |c, _| Text::translate("commands.swing.success.multiple", &[num(c)]),
-        )?;
-        self.feedback(message);
-        Ok(total)
+        horizon_gameplay::commands::swing::swing(self, ctx)
     }
 
     // ---- sounds -----------------------------------------------------------------------
 
     pub(super) fn cmd_playsound(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::Resource(sound)) = ctx.get("sound").cloned() else {
-            return Ok(0);
-        };
-        let source = ctx
-            .literals
-            .iter()
-            .find_map(|l| SOUND_SOURCES.iter().position(|s| s == l))
-            .unwrap_or(0);
-        let targets = if ctx.get("targets").is_some() {
-            self.entities(ctx, "targets", true)?
-        } else {
-            vec![Target::Player]
-        };
-        let pos = self
-            .position_arg(ctx, "pos")
-            .unwrap_or_else(|| self.source_position());
-        let float = |name: &str, default: f32| match ctx.get(name) {
-            Some(Arg::Float(v)) => *v,
-            _ => default,
-        };
-        let (volume, pitch, min_volume) = (
-            float("volume", 1.0),
-            float("pitch", 1.0),
-            float("minVolume", 0.0),
-        );
-        let range = if volume > 1.0 { 16.0 * volume } else { 16.0 };
-        // PlaySoundCommand: one seed for every player.
-        let seed = self.world.random.next_long();
-        let here = self.dim.id();
-        let mut tracker = Tracker::default();
-        for t in targets {
-            if !matches!(t, Target::Player | Target::Guest(_)) {
-                continue;
-            }
-            // Only players in the source's level hear it.
-            if let Target::Guest(conn) = t
-                && self.command_guest(conn).is_none_or(|g| g.dimension != here)
-            {
-                continue;
-            }
-            let Some(p) = self.target_position(t) else {
-                continue;
-            };
-            let Some((at, v)) = playsound_placement(pos, p, range, volume, min_volume) else {
-                continue;
-            };
-            self.play_sound_to(t, &sound, at, v, pitch, source, seed);
-            tracker.mark(&holder(self.target_name(t)));
-        }
-        let name = Text::literal(sound.clone());
-        let (message, total) = tracker.message(
-            true,
-            Some(err("commands.playsound.failed", &[])),
-            |h, _| {
-                Text::translate(
-                    "commands.playsound.success.single",
-                    &[name.clone(), h.text.clone()],
-                )
-            },
-            |c, _| {
-                Text::translate(
-                    "commands.playsound.success.multiple",
-                    &[name.clone(), num(c)],
-                )
-            },
-        )?;
-        self.feedback(message);
-        Ok(total)
+        horizon_gameplay::commands::sound::playsound(self, ctx)
     }
     /// `ClientboundSoundPacket` to one player: a guest's connection is sent
     /// it; the window's own player plays it. `/playsound` and a native mod's
@@ -758,31 +556,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn cmd_stopsound(&mut self, ctx: &Context) -> R<i32> {
-        let targets = self.entities(ctx, "targets", true)?;
-        let source = ctx
-            .literals
-            .iter()
-            .find_map(|l| SOUND_SOURCES.iter().position(|s| s == l));
-        let sound = match ctx.get("sound") {
-            Some(Arg::Resource(s)) => Some(s.clone()),
-            _ => None,
-        };
-        self.stop_sound_for(&targets, sound.as_deref(), source);
-        let key = match (source, &sound) {
-            (Some(_), Some(_)) => "commands.stopsound.success.source.sound",
-            (Some(_), None) => "commands.stopsound.success.source.any",
-            (None, Some(_)) => "commands.stopsound.success.sourceless.sound",
-            (None, None) => "commands.stopsound.success.sourceless.any",
-        };
-        let mut args = Vec::new();
-        if let Some(s) = &sound {
-            args.push(Text::literal(s.clone()));
-        }
-        if let Some(i) = source {
-            args.push(Text::literal(SOUND_SOURCES[i]));
-        }
-        self.feedback(Text::translate(key, &args));
-        Ok(targets.len() as i32)
+        horizon_gameplay::commands::sound::stopsound(self, ctx)
     }
 
     // ---- /particle ----------------------------------------------------------------------
@@ -2247,40 +2021,6 @@ fn text_error(key: &str, args: &[Text]) -> horizon_client::command::CommandError
     horizon_client::command::CommandError::new(Text::translate(key, args))
 }
 
-/// `PlaySoundCommand.playSound`: the point and the volume one target hears the
-/// sound at. A target past `range` hears nothing unless `minVolume` is above
-/// zero, and then the point moves two blocks from the target towards the sound
-/// and the volume is `minVolume`; a target exactly at `range` still hears it
-/// (the command's test is `>`, unlike `PlayerList.broadcast`'s `<`).
-fn playsound_placement(
-    pos: [f64; 3],
-    target: [f64; 3],
-    range: f32,
-    volume: f32,
-    min_volume: f32,
-) -> Option<([f64; 3], f32)> {
-    let d = [pos[0] - target[0], pos[1] - target[1], pos[2] - target[2]];
-    let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    // PlaySoundCommand compares against Mth.square(float range): the square
-    // rounds in float and only then widens, so a point between that square and
-    // the double square is out of range in vanilla.
-    if dist2 <= f64::from(range * range) {
-        return Some((pos, volume));
-    }
-    if min_volume <= 0.0 {
-        return None;
-    }
-    let dist = dist2.sqrt();
-    Some((
-        [
-            target[0] + d[0] / dist * 2.0,
-            target[1] + d[1] / dist * 2.0,
-            target[2] + d[2] / dist * 2.0,
-        ],
-        min_volume,
-    ))
-}
-
 /// `Entity.lookAt`: yaw and pitch from `from` towards `to`, the yaw wrapped
 /// to -180..180 as `Mth.wrapDegrees` does.
 pub(super) fn look_at(from: [f64; 3], to: [f64; 3]) -> [f32; 2] {
@@ -2385,7 +2125,8 @@ mod allay_owner_damage_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{look_at, playsound_placement, take_new_reinforcements};
+    use super::{look_at, take_new_reinforcements};
+    use horizon_gameplay::commands::sound::playsound_placement;
     use horizon_client::mobs::{MobEvent, Who};
 
     #[test]
