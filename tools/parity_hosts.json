@@ -103,7 +103,6 @@
   "server_player_combat": "#18133: NaN where vanilla has Float.MAX_VALUE",
   "server_player_damage": "#18133: an `updated` record missing at line 249973",
   "server_resource_pack": "#18133: extra config custom_payload horizon:payloads",
-  "source_silence": "#18133: Rust run writes no explosion.txt",
-  "world_spawn_sync": "#18133: the End's world spawn override row missing"
+  "source_silence": "#18133: Rust run writes no explosion.txt"
  }
 }

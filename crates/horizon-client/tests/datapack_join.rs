@@ -160,6 +160,7 @@ impl Host {
             next_entity: &mut self.next_entity,
             spawn: [8.5, f64::from(MIN_Y + 5), 8.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,

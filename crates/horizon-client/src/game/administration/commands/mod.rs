@@ -3292,10 +3292,16 @@ impl Game<'_> {
         let rot = [wrap_degrees(yaw), pitch.clamp(-90.0, 90.0)];
         let previous_point = self.world_spawn_position().map(|v| v.floor() as i32);
         let old_angle = self.level.world_spawn_angle;
+        let moved_level = self.level.spawn_dimension() != level.id();
         let old = self.level.world_spawn.replace(pos);
         self.level.world_spawn_angle = rot;
         self.level.world_spawn_dimension = Some(level.id().to_string());
-        if previous_point != pos || old_angle.map(f32::to_bits) != rot.map(f32::to_bits) {
+        // MinecraftServer.setRespawnData compares the whole RespawnData, its
+        // dimension too.
+        if previous_point != pos
+            || old_angle.map(f32::to_bits) != rot.map(f32::to_bits)
+            || moved_level
+        {
             self.lan_broadcast_world_spawn();
         }
         self.native_spawn_change(pos, rot);

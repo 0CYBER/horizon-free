@@ -144,6 +144,8 @@ pub struct TickCtx<'a> {
     pub spawn: [f64; 3],
     /// Rotation of the world spawn sent by PlayerList.sendLevelInfo.
     pub spawn_angle: [f32; 2],
+    /// The world spawn's dimension (`RespawnData.dimension`), sent with it.
+    pub spawn_dimension: &'a str,
     pub difficulty: i32,
     pub difficulty_locked: bool,
     /// The overworld clock's speed (0 when the day does not advance).
@@ -2144,12 +2146,12 @@ impl Hub {
         });
     }
 
-    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data
-    /// (the world spawn, in the Overworld wherever the player is).
-    pub fn default_spawn(&self, spawn: [f64; 3], angle: [f32; 2]) -> C {
+    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data:
+    /// the world spawn with the dimension it was set in, wherever the player is.
+    pub fn default_spawn(&self, dimension: &str, spawn: [f64; 3], angle: [f32; 2]) -> C {
         C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
             pos: play::GlobalPos {
-                dimension: "minecraft:overworld".into(),
+                dimension: dimension.into(),
                 pos: [
                     spawn[0].floor() as i32,
                     spawn[1].floor() as i32,
@@ -2176,7 +2178,7 @@ impl Hub {
         }
         g.send(&C::InitializeBorder(super::border::initialize(ctx.border)));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
-        g.send(&self.default_spawn(spawn, ctx.spawn_angle));
+        g.send(&self.default_spawn(ctx.spawn_dimension, spawn, ctx.spawn_angle));
         let w = &ctx.world.weather;
         if w.raining {
             g.send(&C::GameEvent(play::GameEvent {
@@ -4840,7 +4842,7 @@ impl Hub {
             g.tracker.clear();
         });
         self.resend_teleport(i, None);
-        let spawn = self.default_spawn(ctx.spawn, ctx.spawn_angle);
+        let spawn = self.default_spawn(ctx.spawn_dimension, ctx.spawn, ctx.spawn_angle);
         self.guests.update(i, |g| {
             g.send(&spawn);
             g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
@@ -5491,6 +5493,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -5964,6 +5967,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -6047,6 +6051,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -6117,6 +6122,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -6163,6 +6169,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -6364,6 +6371,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -6521,6 +6529,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -6635,6 +6644,7 @@ mod tests {
                 next_entity: &mut next_entity,
                 spawn: [0.5, 64.0, 0.5],
                 spawn_angle: [0.0; 2],
+                spawn_dimension: "minecraft:overworld",
                 difficulty: 2,
                 difficulty_locked: false,
                 clock_rate: 1.0,
@@ -6883,6 +6893,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -7293,6 +7304,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -7369,6 +7381,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -7745,6 +7758,7 @@ mod tests {
             next_entity: &mut next_entity,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -7873,6 +7887,7 @@ mod tests {
                 next_entity: &mut next_entity,
                 spawn: [0.5, 64.0, 0.5],
                 spawn_angle: [0.0; 2],
+                spawn_dimension: "minecraft:overworld",
                 difficulty: 2,
                 difficulty_locked: false,
                 clock_rate: 1.0,
