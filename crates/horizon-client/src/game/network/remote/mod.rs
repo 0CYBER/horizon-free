@@ -5692,11 +5692,7 @@ impl Game<'_> {
                     } else {
                         horizon_client::skins::Signature::Unsigned
                     };
-                    horizon_client::skins::unpack(
-                        &t.value,
-                        signature,
-                        horizon_client::skins::texture_uris(),
-                    )
+                    horizon_client::skins::unpack_known(&t.value, signature)
                 } else {
                     // `ResolvableProfile.resolveProfile`: no `textures` and
                     // only a name or an id resolves through the services.
@@ -5710,11 +5706,7 @@ impl Game<'_> {
                     key.and_then(|key| match self.skin_profiles.borrow_mut().state(&key) {
                         horizon_client::skins::Resolve::Done(Some(profile)) => {
                             profile.textures().map(|(value, signature)| {
-                                horizon_client::skins::unpack(
-                                    &value,
-                                    signature,
-                                    horizon_client::skins::texture_uris(),
-                                )
+                                horizon_client::skins::unpack_known(&value, signature)
                             })
                         }
                         _ => None,
