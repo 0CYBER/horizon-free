@@ -99,6 +99,8 @@ pub struct Report {
     pub loot_tables_upgraded: usize,
     /// Advancements whose criteria were rewritten ([`upgrade_advancement`]).
     pub advancements_upgraded: usize,
+    /// Predicate files rewritten in 26.3's shape ([`upgrade_predicate`]).
+    pub predicates_upgraded: usize,
     /// Blocks whose jar has no loot table but drop themselves in the oracle:
     /// the mod registers that table in code, and carry-over writes it.
     pub loot_tables_added: usize,
@@ -592,6 +594,22 @@ fn rename_kind(v: &mut Value, key: &str) {
         && let Some(kind) = o.remove(key)
     {
         o.insert("type".to_owned(), kind);
+    }
+}
+
+/// A 1.21.1 predicate file (`data/<ns>/predicate/`) in 26.3's shape: its
+/// condition as in a loot table ([`upgrade_condition`]), and a list of
+/// conditions, which 1.21.1 read as all of them, one `minecraft:all_of`.
+pub fn upgrade_predicate(v: &mut Value) {
+    if let Value::Array(list) = v {
+        let mut list = std::mem::take(list);
+        list.iter_mut().for_each(upgrade_condition);
+        *v = match <[Value; 1]>::try_from(list) {
+            Ok([c]) => c,
+            Err(list) => json!({"type": "minecraft:all_of", "terms": list}),
+        };
+    } else {
+        upgrade_condition(v);
     }
 }
 
@@ -1243,6 +1261,19 @@ pub fn carry(
                     if table != before {
                         report.loot_tables_upgraded += 1;
                         bytes = serde_json::to_vec_pretty(&table).unwrap_or(bytes);
+                    }
+                }
+            } else if rel.starts_with("predicate/")
+                && name.starts_with("data/")
+                && name.ends_with(".json")
+            {
+                if let Ok(mut predicate) = serde_json::from_slice::<Value>(&bytes) {
+                    let before = predicate.clone();
+                    upgrade_predicate(&mut predicate);
+                    renamed_ids(&mut predicate);
+                    if predicate != before {
+                        report.predicates_upgraded += 1;
+                        bytes = serde_json::to_vec_pretty(&predicate).unwrap_or(bytes);
                     }
                 }
             } else if let Some(b) = rel
@@ -2168,6 +2199,43 @@ mod tests {
                 .unwrap()
                 .starts_with("does not parse")
         );
+    }
+
+    /// 26.3 predicates dispatch on `type`: a 1.21.1 predicate file keyed by
+    /// `condition`, or a list of conditions, is carried in 26.3's shape.
+    #[test]
+    fn predicate_files_are_carried_in_26_3_shape() {
+        let dir = temp_dir("predicates");
+        let jar = dir.join("predicates.jar");
+        write_jar(
+            &jar,
+            &[
+                (
+                    "data/example/predicate/ensnared.json",
+                    br##"{"condition":"minecraft:entity_properties","entity":"this","predicate":{"type":"#example:ignores"}}"##,
+                ),
+                (
+                    "data/example/predicate/both.json",
+                    br#"[{"condition":"minecraft:random_chance","chance":0.5},{"condition":"minecraft:survives_explosion"}]"#,
+                ),
+            ],
+        );
+        let out = dir.join("work/mods/example");
+        let report = carry_alone(&jar, &out).unwrap();
+        assert_eq!(report.predicates_upgraded, 2);
+        let read = |name: &str| -> Value {
+            let file = out.join(format!("carry/data/example/predicate/{name}.json"));
+            serde_json::from_slice(&fs::read(file).unwrap()).unwrap()
+        };
+        let ensnared = read("ensnared");
+        assert_eq!(ensnared["type"], "minecraft:entity_properties");
+        assert!(ensnared.get("condition").is_none());
+        assert!(ensnared["predicate"].get("type").is_none());
+        let both = read("both");
+        assert_eq!(both["type"], "minecraft:all_of");
+        assert_eq!(both["terms"][0]["type"], "minecraft:random_chance");
+        assert_eq!(both["terms"][1]["type"], "minecraft:survives_explosion");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
