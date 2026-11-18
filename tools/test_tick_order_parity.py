@@ -345,8 +345,21 @@ def run_side(label, command, build, world, all_cells):
 
 # ---- comparison ---------------------------------------------------------------------------------------------
 
+NUMBER = r'-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?'
+
+
 def numbers(text):
-    return [float(t) for t in re.findall(r'-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?', text)]
+    return [float(t) for t in re.findall(NUMBER, text)]
+
+
+def normalized(text):
+    """Whitespace-collapsed text, so a line wrap is not a difference; None stays distinct from any string."""
+    return re.sub(r'\s+', ' ', text).strip() if text is not None else None
+
+
+def non_numeric(text):
+    """The text with each number blanked out: the feedback a numeric tolerance may not excuse."""
+    return re.sub(NUMBER, '#', text)
 
 
 def values(history):
@@ -357,15 +370,24 @@ def values(history):
 
 def compare(one, other):
     """(values off, first tick that differs, largest difference, total) between two cells' values, by key: a value
-    one side lacks counts as infinitely far."""
+    one side lacks counts as infinitely far. Two texts match only when they are identical after whitespace
+    normalization, or differ solely in numbers that are within TOLERANCE and leave the same non-numeric feedback."""
     off, first, worst = 0, None, 0.0
     for key in sorted(set(one) | set(other), key=lambda k: (int(k[0]), k[1], k[2])):
-        left, right = one.get(key), other.get(key)
+        left, right = normalized(one.get(key)), normalized(other.get(key))
         if left == right:
             continue
-        a, b = numbers(left or ''), numbers(right or '')
-        delta = max((abs(x - y) for x, y in zip(a, b)), default=0.0) if left and right and len(a) == len(b) else float('inf')
-        if delta > TOLERANCE or left is None or right is None:
+        if left is None or right is None:
+            off += 1
+            first = int(key[0]) if first is None else first
+            worst = float('inf')
+            continue
+        a, b = numbers(left), numbers(right)
+        # Numeric tolerance may only excuse a difference in the numbers themselves: any change to the surrounding
+        # text (a name, a unit, a word such as 'gone') is a real difference even when neither side holds a digit.
+        delta = (max((abs(x - y) for x, y in zip(a, b)), default=0.0)
+                 if non_numeric(left) == non_numeric(right) and len(a) == len(b) else float('inf'))
+        if delta > TOLERANCE:
             off += 1
             first = int(key[0]) if first is None else first
             worst = max(worst, delta)
