@@ -5,9 +5,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
+        // Tests run on parallel threads of one process, where two can read the same clock value.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "horizon-native-cache-{}-{}",
+            "horizon-native-cache-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
