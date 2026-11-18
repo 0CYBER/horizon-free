@@ -49,7 +49,7 @@ Panda.addEatingParticles	inline	crates/horizon-client/src/mobs/panda.rs::handle_
 Panda.updateSitAmount	inline	crates/horizon-client/src/mobs/panda.rs::update_amounts	sit amount rises 0.15 and falls 0.19 a tick
 Panda.updateOnBackAnimation	inline	crates/horizon-client/src/mobs/panda.rs::update_amounts	on-back amount, same steps
 Panda.updateRollAmount	inline	crates/horizon-client/src/mobs/panda.rs::update_amounts	roll amount, same steps
-Panda.pickUpItem	inline	crates/horizon-client/src/game/mobs/pandas.rs::Game::tick_pandas	takes a panda_eats_from_ground item at its feet with an empty mouth (mob_griefing), guaranteed drop
+Panda.pickUpItem	inline	crates/horizon-gameplay/src/pandas.rs::tick_pandas	takes a panda_eats_from_ground item at its feet with an empty mouth (mob_griefing), guaranteed drop
 Panda.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	random main and hidden genes, set_attributes, ageable group with 0.2 chance
 Panda.setGeneFromParents	port	crates/horizon-client/src/mobs/panda.rs::inherit	genes from both parents with a 1 in 32 re-roll each; the one-parent branch is never reached
 Panda.PandaAttackGoal.canUse	port	crates/horizon-client/src/mobs/panda.rs::When::can_use	melee attack only while can_perform_action

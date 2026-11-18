@@ -44,7 +44,7 @@ MobSensor.doTick	inline	crates/horizon-client/src/mobs/armadillo.rs::server_ai_s
 MobSensor.checkForMobsNearby	port	crates/horizon-client/src/mobs/armadillo.rs::scared_by_someone	undead, last attacker or a sprinting or riding player within 7 by 2 blocks
 MobSensor.mobDetected	inline	crates/horizon-client/src/mobs/armadillo.rs::server_ai_step	danger = 80 ticks
 NearestBedSensor.doTick	port	crates/horizon-client/src/mobs/villager_brain.rs::sense_bed	babies only, at most four new beds per scan, 40 tick cache, path must reach the bed
-NearestItemSensor.doTick	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_pickups	gap: player: villagers never walk to dropped food or seeds (only what lands within a block is picked up) and piglins and allays scan their own items without the line-of-sight test
+NearestItemSensor.doTick	port	crates/horizon-gameplay/src/piglins.rs::piglin_pickups	gap: player: villagers never walk to dropped food or seeds (only what lands within a block is picked up) and piglins and allays scan their own items without the line-of-sight test
 NearestLivingEntitySensor.doTick	port	crates/horizon-client/src/mobs/brain.rs::living_near	alive entities within the follow range box, nearest first, stored with a fresh visible list
 NearestVisibleLivingEntitySensor.getNearestEntity	inline	crates/horizon-client/src/mobs/animal_brain.rs::sense_axolotl_attackables	find_closest over the visible list with the sensor's own test
 PiglinBruteSpecificSensor.doTick	inline	crates/horizon-client/src/mobs/piglin.rs::register_brute	gap: minor: nemesis is a NearestTarget on wither skeletons only, the wither boss is not one; alerting nearby adult piglins is HurtByTarget alert

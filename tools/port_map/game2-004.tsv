@@ -33,14 +33,14 @@ Piglin.createAttributes	skip:data		attribute defaults (health 16, speed 0.35, at
 Piglin.checkPiglinSpawnRules	port	crates/horizon-client/src/mobs/spawn_rules.rs::check_spawn_rules	not spawning on a nether wart block
 Piglin.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::piglin	baby chance or spawn weapon, hunt wait, then equipment and enchantments
 Piglin.populateDefaultEquipmentSlots	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::populate	golden armour at 10 percent per adult slot
-Piglin.mobInteract	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::give_piglin	a gold ingot handed over starts admiring
+Piglin.mobInteract	port	crates/horizon-gameplay/src/piglins.rs::give_piglin	a gold ingot handed over starts admiring
 Piglin.setBaby	port	crates/horizon-client/src/mobs/finalize.rs::set_baby	gap: minor: sets the baby age only; the speed modifier is not set in this fn
 Piglin.customServerAiStep	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	gap: minor: the brain tick is the registered goal set (register_piglin), not this fn
 Piglin.finishConversion	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	the conversion cancels the admire and drops the admired item; the rest of a piglin's carried inventory is still not scattered
 Piglin.hurtServer	inline	crates/horizon-client/src/mobs/piglin.rs::celebrate	gap: player: a hit by a player does not stop an admiring piglin or start its admiring-disabled wait; babies do not flee the attacker
-Piglin.canUseNonMeleeWeapon	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_wanted	gap: minor: checks the preferred-weapons tag only, not the usable-crossbow tag or the kinetic weapon component
+Piglin.canUseNonMeleeWeapon	port	crates/horizon-gameplay/src/piglins.rs::piglin_wanted	gap: minor: checks the preferred-weapons tag only, not the usable-crossbow tag or the kinetic weapon component
 Piglin.holdInOffHand	port	crates/horizon-client/src/mobs/piglin.rs::hold_in_offhand	equips the item (drop chance 2.0 as setItemSlotAndDropWhenKilled) and makes the piglin persistent unless it is the barter item
-Piglin.wantsToPickUp	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_wants	gap: minor: does not check the admiring-disabled wait after a hit by a player
+Piglin.wantsToPickUp	port	crates/horizon-gameplay/src/piglins.rs::piglin_wants	gap: minor: does not check the admiring-disabled wait after a hit by a player
 Piglin.startRiding	port	crates/horizon-client/src/mobs/riders.rs::start_riding	the boarding tests (not the vehicle it is on, not one it carries, the boarding cooldown, a free vehicle) plus the `Piglin` case: a baby piglin on a hoglin goes on top of the up-to-three piglins already there
 Piglin.getTopPassenger	port	crates/horizon-client/src/mobs/riders.rs::top_passenger	the top of the passenger chain, capped at four passengers on a hoglin
 Piglin.getAmbientSound	port	crates/horizon-client/src/mobs/piglin.rs::piglin_ambient	the sound of the activity: angry, retreat, admiring, celebrate, jealous, or the plain grunt
@@ -56,18 +56,18 @@ PiglinAi.createIdleLookBehaviors	inline	crates/horizon-client/src/mobs/piglin.rs
 PiglinAi.createIdleMovementBehaviors	inline	crates/horizon-client/src/mobs/piglin.rs::register_piglin	gap: minor: strolls only; no walking up to other piglins or to a look target
 PiglinAi.updateActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_piglin	gap: minor: the activity choice is the goal priority order; the aggressive and dancing flags are set elsewhere
 PiglinAi.isBabyRidingBaby	port	crates/horizon-client/src/mobs/piglin.rs::is_baby_riding_baby	a baby piglin on a baby piglin or a baby hoglin
-PiglinAi.pickUpItem	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_pickups	loved item admired, food eaten, else worn or stored
-PiglinAi.holdInOffhand	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::start_admiring	drops what the off hand held, whole, then holds the item through hold_in_offhand (Piglin.holdInOffHand), which sets persistence
-PiglinAi.removeOneItemFromItemEntity	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_pickups	takes one item from the stack (nuggets whole)
+PiglinAi.pickUpItem	port	crates/horizon-gameplay/src/piglins.rs::piglin_pickups	loved item admired, food eaten, else worn or stored
+PiglinAi.holdInOffhand	port	crates/horizon-gameplay/src/piglins.rs::start_admiring	drops what the off hand held, whole, then holds the item through hold_in_offhand (Piglin.holdInOffHand), which sets persistence
+PiglinAi.removeOneItemFromItemEntity	port	crates/horizon-gameplay/src/piglins.rs::piglin_pickups	takes one item from the stack (nuggets whole)
 PiglinAi.cancelAdmiring	port	crates/horizon-client/src/mobs/piglin.rs::stop_admiring	the off hand is emptied and admiring is disabled for a while
-PiglinAi.throwItems	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::finish_admiring	gap: minor: only the barter path throws; the target choice is nearest player within 16, else a spot nearby
-PiglinAi.throwItemsTowardPos	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_throw	gap: minor: no off-hand swing animation
-PiglinAi.getBarterResponseItems	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::finish_admiring	rolls minecraft:gameplay/piglin_bartering for an adult; a baby gets the ingot back
+PiglinAi.throwItems	port	crates/horizon-gameplay/src/piglins.rs::finish_admiring	gap: minor: only the barter path throws; the target choice is nearest player within 16, else a spot nearby
+PiglinAi.throwItemsTowardPos	port	crates/horizon-gameplay/src/piglins.rs::piglin_throw	gap: minor: no off-hand swing animation
+PiglinAi.getBarterResponseItems	port	crates/horizon-gameplay/src/piglins.rs::finish_admiring	rolls minecraft:gameplay/piglin_bartering for an adult; a baby gets the ingot back
 PiglinAi.wantsToStopRiding	port	crates/horizon-client/src/mobs/piglin.rs::wants_to_stop_riding	a ride target that is not a baby hoglin, or one that is too far or gone
 PiglinAi.isNearestValidAttackTarget	inline	crates/horizon-client/src/mobs/piglin.rs::ai_step	gap: minor: only drops a mob target that is dead or unseen; vanilla also re-picks the nearest valid target
 PiglinAi.isNearZombified	inline	crates/horizon-client/src/mobs/piglin.rs::register_piglin	gap: minor: the 6-block avoid is an AvoidEntity goal; the attack target is not erased near a zombified piglin
 PiglinAi.findNearestValidAttackTarget	port	crates/horizon-client/src/mobs/piglin.rs::hostile_to_player	gap: minor: decides player targets only; angry-at, nemesis and universal anger are not chosen here
-PiglinAi.canAdmire	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::give_piglin	adult piglin takes a gold ingot from the hand
+PiglinAi.canAdmire	port	crates/horizon-gameplay/src/piglins.rs::give_piglin	adult piglin takes a gold ingot from the hand
 PiglinAi.maybeRetaliate	inline	crates/horizon-client/src/mobs/goals.rs::HurtByTarget::start	gap: minor: the hurt mob becomes the target; the 600-tick anger timer and the too-far check are not kept
 PiglinAi.getSoundForActivity	port	crates/horizon-client/src/mobs/piglin.rs::piglin_sound	angry, retreat, admiring, celebrate, jealous and plain grunts, activity by activity
 PiglinAi.isNearAvoidTarget	inline	crates/horizon-client/src/mobs/piglin.rs::piglin_sound	the avoid target within 12 blocks picks the retreat grunt
@@ -85,9 +85,9 @@ PiglinAi.wantsToStopFleeing	port	crates/horizon-client/src/mobs/piglin.rs::wants
 PiglinAi.hoglinsOutnumberPiglins	port	crates/horizon-client/src/mobs/piglin.rs::hoglins_outnumber_piglins	a piglin counts itself and sees more adult hoglins than adult piglins
 PiglinAi.setAvoidTargetAndDontHuntForAWhile	port	crates/horizon-client/src/mobs/piglin.rs::set_avoid_target_and_dont_hunt	the hunt is pushed back by 30 to 120 seconds
 PiglinAi.dontKillAnyMoreHoglinsForAWhile	port	crates/horizon-client/src/mobs/piglin.rs::HuntHoglin::start	gap: minor: sets only the hunting piglin's own wait; the wait from a hit on a hoglin is not set
-PiglinAi.getRandomNearbyPos	inline	crates/horizon-client/src/game/mobs/piglins.rs::Game::finish_admiring	gap: minor: a random spot within 4 blocks, not a land position
+PiglinAi.getRandomNearbyPos	inline	crates/horizon-gameplay/src/piglins.rs::finish_admiring	gap: minor: a random spot within 4 blocks, not a land position
 PiglinAi.isPlayerHoldingLovedItem	port	crates/horizon-client/src/mobs/piglin.rs::holds_loved	gold in either hand of the nearest player
-PiglinAi.isNotHoldingLovedItemInOffHand	inline	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_wants	the off hand holds no loved item test
+PiglinAi.isNotHoldingLovedItemInOffHand	inline	crates/horizon-gameplay/src/piglins.rs::piglin_wants	the off hand holds no loved item test
 PiglinAi.isZombified	inline	crates/horizon-client/src/mobs/piglin.rs::register_piglin	the zombified piglin and zoglin species list of the avoid goal
 PiglinAi.findNearbyAdultPiglins	inline	crates/horizon-client/src/mobs/piglin.rs::HuntHoglin::start	gap: minor: uses the follow range, not the sensor's nearest living entities list
 AbstractSkeleton.registerGoals	port	crates/horizon-client/src/mobs/undead.rs::register	restrict sun, flee sun, wolf avoid, stroll, look, targets

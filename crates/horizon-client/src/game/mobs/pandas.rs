@@ -1,17 +1,16 @@
 //! Pandas on the game side: the food they find on the ground and pick up
 //! (`Mob.aiStep`, `Panda.pickUpItem`), the bamboo a player gives them
-//! (`Panda.mobInteract`), the start a sneeze gives the grown pandas about,
-//! and the crumbs and the sneeze a window draws.
-use super::{
-    Game,
-    pickups::{Collector, Taken},
-};
+//! (`Panda.mobInteract`) and the start a sneeze gives the grown pandas about run on the
+//! game's `PandaLevel` (`horizon_gameplay::pandas`, implemented below: the food tag is
+//! the private `Game::panda_eats_from_ground`, which a mod can listen to); the crumbs and the sneeze a window
+//! draws stay here.
+use super::Game;
 use horizon_client::{
     items::ItemStack,
     mobs::{Species, panda},
     particles::{ParticleOptions, ParticleType},
 };
-use horizon_core::geometry::Vec3;
+use horizon_gameplay::panda_level::PandaLevel;
 
 impl Game<'_> {
     /// `Panda.canPickUpAndEat`'s tag.
@@ -25,154 +24,15 @@ impl Game<'_> {
     /// A panda takes what lies at its feet when its mouth is free, and
     /// looks for food within 6 and 8 blocks for `PandaSitGoal`.
     pub(super) fn tick_pandas(&mut self) {
-        let griefing = self
-            .ui
-            .rules
-            .bool_at(horizon_client::gamerules::vanilla::MOB_GRIEFING);
-        for i in 0..self.mobs.len() {
-            let m = &self.mobs[i];
-            if m.species() != Species::Panda || !m.alive() || !self.creatures.ticked.contains(&m.id)
-            {
-                continue;
-            }
-            let id = m.id;
-            let wants = |g: &Self, e: &horizon_client::entities::ItemEntity| {
-                e.pickup_delay == 0 && g.panda_eats_from_ground(&e.stack.item)
-            };
-            // Mob.aiStep: the items within the box grown by (1, 0, 1).
-            if m.can_pick_up_loot()
-                && self.entity_grief(m.id, griefing)
-                && m.extra.main_hand_id().is_none()
-            {
-                let reach = m.bounds().inflate(Vec3::new(1.0, 0.0, 1.0));
-                let taken = self
-                    .dropped
-                    .iter()
-                    .position(|e| wants(self, e) && reach.intersects(e.bounds()));
-                if let Some(j) = taken {
-                    let before = self.dropped[j].clone();
-                    // `Panda.pickUpItem`'s `onItemPickup` comes first: the
-                    // advancement of whoever threw it.
-                    self.mob_item_pickup_trigger(i, &before);
-                    let e = self.remove_dropped(j);
-                    self.add_pickup(Taken::Item(Box::new(e.clone())), Collector::Mob(id));
-                    panda::hold(&mut self.mobs[i], &e.stack.item, e.stack.count, true);
-                }
-            }
-            let m = &self.mobs[i];
-            let area = |r: f64| m.bounds().inflate(Vec3::new(r, r, r));
-            let (near, wide) = (area(6.0), area(8.0));
-            let food_near = self
-                .dropped
-                .iter()
-                .any(|e| wants(self, e) && near.intersects(e.bounds()));
-            let food_at = self
-                .dropped
-                .iter()
-                .find(|e| wants(self, e) && wide.intersects(e.bounds()))
-                .map(|e| [e.position.x, e.position.y, e.position.z]);
-            panda::set_food(&mut self.mobs[i], food_near, food_at);
-        }
+        horizon_gameplay::pandas::tick_pandas(self);
     }
     /// `Panda.mobInteract` for a click with `item`; whether the click is taken.
     pub(super) fn interact_panda(&mut self, index: usize, item: &str) -> bool {
-        let creative = self.creative;
-        let m = &mut self.mobs[index];
-        if panda::scared(m) {
-            return false;
-        }
-        if panda::get_up(m) {
-            return true;
-        }
-        // A baby holding a golden_dandelion goes on to `AgeableMob.mobInteract`,
-        // which `interact_mob` answered before this; anything else that is not
-        // bamboo passes.
-        if !m.kind.food.iter().any(|f| f == item) {
-            return false;
-        }
-        if m.ai.target.is_some() {
-            panda::got_bamboo(m);
-        }
-        let at = [m.position.x, m.position.y, m.position.z];
-        let id = m.id;
-        let mut dropped = None;
-        let mut loved = false;
-        if m.is_baby() {
-            // Panda.mobInteract: a baby an age lock holds back passes.
-            if !horizon_client::mobs::ai::can_age_up(m) {
-                return false;
-            }
-            // ageUp((int) (-getAge() / 20 * 0.1F), true).
-            let seconds = ((-m.extra.age / 20) as f32 * 0.1) as i32;
-            horizon_client::mobs::ai::age_up(m, seconds, true);
-        } else if m.extra.age == 0 && m.extra.in_love <= 0 {
-            m.extra.in_love = 600;
-            m.extra.love_player = true;
-            loved = true;
-        } else {
-            if panda::is_sitting(m) || m.fluids.in_water {
-                return false;
-            }
-            panda::try_to_sit(m);
-            panda::start_eating(m);
-            // What it held falls, unless the player has infinite materials.
-            if let Some(held) = m.extra.main_hand_id().map(str::to_owned)
-                && !creative
-            {
-                dropped = Some(ItemStack::new(&held, panda::held_count(m)));
-            }
-            panda::hold(m, item, 1, false);
-        }
-        if loved {
-            self.love_cause.insert(id, self.lan_acting);
-            let kind = self
-                .mobs
-                .iter()
-                .find(|m| m.id == id)
-                .map(super::native_hooks::mob_kind)
-                .unwrap_or_default();
-            self.native_entity_enter_love_mode(id, &kind, self.lan_acting_uuid);
-            // Animal.setInLove: entity event 18, the love hearts.
-            self.mob_event_particles(id, 18);
-        }
-        self.consume_held();
-        if let Some(stack) = dropped {
-            self.spawn_item(stack, at, [0.0, 0.2, 0.0], 10);
-        }
-        true
+        horizon_gameplay::pandas::interact_panda(self, index, item)
     }
     /// `Panda.afterSneeze`: the grown pandas within 10 blocks of a cub jump.
     pub(super) fn panda_sneezed(&mut self, id: u32) {
-        let Some(area) = self
-            .mobs
-            .iter()
-            .find(|m| m.id == id)
-            .map(|m| m.bounds().inflate(Vec3::new(10.0, 10.0, 10.0)))
-        else {
-            return;
-        };
-        let mut mobs = self.mobs.lift();
-        #[cfg(test)]
-        super::entity::taken_pass_tests::after_take(self);
-        let w = self.mob_world_base(&[]);
-        for m in &mut mobs {
-            if m.species() == Species::Panda
-                && !m.is_baby()
-                && m.on_ground
-                && !m.fluids.in_water
-                && panda::can_perform_action(m, panda::scared(m))
-                && area.intersects(m.bounds())
-            {
-                // LivingEntity.jumpFromGround.
-                m.needs_sync = true;
-                let power = f64::from(m.jump_power(&w));
-                if power > 1.0e-5 {
-                    m.velocity.y = power.max(m.velocity.y);
-                }
-            }
-        }
-        self.mobs
-            .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
+        horizon_gameplay::pandas::panda_sneezed(self, id);
     }
     /// What a window draws of its pandas: the crumbs of a bite
     /// (`addEatingParticles`) and the sneeze's particle.
@@ -206,6 +66,34 @@ impl Game<'_> {
     }
 }
 
+impl PandaLevel for Game<'_> {
+    fn panda_eats_from_ground(&self, item: &str) -> bool {
+        Game::panda_eats_from_ground(self, item)
+    }
+    fn is_creative(&self) -> bool {
+        self.creative
+    }
+    fn panda_in_love(&mut self, id: u32) {
+        self.love_cause.insert(id, self.lan_acting);
+        let kind = self
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .map(super::native_hooks::mob_kind)
+            .unwrap_or_default();
+        self.native_entity_enter_love_mode(id, &kind, self.lan_acting_uuid);
+        // Animal.setInLove: entity event 18, the love hearts.
+        self.mob_event_particles(id, 18);
+    }
+    fn consume_held(&mut self) {
+        Game::consume_held(self);
+    }
+    fn after_mobs_lifted(&mut self) {
+        #[cfg(test)]
+        super::entity::taken_pass_tests::after_take(self);
+    }
+}
+
 #[cfg(test)]
 mod nested_spawn_tests {
     #[test]
@@ -236,6 +124,7 @@ mod pickup_tests {
     use crate::game::game_tests::tests::server_game;
     use horizon_client::advancements as adv;
     use horizon_client::motion::PlayerMotion;
+    use horizon_core::geometry::Vec3;
     use horizon_world::lazy_json::LazyJson;
 
     const ADV: &str = "horizon:test/panda_pickup";

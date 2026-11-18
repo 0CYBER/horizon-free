@@ -65,7 +65,7 @@ PiglinBruteAi.maybePlayActivitySound	port	crates/horizon-client/src/mobs/piglin.
 PiglinBruteAi.playActivitySound	port	crates/horizon-client/src/mobs/piglin.rs::play_brute_sound	entity.piglin_brute.angry when the fight activity starts
 PiglinBruteAi.setAngerTarget	missing		minor: no 600-tick anger memory; the target goals keep the target instead
 PiglinBruteAi.updateActivity	inline	crates/horizon-client/src/mobs/piglin.rs::update_activity	the first valid activity (fight on a target, else idle for a brute) is stored and voiced on a change; shared with PiglinAi and HoglinAi
-StartAdmiringItemIfSeen.create	inline	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_pickups	gap: player: a piglin takes a wanted item and admires it in hand; it does not stop to admire one it only sees on the ground
+StartAdmiringItemIfSeen.create	inline	crates/horizon-gameplay/src/piglins.rs::piglin_pickups	gap: player: a piglin takes a wanted item and admires it in hand; it does not stop to admire one it only sees on the ground
 StopAdmiringIfItemTooFarAway.create	inline	crates/horizon-client/src/mobs/piglin.rs::Memories::admire_seen	the 9 block test on NEAREST_VISIBLE_WANTED_ITEM (squared 81) while the off hand holds what is admired, folded into the admire memory tick
 StopAdmiringIfTiredOfTryingToReachItem.create	inline	crates/horizon-client/src/mobs/piglin.rs::Memories::admire_seen	the 200 tick TIME_TRYING_TO_REACH_ADMIRE_ITEM countdown that ends the admire, then DISABLE_WALK_TO_ADMIRE_ITEM for 200
 Parched.getArrow	inline	crates/horizon-client/src/mobs/undead.rs::perform_ranged_attack	Parched arrows carry weakness for 600 ticks
