@@ -38,11 +38,85 @@ TLDS = "com|net|org|dev|gg|io|ms|me|app|xyz|co|za|uk|de|fr|tv|eu|ch|nl|ru|jp|au|
 HOST = r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + TLDS + r")"
 URL = re.compile(r"\b(?:https?|wss?)://(?:[^/@\s\"]*@)?(\[[0-9a-f:]+\]|[a-z0-9.-]+)", re.I)
 WHOLE = re.compile(r"^(" + HOST + r"|(?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?(?:/\S*)?$", re.I)
-# Files with neither a URL nor a whole-string host skip the tokenizer.
-MAYBE_HOST = re.compile(r"://|\"" + HOST + r"(?::\d+)?[\"/]|\"(?:\d{1,3}\.){3}\d{1,3}", re.I)
+# Files with neither a URL nor a whole-string host skip the tokenizer. Rust's hex/Unicode escapes and
+# line continuations can build or split an ASCII host while the raw source has no plain host and no
+# "://", so those escape signatures also send a file to the tokenizer (the simple escapes cannot form
+# a host character). This is a cheap hint, not a decode: raw strings, comments and #[cfg(test)] items
+# are still excluded downstream.
+_ESCAPE_HINT = r"\\x[0-9a-fA-F]{2}|\\u\{[0-9a-fA-F_]+\}|\\\r?\n"
+MAYBE_HOST = re.compile(r"://|\"" + HOST + r"(?::\d+)?[\"/]|\"(?:\d{1,3}\.){3}\d{1,3}|" + _ESCAPE_HINT, re.I)
 TEST_MOD = re.compile(r"#\[cfg\((?:all\()?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;")
 PLACEHOLDER = re.compile(r"(^|\.)(example(\.(com|net|org))?|test|invalid|localhost|local)$")
 SKIP_DIRS = {"tests", "examples", "benches", "fixtures", "target"}
+
+# Rust's ordinary-string escapes. Raw strings are decoded nowhere (see tokenize); these apply only to `"..."`.
+_RUST_SIMPLE_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
+_RUST_HEX = "0123456789abcdefABCDEF"
+_RUST_WS = " \t\r\n\x0b\x0c"
+
+
+def _decode_rust_string(raw):
+    """Decoded value of an ordinary Rust string literal's contents.
+
+    Covers every escape valid in a shipped Rust string: \\n \\r \\t \\0 \\\\ \\" \\', ASCII \\xNN,
+    \\u{...} (a hex digit followed by hex digits/underscores) and backslash-newline whitespace continuation.
+    A sequence this decoder does not recognize is kept verbatim: invalid Rust cannot be in shipped
+    source, and leaving it visible is safer than silently rewriting what the scanner read.
+    """
+    out, i, n = [], 0, len(raw)
+    while i < n:
+        c = raw[i]
+        if c != "\\":
+            out.append(c)
+            i += 1
+            continue
+        if i + 1 >= n:
+            out.append(c)
+            i += 1
+            continue
+        e = raw[i + 1]
+        if e in _RUST_SIMPLE_ESCAPES:
+            out.append(_RUST_SIMPLE_ESCAPES[e])
+            i += 2
+        elif e == "x" and i + 3 < n and raw[i + 2] in _RUST_HEX and raw[i + 3] in _RUST_HEX:
+            value = int(raw[i + 2:i + 4], 16)
+            if value < 0x80:  # Rust requires ASCII for \xNN in a string literal.
+                out.append(chr(value))
+            else:
+                out.append(raw[i:i + 4])
+            i += 4
+        elif raw.startswith("u{", i + 1):
+            close = raw.find("}", i + 3)
+            body = raw[i + 3:close] if close > 0 else ""
+            # rustc accepts a hex digit followed by any mix of hex digits and underscores: internal
+            # repeats and a trailing underscore are valid, a leading underscore is not (verified with
+            # rustc 1.99.1). Ignore underscores when counting the 1..6 actual hex digits to validate.
+            digits = None
+            if body and body[0] in _RUST_HEX and all(d == "_" or d in _RUST_HEX for d in body):
+                candidate = body.replace("_", "")
+                if 1 <= len(candidate) <= 6:
+                    digits = candidate
+            if digits:
+                value = int(digits, 16)
+                if value <= 0x10FFFF and not 0xD800 <= value <= 0xDFFF:
+                    out.append(chr(value))
+                    i = close + 1
+                    continue
+            end = close + 1 if close > 0 else n
+            out.append(raw[i:end])  # malformed or out-of-range: keep it visible
+            i = end
+        elif e in "\r\n":
+            # Line continuation: the backslash, its newline and the following ASCII whitespace vanish.
+            j = i + 2
+            if e == "\r" and j < n and raw[j] == "\n":
+                j += 1
+            while j < n and raw[j] in _RUST_WS:
+                j += 1
+            i = j
+        else:
+            out.append(raw[i:i + 2])
+            i += 2
+    return "".join(out)
 
 
 def tokenize(text):
@@ -87,7 +161,9 @@ def tokenize(text):
             j = i + 1
             while j < n and text[j] != '"':
                 j += 2 if text[j] == "\\" else 1
-            out.append((i + 1, text[i + 1:j]))
+            # Keep the source offset (for #[cfg(test)] ranges) and the masked span (for brace
+            # matching), but hand the scanner the literal's decoded value, not its spelling.
+            out.append((i + 1, _decode_rust_string(text[i + 1:j])))
             blank(i + 1, j)
             i = j + 1
         elif c == "'":
