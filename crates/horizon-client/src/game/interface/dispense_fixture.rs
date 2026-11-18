@@ -512,10 +512,13 @@ impl Game<'_> {
         } else {
             GameMode::Survival
         };
-        self.player = Some(PlayerMotion::new(
-            self.motion,
-            horizon_core::geometry::Vec3::new(0.0, 0.0, 0.0),
-        )?);
+        let mut player =
+            PlayerMotion::new(self.motion, horizon_core::geometry::Vec3::new(0.0, 0.0, 0.0))?;
+        // GameType.updatePlayerAbilities, as a mode change sets it: a creative
+        // player's `Abilities.invulnerable` turns the arrow away in `hurtServer`,
+        // before `applyItemBlocking` counts the shield as used.
+        player.invulnerable = self.creative;
+        self.player = Some(player);
         self.yaw = 0.0;
         self.armor = Default::default();
         self.offhand = Some(stack);

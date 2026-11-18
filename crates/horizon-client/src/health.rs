@@ -1736,10 +1736,9 @@ impl HurtWorld for Environment<'_> {
         }
         // Nothing is stopped without a raised item, or when its `bypassed_by` or a
         // piercing arrow skips it; a native mod may still force a block.
+        let reached = matches!(&self.blocking, Some(b) if !b.bypassed && !b.pierce);
         let vanilla = match &self.blocking {
-            Some(b) if !b.bypassed && !b.pierce => {
-                b.rules.resolve(&mut MatchedSets, damage, b.angle)?
-            }
+            Some(b) if reached => b.rules.resolve(&mut MatchedSets, damage, b.angle)?,
             _ => 0.0,
         };
         let shield_damage = self
@@ -1762,10 +1761,20 @@ impl HurtWorld for Environment<'_> {
             .level
             .attack()
             .player_source(&self.source.definition().name, self.causing);
+        let vanilla_blocked = vanilla > 0.0;
         let Some(block) =
             self.level
                 .shield_block(Hurting::Player(self.entity, source), damage, block)
         else {
+            // `BlocksAttacks.hurtBlockingItem` runs once the raised item is reached,
+            // even when its reductions stop nothing (a hit from behind): the hit
+            // counts it as used, and wears what `itemDamage` gives for 0 (nothing,
+            // unless an item's own threshold is 0 or below). A block a native mod
+            // takes back stays as before, unused.
+            self.blocking_item_used = reached && !vanilla_blocked;
+            if self.blocking_item_used {
+                self.shield_damage = shield_damage;
+            }
             return Ok(0.0);
         };
         self.blocking_item_used = true;
@@ -2219,6 +2228,76 @@ mod tests {
             .unwrap();
         assert_eq!(o.blocked, 3.0, "Easy scales 4 to 3 before the shield");
         assert!(o.fully_blocked && !o.knockback);
+    }
+
+    /// #18114: `applyItemBlocking` calls `BlocksAttacks.hurtBlockingItem` (which
+    /// awards `used`) whatever the reductions resolve to, so a hit from behind a
+    /// raised shield uses it without blocking anything; a piercing arrow returns
+    /// before it and does not.
+    #[test]
+    fn a_hit_from_behind_uses_the_shield_and_a_piercing_arrow_does_not() {
+        use horizon_world::blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let health = &resources.health;
+        let id = health.damage.id("minecraft:arrow").unwrap();
+        let hit = |angle: f64, pierce: bool, threshold: f32| {
+            let shield = super::Blocking {
+                rules: BlockingRules {
+                    delay_seconds: 0.25,
+                    disable_scale: 1.0,
+                    reductions: vec![DamageReduction {
+                        horizontal_angle: 90.0,
+                        types: None,
+                        base: 0.0,
+                        factor: 1.0,
+                    }],
+                    item_damage: ItemDamageFunction {
+                        threshold,
+                        base: 1.0,
+                        factor: 1.0,
+                    },
+                },
+                bypassed: false,
+                pierce,
+                angle,
+            };
+            let mut player =
+                crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                    .unwrap();
+            player
+                .hurt_caused_by(
+                    &mut super::TestLevel::new(0).level(),
+                    health,
+                    super::HealthRules::default(),
+                    id,
+                    4.0,
+                    Some(shield),
+                    false,
+                    0,
+                    false,
+                )
+                .unwrap()
+        };
+        let behind = hit(std::f64::consts::PI, false, 3.0);
+        assert!(
+            behind.blocking_item_used,
+            "a hit from behind uses the shield"
+        );
+        assert_eq!(behind.blocked, 0.0, "and the shield stops none of it");
+        assert_eq!(behind.shield_damage, 0, "nor wears");
+        // ItemDamageFunction.apply(0) is `base` once the threshold is 0.
+        let worn = hit(std::f64::consts::PI, false, 0.0);
+        assert_eq!(worn.shield_damage, 1, "an item whose threshold is 0 wears");
+        let piercing = hit(0.0, true, 3.0);
+        assert!(!piercing.blocking_item_used, "a piercing arrow skips it");
+        assert_eq!(piercing.blocked, 0.0);
     }
 
     /// #7309: on Hard a mob's 4 is scaled to 6 (`Player.hurtServer`), on

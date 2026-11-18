@@ -92,7 +92,6 @@
   "menu_click": "#18133: writable_book_content:{pages:[]} and damage:0 kept",
   "mob_ai": "#18133: enderman hurt twice in a tick teleports differently",
   "numeric_damage_component": "#18133: damage:0 kept and readable by /data",
-  "player_blocking": "#18133: shield used statistic counts one event late",
   "portal_cooldown": "#18133: cooldown test fails; Rust log not in the artifact",
   "raid_village": "#18133: NoAI write changes live POI inputs before the comparison",
   "recipe": "#18133: repaired and dyed items keep damage:0/max_damage",
