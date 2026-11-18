@@ -261,17 +261,39 @@ mod vertex_tests {
         }
     }
     #[test]
-    fn emission_keeps_the_colour_and_the_free_bits() {
+    fn emission_keeps_the_colour_and_the_other_bits() {
+        use super::{INCANDESCENT, LOW, VERY_BRIGHT, WHOLE, as_fluid, emitting, giving_off};
         let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
-        assert_eq!(super::emitting(rgb, 0), rgb);
-        assert_eq!(super::emitting(rgb, super::INCANDESCENT), 0xFD56_3412);
-        assert_eq!(super::emitting(rgb, super::VERY_BRIGHT), 0xFB56_3412);
-        assert_eq!(super::emitting(rgb, super::LOW | super::WHOLE), 0xFA56_3412);
-        assert_eq!(super::emitting(rgb, super::WHOLE), rgb);
-        assert_eq!(
-            super::emitting(rgb, super::VERY_BRIGHT) | super::EMISSION_BITS,
-            rgb
-        );
+        assert_eq!(emitting(rgb, 0), rgb);
+        assert_eq!(giving_off(rgb, 0), rgb);
+        assert_eq!(giving_off(emitting(rgb, INCANDESCENT), 14), 0x1D56_3412);
+        assert_eq!(giving_off(emitting(rgb, VERY_BRIGHT), 15), 0x0B56_3412);
+        assert_eq!(giving_off(emitting(rgb, LOW | WHOLE), 3), 0xCA56_3412);
+        assert_eq!(emitting(rgb, WHOLE), rgb);
+        // A light level without a tier: a glow lichen's.
+        assert_eq!(giving_off(rgb, 7), 0x8F56_3412);
+        let lava = as_fluid(giving_off(emitting(rgb, INCANDESCENT | WHOLE), 15));
+        assert_eq!(lava, 0x0156_3412);
+        assert_eq!(giving_off(emitting(lava, LOW), 3), 0xCE56_3412);
+    }
+    /// A `shaders/` pack gets main's bytes from before 6c: `emitting`'s alone off a fluid, and
+    /// main's `fluid_face` on one (8 plus the face in the high nibble), whatever level and fluid
+    /// flag 6c put in.
+    #[test]
+    fn a_shaders_format_pack_gets_mains_bytes() {
+        use super::{INCANDESCENT, as_fluid, emitting, for_shaders_format, giving_off};
+        let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
+        for level in [0, 3, 14, 15] {
+            let lit = giving_off(emitting(rgb, INCANDESCENT), level);
+            for color in [lit, as_fluid(lit)] {
+                assert_eq!(for_shaders_format(color, None), 0xFD56_3412);
+                // Main's `fluid_faces_keep_the_colour_and_the_emission`.
+                assert_eq!(for_shaders_format(color, Some(0)), 0x8D56_3412);
+                assert_eq!(for_shaders_format(color, Some(5)), 0xDD56_3412);
+                assert_eq!(for_shaders_format(color, Some(1)), 0x9D56_3412);
+            }
+        }
+        assert_eq!(for_shaders_format(rgb, None), rgb);
     }
     #[test]
     fn light_sources_shine_by_kind_not_light_level() {
@@ -292,33 +314,32 @@ mod vertex_tests {
         assert_eq!(hdr_tier("vault", 12), INCANDESCENT);
         assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
     }
-    #[test]
-    fn fluid_faces_keep_the_colour_and_the_emission() {
-        let lit = super::emitting(super::pack_rgb([0x12, 0x34, 0x56]), super::INCANDESCENT);
-        assert_eq!(super::fluid_face(lit, 0), 0x8D56_3412);
-        assert_eq!(super::fluid_face(lit, 5), 0xDD56_3412);
-        // Another face replaces the first.
-        assert_eq!(super::fluid_face(super::fluid_face(lit, 5), 1), 0x9D56_3412);
-    }
-    /// What `gfx/native_material.rs` reads back from the colour's alpha byte: the face of a
-    /// fluid quad, and the HDR tier.
-    fn decoded(color: u32) -> (Option<u32>, u32) {
+    /// What `terrain.wgsl` (the tier), `gfx/native_material.rs` and `gfx/native_shadow.rs` (the
+    /// fluid flag and the level) read back from the colour's alpha byte.
+    fn decoded(color: u32) -> (u32, bool, u32) {
         let flags = color >> 24;
-        let high = flags >> 4;
-        let fluid = high >= 8 && (high & 7) < 6;
-        (fluid.then_some(high & 7), 15 - (flags & 15))
+        (7 - (flags & 7), flags & 8 == 0, 15 - (flags >> 4))
     }
     #[test]
-    fn the_material_stage_reads_back_what_the_mesher_encodes() {
+    fn the_shaders_read_back_what_the_mesher_encodes() {
         let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
-        for tier in 0..=super::VERY_BRIGHT {
-            let lit = super::emitting(rgb, tier);
-            assert_eq!(decoded(lit), (None, u32::from(tier)));
-            for face in 0..6 {
-                assert_eq!(
-                    decoded(super::fluid_face(lit, face)),
-                    (Some(face as u32), u32::from(tier))
-                );
+        // Every code a block has: 0, the three tiers alone and all over.
+        let tiers = [
+            0,
+            1,
+            2,
+            3,
+            1 | super::WHOLE,
+            2 | super::WHOLE,
+            3 | super::WHOLE,
+        ];
+        for (tier, code) in tiers.into_iter().zip([0, 1, 2, 3, 5, 6, 7]) {
+            for level in 0..=15 {
+                let lit = super::giving_off(super::emitting(rgb, tier), level);
+                assert_eq!(lit & 0xFF_FFFF, rgb & 0xFF_FFFF);
+                assert_eq!(decoded(lit), (code, false, u32::from(level)));
+                let fluid = super::as_fluid(lit);
+                assert_eq!(decoded(fluid), (code, true, u32::from(level)));
             }
         }
     }
@@ -388,20 +409,19 @@ impl TerrainSource {
 ///
 /// - word 0: the tint (0xBBGGRR, as the vertex colour holds it), bits 24..27 the face's shade
 ///   (`SHADES`' index + 1; 0: no look), bits 27..30 the face (`Direction` order);
-/// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low;
-/// - word 2: the light level the surface gives off, 0..15: its block state's (a model face's
-///   own `light_emission` doesn't count), or a fluid's own (lava 15, water 0, also around a
-///   waterlogged light).
+/// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low.
+///
+/// The light level the surface gives off is the vertex's (`giving_off`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct QuadLook(pub [u32; 3]);
+pub struct QuadLook(pub [u32; 2]);
 /// The directional shades a face can have, by `QuadLook`'s code 1..5.
 /// (A fluid's side takes the top's shade times its own: 0.72 and 0.54 under Nether shading.)
 pub const SHADES: [f32; 7] = [0.5, 0.6, 0.8, 0.9, 1.0, 0.72, 0.54];
 impl QuadLook {
     /// `tint` as 0xRRGGBB, `shade` one of `SHADES` (another reads as 1), `ao` each corner's
     /// brightness 0..1.
-    pub(crate) fn new(tint: u32, shade: f32, face: u32, ao: [f32; 4], emission: u8) -> Self {
+    pub(crate) fn new(tint: u32, shade: f32, face: u32, ao: [f32; 4]) -> Self {
         let code = SHADES
             .iter()
             .position(|&s| (s - shade).abs() < 1e-4)
@@ -412,11 +432,7 @@ impl QuadLook {
             .enumerate()
             .map(|(i, &b)| (lighting::gray(b).clamp(0, 255) as u32) << (8 * i))
             .sum();
-        Self([
-            rgb | code << 24 | (face & 7) << 27,
-            ao,
-            u32::from(emission.min(15)),
-        ])
+        Self([rgb | code << 24 | (face & 7) << 27, ao])
     }
     /// This quad's look on a piece of it whose corners are at `(s, t)` of the quad (`bilinear`).
     fn piece(self, at: [(f32, f32); 4]) -> Self {
@@ -429,12 +445,12 @@ impl QuadLook {
             .iter()
             .enumerate()
             .map(|(i, &a)| a.min(255) << (8 * i));
-        Self([self.0[0], ao.sum(), self.0[2]])
+        Self([self.0[0], ao.sum()])
     }
     /// The same look with another tint (0xRRGGBB): an overlay's.
     fn tinted(self, tint: u32) -> Self {
         let rgb = (tint >> 16 & 255) | (tint & 0xFF00) | (tint & 255) << 16;
-        Self([self.0[0] & !0xFF_FFFF | rgb, self.0[1], self.0[2]])
+        Self([self.0[0] & !0xFF_FFFF | rgb, self.0[1]])
     }
 }
 
@@ -1683,12 +1699,15 @@ mod reuse_tests;
 mod tint_tests;
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
-/// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
-/// in HDR output (`gfx/hdr.rs`): 15 minus the tier, plus 4 for one that shines all over
-/// (`WHOLE`), so the usual 0xFF means none. The byte's high nibble carries the fluid face
-/// flags (`fluid_face`); the shaders ignore the vertex alpha, so both travel to the
-/// material stage untouched.
-pub const EMISSION_BITS: u32 = 0x0F00_0000;
+/// `TerrainVertex::color`'s alpha byte, stored inverted so the usual 0xFF means nothing: bits
+/// 0..2 (`TIER_BITS`) 7 minus how brightly the face shines in HDR output (`gfx/hdr.rs`), the
+/// tier plus 4 for one that shines all over (`WHOLE`); bit 3 (`FLUID_BIT`) clear on a fluid
+/// quad; bits 4..7 (`LEVEL_BITS`) 15 minus the light level the surface gives off
+/// (`MaterialInput.emission`). The shaders take the vertex alpha for none of its colour, so
+/// all three travel to the HDR marks and the material stage untouched.
+pub const TIER_BITS: u32 = 0x0700_0000;
+pub const FLUID_BIT: u32 = 0x0800_0000;
+pub const LEVEL_BITS: u32 = 0xF000_0000;
 /// HDR tiers, by the kind of light rather than its level: a candle's flame is as bright as
 /// a torch's, it only lights less around it. 0 stays as in SDR.
 pub const LOW: u8 = 1;
@@ -1699,26 +1718,41 @@ pub const VERY_BRIGHT: u8 = 4;
 /// Added to a tier: the light source shines all over (a froglight), not only where its
 /// sprite is brightest (a torch's flame, not its handle). See `gfx/hdr.rs` `Masks`.
 pub const WHOLE: u8 = 8;
-/// `color` marked as shining at `tier` (0 to `VERY_BRIGHT`, plus `WHOLE`).
+/// `color` marked as shining at `tier` (0 to `VERY_BRIGHT`, plus `WHOLE` below it), on a quad
+/// that isn't a fluid's (`as_fluid` marks one after).
 pub fn emitting(color: u32, tier: u8) -> u32 {
-    let level = (tier & !WHOLE).min(VERY_BRIGHT);
-    let code = if level > 0 && tier & WHOLE != 0 {
-        level + 4
+    let base = (tier & !WHOLE).min(VERY_BRIGHT);
+    let code = if base > 0 && tier & WHOLE != 0 {
+        base + 4
     } else {
-        level
+        base
     };
-    color & !EMISSION_BITS | u32::from(15 - code) << 24
+    // Terrain has three bits for it: `VERY_BRIGHT` all over is the sun's, never a block's.
+    debug_assert!(code < 8, "tier {tier} doesn't fit a terrain vertex");
+    color & !(TIER_BITS | FLUID_BIT) | u32::from(15 - code) << 24
 }
-/// The high nibble of `TerrainVertex::color`'s alpha byte: 8 plus the face (`Direction`
-/// as usize) on a fluid quad, 0xF on every other. `terrain.wgsl` reads only the low nibble
-/// (the emission), so only the material stage of Horizon's own packs reads it
-/// (`gfx/native_material.rs`); whether the fluid is water or lava follows from the pass
-/// that draws it.
-pub const FLUID_FACE_BITS: u32 = 0xF000_0000;
-/// `color` marked as a fluid quad of face `face` (`Direction` as usize, 0 to 5).
-pub fn fluid_face(color: u32, face: usize) -> u32 {
-    debug_assert!(face < 6);
-    color & !FLUID_FACE_BITS | 0x8000_0000 | (face as u32) << 28
+/// `color` marked as giving off light `level` (0..15).
+pub fn giving_off(color: u32, level: u8) -> u32 {
+    color & !LEVEL_BITS | u32::from(15 - level.min(15)) << 28
+}
+/// `color` marked as a fluid quad's (`FLUID_BIT`).
+pub fn as_fluid(color: u32) -> u32 {
+    color & !FLUID_BIT
+}
+/// `color` as a `shaders/` pack takes it (`Mesher::shader_pack`): the alpha byte as it was before
+/// the light level and the fluid flag were in it, since that path reads the HDR tier from its low
+/// four bits and, with `separateAo`, a far tile's whole byte as occlusion. The low nibble is
+/// `emitting`'s; the high one 0xF, or on a fluid quad of face `fluid_face` (`Direction` as
+/// usize) 8 plus that face.
+pub fn for_shaders_format(color: u32, fluid_face: Option<usize>) -> u32 {
+    let color = color | FLUID_BIT;
+    match fluid_face {
+        None => color | LEVEL_BITS,
+        Some(face) => {
+            debug_assert!(face < 6);
+            color & !LEVEL_BITS | (8 | face as u32) << 28
+        }
+    }
 }
 /// The HDR tier of block `name` (no namespace), which emits light `level`.
 pub fn hdr_tier(name: &str, level: u8) -> u8 {
@@ -2149,7 +2183,8 @@ pub struct Mesher<'a> {
     /// OptiFine/Iris separate ambient occlusion: vertex RGB does not include AO, and AO factor is passed in vertex alpha.
     pub separate_ao: bool,
     /// A `shaders/` pack draws the terrain (with or without its `oldLighting`): fluid tops are
-    /// split into triangles as Iris splits them (`fluid::splits_north_east`).
+    /// split into triangles as Iris splits them (`fluid::splits_north_east`), and the vertex
+    /// alpha is the byte from before the light level and the fluid flag (`for_shaders_format`).
     pub shader_pack: bool,
     /// A shader API 0.2 pack reads the terrain's own inputs (`tint`, `shade`, `ao`, `face`,
     /// `emission`): each quad gets its `QuadLook`.
@@ -2504,7 +2539,6 @@ impl Mesher<'_> {
                 directional,
                 q.facing as u32,
                 ao_factor,
-                state.emission,
             ),
             false => QuadLook::default(),
         };
@@ -2570,8 +2604,10 @@ impl Mesher<'_> {
             let color = if self.separate_ao {
                 let ao_byte = (ao_factor[i] * 255.0).round().clamp(0.0, 255.0) as u32;
                 ao_byte << 24 | (pack_rgb(rgb) & 0x00FF_FFFF)
+            } else if self.shader_pack {
+                for_shaders_format(emitting(pack_rgb(rgb), tier), None)
             } else {
-                emitting(pack_rgb(rgb), tier)
+                giving_off(emitting(pack_rgb(rgb), tier), state.emission)
             };
             TerrainVertex::packed_uv(
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],

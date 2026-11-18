@@ -119,7 +119,7 @@ struct HorizonDisplacePoint {
     light: vec2<f32>,
     color: vec4<f32>,
     // The quad's look (`horizon_look`), and the point's ambient occlusion (`horizon_look_ao`).
-    look: vec3<u32>,
+    look: vec2<u32>,
     ao: f32,
     // The face's normal, and how much of the relief the point has by its distance.
     normal: vec3<f32>,
@@ -133,11 +133,11 @@ struct HorizonDisplaceQuad {
     c3: HorizonDisplaceCorner,
     origin: vec3<f32>,
     normal: vec3<f32>,
-    look: vec3<u32>,
+    look: vec2<u32>,
 }
 // The ambient occlusion at (`s`, `t`) of a quad of `look`, between its corners' as the
 // colour is.
-fn horizon_displace_ao(look: vec3<u32>, s: f32, t: f32) -> f32 {
+fn horizon_displace_ao(look: vec2<u32>, s: f32, t: f32) -> f32 {
     return mix(mix(horizon_look_ao(look, 0u), horizon_look_ao(look, 1u), s),
         mix(horizon_look_ao(look, 3u), horizon_look_ao(look, 2u), s), t);
 }
@@ -928,7 +928,7 @@ mod tests {
         // A look a quad, in the order the grid takes them, laid out on the pages as the arena
         // holds them.
         use crate::mesher::QuadLook;
-        let look = |q: u32| QuadLook([0x0300_0000 | (q * 0x10101), 0x0102_0304 * (q + 1), q]);
+        let look = |q: u32| QuadLook([0x0300_0000 | (q * 0x10101), 0x0102_0304 * (q + 1)]);
         let all: Vec<QuadLook> = (0..expected.len() as u32 / 4).map(look).collect();
         let (na, nb) = (a.len() / 4, b.len() / 4);
         let mut looks_one = vec![QuadLook::default(); 8];

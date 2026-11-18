@@ -1178,9 +1178,9 @@ fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
         hashes,
         [
             "1af2ec758e6f343986c676a7df695a1bf820ac9f498840422bbb8ef72df65cc4",
-            "05d4cc7ba11791f4f6b8ff3acdbe1f422747f8360de29064b9ad6e48cb33ee70",
+            "29affe29f1192045e0abd0b8a507f8f79e88c128521b83cf949abe042b32ebcc",
             "e646501b8bcd9097579a8bcb14e11710439d85617dfc61b044bde4e0490c8681",
-            "f7e7650f346bb7e551dbdbd6f40d4ee2ca0d7c1a52ddde63ee37f4a754073412",
+            "21e40d6e1d5ba4792ce40a0a1ecf2ea483bfd60a05cff344c8f73fb5fcf99fe9",
         ]
     );
 }
@@ -1210,8 +1210,9 @@ fn the_retained_block_entities_store_is_the_layer_s_last_binding() {
 }
 
 /// `Report::looks`: a stage reads a field only the terrain's quad looks hold (`tint`, `shade`,
-/// `ao`, `face`, `emission`), by member on `MaterialInput` or `VertexInput`, through a `var` too;
-/// the prelude reads none, nor do an entity stage's `tint` and a pack's own `shade`.
+/// `ao`, `face`), by member on `MaterialInput` or `VertexInput`, through a `var` too; the
+/// prelude reads none, nor do an entity stage's `tint`, a pack's own `shade`, and `emission` and
+/// `shaded_tint`, which the vertex holds.
 #[test]
 fn looks_are_read_by_the_terrain_fields_alone() {
     let dir = |path: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
@@ -1246,7 +1247,11 @@ fn looks_are_read_by_the_terrain_fields_alone() {
     ));
     assert!(material("    return Surface(input.albedo * input.tint);"));
     assert!(material(
-        "    var i = input;\n    i.light.x = 1.0;\n    return Surface(vec4(i.emission));"
+        "    var i = input;\n    i.light.x = 1.0;\n    return Surface(vec4(f32(i.face)));"
+    ));
+    assert!(!material(
+        "    var i = input;\n    i.light.x = 1.0;\n    \
+         return Surface(i.shaded_tint * (1.0 + i.emission));"
     ));
 }
 
@@ -1292,7 +1297,7 @@ fn looks_are_read_through_pointers_copies_and_other_files() {
     let forms = [
         (
             "a function pointer",
-            "fn glow(p: ptr<function, MaterialInput>) -> f32 { return (*p).emission; }\n\
+            "fn glow(p: ptr<function, MaterialInput>) -> f32 { return (*p).ao; }\n\
              fn material(input: MaterialInput) -> Surface {\n    var i = input;\n    \
              return Surface(vec4(glow(&i)));\n}\n",
         ),

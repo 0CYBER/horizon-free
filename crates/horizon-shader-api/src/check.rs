@@ -174,10 +174,7 @@ impl CheckedStage {
 /// holds their product (`shaded_tint`). `RayHit`'s aren't among them: a terrain hit reads the
 /// ray scene's own store, not the sections' looks.
 const LOOK_FIELDS: [(&str, &[&str]); 2] = [
-    (
-        "MaterialInput",
-        &["tint", "shade", "ao", "face", "emission"],
-    ),
+    ("MaterialInput", &["tint", "shade", "ao", "face"]),
     ("VertexInput", &["tint", "shade", "ao", "face"]),
 ];
 

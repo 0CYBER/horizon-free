@@ -2,7 +2,7 @@
 use super::{Column, Span, Spans, TileKey};
 use crate::{
     fast_hash::{FxHashMap, FxHashSet},
-    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex, fluid_face},
+    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex, as_fluid},
     streaming::WorkerContext,
 };
 use horizon_assets::model::Direction;
@@ -60,22 +60,22 @@ struct Material<L> {
 }
 /// What a far face carries of its quad's look, chosen once per tile: nothing (`()`) where tiles
 /// carry no looks, so the paints, materials and segments a tile keeps and the key its faces
-/// merge by have their sizes before looks; the `QuadLook`'s words (`[u32; 3]`) where they do.
+/// merge by have their sizes before looks; the `QuadLook`'s words (`[u32; 2]`) where they do.
 trait Look: Copy + Ord {
-    fn make(look: impl FnOnce() -> [u32; 3]) -> Self;
-    fn words(self) -> [u32; 3];
+    fn make(look: impl FnOnce() -> [u32; 2]) -> Self;
+    fn words(self) -> [u32; 2];
 }
 impl Look for () {
-    fn make(_: impl FnOnce() -> [u32; 3]) -> Self {}
-    fn words(self) -> [u32; 3] {
-        [0; 3]
+    fn make(_: impl FnOnce() -> [u32; 2]) -> Self {}
+    fn words(self) -> [u32; 2] {
+        [0; 2]
     }
 }
-impl Look for [u32; 3] {
-    fn make(look: impl FnOnce() -> [u32; 3]) -> Self {
+impl Look for [u32; 2] {
+    fn make(look: impl FnOnce() -> [u32; 2]) -> Self {
         look()
     }
-    fn words(self) -> [u32; 3] {
+    fn words(self) -> [u32; 2] {
         self
     }
 }
@@ -85,6 +85,9 @@ pub(super) struct Mesher {
     /// Whether quads get their looks (`crate::mesher::QuadLook`), as the section mesher's
     /// `looks`: 0 not, 1 with the Overworld's face shades, 2 with the Nether's.
     pub(super) looks: u8,
+    /// A `shaders/` pack draws the terrain: the vertex alpha as the section mesher's
+    /// `shader_pack` gives it (`crate::mesher::for_shaders_format`).
+    pub(super) shader_pack: bool,
 }
 impl Mesher {
     pub(super) fn mesh(
@@ -105,7 +108,7 @@ impl Mesher {
             }
             true => {
                 let material = |s: &Span, d, at| self.material(s, d, at, context);
-                mesh_columns_with_edges::<[u32; 3]>(key, columns, c, b, neighbors, finer, material)
+                mesh_columns_with_edges::<[u32; 2]>(key, columns, c, b, neighbors, finer, material)
             }
         }
     }
@@ -248,16 +251,31 @@ impl Mesher {
                     // The colour keeps the Overworld's shades in every dimension; a shader pack's
                     // `shade` is the dimension's.
                     let level = || context.tables.facts(span.state).map_or(0, |f| f.emission);
-                    Paint {
-                        look: L::make(|| far_look(looks, rgb, direction, fluid, level)),
-                        layer: face.layer,
-                        light: span.light,
-                        // The HDR tier, as the section mesher writes it, so a light source
-                        // keeps shining across the LOD boundary.
-                        color: crate::mesher::emitting(
+                    // The HDR tier and light level, as the section mesher writes them, so a light
+                    // source keeps shining across the LOD boundary; and the same fluid flag, so the
+                    // material stage's water reaches the distant tiles too.
+                    let color = crate::mesher::giving_off(
+                        crate::mesher::emitting(
                             channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
                             context.tables.hdr_tier(span.state),
                         ),
+                        level(),
+                    );
+                    let color = if self.shader_pack {
+                        crate::mesher::for_shaders_format(
+                            color,
+                            fluid.then_some(direction as usize),
+                        )
+                    } else if fluid {
+                        as_fluid(color)
+                    } else {
+                        color
+                    };
+                    Paint {
+                        look: L::make(|| far_look(looks, rgb, direction, fluid)),
+                        layer: face.layer,
+                        light: span.light,
+                        color,
                         translucent: face.translucent,
                     }
                 })
@@ -269,24 +287,18 @@ impl Mesher {
 }
 
 /// A far face's `QuadLook` words (`Mesher::looks`: 0 none, 1 the Overworld's shades, 2 the
-/// Nether's) for its tint 0xRRGGBB and its block's light `level`: no ambient occlusion. A
-/// `fluid`'s side has the top's shade times the side's, as the section mesher gives it.
-pub(crate) fn far_look(
-    looks: u8,
-    rgb: u32,
-    direction: Direction,
-    fluid: bool,
-    level: impl Fn() -> u8,
-) -> [u32; 3] {
+/// Nether's) for its tint 0xRRGGBB: no ambient occlusion. A `fluid`'s side has the top's shade
+/// times the side's, as the section mesher gives it.
+pub(crate) fn far_look(looks: u8, rgb: u32, direction: Direction, fluid: bool) -> [u32; 2] {
     if looks == 0 {
-        return [0; 3];
+        return [0; 2];
     }
     let nether = looks == 2;
     let mut shade = crate::mesher::cardinal_shade(nether, direction);
     if fluid && !matches!(direction, Direction::Up | Direction::Down) {
         shade *= crate::mesher::cardinal_shade(nether, Direction::Up);
     }
-    crate::mesher::QuadLook::new(rgb, shade, direction as u32, [1.0; 4], level()).0
+    crate::mesher::QuadLook::new(rgb, shade, direction as u32, [1.0; 4]).0
 }
 
 struct Segment<'a, L> {
@@ -308,6 +320,8 @@ fn hides<L>(
         || (material.fluid != 0 && material.fluid == current_material.fluid)
 }
 
+/// What faces merge by. The colour's alpha holds the HDR class and the block's light level
+/// (`mesher::giving_off`), which a pack's `emission` reads, so faces of other levels stay apart.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct FaceKey {
     direction: Direction,
@@ -336,20 +350,13 @@ fn add_face<L: Look>(
 ) {
     for (overlay, paint) in material.faces.into_iter().enumerate() {
         let Some(paint) = paint else { continue };
-        // The same fluid flags the section mesher sets, so the material stage's water
-        // reaches the distant tiles too and the LOD boundary keeps one look.
-        let color = if material.fluid != 0 {
-            fluid_face(paint.color, direction as usize)
-        } else {
-            paint.color
-        };
         let key = FaceKey {
             direction,
             plane: plane.to_bits(),
             overlay: overlay as u8,
             layer: paint.layer,
             light: paint.light,
-            color,
+            color: paint.color,
             translucent: paint.translucent,
         };
         faces.entry((key, paint.look)).or_default().push(rect);
@@ -1247,7 +1254,7 @@ fn emit_quad(mesh: &mut SectionMesh, grouped: (FaceKey, impl Look), rect: Rect, 
     ) {
         points.reverse()
     }
-    if look != [0; 3] {
+    if look != [0; 2] {
         let (looks, quads) = match key.translucent {
             true => (&mut mesh.translucent_looks, mesh.translucent.len() / 4),
             false => (&mut mesh.solid_looks, mesh.solid.len() / 4),
@@ -1464,6 +1471,85 @@ mod tests {
         let p = |i: usize| glam::Vec3::from(q[i].pos);
         (p(1) - p(0)).cross(p(2) - p(0))
     }
+    /// Far faces that differ only in their block's light level stay apart, each keeping its own:
+    /// the level is in the vertex colour, where a pack reads `emission` with no looks.
+    #[test]
+    fn far_faces_of_other_light_levels_stay_apart() {
+        // A checkerboard of states 1 and 3: the same face, giving off `levels` by state.
+        fn painted(span: &Span, levels: [u8; 2]) -> Material<()> {
+            let level = levels[usize::from(span.state.0 == 3)];
+            let paint = Paint {
+                layer: 1,
+                light: span.light,
+                color: crate::mesher::giving_off(u32::MAX, level),
+                translucent: false,
+                look: (),
+            };
+            Material {
+                faces: [Some(paint), None],
+                fluid: 0,
+                opaque: true,
+            }
+        }
+        let mut columns = columns();
+        for (i, column) in columns.iter_mut().enumerate() {
+            let state = if (i % CELLS + i / CELLS).is_multiple_of(2) {
+                3
+            } else {
+                1
+            };
+            column.spans = vec![span(0, 4, state)].into();
+        }
+        let refs: Vec<&Column> = columns.iter().collect();
+        let key = TileKey {
+            x: 0,
+            z: 0,
+            level: 0,
+        };
+        let (no_edges, set) = (Default::default(), FxHashSet::default());
+        let mesh = |levels: [u8; 2]| {
+            mesh_columns_with_edges::<()>(key, &refs, &set, None, &no_edges, &[], |s, _, _| {
+                painted(s, levels)
+            })
+        };
+        // The top faces: each one's cell (from its centre) and level.
+        let tops = |mesh: &SectionMesh| {
+            let top = mesh.solid.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
+            let (lo, hi) = mesh.solid.iter().fold((f32::MAX, f32::MIN), |(lo, hi), v| {
+                (
+                    lo.min(v.pos[0]).min(v.pos[2]),
+                    hi.max(v.pos[0]).max(v.pos[2]),
+                )
+            });
+            let cell = (hi - lo) / CELLS as f32;
+            let quads = mesh.solid.as_chunks::<4>().0;
+            quads
+                .iter()
+                .filter(|q| q.iter().all(|v| v.pos[1] == top))
+                .map(|q| {
+                    let centre = |k: usize| q.iter().map(|v| v.pos[k]).sum::<f32>() / 4.0;
+                    let at = |k: usize| ((centre(k) - lo) / cell) as i32;
+                    ((at(0), at(2)), 15 - (q[0].color >> 28))
+                })
+                .collect::<FxHashMap<(i32, i32), u32>>()
+        };
+        // Both states at one level, unlit or lit, the top merges and keeps that level; at two,
+        // every cell is its own face with its own state's: state 3's (x + z even) 12, state 1's 0.
+        for level in [0, 5] {
+            let alike = tops(&mesh([level, level]));
+            assert!(alike.len() < CELLS * CELLS, "{level}: {alike:?}");
+            assert!(
+                alike.values().all(|&l| l == u32::from(level)),
+                "{level}: {alike:?}"
+            );
+        }
+        let lit = tops(&mesh([0, 12]));
+        assert_eq!(lit.len(), CELLS * CELLS, "{lit:?}");
+        for (&(x, z), &level) in &lit {
+            let want = if (x + z) % 2 == 0 { 12 } else { 0 };
+            assert_eq!(level, want, "cell {:?}", (x, z));
+        }
+    }
     /// A far tile's looks: each face's look gives back its vertex colour (the Overworld's
     /// shades, no ambient occlusion; the Nether's shades differ only in its look), and the
     /// looks stay with their quads through the merge, the solid sort and the compact layout.
@@ -1477,10 +1563,10 @@ mod tests {
         };
         for rgb in [0xffffff, 0x91bd59, 0x3f76e4, 0x010203] {
             for d in Direction::ALL {
-                let [a, ao, level] = far_look(1, rgb, d, false, || 7);
-                assert_eq!((ao, level, a >> 27 & 7), (u32::MAX, 7, d as u32));
+                let [a, ao] = far_look(1, rgb, d, false);
+                assert_eq!((ao, a >> 27 & 7), (u32::MAX, d as u32));
                 let s = crate::mesher::SHADES[(a >> 24 & 7) as usize - 1];
-                let nether = far_look(2, rgb, d, false, || 7)[0];
+                let nether = far_look(2, rgb, d, false)[0];
                 let n = crate::mesher::SHADES[(nether >> 24 & 7) as usize - 1];
                 assert_eq!(n, crate::mesher::cardinal_shade(true, d));
                 for shift in [0, 8, 16] {
@@ -1492,7 +1578,7 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(far_look(0, rgb, Direction::Up, false, || 7), [0; 3]);
+            assert_eq!(far_look(0, rgb, Direction::Up, false), [0; 2]);
         }
         // Each paint's look names its layer and face.
         let looked = |span: &Span, direction: Direction, _: [i32; 2]| {
@@ -1502,7 +1588,7 @@ mod tests {
                 light: span.light,
                 color: u32::MAX,
                 translucent: water,
-                look: [span.state.0, direction as u32, u32::from(span.light)],
+                look: [span.state.0, direction as u32],
             };
             Material {
                 faces: [Some(paint), None],
@@ -1532,7 +1618,7 @@ mod tests {
         };
         let refs: Vec<&Column> = columns.iter().collect();
         let no_edges = Default::default();
-        let mut mesh = mesh_columns_with_edges::<[u32; 3]>(
+        let mut mesh = mesh_columns_with_edges::<[u32; 2]>(
             key,
             &refs,
             &FxHashSet::default(),
@@ -1563,7 +1649,7 @@ mod tests {
             let quads = vertices.as_chunks::<4>().0;
             assert!(quads.len() > 20 && looks.len() == quads.len());
             for (q, look) in quads.iter().zip(looks) {
-                let [layer, direction, _] = look.0;
+                let [layer, direction] = look.0;
                 assert_eq!(layer, u32::from(q[0].layer));
                 // A quad's winding gives its normal against the face it shows.
                 let n = face(q);
@@ -1602,7 +1688,7 @@ mod tests {
                 light: span.light,
                 color: u32::MAX,
                 translucent: water,
-                look: L::make(|| [0; 3]),
+                look: L::make(|| [0; 2]),
             };
             Material {
                 faces: [Some(paint), None],
@@ -1630,7 +1716,7 @@ mod tests {
         let plain_mesh =
             mesh_columns_with_edges::<()>(key, &refs, &set, None, &no_edges, &[], plain);
         let looked =
-            mesh_columns_with_edges::<[u32; 3]>(key, &refs, &set, None, &no_edges, &[], plain);
+            mesh_columns_with_edges::<[u32; 2]>(key, &refs, &set, None, &no_edges, &[], plain);
         assert!(plain_mesh.solid.len() > 80 && !plain_mesh.translucent.is_empty());
         for (a, b) in [
             (&plain_mesh.solid, &looked.solid),

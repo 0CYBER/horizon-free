@@ -205,7 +205,7 @@ struct TerrainOut {
     color: vec4<f32>,
     spherical: f32,
     cylindrical: f32,
-    // How the face shines in HDR output (mesher.rs's `EMISSION_BITS`): 0 not
+    // How the face shines in HDR output (mesher.rs's `TIER_BITS`): 0 not
     // at all, 1 to 4 the tier with its bright parts, 5 to 8 the tier all over.
     emission: u32,
     // Block and sky light over 16.
@@ -698,7 +698,7 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     if globals.colored_count.x > 0u {
         out.color = vec4(min(out.color.rgb + color.rgb * native_colored_light(pos), vec3(1.0)), out.color.a);
     }
-    out.emission = 15u - (u32(round(color.a * 255.0)) & 15u);
+    out.emission = 7u - (u32(round(color.a * 255.0)) & 7u);
     out.height = pos.y;
     let eye = pos - globals.view_origin.xyz;
     out.spherical = length(eye);

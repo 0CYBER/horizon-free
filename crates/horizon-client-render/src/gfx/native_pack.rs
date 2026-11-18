@@ -1046,7 +1046,7 @@ file = \"material.wgsl\"
             entries: &entries,
         });
         // A page's looks: one quad's, at its four vertices' slots.
-        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 2, [1.0, 0.8, 0.6, 1.0], 15);
+        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 2, [1.0, 0.8, 0.6, 1.0]);
         let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[look; 4]),

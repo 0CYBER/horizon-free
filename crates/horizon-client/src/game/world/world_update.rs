@@ -138,6 +138,7 @@ impl Game<'_> {
         if let Some(source) = source {
             let lod = horizon_client::lod::Lod::new(source, self.worker_context());
             lod.set_looks(self.streaming.looks, self.streaming.nether_shading);
+            lod.set_shader_pack(self.streaming.shader_pack);
             self.lod = Some(lod);
             self.lod_observe.extend(self.world.chunks.keys().copied());
         }

@@ -261,15 +261,20 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
         );
     }
     // Reusing the same mesh for native/default rendering clears metadata and keeps
-    // native model vertices byte-for-byte (fluid splitting already differs with packs).
+    // native model vertices byte-for-byte (fluid splitting already differs with packs), but
+    // for the alpha a `shaders/` pack takes (`for_shaders_format`).
     mesher.shader_pack = false;
     let native = mesher.mesh_reusing(&region, 0, mesh, &mut MeshScratch::default());
     assert!(native.solid_sources.is_empty() && native.translucent_sources.is_empty());
     for q in native.solid.as_chunks::<4>().0.iter() {
+        let q = q.map(|v| TerrainVertex {
+            color: crate::mesher::for_shaders_format(v.color, None),
+            ..v
+        });
         assert!(
             before
                 .iter()
-                .any(|(bytes, _)| bytes == bytemuck::cast_slice::<_, u8>(q)),
+                .any(|(bytes, _)| bytes == bytemuck::cast_slice::<_, u8>(&q)),
             "source tracking altered native vertices"
         );
     }

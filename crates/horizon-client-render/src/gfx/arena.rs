@@ -83,7 +83,7 @@ impl FreeList {
 }
 
 /// Bytes of one slot's `mesher::QuadLook`.
-pub(super) const LOOK_BYTES: u64 = 12;
+pub(super) const LOOK_BYTES: u64 = 8;
 
 /// One vertex buffer of the arena; only the newest page grows.
 struct Page {
@@ -1937,7 +1937,7 @@ mod tests {
         let mut ranges = Vec::new();
         for i in 0..12u32 {
             let (page, start) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
-            let looks = vec![QuadLook([0x0400_0000 | i, i, i % 16]); GRAIN as usize];
+            let looks = vec![QuadLook([0x0400_0000 | i, i]); GRAIN as usize];
             arena.write_looks(&mut encoder, &mut uploads, page, start, GRAIN, &looks);
             ranges.push((page, start, looks[0]));
         }

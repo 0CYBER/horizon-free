@@ -3,7 +3,7 @@
 //! beside glass and leaves, back faces, cardinal shading and max(self, above)
 //! light.
 use super::{
-    Info, MeshTables, Padded, SectionMesh, TerrainVertex, fluid_face, lighting, pack_coords,
+    Info, MeshTables, Padded, SectionMesh, TerrainVertex, as_fluid, lighting, pack_coords,
     pack_rgb, part_tables::PartTables, pi,
 };
 use horizon_core::{
@@ -213,7 +213,8 @@ pub(super) fn splits_north_east(nw: f32, ne: f32, sw: f32, se: f32) -> bool {
 /// `(nether, shader_pack_lighting, separate_ao, shader_pack)`: the Nether's face shading, only the
 /// up-face value when a shader pack lights the faces (`Mesher::shader_pack_lighting`), whether to
 /// keep pure alpha for separate AO, and whether a `shaders/` pack draws the terrain
-/// (`Mesher::shader_pack`: tops split as Iris splits them, [`splits_north_east`]).
+/// (`Mesher::shader_pack`: tops split as Iris splits them, [`splits_north_east`], and the alpha
+/// as that path reads it, `mesher::for_shaders_format`).
 pub(super) fn tesselate(
     tables: &MeshTables,
     parts: &PartTables,
@@ -276,12 +277,20 @@ pub(super) fn tesselate(
     } else {
         crate::mesher::hdr_tier("lava", 15)
     };
+    // What the fluid itself gives off, on every face and not the block holding it: lava's block
+    // 15 at every level, water none, also around a waterlogged light; a mod fluid its own
+    // block's (a mod fluid waterlogging another block reads that block's).
+    let level = match kind {
+        FluidKind::Lava | FluidKind::FlowingLava => 15,
+        FluidKind::Mod(_) | FluidKind::ModFlowing(_) => me.emission,
+        _ => 0,
+    };
     let color = |by: f32| {
         let rgb = [16, 8, 0].map(|shift| lighting::scale((tint >> shift & 255) as i32, by) as u32);
         if separate_ao {
             pack_rgb(rgb)
         } else {
-            crate::mesher::emitting(pack_rgb(rgb), emission)
+            crate::mesher::giving_off(crate::mesher::emitting(pack_rgb(rgb), emission), level)
         }
     };
     let height = |step: isize| -> f32 {
@@ -365,14 +374,6 @@ pub(super) fn tesselate(
     } else {
         (&mut out.solid, &mut out.solid_looks, &mut out.sprite_layers)
     };
-    // What the fluid itself gives off, on every face and not the block holding it: lava's block
-    // 15 at every level, water none, also around a waterlogged light; a mod fluid its own
-    // block's (a mod fluid waterlogging another block reads that block's).
-    let level = match kind {
-        FluidKind::Lava | FluidKind::FlowingLava => 15,
-        FluidKind::Mod(_) | FluidKind::ModFlowing(_) => me.emission,
-        _ => 0,
-    };
     let mut quad = |v: [([f32; 3], [f32; 2]); 4],
                     layer: u16,
                     shade: f32,
@@ -383,15 +384,17 @@ pub(super) fn tesselate(
             sprite_layers.push(layer);
         }
         if looks {
-            let look = super::QuadLook::new(tint, shade, face as u32, [1.0; 4], level);
+            let look = super::QuadLook::new(tint, shade, face as u32, [1.0; 4]);
             target_looks.resize(target.len() / 4, super::QuadLook::default());
             target_looks.extend(std::iter::repeat_n(look, 1 + usize::from(back)));
         }
         let color = color(shade);
         let color = if separate_ao {
             color
+        } else if shader_pack {
+            crate::mesher::for_shaders_format(color, Some(face))
         } else {
-            fluid_face(color, face)
+            as_fluid(color)
         };
         let vertex = |(pos, uv)| TerrainVertex::new(pos, uv, layer, color, light);
         target.extend([vertex(v[0]), vertex(v[1]), vertex(v[2]), vertex(v[3])]);
@@ -698,8 +701,7 @@ mod tests {
                 );
                 let looks = [mesh.solid_looks, mesh.translucent_looks].concat();
                 for side in [D::North, D::South, D::West, D::East] {
-                    let far =
-                        crate::lod::far_look(1 + u8::from(nether), 0xFFFFFF, side, true, || 0);
+                    let far = crate::lod::far_look(1 + u8::from(nether), 0xFFFFFF, side, true);
                     let shades: Vec<u32> = looks
                         .iter()
                         .filter(|l| l.0[0] >> 27 & 7 == side as u32)
@@ -712,6 +714,66 @@ mod tests {
                         far[0] >> 24 & 7
                     );
                 }
+            }
+        }
+    }
+
+    /// With a `shaders/` pack, a fluid's alpha is main's byte from before the light level and the
+    /// fluid flag: the tier's `15 - code` in the low four bits, 8 plus the quad's face in the high
+    /// four (`fluid_face`); else 6c's.
+    #[test]
+    fn a_fluids_alpha_is_the_old_byte_for_a_shaders_format_pack() {
+        let mut tables = super::super::part_tables_tests::tables(false);
+        let mut pad = Padded {
+            blocks: vec![0; super::super::P.pow(3)],
+            light: vec![0xF0; super::super::P.pow(3)],
+        };
+        pad.blocks[pi(0, 0, 0)] = 1;
+        for (kind, tier, level) in [
+            (FluidKind::Water, 0, 0u32),
+            (FluidKind::Lava, crate::mesher::hdr_tier("lava", 15), 15),
+        ] {
+            tables.info[1].fluid = FluidState::new(kind, 8, false);
+            let old = crate::mesher::emitting(0, tier) >> 24 | 0xF0;
+            for shader_pack in [false, true] {
+                let mut mesh = SectionMesh::default();
+                // With looks, for each quad's face; the vertices are the same without.
+                let keys = (false, false, false, shader_pack, true);
+                tesselate(
+                    &tables,
+                    &PartTables::NONE,
+                    keys,
+                    &pad,
+                    0x3F76E4,
+                    &mut mesh,
+                    [0; 3],
+                );
+                let quads = (mesh.solid.as_chunks::<4>().0.iter().zip(&mesh.solid_looks)).chain(
+                    mesh.translucent
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(&mesh.translucent_looks),
+                );
+                let mut faces = Vec::new();
+                for (quad, look) in quads {
+                    let face = look.0[0] >> 27 & 7;
+                    faces.push(face);
+                    // Main's `fluid_face(emitting(rgb, tier), face)`.
+                    let want = if shader_pack {
+                        0x80 | face << 4 | old & 0xF
+                    } else {
+                        (15 - level) << 4 | old & 0x7
+                    };
+                    let alphas = quad.map(|v| v.color >> 24);
+                    assert!(
+                        alphas.iter().all(|&a| a == want),
+                        "{kind:?} shader pack {shader_pack}, face {face}: {alphas:x?}, want {want:x}"
+                    );
+                }
+                faces.sort_unstable();
+                faces.dedup();
+                assert_eq!(faces, [0, 1, 2, 3, 4, 5], "{kind:?}");
             }
         }
     }

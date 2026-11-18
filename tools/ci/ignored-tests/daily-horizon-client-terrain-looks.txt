@@ -3,5 +3,6 @@
 horizon-client game::shader_pack_looks_tests::a_world_held_for_a_pack_that_no_longer_builds_follows_no_pack lib daily resources
 horizon-client game::shader_pack_looks_tests::a_world_held_for_a_pack_whose_folder_is_gone_follows_no_pack lib daily resources
 horizon-client game::shader_pack_looks_tests::pages_past_the_look_limit_are_dropped_when_looks_turn_on lib daily resources
+horizon-client game::shader_pack_looks_tests::sections_without_looks_are_dropped_when_looks_turn_on lib daily resources
 horizon-client game::shader_pack_looks_tests::terrain_looks_go_with_the_world_to_a_new_renderer lib daily resources
 horizon-client game::shader_pack_looks_tests::terrain_looks_stay_with_their_quads_through_pack_changes lib daily resources

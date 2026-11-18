@@ -37,7 +37,7 @@ pub fn decide(pack: bool, switch: bool, storage: bool) -> Result<bool, String> {
     if pack && !storage {
         return Err(
             "the device's vertex stage reads no storage buffers, which the terrain's \
-                    `tint`, `shade`, `ao`, `face` and `emission` need (`shaded_tint` doesn't)"
+                    `tint`, `shade`, `ao` and `face` need (`shaded_tint` and `emission` don't)"
                 .into(),
         );
     }
@@ -45,15 +45,14 @@ pub fn decide(pack: bool, switch: bool, storage: bool) -> Result<bool, String> {
 }
 
 /// The looks as the material and shadow wrappers read them: `horizon_look(slot)`, a slot's
-/// three words (`mesher::QuadLook`), zero past the buffer.
+/// two words (`mesher::QuadLook`), zero past the buffer.
 pub const LOOK_WGSL: &str = "
 @group(2) @binding(0) var<storage, read> horizon_looks: array<u32>;
-fn horizon_look(slot: u32) -> vec3<u32> {
-    if slot * 3u + 2u >= arrayLength(&horizon_looks) {
-        return vec3<u32>(0u);
+fn horizon_look(slot: u32) -> vec2<u32> {
+    if slot * 2u + 1u >= arrayLength(&horizon_looks) {
+        return vec2<u32>(0u);
     }
-    return vec3<u32>(horizon_looks[slot * 3u], horizon_looks[slot * 3u + 1u],
-        horizon_looks[slot * 3u + 2u]);
+    return vec2<u32>(horizon_looks[slot * 2u], horizon_looks[slot * 2u + 1u]);
 }
 ";
 
@@ -80,8 +79,8 @@ pub fn wgsl(looks: bool) -> &'static str {
 
 /// `LOOK_WGSL` for a pack that doesn't read them: every slot has none.
 pub const NO_LOOK_WGSL: &str = "
-fn horizon_look(slot: u32) -> vec3<u32> {
-    return vec3<u32>(0u);
+fn horizon_look(slot: u32) -> vec2<u32> {
+    return vec2<u32>(0u);
 }
 ";
 
@@ -199,6 +198,14 @@ impl super::Renderer {
             arena.limit_looks(slots);
         }
     }
+    /// A device whose largest storage binding takes a whole page's looks: no arena's pages
+    /// change their limit when looks turn on (`Arena::set_looks` holds).
+    pub fn lift_look_limits(&mut self) {
+        self.arena.limit_looks(u64::MAX);
+        if let Some(arena) = &mut self.translucent_arena {
+            arena.limit_looks(u64::MAX);
+        }
+    }
     /// Section `key`'s looks, solid then translucent, read back from its arenas, beside its
     /// mesh's as handed over (`keep_capture_copies` on before it was uploaded), and whether
     /// translucent quads have an arena of their own.
@@ -268,7 +275,7 @@ mod tests {
         assert_eq!(decide(false, true, false), Ok(false));
         let refused = decide(true, true, false).unwrap_err();
         assert!(refused.starts_with("the device's vertex stage reads no storage buffers"));
-        assert!(refused.contains("(`shaded_tint` doesn't)"));
+        assert!(refused.contains("(`shaded_tint` and `emission` don't)"));
     }
 
     /// A mesh's looks as the renderer uploads them (`per_slot`, `Arena::write_looks`) sit at
@@ -305,7 +312,7 @@ mod tests {
         let layout = packed::place(&records, &quads);
         assert!(!layout.is_empty());
         let looks: Vec<QuadLook> = (0..quads.len() as u32)
-            .map(|q| QuadLook([0x0400_0000 | q, 0x8040_2010 + q, q % 16]))
+            .map(|q| QuadLook([0x0400_0000 | q, 0x8040_2010 + q]))
             .collect();
         // Record r stands for quad r, which is what puts quad r's look at slot r.
         for (r, quad) in quads.iter().enumerate() {
@@ -356,8 +363,10 @@ mod tests {
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let bytes = rx.recv().unwrap();
         let entry = |slot: u64| {
-            let at = (slot * 12) as usize;
-            QuadLook(bytemuck::pod_read_unaligned(&bytes[at..at + 12]))
+            let at = (slot * LOOK_BYTES) as usize;
+            QuadLook(bytemuck::pod_read_unaligned(
+                &bytes[at..at + LOOK_BYTES as usize],
+            ))
         };
         let none = QuadLook::default();
         let (compact_at, wide_at) = (at[0].1, at[1].1);

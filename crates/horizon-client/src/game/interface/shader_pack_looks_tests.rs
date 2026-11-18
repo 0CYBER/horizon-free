@@ -316,3 +316,39 @@ fn pages_past_the_look_limit_are_dropped_when_looks_turn_on() {
         held_as_handed(game, key, "pages within the limit");
     });
 }
+
+/// A section resident when looks turn on, in a page that holds them (on a device whose storage
+/// bindings take a whole page's looks), has none of its own: the page's new looks are zeros (face
+/// 0, down). The renderer drops it at once, before a frame draws it so, and the game meshes it
+/// again with its looks.
+#[test]
+#[ignore = "daily"]
+fn sections_without_looks_are_dropped_when_looks_turn_on() {
+    let name =
+        "game::shader_pack_looks_tests::sections_without_looks_are_dropped_when_looks_turn_on";
+    if run_fresh_cases(name, "HORIZON_TERRAIN_LOOKS", &["1"]) {
+        return;
+    }
+    with_client_game(|game| {
+        let (_event_loop, key) = scene(game);
+        frame(game);
+        assert!(!game.streaming.looks);
+        upload(game, key);
+        let renderer = game.renderer.as_mut().unwrap();
+        assert!(renderer.section_looks(key).is_some(), "uploaded");
+        renderer.lift_look_limits();
+        let _ = renderer.take_dropped_sections();
+        // Without `[shadow]`, as without a pack: the same layout of translucent quads, so
+        // nothing else drops the section.
+        install(game, false);
+        frame(game);
+        let renderer = game.renderer.as_mut().unwrap();
+        assert!(renderer.terrain_looks(), "looks on");
+        assert!(renderer.section_looks(key).is_none(), "dropped");
+        // The game meshes them again with the looks at once (`take_dropped_sections`).
+        game.update_world();
+        assert!(game.streaming.looks, "the game meshes with looks");
+        upload(game, key);
+        held_as_handed(game, key, "meshed again with looks");
+    });
+}

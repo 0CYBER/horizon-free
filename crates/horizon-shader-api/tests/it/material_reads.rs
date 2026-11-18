@@ -220,7 +220,7 @@ fn a_material_without_reads_composes_as_before() {
         hashes,
         [
             "3603cefa770143294f4a0fe1a9d799cd0daa52c95fd11ef9dad28a93d1619458",
-            "86506beb825be2112126bce1eb81ddc11bd0366ee875a73f45e1f0b069dc8089",
+            "a8ba6e8a89b7865fb0e1b897330bbca5ab48605f55984f969aade62d5d890655",
         ]
     );
     let plain = pack(&material(""), &[("w.wgsl", WRITE), ("m.wgsl", PLAIN)]);

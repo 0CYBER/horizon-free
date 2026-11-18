@@ -28,8 +28,8 @@ struct HorizonShadowOut {
     // the camera).
     @location(4) base: vec3<f32>,
 }
-// `color` is the vertex colour: the tint, and the fluid flag in its alpha's high nibble
-// (mesher.rs's `fluid_face`). What the light passes through is that colour, whether or not the
+// `color` is the vertex colour: the tint, and the fluid flag in its alpha's bit 3 (mesher.rs's
+// `FLUID_BIT`, clear on a fluid). What the light passes through is that colour, whether or not the
 // sections carry their quads' looks: a pack's `shadow_color` doesn't depend on its other inputs.
 fn horizon_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>)
     -> HorizonShadowOut {
@@ -40,8 +40,7 @@ fn horizon_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<
     out.uv = uv;
     out.layer = layer;
     out.tint = color.rgb;
-    let high = u32(round(color.a * 255.0)) >> 4u;
-    out.fluid = u32(high >= 8u && (high & 7u) < 6u);
+    out.fluid = u32((u32(round(color.a * 255.0)) & 8u) == 0u);
     out.base = pos;
     return out;
 }

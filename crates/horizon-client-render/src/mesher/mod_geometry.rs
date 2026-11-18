@@ -310,6 +310,10 @@ pub(super) fn add(mesher: &Mesher<'_>, tints: &mut Tints<'_>, out: &mut SectionM
 /// `quad` as four section vertices in its pass, drawn with atlas `layer`.
 fn emit(mesher: &Mesher<'_>, quad: &SectionQuad, layer: u16, out: &mut SectionMesh) {
     let [a, r, g, b] = quad.color.to_be_bytes().map(u32::from);
+    // The alpha lands in the HDR tier's bits (`mesher::emitting`), as it always has; no fluid,
+    // and no light level, as the look says. A `shaders/` pack reads the byte as it was before
+    // those were in it (`mesher::for_shaders_format`): the alpha whole.
+    let a = if mesher.shader_pack { a } else { a | 0xF8 };
     let color = r | g << 8 | b << 16 | a << 24;
     let [sky, block] = quad.light.map(|l| u16::from(l.min(15)) * 16);
     let light = sky | block << 8;
@@ -330,7 +334,7 @@ fn emit(mesher: &Mesher<'_>, quad: &SectionQuad, layer: u16, out: &mut SectionMe
             let axis = n.abs().max_position();
             // `Direction` order: down, up, north, south, west, east.
             let face = [4, 0, 2][axis] + u32::from(n[axis] > 0.0);
-            super::QuadLook::new(quad.color & 0xFF_FFFF, 1.0, face, [1.0; 4], 0)
+            super::QuadLook::new(quad.color & 0xFF_FFFF, 1.0, face, [1.0; 4])
         }
         false => super::QuadLook::default(),
     };
