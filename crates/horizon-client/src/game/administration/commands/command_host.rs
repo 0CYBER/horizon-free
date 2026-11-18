@@ -7,12 +7,15 @@ mod fillbiome;
 mod forceload;
 mod gamerule;
 mod help;
+mod profiler;
+mod publish;
 mod recipe;
 mod rotate;
 mod sound;
 mod swing;
 pub(super) mod tag;
 mod time;
+mod version;
 mod weather;
 mod worldborder;
 

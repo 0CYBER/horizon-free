@@ -85,8 +85,8 @@ PlaySoundCommand.playSound	port	crates/horizon-gameplay/src/commands/sound.rs::p
 PostEffectCommand.addPostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	gap: player: the effect is stored and listed, but nothing draws it
 PostEffectCommand.clearPostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	gap: player: the cleared list is never drawn anyway
 PostEffectCommand.removePostEffect	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_posteffect	gap: player: the removed effect was never drawn
-PublishCommand.getSuccessMessage	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_publish	published-port message with a copy-on-click port
-PublishCommand.publish	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_publish	with IntegratedServer.publishServer: the world is opened to the LAN and the port reported
+PublishCommand.getSuccessMessage	port	crates/horizon-gameplay/src/commands/publish.rs::publish	published-port message with a copy-on-click port
+PublishCommand.publish	port	crates/horizon-gameplay/src/commands/publish.rs::publish	with IntegratedServer.publishServer: the world is opened to the LAN and the port reported
 RaidCommand.glow	port	crates/horizon-client/src/game/mobs/raids/mod.rs::Game::raid_glow	glowing for 1000 ticks, amplifier 1, on the raid's raiders (via cmd_raid raid.glow)
 RaidCommand.setRaidOmenLevel	port	crates/horizon-client/src/game/administration/commands/raid.rs::Game::cmd_raid	raid.setomen branch
 RaidCommand.spawnLeader	port	crates/horizon-client/src/game/administration/commands/raid.rs::Game::cmd_raid	raid.spawnleader branch: patrol leader and banner

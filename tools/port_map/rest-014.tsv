@@ -106,8 +106,8 @@ DataPackCommand.enablePack	port	crates/horizon-client/src/game/administration/fu
 DataPackCommand.disablePack	port	crates/horizon-client/src/game/administration/functions.rs::Game::cmd_datapack	disable branch; apply_pack_change reloads
 DataPackCommand.getPack	port	crates/horizon-client/src/game/administration/functions.rs::Game::cmd_datapack	unknown, already enabled or disabled, and feature checks
 DeOpCommands.register	inline	crates/horizon-client/src/game/administration/commands/mod.rs::Game::execute_command	"deop" reaches the deop arm of cmd_profiles on a dedicated server: the op entry goes, commands.deop.success is said, and a player left unlisted is kicked
-DebugCommand.start	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_debug	profiler start, already-running error
-DebugCommand.stop	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_debug	profiler stop, ticks and tps
+DebugCommand.start	port	crates/horizon-gameplay/src/commands/profiler.rs::debug	profiler start, already-running error
+DebugCommand.stop	port	crates/horizon-gameplay/src/commands/profiler.rs::debug	profiler stop, ticks and tps
 DebugCommand.TraceCustomExecutor.runGuarded	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::cmd_debug_function	trace file under debug/ with one line per call
 DebugCommand.Tracer.printIndent	inline	crates/horizon-client/src/game/administration/commands/extra.rs::Game::trace_function	indent closure inside trace_function
 DebugCommand.Tracer.onCommand	port	crates/horizon-client/src/game/administration/commands/extra.rs::Game::trace_function	[C] line

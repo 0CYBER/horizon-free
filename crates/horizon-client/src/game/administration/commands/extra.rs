@@ -13,6 +13,7 @@ use horizon_client::{
     text::{self, ClickEvent, InlineObject, Style, Text},
 };
 use horizon_core::nbt::{JavaString, Tag};
+use horizon_gameplay::commands::profiler::filename_date_time;
 use horizon_protocol::packets::{
     Empty,
     play::{self, Clientbound as C, DialogHolder},
@@ -142,40 +143,11 @@ pub(in crate::game) struct CommandExtras {
     pub pregen: Option<super::pregen::PregenTask>,
 }
 
-use horizon_core::version::{BUILD_TIME, DATA_VERSION, STABLE, VANILLA_VERSION, VERSION_ID};
-
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
 }
 fn tr_error(key: &str, args: &[Text]) -> CommandError {
     CommandError::new(Text::translate(key, args))
-}
-/// `String.format(Locale.ROOT, "%.2f", v)`.
-fn two_places(v: f64) -> String {
-    super::percent_f(v, 2)
-}
-/// `Util.getFilenameFormattedDateTime` (`yyyy-MM-dd_HH.mm.ss`, local time).
-fn filename_date_time() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    let (y, mo, d, h, mi, s) = civil(secs);
-    format!("{y:04}-{mo:02}-{d:02}_{h:02}.{mi:02}.{s:02}")
-}
-/// UTC civil date and time of a Unix timestamp.
-fn civil(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    (y, m, d, rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 impl Game<'_> {
@@ -957,101 +929,20 @@ impl Game<'_> {
 
     /// `PublishCommand.publish` with `IntegratedServer.publishServer`.
     pub(super) fn cmd_publish(&mut self, ctx: &Context) -> R<i32> {
-        let allow = matches!(ctx.get("allowCommands"), Some(Arg::Bool(true)));
-        let port = match ctx.get("port") {
-            Some(Arg::Int(p)) => *p,
-            // HttpUtil.getAvailablePort.
-            _ => std::net::TcpListener::bind((
-                if std::env::var_os("HORIZON_TEST_LOOPBACK").is_some_and(|v| v == "1") {
-                    "127.0.0.1"
-                } else {
-                    "0.0.0.0"
-                },
-                0,
-            ))
-            .and_then(|l| l.local_addr())
-            .map_or(25564, |a| i32::from(a.port())),
-        };
-        let published = if self.serving() {
-            self.published_port()
-        } else {
-            self.lan.as_ref().map(|l| l.settings.port)
-        };
-        if let Some(port) = published {
-            return Err(err("commands.publish.alreadyPublished.lan", &[&port]));
-        }
-        let settings = super::super::lan::LanSettings {
-            port: port as u16,
-            guest_commands: allow,
-            force_game_mode: false,
-        };
-        // A dedicated server is open from the start (`published` above).
-        let started = self.serving() && self.publish(settings).is_ok();
-        if !started {
-            return Err(err("commands.publish.failed", &[]));
-        }
-        let port_text = port.to_string();
-        let link = Text::literal(port_text.clone()).with_style(&Style {
-            color: Some(text::GREEN),
-            hover: Some(std::sync::Arc::new(Text::translate("chat.copy.click", &[]))),
-            ..Style::default()
-        });
-        self.feedback(Text::translate(
-            "commands.publish.started.lan",
-            &[Text::translate("chat.square_brackets", &[link])],
-        ));
-        Ok(port)
+        horizon_gameplay::commands::publish::publish(self, ctx)
     }
     pub(super) fn cmd_unpublish(&mut self) -> R<i32> {
-        if !self.unpublish() {
-            return Err(err("commands.unpublish.notPublished", &[]));
-        }
-        self.feedback(Text::translate("commands.unpublish.success", &[]));
-        Ok(1)
+        horizon_gameplay::commands::publish::unpublish(self)
     }
 
     // ---- /debug, /jfr, /version -----------------------------------------
 
     pub(super) fn cmd_debug(&mut self, ctx: &Context) -> R<i32> {
-        if ctx.literals.iter().any(|l| l == "function") {
-            return self.cmd_debug_function(ctx);
-        }
-        // MinecraftServer.isTimeProfilerRunning / startTimeProfiler /
-        // stopTimeProfiler: a stop before the delayed start took effect
-        // reports empty results and leaves the start pending.
-        let running = self.cmds.profiler_delay || self.cmds.profiler.is_some();
-        if ctx.literals.iter().any(|l| l == "start") {
-            if running {
-                return Err(err("commands.debug.alreadyRunning", &[]));
-            }
-            self.cmds.profiler_delay = true;
-            self.feedback(Text::translate("commands.debug.started", &[]));
-            return Ok(0);
-        }
-        if !running {
-            return Err(err("commands.debug.notRunning", &[]));
-        }
-        let (seconds, ticks) = match self.cmds.profiler.take() {
-            Some((started, ticks)) => (
-                started.elapsed().as_nanos() as f64 / 1.0e9,
-                (self.ticks - ticks) as f64,
-            ),
-            None => (0.0, 0.0),
-        };
-        let tps = ticks / seconds;
-        self.feedback(Text::translate(
-            "commands.debug.stopped",
-            &[
-                Text::literal(two_places(seconds)),
-                num(ticks as i64),
-                Text::literal(two_places(tps)),
-            ],
-        ));
-        Ok(tps as i32)
+        horizon_gameplay::commands::profiler::debug(self, ctx)
     }
     /// `DebugCommand.TraceCustomExecutor`: run the functions with a tracer
     /// writing to `debug/debug-trace-<time>.txt`.
-    fn cmd_debug_function(&mut self, ctx: &Context) -> R<i32> {
+    pub(super) fn cmd_debug_function(&mut self, ctx: &Context) -> R<i32> {
         if !self.exec.functions.is_empty() {
             return Err(err("commands.debug.function.noRecursion", &[]));
         }
@@ -1131,94 +1022,17 @@ impl Game<'_> {
     /// `/jfr start|stop` (JfrCommand). Horizon has no JVM flight recorder:
     /// the recording is its own tick timing, dumped as JSON.
     pub(super) fn cmd_jfr(&mut self, ctx: &Context) -> R<i32> {
-        if ctx.literals.iter().any(|l| l == "start") {
-            if self.cmds.jfr.is_some() {
-                return Err(err("commands.jfr.start.failed", &[]));
-            }
-            let stamp = filename_date_time();
-            self.cmds.jfr = Some((Instant::now(), self.ticks, stamp));
-            self.feedback(Text::translate("commands.jfr.started", &[]));
-            return Ok(1);
-        }
-        let Some((started, ticks, stamp)) = self.cmds.jfr.take() else {
-            return Err(tr_error(
-                "commands.jfr.dump.failed",
-                &[Text::literal("Not currently profiling")],
-            ));
-        };
-        let relative = format!("debug/client-{stamp}.json");
-        let path = std::env::current_dir().unwrap_or_default().join(&relative);
-        let report = serde_json::json!({
-            "environment": "client",
-            "seconds": started.elapsed().as_secs_f64(),
-            "ticks": self.ticks - ticks,
-        });
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, report.to_string()));
-        if let Err(e) = written {
-            return Err(tr_error(
-                "commands.jfr.dump.failed",
-                &[Text::literal(e.to_string())],
-            ));
-        }
-        let file = Text::literal(relative).underlined().with_style(&Style {
-            hover: Some(std::sync::Arc::new(Text::translate("chat.copy.click", &[]))),
-            ..Style::default()
-        });
-        self.feedback(Text::translate("commands.jfr.stopped", &[file]));
-        Ok(1)
+        horizon_gameplay::commands::profiler::jfr(self, ctx)
     }
 
     /// `VersionCommand.dumpVersion`'s lines: Horizon reports the version it
     /// implements.
     pub(in crate::game) fn version_lines(&self) -> Vec<Text> {
-        let protocol = horizon_protocol::PROTOCOL_VERSION;
-        let mut lines: Vec<Text> = [
-            ("commands.version.id", vec![Text::literal(VERSION_ID)]),
-            (
-                "commands.version.name",
-                vec![Text::literal(VANILLA_VERSION)],
-            ),
-            ("commands.version.data", vec![num(DATA_VERSION)]),
-            ("commands.version.series", vec![Text::literal("main")]),
-            (
-                "commands.version.protocol",
-                vec![num(protocol), Text::literal(format!("0x{protocol:x}"))],
-            ),
-            (
-                "commands.version.build_time",
-                vec![Text::literal(BUILD_TIME)],
-            ),
-            (
-                "commands.version.pack.resource",
-                vec![Text::literal("97.1")],
-            ),
-            ("commands.version.pack.data", vec![Text::literal("121.0")]),
-        ]
-        .into_iter()
-        .map(|(key, args)| Text::translate(key, &args))
-        .collect();
-        lines.push(Text::translate(
-            if STABLE {
-                "commands.version.stable.yes"
-            } else {
-                "commands.version.stable.no"
-            },
-            &[],
-        ));
-        lines
+        horizon_gameplay::commands::version::version_lines(horizon_protocol::PROTOCOL_VERSION)
     }
     /// `VersionCommand`.
     pub(super) fn cmd_version(&mut self) -> R<i32> {
-        if !self.command_source.is_some_and(|s| s.silent) {
-            self.system_message(Text::translate("commands.version.header", &[]));
-            for line in self.version_lines() {
-                self.system_message(line);
-            }
-        }
-        Ok(1)
+        horizon_gameplay::commands::version::version(self)
     }
 }
 
