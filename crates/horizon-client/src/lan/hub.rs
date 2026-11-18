@@ -3608,6 +3608,19 @@ impl Hub {
                     values,
                 }));
             }
+            // ServerEntity.sendDirtyEntityData: the skin parts
+            // (Avatar.DATA_PLAYER_MODE_CUSTOMISATION) the player's model shows, which
+            // ServerPlayer.updateOptions copies from the client's information, go to the
+            // player itself too. Its own entity is never tracked to it
+            // (ChunkMap.TrackedEntity.updatePlayer skips the entity itself), so this is
+            // the only way its client learns them and draws its outer layer (#17123).
+            if g.info.model_customisation != g.sent_skin {
+                g.sent_skin = g.info.model_customisation;
+                g.send(&C::SetEntityData(play::SetEntityData {
+                    id: g.entity_id,
+                    values: vec![(16, serializer::BYTE, Value::Byte(g.sent_skin as i8))],
+                }));
+            }
             // ServerEntity.sendDirtyEntityData: the arrows and bee stingers stuck
             // in the player go to the player too, whose own model draws them.
             if g.stuck != g.sent_stuck {
@@ -4798,6 +4811,11 @@ impl Hub {
         self.respawned(id);
         self.guests.update(i, |g| {
             g.sent_pose = crate::pose::Pose::Standing;
+            // ClientPacketListener.handleRespawn without KEEP_ENTITY_DATA: the client's new player is
+            // built from zero data, so the skin parts its dead one held are gone too. Pairing this
+            // reset with the pose's keeps the outer layer sent again on the next tick; without it the
+            // mask counted as sent and the layer stayed missing until the skin screen (#17123).
+            g.sent_skin = 0;
             // ServerPlayer.restoreFrom: the game mode again (onUpdateAbilities).
             g.send(&g.abilities_packet());
             // The new player faces the level's respawn direction (snapTo), or
@@ -5207,6 +5225,7 @@ mod tests {
     mod pending_move_bound_tests;
     mod pending_move_scope_tests;
     mod pending_move_tests;
+    mod skin_outer_layer_tests;
     mod sound_tests;
     use super::*;
     use crate::fast_hash::FxHashSet;
