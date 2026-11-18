@@ -315,6 +315,12 @@ impl List {
     fn scroller_height(&self) -> i32 {
         ((self.height * self.height) as f32 / self.content_height() as f32) as i32
     }
+    /// `AbstractScrollArea.scrollerHeight` clamped the Java way: `Mth.clamp`
+    /// applies the minimum first and then the maximum, so a list shorter than
+    /// 40 px keeps its last 8 px instead of panicking on crossed bounds.
+    fn scroller_thumb(&self) -> i32 {
+        self.scroller_height().max(32).min(self.height - 8)
+    }
     /// `AbstractScrollArea.mouseDragged` while the scrollbar is held.
     fn drag(&mut self, y: f64) {
         let Some(last) = self.held else { return };
@@ -324,7 +330,7 @@ impl List {
             self.set_scroll(self.max_scroll() as f64);
         } else {
             let max = self.max_scroll().max(1) as f64;
-            let bar = self.scroller_height().clamp(32, self.height - 8);
+            let bar = self.scroller_thumb();
             let scale = (max / (self.height - bar) as f64).max(1.0);
             self.set_scroll(self.scroll + (y - last) * scale);
         }
@@ -1831,7 +1837,7 @@ impl PackScreen {
                     crate::widgets::Cursor::PointingHand
                 });
             }
-            let sh = l.scroller_height().clamp(32, l.height - 8);
+            let sh = l.scroller_thumb();
             let sy = (l.scroll as i32 * (l.height - sh) / l.max_scroll() + l.y).max(l.y);
             d::sprite(
                 out,
@@ -2468,6 +2474,28 @@ mod icon_slot_tests {
             packs(count),
             &[],
         )
+    }
+
+    /// A 120 px window leaves a 38 px pack list, under the 32 px scroller
+    /// minimum plus the 8 px margin: the Java clamp keeps the last 8 px of the
+    /// list, and neither drawing nor dragging the bar panics on crossed bounds.
+    #[test]
+    fn a_short_pack_list_keeps_a_whole_scroller() {
+        let atlas = atlas();
+        let m = Measure(&atlas.font);
+        let mut screen = screen(&m, 30, 120);
+        assert_eq!(screen.lists[0].height, 38);
+        assert_eq!(screen.lists[0].scroller_thumb(), 30);
+        assert!(screen.lists[0].scrollable());
+        let max = screen.lists[0].max_scroll() as f64;
+        // The bar is drawn: this used to panic with min 32 and max 30.
+        assert!(!screen.draw(&m, (0, 0), 0, 0).is_empty());
+        // Dragging one pixel moves the list by max_scroll / 8: the 38 px list
+        // minus the 8 px margin, not the 6 px the 32 px minimum would leave.
+        let l = &mut screen.lists[0];
+        l.held = Some(f64::from(l.y + 1));
+        l.drag(f64::from(l.y + 2));
+        assert_eq!(l.scroll, max / 8.0);
     }
 
     /// Every frame sent every drawn icon again (a 128 by 128 RGBA copy each) into the same

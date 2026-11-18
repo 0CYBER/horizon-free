@@ -904,6 +904,15 @@ pub fn list_background(
         u32::MAX,
     );
 }
+/// `AbstractScrollArea.scrollerHeight`: `Mth.clamp((height * height) / content, 32, height - 8)`.
+/// Java applies the minimum then the maximum, so a list shorter than 40 pixels
+/// keeps a thumb of its last 8 pixels instead of panicking as `f32::clamp` does.
+fn scroller_height(height: f32, content: f32) -> f32 {
+    (height * height / content)
+        .trunc()
+        .max(32.0)
+        .min(height - 8.0)
+}
 /// The visible scrollbar thumb, shared by painting and pointer input.
 pub(crate) fn scrollbar_thumb(
     top: f32,
@@ -915,9 +924,7 @@ pub(crate) fn scrollbar_thumb(
     if content <= height {
         return None;
     }
-    let bar = (height * height / content)
-        .clamp(32.0, height - 8.0)
-        .floor();
+    let bar = scroller_height(height, content).floor();
     let y = top + ((scroll / (content - height)) * (height - bar)).floor();
     Some((y, bar))
 }
@@ -971,7 +978,7 @@ impl Scroll {
             self.amount = max;
         } else {
             let height = bottom - top;
-            let bar = ((height * height / content).trunc()).clamp(32.0, height - 8.0);
+            let bar = scroller_height(height, content);
             self.amount += (y - last) * (max.max(1.0) / (height - bar)).max(1.0);
         }
         self.clamp(top, bottom, content);
@@ -2870,5 +2877,17 @@ mod tests {
         assert_eq!(edit.text_start_x(18.0), 58.0);
         // (114 - 5) / 2 = 54.5, rounded down.
         assert_eq!(edit.text_start_x(5.0), 64.0);
+    }
+    /// A list shorter than the scroller minimum keeps the Java clamp: 20 px of
+    /// list holding 40 px of content has a 12 px thumb, not a panic.
+    #[test]
+    fn a_short_list_keeps_a_whole_scroller() {
+        assert_eq!(scrollbar_thumb(10.0, 30.0, 40.0, 0.0), Some((10.0, 12.0)));
+        assert_eq!(scrollbar_thumb(10.0, 30.0, 40.0, 10.0), Some((14.0, 12.0)));
+        assert_eq!(scrollbar_thumb(10.0, 30.0, 40.0, 20.0), Some((18.0, 12.0)));
+        let mut scroll = Scroll::default();
+        assert!(scroll.press((0.0, 10.0), 0.0, 10.0, 30.0, 40.0));
+        scroll.drag(20.0, 10.0, 30.0, 40.0);
+        assert_eq!(scroll.amount, 20.0);
     }
 }
