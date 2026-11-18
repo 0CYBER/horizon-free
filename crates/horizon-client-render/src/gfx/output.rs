@@ -62,11 +62,13 @@ pub fn driver_fingerprint(info: &wgpu::AdapterInfo, os: &str) -> String {
         .join("; ")
 }
 
-/// What the system last reported for a renderer's display: its luminance, and whether it
-/// shows HDR (`None`: it doesn't say, or nobody asked, as with HDR Off and offscreen).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What the system last reported for a renderer's display: its luminance, its primaries
+/// (Color Boost's target, `hdr::boost_target`), and whether it shows HDR (`None`: it doesn't
+/// say, or nobody asked, as with HDR Off and offscreen).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DisplayReading {
     pub(crate) luminance: Option<Reported>,
+    pub(crate) primaries: Option<super::hdr::Primaries>,
     pub(crate) hdr: Option<bool>,
 }
 impl DisplayReading {
@@ -157,6 +159,10 @@ pub struct EffectiveOutput {
     pub(crate) nits: [f32; 3],
     /// The HUD and menus' brightness, as a share of paper white: their nits over its.
     pub(crate) ui_brightness: f32,
+    /// The display's primaries as last reported (`DisplayReading`).
+    pub(crate) primaries: Option<super::hdr::Primaries>,
+    /// Color Boost's BT.709 to BT.2020 for them (`hdr::gamut`); `None` at 0.
+    pub(crate) gamut: Option<super::hdr::Matrix>,
     /// The running shader pack lights the world itself: Horizon lifts none of it, so Look has
     /// nothing to pick (`with_pack`).
     pub(crate) pack_lights: bool,
@@ -200,6 +206,8 @@ impl EffectiveOutput {
         },
         nits: [203.0, 1000.0, 0.0],
         ui_brightness: 1.0,
+        primaries: None,
+        gamut: None,
         pack_lights: false,
         rays: None,
     };
@@ -319,6 +327,11 @@ pub(crate) fn resolve_output(
         ],
         ui_brightness: settings.ui_nits(reading.luminance) as f32
             / settings.paper_white_nits(reading.luminance) as f32,
+        primaries: reading.primaries,
+        gamut: super::hdr::gamut(
+            settings.hdr_color_boost as f32 / 100.0,
+            super::hdr::boost_target(reading.primaries),
+        ),
         pack_lights: false,
         rays: None,
     }
@@ -349,6 +362,7 @@ pub(crate) mod tests {
                     peak: 1000,
                     peak_guessed: false,
                 }),
+                primaries: None,
                 hdr: system,
             },
         )

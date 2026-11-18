@@ -27,6 +27,10 @@ struct Params {
     // 2 peak, 3 paper white), y the slider in nits, z where its controls start,
     // a share of the height.
     calibration: vec4<f32>,
+    // Color Boost (gfx/hdr.rs `gamut`): linear BT.709 to BT.2020 through the primaries stretched
+    // toward the display's, used where `boost` is 1 (display_boosted). At 0 nothing reads it.
+    gamut: mat3x3<f32>,
+    boost: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 // Horizon's logo, 1 inside, 0 outside, for calibration's test pictures.
@@ -163,6 +167,10 @@ fn dithered(e: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
 // Light in units of paper white at the pixel `pos`, as the swapchain takes it: HDR10 or scRGB,
 // the black level lifted.
 fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
+    // Color Boost off keeps this exact path, so the picture is the same to the bit.
+    if params.boost > 0.5 {
+        return display_boosted(light, pos);
+    }
     let scrgb = light * params.paper;
     if params.pq > 0.5 {
         let e = pq(BT709_TO_BT2020 * scrgb * 80.0);
@@ -177,6 +185,23 @@ fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
         return vec4(BT2020_TO_BT709 * lifted / 80.0 * params.scrgb_gain, 1.0);
     }
     return vec4(scrgb * params.scrgb_gain, 1.0);
+}
+
+// `display` with Color Boost on: the light's colours stretched toward the display's primaries
+// (`params.gamut`, into BT.2020, where they stay inside). scRGB takes them back onto BT.709's
+// axes, where they go negative past BT.709's gamut, as scRGB allows.
+fn display_boosted(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
+    let nits = params.gamut * (light * params.paper) * 80.0;
+    if params.pq > 0.5 {
+        let e = pq(nits);
+        let lifted = select(e, lift_black(e), params.black > 0.0);
+        if pq_dither {
+            return vec4(dithered(lifted, pos.xy), 1.0);
+        }
+        return vec4(lifted, 1.0);
+    }
+    let lifted = select(nits, pq_nits(lift_black(pq(nits))), params.black > 0.0);
+    return vec4(BT2020_TO_BT709 * lifted / 80.0 * params.scrgb_gain, 1.0);
 }
 
 // The last pass over a frame without the HUD's layer, a `shaders/` pack's (gfx/output.rs): its

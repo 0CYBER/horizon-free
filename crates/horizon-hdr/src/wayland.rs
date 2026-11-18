@@ -20,7 +20,7 @@ use wayland_protocols::wp::color_management::v1::client::{
     wp_image_description_v1::{self, WpImageDescriptionV1},
 };
 
-/// A surface's preferred luminances, in cd/m² (nits).
+/// A surface's preferred luminances, in cd/m² (nits), and the target display's primaries.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Luminances {
     /// The reference white: where SDR white sits.
@@ -28,6 +28,9 @@ pub struct Luminances {
     /// The darkest and brightest the target display shows (`target_luminance`).
     pub target_min: f32,
     pub target_max: f32,
+    /// The red, green and blue the target display shows, CIE 1931 xy (`target_primaries`);
+    /// `None` where the compositor doesn't send them.
+    pub target_primaries: Option<[[f32; 2]; 3]>,
 }
 
 #[derive(Default)]
@@ -38,7 +41,14 @@ struct State {
     ready: Option<bool>,
     reference: Option<f32>,
     target: Option<(f32, f32)>,
+    target_primaries: Option<[[f32; 2]; 3]>,
     done: bool,
+}
+
+/// `target_primaries`' red, green and blue, each coordinate sent times 1 000 000.
+fn primaries_xy([r_x, r_y, g_x, g_y, b_x, b_y]: [i32; 6]) -> [[f32; 2]; 3] {
+    let xy = |x: i32, y: i32| [x as f32 / 1_000_000.0, y as f32 / 1_000_000.0];
+    [xy(r_x, r_y), xy(g_x, g_y), xy(b_x, b_y)]
 }
 
 /// What a compositor says about one window, kept up to date: [`Watch::changed`] says
@@ -115,6 +125,7 @@ impl Watch {
         let qh = self.queue.handle();
         let state = &mut self.state;
         (state.ready, state.reference, state.target, state.done) = (None, None, None, false);
+        state.target_primaries = None;
         let description = self.feedback.get_preferred(&qh, ());
         let found = (|| {
             while state.ready.is_none() {
@@ -132,6 +143,7 @@ impl Watch {
                 reference: state.reference?,
                 target_min,
                 target_max,
+                target_primaries: state.target_primaries,
             })
         })();
         description.destroy();
@@ -224,8 +236,29 @@ impl Dispatch<WpImageDescriptionInfoV1, ()> for State {
             wp_image_description_info_v1::Event::TargetLuminance { min_lum, max_lum } => {
                 state.target = Some((min_lum as f32 / 10_000.0, max_lum as f32));
             }
+            wp_image_description_info_v1::Event::TargetPrimaries {
+                r_x,
+                r_y,
+                g_x,
+                g_y,
+                b_x,
+                b_y,
+                ..
+            } => state.target_primaries = Some(primaries_xy([r_x, r_y, g_x, g_y, b_x, b_y])),
             wp_image_description_info_v1::Event::Done => state.done = true,
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// KWin's target primaries for a wide-gamut panel, as a trace of its events showed them.
+    #[test]
+    fn target_primaries_read_in_millionths() {
+        assert_eq!(
+            super::primaries_xy([690_000, 303_000, 241_000, 714_000, 144_000, 54_000]),
+            [[0.690, 0.303], [0.241, 0.714], [0.144, 0.054]]
+        );
     }
 }

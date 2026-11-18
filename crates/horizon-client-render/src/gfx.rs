@@ -13295,9 +13295,15 @@ impl DisplayReading {
         let hdr = info.coarse.and_then(|coarse| coarse.high_dynamic_range);
         Self {
             luminance: os_reported(info),
+            primaries: os_primaries(info),
             hdr,
         }
     }
+}
+/// The display's primaries as the OS reports them (Windows: DXGI's output description).
+fn os_primaries(info: &wgpu::DisplayHdrInfo) -> Option<hdr::Primaries> {
+    let c = info.chromaticity.as_ref()?;
+    hdr::reported_primaries([c.red?, c.green?, c.blue?])
 }
 /// Potential EDR is fixed for a screen; current EDR follows brightness and must not
 /// repeatedly switch HDR output as the player adjusts the desktop's brightness.
@@ -13457,6 +13463,7 @@ fn os_reported(info: &wgpu::DisplayHdrInfo) -> Option<crate::graphics::Reported>
 fn wayland_reading(now: Option<horizon_hdr::wayland::Luminances>) -> DisplayReading {
     now.map_or_else(DisplayReading::default, |l| DisplayReading {
         luminance: Some(reported(l)),
+        primaries: l.target_primaries.and_then(hdr::reported_primaries),
         // The preferred target's headroom is the compositor's live report, not the
         // swapchain's supported formats. Invalid or absent readings stay unknown.
         hdr: (l.reference.is_finite()

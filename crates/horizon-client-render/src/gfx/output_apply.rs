@@ -158,6 +158,7 @@ fn graced(
     match since {
         Some(_) => DisplayReading {
             luminance: applied.reported,
+            primaries: applied.primaries,
             hdr: Some(true),
         },
         None => raw,
@@ -306,6 +307,7 @@ impl Renderer {
         [hdr.paper_white, hdr.peak, hdr.black] = output.nits;
         hdr.reference_80 = self.hdr_reference_80();
         hdr.ui = output.ui_brightness;
+        hdr.gamut = output.gamut;
         Ok(hdr)
     }
 
@@ -364,6 +366,7 @@ impl Renderer {
         }
         if let Some(hdr) = &mut self.hdr {
             hdr.ui = next.ui_brightness;
+            hdr.gamut = next.gamut;
             if (hdr.paper_white, hdr.peak, hdr.black) != (paper_white, peak, black) {
                 (hdr.paper_white, hdr.peak, hdr.black) = (paper_white, peak, black);
                 self.send_hdr_metadata();
@@ -595,7 +598,7 @@ mod tests {
         );
     }
 
-    /// The display's luminance or the UI brightness change on the same output: the values
+    /// The display's luminance, the UI brightness or Color Boost change on the same output: the values
     /// follow, and nothing is built or configured again.
     #[test]
     fn new_nits_on_the_same_output_build_nothing() {
@@ -609,12 +612,15 @@ mod tests {
         });
         // 150 nits under the reported paper white of 250: 0.6 of it.
         settings.hdr_ui_nits = 150;
+        // Color Boost too: a new matrix on the same output.
+        settings.hdr_color_boost = 50;
         let mut swapchain = Swapchain::default();
         let next = candidate(&settings, caps, reading, &applied);
         let published = commit(&mut swapchain, &applied, next, caps, &mut None);
         assert_eq!(published, next);
         assert_eq!(published.nits, [250.0, 600.0, 0.0]);
         assert_eq!(published.ui_brightness, 0.6);
+        assert!(applied.gamut.is_none() && published.gamut.is_some());
         assert!(swapchain.asked.is_empty());
     }
 
@@ -793,6 +799,7 @@ mod tests {
                     peak: 800,
                     peak_guessed: false,
                 }),
+                primaries: None,
                 hdr,
             };
             self.caps.hdr = offer;

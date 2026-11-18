@@ -39,6 +39,123 @@ pub fn scrgb_reference_80(vendor: u32, driver: &str) -> bool {
     !(vendor == 0x10de && driver == "NVIDIA")
 }
 
+/// The CIE 1931 xy chromaticities of a red, green and blue primary.
+pub type Primaries = [[f32; 2]; 3];
+/// A linear RGB to RGB matrix, columns first (WGSL's `mat3x3<f32>`): column `i` is where
+/// channel `i` alone goes.
+pub type Matrix = [[f32; 3]; 3];
+const BT709: Primaries = [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]];
+const BT2020: Primaries = [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]];
+const DISPLAY_P3: Primaries = [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]];
+/// Every colour here keeps D65 as white, whatever white point the display reports.
+const D65: [f64; 2] = [0.3127, 0.3290];
+
+/// Reported primaries as the display reading keeps them: `None` for a coordinate that isn't a
+/// number, which would also never compare equal to the next reading.
+pub(super) fn reported_primaries(p: Primaries) -> Option<Primaries> {
+    p.as_flattened().iter().all(|c| c.is_finite()).then_some(p)
+}
+
+/// The primaries Color Boost stretches toward on a display that `reported` its own: those, or
+/// Display P3 where none were reported, all are zero, or they don't hold BT.709's (nothing
+/// would be stretched toward the display then, only away from it). Each one outside BT.2020
+/// is moved onto BT.2020's edge, so the stretch never goes past it: Display P3's red too,
+/// which lies a hair outside.
+pub fn boost_target(reported: Option<Primaries>) -> Primaries {
+    let clamp = |p: Primaries| p.map(|p| onto_triangle(p, BT2020));
+    reported
+        .filter(|p| p.as_flattened().iter().any(|&c| c != 0.0))
+        .map(clamp)
+        .filter(|clamped| BT709.iter().all(|&p| inside(p, *clamped, 2e-3)))
+        .unwrap_or_else(|| clamp(DISPLAY_P3))
+}
+
+/// Whether `p` lies in `triangle`, or within `slack` of it (a quantised report of Display P3
+/// holds BT.709's blue a hair outside). A triangle with no area holds nothing.
+fn inside(p: [f32; 2], triangle: Primaries, slack: f32) -> bool {
+    let cross = |a: [f32; 2], b: [f32; 2], p: [f32; 2]| {
+        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+    };
+    let area = cross(triangle[0], triangle[1], triangle[2]);
+    if area.abs() < 1e-6 {
+        return false;
+    }
+    (0..3).all(|i| {
+        let (a, b) = (triangle[i], triangle[(i + 1) % 3]);
+        let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+        cross(a, b, p) * area.signum() / length >= -slack
+    })
+}
+
+/// `p`, or outside `triangle` the nearest point on its edges.
+fn onto_triangle(p: [f32; 2], triangle: Primaries) -> [f32; 2] {
+    if inside(p, triangle, 0.0) {
+        return p;
+    }
+    let nearest = |a: [f32; 2], b: [f32; 2]| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+        [a[0] + t * dx, a[1] + t * dy]
+    };
+    (0..3)
+        .map(|i| nearest(triangle[i], triangle[(i + 1) % 3]))
+        .min_by(|a, b| {
+            let d = |q: &[f32; 2]| (q[0] - p[0]).hypot(q[1] - p[1]);
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap_or(p)
+}
+
+/// HDR output's linear BT.709 to BT.2020 with Color Boost `boost` (0..=1) toward `target`
+/// (`boost_target`): `None` at 0, where the shader keeps its exact constant.
+pub fn gamut(boost: f32, target: Primaries) -> Option<Matrix> {
+    (boost > 0.0).then(|| stretched_to_bt2020(boost.min(1.0), target))
+}
+
+/// Linear RGB in BT.709's primaries, each moved `boost` of the way toward `target`'s, D65
+/// white kept, to BT.2020: RGB to XYZ by those primaries, then XYZ to BT.2020.
+fn stretched_to_bt2020(boost: f32, target: Primaries) -> Matrix {
+    let s = f64::from(boost);
+    let stretched: [[f64; 2]; 3] = std::array::from_fn(|i| {
+        std::array::from_fn(|c| {
+            let from = f64::from(BT709[i][c]);
+            from + s * (f64::from(target[i][c]) - from)
+        })
+    });
+    let bt2020 = BT2020.map(|p| p.map(f64::from));
+    let m = mul(inverse(rgb_to_xyz(bt2020)), rgb_to_xyz(stretched));
+    // Rows here; the shader takes columns.
+    std::array::from_fn(|col| std::array::from_fn(|row| m[row][col] as f32))
+}
+
+/// The RGB to XYZ matrix (rows) of `primaries` with D65 white: each primary's XYZ at Y = 1,
+/// scaled so that RGB 1, 1, 1 is D65 at Y = 1.
+fn rgb_to_xyz(primaries: [[f64; 2]; 3]) -> [[f64; 3]; 3] {
+    let xyz = |[x, y]: [f64; 2]| [x / y, 1.0, (1.0 - x - y) / y];
+    let columns = primaries.map(xyz);
+    let p: [[f64; 3]; 3] = std::array::from_fn(|r| std::array::from_fn(|c| columns[c][r]));
+    let white = xyz(D65);
+    let inv = inverse(p);
+    let scale: [f64; 3] =
+        std::array::from_fn(|r| (0..3).map(|c| inv[r][c] * white[c]).sum::<f64>());
+    std::array::from_fn(|r| std::array::from_fn(|c| p[r][c] * scale[c]))
+}
+
+fn mul(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    std::array::from_fn(|r| std::array::from_fn(|c| (0..3).map(|k| a[r][k] * b[k][c]).sum()))
+}
+
+fn inverse(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let cofactor = |r: usize, c: usize| {
+        let (r1, r2) = ((r + 1) % 3, (r + 2) % 3);
+        let (c1, c2) = ((c + 1) % 3, (c + 2) % 3);
+        m[r1][c1] * m[r2][c2] - m[r1][c2] * m[r2][c1]
+    };
+    let det: f64 = (0..3).map(|c| m[0][c] * cofactor(0, c)).sum();
+    // The adjugate is the cofactors transposed.
+    std::array::from_fn(|r| std::array::from_fn(|c| cofactor(c, r) / det))
+}
+
 impl Output {
     pub fn name(self) -> &'static str {
         match self {
@@ -94,6 +211,7 @@ pub(super) fn offscreen_display() -> super::DisplayReading {
         std::env::var_os("HORIZON_HDR_DISPLAY").and_then(|file| std::fs::read_to_string(file).ok());
     super::DisplayReading {
         luminance: None,
+        primaries: None,
         hdr: match said.as_deref().map(str::trim) {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -210,6 +328,27 @@ pub struct Hdr {
     /// An scRGB surface's reference white is 80 nits, the compositor's white (`surface_scale`):
     /// on Wayland, but for NVIDIA's own driver (`scrgb_reference_80`).
     pub reference_80: bool,
+    /// Color Boost's BT.709 to BT.2020 (`gamut`) for the whole picture HDR output writes, the
+    /// HDR screenshot included; `None` shows the colours exactly. Calibration's test pictures
+    /// never take it.
+    pub gamut: Option<Matrix>,
+}
+
+/// hdr.wgsl's `Params` in floats: 7 scalars and a pad, `calibration`, `gamut`'s three columns
+/// of 16 bytes each, and `boost` padded to the struct's 16-byte alignment.
+const PARAMS: usize = 28;
+
+/// `Params`' last 16 floats, from `gamut` on: its columns, each padded to 16 bytes, and
+/// `boost`, 1 with a matrix, 0 without.
+fn gamut_params(gamut: Option<Matrix>) -> [f32; 16] {
+    let mut floats = [0.0; 16];
+    if let Some(gamut) = gamut {
+        for (i, column) in gamut.iter().enumerate() {
+            floats[4 * i..][..3].copy_from_slice(column);
+        }
+        floats[12] = 1.0;
+    }
+    floats
 }
 
 pub(super) fn shader() -> String {
@@ -342,7 +481,7 @@ impl Hdr {
         let params = || {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Horizon HDR parameters"),
-                size: 48,
+                size: std::mem::size_of::<[f32; PARAMS]>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -389,12 +528,13 @@ impl Hdr {
             look: true,
             calibration: None,
             reference_80: false,
+            gamut: None,
         }
     }
 
     /// The same HDR output presenting `output` instead (`output_apply`): the same frame and
     /// HUD layer, and the player's tuning as it is (the look, the world's lighting, the UI
-    /// brightness, the masks, the debug view, calibration and the luminance). Its
+    /// brightness, Color Boost, the masks, the debug view, calibration and the luminance). Its
     /// targets are made again on the next frame.
     pub fn retargeted(&self, device: &wgpu::Device, queue: &wgpu::Queue, output: Output) -> Self {
         Self {
@@ -408,6 +548,7 @@ impl Hdr {
             look: self.look,
             calibration: self.calibration,
             reference_80: self.reference_80,
+            gamut: self.gamut,
             ..Self::new(device, queue, self.format, output, self.layered.is_some())
         }
     }
@@ -857,13 +998,14 @@ impl Hdr {
     }
 
     /// hdr.wgsl's `Params`.
-    fn params(&self, world: bool, pq: bool) -> [f32; 12] {
+    fn params(&self, world: bool, pq: bool) -> [f32; PARAMS] {
         let paper = self.paper_white.max(1.0);
         // Only Horizon's lifted world is known to end at the look's scene peak; elsewhere (the
         // Vanilla look, a pack's own light, the title) the curve's source follows the display.
         let look = f32::from(u8::from(world && self.lighting));
         let c = self.calibration;
-        [
+        let mut params = [0.0; PARAMS];
+        params[..12].copy_from_slice(&[
             paper / 80.0,
             self.headroom(),
             f32::from(u8::from(pq)),
@@ -881,7 +1023,9 @@ impl Hdr {
             c.map_or(0.0, |c| c.nits),
             c.map_or(0.0, |c| c.band),
             0.0,
-        ]
+        ]);
+        params[12..].copy_from_slice(&gamut_params(self.gamut));
+        params
     }
 
     /// One full-screen pass of `pipeline` into `view`.
@@ -1216,6 +1360,123 @@ var<private> params: ReferenceParams;
             return std::array::from_fn(|i| f32::from(bytes[i]) / 255.0);
         }
         std::array::from_fn(|i| half::f16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]).to_f32())
+    }
+
+    /// KWin's target primaries for a wide-gamut panel, from a trace of its events.
+    const KWIN: super::Primaries = [[0.690, 0.303], [0.241, 0.714], [0.144, 0.054]];
+
+    /// Color Boost at 0 is BT.709 to BT.2020 as the shader's constant (ITU-R BT.2087, 4
+    /// decimals) has it, and leaves the uniform's matrix and flag at zero: the shader's own path.
+    #[test]
+    fn no_color_boost_is_bt709_to_bt2020() {
+        let constant = [
+            [0.6274, 0.0691, 0.0164],
+            [0.3293, 0.9195, 0.0880],
+            [0.0433, 0.0114, 0.8956],
+        ];
+        let m = super::stretched_to_bt2020(0.0, KWIN);
+        for (got, want) in m.as_flattened().iter().zip(constant.as_flattened()) {
+            assert!((got - want).abs() < 1e-4, "{m:?}");
+        }
+        assert_eq!(super::gamut(0.0, KWIN), None);
+        assert_eq!(super::gamut_params(None), [0.0; 16]);
+        // Packed as WGSL takes a mat3x3: red's column first, each padded to 16 bytes.
+        let packed = super::gamut_params(Some(m));
+        let pad = [0.0];
+        assert_eq!(
+            packed,
+            [
+                &m[0][..],
+                &pad,
+                &m[1],
+                &pad,
+                &m[2],
+                &pad,
+                &[1.0, 0.0, 0.0, 0.0]
+            ]
+            .concat()[..]
+        );
+    }
+
+    /// Full Color Boost shows pure red, green and blue at the display's own primaries (through
+    /// ITU-R BT.2020's published RGB to XYZ), and white stays D65's white.
+    #[test]
+    fn full_color_boost_reaches_the_display_primaries() {
+        let target = super::boost_target(Some(KWIN));
+        assert_eq!(target, KWIN);
+        let m = super::gamut(1.0, target).unwrap();
+        let bt2020_to_xyz = [
+            [0.636958, 0.144617, 0.168881],
+            [0.262700, 0.677998, 0.059302],
+            [0.000000, 0.028073, 1.060985],
+        ];
+        for (channel, want) in m.iter().zip(KWIN) {
+            let xyz: [f32; 3] =
+                std::array::from_fn(|r| (0..3).map(|k| bt2020_to_xyz[r][k] * channel[k]).sum());
+            let sum: f32 = xyz.iter().sum();
+            let xy = [xyz[0] / sum, xyz[1] / sum];
+            assert!(
+                (xy[0] - want[0]).abs() < 1e-4 && (xy[1] - want[1]).abs() < 1e-4,
+                "{xy:?} {want:?}"
+            );
+        }
+        let white: [f32; 3] = std::array::from_fn(|r| m.iter().map(|c| c[r]).sum());
+        assert!(white.iter().all(|w| (w - 1.0).abs() < 1e-5), "{white:?}");
+    }
+
+    /// What Color Boost stretches toward: the display's primaries; Display P3 for none, zeros,
+    /// or a gamut short of BT.709. Display P3 reported as DXGI quantises it holds BT.709's blue,
+    /// which it shares. A red past BT.2020, Display P3's own included, is moved onto its edge,
+    /// so no colour needs a negative BT.2020 channel.
+    #[test]
+    fn the_boost_target_stays_within_bt2020_and_falls_back_to_display_p3() {
+        use super::{BT2020, DISPLAY_P3, boost_target, inside, reported_primaries};
+        let fallback = boost_target(None);
+        assert_eq!(fallback[1..], DISPLAY_P3[1..]);
+        for reported in [
+            Some([[0.0; 2]; 3]),
+            Some([[0.600, 0.340], [0.320, 0.570], [0.160, 0.070]]),
+            reported_primaries([[f32::NAN, 0.3], [0.2, 0.7], [0.15, 0.06]]),
+        ] {
+            assert_eq!(boost_target(reported), fallback, "{reported:?}");
+        }
+        let quantised = [[0.6797, 0.3203], [0.2647, 0.6904], [0.1503, 0.0605]];
+        assert_eq!(boost_target(Some(quantised))[1..], quantised[1..]);
+        let wide = [[0.730, 0.265], KWIN[1], KWIN[2]];
+        let clamped = boost_target(Some(wide));
+        assert_eq!(clamped[1..], wide[1..]);
+        for target in [fallback, boost_target(Some(quantised)), clamped] {
+            assert!(inside(target[0], BT2020, 1e-6), "{target:?}");
+            let m = super::gamut(1.0, target).unwrap();
+            assert!(m.as_flattened().iter().all(|&c| c > -1e-6), "{m:?}");
+        }
+        assert_ne!(fallback[0], DISPLAY_P3[0]);
+        assert_ne!(clamped[0], wide[0]);
+    }
+
+    /// hdr.wgsl's `Params` is laid out as `params` writes it: `gamut` after `calibration`, its
+    /// columns 16 bytes apart, then `boost`, the whole as large as the buffer.
+    #[test]
+    fn the_params_struct_matches_the_floats_written() {
+        let module = naga::front::wgsl::parse_str(&super::shader()).unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("Params"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("Params is a struct");
+        };
+        assert_eq!(*span as usize, 4 * super::PARAMS);
+        let offset = |name: &str| {
+            members
+                .iter()
+                .find(|m| m.name.as_deref() == Some(name))
+                .map(|m| m.offset as usize / 4)
+        };
+        assert_eq!(offset("calibration"), Some(8));
+        assert_eq!(offset("gamut"), Some(super::PARAMS - 16));
+        assert_eq!(offset("boost"), Some(super::PARAMS - 4));
     }
 
     /// Mesa's drivers (RADV, ANV, NVK on an NVIDIA card) leave a Wayland scRGB surface at the

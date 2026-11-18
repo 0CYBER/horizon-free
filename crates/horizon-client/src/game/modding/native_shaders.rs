@@ -339,7 +339,9 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584), and neither is `[motion]`.
+/// isn't served yet (#14584), and neither is `[motion]`. Serving `"bt2020"` must also keep HDR's
+/// Color Boost (`gfx::hdr::gamut`) off for that pack: it stretches BT.709 colours, and a BT.2020
+/// pack's are already where it meant them.
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
     if m.primaries == Primaries::Bt2020 {
         return Some(
