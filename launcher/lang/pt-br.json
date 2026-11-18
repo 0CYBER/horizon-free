@@ -33,7 +33,7 @@
   "A new version is available": "Uma nova versão está disponível",
   "A new world takes a minute the first time": "Um mundo novo leva um minuto na primeira vez",
   "A new world with a random seed": "Um mundo novo com uma seed aleatória",
-  "A player's name": "Nome de um jogador",
+  "A player's name": "Nome do jogador",
   "A program and its arguments; the game's command line goes after them.": "Um programa e seus argumentos; a linha de comando do jogo vem depois deles.",
   "A rule of the world. Applies at once.": "Uma regra do mundo. Aplica-se imediatamente.",
   "A rule of the world: start the server to change it.": "Uma regra do mundo: inicie o servidor para alterá-la.",
@@ -646,7 +646,7 @@
   "No version is installed yet.": "Nenhuma versão foi instalada ainda.",
   "No version matches “{search}”.": "Nenhuma versão corresponde a “{search}”.",
   "No version matches.": "Nenhuma versão encontrada.",
-  "No worlds to put in.": "Nenhum mundo para colocar.",
+  "No worlds to put in.": "Nenhum mundo para adicionar.",
   "No worlds yet": "Nenhum mundo ainda",
   "No worlds yet. Make one in the game and it shows up here.": "Ainda não há mundos. Crie um no jogo e ele aparecerá aqui.",
   "No worlds yet: they appear here once you play one.": "Nenhum mundo ainda: eles aparecem aqui quando você joga um.",
@@ -1368,6 +1368,6 @@
   "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Vidro e Desfoque moldam os painéis foscos da aparência escura; a clara desenha painéis brancos sólidos.",
   "Performance mode draws solid panels, without glass or blur.": "Modo de desempenho desenha painéis sólidos, sem vidro nem desfoque.",
   "This theme's night draws solid panels, without glass or blur.": "A noite deste tema desenha painéis sólidos, sem vidro nem desfoque.",
-  "The server gets a copy: your single-player world stays as it is.": "The server gets a copy: your single-player world stays as it is.",
-  "You have no single-player world yet: play one first, or choose New world.": "You have no single-player world yet: play one first, or choose New world."
+  "The server gets a copy: your single-player world stays as it is.": "O servidor recebe uma cópia: seu mundo de um jogador permanece como está.",
+  "You have no single-player world yet: play one first, or choose New world.": "Você ainda não tem um mundo de um jogador: jogue um primeiro ou escolha Novo mundo."
 }
