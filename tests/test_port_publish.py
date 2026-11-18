@@ -49,11 +49,38 @@ class PublishTests(unittest.TestCase):
 
     def test_refuses_code(self):
         for line in ["```java\nint x = 1;\n```", "    return this.foodLevel;", "public void tick(Player player) {",
-                     "- `if (x) { y(); }`", "import net.minecraft.world.food.FoodData;"]:
+                     "- `if (x) { y(); }`", "`int remaining=42;`", "`this.field=12345;`",
+                     "import net.minecraft.world.food.FoodData;"]:
             with self.assertRaises(ValueError, msg=line):
                 publish.assert_no_code(line)
         publish.assert_no_code("- `<init>(Lnet/minecraft/core/RegistryAccess;Lnet/minecraft/world/Foo;)V`, `a()V`")
         publish.assert_no_code("- `ParityData.java:45: cannot find symbol: variable WORLD (class RegistryLayer)`")
+
+    def test_a_non_compile_failure_diagnostic_reaches_the_issue(self):
+        for error, expected in (("Traceback:\nKeyError: bar", "KeyError: bar"),
+                                ("RuntimeError: status=1", "RuntimeError: status=1")):
+            with self.subTest(error=error):
+                item = {"rank": 1, "kind": "regen-failed", "title": "Generator foo: failed on 26.4",
+                        "files": ["crates/foo.rs"], "error": error}
+                text = publish.body(item, REPORT, DIFF, "/tmp/store")
+                self.assertIn(expected, text)
+
+    def test_a_plain_java_statement_is_refused(self):
+        for line in ("    int remaining = 42;", "        doThing();", "    this.field = 12345;", "        foo(bar);"):
+            with self.assertRaises(ValueError, msg=line):
+                publish.assert_no_code("intro\n" + line + "\nend\n")
+        publish.assert_no_code("Methods added: `foo()`\n")
+
+    def test_a_single_marker_keeps_all_ambiguous_text(self):
+        generated = publish.START + "\nnew generated\n" + publish.END
+        head = ("IMPORTANT human note about workaround\n\nA second human paragraph.\n"
+                "Minecraft 26.3 → 26.4: a contributor's explanation.\n")
+        tail = "\n\nThe full diff is attached to my notes.\n\nMore human notes\n"
+        for before, marker, after in [(head + "old generated text\n", publish.END, tail),
+                                      (head, publish.START, "\nold generated text" + tail)]:
+            with self.subTest(marker=marker):
+                self.assertEqual(publish.merged(before + marker + after, generated),
+                                 before + generated + after)
 
     def test_update_keeps_what_people_wrote(self):
         existing = f"Notes from a contributor.\n{publish.START}\nold\n{publish.END}\nMore notes."

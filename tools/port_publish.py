@@ -42,7 +42,8 @@ CODE = re.compile(r"^\s*(?:(?:public|private|protected|static|final|abstract)\s+
                   r"|(?:return|throw|import|package)\s+\S|(?:if|for|while|switch)\s*\(|[}{]\s*$)|;\s*$")
 # Inside backticks: names, JVM descriptors (`m(Lx/Y;I)V`, no spaces) and javac's one-line errors, never braces,
 # statements or assignments.
-QUOTED_CODE = re.compile(r"[{}]|;\s+\S|\s=\s|\breturn\s|\bnew\s+[A-Z]")
+QUOTED_CODE = re.compile(r"[{}]|;\s+\S|\s=\s|\breturn\s|\bnew\s+[A-Z]"
+                         r"|\b\w+(?:\.\w+)*\s*=\s*[^=].*;\s*$")
 
 
 def published(item):
@@ -79,6 +80,9 @@ def body(item, report, diff, store_path, limit=25):
         lines.append(f"Run: `{item['command']}`")
     if item.get("compile_errors"):
         lines += ["javac, against " + new + ":", *(f"- `{e}`" for e in item["compile_errors"])]
+    if item.get("error"):
+        # A generator or prepare can fail for a non-compile reason: this is the only diagnostic there is.
+        lines.append("Failure: `" + " / ".join(str(item["error"]).splitlines()[:4])[:400] + "`")
     if item.get("failed"):
         lines.append(f"Harnesses failing on {new}: " + ", ".join(f"`{h}`" for h in item["failed"])
                      + (f" (oracle no longer compiles: {', '.join(item['oracle'])})" if item.get("oracle") else ""))
@@ -132,7 +136,13 @@ def assert_no_code(text):
     for line in text.splitlines():
         if any(QUOTED_CODE.search(span) for span in re.findall(r"`([^`]*)`", line)):
             raise ValueError(f"Refusing to publish a quoted span that reads like source code: {line[:120]!r}")
-        prose = re.sub(r"`[^`]*`", "", line).strip(" -*,;:()")
+        plain = re.sub(r"`[^`]*`", "", line)
+        # A plain declaration, assignment or call is Java source too. `prose` below has the trailing
+        # `;` stripped, so check it before stripping, but do not rescan accepted quoted metadata.
+        if re.search(r"\b(?:int|long|boolean|double|float|char|byte|short|String|var)\s+\w+\s*="
+                     r"|\b\w+(?:\.\w+)*\s*=\s*[^=]|\b\w+\([^()]*\)\s*;\s*$", plain):
+            raise ValueError(f"Refusing to publish a line that reads like source code: {line[:120]!r}")
+        prose = plain.strip(" -*,;:()")
         if line.startswith("<!--") or not prose:
             continue
         if CODE.search(prose):
@@ -140,11 +150,18 @@ def assert_no_code(text):
 
 
 def merged(existing, generated):
-    """An issue's body with its generated part replaced, the rest kept."""
+    """An issue's body with its generated part replaced, the rest kept.
+
+    A manual edit can remove one of the markers. Without both boundaries, no existing text can
+    safely be identified as generated: replace only the remaining marker and keep all other text.
+    """
     if existing and START in existing and END in existing:
         head, rest = existing.split(START, 1)
         return head + generated.strip() + rest.split(END, 1)[1]
-    return generated
+    if not existing or (START not in existing and END not in existing):
+        return generated
+    marker = START if START in existing else END
+    return existing.replace(marker, generated.strip(), 1)
 
 
 def tracking_body(report, issues, others, limit=200):
