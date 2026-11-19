@@ -296,6 +296,25 @@ fn column_size(index: usize) -> (f32, f32) {
     SIZES[index]
 }
 
+/// Camera-relative bounding box for a weather column, enclosing its
+/// quad with padding for vertex rounding and sub-pixel jitter.
+pub fn column_bounds(
+    x: i32,
+    bottom_y: i32,
+    top_y: i32,
+    z: i32,
+    camera: [f64; 3],
+) -> ([f32; 3], [f32; 3]) {
+    let rel_x = (f64::from(x) + 0.5 - camera[0]) as f32;
+    let rel_z = (f64::from(z) + 0.5 - camera[2]) as f32;
+    let y0 = (f64::from(bottom_y) - camera[1]) as f32;
+    let y1 = (f64::from(top_y) - camera[1]) as f32;
+    (
+        [rel_x - 1.0, y0, rel_z - 1.0],
+        [rel_x + 1.0, y1, rel_z + 1.0],
+    )
+}
+
 /// `prepareInstances` for one column: rain uses `max_alpha` 1, snow 0.8.
 pub fn column_quad(
     column: &Column,
@@ -559,6 +578,39 @@ mod tests {
             assert!(vertex.pos[0].is_nan());
             assert!(vertex.pos[2].is_nan());
             assert!(vertex.pos[1].is_finite());
+        }
+    }
+
+    #[test]
+    fn column_bounds_strictly_encloses_all_quad_vertices() {
+        let camera = [10.25, 72.5, -15.75];
+        let cx = 10.25f64.floor() as i32;
+        let cz = (-15.75f64).floor() as i32;
+        for dx in -15..=15 {
+            for dz in -15..=15 {
+                let x = cx + dx;
+                let z = cz + dz;
+                let bottom_y = 60;
+                let top_y = 90;
+                let column = Column {
+                    x,
+                    z,
+                    bottom_y,
+                    top_y,
+                    u_offset: 0.0,
+                    v_offset: 0.0,
+                    light_coords: 0,
+                };
+                let quad = column_quad(&column, camera, 1.0, 15, 1.0);
+                let (lo, hi) = column_bounds(x, bottom_y, top_y, z, camera);
+                for vertex in quad {
+                    if vertex.pos[0].is_finite() {
+                        assert!(vertex.pos[0] >= lo[0] && vertex.pos[0] <= hi[0]);
+                        assert!(vertex.pos[1] >= lo[1] && vertex.pos[1] <= hi[1]);
+                        assert!(vertex.pos[2] >= lo[2] && vertex.pos[2] <= hi[2]);
+                    }
+                }
+            }
         }
     }
 }

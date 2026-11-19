@@ -514,6 +514,10 @@ impl Game<'_> {
         // The 32x32 direction table supports at most a 15-block radius.
         let radius = self.settings.weather_radius.clamp(0, 15);
         let eye = camera.to_array();
+        let view = self
+            .view_frustum
+            .as_ref()
+            .filter(|_| self.pack_ids.is_none() && self.native_shaders.picked.is_empty());
         let mut rain = Vec::new();
         let mut snow_vertices = Vec::new();
         // Saturation keeps extreme camera coordinates from overflowing the loop.
@@ -524,6 +528,12 @@ impl Game<'_> {
                 let y1 = cy.saturating_add(radius).max(top);
                 if y1 == y0 {
                     continue;
+                }
+                if let Some(view) = view {
+                    let (lo, hi) = weather::column_bounds(x, y0, y1, z, eye);
+                    if !view.intersects(glam::Vec3::from_array(lo), glam::Vec3::from_array(hi)) {
+                        continue;
+                    }
                 }
                 let Some(snow) = self.precipitation(x, cy, z) else {
                     continue;
@@ -676,5 +686,13 @@ mod crack_sprite_tests {
                 translucent: classic
             })
         );
+    }
+
+    #[test]
+    fn weather_column_bounds_strictly_enclose_column_quad() {
+        let camera = [0.0, 70.0, 0.0];
+        let (lo, hi) = horizon_client::weather::column_bounds(5, 60, 80, -10, camera);
+        assert_eq!(lo, [4.5, -10.0, -10.5]);
+        assert_eq!(hi, [6.5, 10.0, -8.5]);
     }
 }
