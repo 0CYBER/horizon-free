@@ -63,6 +63,13 @@ pub fn cull_back(normal: [i8; 4]) -> [i8; 4] {
         [normal[0], normal[1], normal[2], SHADED_CULL_W]
     }
 }
+/// Whether `entity.wgsl` drops the back-facing pixels of a quad with this `Vertex::normal`: a
+/// baked culling w in 1..64 ([`CULL_BACK`]) or a shaded one in -126..0 ([`SHADED_CULL_W`]). Every
+/// other quad (-127, 0, 127: `NoCull` render types) draws both sides.
+pub fn culls_back(normal: [i8; 4]) -> bool {
+    let w = normal[3];
+    (1..64).contains(&w) || (-126..0).contains(&w)
+}
 /// A section vertex: vanilla's `DefaultVertexFormat.BLOCK` (position, colour,
 /// UV0, UV2) with the sprite's array layer beside the light, in 24 bytes
 /// rather than vanilla's 28: the UV is fixed point, which holds model UVs

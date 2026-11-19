@@ -204,7 +204,7 @@ impl Game<'_> {
                             q[0].color
                         },
                         normal,
-                        cull: (1..64).contains(&w) || (-126..0).contains(&w),
+                        cull: horizon_client::mesher::culls_back(q[0].normal),
                     });
                 }
             }

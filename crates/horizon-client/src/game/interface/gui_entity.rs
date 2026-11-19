@@ -4,7 +4,8 @@
 //! draws it with (a mod's renderer for its type, else its model, then the
 //! mods' layers), then seen as the inventory's player is (`draw_player_preview`):
 //! the box's centre, `size` pixels a block, turned, depth-sorted, back faces
-//! culled and lit by `Lighting.ENTITY_IN_UI`.
+//! culled where the model's render type culls them (as in the world) and lit by
+//! `Lighting.ENTITY_IN_UI`.
 //!
 //! Nothing here runs unless a mod calls `DrawContext::entity`. The buffers and
 //! the entities made for `GuiEntity::Kind` are kept per thread and reused, so a
@@ -31,8 +32,9 @@ struct Made {
     mob: Mob,
 }
 
-/// A face of the entity as seen: its depth, corners, UVs and ABGR colour.
-type SeenQuad = (f32, [[f32; 3]; 4], [[f32; 2]; 4], u32);
+/// A face of the entity as seen: its depth, corners, UVs, ABGR colour and its
+/// place in the model's order.
+type SeenQuad = (f32, [[f32; 3]; 4], [[f32; 2]; 4], u32, usize);
 
 #[derive(Default)]
 struct Scratch {
@@ -146,7 +148,7 @@ impl Game<'_> {
             return Err(GuiEntityError::BadView);
         }
         let start = batch.vertices.len();
-        for &(_, p, uv, color) in &scratch.quads {
+        for &(_, p, uv, color, _) in &scratch.quads {
             batch.quad_3d(p, uv, color);
         }
         let end = batch.vertices.len();
@@ -283,31 +285,48 @@ impl Game<'_> {
 }
 
 /// `verts` seen through `gui`, into `quads` far to near: the faces that look
-/// away left out, each lit by `Lighting.ENTITY_IN_UI` (`entity_in_ui_shade`).
+/// away left out where the world's entity shader drops them
+/// (`mesher::culls_back`), each lit by `Lighting.ENTITY_IN_UI`
+/// (`entity_in_ui_shade`) from the side facing out, or the seen side of a
+/// two-sided quad.
 fn seen_quads(verts: &[Vertex], gui: Mat4, quads: &mut Vec<SeenQuad>) {
     quads.clear();
-    for q in verts.as_chunks::<4>().0 {
+    for (order, q) in verts.as_chunks::<4>().0.iter().enumerate() {
         let p: [Vec3; 4] =
             std::array::from_fn(|i| gui.transform_point3(Vec3::from_array(q[i].pos)));
         let n = (p[1] - p[0]).cross(p[2] - p[0]);
         // The winding gives inward normals: faces with n.z >= 0 point away.
-        if n.z >= 0.0 {
+        let back = n.z >= 0.0;
+        if back && horizon_client::mesher::culls_back(q[0].normal) {
             continue;
         }
-        let shade = super::perspective::entity_in_ui_shade(-n.normalize_or_zero());
+        // The outward normal; `entity.wgsl` lights the back of a two-sided
+        // quad (normal w -127 or -128) by the negated normal, its visible side.
+        let outward = -n.normalize_or_zero();
+        let two_sided = matches!(q[0].normal[3], -128 | -127);
+        let shade = super::perspective::entity_in_ui_shade(if back && two_sided {
+            -outward
+        } else {
+            outward
+        });
         let c = q[0].color;
         let ch = |s: u32| ((((c >> s) & 255) as f32 * shade) as u32) << s;
         let color = (c & 0xFF00_0000) | ch(0) | ch(8) | ch(16);
         let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
+        // Kept in their order (the HUD pipelines cull neither winding), so
+        // the quad splits along the same diagonal from either side.
         quads.push((
             depth,
             p.map(|v| v.to_array()),
             std::array::from_fn(|i| q[i].uv),
             color,
+            order,
         ));
     }
-    // Translucent faces over what is behind them; unstable, so no buffer is allocated.
-    quads.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    // Translucent faces over what is behind them; faces at one depth (a layer
+    // over its model) keep the model's order. Unstable on (depth, order), so no
+    // buffer is allocated and the order is still total.
+    quads.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.4.cmp(&b.4)));
 }
 
 #[cfg(test)]
@@ -342,37 +361,87 @@ mod tests {
         assert_eq!(fixed, (210.0, 210.0, 10.0, 0.0));
     }
 
-    #[test]
-    fn faces_looking_away_are_culled_and_the_rest_sorted_far_to_near() {
-        let v = |pos: [f32; 3]| Vertex {
+    /// A quad of four vertices at depth `z` with `normal`, towards the viewer
+    /// or (reversed) away from it, its UVs telling the corners apart.
+    fn face(z: f32, normal: [i8; 4], toward: bool) -> [Vertex; 4] {
+        let v = |pos: [f32; 3], uv: [f32; 2]| Vertex {
             pos,
-            uv: [0.0; 2],
+            uv,
             layer: 0,
             color: 0xFFFF_FFFF,
             light: 0,
-            normal: [0; 4],
+            normal,
             glint_uv: [0.0; 2],
         };
-        // Two faces towards the viewer at z 1 and 2, and one facing away.
-        let toward = |z: f32| {
-            [
-                v([0.0, 0.0, z]),
-                v([0.0, 1.0, z]),
-                v([1.0, 1.0, z]),
-                v([1.0, 0.0, z]),
-            ]
-        };
+        let mut face = [
+            v([0.0, 0.0, z], [0.0, 0.0]),
+            v([0.0, 1.0, z], [0.0, 1.0]),
+            v([1.0, 1.0, z], [1.0, 1.0]),
+            v([1.0, 0.0, z], [1.0, 0.0]),
+        ];
+        if !toward {
+            face.reverse();
+        }
+        face
+    }
+
+    #[test]
+    fn faces_looking_away_are_culled_and_the_rest_sorted_far_to_near() {
+        let cull = horizon_client::mesher::CULL_BACK;
         let mut verts = Vec::new();
-        verts.extend(toward(2.0));
-        verts.extend(toward(1.0));
-        let mut away = toward(0.0);
-        away.reverse();
-        verts.extend(away);
+        verts.extend(face(2.0, cull, true));
+        verts.extend(face(1.0, cull, true));
+        verts.extend(face(0.0, cull, false));
         let mut quads = Vec::new();
         seen_quads(&verts, Mat4::IDENTITY, &mut quads);
         let depths: Vec<f32> = quads.iter().map(|q| q.0).collect();
         assert_eq!(depths.len(), 2, "{depths:?}");
         assert!(depths[0] < depths[1]);
+    }
+
+    /// `NoCull` model parts (a mob's legs and clothes drawn as single planes)
+    /// draw from behind as the world draws them, and layers at the depth of
+    /// their model keep the model's order.
+    #[test]
+    fn double_sided_faces_are_kept_and_equal_depths_keep_the_model_order() {
+        let two_sided = [0, 0, 127, -127];
+        // A double-sided face seen from behind, nearest of all.
+        let mut verts = Vec::from(face(3.0, two_sided, false));
+        // Layers over two parts at depths 1 and 2, in the model's order (the
+        // alpha byte): enough faces that a sort without a tie-break reorders them.
+        for order in 0..64u32 {
+            let mut quad = face(1.0 + (order % 2) as f32, two_sided, true);
+            for v in &mut quad {
+                v.color = order << 24 | 0x00FF_FFFF;
+            }
+            verts.extend(quad);
+        }
+        let mut quads = Vec::new();
+        seen_quads(&verts, Mat4::IDENTITY, &mut quads);
+        assert_eq!(quads.len(), 65, "the face seen from behind is kept");
+        assert_eq!(quads.last().unwrap().0, 3.0);
+        let order = |depth: f32| -> Vec<u32> {
+            quads.iter().filter(|q| q.0 == depth).map(|q| q.3 >> 24).collect()
+        };
+        assert_eq!(order(1.0), (0..64u32).step_by(2).collect::<Vec<_>>());
+        assert_eq!(order(2.0), (1..64u32).step_by(2).collect::<Vec<_>>());
+    }
+
+    /// `entity.wgsl` lights the back of a two-sided quad as its visible side:
+    /// a face turned straight away is as bright as one turned straight at the
+    /// viewer. A one-sided shaded quad (w 127) keeps its own normal's light.
+    #[test]
+    fn the_back_of_a_two_sided_face_is_lit_as_its_visible_side() {
+        let shade_of = |normal: [i8; 4], toward: bool| {
+            let mut quads = Vec::new();
+            seen_quads(&face(0.0, normal, toward), Mat4::IDENTITY, &mut quads);
+            quads[0].3 & 0xFF
+        };
+        let front = shade_of([0, 0, 127, -127], true);
+        for w in [-127, -128] {
+            assert_eq!(shade_of([0, 0, -127, w], false), front, "w {w}");
+        }
+        assert!(shade_of([0, 0, -127, 127], false) < front);
     }
 
     #[test]
