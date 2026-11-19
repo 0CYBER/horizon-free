@@ -132,6 +132,14 @@ pub struct BlockEntities {
     /// instance blocks, `shows_box`), so a frame looks at them without scanning the map.
     /// Like `mods`, one taken out stays listed until `put` or `remove`.
     boxes: FxHashSet<Pos>,
+    /// Positions by the kind a frame or a tick looks up (`listed`): a beacon's beam, a vault's
+    /// item, a campfire, a brushable block, a shelf, and the spawners and potent sulfur a
+    /// client ticks. One taken out stays in the set until `put` or `remove`; `listed` hides it
+    /// while it is out of the map.
+    listed: [FxHashSet<Pos>; LISTED_KINDS],
+    /// Every block entity's position by chunk, including one taken out only until `take`
+    /// unindexes it. Unloading a chunk reads this instead of the whole map.
+    by_chunk: FxHashMap<(i32, i32), FxHashSet<Pos>>,
     /// The signs a player's editor is on (`SignBlockEntity.playerWhoMayEdit`
     /// set), so the level's tick checks those alone instead of every sign.
     sign_editors: FxHashSet<Pos>,
@@ -206,6 +214,69 @@ fn shows_box(entity: &BlockEntity) -> bool {
         entity,
         BlockEntity::StructureBlock(_) | BlockEntity::TestInstanceBlock(_)
     )
+}
+
+/// The block entities a frame or a tick looks at by kind, apart from the mesher's lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listed {
+    Beacon,
+    Vault,
+    Campfire,
+    Brushable,
+    Shelf,
+    /// A client ticks spawners, trial spawners and vaults near the player, and potent sulfur
+    /// everywhere it knows.
+    Spawner,
+    TrialSpawner,
+    PotentSulfur,
+}
+
+const LISTED_KINDS: usize = 8;
+
+fn listed_kind(entity: &BlockEntity) -> Option<Listed> {
+    match entity {
+        BlockEntity::Beacon(_) => Some(Listed::Beacon),
+        BlockEntity::Vault(_) => Some(Listed::Vault),
+        BlockEntity::Campfire(_) => Some(Listed::Campfire),
+        BlockEntity::Brushable(_) => Some(Listed::Brushable),
+        BlockEntity::Shelf(_) => Some(Listed::Shelf),
+        BlockEntity::Spawner(_) => Some(Listed::Spawner),
+        BlockEntity::TrialSpawner(_) => Some(Listed::TrialSpawner),
+        BlockEntity::PotentSulfur(_) => Some(Listed::PotentSulfur),
+        _ => None,
+    }
+}
+
+/// Keeps `pos` listed under the kind of `entity` alone (none: under no kind).
+fn note_listed(drawn: &mut [FxHashSet<Pos>; LISTED_KINDS], pos: Pos, entity: Option<&BlockEntity>) {
+    let kind = entity.and_then(listed_kind);
+    for (index, set) in drawn.iter_mut().enumerate() {
+        if kind.is_some_and(|kind| kind as usize == index) {
+            set.insert(pos);
+        } else {
+            set.remove(&pos);
+        }
+    }
+}
+
+fn index_chunk(by_chunk: &mut FxHashMap<(i32, i32), FxHashSet<Pos>>, pos: Pos) {
+    by_chunk.entry(chunk_of(pos)).or_default().insert(pos);
+}
+
+fn unindex_chunk(by_chunk: &mut FxHashMap<(i32, i32), FxHashSet<Pos>>, pos: &Pos) {
+    let chunk = chunk_of(*pos);
+    if let Some(set) = by_chunk.get_mut(&chunk) {
+        set.remove(pos);
+        if set.is_empty() {
+            by_chunk.remove(&chunk);
+        }
+    }
+}
+
+fn forget_listed(drawn: &mut [FxHashSet<Pos>; LISTED_KINDS], pos: &Pos) {
+    for set in drawn.iter_mut() {
+        set.remove(pos);
+    }
 }
 
 fn chunk_of((x, _, z): Pos) -> (i32, i32) {
@@ -624,6 +695,13 @@ impl BlockEntities {
             .iter()
             .filter_map(|pos| Some((pos, self.map.get(pos)?)))
     }
+    /// The block entities of `kind`, in no order, without scanning the map. One `take` took out
+    /// stays in the set until `put` or `remove`, and is skipped here while it is out.
+    pub fn listed(&self, kind: Listed) -> impl Iterator<Item = (&Pos, &BlockEntity)> {
+        self.listed[kind as usize]
+            .iter()
+            .filter_map(|pos| Some((pos, self.map.get(pos)?)))
+    }
     /// Keeps `pos` listed in `boxes` exactly while `entity` shows a box.
     fn note_box(&mut self, pos: Pos, entity: Option<&BlockEntity>) {
         if entity.is_some_and(shows_box) {
@@ -748,7 +826,9 @@ impl BlockEntities {
         self.replace_taken(pos);
         let new_box = shows_box(&entity);
         self.note_sign_editor(pos, &entity);
+        note_listed(&mut self.listed, pos, Some(&entity));
         self.asleep.remove(&pos);
+        index_chunk(&mut self.by_chunk, pos);
         let old = self.map.insert(pos, entity);
         if self.on_load_enabled && new_identity && new_is_mod {
             self.on_load.push_back((pos, self.generations[&pos]));
@@ -784,6 +864,7 @@ impl BlockEntities {
             self.add(pos);
         }
         self.asleep.remove(&pos);
+        index_chunk(&mut self.by_chunk, pos);
         let entity = self.map.entry(pos).or_insert_with(make);
         if absent && matches!(entity, BlockEntity::Mod(_)) {
             if self.on_load_enabled {
@@ -793,6 +874,9 @@ impl BlockEntities {
         }
         if absent && shows_box(entity) {
             self.boxes.insert(pos);
+        }
+        if absent {
+            note_listed(&mut self.listed, pos, Some(entity));
         }
         entity
     }
@@ -835,8 +919,10 @@ impl BlockEntities {
         self.asleep.remove(pos);
         self.cancel(pos);
         let removed = self.map.remove(pos);
+        unindex_chunk(&mut self.by_chunk, pos);
         forget_mod(&mut self.mods, *pos);
         self.boxes.remove(pos);
+        forget_listed(&mut self.listed, pos);
         self.sign_editors.remove(pos);
         removed
     }
@@ -845,6 +931,7 @@ impl BlockEntities {
     pub fn take(&mut self, pos: &Pos) -> Option<(BlockEntityLease, BlockEntity)> {
         self.asleep.remove(pos);
         let entity = self.map.remove(pos)?;
+        unindex_chunk(&mut self.by_chunk, pos);
         let token = next_token();
         self.out.insert(*pos, token);
         let generation = self.generations[pos];
@@ -884,7 +971,9 @@ impl BlockEntities {
             self.mods.entry(chunk_of(pos)).or_default().insert(pos);
         }
         self.note_box(pos, Some(&entity));
+        note_listed(&mut self.listed, pos, Some(&entity));
         self.note_sign_editor(pos, &entity);
+        index_chunk(&mut self.by_chunk, pos);
         if self.map.insert(pos, entity).is_none()
             && !self.live.contains_key(&pos)
             && !self.pending.contains_key(&pos)
@@ -926,7 +1015,8 @@ impl BlockEntities {
             &mut self.freed,
             &mut self.attachments,
         );
-        let (mods, boxes) = (&mut self.mods, &mut self.boxes);
+        let (mods, boxes, listed) = (&mut self.mods, &mut self.boxes, &mut self.listed);
+        let by_chunk = &mut self.by_chunk;
         let generations = &mut self.generations;
         let observer = self.attachment_observer.as_ref();
         let sign_editors = &mut self.sign_editors;
@@ -940,10 +1030,47 @@ impl BlockEntities {
                 pending.remove(p);
                 forget_mod(mods, *p);
                 boxes.remove(p);
+                forget_listed(listed, p);
+                unindex_chunk(by_chunk, p);
                 sign_editors.remove(p);
             }
             kept
         });
+    }
+    /// [`Self::unload`] of the block entities in `chunks`, reading theirs alone ([`Self::by_chunk`])
+    /// rather than every block entity of the world. The same block entities go, with the same of
+    /// what they hold, and those that sleep elsewhere stay asleep.
+    pub fn unload_chunks(&mut self, chunks: &[(i32, i32)]) {
+        let set: FxHashSet<(i32, i32)> = chunks.iter().copied().collect();
+        let gone = |p: &Pos| set.contains(&chunk_of(*p));
+        self.carried.retain(|p, _| !gone(p));
+        let positions: Vec<Pos> = set
+            .iter()
+            .filter_map(|chunk| self.by_chunk.get(chunk))
+            .flatten()
+            .copied()
+            .collect();
+        for p in &positions {
+            if self.map.remove(p).is_none() {
+                continue;
+            }
+            retire_attachments(
+                &mut self.attachments,
+                self.attachment_observer.as_ref(),
+                &self.generations,
+                p,
+            );
+            self.generations.remove(p);
+            self.freed |= self.live.remove(p).is_some();
+            self.pending.remove(p);
+            forget_mod(&mut self.mods, *p);
+            self.boxes.remove(p);
+            forget_listed(&mut self.listed, p);
+            unindex_chunk(&mut self.by_chunk, p);
+            self.sign_editors.remove(p);
+            self.asleep.remove(p);
+        }
+        self.retire_taken(gone);
     }
     pub fn clear(&mut self) {
         self.unload_attachments();
@@ -951,8 +1078,12 @@ impl BlockEntities {
         self.on_load.clear();
         self.attachments.clear();
         self.map.clear();
+        self.by_chunk.clear();
         self.mods.clear();
         self.boxes.clear();
+        for set in &mut self.listed {
+            set.clear();
+        }
         self.sign_editors.clear();
         self.asleep.clear();
         self.tickers = Arc::default();
@@ -984,7 +1115,9 @@ impl BlockEntities {
             self.asleep.remove(&p);
             let new_is_mod = matches!(e, BlockEntity::Mod(_));
             self.note_box(p, Some(&e));
+            note_listed(&mut self.listed, p, Some(&e));
             self.note_sign_editor(p, &e);
+            index_chunk(&mut self.by_chunk, p);
             let old = self.map.insert(p, e);
             if old.is_some() {
                 self.replaced.insert(p);
@@ -1430,6 +1563,225 @@ mod tests {
         b.insert(r, test_block());
         b.clear();
         assert!(b.boxes.is_empty());
+    }
+
+    #[test]
+    fn unloading_chunks_by_the_index_is_unloading_by_a_scan() {
+        let campfire = || BlockEntity::Campfire(Box::default());
+        let fill = |b: &mut BlockEntities| {
+            for x in [-20, -3, 0, 5, 17, 33] {
+                for z in [-17, 0, 9, 40] {
+                    let entity = if (x + z) % 2 == 0 {
+                        hopper()
+                    } else {
+                        campfire()
+                    };
+                    b.insert((x, 64, z), entity);
+                }
+            }
+            b.insert((15, -80, 15), hopper());
+            b.insert((15, 400, 15), campfire());
+            b.insert((16, 400, 15), campfire());
+            b.sleep((5, 64, 9));
+            b.sleep((17, 64, -17));
+            b.take(&(0, 64, 0)).unwrap()
+        };
+        let (mut a, mut b) = (level(), level());
+        let (_lease_a, _) = fill(&mut a);
+        let (_lease_b, _) = fill(&mut b);
+        let chunks = [(0, 0), (2, 2), (-2, -2)];
+        a.unload(|p| chunks.contains(&chunk_of(*p)));
+        b.unload_chunks(&chunks);
+        let keys = |b: &BlockEntities| {
+            let mut v: Vec<Pos> = b.keys().copied().collect();
+            v.sort();
+            v
+        };
+        assert_eq!(keys(&a), keys(&b));
+        assert!(!b.contains_key(&(15, -80, 15)));
+        assert!(!b.contains_key(&(15, 400, 15)));
+        assert!(b.contains_key(&(16, 400, 15)));
+        for p in keys(&a) {
+            assert_eq!(a.is_asleep(&p), b.is_asleep(&p), "{p:?}");
+        }
+        assert!(b.is_asleep(&(17, 64, -17)));
+        let listed_camps = |b: &BlockEntities| {
+            let mut v: Vec<Pos> = b.listed(Listed::Campfire).map(|(p, _)| *p).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(listed_camps(&a), listed_camps(&b));
+        let mut indexed: Vec<Pos> = b.by_chunk.values().flatten().copied().collect();
+        indexed.sort();
+        assert_eq!(indexed, keys(&b));
+        assert!(b.by_chunk.values().all(|set| !set.is_empty()));
+    }
+
+    #[test]
+    fn each_listed_kind_lists_exactly_its_block_entities() {
+        let campfire = || BlockEntity::Campfire(Box::default());
+        let shelf = || BlockEntity::Shelf(Box::default());
+        let listed = |b: &BlockEntities, kind: Listed| {
+            let mut v: Vec<Pos> = b.listed(kind).map(|(p, _)| *p).collect();
+            v.sort();
+            v
+        };
+        let mut b = level();
+        let (p, q, r) = ((0, 0, 0), (1, 0, 0), (2, 0, 0));
+        b.insert(p, campfire());
+        b.insert(q, hopper());
+        assert_eq!(listed(&b, Listed::Campfire), [p]);
+        assert_eq!(listed(&b, Listed::Shelf), []);
+        b.insert(p, shelf());
+        assert_eq!(listed(&b, Listed::Campfire), []);
+        assert_eq!(listed(&b, Listed::Shelf), [p]);
+        b.insert(q, campfire());
+        b.get_or_insert_with(r, campfire);
+        assert_eq!(listed(&b, Listed::Campfire), [q, r]);
+        let (lease, taken) = b.take(&q).unwrap();
+        assert_eq!(listed(&b, Listed::Campfire), [r]);
+        b.put(lease, taken);
+        assert_eq!(listed(&b, Listed::Campfire), [q, r]);
+        let (lease, taken) = b.take(&r).unwrap();
+        b.insert(r, hopper());
+        assert!(!b.put(lease, taken));
+        assert_eq!(listed(&b, Listed::Campfire), [q]);
+        b.remove(&q);
+        assert_eq!(listed(&b, Listed::Campfire), []);
+        b.load_chunk(vec![(q, campfire()), (r, shelf())]);
+        assert_eq!(listed(&b, Listed::Campfire), [q]);
+        assert_eq!(listed(&b, Listed::Shelf), [p, r]);
+        b.retain(|pos, _| *pos != r);
+        assert_eq!(listed(&b, Listed::Shelf), [p]);
+        let scanned = |b: &BlockEntities| {
+            let mut v: Vec<Pos> = b
+                .iter()
+                .filter(|(_, e)| matches!(e, BlockEntity::Campfire(_) | BlockEntity::Shelf(_)))
+                .map(|(p, _)| *p)
+                .collect();
+            v.sort();
+            v
+        };
+        let mut both = [listed(&b, Listed::Campfire), listed(&b, Listed::Shelf)].concat();
+        both.sort();
+        assert_eq!(both, scanned(&b));
+        b.clear();
+        assert!(b.listed.iter().all(FxHashSet::is_empty));
+    }
+
+    const HOPPERS: i32 = 8000;
+    const SAMPLE_CHUNKS: [(i32, i32); 5] = [(0, 0), (16, 0), (32, 0), (48, 0), (64, 0)];
+
+    fn many_block_entities() -> BlockEntities {
+        let mut b = level();
+        for i in 0..HOPPERS {
+            let x = (i % 200) * 16;
+            let z = (i / 200) * 16;
+            b.insert((x, 64, z), hopper());
+        }
+        for i in 0..8 {
+            b.insert((i, 70, 1), BlockEntity::Beacon(Box::default()));
+            b.insert((i, 71, 2), BlockEntity::Campfire(Box::default()));
+        }
+        b
+    }
+
+    #[test]
+    fn the_indexes_match_a_full_scan() {
+        let mut scanned = many_block_entities();
+        let mut indexed = many_block_entities();
+        let mut beacons: Vec<_> = scanned
+            .iter()
+            .filter_map(|(p, e)| matches!(e, BlockEntity::Beacon(_)).then_some(*p))
+            .collect();
+        let mut listed: Vec<_> = indexed.listed(Listed::Beacon).map(|(p, _)| *p).collect();
+        beacons.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(beacons.len(), 8);
+        assert_eq!(beacons, listed);
+
+        scanned.unload(|p| SAMPLE_CHUNKS.contains(&chunk_of(*p)));
+        indexed.unload_chunks(&SAMPLE_CHUNKS);
+        let keys = |ents: &BlockEntities| {
+            let mut positions: Vec<_> = ents.keys().copied().collect();
+            positions.sort_unstable();
+            positions
+        };
+        assert_eq!(keys(&scanned), keys(&indexed));
+    }
+
+    /// Same machine, one process. The scan walks every block entity; the index walks the kind or chunk.
+    #[test]
+    fn measure_block_entity_indexes_against_a_full_scan() {
+        use std::time::Instant;
+        if !std::env::var("HORIZON_MEASURE_BLOCK_ENTITIES").is_ok_and(|value| value == "1") {
+            return;
+        }
+        const RUNS: usize = 11;
+        let b = many_block_entities();
+        let time_scan = || {
+            let start = Instant::now();
+            let n = b
+                .iter()
+                .filter(|(_, e)| matches!(e, BlockEntity::Beacon(_)))
+                .count();
+            (start.elapsed().as_nanos(), n)
+        };
+        let time_index = || {
+            let start = Instant::now();
+            let n = b.listed(Listed::Beacon).count();
+            (start.elapsed().as_nanos(), n)
+        };
+        for _ in 0..2 {
+            let _ = time_scan();
+            let _ = time_index();
+        }
+        let mut scan = Vec::with_capacity(RUNS);
+        let mut index = Vec::with_capacity(RUNS);
+        for _ in 0..RUNS {
+            let (dt, n) = time_scan();
+            assert_eq!(n, 8);
+            scan.push(dt);
+            let (dt, n) = time_index();
+            assert_eq!(n, 8);
+            index.push(dt);
+        }
+        let (scan_m, scan_p, scan_w) = spread(&mut scan);
+        let (index_m, index_p, index_w) = spread(&mut index);
+        let mut unload_scan = Vec::new();
+        let mut unload_index = Vec::new();
+        for _ in 0..2 {
+            let mut warm = many_block_entities();
+            warm.unload(|p| SAMPLE_CHUNKS.contains(&chunk_of(*p)));
+            let mut warm = many_block_entities();
+            warm.unload_chunks(&SAMPLE_CHUNKS);
+        }
+        for _ in 0..RUNS {
+            let mut left = many_block_entities();
+            let start = Instant::now();
+            left.unload(|p| SAMPLE_CHUNKS.contains(&chunk_of(*p)));
+            unload_scan.push(start.elapsed().as_nanos());
+            let mut right = many_block_entities();
+            let start = Instant::now();
+            right.unload_chunks(&SAMPLE_CHUNKS);
+            unload_index.push(start.elapsed().as_nanos());
+        }
+        let (us_m, us_p, us_w) = spread(&mut unload_scan);
+        let (ui_m, ui_p, ui_w) = spread(&mut unload_index);
+        let report = format!(
+            "scene hoppers={HOPPERS} beacons=8 campfires=8 runs={RUNS}\n             kind_scan_ns median={scan_m} p95={scan_p} worst={scan_w}\n             kind_index_ns median={index_m} p95={index_p} worst={index_w}\n             unload_scan_ns median={us_m} p95={us_p} worst={us_w}\n             unload_index_ns median={ui_m} p95={ui_p} worst={ui_w}\n"
+        );
+        let path = std::env::temp_dir().join("hz-measure-blocks.txt");
+        std::fs::write(&path, &report).unwrap();
+        println!("{report}");
+    }
+
+    fn spread(samples: &mut [u128]) -> (u128, u128, u128) {
+        samples.sort_unstable();
+        let n = samples.len();
+        let median = samples[n / 2];
+        let p95_at = ((n as f64) * 0.95).ceil() as usize - 1;
+        (median, samples[p95_at], samples[n - 1])
     }
 
     /// Marker drawing and `boxes` name the same test instance blocks, and the box list is

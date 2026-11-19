@@ -469,15 +469,10 @@ impl Game<'_> {
             horizon_client::spans::time("replace_remote", || {
                 self.streaming.replace_remote(&mut self.world, chunk)
             });
-            self.world
-                .block_entities
-                .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
         } else {
             self.streaming.insert_remote(&mut self.world, chunk);
         }
-        self.world
-            .block_entities
-            .unload(|k| (k.0 >> 4, k.2 >> 4) == (x, z));
+        self.world.block_entities.unload_chunks(&[(x, z)]);
         self.load_block_entities((x, z), &p.chunk.block_entities);
         // After the column's block entities load: an attachment keeps its block entity if the
         // packet sent it again, and one left from a forgotten column goes.

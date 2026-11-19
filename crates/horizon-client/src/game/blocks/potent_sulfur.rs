@@ -550,8 +550,8 @@ impl Game<'_> {
         let keys: Vec<Pos> = self
             .world
             .block_entities
-            .iter()
-            .filter_map(|(k, e)| matches!(e, BlockEntity::PotentSulfur(_)).then_some(*k))
+            .listed(horizon_client::block_entities::Listed::PotentSulfur)
+            .map(|(k, _)| *k)
             .collect();
         for key in keys {
             self.client_tick_potent_sulfur(key);

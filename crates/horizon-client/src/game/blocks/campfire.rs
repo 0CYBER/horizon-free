@@ -148,7 +148,11 @@ impl Game<'_> {
     /// (90° about X), at a corner and three eighths of its size, drawn as a
     /// FIXED item seeded by the block's position plus the slot.
     pub(super) fn campfire_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        for (key, entity) in &self.world.block_entities {
+        for (key, entity) in self
+            .world
+            .block_entities
+            .listed(horizon_client::block_entities::Listed::Campfire)
+        {
             let BlockEntity::Campfire(c) = entity else {
                 continue;
             };

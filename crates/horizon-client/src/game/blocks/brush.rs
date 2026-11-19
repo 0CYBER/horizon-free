@@ -311,7 +311,11 @@ impl Game<'_> {
     /// `BrushableBlockRenderer`: reveal the item from the first brushed face.
     pub(super) fn brushable_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         use horizon_assets::item_model::DisplayContext;
-        for (key, entity) in &self.world.block_entities {
+        for (key, entity) in self
+            .world
+            .block_entities
+            .listed(horizon_client::block_entities::Listed::Brushable)
+        {
             let BlockEntity::Brushable(b) = entity else {
                 continue;
             };

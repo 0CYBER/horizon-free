@@ -575,8 +575,17 @@ impl Game<'_> {
             p.position.y.floor() as i32,
             p.position.z.floor() as i32,
         ];
-        let (keys, trial_keys, vault_keys) =
-            nearby_remote_spawner_keys(&self.world.block_entities, center);
+        let (keys, trial_keys, vault_keys) = {
+            use horizon_client::block_entities::Listed;
+            let listed = &self.world.block_entities;
+            nearby_remote_spawner_keys(
+                listed
+                    .listed(Listed::Spawner)
+                    .chain(listed.listed(Listed::TrialSpawner))
+                    .chain(listed.listed(Listed::Vault)),
+                center,
+            )
+        };
         self.client_tick_spawners(&keys);
         for key in trial_keys {
             self.client_tick_trial_spawner(key);

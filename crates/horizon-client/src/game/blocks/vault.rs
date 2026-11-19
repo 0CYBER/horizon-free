@@ -243,7 +243,11 @@ impl Game<'_> {
     /// `VaultRenderer`: the display item of every vault near the camera that
     /// shows one, turning above its floor.
     pub(super) fn vault_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        for (key, entity) in &self.world.block_entities {
+        for (key, entity) in self
+            .world
+            .block_entities
+            .listed(horizon_client::block_entities::Listed::Vault)
+        {
             let BlockEntity::Vault(vault) = entity else {
                 continue;
             };
