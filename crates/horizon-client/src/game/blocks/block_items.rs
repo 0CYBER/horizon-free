@@ -55,6 +55,9 @@ fn clone_item<'a>(name: &str, block_item: &'a str) -> &'a str {
         // GrowingPlantBodyBlock: new ItemStack(getHeadBlock()), the block that
         // carries the item.
         "minecraft:kelp_plant" => "minecraft:kelp",
+        // TallSeagrassBlock.getCloneItemStack: new ItemStack(Blocks.SEAGRASS),
+        // for both halves of a plant whose own item is air.
+        "minecraft:tall_seagrass" => "minecraft:seagrass",
         "minecraft:twisting_vines_plant" => "minecraft:twisting_vines",
         "minecraft:weeping_vines_plant" => "minecraft:weeping_vines",
         // CandleCakeBlock: new ItemStack(Blocks.CAKE), for every colour and
@@ -434,6 +437,7 @@ mod tests {
             ("minecraft:cave_vines_plant", "minecraft:glow_berries"),
             ("minecraft:big_dripleaf_stem", "minecraft:big_dripleaf"),
             ("minecraft:kelp_plant", "minecraft:kelp"),
+            ("minecraft:tall_seagrass", "minecraft:seagrass"),
             ("minecraft:twisting_vines_plant", "minecraft:twisting_vines"),
             ("minecraft:weeping_vines_plant", "minecraft:weeping_vines"),
             ("minecraft:candle_cake", "minecraft:cake"),
