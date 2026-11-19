@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     chunk::BlockEntityInfo,
+    item::Component,
     packets::{recipes::RecipeBookSeenRecipe, round_trip},
     text::literal,
 };
