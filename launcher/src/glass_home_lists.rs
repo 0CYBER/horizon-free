@@ -182,16 +182,7 @@ impl Launcher {
         // Under the pointer only, as the mockup's row actions: the size keeps the row's end.
         let mut more = div().relative().child(more);
         if menu_open {
-            more = more.child(
-                deferred(
-                    div()
-                        .absolute()
-                        .top(px(44.))
-                        .right_0()
-                        .child(self.world_menu(w, cx)),
-                )
-                .with_priority(1),
-            );
+            more = more.child(world_menu_overlay(self.world_menu(w, cx)));
         }
         div().child(
             row.child(ui::list_text(w.name.clone(), facts.join(" · ")))
@@ -468,6 +459,19 @@ impl Launcher {
     }
 }
 
+fn world_menu_overlay(menu: impl IntoElement) -> impl IntoElement {
+    // Offset only the downward placement so the flipped menu ends above the button.
+    deferred(
+        div().absolute().top_0().right_0().child(
+            gpui::anchored()
+                .anchor(gpui::Anchor::TopRight)
+                .offset(gpui::point(px(0.), px(44.)))
+                .child(menu),
+        ),
+    )
+    .with_priority(1)
+}
+
 /// Add server: opens or closes the line to add one, its address field focused.
 fn toggle_add(cx: &mut Context<Launcher>) -> Listener<ClickEvent> {
     Box::new(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -535,4 +539,52 @@ pub(super) fn danger_button(id: SharedString, label: SharedString) -> Stateful<D
                 .text_color(ui::danger())
                 .child(label),
         )
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::*;
+
+    struct WorldRow {
+        bottom: bool,
+    }
+
+    impl Render for WorldRow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let menu = div()
+                .debug_selector(|| "menu".into())
+                .w(px(230.))
+                .h(px(200.));
+            div().size_full().relative().child(
+                div()
+                    .absolute()
+                    .right(px(16.))
+                    .map(|row| {
+                        if self.bottom {
+                            row.bottom_0()
+                        } else {
+                            row.top_0()
+                        }
+                    })
+                    .size(px(36.))
+                    .debug_selector(|| "button".into())
+                    .child(world_menu_overlay(menu)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    async fn world_menu_fits_at_both_ends_of_the_window(cx: &mut gpui::TestAppContext) {
+        for bottom in [false, true] {
+            let (_, window) = cx.add_window_view(|_, _| WorldRow { bottom });
+            let menu = window.debug_bounds("menu").unwrap();
+            let button = window.debug_bounds("button").unwrap();
+            assert_eq!(menu.right(), button.right());
+            if bottom {
+                assert!(menu.top() >= px(0.) && menu.bottom() <= button.top());
+            } else {
+                assert!(menu.top() >= button.bottom());
+            }
+        }
+    }
 }
