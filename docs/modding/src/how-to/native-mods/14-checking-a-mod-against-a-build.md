@@ -47,7 +47,11 @@ it cannot resolve with certainty counts as used and as built field by field. A s
 path (`world::DimensionSettings { … }`) counts for the API's struct of that name; an unqualified one counts as
 the mod's own only in the file that defines it outside any `#[cfg]`, when nothing in that file (a `use`, a glob,
 an inline module, a macro or attribute that is not standard or the API's) could change what the name means and
-the mod has no `include!`. What the parser cannot see counts as doubt, which refuses rather than guesses:
+the mod has no `include!`. One exception: a variant of an enum defined at the top of the same file is not the
+API's struct when that file shows it plainly (`Kind::V { … }`, `self::Kind::V { … }`, `Self::V { … }` in
+`impl Kind`, or a name imported by `use self::Kind::V;`). Everywhere else the check stays on the safe side: it
+may say a mod builds an API struct when it does not, never the other way round for ordinary code. What the
+parser cannot see counts as doubt, which refuses rather than guesses:
 - inside a macro body, an API struct name followed by `{` or `(` is a build, in full unless it ends in `..`,
   wherever it stands (`a < Pos(1, 2)`, `for Pos(x, y) in v`). A tuple or unit struct's name with no bracket
   after it is a build too, except where only a type stands or as a type written after `name:` in parameters,

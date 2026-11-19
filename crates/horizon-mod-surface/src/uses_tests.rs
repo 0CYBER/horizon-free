@@ -1419,7 +1419,8 @@ fn the_mods_own_type_wins_only_when_no_file_can_see_the_apis() {
         "use mod_api as api;\nfn f() { let s = api::Settings { height: 1 }; }",
     );
     assert_eq!(built_in(&[own, renamed], "type:Settings"), full);
-    // A variant or an associated type of the name does not shadow.
+    // A variant or an associated type of the name does not shadow: with no `use` of it, the
+    // variant is not in scope, so the bare literal is not the variant.
     let variant = (
         "src/kinds.rs",
         "enum Kind { Settings }\nfn f() { let s = Settings { height: 1 }; }",
@@ -1533,12 +1534,14 @@ fn whether_a_name_is_the_mods_own_follows_each_files_scope() {
     );
     assert_eq!(built_in(&[declared, own, qualified], "type:Settings"), full);
     // A path inside the mod that leads to an associated type, which may stand for the API's: the
-    // API's. So does one through an enum, which is no module the mod declares.
+    // API's.
     let associated = (
         "src/third.rs",
         "impl It for X { type Settings = mod_api::Settings; }\nfn g() { let s = crate::X::Settings { height: 1 }; }",
     );
     assert_eq!(built_in(&[associated], "type:Settings"), full);
+    // An import through `crate::` of an enum's variant: the scan does not know which file is
+    // the crate's root, so the API's.
     let variant = (
         "src/third.rs",
         "enum Kind { Settings { mine: u8 } }\nuse crate::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }",
@@ -1556,6 +1559,207 @@ fn whether_a_name_is_the_mods_own_follows_each_files_scope() {
         "mod inner { pub use mod_api::*; }\npub struct Settings { pub mine: u8 }\nfn g() { let s = Settings { mine: 1 }; }",
     );
     assert_eq!(built_in(&[inline], "type:Settings"), full);
+}
+
+#[test]
+fn a_variant_of_the_files_own_enum_builds_no_api_struct() {
+    let none = Some(Built::None);
+    let full = Some(Built::Full);
+    let enums = "pub enum Kind { Settings { mine: u8 }, Pos(u8) }\n";
+    let of = |id: &str, source: &str| {
+        let text = format!("{enums}{source}");
+        built_in(&[("src/lib.rs", text.as_str())], id)
+    };
+    // The file's own top-level enum: through the enum or `self::`, as a literal or an
+    // exhaustive pattern, through `Self` in an impl for it, or imported by name.
+    for source in [
+        "fn g() -> Kind { Kind::Settings { mine: 1 } }",
+        "fn g() -> Kind { self::Kind::Settings { mine: 1 } }",
+        "fn g(k: Kind) -> u8 { match k { Kind::Settings { mine } => mine, _ => 0 } }",
+        "impl Kind { fn new() -> Self { Self::Settings { mine: 1 } } }",
+        "use self::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }",
+        "use self::Kind::Settings as S;\nfn g() { let s = S { mine: 1 }; }",
+    ] {
+        assert_eq!(of("type:Settings", source), none, "{source}");
+    }
+    assert_eq!(of("type:Pos", "fn g() -> Kind { Kind::Pos(1) }"), none);
+    assert_eq!(
+        of(
+            "type:Pos",
+            "use self::Kind::Pos;\nfn g() { let p = Pos(1); }"
+        ),
+        none
+    );
+    // Kept strict: anything the file cannot show leads to its own top-level enum.
+    for source in [
+        // The API's own literal beside the variant's.
+        "fn g() { let k = Kind::Settings { mine: 1 }; let s = mod_api::Settings { height: 1 }; }",
+        // An enum the file does not define, or without the variant.
+        "fn g() { let s = dep::Kind::Settings { mine: 1 }; }",
+        "use dep::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }",
+        "fn g() { let s = Other::Settings { mine: 1 }; }",
+        // An import other than a single leaf `use self::Kind::V`: bare (edition 2015 reads it
+        // from the crate's root), in braces, or a second one beside it.
+        "use Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }",
+        "use self::{Kind::Settings};\nfn g() { let s = Settings { mine: 1 }; }",
+        "use self::Kind::Settings;\nuse Kind::Settings as S;\nfn g() { let s = Kind::Settings { mine: 1 }; }",
+        // A macro called through a path.
+        "fn g() { std::println!(); let s = Kind::Settings { mine: 1 }; }",
+        // A path through `crate::`, whose root file the scan does not know.
+        "fn g() { let s = crate::Kind::Settings { mine: 1 }; }",
+        "use crate::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }",
+        // The name bound again: a `use`, a function's own enum, a generic parameter.
+        "fn g() { use dep::Kind; let s = Kind::Settings { mine: 1 }; }",
+        "fn g() { enum Kind { Settings { height: u8 } } let s = Kind::Settings { height: 1 }; }",
+        "fn g<Kind: Make>() { let s = Kind::Settings { height: 1 }; }",
+        // A glob, a second `use` of the imported name, a macro body.
+        "use mod_api::*;\nfn g() { let s = Kind::Settings { mine: 1 }; }",
+        "use mod_api::*;\nimpl Kind { fn new() -> Self { Self::Settings { mine: 1 } } }",
+        "use self::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }\nfn h() { use mod_api::Settings; let s = Settings { height: 1 }; }",
+        "fn g() { let v = vec![Kind::Settings { mine: 1 }]; }",
+    ] {
+        assert_eq!(of("type:Settings", source), full, "{source}");
+    }
+    let alone = |files: &[(&str, &str)]| built_in(files, "type:Settings");
+    // An enum in a sibling module, or under `#[cfg]`, is no evidence.
+    assert_eq!(
+        alone(&[
+            ("src/lib.rs", "mod kind;\nmod other;"),
+            ("src/kind.rs", "pub enum Kind { Settings { mine: u8 } }"),
+            (
+                "src/other.rs",
+                "fn g() { let s = Kind::Settings { mine: 1 }; }"
+            ),
+        ]),
+        full
+    );
+    assert_eq!(
+        alone(&[(
+            "src/lib.rs",
+            "#[cfg(feature = \"x\")]\nenum Kind { Settings { mine: u8 } }\nfn g() { let s = Kind::Settings { mine: 1 }; }"
+        )]),
+        full
+    );
+    // An API name as the enum's.
+    assert_eq!(
+        alone(&[(
+            "src/lib.rs",
+            "enum Pos { Settings { mine: u8 } }\nfn g() { let s = Pos::Settings { mine: 1 }; }"
+        )]),
+        full
+    );
+    // A function's enum does not hide the crate, renamed by `extern crate self`, through which
+    // the path reaches the API's struct.
+    assert_eq!(
+        alone(&[(
+            "src/lib.rs",
+            "extern crate self as LocalKind;\npub use mod_api::Settings;\nfn local_model() { enum LocalKind { Settings {} } }\npub fn build() -> LocalKind::Settings { LocalKind::Settings { height: 1 } }"
+        )]),
+        full
+    );
+    // A `use` rooted at `::` names a crate, not the file's enum of the same name.
+    assert_eq!(
+        alone(&[(
+            "src/lib.rs",
+            "enum blast_vocab { Settings {} }\nuse ::blast_vocab::Settings as Calc;\npub fn build() -> Calc { Calc { height: 1, ..Default::default() } }"
+        )]),
+        Some(Built::Base)
+    );
+}
+
+#[test]
+fn what_may_rename_or_shadow_an_enum_from_outside_its_file_leaves_the_api_struct() {
+    let base = Some(Built::Base);
+    let settings = |files: &[(&str, &str)]| built_in(files, "type:Settings");
+    // A rooted import inside braces.
+    assert_eq!(
+        settings(&[(
+            "src/lib.rs",
+            "enum blast_vocab { Settings {} }\nuse {::blast_vocab::Settings as Calc};\nfn build() -> Calc { Calc { height: 1, ..Default::default() } }"
+        )]),
+        base
+    );
+    // A bare `use Kind::V`, which edition 2015 reads from the crate's root.
+    assert_eq!(
+        settings(&[
+            (
+                "src/lib.rs",
+                "extern crate mod_api;\nmod worker;\nmod Kind { pub use mod_api::Settings; }"
+            ),
+            (
+                "src/worker.rs",
+                "enum Kind { Settings {} }\nuse Kind::Settings as Calc;\nfn build() -> Calc { Calc { height: 1, ..Default::default() } }"
+            ),
+        ]),
+        base
+    );
+    // A macro reached through a rebound `std` that brings in a shadowing import.
+    assert_eq!(
+        settings(&[
+            ("src/lib.rs", "mod shim;\nmod worker;"),
+            (
+                "src/shim.rs",
+                "macro_rules! rebind { () => { use ::mod_api as LocalKind; }; }\npub(crate) use rebind as vec;"
+            ),
+            (
+                "src/worker.rs",
+                "use crate::shim as std;\nenum LocalKind { Settings {} }\nfn build() -> mod_api::Settings {\n    std::vec!();\n    LocalKind::Settings { height: 1, ..Default::default() }\n}"
+            ),
+        ]),
+        base
+    );
+    // The same name spelled with a combining accent and a precomposed one.
+    assert_eq!(
+        settings(&[(
+            "src/lib.rs",
+            "enum Kinde\u{301} { Settings {} }\nfn build() -> mod_api::Settings {\n    use mod_api as Kind\u{e9};\n    Kinde\u{301}::Settings { height: 1, ..Default::default() }\n}"
+        )]),
+        base
+    );
+    // A crate-level `macro_rules!` that shadows the prelude's `vec!` in a later module.
+    assert_eq!(
+        settings(&[
+            (
+                "src/lib.rs",
+                "macro_rules! vec { () => { use ::mod_api as LocalKind; }; }\nmod worker;"
+            ),
+            (
+                "src/worker.rs",
+                "enum LocalKind { Settings {} }\nfn build() -> mod_api::Settings {\n    vec!();\n    LocalKind::Settings { height: 1, ..Default::default() }\n}"
+            ),
+        ]),
+        base
+    );
+}
+
+#[test]
+fn a_mod_that_builds_only_its_own_variant_fits_when_the_api_struct_changes() {
+    let uses = scan_on(
+        wider(),
+        "enum Kind { Settings { mine: u8 } }\nuse self::Kind::Settings;\nfn g() -> Kind { let _ = Kind::Settings { mine: 1 }; Settings { mine: 2 } }",
+    );
+    let record = settings(&[("height", "i32")], &["Clone", "Default"]);
+    let mut sealed_record = Type::new(
+        record.id.clone(),
+        "",
+        None,
+        TypeContract {
+            constructible: false,
+            ..record.contract.clone()
+        },
+        record.fields.clone(),
+        vec![],
+    );
+    sealed_record.impls = record.impls.clone();
+    let mut sealed = wider();
+    sealed.replace_type(sealed_record);
+    assert_eq!(fits(uses.entries(), &sealed.build()), Fit::Fits);
+    let mut gained = wider();
+    gained.replace_type(settings(
+        &[("height", "i32"), ("depth", "i32")],
+        &["Clone", "Default"],
+    ));
+    assert_eq!(fits(uses.entries(), &gained.build()), Fit::Fits);
 }
 
 #[test]

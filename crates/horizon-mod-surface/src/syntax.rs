@@ -54,6 +54,12 @@ pub(crate) struct Syntax<'t> {
     pub defines: BTreeSet<&'t str>,
     /// Every struct, enum and union defined anywhere, and every enum variant.
     pub types: BTreeSet<&'t str>,
+    /// The enums the file defines at its top level, under no `#[cfg]` or `#[cfg_attr]`, with
+    /// each of their variants: (enum, variant).
+    pub top_enums: BTreeSet<(&'t str, &'t str)>,
+    /// Every name an item, module, extern crate or generic type parameter binds anywhere in
+    /// the file, once per binding (`use` left out).
+    pub bound: Vec<&'t str>,
     /// Every trait defined anywhere.
     pub traits: BTreeSet<&'t str>,
     /// `type X = …Y<…>;` anywhere: (X, Y), and whether it is an item of its own (not an
@@ -198,6 +204,7 @@ impl<'a, 't> Visit<'a> for Reader<'t> {
     fn visit_item_mod(&mut self, m: &'a syn::ItemMod) {
         self.out.inline_modules |= m.content.is_some();
         let name = self.name(&m.ident);
+        self.out.bound.push(name);
         self.out.modules.insert(name);
         visit::visit_item_mod(self, m);
     }
@@ -205,12 +212,14 @@ impl<'a, 't> Visit<'a> for Reader<'t> {
     fn visit_item_struct(&mut self, i: &'a syn::ItemStruct) {
         let name = self.name(&i.ident);
         self.out.types.insert(name);
+        self.out.bound.push(name);
         visit::visit_item_struct(self, i);
     }
 
     fn visit_item_enum(&mut self, i: &'a syn::ItemEnum) {
         let name = self.name(&i.ident);
         self.out.types.insert(name);
+        self.out.bound.push(name);
         for variant in &i.variants {
             let name = self.name(&variant.ident);
             self.out.types.insert(name);
@@ -221,23 +230,46 @@ impl<'a, 't> Visit<'a> for Reader<'t> {
     fn visit_item_union(&mut self, i: &'a syn::ItemUnion) {
         let name = self.name(&i.ident);
         self.out.types.insert(name);
+        self.out.bound.push(name);
         visit::visit_item_union(self, i);
     }
 
     fn visit_item_trait(&mut self, i: &'a syn::ItemTrait) {
         let name = self.name(&i.ident);
         self.out.traits.insert(name);
+        self.out.bound.push(name);
         visit::visit_item_trait(self, i);
     }
 
     fn visit_item_type(&mut self, i: &'a syn::ItemType) {
+        self.out.bound.push(self.name(&i.ident));
         self.alias(&i.ident, &i.ty, true);
         visit::visit_item_type(self, i);
     }
 
     fn visit_impl_item_type(&mut self, i: &'a syn::ImplItemType) {
+        self.out.bound.push(self.name(&i.ident));
         self.alias(&i.ident, &i.ty, false);
         visit::visit_impl_item_type(self, i);
+    }
+
+    fn visit_trait_item_type(&mut self, i: &'a syn::TraitItemType) {
+        self.out.bound.push(self.name(&i.ident));
+        visit::visit_trait_item_type(self, i);
+    }
+
+    fn visit_item_extern_crate(&mut self, i: &'a syn::ItemExternCrate) {
+        let name = match &i.rename {
+            Some((_, rename)) => rename,
+            None => &i.ident,
+        };
+        self.out.bound.push(self.name(name));
+        visit::visit_item_extern_crate(self, i);
+    }
+
+    fn visit_type_param(&mut self, p: &'a syn::TypeParam) {
+        self.out.bound.push(self.name(&p.ident));
+        visit::visit_type_param(self, p);
     }
 
     fn visit_macro(&mut self, m: &'a syn::Macro) {
@@ -521,6 +553,15 @@ pub(crate) fn parse(text: &str) -> Result<Syntax<'_>, Unread> {
                 if let Some(ident) = defined {
                     let name = reader.name(ident);
                     reader.out.defines.insert(name);
+                }
+                if let syn::Item::Enum(i) = item
+                    && !conditional(&i.attrs)
+                {
+                    let name = reader.name(&i.ident);
+                    for variant in &i.variants {
+                        let variant = reader.name(&variant.ident);
+                        reader.out.top_enums.insert((name, variant));
+                    }
                 }
             }
             reader.visit_file(&file);
