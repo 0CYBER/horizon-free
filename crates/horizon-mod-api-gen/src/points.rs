@@ -1121,20 +1121,32 @@ pub(crate) fn records_selected(
         .collect();
     let mut api_places = proc_macro2::TokenStream::new();
     let mut api_refusals = proc_macro2::TokenStream::new();
+    // The point transport's own rules; each place is checked on its own, by name
+    // (`point_identity`), so a point added to the catalog leaves the others as they were. The
+    // ids are `mod_api::wire`'s and the subscriptions' shape is `Subscriptions`, both mixed in
+    // at run time (`points_layout`).
     let mut layout = 0xcbf29ce484222325u64;
+    for byte in "points by name (#18253): a place's identity is its declaration and its record's field layouts".bytes() {
+        layout = (layout ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+    }
+    // Each place's identity as a row of the field types it reaches, read through one table:
+    // a match over every place is a function too large for rustc to compile for wasm.
+    let mut identities = std::collections::HashMap::new();
+    let mut fields = (Vec::new(), std::collections::HashMap::new());
+    let mut by_name = Vec::new();
     for point in points {
-        for byte in format!(
-            "{}:{}:{}:{}:{:?}",
-            point.name, point.host, point.record_item, point.at_return, point.api_refusal
-        )
-        .bytes()
-        {
-            layout = (layout ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        }
         if let Some(reason) = &point.api_refusal {
             let target = &point.target;
             api_refusals.extend(quote! { (#target, #reason), });
             continue;
+        }
+        let (hash, reached) = identity(point, &mut fields);
+        for name in std::iter::once(point.name.clone())
+            .chain(point.at_return.then(|| format!("{}_return", point.name)))
+        {
+            let variant = point_shape::camel(&name);
+            by_name.push((name.clone(), quote::format_ident!("{variant}")));
+            identities.insert(variant, (name, hash, reached.clone()));
         }
         let record = quote::format_ident!("{}", point.record);
         let passed = match point.host {
@@ -1193,14 +1205,47 @@ pub(crate) fn records_selected(
     })
     .expect("point variants");
     let debug_names = ids.variants.iter().map(|variant| variant.ident.to_string());
+    let identity_rows =
+        ids.variants
+            .iter()
+            .map(|variant| match identities.get(&variant.ident.to_string()) {
+                Some((name, hash, reached)) => quote!((#name, #hash, &[#(#reached),*])),
+                None => quote!(("", 0, &[])),
+            });
+    by_name.sort_by(|a, b| a.0.cmp(&b.0));
+    let by_name = by_name
+        .iter()
+        .map(|(name, variant)| quote!((#name, PointId::#variant)));
+    let field_layouts = fields.0.iter().enumerate().map(|(index, ty)| {
+        let index = index as u32;
+        quote!(#index => <#ty as ::mod_api::wire::Wire>::layout(&mut ::std::vec::Vec::new()),)
+    });
     quote! {
         #(#records)*
         /// Target names for native load diagnostics.
         #[doc(hidden)]
         pub const POINT_TARGETS: &[&str] = &[#(#targets),*];
-        /// The generated point export table and record layout, checked separately from the API layout.
+        /// The point transport's rules, checked separately from the API layout; each place is
+        /// checked on its own (`point_identity`).
         #[doc(hidden)]
         pub const POINT_LAYOUT: u64 = #layout;
+        /// An API place's name and what a guest and the game must agree on for it: its
+        /// declaration and the wire layout of each field of its record.
+        #[doc(hidden)]
+        pub fn point_identity(point: PointId) -> (&'static str, u64) {
+            static IDENTITIES: [(&str, u64, &[u32]); PointId::__Count as usize + 1] = [#(#identity_rows),*];
+            fn field_layout(index: u32) -> u64 {
+                match index { #(#field_layouts)* _ => 0 }
+            }
+            let (name, hash, reached) = IDENTITIES[point as usize];
+            (name, reached.iter().fold(hash, |hash, &field| ::mod_api::wire::layout_mix(hash, field_layout(field))))
+        }
+        /// The API place named `name` in this game.
+        #[doc(hidden)]
+        pub fn point_by_name(name: &str) -> ::std::option::Option<PointId> {
+            static BY_NAME: &[(&str, PointId)] = &[#(#by_name),*];
+            BY_NAME.binary_search_by(|(at, _)| (*at).cmp(name)).ok().map(|index| BY_NAME[index].1)
+        }
         /// API places as (place, target function, return phase, the return type a `replace` there
         /// can't produce), for manifest validation: a head whose return is neither `()` nor an
         /// API value refuses a replacement when a module loads.
@@ -1213,8 +1258,8 @@ pub(crate) fn records_selected(
         #[cfg(any(target_arch = "wasm32", feature = "wasm-guest"))]
         #[doc(hidden)]
         pub fn guest_dispatch(id: u32, input: &mut ::mod_api::wire::Reader<'_>, out: &mut ::mod_api::wire::Writer) -> Result<(), ::mod_api::wire::WireError> {
-            if id == 0xBFFF_FFFF { out.put(&crate::guest::subscriptions()); return Ok(()); }
-            let index = (id & 0x3FFF_FFFF) as usize;
+            if id == ::mod_api::wire::POINT_SUBSCRIPTIONS { out.put(&crate::guest::subscriptions()); return Ok(()); }
+            let index = id.wrapping_sub(::mod_api::wire::POINTS) as usize;
             let (place, function) = guest_exports::TABLE.get(index).copied().flatten().ok_or(::mod_api::wire::WireError::Tag(id))?;
             function(place, input, out)
         }
@@ -1251,6 +1296,47 @@ pub(crate) fn records_selected(
         pub mod listeners { use super::*; #(#listeners)* }
     }
     .to_string()
+}
+
+/// `point`'s identity: the hash of its declaration and the indices in `fields` of its record's
+/// field types, whose run-time `Wire` layouts the generator can't see.
+fn identity(
+    point: &GamePoint,
+    fields: &mut (Vec<syn::Type>, std::collections::HashMap<String, u32>),
+) -> (u64, Vec<u32>) {
+    struct Static;
+    impl syn::visit_mut::VisitMut for Static {
+        fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
+            *lifetime = syn::parse_quote!('static);
+        }
+    }
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in format!(
+        "{}:{}:{}:{}",
+        point.name, point.host, point.record_item, point.at_return
+    )
+    .bytes()
+    {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+    }
+    let file: syn::File = syn::parse_str(&point.record_item).expect("point record");
+    let mut reached = Vec::new();
+    for item in &file.items {
+        if let syn::Item::Struct(record) = item {
+            for field in &record.fields {
+                let mut ty = field.ty.clone();
+                syn::visit_mut::VisitMut::visit_type_mut(&mut Static, &mut ty);
+                let key = quote::ToTokens::to_token_stream(&ty).to_string();
+                let (types, known) = &mut *fields;
+                let index = *known.entry(key).or_insert_with(|| {
+                    types.push(ty);
+                    types.len() as u32 - 1
+                });
+                reached.push(index);
+            }
+        }
+    }
+    (hash, reached)
 }
 
 /// Engine-owned records and typed dispatch; registration stays in the platform.

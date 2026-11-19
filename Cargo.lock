@@ -515,6 +515,7 @@ dependencies = [
  "horizon-mod-point-emit",
  "horizon-mod-source",
  "horizon-mod-surface",
+ "horizon-mod-vocab",
  "horizon-mod-wasm",
  "horizon-port-pack",
  "horizon-release-sign",

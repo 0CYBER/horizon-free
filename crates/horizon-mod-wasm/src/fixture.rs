@@ -19,6 +19,8 @@ pub fn module(bytes: &[u8]) -> Result<WasmMod, String> {
     .ok_or_else(|| "fixture exported no mod boundary".to_owned())
 }
 
+pub use crate::calls::{answering, by_name, host_shim, import_name, shim_keys};
+
 /// Resolve a production host row without pinning generated numeric IDs in a fixture.
 pub fn import_id(owner: &str, name: &str) -> Option<u32> {
     crate::boundary::import_id(owner, name)

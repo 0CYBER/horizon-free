@@ -28,12 +28,14 @@ pub(super) fn describe(
     markers
         .iter()
         .map(|(hook, parameter)| {
-            let ask = methods
+            if !methods
                 .iter()
                 .filter(|m| exports().contains(&m.owner))
-                .position(|m| m.owner == "ItemPart" && m.name == *hook)
-                .ok_or_else(|| format!("prepared hook {hook} has no ItemPart export"))?
-                as u32;
+                .any(|m| m.owner == "ItemPart" && m.name == *hook)
+            {
+                return Err(format!("prepared hook {hook} has no ItemPart export"));
+            }
+            let ask = super::names::export_id("ItemPart", hook);
             Ok(Abi {
                 hook: hook.clone(),
                 parameter: parameter.clone(),

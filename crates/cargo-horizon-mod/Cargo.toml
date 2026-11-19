@@ -21,6 +21,9 @@ horizon-mod-source = { path = "../horizon-mod-source" }
 dunce = "1.0.5"
 horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index", "prebuilt"] }
 horizon-mod-point-emit = { path = "../horizon-mod-point-emit" }
+# The transport's group-state size, which the std member is written with (already a dependency
+# of `horizon-mod-package`).
+horizon-mod-vocab = { path = "../horizon-mod-vocab" }
 # The uses scan, the fit test, the surface search and its diff, over the fetched SDK's `surface.json`.
 horizon-mod-surface = { path = "../horizon-mod-surface" }
 horizon-release-sign = { path = "../horizon-release-sign" }

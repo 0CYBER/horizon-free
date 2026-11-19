@@ -14,7 +14,7 @@ impl<T> Default for PreparedSlots<T> {
 impl<T> PreparedSlots<T> {
     pub fn prepare(&mut self, slot: u32, generation: u32, value: T) -> Result<(), WireError> {
         let slot = slot as usize;
-        if generation == 0 || slot >= 4096 {
+        if generation == 0 || slot >= crate::wire::MAX_PREPARED_SLOTS {
             return Err(WireError::Invalid("invalid prepared slot"));
         }
         if self.slots.get(slot).is_some_and(Option::is_some) {

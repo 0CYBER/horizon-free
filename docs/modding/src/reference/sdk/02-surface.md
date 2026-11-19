@@ -70,6 +70,30 @@ merge base with the head. It reports, and fails the check only when:
   its own line), is named by a note the pull request adds. Conditional and additive changes need none. The gate is
   `gate = true` in `tools/ci/surface.toml`.
 
+## Wasm mods on a later build
+
+A wasm mod keeps loading on a later build that only added to the API: a method anywhere in a trait, a hook, a
+type. Each call the mod makes is its own import, linked by name and signature, and each export is known by its name.
+Before the mod runs, the game compares each of the mod's calls with its own, including the Wire layout of every type
+the call reaches (an enum's case order too). A hook added after the mod was built is never subscribed; a direct
+call of it answers that the mod has none.
+
+The game still refuses a mod, naming the call or point, when:
+
+- a call it makes changed (its signature, or the layout of a type it reaches) or is gone. The generated guest hands
+  out `dyn` host traits, and a vtable keeps every method of its trait, so a mod reaches every method of a trait it
+  reaches. In practice a changed or removed host method refuses every wasm mod built before the change;
+- one of its exports (a hook or a handler method) changed or is gone;
+- what every call shares changed: a transport value (`mod_api::wire::PROTOCOL`: reserved IDs, the group state,
+  reply tags and limits, and `CORE_VERSION`, bumped by hand for a transport change no value shows), the file
+  roots, the prepared ABI, or a hand-written codec, including the NBT tag ids and limits and the `serde` shapes
+  some codecs embed (one added counts too). Encodings written outside those files, such as the NBT reader and
+  writer, are pinned byte for byte by `horizon-mod-vocab/tests/wire_golden.rs` instead;
+- the members of one linked group were built against different builds;
+- a point it listens to changed or is gone.
+
+Wasm mods built before calls were linked by name must be rebuilt once.
+
 ## Command completion layouts
 
 `CommandSuggestion` now carries an optional `replace_start` byte offset into the prefix. `None` replaces the whole

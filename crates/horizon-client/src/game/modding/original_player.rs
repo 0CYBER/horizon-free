@@ -307,7 +307,7 @@ mod tests {
             "(data (i32.const 24576) \"{}\")",
             escape(marker.bytes())
         ));
-        let bytes = wat::parse_str(format!(r#"(module
+        let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(r#"(module
           (@custom "dylink.0" "\01\04\00\00\00\00")
           (import "env" "memory" (memory 1))
           (import "env" "__indirect_function_table" (table 1 funcref))
@@ -335,7 +335,16 @@ mod tests {
             i32.const 28672 i32.const 512 i32.const 16 memory.copy
             i32.const 28688 i32.const 532 i32.const 528 i32.load i32.add i32.load8_u i32.store8
             i32.const 28689 global.get $original i64.store
-            i64.const {reply}))"#, layout=*mod_api::wire::LAYOUT, len=marker.bytes().len(), reply=(28672u64 << 32) | 25)).unwrap();
+            i64.const {reply}))"#, layout=*mod_api::wire::LAYOUT, len=marker.bytes().len(), reply=(28672u64 << 32) | 25), &[
+                ("Backend", "original_player_position"),
+                ("Backend", "original_player_health"),
+                ("Backend", "original_player_experience"),
+                ("Backend", "original_player_effects"),
+                ("Backend", "original_player_dimension"),
+                ("Backend", "original_player_inventory_slot"),
+                ("AttachmentStore", "saved"),
+                ("BackendMut", "player_set_experience_levels"),
+            ])).unwrap();
         let module = horizon_mod_wasm::fixture::module(&bytes).unwrap();
         module.player_clone(host, event);
         assert_eq!(player.experience(host).unwrap().level, 42);

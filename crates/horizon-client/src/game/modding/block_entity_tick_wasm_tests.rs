@@ -41,7 +41,7 @@ pub(super) fn tick(
         "wasm_identity_readonly" => format!("i64.const 32768 i64.const 32 i64.shl i64.const {} i64.or", wrong_revision.bytes().len()),
         _ => "i64.const 520 i64.const 32 i64.shl global.get $length i32.const 8 i32.sub i64.extend_i32_u i64.or".to_owned(),
     };
-    let bytes = wat::parse_str(format!(r#"(module
+    let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(r#"(module
       (@custom "dylink.0" "\01\04\00\00\00\00")
       (import "env" "memory" (memory 1))
       (import "env" "__indirect_function_table" (table 1 funcref))
@@ -57,7 +57,7 @@ pub(super) fn tick(
         i32.const {setter} i32.const 4096 i32.const {set_len} i32.const 16384 i32.const 4096 call $host drop
         i32.const {discard} i32.const 8192 i32.const {remove_len} i32.const 16384 i32.const 4096 call $host drop
         {output})
-    )"#, layout=*mod_api::wire::LAYOUT, revision=escape(wrong_revision.bytes()), set=escape(set.bytes()), remove=escape(remove.bytes()), set_len=set.bytes().len(), remove_len=remove.bytes().len())).unwrap();
+    )"#, layout=*mod_api::wire::LAYOUT, revision=escape(wrong_revision.bytes()), set=escape(set.bytes()), remove=escape(remove.bytes()), set_len=set.bytes().len(), remove_len=remove.bytes().len()), &[("BackendMut", "item_entity_set_stack"), ("BackendMut", "entity_discard")])).unwrap();
     let module = horizon_mod_wasm::fixture::module(&bytes).unwrap();
     let handler = horizon_mod_wasm::WasmHandler::new(&module, Id(1));
     handler.block_entity_tick(host, event);

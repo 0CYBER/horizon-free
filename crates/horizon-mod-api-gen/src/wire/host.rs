@@ -61,13 +61,8 @@ fn frame(surface: &mut super::Surface<'_>) -> Result<String, String> {
         if *owner == "ConfigFiles" {
             let mut roots = String::new();
             for (root, source, accessor) in super::FILE_ROOTS {
-                let access = surface
-                    .dropped
-                    .iter()
-                    .chain(surface.methods.iter())
-                    .find(|method| method.owner == *source && method.name == *accessor)
-                    .and_then(|method| method.access.as_deref())
-                    .unwrap_or("WorldOnly");
+                let access =
+                    super::names::root_access(source, accessor, &surface.methods, &surface.dropped);
                 let source = snake(source);
                 writeln!(roots, "{root} => {{ if !mod_api::__private::access_allowed({accessor:?}, mod_api::__private::LoadAccess::{access}) {{ return Err(ServeError::Phase {{ operation: {accessor:?}, phase: mod_api::__private::current_phase() }}); }} Ok(self.{source}()?.{accessor}()) }},").unwrap();
             }
@@ -424,12 +419,12 @@ pub(super) fn generate(
     code.push_str(
         "pub fn export_id(owner: &str, name: &str) -> Option<u32> { match (owner,name) {\n",
     );
-    for (id, m) in surface
+    for m in surface
         .methods
         .iter()
         .filter(|m| super::exports().contains(&m.owner))
-        .enumerate()
     {
+        let id = super::names::export_id(m.owner, &m.name);
         writeln!(code, "({:?},{:?}) => Some({id}),", m.owner, m.name).unwrap();
     }
     for abi in super::prepared::describe(&surface.methods, prepared_hooks)? {
@@ -444,12 +439,12 @@ pub(super) fn generate(
     }
     code.push_str("_ => None } }\n");
     code.push_str("pub const EXPORT_NAMES: &[(u32, &str)] = &[\n");
-    for (id, m) in surface
+    for m in surface
         .methods
         .iter()
         .filter(|m| super::exports().contains(&m.owner))
-        .enumerate()
     {
+        let id = super::names::export_id(m.owner, &m.name);
         writeln!(code, "({id}, {:?}),", format!("{}::{}", m.owner, m.name)).unwrap();
     }
     for abi in super::prepared::describe(&surface.methods, prepared_hooks)? {
@@ -476,11 +471,53 @@ pub(super) fn generate(
         writeln!(code, "({:?},{:?}) => Some({id}),", m.owner, m.name).unwrap();
     }
     code.push_str("_ => None } }\n");
+    // The import a mod's call arrives through, by the name it was built with: the game's own
+    // id for it, or whether the game has the call under another signature (changed) or not
+    // at all (removed).
+    let mut exact = String::new();
+    let mut known = String::new();
+    let mut names = String::new();
+    for (id, (m, held)) in imports(&surface.methods)
+        .iter()
+        .map(|m| (*m, false))
+        .chain(
+            held_methods(&surface.methods)
+                .into_iter()
+                .map(|m| (m, true)),
+        )
+        .enumerate()
+    {
+        writeln!(
+            exact,
+            "{:?} => Ok({id}),",
+            super::names::import_name(types, m, held)
+        )
+        .unwrap();
+        writeln!(known, "{:?} => Err(true),", super::names::key(m, held)).unwrap();
+        writeln!(
+            names,
+            "({:?},{:?}) => Some({:?}),",
+            format!("{}{}", if held { "held-" } else { "" }, m.owner),
+            m.name,
+            super::names::import_name(types, m, held)
+        )
+        .unwrap();
+    }
+    writeln!(
+        code,
+        "pub fn import_name(owner: &str, name: &str) -> Option<&'static str> {{ match (owner, name) {{ {names} _ => None }} }}"
+    )
+    .unwrap();
+    writeln!(
+        code,
+        "pub fn import_by_name(name: &str) -> Result<u32, bool> {{ match name {{ {exact} _ => match name.split_once('#').map_or(name, |(key, _)| key) {{ {known} _ => Err(false) }} }} }}"
+    )
+    .unwrap();
     code.push_str(
         r#"
 impl Cx {
     fn check_static_ack(&self, ack: u32) -> Result<(), ServeError> {
-        if ack != u32::MAX && ack as usize >= self.static_strings.len() {
+        if ack != mod_api::wire::NO_STATIC_ID && ack as usize >= self.static_strings.len() {
             return Err(WireError::Invalid("static string acknowledgement outside table").into());
         }
         Ok(())
@@ -493,8 +530,8 @@ impl Cx {
             if self.static_strings.len() >= mod_api::wire::MAX_STATIC_STRINGS {
                 // Admission is an optimization: a full group table cannot impose a
                 // stricter limit than the existing per-member static string storage.
-                out.put(&2u8);
-                out.put(&u32::MAX);
+                out.put(&mod_api::wire::STATIC_UNCACHED);
+                out.put(&mod_api::wire::NO_STATIC_ID);
                 out.put(text);
                 return Ok(());
             }
@@ -503,7 +540,7 @@ impl Cx {
             id
         };
         let definition = id != ack;
-        out.put(&u8::from(definition));
+        out.put(&if definition { mod_api::wire::STATIC_DEFINITION } else { mod_api::wire::STATIC_KNOWN });
         out.put(&id);
         if definition { out.put(text); }
         Ok(())
@@ -620,16 +657,7 @@ impl Cx {
                 if m.receiver == Some(true) { "_mut" } else { "" }
             )
         };
-        let accessor = super::REACHED
-            .iter()
-            .find(|(owner, _, _)| *owner == m.owner)
-            .filter(|_| m.owner != "ConfigFiles")
-            .and_then(|_| {
-                surface.dropped.iter().find(|candidate| {
-                    super::frame_accessor(candidate)
-                        && matches!(&candidate.ret, Ty::Dyn(name, _) if name == m.owner)
-                })
-            });
+        let accessor = super::names::frame_accessor_of(m, &surface.dropped);
         let mut access = String::new();
         for checked in accessor.into_iter().chain(std::iter::once(m)) {
             if let Some(level) = &checked.access {
@@ -712,7 +740,7 @@ impl Cx {
                         .iter()
                         .filter(|m| super::exports().contains(&m.owner)),
                 )
-                .enumerate()
+                .map(|m| (super::names::export_id(m.owner, &m.name), m))
                 .filter(|(_, m)| m.owner == *owner && m.via.as_deref().unwrap_or(m.owner) == group)
             {
                 let sig = rust_sig(types, m);
@@ -977,12 +1005,15 @@ fn host_and_coverage(root: &std::path::Path) -> Result<(String, String), String>
         ("capability_providers_generated.rs", providers.as_str()),
     ];
     let mut surface = super::surface(root, &included)?;
-    let count = surface
+    if !surface
         .methods
         .iter()
-        .filter(|m| super::exports().contains(&m.owner))
-        .position(|m| m.owner == "Hooks" && m.name == "subscribed")
-        .ok_or("Hooks::subscribed absent")?;
+        .any(|m| m.owner == "Hooks" && m.name == "subscribed")
+    {
+        return Err("Hooks::subscribed absent".into());
+    }
+    // By name, like every export (#18253): a hook added before it moves no id.
+    let count = super::names::export_id("Hooks", "subscribed");
     let catalog = crate::Catalog::load(root)?;
     let prepared_hooks = catalog
         .hooks
@@ -1076,7 +1107,7 @@ fn host_and_coverage(root: &std::path::Path) -> Result<(String, String), String>
     for (variant, name) in &surface.hooks {
         writeln!(code, "{:?} => Some(mod_api::HookId::{}),", name, variant).unwrap();
     }
-    code.push_str("_ => None } } pub fn subscriptions_of(owner: &str, names: Vec<String>) -> &'static [Option<mod_api::HookId>] { names.into_iter().filter_map(|name| { let id = hook_id(&name); if id.is_none() { log::warn!(\"wasm {owner}: unknown hook {name}\"); } id.map(Some) }).collect::<Vec<_>>().leak() }\n");
+    code.push_str("_ => None } } pub fn subscriptions_of(owner: &str, names: mod_api::wire::SubscriptionAnswer) -> &'static [Option<mod_api::HookId>] { names.into_iter().filter_map(|name| { let id = hook_id(&name); if id.is_none() { log::warn!(\"wasm {owner}: unknown hook {name}\"); } id.map(Some) }).collect::<Vec<_>>().leak() }\n");
     for path in surface.types.index.read.take() {
         crate::rerun_if_changed(&path.display());
     }

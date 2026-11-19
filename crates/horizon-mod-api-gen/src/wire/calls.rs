@@ -248,7 +248,8 @@ pub(super) fn guest(
             } else {
                 ""
             };
-            writeln!(out, "{}", import_body(types, m, id, prefix)).unwrap();
+            let name = super::names::import_name(types, m, false);
+            writeln!(out, "{}", import_body(types, m, id, &name, prefix)).unwrap();
         }
         for m in dropped.iter().filter(|m| {
             !exports().contains(&m.owner) && m.via.as_deref().unwrap_or(m.owner) == owner
@@ -256,7 +257,7 @@ pub(super) fn guest(
             // Frame accessors are local proxies, not absent capabilities. Their service
             // methods cross the wire and the engine owns the phase check there.
             if super::frame_accessor(m) {
-                writeln!(out, "{}", import_body(types, m, 0, "")).unwrap();
+                writeln!(out, "{}", import_body(types, m, 0, "", "")).unwrap();
                 continue;
             }
             // What the API keeps off wasm exists only on a native build of the guest.
@@ -286,7 +287,14 @@ pub(super) fn guest(
             .enumerate()
             .filter(|(_, m)| m.owner == *owner)
         {
-            out.push_str(&import_body(types, m, all.len() + id, "w.put(&self.0);"));
+            let name = super::names::import_name(types, m, true);
+            out.push_str(&import_body(
+                types,
+                m,
+                all.len() + id,
+                &name,
+                "w.put(&self.0);",
+            ));
         }
         out.push_str("}\n");
     }
@@ -386,8 +394,8 @@ pub(super) fn mutable_scalar(ty: &Ty) -> bool {
 /// The mod's body of import `id`: its arguments encoded, one crossing, the answer decoded. A
 /// frame object it returns is a local proxy; file capabilities retain their root selector.
 /// A handler it passes is kept under every trait it answers as and crosses as its id.
-fn import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) -> String {
-    let normal = uncached_import_body(types, m, id, prefix);
+fn import_body(types: &Types<'_>, m: &Method, id: usize, name: &str, prefix: &str) -> String {
+    let normal = uncached_import_body(types, m, id, name, prefix);
     let cache = match m.name.as_str() {
         "entity_kind" => Some("cached_equip_kind(p0)"),
         "entity_position" => Some("cached_equip_position(p0)"),
@@ -409,7 +417,15 @@ fn import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) -> String
         normal
     }
 }
-fn uncached_import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) -> String {
+/// On wasm the call goes through its own import, `name`; a native build of the guest (the
+/// tests' transport) sends the game's id instead.
+fn uncached_import_body(
+    types: &Types<'_>,
+    m: &Method,
+    id: usize,
+    name: &str,
+    prefix: &str,
+) -> String {
     let sig = rust_sig(types, m);
     let guest = "crate::wire::guest";
     if let Some((root, _, _)) = super::FILE_ROOTS
@@ -437,7 +453,7 @@ fn uncached_import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) 
             format!("&Guest as &dyn {}", trait_path(target))
         };
         return format!(
-            "{sig} {{ let w = {guest}::begin(); let r = {guest}::host({id}u32, w); let answer: Result<(), {error}> = r.take().expect(\"the host answered with an invalid frame-access result\"); answer.map(|()| {value}) }}"
+            "{sig} {{ let w = {guest}::begin(); let r = host_import!({name:?}, {id}u32, w); let answer: Result<(), {error}> = r.take().expect(\"the host answered with an invalid frame-access result\"); answer.map(|()| {value}) }}"
         );
     }
     let mut put = String::new();
@@ -527,7 +543,7 @@ fn uncached_import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) 
         )
     };
     format!(
-        "{sig} {{ let mut w = {guest}::begin(); {prefix} {put} let r = {guest}::host({id}u32, w); {take} }}"
+        "{sig} {{ let mut w = {guest}::begin(); {prefix} {put} let r = host_import!({name:?}, {id}u32, w); {take} }}"
     )
 }
 
@@ -639,7 +655,7 @@ pub(super) fn snapshot(types: &Types<'_>, ty: &Ty, place: &str) -> Option<String
         }
         Ty::Ref(t, _) => snapshot(types, t, &format!("*({place})"))?,
         Ty::Option(t) => format!(
-            "match &({place}) {{ Some(x) => {{ w.put(&1u8); {} }}, None => w.put(&0u8) }}",
+            "match &({place}) {{ Some(x) => {{ w.put(&crate::wire::OPTION_SOME); {} }}, None => w.put(&crate::wire::OPTION_NONE) }}",
             snapshot(types, t, "*x")?
         ),
         Ty::Array(t, _) => format!("for x in &({place}) {{ {} }}", snapshot(types, t, "*x")?),
@@ -1006,7 +1022,8 @@ pub(super) fn dispatchable(types: &Types<'_>, m: &Method) -> bool {
 /// The guest's `hook`: one arm for every export a mod can be called through, reading the
 /// arguments from the buffer, calling the mod, and writing the answer then each `&mut`
 /// argument back whole (the host takes from it the fields a mod may change). The arms'
-/// ids are the exports' positions; the exports that need more than that are returned by name.
+/// ids are the exports' name hashes (`names::export_id`); the exports that need more than
+/// that are returned by name.
 pub(super) fn dispatch(
     types: &Types<'_>,
     methods: &[Method],
@@ -1019,7 +1036,8 @@ pub(super) fn dispatch(
     let mut arms = String::new();
     let mut preparation = String::new();
     let mut apart = Vec::new();
-    for (id, m) in all.iter().enumerate() {
+    for m in &all {
+        let id = super::names::export_id(m.owner, &m.name);
         if !dispatchable(types, m) {
             apart.push(format!("{}::{}", m.owner, m.name));
             continue;
@@ -1125,11 +1143,11 @@ pub(super) fn dispatch(
         let call = format!("receiver.{}({})", m.name, args.join(", "));
         let answer = if m.owner == "Hooks" && m.name == "subscribed" {
             format!(
-                "{call}.iter().flatten().map(|id| {{ let listener = receiver.listeners().iter().find(|l| l.hook.is_some_and(|h| h as usize == *id as usize)); (hook_name(*id).to_string(), listener.map_or(0, |l| l.priority), listener.is_some_and(|l| l.receive_cancelled)) }}).collect::<Vec<_>>()"
+                "{call}.iter().flatten().map(|id| {{ let listener = receiver.listeners().iter().find(|l| l.hook.is_some_and(|h| h as usize == *id as usize)); (hook_name(*id).to_string(), listener.map_or(0, |l| l.priority), listener.is_some_and(|l| l.receive_cancelled)) }}).collect::<crate::wire::SubscribedAnswer>()"
             )
         } else if is_subscription(m) {
             format!(
-                "{call}.iter().flatten().map(|id| hook_name(*id).to_string()).collect::<Vec<String>>()"
+                "{call}.iter().flatten().map(|id| hook_name(*id).to_string()).collect::<crate::wire::SubscriptionAnswer>()"
             )
         } else {
             call

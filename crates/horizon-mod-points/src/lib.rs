@@ -81,6 +81,23 @@ macro_rules! replace {
 #[cfg(any(target_arch = "wasm32", feature = "wasm-guest"))]
 pub mod guest;
 
+/// A guest's answer to `POINT_SUBSCRIPTIONS`: each place it listens at, as its own place id,
+/// the place's name and identity (`point_identity`), and the listener's inject id.
+// hidden: the points transport, read by the game and written by the guest
+#[doc(hidden)]
+pub type Subscriptions = Vec<(u32, String, u64, String)>;
+
+/// What a guest and the game must agree on for the points as a whole: their rules
+/// (`POINT_LAYOUT`) and the subscriptions' shape. Each place is checked on its own.
+// hidden: the points transport, read by the game and written by the guest
+#[doc(hidden)]
+pub fn points_layout() -> u64 {
+    mod_api::wire::layout_mix(
+        POINT_LAYOUT,
+        <Subscriptions as mod_api::wire::Wire>::layout(&mut Vec::new()),
+    )
+}
+
 // hidden: the game's side of the points, not part of the API a mod is written against
 #[doc(hidden)]
 pub mod __private {

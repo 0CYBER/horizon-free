@@ -426,6 +426,9 @@ pub struct WasmMod {
     prepared: Arc<Mutex<crate::prepared::Slots>>,
     prepared_entries: Arc<std::collections::HashMap<u32, TypedFunc<(), u64>>>,
     subscriptions: Arc<Mutex<std::collections::HashMap<(Id, u32), &'static [Option<HookId>]>>>,
+    /// The game's exports added after the mod was built, sorted: a call of one is answered
+    /// as the mod not having it. Read only once the mod refused a call.
+    missing: Arc<[u32]>,
 }
 /// A guest object never owns the store that may itself retain that object.
 #[derive(Clone)]
@@ -441,6 +444,7 @@ pub(crate) struct WeakWasmMod {
     prepared: Arc<Mutex<crate::prepared::Slots>>,
     prepared_entries: Arc<std::collections::HashMap<u32, TypedFunc<(), u64>>>,
     subscriptions: Arc<Mutex<std::collections::HashMap<(Id, u32), &'static [Option<HookId>]>>>,
+    missing: Arc<[u32]>,
 }
 impl WeakWasmMod {
     pub(crate) fn equip_instance(&self) -> usize {
@@ -614,6 +618,7 @@ impl WeakWasmMod {
             prepared: self.prepared.clone(),
             prepared_entries: self.prepared_entries.clone(),
             subscriptions: self.subscriptions.clone(),
+            missing: self.missing.clone(),
         })
     }
 }
@@ -721,6 +726,47 @@ impl Drop for Resumed {
     fn drop(&mut self) {
         unsafe { &*self.loan }.context.set(self.context);
     }
+}
+
+/// `horizon::host`: the transport's own calls, by their reserved ids. Every API call has its
+/// own import, linked by name.
+fn control(
+    caller: Caller<'_, State>,
+    id: u32,
+    ptr: u32,
+    len: u32,
+    out: u32,
+    cap: u32,
+) -> wasmtime::Result<u32> {
+    if id != mod_api::wire::HOST_RELEASE && id != mod_api::wire::HOST_LOG {
+        return Err(wasmtime::Error::msg(format!(
+            "horizon.host carries the reserved ids only, not {id}"
+        )));
+    }
+    host(caller, id, ptr, len, out, cap)
+}
+
+/// A mod's table of the calls it was built with (`CALLS`), asked before anything else runs in it.
+fn calls_of(
+    store: &mut Store<State>,
+    memory: Memory,
+    input: &TypedFunc<u32, u32>,
+    hook: &TypedFunc<u32, u64>,
+) -> wasmtime::Result<crate::calls::Table> {
+    input.call(&mut *store, 0)?;
+    let answer = hook.call(&mut *store, mod_api::wire::CALLS)?;
+    let ptr = (answer >> 32) as usize;
+    let len = answer as u32;
+    let data = memory.data(&*store);
+    if len == mod_api::wire::REFUSED {
+        let reason: String = Reader::new(data.get(ptr..).unwrap_or_default()).take()?;
+        return Err(wasmtime::Error::msg(reason));
+    }
+    let bytes = ptr
+        .checked_add(len as usize)
+        .and_then(|end| data.get(ptr..end))
+        .ok_or_else(|| wasmtime::Error::msg("reply outside memory"))?;
+    Ok(Reader::decode(bytes)?)
 }
 
 fn host(
@@ -861,6 +907,7 @@ impl WasmMod {
             prepared: self.prepared.clone(),
             prepared_entries: self.prepared_entries.clone(),
             subscriptions: self.subscriptions.clone(),
+            missing: self.missing.clone(),
         }
     }
     pub(crate) fn mod_id(&self) -> &str {
@@ -904,6 +951,10 @@ impl WasmMod {
         store.limiter(|state| &mut state.limits);
         store.set_epoch_deadline(horizon_mod_runtime::MAX_GUEST_CALL_BUDGET_MILLIS);
         let mut armed = false;
+        // Each API call is its own import, linked by name: what the group imports, and the
+        // first import this game changed or doesn't have.
+        let mut imported = std::collections::BTreeSet::new();
+        let mut unlinked = None;
         let mut group = Group::link_cached_with(store, members, cache, |store, module, name| {
             // Compilation is not guest execution and must not consume its load deadline.
             if !armed {
@@ -914,14 +965,33 @@ impl WasmMod {
                 return None;
             }
             match name {
-                "host" => Some(Extern::Func(Func::wrap(store, host))),
+                "host" => Some(Extern::Func(Func::wrap(store, control))),
                 "host_reply" => Some(Extern::Func(Func::wrap(store, host_reply))),
-                _ => None,
+                name => match crate::boundary::import_by_name(name) {
+                    Ok(id) => {
+                        imported.insert(crate::calls::key(name).to_owned());
+                        Some(Extern::Func(Func::wrap(
+                            store,
+                            move |caller: Caller<'_, State>, ptr, len, out, cap| {
+                                host(caller, id, ptr, len, out, cap)
+                            },
+                        )))
+                    }
+                    Err(changed) => {
+                        unlinked.get_or_insert(Refusal::Call {
+                            call: crate::calls::key(name).to_owned(),
+                            changed,
+                        });
+                        None
+                    }
+                },
             }
         })
-        .map_err(Refusal::from_link)?;
+        .map_err(|error| unlinked.take().unwrap_or_else(|| Refusal::from_link(error)))?;
         group.store.data_mut().memory = Some(group.memory);
         let mut exports = Vec::new();
+        // Every mod of a group shares its memory and std: they must agree exactly.
+        let mut first: Option<(String, crate::calls::Table)> = None;
         for (name, instance) in group.members.clone() {
             // The std member is a library, not a mod.
             if instance
@@ -937,9 +1007,6 @@ impl WasmMod {
                 .call(&mut group.store, ())
                 .map_err(load)?;
             if layout != *mod_api::wire::LAYOUT {
-                if layout == mod_api::wire_core_layout() {
-                    return Err(Refusal::Runtime("prepared can_equip ABI layout mismatch: guest carries the old unprepared layout; rebuild the wasm mod".into()));
-                }
                 return Err(Refusal::Layout {
                     built: layout,
                     game: *mod_api::wire::LAYOUT,
@@ -954,10 +1021,10 @@ impl WasmMod {
                     .map_err(load)?
                     .call(&mut group.store, ())
                     .map_err(load)?;
-                if built != mod_points::POINT_LAYOUT {
+                if built != mod_points::points_layout() {
                     return Err(Refusal::PointLayout {
                         built,
-                        game: mod_points::POINT_LAYOUT,
+                        game: mod_points::points_layout(),
                     });
                 }
             }
@@ -967,6 +1034,20 @@ impl WasmMod {
             let hook = instance
                 .get_typed_func(&mut group.store, "horizon_hook")
                 .map_err(load)?;
+            let mut table = calls_of(&mut group.store, group.memory, &input, &hook)
+                .map_err(|e| Refusal::Runtime(format!("{name}: its calls: {e:#}")))?;
+            table.sort();
+            let missing = crate::calls::check(&table, &imported)?;
+            match &first {
+                Some((other, calls)) if *calls != table => {
+                    return Err(Refusal::MixedGroup {
+                        first: other.clone(),
+                        second: name.clone(),
+                    });
+                }
+                Some(_) => {}
+                None => first = Some((name.clone(), table)),
+            }
             let mut prepared_entries = std::collections::HashMap::new();
             for (_, entries) in crate::boundary::PREPARED_EXPORTS {
                 for (name, id) in entries {
@@ -975,7 +1056,7 @@ impl WasmMod {
                     }
                 }
             }
-            exports.push((name, input, hook, Arc::new(prepared_entries)));
+            exports.push((name, input, hook, Arc::new(prepared_entries), missing));
         }
         let lending = group.store.data().lending.clone();
         let running = Arc::new(Running {
@@ -993,7 +1074,7 @@ impl WasmMod {
             .group = Arc::as_ptr(&running) as usize;
         Ok(exports
             .into_iter()
-            .map(|(name, input, hook, prepared_entries)| Self {
+            .map(|(name, input, hook, prepared_entries, missing)| Self {
                 id: name.into(),
                 running: running.clone(),
                 input,
@@ -1005,6 +1086,7 @@ impl WasmMod {
                 prepared: Arc::default(),
                 prepared_entries,
                 subscriptions: Arc::default(),
+                missing: missing.into(),
             })
             .collect())
     }
@@ -1249,6 +1331,16 @@ impl WasmMod {
             }
             _ => None,
         };
+        // An export added after the mod was built: the mod has none, which is no failure.
+        let absent =
+            matches!(result, Err(CallError::Refused(_))) && self.missing.binary_search(&id).is_ok();
+        if absent {
+            drop(panic_stop);
+            drop(resources);
+            drop(scope);
+            note(format!("{} was built before export {id}", self.id));
+            return Ok(None);
+        }
         if result.is_err() {
             horizon_mod_runtime::dispatch_failures::record_dispatch_failure();
         }
@@ -1324,7 +1416,7 @@ impl WasmMod {
         };
         let ptr = (result >> 32) as usize;
         let len = result as u32;
-        if len == u32::MAX {
+        if len == mod_api::wire::REFUSED {
             let bytes = memory.data(&*store).get(ptr..).ok_or_else(|| {
                 CallError::Refused(wasmtime::Error::msg("error reply outside memory"))
             })?;

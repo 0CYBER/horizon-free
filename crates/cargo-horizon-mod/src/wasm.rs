@@ -199,9 +199,14 @@ fn std_member(target_dir: &Path, toolchain: &Toolchain) -> Result<Vec<u8>, Strin
         "[package]\nname = \"horizon-wasm-std\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n",
     )
     .map_err(|e| e.to_string())?;
+    // The array's length is the transport's own value, which the game checks
+    // (`horizon_group_words`) when it links a group.
+    let words = mod_vocab::wire::GROUP_WORDS;
     std::fs::write(
         dir.join("src/lib.rs"),
-        "// The group's one std: linked whole and exported. The array is the group's shared state: word 0\n// points at its handler table, word 1 counts its cache budget, word 2 guards eviction, words 3.. are eviction callbacks\n// (`horizon_mod_api::wire::guest`).\n#[unsafe(no_mangle)]\npub static horizon_group_state: [core::sync::atomic::AtomicUsize; 32] =\n    [const { core::sync::atomic::AtomicUsize::new(0) }; 32];\n",
+        format!(
+            "// The group's one std: linked whole and exported. The array is the group's shared state (`horizon_mod_api::wire::guest`).\n#[unsafe(no_mangle)]\npub static horizon_group_state: [core::sync::atomic::AtomicUsize; {words}] =\n    [const {{ core::sync::atomic::AtomicUsize::new(0) }}; {words}];\n/// The array's length, which the game checks.\n#[unsafe(no_mangle)]\npub extern \"C\" fn horizon_group_words() -> u32 {{\n    {words}\n}}\n"
+        ),
     )
     .map_err(|e| e.to_string())?;
     let mut command = cargo_command("rustc", "std", &dir, target_dir, toolchain)?;

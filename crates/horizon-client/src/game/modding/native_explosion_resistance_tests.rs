@@ -216,7 +216,7 @@ pub(in crate::game) fn wasm_answer<T: Wire>(
         })
         .collect::<String>();
     let id = horizon_mod_wasm::fixture::import_id(owner, name).unwrap();
-    let bytes = wat::parse_str(format!(
+    let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(
         r#"(module
           (@custom "dylink.0" "\01\04\00\00\00\00")
           (import "env" "memory" (memory 1))
@@ -242,7 +242,7 @@ pub(in crate::game) fn wasm_answer<T: Wire>(
         reply = escape(reply.bytes()),
         input_len = input.bytes().len(),
         reply_at = (16384u64 << 32) | reply.bytes().len() as u64,
-    ))
+    ), &[(owner, name)]))
     .unwrap();
     let module = horizon_mod_wasm::fixture::module(&bytes).unwrap();
     let mut context = Writer::new();

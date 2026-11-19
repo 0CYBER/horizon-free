@@ -1,4 +1,6 @@
 //! Self-refusal uses its own process because point initialization is once per process.
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
 use horizon_mod_package::manifest::Package;
 use horizon_mod_wasm::{WasmPackage, load};
 

@@ -161,32 +161,46 @@ glue or another Rust interface.
 Pointers and lengths below are wasm32 `u32` values. The game provides these imports in the
 `horizon` module:
 
-- `host(id, in_ptr, in_len, out_ptr, out_cap) -> u32` invokes a generated import ID. Arguments
-  are Wire values in order. It writes the reply if it fits and returns its length; if the length
-  exceeds `out_cap`, call `host_reply(out_ptr)` after allocating that many bytes to copy the
-  retained reply. Host errors trap the call.
+- `Owner::method#signature(in_ptr, in_len, out_ptr, out_cap) -> u32`: one import per API call
+  (`held-Owner::method#signature` for a method of a handler another mod gave the game).
+  Arguments are Wire values in order. It writes the reply if it fits and returns its length; if
+  the length exceeds `out_cap`, call `host_reply(out_ptr)` after allocating that many bytes to
+  copy the retained reply. Host errors trap the call. `signature` is a hash of the call's
+  receiver, argument and answer types, with the generated shape of each borrowing type. The game
+  links each import by name: one it doesn't have, or has with another signature, refuses the mod,
+  naming the call.
+- `host(id, in_ptr, in_len, out_ptr, out_cap) -> u32`: the same for the reserved IDs
+  `HOST_RELEASE` and `HOST_LOG`.
 - `host_reply(out_ptr)` copies that retained reply.
 
 Each guest exports:
 
-- `horizon_layout() -> u64`: the generated layout hash. A mismatch is refused.
-- `horizon_layout_ext() -> u64`, when `mod_points` is linked: the full point catalog's layout
-  hash. The loader checks it before accepting any listener.
+- `horizon_layout() -> u64`: the hash of what every call shares: the reserved IDs, group state,
+  the prepared ABI and the hand-written codecs. A mismatch is refused.
+- `horizon_layout_ext() -> u64`, when `mod_points` is linked: the point protocol's hash. Each
+  point is checked by name when the mod subscribes to it.
 - `horizon_in(len) -> ptr`: the buffer into which the game writes the next call's input.
-- `horizon_hook(id) -> u64`: runs the generated export ID after the input is written. The high
-  32 bits are the reply pointer and the low 32 bits its length; `u32::MAX` as the length denotes
-  an error, with a Wire string at the pointer. The reply remains valid until the next call at
-  the same depth. A handler call starts its input with the handler's `u64` ID.
+- `horizon_hook(id) -> u64`: runs export `id` after the input is written. An export's ID is a hash
+  of its name (`Owner::method`), the same in every build. The high 32 bits are the reply pointer
+  and the low 32 bits its length; `u32::MAX` as the length denotes an error, with a Wire string at
+  the pointer. The reply remains valid until the next call at the same depth. A handler call
+  starts its input with the handler's `u64` ID.
 
 The reserved IDs are `INIT = 0xFFFF_FF00` (guest package-list initialization),
-`RELEASE = 0xFFFF_FF01` (guest handler IDs to release), and `HOST_RELEASE = 0xFFFF_FF02`
-(host object ID to release), and `HOST_LOG = 0xFFFF_FF03` (a guest panic string, with no reply).
-Other IDs index the generated import or export table. A hook reply
-contains its return value followed by writable arguments in field order.
+`RELEASE = 0xFFFF_FF01` (guest handler IDs to release), `HOST_RELEASE = 0xFFFF_FF02`
+(host object ID to release), `HOST_LOG = 0xFFFF_FF03` (a guest panic string, with no reply) and
+`CALLS = 0xFFFF_FF04`. `CALLS` answers the mod's calls as `(key, hash)` pairs: each import and
+export it was built with, the hash covering its signature and the Wire layout of each type it
+reaches. The game asks for it first and compares each call the mod imports and each export both
+have with its own; one that differs, or an export the game no longer has, refuses the mod, naming
+the call. A hook reply contains its return value followed by writable arguments in
+field order.
 
 Points use that same hook export, call arena and execution budget. Place IDs are
-`0x8000_0000 + place`. The subscription query `0xBFFF_FFFF` returns `(place, injection_id)`
-pairs. Point call input starts with the `u32` subscription index. A `HostSide` point then carries
+`0x8000_0000 + place`, `place` being the guest's own index. The subscription query
+`0xBFFF_FFFF` returns `(place, point name, point hash, injection_id)`: the game finds each point
+by name and refuses one it doesn't have or has with another hash (its host and record
+layout). Point call input starts with the `u32` subscription index. A `HostSide` point then carries
 a server/client boolean, followed by its listener record. Calls reply with unit and the record,
 which the host decodes completely before writing any field back.
 

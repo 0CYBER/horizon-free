@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 // Input: slot, generation, existing ItemStack Wire bytes and prepared kind strings.
 // Reply: the validated (slot, generation) token.
-pub(crate) const PREPARE: u32 = 0xffff_ff10;
+pub(crate) const PREPARE: u32 = mod_api::wire::PREPARE;
 // Input: slot, generation; empty reply.
-pub(crate) const RELEASE: u32 = 0xffff_ff11;
+pub(crate) const RELEASE: u32 = mod_api::wire::RELEASE_PREPARED;
 // Matches the guest's PreparedSlots bound in horizon-mod-api/src/wire/prepared.rs.
-const MAX_PREPARED_SLOTS: usize = 4096;
+const MAX_PREPARED_SLOTS: usize = mod_api::wire::MAX_PREPARED_SLOTS;
 static NEXT_GENERATION: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Default)]

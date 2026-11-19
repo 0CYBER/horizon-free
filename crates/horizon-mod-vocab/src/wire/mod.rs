@@ -26,37 +26,120 @@ mod resources;
 #[doc(hidden)]
 pub use resources::{ResourceAccess, Unsupported, install_resource_access};
 
-/// The guest's start-up call: its input is the package list.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const INIT: u32 = 0xFFFF_FF00;
-/// The guest's call to drop the handlers the game let go of: its input is their ids.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const RELEASE: u32 = 0xFFFF_FF01;
-/// The game's import freeing an object the mod held: its input is the id.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const HOST_RELEASE: u32 = 0xFFFF_FF02;
-/// The game's import taking a message from the mod (a panic's text): its input is a string.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const HOST_LOG: u32 = 0xFFFF_FF03;
+/// Declares the transport's values and [`PROTOCOL`] from one list, so a value can't be added
+/// or changed without changing the core layout.
+macro_rules! protocol {
+    ($($(#[doc = $doc:literal])* $name:ident: $ty:ty = $value:expr;)*) => {
+        $(
+            $(#[doc = $doc])*
+            // hidden: transport plumbing used by generated boundary code.
+            #[doc(hidden)]
+            pub const $name: $ty = $value;
+        )*
+        /// Every value above, by name: mixed into the core layout, so that a change to one
+        /// refuses every mod built before it.
+        // hidden: transport plumbing used by generated boundary code.
+        #[doc(hidden)]
+        pub const PROTOCOL: &[(&str, u64)] = &[$((stringify!($name), $name as u64)),*];
+    };
+}
 
-/// The layout of every value and call that crosses, a hash the generator writes: a mod built
-/// for another one is refused when it loads.
+protocol! {
+    /// The transport's version, bumped by hand when it changes in a way no value here shows:
+    /// every mod built before is refused.
+    CORE_VERSION: u32 = 1;
+    /// The guest's start-up call: its input is the package list ([`InitInput`]).
+    INIT: u32 = 0xFFFF_FF00;
+    /// The guest's call to drop the handlers the game let go of: its input is their ids.
+    RELEASE: u32 = 0xFFFF_FF01;
+    /// The game's import freeing an object the mod held: its input is the id.
+    HOST_RELEASE: u32 = 0xFFFF_FF02;
+    /// The game's import taking a message from the mod (a panic's text): its input is a string.
+    HOST_LOG: u32 = 0xFFFF_FF03;
+    /// The game's question to a mod, when it loads, for every call the mod was built with
+    /// (`call_layouts`): the answer is a [`CallsAnswer`].
+    CALLS: u32 = 0xFFFF_FF04;
+    /// The game's call preparing a prepared hook's stack.
+    PREPARE: u32 = 0xFFFF_FF10;
+    /// The game's call releasing a prepared stack.
+    RELEASE_PREPARED: u32 = 0xFFFF_FF11;
+    /// Prepared slots a mod holds at once; the game hands out slots below it.
+    MAX_PREPARED_SLOTS: usize = 4096;
+    /// The first point listener id: a mod's listener at its own point index `place` is
+    /// `POINTS + place`, below [`POINT_SUBSCRIPTIONS`].
+    POINTS: u32 = 0x8000_0000;
+    /// The call answering a mod's point subscriptions.
+    POINT_SUBSCRIPTIONS: u32 = 0xBFFF_FFFF;
+    /// The end of the ids the points answer.
+    POINTS_END: u32 = 0xC000_0000;
+    /// A reply length saying the call was refused: its reason, a string, is at the pointer.
+    REFUSED: u32 = u32::MAX;
+    /// Words in a link group's shared state, the std member's `horizon_group_state`. The
+    /// build tool writes the std member's array from this value, and the std member answers
+    /// it (`horizon_group_words`), which the game checks.
+    GROUP_WORDS: usize = 32;
+    /// The group-state word pointing at the group's handler table.
+    GROUP_WORD_HANDLERS: usize = 0;
+    /// The group-state word counting the group's cache budget.
+    GROUP_WORD_BUDGET: usize = 1;
+    /// The group-state word that is non-zero while eviction callbacks run.
+    GROUP_WORD_EVICTING: usize = 2;
+    /// The first group-state word holding an eviction callback.
+    GROUP_WORD_EVICT: usize = 3;
+    /// The memory budget shared by every member's guest-side caches.
+    GROUP_BUDGET_BYTES: usize = 256 << 20;
+    /// Maximum static strings retained by either transport string table.
+    MAX_STATIC_STRINGS: usize = 4096;
+    /// Maximum bytes in one static API string (the existing interning bound).
+    MAX_STATIC_STRING_BYTES: usize = 256;
+    /// An absent `Option`'s tag, which generated code also writes for a borrowed shape.
+    OPTION_NONE: u8 = 0;
+    /// A present `Option`'s tag, before its value.
+    OPTION_SOME: u8 = 1;
+    /// A static string reply: the id of a string the guest already has.
+    STATIC_KNOWN: u8 = 0;
+    /// A static string reply: an id and the string it now stands for.
+    STATIC_DEFINITION: u8 = 1;
+    /// A static string reply: a string with no id ([`NO_STATIC_ID`]), the table being full.
+    STATIC_UNCACHED: u8 = 2;
+    /// The static string id meaning none: an uncached reply's id, and a guest's
+    /// acknowledgement before it has decoded one.
+    NO_STATIC_ID: u32 = u32::MAX;
+}
+
+/// [`INIT`]'s input.
+// hidden: transport plumbing used by generated boundary code.
+// no wire: an alias; the type it names has its codec.
+#[doc(hidden)]
+pub type InitInput = Vec<crate::PackageInfo>;
+/// [`RELEASE`]'s input.
+// hidden: transport plumbing used by generated boundary code.
+// no wire: an alias; the type it names has its codec.
+#[doc(hidden)]
+pub type ReleaseInput = Vec<Id>;
+/// `Hooks::subscribed`'s answer as it crosses: each hook's name, priority and whether it
+/// receives cancelled events.
+// hidden: transport plumbing used by generated boundary code.
+// no wire: an alias; the type it names has its codec.
+#[doc(hidden)]
+pub type SubscribedAnswer = Vec<(String, i32, bool)>;
+/// A part's subscriptions (`BlockPart::block_subscribed`, …) as they cross: hook names.
+// hidden: transport plumbing used by generated boundary code.
+// no wire: an alias; the type it names has its codec.
+#[doc(hidden)]
+pub type SubscriptionAnswer = Vec<String>;
+/// [`CALLS`]'s answer: each call's key, hash and whether it is an export.
+// hidden: transport plumbing used by generated boundary code.
+// no wire: an alias; the type it names has its codec.
+#[doc(hidden)]
+pub type CallsAnswer = Vec<(String, u64, bool)>;
+
+/// What a mod and the game must agree on exactly, a hash the generator writes: the transport's
+/// rules, its own payloads and the hand-written codecs. Each call is checked on its own, by
+/// name (`call_layouts`), so a mod built before a call was added still loads.
 // hidden: transport plumbing used by generated boundary code.
 #[doc(hidden)]
 pub use crate::WIRE_LAYOUT as LAYOUT;
-
-/// Maximum static strings retained by either transport string table.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const MAX_STATIC_STRINGS: usize = 4096;
-/// Maximum bytes in one static API string (the existing interning bound).
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const MAX_STATIC_STRING_BYTES: usize = 256;
 
 /// Intern a static API string using the platform's bounded process-lifetime storage.
 /// Refuses clearly when the platform resource socket has not been installed.
@@ -198,10 +281,10 @@ impl Writer {
     pub fn put_opt<T: Put + ?Sized>(&mut self, value: Option<&T>) {
         match value {
             Some(value) => {
-                self.put(&1u8);
+                self.put(&OPTION_SOME);
                 self.put(value);
             }
-            None => self.put(&0u8),
+            None => self.put(&OPTION_NONE),
         }
     }
     /// Encodes a borrowed value unless an earlier write failed.
@@ -824,9 +907,9 @@ impl<T: Wire> Wire for Option<T> {
     const MIN: usize = 1;
     fn put(&self, out: &mut Writer) {
         match self {
-            None => out.put(&0u8),
+            None => out.put(&OPTION_NONE),
             Some(value) => {
-                out.put(&1u8);
+                out.put(&OPTION_SOME);
                 out.put(value);
             }
         }
@@ -834,16 +917,16 @@ impl<T: Wire> Wire for Option<T> {
     fn put_owned(self, out: &mut Writer) {
         match self {
             Some(value) => {
-                out.put(&1u8);
+                out.put(&OPTION_SOME);
                 out.put_owned(value);
             }
-            None => out.put(&0u8),
+            None => out.put(&OPTION_NONE),
         }
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
         match u8::take(input)? {
-            0 => Ok(None),
-            1 => T::take(input).map(Some),
+            OPTION_NONE => Ok(None),
+            OPTION_SOME => T::take(input).map(Some),
             tag => Err(WireError::Tag(tag.into())),
         }
     }

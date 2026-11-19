@@ -62,6 +62,9 @@ pub enum LinkError {
         budget: crate::compile_budget::CompileBudget,
         why: String,
     },
+    /// The shared std holds another group state than this game's (`words`), or predates the
+    /// check and doesn't say (`None`).
+    Std { member: String, words: Option<u32> },
     /// A call into a member trapped or named no export.
     Call {
         member: String,
@@ -95,6 +98,21 @@ impl fmt::Display for LinkError {
             } => write!(
                 f,
                 "{member}: cannot enforce compilation budget {budget}: {why}; restore a private writable .horizon-cache/wasm directory and a working compiler executable"
+            ),
+            Self::Std {
+                member,
+                words: None,
+            } => write!(
+                f,
+                "{member}: this shared std is older than the game and doesn't say how much group state it holds: reinstall the game"
+            ),
+            Self::Std {
+                member,
+                words: Some(words),
+            } => write!(
+                f,
+                "{member}: this shared std holds {words} group-state words, the game uses {}: reinstall the game",
+                mod_api::wire::GROUP_WORDS
             ),
             Self::Call {
                 member,
@@ -449,6 +467,37 @@ impl<T: 'static> Group<T> {
             members: instances,
             memory,
         };
+        // The std member holds the state every member shares: its size is checked before any
+        // relocation or constructor can touch it. Its answer is a constant, needing neither.
+        for (name, instance) in &group.members {
+            if instance
+                .get_export(&mut group.store, "horizon_group_state")
+                .is_none()
+            {
+                continue;
+            }
+            let words =
+                match instance.get_typed_func::<(), u32>(&mut group.store, "horizon_group_words") {
+                    Err(_) => None,
+                    Ok(words) => {
+                        Some(
+                            words
+                                .call(&mut group.store, ())
+                                .map_err(|e| LinkError::Call {
+                                    member: name.clone(),
+                                    function: "horizon_group_words".into(),
+                                    why: format!("{e:#}"),
+                                })?,
+                        )
+                    }
+                };
+            if words.is_none_or(|words| words as usize != mod_api::wire::GROUP_WORDS) {
+                return Err(LinkError::Std {
+                    member: name.clone(),
+                    words,
+                });
+            }
+        }
         let _instantiate = crate::load_times::timer(crate::load_times::Phase::Instantiate);
         for hook in [
             "__wasm_start",

@@ -1027,3 +1027,46 @@ fn original_player_identity_and_attachment_selector_cross_the_boundary() {
     fields(original, (0x1234_5678u64,));
     fields(Holder::OriginalPlayer(0x1234_5678), (5u32, 0x1234_5678u64));
 }
+
+/// A hand-written codec composes the layouts of what it encodes (#18253): reordering two fields
+/// of a derived type it carries, the way `RegistrationContext` carries `RuntimeEnvironment`,
+/// changes its layout, so a call reaching it refuses a mod built against the other order.
+#[test]
+fn a_manual_codec_carries_a_nested_types_layout_change() {
+    mod before {
+        #[derive(horizon_mod_api_macros::Wire)]
+        pub struct Environment {
+            pub game_version: String,
+            pub horizon_version: String,
+        }
+    }
+    mod after {
+        #[derive(horizon_mod_api_macros::Wire)]
+        pub struct Environment {
+            pub horizon_version: String,
+            pub game_version: String,
+        }
+    }
+    struct Context<T>(Option<T>);
+    impl<T: Wire> Wire for Context<T> {
+        crate::wire::layout_fields!("runtime" => Option<T>);
+        const LAYOUT_SEED: u64 = crate::wire::layout_seed("Context");
+        const MIN: usize = 1;
+        fn put(&self, out: &mut Writer) {
+            out.put(&self.0);
+        }
+        fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
+            Ok(Self(input.take()?))
+        }
+    }
+    assert_ne!(
+        <Context<before::Environment>>::layout(&mut vec![]),
+        <Context<after::Environment>>::layout(&mut vec![])
+    );
+    let runtime = <Option<crate::RuntimeEnvironment>>::layout(&mut vec![]);
+    assert!(
+        <crate::RegistrationContext as Wire>::__field_layouts()
+            .unwrap()
+            .contains(&("runtime", runtime))
+    );
+}

@@ -2,7 +2,8 @@
 
 A mod is **made for** the build it pins. A native mod on the mod API alone also **fits** another build when nothing
 it uses changed there, and the launcher then compiles it against that build on the player's computer. Only the built
-binary is exact to the build; the loader's build-id check is unchanged.
+binary is exact to the build; the loader's build-id check is unchanged. A wasm mod is never rebuilt: it loads on a
+later build that kept every call it makes ([Wasm mods on a later build](02-surface.md#wasm-mods-on-a-later-build)).
 
 ## The rule
 

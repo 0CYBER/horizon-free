@@ -323,7 +323,7 @@ fn wasm_weapon_dispatch(
             answer_len = answer.bytes().len()
         )
     };
-    let bytes = wat::parse_str(format!(
+    let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(
         r#"(module
       (@custom "dylink.0" "\01\04\00\00\00\00")
       (import "env" "memory" (memory 1))
@@ -356,7 +356,7 @@ fn wasm_weapon_dispatch(
         request = escape(request.bytes()),
         answer = escape(answer.bytes()),
         answer_len = answer.bytes().len()
-    ))
+    ), &[("Backend", "living_weapon_item")]))
     .unwrap();
     let module = horizon_mod_wasm::fixture::module(&bytes).unwrap();
     let mut sentinel = expected.clone();

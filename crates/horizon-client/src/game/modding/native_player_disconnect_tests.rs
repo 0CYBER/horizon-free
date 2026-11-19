@@ -221,7 +221,7 @@ fn wasm_disconnect_crosses_the_generated_forwarder() {
             reply.put(&mod_api::ServerTickPhase::ServerTickEnd {
                 world_running: true,
             });
-            let bytes = wat::parse_str(format!(r#"(module
+            let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(r#"(module
               (@custom "dylink.0" "\01\04\00\00\00\00")
               (import "env" "memory" (memory 1))
               (import "env" "__indirect_function_table" (table 1 funcref))
@@ -247,7 +247,7 @@ fn wasm_disconnect_crosses_the_generated_forwarder() {
                 kicked = check(answer(true), 32768),
                 not_kicked = check(answer(false), 36864),
                 reply_at = (16384u64 << 32) | reply.bytes().len() as u64,
-            ))
+            ), &[("BackendMut", "player_disconnect")]))
             .unwrap();
             let module = horizon_mod_wasm::fixture::module(&bytes).unwrap();
             let mut context = Writer::new();

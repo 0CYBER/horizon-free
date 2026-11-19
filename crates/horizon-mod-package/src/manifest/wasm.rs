@@ -188,6 +188,12 @@ fn valid_member(bytes: &[u8]) -> Result<(), WasmError> {
             wasmparser::Payload::ImportSection(section) => {
                 for import in section.into_imports() {
                     let import = import.map_err(|_| WasmError::InvalidMember)?;
+                    // Each API call's own import, which the game links by name:
+                    // `Owner::method#signature`.
+                    let call = import.module == "horizon"
+                        && import.name.contains("::")
+                        && import.name.contains('#')
+                        && matches!(import.ty, wasmparser::TypeRef::Func(_));
                     let allowed = matches!(
                         (import.module, import.name, import.ty),
                         ("env", "memory", wasmparser::TypeRef::Memory(_))
@@ -209,7 +215,7 @@ fn valid_member(bytes: &[u8]) -> Result<(), WasmError> {
                                 wasmparser::TypeRef::Func(_)
                             )
                     );
-                    if !allowed {
+                    if !allowed && !call {
                         return Err(WasmError::InvalidMember);
                     }
                 }
@@ -273,6 +279,12 @@ mod tests {
         let imports = r#"(import "horizon" "host" (func)) (import "env" "memory" (memory 1))"#;
         let good = module(imports, exports, dylink);
         assert_eq!(section(&good).check(&good), Ok(()));
+        let call = module(
+            r#"(import "horizon" "Host::level#00000000000000ff" (func)) (import "env" "memory" (memory 1))"#,
+            exports,
+            dylink,
+        );
+        assert_eq!(section(&call).check(&call), Ok(()));
         for bad in [
             module(imports, exports, ""),
             module(imports, exports, r#"(@custom "dylink.0" "\01\01\00")"#),

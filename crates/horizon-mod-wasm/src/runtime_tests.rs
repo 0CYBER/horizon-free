@@ -8,6 +8,9 @@ mod payload_busy;
 #[path = "runtime_tests/nested_worker.rs"]
 mod nested_worker;
 
+#[path = "runtime_tests/calls.rs"]
+mod calls;
+
 #[test]
 fn released_queue_empty_fast_path_does_not_wait_for_its_mutex() {
     let releases = Arc::new(Releases::<Id>::default());
@@ -77,14 +80,22 @@ impl<F: FnMut() -> i64> mod_api::StructureRandom for Random<F> {
 fn guest(layout: u64, body: &str) -> Vec<u8> {
     guest_with_exports(layout, body, "")
 }
+/// The calls these hand-written guests make through `call $host`, by the game's ids.
+const CALLS: &[(&str, &str)] = &[
+    ("StructureRandom", "next_long"),
+    ("EnergyHandler", "amount"),
+];
 pub(super) fn guest_with_exports(layout: u64, body: &str, exports: &str) -> Vec<u8> {
+    let (imports, host) = crate::calls::host_shim(CALLS);
+    let body = crate::calls::answering(&crate::calls::shim_keys(CALLS), body);
     wat::parse_str(format!(
         r#"(module
       (@custom "dylink.0" "\01\04\00\00\00\00")
       (import "env" "memory" (memory 1))
       (import "env" "__indirect_function_table" (table 1 funcref))
-      (import "horizon" "host" (func $host (param i32 i32 i32 i32 i32) (result i32)))
+      {imports}
       (import "horizon" "host_reply" (func $reply (param i32)))
+      {host}
       (func (export "horizon_layout") (result i64) i64.const {layout})
       (func $recurse (param $depth i32) (result i32)
         local.get $depth i32.eqz
@@ -772,10 +783,7 @@ fn layout_mismatch_is_a_mods_page_refusal() {
         .err()
         .unwrap();
         assert!(matches!(refusal, Refusal::Layout { .. }));
-        assert_eq!(
-            refusal.to_string(),
-            "built for another version of the mod API (including the prepared can_equip ABI)"
-        );
+        assert!(refusal.to_string().contains("rebuild it"), "{refusal}");
     })
 }
 #[test]
@@ -2198,33 +2206,6 @@ fn a_group_grows_past_256_mib_to_its_default_limit_and_goes_on_there() {
 #[test]
 fn a_lowered_limit_refuses_growth_inside_the_guest() {
     assert_eq!(grow_until_refused(64), 1_024);
-}
-
-#[test]
-fn old_unprepared_can_equip_fingerprint_is_refused_at_load() {
-    crate::test_stack::on_guest_stack(|| {
-        let old = mod_api::wire_core_layout();
-        assert_ne!(old, *mod_api::wire::LAYOUT);
-        let bytes = guest(old, "unreachable");
-        let refusal = WasmMod::instantiate(
-            &engine().unwrap(),
-            DEFAULT_GROUP_MEMORY_MIB,
-            &[Member {
-                name: "old_can_equip",
-                module: &bytes,
-            }],
-            None,
-        )
-        .err()
-        .unwrap();
-        assert!(
-            refusal
-                .to_string()
-                .contains("prepared can_equip ABI layout mismatch"),
-            "{refusal}"
-        );
-        assert!(refusal.to_string().contains("old unprepared layout"));
-    });
 }
 
 #[test]

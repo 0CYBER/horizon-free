@@ -306,13 +306,14 @@ fn wasm_profession(value: ProfessionDefinition, owner: &str) -> mod_api::ModEntr
     declaration.put(&value);
     let declaration = declaration.into_bytes();
     let operation = horizon_mod_wasm::fixture_import_id("VillagerProfessions", "register").unwrap();
+    let subscribed = horizon_mod_wasm::fixture_export_id("Hooks", "subscribed").unwrap();
     let hook =
         horizon_mod_wasm::fixture_export_id("Hooks", "register_villager_professions").unwrap();
     let std = wat::parse_str(
         r#"(module (@custom "dylink.0" "\01\04\00\00\00\00") (import "env" "memory" (memory 1)))"#,
     )
     .unwrap();
-    let module = wat::parse_str(format!(r#"(module
+    let module = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(r#"(module
         (@custom "dylink.0" "\01\04\00\00\00\00")
         (import "env" "memory" (memory 1))
         (import "env" "__indirect_function_table" (table 1 funcref))
@@ -323,7 +324,7 @@ fn wasm_profession(value: ProfessionDefinition, owner: &str) -> mod_api::ModEntr
         (func (export "horizon_layout") (result i64) i64.const {layout})
         (func (export "horizon_in") (param i32) (result i32) i32.const 512)
         (func (export "horizon_hook") (param i32) (result i64)
-            local.get 0 i32.eqz if (result i64)
+            local.get 0 i32.const {subscribed} i32.eq if (result i64)
                 i64.const {sub_reply}
             else local.get 0 i32.const {hook} i32.eq if (result i64)
                 i32.const {operation} i32.const 4096 i32.const {length} i32.const 0 i32.const 0 call $host
@@ -331,7 +332,7 @@ fn wasm_profession(value: ProfessionDefinition, owner: &str) -> mod_api::ModEntr
                 i64.const 0
             else i64.const 0 end end))"#,
             subscriptions=data(&subscriptions), declaration=data(&declaration), layout=*mod_api::wire::LAYOUT,
-            sub_reply=(2048u64<<32)|subscriptions.len() as u64, length=declaration.len())).unwrap();
+            sub_reply=(2048u64<<32)|subscriptions.len() as u64, length=declaration.len()), &[("VillagerProfessions", "register")])).unwrap();
     let manifest = horizon_mod_package::manifest::Manifest::parse(&format!("id = '{owner}'\nname = 'Wasm engineer'\nversion = '1.0.0'\napi = '0.2'\ncapabilities = ['registries']\n[wasm]\nsha512 = '{}'\ntoolchain = 'test'\nbuilt_with = 'test'\n", "a".repeat(128))).unwrap();
     let mut loaded = horizon_mod_wasm::load(
         &std,

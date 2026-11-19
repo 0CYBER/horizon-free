@@ -33,6 +33,17 @@ impl Wire for crate::InsideEffect {
 }
 
 impl Wire for crate::EntityWrite {
+    layout_fields!(
+        "push" => Vec<f64>,
+        "set_movement" => Vec<f64>,
+        "stuck_in" => Vec<f64>,
+        "hurt.source" => Option<u32>,
+        "hurt.amount" => f32,
+        "set_fire_ticks" => i32,
+        "add_effect.effect" => crate::EffectKey,
+        "add_effect.duration" => i32,
+        "add_effect.amplifier" => u8,
+    );
     const LAYOUT_SEED: u64 = crate::wire::layout_seed(stringify!(crate::EntityWrite));
     const MIN: usize = 4;
     fn put(&self, out: &mut Writer) {
@@ -107,6 +118,7 @@ impl Wire for crate::EntityWrite {
 }
 
 impl Wire for crate::PlannedInside {
+    layout_fields!("effect" => crate::InsideEffect, "write" => crate::EntityWrite);
     const LAYOUT_SEED: u64 = crate::wire::layout_seed(stringify!(crate::PlannedInside));
     const MIN: usize = 4;
     fn put(&self, out: &mut Writer) {
@@ -136,6 +148,13 @@ impl Wire for crate::PlannedInside {
 }
 
 impl Wire for crate::InsideEffects {
+    layout_fields!(
+        "last_step" => i32,
+        "in_step" => Vec<bool>,
+        "before" => Vec<Vec<crate::EntityWrite>>,
+        "after" => Vec<Vec<crate::EntityWrite>>,
+        "planned" => Vec<crate::PlannedInside>,
+    );
     const LAYOUT_SEED: u64 = crate::wire::layout_seed(stringify!(crate::InsideEffects));
     const MIN: usize = <i32 as Wire>::MIN;
     fn put(&self, out: &mut Writer) {
@@ -264,6 +283,11 @@ impl Wire for crate::LoadedMods {
     }
 }
 impl Wire for crate::RegistrationContext {
+    layout_fields!(
+        "instance_dir" => Option<crate::InstanceDirectory>,
+        "runtime" => Option<crate::RuntimeEnvironment>,
+        "startup" => Option<std::sync::Arc<dyn crate::StartupScreen>>,
+    );
     const LAYOUT_SEED: u64 = crate::wire::layout_seed("RegistrationContext.runtime.startup.v3");
     const MIN: usize = <Option<crate::InstanceDirectory> as Wire>::MIN
         + <Option<crate::RuntimeEnvironment> as Wire>::MIN

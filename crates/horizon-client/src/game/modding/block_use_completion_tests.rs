@@ -734,7 +734,7 @@ fn block_use_wasm_replace(
     };
     let setter =
         horizon_mod_wasm::fixture::import_id("BackendMut", "living_set_hand_item").unwrap();
-    let bytes = wat::parse_str(format!(r#"(module
+    let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(&format!(r#"(module
       (@custom "dylink.0" "\01\04\00\00\00\00")
       (import "env" "memory" (memory 1))
       (import "env" "__indirect_function_table" (table 1 funcref))
@@ -747,7 +747,7 @@ fn block_use_wasm_replace(
       (func (export "horizon_hook") (param i32) (result i64)
         i32.const {setter} i32.const 4096 i32.const {input_len} i32.const 16384 i32.const 4096 call $host drop
         i64.const 8192 i64.const 32 i64.shl i64.const {output_len} i64.or)
-    )"#, layout=*mod_api::wire::LAYOUT, input=escape(input.bytes()), output=escape(output.bytes()), input_len=input.bytes().len(), output_len=output.bytes().len())).unwrap();
+    )"#, layout=*mod_api::wire::LAYOUT, input=escape(input.bytes()), output=escape(output.bytes()), input_len=input.bytes().len(), output_len=output.bytes().len()), &[("BackendMut", "living_set_hand_item")])).unwrap();
     let module = horizon_mod_wasm::fixture::module(&bytes).unwrap();
     module.right_click_block(mod_api::HostSide::Server(host), event)
 }

@@ -1,4 +1,6 @@
 //! Load a real point-bearing guest into the plain engine and require a named refusal.
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
 use horizon_mod_package::manifest::Package;
 use horizon_mod_wasm::{WasmPackage, load};
 

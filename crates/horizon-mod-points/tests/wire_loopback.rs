@@ -59,8 +59,8 @@ fn loopback(id: u32, mut input: Writer, record: &mut dyn Record) {
     let reply = unsafe { std::slice::from_raw_parts(pointer, len as usize) };
     let mut reply = Reader::new(reply);
     reply.take::<()>().unwrap();
-    let top = id == 0x8000_0000 + PointId::GameServerLinksListTop as u32;
-    let top_return = id == 0x8000_0000 + PointId::GameServerLinksListTopReturn as u32;
+    let top = id == mod_api::wire::POINTS + PointId::GameServerLinksListTop as u32;
+    let top_return = id == mod_api::wire::POINTS + PointId::GameServerLinksListTopReturn as u32;
     if (top && BAD_HEAD.swap(false, Ordering::Relaxed))
         || (top_return && BAD_RETURN.swap(false, Ordering::Relaxed))
     {
@@ -116,13 +116,21 @@ fn head_and_return_share_the_hook_arena_and_native_listener_list() {
         "guest", 0, "return", tail,
     ))
     .unwrap();
-    assert_eq!(
-        mod_points::guest::subscriptions(),
-        [
-            (PointId::Tick as u32, "head".into()),
-            (PointId::TickReturn as u32, "return".into())
-        ]
-    );
+    // Each subscription names its place and carries that place's identity, which the game
+    // looks up by name: a head and its return are two places.
+    let listed = mod_points::guest::subscriptions();
+    let expected = [(PointId::Tick, "head"), (PointId::TickReturn, "return")];
+    assert_eq!(listed.len(), expected.len());
+    for ((place, name, identity, inject), (id, want)) in listed.iter().zip(expected) {
+        let (point_name, point_identity) = mod_points::point_identity(id);
+        assert_eq!(*place, id as u32);
+        assert_eq!(
+            (name.as_str(), *identity, inject.as_str()),
+            (point_name, point_identity, want)
+        );
+        assert_eq!(mod_points::point_by_name(point_name), Some(id));
+    }
+    assert_ne!(listed[0].1, listed[1].1);
     for (place, endpoint) in [
         (PointId::Tick, &LOOPBACK_HEAD),
         (PointId::TickReturn, &LOOPBACK_RETURN),
@@ -131,7 +139,7 @@ fn head_and_return_share_the_hook_arena_and_native_listener_list() {
             "guest",
             place.place(),
             endpoint,
-            0x8000_0000 + place as u32,
+            mod_api::wire::POINTS + place as u32,
         ))
         .unwrap();
     }
@@ -154,7 +162,7 @@ fn head_and_return_share_the_hook_arena_and_native_listener_list() {
             "guest",
             place.place(),
             endpoint,
-            0x8000_0000 + place as u32,
+            mod_api::wire::POINTS + place as u32,
         ))
         .unwrap();
     }
@@ -236,4 +244,18 @@ fn __fnr_read_body_0() -> Option<fn(f32, usize) -> f32> {
     } else {
         Some(unsafe { std::mem::transmute::<*mut (), fn(f32, usize) -> f32>(pointer) })
     }
+}
+
+/// Every API place, head and return, has a name the game finds it by and an identity.
+#[test]
+fn every_place_is_found_by_its_name() {
+    let mut names = std::collections::HashSet::new();
+    for &(place, ..) in mod_points::API_PLACES {
+        let (name, _) = mod_points::point_identity(place);
+        assert!(!name.is_empty(), "{place:?}");
+        assert!(names.insert(name), "{name} twice");
+        assert_eq!(mod_points::point_by_name(name), Some(place), "{name}");
+    }
+    assert!(names.iter().any(|name| name.ends_with("_return")));
+    assert_eq!(mod_points::point_by_name("no_such_place"), None);
 }
