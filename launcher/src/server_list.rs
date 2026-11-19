@@ -46,8 +46,16 @@ fn text(entry: &Compound, k: &str) -> String {
     }
 }
 
+/// `CompoundTag.getBooleanOr("hidden", false)`, as the game reads it: any number whose low byte
+/// isn't zero.
 fn hidden(entry: &Compound) -> bool {
-    matches!(entry.get(&key("hidden")), Some(Tag::Byte(b)) if *b != 0)
+    match entry.get(&key("hidden")) {
+        Some(Tag::Byte(b)) => *b != 0,
+        Some(Tag::Short(n)) => *n as i8 != 0,
+        Some(Tag::Int(n)) => *n as i8 != 0,
+        Some(Tag::Long(n)) => *n as i8 != 0,
+        _ => false,
+    }
 }
 
 fn entry(name: &str, ip: &str) -> Compound {
@@ -155,16 +163,21 @@ impl List {
         Ok(server)
     }
 
+    /// The list as a servers.dat holding only the shown entries, each with all its fields: what
+    /// an export shares, without the addresses the player typed in Direct Connection.
+    pub fn shown_file(&self) -> Result<Vec<u8>, String> {
+        // The game also reads a float or double flag (`asByte`: the low byte of its floor).
+        let floating = |e: &Compound| match e.get(&key("hidden")) {
+            Some(Tag::Float(bits)) => f32::from_bits(*bits).floor() as i32 & 0xff != 0,
+            Some(Tag::Double(bits)) => f64::from_bits(*bits).floor() as i32 & 0xff != 0,
+            _ => false,
+        };
+        file(self.entries.iter().filter(|e| !hidden(e) && !floating(e)))
+    }
+
     /// Writes the list as the game does: a new file first, the old one kept as `servers.dat_old`.
     pub fn save(&self, home: &Path) -> Result<(), String> {
-        let root = NamedTag {
-            name: "".into(),
-            tag: Tag::compound([(
-                "servers",
-                Tag::List(self.entries.iter().cloned().map(Tag::Compound).collect()),
-            )]),
-        };
-        let bytes = nbt::write_named(&root, Limits::default()).map_err(|e| e.to_string())?;
+        let bytes = file(self.entries.iter())?;
         let (new, current) = (home.join("servers.dat_new"), home.join(FILE));
         let written = fs::create_dir_all(home)
             .and_then(|()| fs::write(&new, bytes))
@@ -204,6 +217,18 @@ impl List {
         });
         changed
     }
+}
+
+/// `entries` as servers.dat's bytes: uncompressed NBT, `servers` their list.
+fn file<'a>(entries: impl Iterator<Item = &'a Compound>) -> Result<Vec<u8>, String> {
+    let root = NamedTag {
+        name: "".into(),
+        tag: Tag::compound([(
+            "servers",
+            Tag::List(entries.cloned().map(Tag::Compound).collect()),
+        )]),
+    };
+    nbt::write_named(&root, Limits::default()).map_err(|e| e.to_string())
 }
 
 /// Puts the official server at `address` first in the list in `home`, once: not again after the
