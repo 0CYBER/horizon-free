@@ -255,10 +255,10 @@ impl Launcher {
                         .child(
                             shell::text(theme::night::UI, shell::c(n.ink_soft))
                                 .relative()
-                                .child(trf("Launcher {version}", &[("version", version)])),
+                                .child(self.launcher_ready_note(version)),
                         )
                         .child(div().relative().flex().child(
-                            button("update-launcher", "Update", Kind::Primary, &t).on_click(
+                            button("update-launcher", "Update now", Kind::Primary, &t).on_click(
                                 cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.apply_launcher_update(cx);
                                     cx.notify();

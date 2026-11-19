@@ -112,7 +112,7 @@ impl Launcher {
             updates: Updates::default(),
             checked: None,
             update_error: None,
-            // The installer the last Update started could not put the new launcher in place.
+            // The installer the last Update or close started could not put the new launcher in place.
             self_update: horizon_launcher::update_handoff::take_failure()
                 .map_or(SelfUpdate::Idle, |e| SelfUpdate::Stuck(Some(e))),
             self_update_hidden: false,
@@ -486,6 +486,18 @@ impl Launcher {
             });
             let _ = tx.send(Msg::Updates(updates.map(Box::new)));
         });
+    }
+
+    /// A downloaded launcher update's line in both sidebar styles: when it goes in.
+    pub(crate) fn launcher_ready_note(&self, version: &str) -> String {
+        if horizon_launcher::update_handoff::installs_on_close() {
+            trf(
+                "Launcher {version} installs when you close Horizon",
+                &[("version", version)],
+            )
+        } else {
+            trf("Launcher {version}", &[("version", version)])
+        }
     }
 
     /// Recovery text shared by both sidebar styles and Settings.

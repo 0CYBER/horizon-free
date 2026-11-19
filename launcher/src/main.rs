@@ -616,8 +616,8 @@ actions!(horizon_launcher, [Quit, CloseWindow]);
 fn shut_down(cx: &mut App) {
     servers_page::stop_on_quit();
     telemetry::send_before_exit();
-    // A downloaded launcher update goes in only when the player presses Update: closing drops it.
-    horizon_launcher::update_handoff::forget();
+    // A downloaded launcher update goes in once this process has exited; the game keeps running.
+    horizon_launcher::update_handoff::on_close();
     cx.quit()
 }
 

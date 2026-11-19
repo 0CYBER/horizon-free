@@ -3504,6 +3504,30 @@ fn replace_binary(new: &Path, exe: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The file every launcher locks to replace the launcher at `target` ([`lock_update`]): beside
+/// what is replaced (the `.app` bundle on macOS, else the file), so launchers of either version
+/// lock the same one.
+pub(crate) fn update_lock_file(target: &Path) -> PathBuf {
+    let place = app_bundle(target).unwrap_or(target);
+    let name = place.file_name().unwrap_or_default().to_string_lossy();
+    place.with_file_name(format!("{name}.lock"))
+}
+
+/// Locks `lock` for one replacement, waiting while another launcher holds it. Reading the version
+/// in place, replacing it and putting the old one back after a failure happen under it, and the
+/// startup cleanup ([`remove_replaced_binaries`]) takes it too. Two windows that staged the same
+/// release and closed then go one after the other: the second reads the version the first put in
+/// and changes nothing. Released when the file is dropped.
+pub(crate) fn lock_update(lock: &Path) -> Result<fs::File, String> {
+    fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock)
+        .and_then(|file| file.lock().map(|()| file))
+        .map_err(|e| format!("Could not lock {}: {e}", lock.display()))
+}
+
 /// Deletes the binaries earlier self-updates moved aside (`replace_binary`), and the copies of an
 /// update that stopped before its new binary took its place (`<name>.update-<pid>`). The one the
 /// launcher just restarted from is still exiting, so this keeps trying for a few seconds in the
@@ -3515,29 +3539,49 @@ pub fn remove_replaced_binaries() {
         return;
     };
     let dir = dir.to_path_buf();
-    let name = name.to_string_lossy();
-    let old = format!("{name}.old-");
-    let update = format!("{name}.update-");
-    let own = format!("{update}{}", std::process::id());
+    let name = name.to_string_lossy().into_owned();
+    let lock = update_lock_file(exe);
     std::thread::spawn(move || {
         for _ in 0..10 {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                return;
-            };
-            let mut left = false;
-            for entry in entries.flatten() {
-                let file = entry.file_name();
-                let file = file.to_string_lossy();
-                if file.starts_with(&old) || (file.starts_with(&update) && file != own) {
-                    left |= fs::remove_file(entry.path()).is_err();
-                }
-            }
-            if !left {
+            if remove_replaced_once(&dir, &name, std::process::id(), &lock) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
     });
+}
+
+/// One pass of [`remove_replaced_binaries`]: true when nothing is left. Nothing goes while a
+/// launcher holds the update lock, whose `.update-<pid>` copy and the `.old-` file it would put
+/// back after a failure are in use.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn remove_replaced_once(dir: &Path, name: &str, own_pid: u32, lock: &Path) -> bool {
+    let Ok(lock) = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock)
+    else {
+        return false;
+    };
+    if lock.try_lock().is_err() {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return true;
+    };
+    let old = format!("{name}.old-");
+    let update = format!("{name}.update-");
+    let own = format!("{update}{own_pid}");
+    let mut left = false;
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let file = file.to_string_lossy();
+        if file.starts_with(&old) || (file.starts_with(&update) && file != own) {
+            left |= fs::remove_file(entry.path()).is_err();
+        }
+    }
+    !left
 }
 
 /// The app bundle the launcher runs from (`…/Horizon.app` for `…/Horizon.app/Contents/MacOS/
@@ -3809,7 +3853,14 @@ pub(crate) fn already_in_place(installed: Option<&str>, tag: &str) -> bool {
 pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), String> {
     if let Some(staged) = stage_update(release, &progress)? {
         let work = update_work_dir();
-        let placed = place_checked(&work, &staged, place_staged);
+        let target = update_target();
+        let placed = lock_update(&update_lock_file(&target)).and_then(|_lock| {
+            // An installer may have put this release in while this one downloaded.
+            if already_in_place(installed_launcher_version(&target).as_deref(), &staged.tag) {
+                return Ok(());
+            }
+            place_checked(&work, &staged, place_staged)
+        });
         remove_stage(&work, &staged.payload);
         placed?;
     }
