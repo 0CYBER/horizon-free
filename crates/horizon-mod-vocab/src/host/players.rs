@@ -491,6 +491,16 @@ pub trait PlayersBackend {
     /// have none. The outer None is a stale or offline player, or no server list.
     #[access(WorldOnly)]
     fn player_nickname(&self, player: PlayerRef) -> Option<Option<String>>;
+    /// Side: both.
+    /// `Player.hasCorrectToolForDrops(state)`: true when `state` needs no tool, else whether
+    /// the stack in the player's selected hotbar slot is a correct tool for it
+    /// (`BlockStates::is_correct_tool_for_drops`). Vanilla's own rule: mods'
+    /// `can_harvest_block` and `player_harvest_check` are not asked, so a listener of them
+    /// may call it. On a client, for the local player only. None for an unknown state, a
+    /// stale or unavailable player.
+    #[access(WorldOnly)]
+    fn player_has_correct_tool_for_drops(&self, player: PlayerRef, state: BlockState)
+    -> Option<bool>;
 }
 /// The handles' client reads of the `players` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

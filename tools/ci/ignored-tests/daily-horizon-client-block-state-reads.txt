@@ -1,0 +1,4 @@
+# horizon-rust/horizon#18575: these mod-API tests read the prepared 26.3 data.
+horizon-client game::native_block_state_reads::tests::a_level_handle_reads_whether_a_block_conducts_redstone lib daily resources
+horizon-client game::native_block_state_reads::tests::block_state_reads_answer_vanillas_facts_through_the_host lib daily resources
+horizon-client game::native_block_state_reads::tests::the_acting_players_tool_rule_reads_the_selected_slot_during_an_off_hand_use lib daily resources

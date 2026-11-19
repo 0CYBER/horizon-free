@@ -168,6 +168,42 @@ impl BlockStates<'_> {
     pub fn states_of(&self, block: crate::BlockKey) -> Option<BlockStateRange> {
         self.backend?.block_states_of(block)
     }
+
+    /// `BlockState.getLightEmission()`: the light `state` gives off, 0 to 15 (glowstone 15).
+    /// A block declaring `dynamic_light` may emit another level at a position through its
+    /// parts' `light_emission`; this is the state's own. None as for `replaceable`.
+    pub fn light_emission(&self, state: BlockState) -> Option<u8> {
+        self.backend?.block_state_light_emission(state)
+    }
+    /// `Block.getFriction()`: how slippery `state`'s block is, 0.6 for most, ice 0.98.
+    /// None as for `replaceable`.
+    pub fn friction(&self, state: BlockState) -> Option<f32> {
+        self.backend?.block_state_friction(state)
+    }
+    /// `BlockState.isSolidRender()`: an opaque full cube that hides the faces beside it (stone
+    /// yes, glass no). None as for `replaceable`.
+    pub fn is_solid_render(&self, state: BlockState) -> Option<bool> {
+        self.backend?.block_state_solid_render(state)
+    }
+    /// `BlockState.requiresCorrectToolForDrops()`: `state` drops its loot only when mined with a
+    /// correct tool (obsidian yes, dirt no). None as for `replaceable`.
+    pub fn requires_correct_tool(&self, state: BlockState) -> Option<bool> {
+        self.backend?.block_state_requires_correct_tool(state)
+    }
+    /// `ItemStack.isCorrectToolForDrops(state)`: whether `stack` is a correct tool for `state`'s
+    /// drops (a wooden pickaxe for stone, not for obsidian); false for an empty stack or an
+    /// item that is no tool. Whether a block needs one at all is
+    /// [`requires_correct_tool`](Self::requires_correct_tool); a player's whole answer is
+    /// [`PlayerRef::has_correct_tool_for_drops`](crate::PlayerRef::has_correct_tool_for_drops).
+    /// None as for `replaceable`.
+    pub fn is_correct_tool_for_drops(
+        &self,
+        state: BlockState,
+        stack: &crate::ItemStack,
+    ) -> Option<bool> {
+        self.backend?
+            .block_state_correct_tool_for_drops(state, stack)
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +225,11 @@ mod tests {
         assert_eq!(facts.has_block_entity(state), None);
         assert_eq!(facts.map_color(state), None);
         assert_eq!(facts.states_of(crate::BlockKey(0)), None);
+        assert_eq!(facts.light_emission(state), None);
+        assert_eq!(facts.friction(state), None);
+        assert_eq!(facts.is_solid_render(state), None);
+        assert_eq!(facts.requires_correct_tool(state), None);
+        let stack = crate::ItemStack::of(crate::ItemKey(0));
+        assert_eq!(facts.is_correct_tool_for_drops(state, &stack), None);
     }
 }

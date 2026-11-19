@@ -700,6 +700,17 @@ impl Game<'_> {
         self.native_level_signals(level, |s| s.has_neighbor_signal(block_pos(pos)))
             .unwrap_or(false)
     }
+    /// `BlockState.isRedstoneConductor(level, pos)` for the block at `pos`, through the redstone
+    /// engine's own query so the two never disagree. None for a position that isn't loaded, and
+    /// as for `signal`.
+    pub(super) fn level_is_redstone_conductor(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Option<bool> {
+        let state = self.level_block_state(level, pos)?;
+        self.native_level_signals(level, |s| s.is_redstone_conductor(state, block_pos(pos)))
+    }
     /// Whether `pos` is inside the world's height and its chunk is loaded
     /// (`Level.isLoaded`, which is false outside `isInValidBounds`): a block
     /// read or write there finds the world. False on a client or for a stale

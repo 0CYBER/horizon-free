@@ -194,4 +194,35 @@ pub trait BlockStatesBackend {
         fluid: FluidKey,
         constraints: &[StateConstraint],
     ) -> Result<(), FluidStateError>;
+    /// Side: both.
+    /// `BlockState.getLightEmission()`: the light the state gives off, 0 to 15 (glowstone 15,
+    /// a torch 14). A block declaring `dynamic_light` may emit another level at a position
+    /// through its parts' `light_emission`; this is the state's own. None for an unknown state.
+    #[access(Metadata)]
+    fn block_state_light_emission(&self, state: BlockState) -> Option<u8>;
+    /// Side: both.
+    /// `Block.getFriction()`: how slippery the block is, 0.6 for most, ice 0.98, blue ice
+    /// 0.989, slime 0.8. None for an unknown state.
+    #[access(Metadata)]
+    fn block_state_friction(&self, state: BlockState) -> Option<f32>;
+    /// Side: both.
+    /// `BlockState.isSolidRender()`: an opaque full cube that hides the faces beside it (stone
+    /// yes; glass, leaves and single slabs no). None for an unknown state.
+    #[access(Metadata)]
+    fn block_state_solid_render(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
+    /// `BlockState.requiresCorrectToolForDrops()`: the block drops its loot only when mined
+    /// with a correct tool (stone and obsidian yes, dirt no). None for an unknown state.
+    #[access(Metadata)]
+    fn block_state_requires_correct_tool(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
+    /// `ItemStack.isCorrectToolForDrops(state)`: the `minecraft:tool` rules of `stack` (its
+    /// component, else its item's) name the block as one it harvests. False for an empty stack
+    /// and for an item that is no tool. None for an unknown state.
+    #[access(Metadata)]
+    fn block_state_correct_tool_for_drops(
+        &self,
+        state: BlockState,
+        stack: &ItemStack,
+    ) -> Option<bool>;
 }

@@ -9,11 +9,18 @@ A `BlockState` is an API-owned value pairing a `BlockKey` with a block-local can
 | `sound(state) -> Option<BlockSoundType>` | `BlockState.getSoundType()`: volume, pitch and the break, step, place, hit and fall events |
 | `has_block_entity(state) -> Option<bool>` | `BlockState.hasBlockEntity()` |
 | `map_color(state) -> Option<u8>` | `BlockState.getMapColor`: the `MapColor.id` a map item colours a column by, 0 for none |
+| `light_emission(state) -> Option<u8>` | `BlockState.getLightEmission()`: glowstone 15 (a `dynamic_light` block's parts may answer otherwise at a position) |
+| `friction(state) -> Option<f32>` | `Block.getFriction()`: 0.6 for most, ice 0.98 |
+| `is_solid_render(state) -> Option<bool>` | `BlockState.isSolidRender()`: stone yes, glass no |
+| `requires_correct_tool(state) -> Option<bool>` | `BlockState.requiresCorrectToolForDrops()`: obsidian yes, dirt no |
+| `is_correct_tool_for_drops(state, stack) -> Option<bool>` | `ItemStack.isCorrectToolForDrops(state)`: a wooden pickaxe for stone, not for obsidian |
 | `states_of(block) -> Option<BlockStateRange>` | `StateDefinition.getPossibleStates`, as owned values in canonical local-ordinal order |
 | `definition(block)` | Property names and legal serialized values |
 | `matches(state, block, constraints)` | Partial property match with typed invalid-property and invalid-value errors |
 
 Use `StateConstraint` for each partial constraint; `StateMatchError` identifies an invalid property or value by index. `StateProperty` describes a property's legal values. These types are shared by state-definition services.
+
+A player's whole answer is `player.has_correct_tool_for_drops(host, state)` (`Player.hasCorrectToolForDrops`: no tool needed, or the selected hotbar stack is a correct one). It is vanilla's rule alone: the `can_harvest_block` and `player_harvest_check` hooks are not asked, so their listeners may call it. Whether the block at a position conducts redstone is `level.is_redstone_conductor(host, pos)` (`BlockState.isRedstoneConductor`), on a server, answered by the game's redstone engine; like the engine it ignores a block entity's live shape today, so an open shulker box still conducts.
 
 Queries return `None` for an unknown state or block, including an invalid local ordinal, and on a host with no game behind it (a mod's test double). The ordinal order is defined by the complete canonical property constraints, not by the engine's numeric enumeration.
 
