@@ -2201,6 +2201,29 @@ fn a_macro_body_builds_a_tuple_or_unit_struct_named_where_a_value_may_stand() {
     );
 }
 
+/// The processor time this thread has used, which is what a scan costs: the workspace's tests
+/// run in parallel, and on a busy runner wall time grows with the others' work. Elsewhere the
+/// wall clock, which is never less.
+#[cfg(unix)]
+fn thread_time() -> std::time::Duration {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a valid out pointer, and a clock every Unix this builds on has.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) },
+        0
+    );
+    std::time::Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+}
+
+#[cfg(not(unix))]
+fn thread_time() -> std::time::Duration {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed()
+}
+
 #[test]
 fn large_generated_files_scan_in_linear_time() {
     // Each would take quadratic time in some walk over the file: many macro bodies, many
@@ -2215,9 +2238,9 @@ fn large_generated_files_scan_in_linear_time() {
             "impl S { fn f() -> Self { Self } }\n".repeat(n / 2)
         ),
     ] {
-        let started = std::time::Instant::now();
+        let started = thread_time();
         assert!(ids(&scan_on(wider(), &source)).contains(&"type:Settings"));
-        let took = started.elapsed();
+        let took = thread_time() - started;
         assert!(
             took < std::time::Duration::from_millis(1000),
             "{took:?}: {}",

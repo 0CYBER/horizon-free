@@ -295,34 +295,41 @@ fn a_full_ring_drops_and_counts() {
 
 #[test]
 fn a_session_that_needs_a_larger_ring_than_the_threads_first_gets_one() {
-    let (ready, wait) = mpsc::channel();
-    let (go, work) = mpsc::channel::<()>();
-    let (done, finished) = mpsc::channel::<()>();
-    let worker = thread::spawn(move || {
-        sampled_thread("t-grow");
-        ready.send(()).unwrap();
-        while work.recv().is_ok() {
-            on_deep_stack(|| spin_known(cpu_ms_for_samples(100)));
-            done.send(()).unwrap();
-        }
-    });
-    wait.recv().unwrap();
-    let run = |config: Config| {
-        let session = start_session(config, "t-grow");
-        go.send(()).unwrap();
-        finished.recv().unwrap();
-        session.stop(|_, _| {})
-    };
+    // A thread's ring only grows, so each run takes a new thread: on one kept across runs, a
+    // retry's small session would get the large ring the run before left and never drop.
     first_passing_run(|| {
-        let small = run(at_1khz(Unwind::StackCopy, 4));
-        ensure(small.dropped > 20, || format!("small ring: {small:?}"))?;
-        let large = run(at_1khz(Unwind::StackCopy, 512));
-        ensure(large.dropped == 0 && large.samples > 60, || {
-            format!("large ring: {large:?}")
-        })
+        let (ready, wait) = mpsc::channel();
+        let (go, work) = mpsc::channel::<()>();
+        let (done, finished) = mpsc::channel::<()>();
+        let worker = thread::spawn(move || {
+            sampled_thread("t-grow");
+            ready.send(()).unwrap();
+            while work.recv().is_ok() {
+                on_deep_stack(|| spin_known(cpu_ms_for_samples(100)));
+                done.send(()).unwrap();
+            }
+        });
+        wait.recv().unwrap();
+        let outcome = {
+            let run = |config: Config| {
+                let session = start_session(config, "t-grow");
+                go.send(()).unwrap();
+                finished.recv().unwrap();
+                session.stop(|_, _| {})
+            };
+            let small = run(at_1khz(Unwind::StackCopy, 4));
+            let large = run(at_1khz(Unwind::StackCopy, 512));
+            ensure(small.dropped > 20, || format!("small ring: {small:?}")).and_then(|()| {
+                ensure(large.dropped == 0 && large.samples > 60, || {
+                    format!("large ring: {large:?}")
+                })
+            })
+        };
+        // The thread leaves the registry as it ends, so the next run's session finds only its own.
+        drop(go);
+        worker.join().unwrap();
+        outcome
     });
-    drop(go);
-    worker.join().unwrap();
 }
 
 #[test]

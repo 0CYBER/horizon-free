@@ -981,7 +981,12 @@ mod tests {
     }
 
     /// The option set is the purge delay: mimalloc v3's default for it is
-    /// 1000 ms, and it is 0 once configured.
+    /// 1000 ms, and it is 0 once configured. Configured, a Linux process also
+    /// takes no transparent huge pages, whatever the system's setting.
+    ///
+    /// The allocator's options are the process's, and libtest runs tests in
+    /// parallel: this must stay the only test here that configures it, or the
+    /// default read first sees another test's setting.
     #[test]
     fn configuring_the_allocator_purges_at_once() {
         // SAFETY: reads and sets one integer option.
@@ -991,24 +996,19 @@ mod tests {
         }
         super::configure_allocator();
         assert_eq!(get(), 0);
-    }
-
-    /// Configured, the process takes no transparent huge pages, whatever the
-    /// system's setting.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn configuring_the_allocator_turns_transparent_huge_pages_off() {
-        super::configure_allocator();
-        // SAFETY: reads this process's flag.
-        assert_eq!(
-            unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) },
-            1
-        );
-        // SAFETY: reads one integer option.
-        assert_eq!(
-            unsafe { libmimalloc_sys::mi_option_get(super::ALLOW_THP) },
-            0
-        );
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: reads this process's flag.
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) },
+                1
+            );
+            // SAFETY: reads one integer option.
+            assert_eq!(
+                unsafe { libmimalloc_sys::mi_option_get(super::ALLOW_THP) },
+                0
+            );
+        }
     }
 }
 
