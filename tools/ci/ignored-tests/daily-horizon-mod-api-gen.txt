@@ -30,6 +30,7 @@ horizon-mod-api-gen listener_output_fixture::tests::mixed_outputs_commit_per_lis
 horizon-mod-api-gen neighbor_source_identity_and_early_routing test:neighbor_source_identity daily child-process
 horizon-mod-api-gen parts::installation::tests::a_foreign_author_constructs_nested_inputs_without_access_to_lookup_fields lib daily child-process
 horizon-mod-api-gen parts::tests::a_new_kind_supplies_union_methods_impls_and_fixtures_without_shared_edits lib daily child-process
+horizon-mod-api-gen patch::reach::tests::the_patch_crate_compiles_against_the_games_private_imports lib daily child-process
 horizon-mod-api-gen patch::tests::a_filled_loops_entry_runs_the_loop_with_the_mods_slots_in_order lib daily slow
 horizon-mod-api-gen patch::tests::a_lower_crate_function_gets_a_patch_crate_of_its_own lib daily slow
 horizon-mod-api-gen patch::tests::a_lower_free_function_installs_through_its_library_name lib daily slow
