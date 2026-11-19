@@ -446,7 +446,9 @@ fn load_bitmap(
     });
     for (r, row) in rows.iter().enumerate() {
         for (c, ch) in row.iter().enumerate() {
-            if *ch == '\0' || out.contains_key(ch) {
+            // Character 0 pads the grid. A character listed twice keeps its
+            // last cell, as vanilla's `Map.put` does.
+            if *ch == '\0' {
                 continue;
             }
             let (x, y) = (c as u32 * cell_w, r as u32 * cell_h);
@@ -1961,6 +1963,29 @@ mod tests {
         // Cells 8x16 at height 8: half scale; top 7 - 6.
         assert_eq!((g.top, g.bottom), (1.0, 9.0));
         assert_eq!(g.advance, 5.0, "8 columns used, at half scale, and one");
+    }
+
+    /// `BitmapProvider.Definition.load` puts each cell in a map: a character
+    /// listed twice keeps its last cell. Character 0 is padding, and an earlier
+    /// provider still wins over a later one.
+    #[test]
+    fn a_repeated_character_keeps_its_last_cell() {
+        // Cells 8 wide using 2, 6 and 4 columns: advances 3, 7 and 5.
+        let sheet = png(24, 8, |x, _| {
+            x < 2 || (8..14).contains(&x) || (16..20).contains(&x)
+        });
+        let first = r#"{"type":"bitmap","file":"minecraft:font/first.png","ascent":7,"chars":["a\u0000a"]}"#;
+        let font = font_after("repeated", first, &sheet);
+        assert_eq!(
+            font.glyph('a').advance,
+            5.0,
+            "the last cell, not the first (3) or the next provider's (3)"
+        );
+        assert_eq!(
+            font.glyph('\0').advance,
+            font.glyph('z').advance,
+            "character 0 is not the middle cell (7)"
+        );
     }
 
     /// More rows or columns than the sheet has pixels leave cells of no size.
