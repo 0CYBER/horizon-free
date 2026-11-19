@@ -57,6 +57,10 @@ def cases(count, kinds):
 
 
 def close(p, q):
+    if isinstance(p, dict) and isinstance(q, dict):
+        return p.keys() == q.keys() and all(close(p[k], q[k]) for k in p)
+    if isinstance(p, (list, tuple)) and isinstance(q, (list, tuple)):
+        return len(p) == len(q) and all(close(a, b) for a, b in zip(p, q))
     if (isinstance(p, float) or isinstance(q, float)) and not isinstance(p, bool) and not isinstance(q, bool):
         return abs(p - q) <= 1e-4 * (1 + abs(p))
     return p == q
@@ -77,16 +81,7 @@ def normal(d):
 
 
 def same(x, y):
-    if x.keys() != y.keys():
-        return False
-    for k in x:
-        p, q = x[k], y[k]
-        if isinstance(p, list) and isinstance(q, list):
-            if len(p) != len(q) or not all(close(a, b) for a, b in zip(p, q)):
-                return False
-        elif not close(p, q):
-            return False
-    return True
+    return close(x, y)
 
 
 def main():
