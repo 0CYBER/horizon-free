@@ -171,6 +171,45 @@ def groups():
             *setup(f'/kill {target}'),
         ])
     extra_reload.extend(setup(f'/forceload remove {chunk}'))
+    # cloud fang and eye fire: a summoned value is read back, after ticks, and across a chunk save and reload.
+    fire_kinds = ('area_effect_cloud', 'evoker_fangs', 'eye_of_ender')
+    fire = []
+    for kind in fire_kinds:
+        target = f'@e[type={kind},limit=1]'
+        for saved in ('', ',Fire:100s', ',Fire:0s', ',Fire:-5s', ',Fire:"bad"'):
+            # Fangs and eyes of ender keep a non-numeric Fire as written; vanilla reads it as 0.
+            # That is how Horizon stores their loaded tags, not part of this change.
+            if saved.endswith('"bad"') and kind != 'area_effect_cloud':
+                continue
+            fire.extend([
+                cmd(f'/summon {kind} 12.5 234 8.5 {{NoGravity:1b{saved}}}'),
+                cmd(f'/data get entity {target} Fire'),
+                {'op': 'tick', 'n': 3},
+                cmd(f'/data get entity {target} Fire'),
+                *setup(f'/kill {target}'),
+            ])
+    fire_reload = [*setup(f'/forceload add {chunk}'), wait]
+    for index, kind in enumerate(fire_kinds):
+        fire_reload.append(cmd(
+            f'/summon {kind} {4100 + 4 * index}.5 300 4104.5 {{NoGravity:1b,Fire:170s}}'))
+    fire_reload.append({'op': 'tick', 'n': 3})
+    for kind in fire_kinds:
+        fire_reload.append(cmd(f'/data get entity @e[type={kind},limit=1] Fire'))
+    fire_reload.extend([
+        *setup(f'/forceload remove {chunk}'),
+        {'op': 'tick', 'n': 60},
+        cmd('/execute unless loaded 4096 300 4096', expect_result=1),
+        *setup(f'/forceload add {chunk}'),
+        wait,
+    ])
+    for kind in fire_kinds:
+        target = f'@e[type={kind},limit=1]'
+        fire_reload.extend([
+            cmd(f'/execute if entity {target}', expect_result=1),
+            cmd(f'/data get entity {target} Fire'),
+            *setup(f'/kill {target}'),
+        ])
+    fire_reload.extend(setup(f'/forceload remove {chunk}'))
     return [
         ('projectile common state', summon),
         ('projectile common state reload', reloads),
@@ -179,6 +218,8 @@ def groups():
         ('other projectile codecs', controls),
         ('Rotation on falling blocks, shulkers and clouds', extra),
         ('Rotation on falling blocks, shulkers and clouds reload', extra_reload),
+        ('cloud fang and eye fire', fire),
+        ('cloud fang and eye fire reload', fire_reload),
     ]
 
 

@@ -162,6 +162,10 @@ impl Game<'_> {
             if !ticking(f.pos[0].floor() as i32, f.pos[2].floor() as i32) {
                 return true;
             }
+            // Entity.baseTick: a burning fang's loaded Fire counts down.
+            if let Some(raw) = self.persist.raw.get_mut(&f.id) {
+                horizon_client::entity_nbt::count_down_fire(raw);
+            }
             // `EvokerFangs.tick` -> `Entity.baseTick` -> `updateFluidInteraction`:
             // a current pushes the fangs (they are pushed by fluid).
             let mut velocity = f.velocity.unwrap_or_else(|| {

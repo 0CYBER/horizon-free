@@ -332,6 +332,10 @@ impl Game<'_> {
             if !ticking(o.position.x.floor() as i32, o.position.z.floor() as i32) {
                 return true;
             }
+            // Entity.baseTick: a burning eye's loaded Fire counts down.
+            if let Some(raw) = self.persist.raw.get_mut(&o.id) {
+                horizon_client::entity_nbt::count_down_fire(raw);
+            }
             let m = eye.motion;
             o.position = Vec3::new(o.position.x + m.x, o.position.y + m.y, o.position.z + m.z);
             eye.life += 1;

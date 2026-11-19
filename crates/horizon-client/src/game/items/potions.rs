@@ -1910,6 +1910,11 @@ impl Game<'_> {
     /// five-tick doses, with each victim's configured reapplication delay.
     /// False once the cloud is gone.
     fn tick_potion_cloud(&mut self, c: &mut Breath, players: &[FightPlayer]) -> bool {
+        // `Entity.baseTick`: an `AreaEffectCloud` is fire-immune, so a positive
+        // loaded `Fire` is cleared on its first tick (a load keeps it as given).
+        if let Some(raw) = self.persist.raw.get_mut(&c.id) {
+            horizon_client::entity_nbt::clear_positive_fire(raw);
+        }
         // `Entity.baseTick` -> `updateFluidInteraction`: a cloud whose box (`radius * 2`
         // wide, 0.5 high) is in water resets the fall distance it was loaded with.
         if c.potion.is_some() {
@@ -2854,6 +2859,32 @@ mod tests {
                     .collect::<Vec<_>>(),
                 [(next + 1, 0), (next + 2, 0), (first, 1), (second, 1)]
             );
+        });
+    }
+
+    /// A loaded cloud keeps `Fire` as given until its first tick, which clears
+    /// a positive value only (`Entity.baseTick` of a fire-immune entity).
+    #[test]
+    #[ignore = "daily"]
+    fn a_cloud_clears_a_positive_fire_on_its_tick_and_keeps_a_negative_one() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.breath_clouds.clear();
+            for _ in 0..2 {
+                game.spawn_creeper_cloud([0.0, 80.0, 0.0], Vec::new(), Vec::new(), Vec::new(), 0);
+            }
+            let burning = game.breath_clouds[0].id;
+            let frozen_fire = game.breath_clouds[1].id;
+            for (id, snbt) in [(burning, "{Fire:300s}"), (frozen_fire, "{Fire:-5s}")] {
+                let (tag, _) = horizon_core::nbt::parse_snbt(snbt).unwrap();
+                game.persist.raw.insert(id, tag);
+            }
+            let fire = |game: &crate::game::Game<'_>, id| {
+                horizon_client::save::number(game.persist.raw[&id].get("Fire"))
+            };
+            assert_eq!(fire(game, burning), Some(300));
+            game.tick_potion_clouds();
+            assert_eq!(fire(game, burning), Some(0));
+            assert_eq!(fire(game, frozen_fire), Some(-5));
         });
     }
 

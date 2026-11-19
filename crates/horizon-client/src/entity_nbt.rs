@@ -121,6 +121,26 @@ pub fn loaded_motion(tag: &Tag) -> Vec3 {
 pub fn rotation(tag: &Tag) -> [f32; 2] {
     read_doubles::<2>(tag.get("Rotation")).map_or([0.0; 2], |r| [r[0] as f32, r[1] as f32])
 }
+/// `Entity.baseTick` for a burning entity Horizon keeps as its loaded compound:
+/// one tick off a positive `Fire`, which an unset or spent `Fire` leaves alone.
+pub fn count_down_fire(tag: &mut Tag) {
+    let Tag::Compound(c) = tag else { return };
+    if let Some(ticks) = number(c.get(&"Fire".into())).map(|v| v as i16)
+        && ticks > 0
+    {
+        c.insert("Fire".into(), Tag::Short(ticks - 1));
+    }
+}
+/// `Entity.baseTick` of a fire-immune entity (an `AreaEffectCloud`): a positive
+/// `Fire` is cleared on its tick, while a loaded 0 or negative value stays.
+pub fn clear_positive_fire(tag: &mut Tag) {
+    let Tag::Compound(c) = tag else { return };
+    if let Some(ticks) = number(c.get(&"Fire".into())).map(|v| v as i16)
+        && ticks > 0
+    {
+        c.insert("Fire".into(), Tag::Short(0));
+    }
+}
 /// A saved Rotation as `Entity.load` takes it (`setRot`, read off vanilla 26.3 by the parity rows): the yaw `% 360`
 /// (so 400 loads as 40 but 270 stays 270 and -190 stays -190: Java's remainder keeps the sign) and the pitch
 /// `% 360` clamped to [-90, 90]; a component that is not finite is discarded (`setYRot`/`setXRot`) and loads as
@@ -6552,6 +6572,30 @@ mod tests {
         };
         map.remove(&"Fire".into());
         assert_eq!(orbs_from_nbt(&tag)[0].fire_ticks, 0);
+    }
+    /// `Entity.baseTick` takes one tick off a burning `Fire` (`Fire:300s` reads
+    /// 299 after one tick); 0 and -1 stay. A fire-immune cloud clears only a
+    /// positive `Fire` on its tick.
+    #[test]
+    fn a_loaded_fire_counts_down_and_a_cloud_clears_it() {
+        let fire = |snbt: &str| {
+            let mut tag = horizon_core::nbt::parse_snbt(snbt).unwrap().0;
+            super::count_down_fire(&mut tag);
+            number(tag.get("Fire"))
+        };
+        assert_eq!(fire("{Fire:300s}"), Some(299));
+        assert_eq!(fire("{Fire:1s}"), Some(0));
+        assert_eq!(fire("{Fire:0s}"), Some(0));
+        assert_eq!(fire("{Fire:-1s}"), Some(-1));
+        let cleared = |snbt: &str| {
+            let mut tag = horizon_core::nbt::parse_snbt(snbt).unwrap().0;
+            super::clear_positive_fire(&mut tag);
+            number(tag.get("Fire"))
+        };
+        assert_eq!(cleared("{Fire:300s}"), Some(0));
+        assert_eq!(cleared("{Fire:-5s}"), Some(-5));
+        assert_eq!(cleared("{Fire:0s}"), Some(0));
+        assert_eq!(cleared("{Age:5}"), None);
     }
 }
 
