@@ -133,6 +133,21 @@ fn folders_with_ampersands_are_linked() {
     assert_linked(&linked, &dir, jar);
 }
 
+/// cmd expands `%NAME%` inside quotes as well, so a launcher folder named with one used to be
+/// linked to the expanded path, or to nothing at all, and cmd still succeeded (#18411): such a
+/// folder is refused with a reason, and no link is left behind.
+#[cfg(windows)]
+#[test]
+fn a_folder_name_cmd_would_expand_is_refused() {
+    let s = Scratch::new("percent");
+    let jar = "libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar";
+    let dir = s.launcher("Game %TEMP%", "", jar);
+    let linked = s.0.join("linked");
+    let error = resolve_with(&dir, &[], &linked, &Mojang::new(MANIFEST)).unwrap_err();
+    assert!(error.contains("can't be linked"), "{error}");
+    assert!(fs::symlink_metadata(linked.join("libraries")).is_err());
+}
+
 #[test]
 fn maven_names_become_repository_paths() {
     assert_eq!(
