@@ -940,11 +940,22 @@ fn api_nodes(root: &Text) -> Vec<&Text> {
     }
     nodes
 }
+/// What stands in a custom click's `payload` where the typed tag is kept aside (`exact_payloads`): this prefix,
+/// the call's random nonce and the slot, so text that merely looks like a slot is never taken for one.
+const PAYLOAD_SLOT: &str = "\0payload:";
+/// A random number for one conversion: a mod cannot know it, so it cannot write a slot of its own.
+fn payload_nonce() -> u64 {
+    use std::hash::BuildHasher;
+    std::collections::hash_map::RandomState::new().hash_one(std::time::Instant::now())
+}
 struct Payloads<'a> {
+    nonce: u64,
     tags: HashMap<usize, json_nbt::JsonTag<'a>>,
+    /// With `exact_payloads`, the custom click payloads taken out of the JSON, in slot order.
+    slots: Option<std::cell::RefCell<Vec<&'a Tag>>>,
 }
 impl<'a> Payloads<'a> {
-    fn new(nodes: &[&'a Text]) -> Result<Self, Error> {
+    fn new(nodes: &[&'a Text], exact: bool) -> Result<Self, Error> {
         let mut tags = HashMap::new();
         let mut keep = |tag: &'a Tag| -> Result<(), Error> {
             if matches!(tag, Tag::Compound(v) if v.is_empty())
@@ -985,7 +996,20 @@ impl<'a> Payloads<'a> {
                 keep(tag)?;
             }
         }
-        Ok(Self { tags })
+        Ok(Self {
+            nonce: payload_nonce(),
+            tags,
+            slots: exact.then(Default::default),
+        })
+    }
+    /// A custom click's payload: its JSON, or with `exact_payloads` a slot for the tag itself.
+    fn emit_payload(&self, tag: &'a Tag) -> Value {
+        let Some(slots) = &self.slots else {
+            return self.emit(tag);
+        };
+        let mut slots = slots.borrow_mut();
+        slots.push(tag);
+        format!("{PAYLOAD_SLOT}{:016x}:{}", self.nonce, slots.len() - 1).into()
     }
     fn emit(&self, tag: &Tag) -> Value {
         match tag {
@@ -1094,7 +1118,7 @@ fn action(action: &str, field: &str, value: Value) -> Map<String, Value> {
 }
 fn emitted_style<'a>(
     style: &'a TextStyle,
-    payloads: &Payloads<'_>,
+    payloads: &Payloads<'a>,
     take: &mut impl FnMut(&'a Text) -> Value,
 ) -> Map<String, Value> {
     let mut metadata = payloads.object(&style.metadata);
@@ -1132,7 +1156,7 @@ fn emitted_style<'a>(
             TextClick::Custom { id, payload } => {
                 let mut fields = action("custom", "id", id.clone().into());
                 if let Some(tag) = payload {
-                    fields.insert("payload".into(), payloads.emit(tag));
+                    fields.insert("payload".into(), payloads.emit_payload(tag));
                 }
                 fields
             }
@@ -1202,7 +1226,7 @@ fn emitted_style<'a>(
 }
 fn emitted_node<'a>(
     text: &'a Text,
-    payloads: &Payloads<'_>,
+    payloads: &Payloads<'a>,
     take: &mut impl FnMut(&'a Text) -> Value,
 ) -> Value {
     let mut metadata = payloads.object(&text.metadata);
@@ -1313,9 +1337,13 @@ fn emitted_node<'a>(
     Value::Object(out)
 }
 fn owned_text_component(text: &Text) -> Result<Value, Error> {
+    component_and_payloads(text, false).map(|(component, _)| component)
+}
+/// The component JSON, and with `exact` the custom click payloads it leaves for their own tags.
+fn component_and_payloads(text: &Text, exact: bool) -> Result<(Value, PayloadSlots<'_>), Error> {
     text.validate()?;
     let nodes = api_nodes(text);
-    let payloads = Payloads::new(&nodes)?; // Refuse all representation errors before any JSON clone.
+    let payloads = Payloads::new(&nodes, exact)?; // Refuse all representation errors before any JSON clone.
     let mut ready = HashMap::new();
     for node in nodes {
         let value = emitted_node(node, &payloads, &mut |child| {
@@ -1325,9 +1353,73 @@ fn owned_text_component(text: &Text) -> Result<Value, Error> {
         });
         ready.insert(node as *const _ as usize, value);
     }
-    Ok(ready
+    let component = ready
         .remove(&(text as *const _ as usize))
-        .expect("root was built"))
+        .expect("root was built");
+    let nonce = payloads.nonce;
+    let tags = payloads
+        .slots
+        .map(|slots| slots.into_inner())
+        .unwrap_or_default();
+    Ok((component, PayloadSlots { nonce, tags }))
+}
+/// The custom click payloads kept aside by [`component_with_payload_slots`], in slot order, with the nonce of
+/// the slots that stand for them.
+pub struct PayloadSlots<'a> {
+    nonce: u64,
+    tags: Vec<&'a Tag>,
+}
+/// The component JSON of `text` as `to_engine` builds it, except that each custom click's
+/// payload is a slot, with the payload tags themselves in slot order. JSON has no tag widths
+/// or typed arrays, so a payload only keeps its type when [`restore_payloads`] puts the tag
+/// back into the NBT of this component.
+pub fn component_with_payload_slots(
+    text: &Text,
+) -> Result<(Value, PayloadSlots<'_>), TextFormError> {
+    component_and_payloads(text, true)
+}
+/// Put the payload tags of [`component_with_payload_slots`] back where the NBT of its component
+/// holds their slots: the `payload` of a custom `click_event`.
+pub fn restore_payloads(root: &mut Tag, payloads: &PayloadSlots<'_>) {
+    let wanted = format!("{PAYLOAD_SLOT}{:016x}:", payloads.nonce);
+    let slot = |event: &Tag| -> Option<usize> {
+        let (Some(Tag::String(action)), Some(Tag::String(payload))) =
+            (event.get("action"), event.get("payload"))
+        else {
+            return None;
+        };
+        if action.to_string().ok()? != "custom" {
+            return None;
+        }
+        payload
+            .to_string()
+            .ok()?
+            .strip_prefix(wanted.as_str())?
+            .parse()
+            .ok()
+    };
+    let click_event = nbt::JavaString::from("click_event");
+    let mut work = vec![root];
+    while let Some(tag) = work.pop() {
+        match tag {
+            Tag::List(values) => work.extend(values.iter_mut()),
+            Tag::Compound(entries) => {
+                for (key, value) in entries.iter_mut() {
+                    // The restored payload is the mod's own data: never read as more components.
+                    if *key == click_event
+                        && let Some(original) = slot(value).and_then(|slot| payloads.tags.get(slot))
+                    {
+                        if let Some(payload) = value.get_mut("payload") {
+                            *payload = nbt::clone_tag(original);
+                        }
+                    } else {
+                        work.push(value);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 /// Encode API text, preserving the boundary's validation and representation errors.
 pub fn to_engine(text: &Text) -> Result<engine::Text, TextFormError> {

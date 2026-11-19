@@ -321,7 +321,9 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
             Err(error) => return error.to_compile_error().into(),
         };
         method.attrs.retain(|attr| {
-            !attr.path().is_ident("static_call") && !attr.path().is_ident("service")
+            !attr.path().is_ident("static_call")
+                && !attr.path().is_ident("service")
+                && !attr.path().is_ident("raw_text")
         });
         let operation = method.sig.ident.to_string();
         let label = format!("{union}::{operation}");

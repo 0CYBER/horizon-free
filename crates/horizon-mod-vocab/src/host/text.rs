@@ -23,4 +23,11 @@ pub trait TextHost {
     /// `ChatColor.translateAlternateColorCodes` does.
     #[access(Metadata)]
     fn text_from_legacy(&self, legacy: &str) -> Result<Text, TextFormError>;
+    /// Side: both.
+    /// The text as item components and block entities store it (`ComponentSerialization`
+    /// to NBT): what `minecraft:custom_name` and each `minecraft:lore` line hold. See
+    /// `ItemStack::set_display`.
+    #[access(Metadata)]
+    #[raw_text]
+    fn text_to_nbt(&self, text: &Text) -> Result<Tag, TextFormError>;
 }

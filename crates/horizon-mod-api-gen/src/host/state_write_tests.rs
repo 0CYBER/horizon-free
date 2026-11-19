@@ -10,7 +10,7 @@ fn boolean_state_writes_refuse_before_mutation_without_changing_the_bool_contrac
     ] {
         let method: syn::TraitItemFn =
             syn::parse_str(&format!("fn {name}(&mut self, state: {ty}) -> bool;")).unwrap();
-        let (setup, _, checked_write) = boundary_arguments(&method.sig, name).unwrap();
+        let (setup, _, checked_write) = boundary_arguments(&method.sig, name, false).unwrap();
         assert!(
             !checked_write,
             "bool-returning writes must not acquire a Result wrapper"

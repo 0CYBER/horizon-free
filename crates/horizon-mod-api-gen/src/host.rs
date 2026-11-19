@@ -435,7 +435,8 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                 ) {
                     return Err(format!("{name}: unknown access level {level}"));
                 }
-                let (setup, args, checked_write) = boundary_arguments(&entry.sig, name)?;
+                let raw_text = entry.attrs.iter().any(|a| a.path().is_ident("raw_text"));
+                let (setup, args, checked_write) = boundary_arguments(&entry.sig, name, raw_text)?;
                 let static_call = entry.attrs.iter().any(|a| a.path().is_ident("static_call"));
                 let args = if static_call {
                     args
@@ -664,10 +665,13 @@ fn outer_type(ty: &Type, expected: &str) -> bool {
 /// The conversion code for a host method's boundary arguments, the arguments to pass on, and
 /// whether it is a checked write (`&mut self`, a `Result`, a converted value). A checked write
 /// refuses an invalid value with its error; a read converts a borrowed stack without the write
-/// limits, and any other refused value makes the method return its default.
+/// limits, and any other refused value makes the method return its default. With `raw_text`
+/// (`#[raw_text]`) a `Text` argument reaches the game's method as the mod's own value instead of
+/// the engine's, for a method that must read what the engine form drops (typed payload tags).
 fn boundary_arguments(
     sig: &syn::Signature,
     method: &str,
+    raw_text: bool,
 ) -> Result<(String, String, bool), String> {
     let mutable = sig
         .receiver()
@@ -692,7 +696,7 @@ fn boundary_arguments(
             return Err(format!("{method}: unsupported argument"));
         };
         let name = pat.ident.to_string();
-        let text = text_value(&arg.ty);
+        let text = text_value(&arg.ty) && !raw_text;
         if !boundary_value(&arg.ty) && !text {
             args.push(name);
             continue;
@@ -1192,7 +1196,7 @@ mod tests {
         let method = entry(
             "fn read(&self, ingredient: &Ingredient) -> Result<Arc<[ItemKey]>, IngredientKeysError>;",
         );
-        let (setup, _, checked_write) = boundary_arguments(&method.sig, "read").unwrap();
+        let (setup, _, checked_write) = boundary_arguments(&method.sig, "read", false).unwrap();
         assert!(!checked_write);
         assert!(setup.contains("return Err(mod_api::NoBackend::no_backend())"));
         assert!(!setup.contains("Default::default()"));
@@ -1201,7 +1205,7 @@ mod tests {
     #[test]
     fn borrowed_stacks_are_read_without_write_validation_outside_checked_writes() {
         let read = entry("fn item_resource_damageable(&self, stack: &ItemStack) -> bool;");
-        let (setup, args, checked_write) = boundary_arguments(&read.sig, "read").unwrap();
+        let (setup, args, checked_write) = boundary_arguments(&read.sig, "read", false).unwrap();
         assert!(!checked_write);
         assert!(setup.contains("crate::game::api_values::stack_value(stack)"));
         assert!(!setup.contains("try_into_engine"));
@@ -1209,11 +1213,11 @@ mod tests {
         let write = entry(
             "fn living_apply_consume_effect(&mut self, stack: &ItemStack) -> Result<bool, StackWriteError>;",
         );
-        let (setup, _, checked_write) = boundary_arguments(&write.sig, "write").unwrap();
+        let (setup, _, checked_write) = boundary_arguments(&write.sig, "write", false).unwrap();
         assert!(checked_write);
         assert!(setup.contains("stack.try_into_engine(self.items())?"));
         let owned = entry("fn drop_at(&mut self, stack: ItemStack) -> bool;");
-        let (setup, _, _) = boundary_arguments(&owned.sig, "owned").unwrap();
+        let (setup, _, _) = boundary_arguments(&owned.sig, "owned", false).unwrap();
         assert!(setup.contains("stack.try_into_engine(self.items())"));
     }
 
@@ -1354,16 +1358,26 @@ mod tests {
     }
 
     #[test]
+    fn a_raw_text_argument_reaches_the_game_unconverted() {
+        let read = entry("fn read_text(&self, text: &Text) -> Result<Tag, TextFormError>;");
+        let (setup, args, _) = boundary_arguments(&read.sig, "read_text", true).unwrap();
+        assert!(setup.is_empty());
+        assert_eq!(args, "text");
+        let (setup, _, _) = boundary_arguments(&read.sig, "read_text", false).unwrap();
+        assert!(setup.contains("text.try_into_engine(&())?"));
+    }
+
+    #[test]
     fn text_arguments_refuse_before_even_checked_stack_writes() {
         let text = entry("fn set_text(&mut self, text: &Text) -> Result<(), TextFormError>;");
-        let (setup, args, checked) = boundary_arguments(&text.sig, "set_text").unwrap();
+        let (setup, args, checked) = boundary_arguments(&text.sig, "set_text", false).unwrap();
         assert!(!checked);
         assert!(setup.contains("text.try_into_engine(&())?"));
         assert_eq!(args, "&text");
         let mixed = entry(
             "fn update(&mut self, stack: ItemStack, text: Option<&Text>) -> Result<Text, Refused>;",
         );
-        let (setup, args, checked) = boundary_arguments(&mixed.sig, "update").unwrap();
+        let (setup, args, checked) = boundary_arguments(&mixed.sig, "update", false).unwrap();
         assert!(checked);
         assert!(setup.contains("stack.try_into_engine(self.items())?"));
         assert!(setup.contains("text.try_into_engine(&())?"));

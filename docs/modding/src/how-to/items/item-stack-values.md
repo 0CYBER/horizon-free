@@ -53,6 +53,12 @@ back with its parent transaction instead of splitting one item off.
 elision and `without_component` preserve the normal prototype-plus-patch semantics. The latter
 records real NBT removal entries for default components; it is not an unknown-value fallback.
 
+The display name and lore are the `minecraft:custom_name` and `minecraft:lore` components.
+`ItemStack::set_display(host, Some(&name), &lore)` writes them from `Text` values, converted
+to component NBT by `host.text_to_nbt(&text)`; `None` removes the name and an empty lore slice
+removes the lore. A refused text returns `TextFormError` and changes nothing. Vanilla draws a
+custom name in italics unless its style sets `italic: false`.
+
 ## Game boundaries
 
 A consume or death-protection override whose opaque native effect payload cannot be decoded
