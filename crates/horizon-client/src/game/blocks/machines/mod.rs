@@ -276,18 +276,10 @@ impl Containers<'_> {
     fn name(&self, state: BlockStateId) -> &str {
         self.registry.state(state).map_or("", |s| s.name.as_str())
     }
-    /// `ItemStack.getMaxStackSize`: its component, else the item's.
+    /// `ItemStack.getMaxStackSize`: its component (a removed one being
+    /// vanilla's default of 1), else the item's.
     pub(super) fn max_stack(&self, stack: &ItemStack) -> u32 {
-        if let Some(horizon_core::nbt::Tag::Int(n)) = stack
-            .data()
-            .and_then(|d| d.other("minecraft:max_stack_size"))
-        {
-            return (*n).clamp(1, 99) as u32;
-        }
-        self.items
-            .get(&stack.item)
-            .map_or(64, |i| i.max_stack)
-            .max(1)
+        stack.max_stack_size(self.items).max(1)
     }
     /// `Container.getMaxStackSize(stack)` of a container: the container's own
     /// limit, at most the item's. `ComposterBlock.InputContainer` (levels 0 to
@@ -3443,6 +3435,70 @@ mod can_take_tests {
             game.suck_from_container(sign_pos, [2.5, 5.5, 3.5], &hopper_view)
                 .is_none(),
             "suck_from_container returns None so hopper falls through to suck_item_entities"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stack_size_tests {
+    use super::*;
+    use crate::game::native_machines::tests::server_game;
+
+    /// Stone with its own `max_stack_size`, or with the component removed
+    /// (`!minecraft:max_stack_size`, vanilla's `getOrDefault` default of one).
+    fn stone(size: Option<i32>, count: u32) -> ItemStack {
+        let mut stack = ItemStack::new("minecraft:stone", count);
+        let data = stack.data_mut();
+        match size {
+            Some(n) => data.set_other("minecraft:max_stack_size", Some(Tag::Int(n))),
+            None => data.set_other(
+                "!minecraft:max_stack_size",
+                Some(Tag::Compound(Default::default())),
+            ),
+        };
+        stack.tidy();
+        stack
+    }
+
+    /// `HopperBlockEntity.tryMoveInItem` fills a slot up to the incoming
+    /// stack's `ItemStack.getMaxStackSize` (`itemStack.getMaxStackSize() -
+    /// current.getCount()`), its own `max_stack_size`, not the item's default.
+    #[test]
+    fn a_hopper_stops_at_the_stacks_own_max_stack_size() {
+        if std::env::var_os("HORIZON_TEST_RESOURCES").is_none() {
+            return;
+        }
+        let mut game = server_game();
+        let chest = (2, 4, 3);
+        let state = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:chest")
+            .unwrap();
+        game.world.set(chest.0, chest.1, chest.2, state).unwrap();
+        // One slot, so what does not fit comes back as the remainder.
+        let transfer = |game: &mut Game<'_>, slots: Vec<Option<ItemStack>>, stack: ItemStack| {
+            game.world
+                .block_entities
+                .insert(chest, BlockEntity::Chest(slots));
+            let view = game
+                .containers()
+                .view(chest, false)
+                .expect("the chest's view");
+            let rest = game.add_item(None, &view, stack, Some(Direction::Down));
+            let count = game.containers().get(&view, 0).map(|s| s.count);
+            (rest.map(|s| s.count), count)
+        };
+        // The slot takes four and holds two: two of the five go in.
+        assert_eq!(
+            transfer(&mut game, vec![Some(stone(Some(4), 2))], stone(Some(4), 5)),
+            (Some(3), Some(4))
+        );
+        // A removed component holds one, so nothing merges into it.
+        assert_eq!(
+            transfer(&mut game, vec![Some(stone(None, 1))], stone(None, 2)),
+            (Some(2), Some(1))
         );
     }
 }

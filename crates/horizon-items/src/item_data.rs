@@ -607,6 +607,26 @@ impl ItemStack {
         }
         info.map_or(0, |item| item.damage)
     }
+    /// The stack's own `max_stack_size` component: `Some(1)` when the stack
+    /// removes it (`!minecraft:max_stack_size`, vanilla's `getOrDefault`
+    /// default of 1), `None` when it leaves the item's.
+    pub fn own_max_stack_size(&self) -> Option<u32> {
+        let data = self.data();
+        if data.is_some_and(|d| d.other("!minecraft:max_stack_size").is_some()) {
+            return Some(1);
+        }
+        match data.and_then(|d| d.other("minecraft:max_stack_size")) {
+            Some(Tag::Int(n)) => Some((*n).clamp(1, 99) as u32),
+            _ => None,
+        }
+    }
+    /// `ItemInstance.getMaxStackSize`: the stack's own `max_stack_size`, else
+    /// the item's. A removed component is vanilla's `getOrDefault` default of
+    /// 1, not the item's size.
+    pub fn max_stack_size(&self, items: &crate::items::Items) -> u32 {
+        self.own_max_stack_size()
+            .unwrap_or_else(|| items.get(&self.item).map_or(64, |i| i.max_stack))
+    }
     /// The patch the server sent for this stack, while the stack is still what
     /// it decoded to (its count aside); None once anything else changed.
     pub fn wire_patch(&self) -> Option<Arc<[u8]>> {
