@@ -40,7 +40,9 @@ impl Game<'_> {
         }
         // Item.use: Equippable.swapWithEquipmentSlot runs on this client too, so
         // the armor slot and the hand change at once (the server confirms).
-        if info.equip_slot.is_some() && self.with_hand(hand, |g| g.equip_from_hand(&held)) {
+        if crate::game::armor_stands::hand_equip_slot(&held, self.items()).is_some()
+            && self.with_hand(hand, |g| g.equip_from_hand(&held))
+        {
             // Equippable.swapWithEquipmentSlot's SUCCESS (SwingSource.CLIENT).
             self.with_hand(hand, Game::swing_arm);
             return true;

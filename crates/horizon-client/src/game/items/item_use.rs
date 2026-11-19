@@ -257,17 +257,12 @@ impl Game<'_> {
     /// remainder of a stack that is not emptied goes to the inventory on the
     /// server and arrives with its inventory update.
     pub(super) fn finish_result(&self, stack: &ItemStack, info: &ItemInfo) -> Option<ItemStack> {
-        if self.creative || self.consumable(stack).is_none() {
-            return Some(stack.clone());
-        }
-        let mut left = stack.clone();
-        left.count = left.count.saturating_sub(1);
-        if left.count > 0 {
-            return Some(left);
-        }
-        info.use_remainder
-            .as_deref()
-            .map(|remainder| ItemStack::new(remainder, 1))
+        finish_remaining(
+            stack,
+            info.use_remainder.clone(),
+            self.creative,
+            self.consumable(stack).is_some(),
+        )
     }
     /// `LivingEntityUseItemEvent.Tick` for `stack` in use `ticks` so far, as
     /// `updatingUsingItem` starts: a mod may change the ticks left, which
@@ -1592,5 +1587,71 @@ pub(super) mod interact_vibration_tests {
         }) else {
             panic!("prepared resources failed to load")
         };
+    }
+}
+
+/// What `Item.finishUsingItem` leaves in the hand: a stack that is not a
+/// consumable stays as it is; a consumable loses one, and once that empties
+/// the hand the stack's own `use_remainder` takes it (else `default`, the
+/// item's). Neither in creative mode.
+fn finish_remaining(
+    stack: &ItemStack,
+    default: Option<String>,
+    creative: bool,
+    consumable: bool,
+) -> Option<ItemStack> {
+    if creative || !consumable {
+        return Some(stack.clone());
+    }
+    let mut left = stack.clone();
+    left.count = left.count.saturating_sub(1);
+    if left.count > 0 {
+        return Some(left);
+    }
+    horizon_client::item_sync::use_remainder(stack, default)
+        .as_deref()
+        .map(|remainder| ItemStack::new(remainder, 1))
+}
+
+#[cfg(test)]
+mod finish_remainder_tests {
+    use super::finish_remaining;
+    use horizon_client::items::{ItemInfo, ItemStack};
+    use horizon_core::nbt::Tag;
+
+    /// The stack's own `use_remainder` decides what an emptied hand holds,
+    /// and a removed component leaves nothing even when the item has one.
+    #[test]
+    fn a_used_up_stack_keeps_its_own_use_remainder() {
+        let info = ItemInfo::default();
+        let mut stew = ItemStack::new("minecraft:mushroom_stew", 1);
+        stew.data_mut().set_other(
+            "minecraft:use_remainder",
+            Some(Tag::compound([(
+                "id",
+                Tag::String("minecraft:bowl".into()),
+            )])),
+        );
+        let left = finish_remaining(&stew, info.use_remainder.clone(), false, true).unwrap();
+        assert_eq!(&*left.item, "minecraft:bowl");
+
+        let plain = ItemStack::new("minecraft:mushroom_stew", 1);
+        let left = finish_remaining(
+            &plain,
+            Some("minecraft:glass_bottle".into()),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(&*left.item, "minecraft:glass_bottle");
+
+        let mut removed = plain.clone();
+        removed.data_mut().set_other(
+            "!minecraft:use_remainder",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert!(
+            finish_remaining(&removed, Some("minecraft:glass_bottle".into()), false, true).is_none()
+        );
     }
 }

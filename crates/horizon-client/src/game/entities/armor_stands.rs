@@ -634,19 +634,7 @@ impl Game<'_> {
         best
     }
     fn equipment_slot(&self, stack: &ItemStack) -> usize {
-        match self
-            .res
-            .items()
-            .get(&stack.item)
-            .and_then(|i| i.equip_slot.as_deref())
-        {
-            Some("feet") => 2,
-            Some("legs") => 3,
-            Some("chest") => 4,
-            Some("head") => 5,
-            Some("offhand") => 1,
-            _ => 0,
-        }
+        stand_slot(self.res.items(), stack)
     }
     /// `ArmorStand.interact` for the stand under the crosshair, or for the
     /// stand a guest's interact packet named (its client's click point).
@@ -2062,65 +2050,147 @@ fn swap_with_equipment_slot(
         to_inventory: current,
     }
 }
+/// `Equippable.swapWithEquipmentSlot`'s armour slot for `stack`: the stack's
+/// own `equippable` component (a saved one, or the server's patch), else its
+/// item's, and only while it is swappable.
+pub(super) fn hand_equip_slot(
+    stack: &ItemStack,
+    items: &crate::items::Items,
+) -> Option<(usize, &'static str)> {
+    let equippable = horizon_client::item_sync::equippable(stack, items)?;
+    let actual = stack
+        .data()
+        .and_then(|data| data.other("minecraft:equippable"));
+    // Only adopt the default-allowed shape here. Restricted or otherwise
+    // shaped overrides keep their existing admission until supported.
+    let supported = actual.is_none_or(|tag| {
+        matches!(tag, horizon_core::nbt::Tag::Compound(map)
+            if map.keys().all(|key| matches!(key.to_string_lossy().as_str(), "slot" | "swappable")))
+            && matches!(tag.get("slot"), Some(horizon_core::nbt::Tag::String(_)))
+            && tag.get("swappable").is_none_or(|flag| {
+                horizon_client::item_data::component_bool(flag).is_some()
+            })
+    });
+    let (slot, swappable) = if supported {
+        (equippable.slot.as_str(), equippable.swappable)
+    } else {
+        let info = items.get(&stack.item)?;
+        (info.equip_slot.as_deref()?, info.swappable)
+    };
+    if !swappable {
+        return None;
+    }
+    Some(match slot {
+        "head" => (0, "head"),
+        "chest" => (1, "chest"),
+        "legs" => (2, "legs"),
+        "feet" => (3, "feet"),
+        _ => return None,
+    })
+}
+
+/// The `ArmorStand.equipment` index `ArmorStand.interact` puts `stack` in:
+/// the stack's own `equippable` slot, else the main hand.
+fn stand_slot(items: &crate::items::Items, stack: &ItemStack) -> usize {
+    match horizon_client::item_sync::equippable_slot(stack, items).as_deref() {
+        Some("feet") => 2,
+        Some("legs") => 3,
+        Some("chest") => 4,
+        Some("head") => 5,
+        Some("offhand") => 1,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod stack_equip_tests {
+    use super::{hand_equip_slot, stand_slot};
+    use horizon_client::items::{ItemInfo, ItemStack, Items};
+    use horizon_core::nbt::Tag;
+
+    fn with_equippable(fields: Vec<(&str, Tag)>) -> ItemStack {
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack
+            .data_mut()
+            .set_other("minecraft:equippable", Some(Tag::compound(fields)));
+        stack
+    }
+
+    /// A stack's own `equippable` slot, not its item type's, decides where a
+    /// right-click wears it; a removed component wears nowhere.
+    #[test]
+    fn the_hands_armour_slot_comes_from_the_stacks_equippable() {
+        let items = Items::for_tests(Default::default());
+        let helmet = with_equippable(vec![("slot", Tag::String("head".into()))]);
+        assert_eq!(hand_equip_slot(&helmet, &items), Some((0, "head")));
+        assert_eq!(
+            hand_equip_slot(
+                &with_equippable(vec![("slot", Tag::String("chest".into()))]),
+                &items
+            ),
+            Some((1, "chest"))
+        );
+        let unsupported = with_equippable(vec![("slot", Tag::String("mainhand".into()))]);
+        assert_eq!(hand_equip_slot(&unsupported, &items), None);
+        let unswappable = with_equippable(vec![
+            ("slot", Tag::String("head".into())),
+            ("swappable", Tag::Byte(0)),
+        ]);
+        assert_eq!(hand_equip_slot(&unswappable, &items), None);
+
+        // The item's own component answers while the stack removes it.
+        let mut items = Items::for_tests(Default::default());
+        items.items.insert(
+            "minecraft:iron_helmet".into(),
+            ItemInfo {
+                equip_slot: Some("head".into()),
+                ..Default::default()
+            },
+        );
+        let mut removed = ItemStack::new("minecraft:iron_helmet", 1);
+        removed.data_mut().set_other(
+            "!minecraft:equippable",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert_eq!(hand_equip_slot(&removed, &items), None);
+    }
+
+    /// `ArmorStand.interact` puts a stack in the slot its `equippable` names,
+    /// not the one its item type names.
+    #[test]
+    fn an_armor_stands_slot_comes_from_the_stacks_equippable() {
+        let items = Items::for_tests(Default::default());
+        assert_eq!(
+            stand_slot(
+                &items,
+                &with_equippable(vec![("slot", Tag::String("feet".into()))])
+            ),
+            2
+        );
+        assert_eq!(
+            stand_slot(
+                &items,
+                &with_equippable(vec![("slot", Tag::String("offhand".into()))])
+            ),
+            1
+        );
+        assert_eq!(stand_slot(&items, &ItemStack::new("minecraft:stick", 1)), 0);
+        let mut removed = ItemStack::new("minecraft:stick", 1);
+        removed.data_mut().set_other(
+            "!minecraft:equippable",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert_eq!(stand_slot(&items, &removed), 0);
+    }
+}
 impl Game<'_> {
     /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
     /// its slot (the worn piece comes back to the hand). It runs on a client
     /// too (`Item.use`), as the prediction the server's slot packets confirm.
     pub(super) fn equip_from_hand(&mut self, stack: &ItemStack) -> bool {
-        let Some(info) = self.items().get(&stack.item) else {
+        let Some((index, slot)) = hand_equip_slot(stack, self.items()) else {
             return false;
         };
-        let components = self
-            .pack
-            .item_renderer
-            .models
-            .components(&horizon_client::item_render::stack_view(stack));
-        let Some(equippable) = components.get("minecraft:equippable") else {
-            return false;
-        };
-        let actual = stack
-            .data()
-            .and_then(|data| data.other("minecraft:equippable"));
-        // Only adopt the default-allowed shape here. Restricted or otherwise
-        // shaped overrides keep their existing admission until supported.
-        let supported = actual.is_none_or(|tag| {
-            matches!(tag, horizon_core::nbt::Tag::Compound(map)
-                if map.keys().all(|key| matches!(key.to_string_lossy().as_str(), "slot" | "swappable")))
-                && matches!(tag.get("slot"), Some(horizon_core::nbt::Tag::String(_)))
-                && tag.get("swappable").is_none_or(|flag| {
-                    horizon_client::item_data::component_bool(flag).is_some()
-                })
-        });
-        let slot = if supported {
-            equippable.get("slot").and_then(serde_json::Value::as_str)
-        } else {
-            info.equip_slot.as_deref()
-        };
-        let (index, slot) = match slot {
-            Some("head") => (0, "head"),
-            Some("chest") => (1, "chest"),
-            Some("legs") => (2, "legs"),
-            Some("feet") => (3, "feet"),
-            _ => return false,
-        };
-        // The component codec replaces the whole value: an override which
-        // omits swappable uses true, rather than its item's prototype flag.
-        let swappable = if !supported {
-            info.swappable
-        } else if let Some(actual) = actual {
-            actual
-                .get("swappable")
-                .and_then(horizon_client::item_data::component_bool)
-                .unwrap_or(true)
-        } else {
-            equippable
-                .get("swappable")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true)
-        };
-        if !swappable {
-            return false;
-        }
         let current = self.armor[index].clone();
         // PREVENT_ARMOR_CHANGE (Curse of Binding) outside creative, or the same item.
         if current.as_ref().is_some_and(|c| {
@@ -3050,3 +3120,4 @@ mod postbaseline_lodestone_controls {
         );
     }
 }
+
