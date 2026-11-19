@@ -7,9 +7,11 @@ A creative bot sends creative-slot packets, then the console reads its inventory
 - stone ×64 into slot 36 (the first hotbar slot) and ×1 into 45 (the offhand): kept;
 - a diamond sword ×2 into 37 and ender pearls ×17 into 38 (more than their stack size): ignored
   (handleSetCreativeModeSlot's `validData`);
-- stone into 0 (the crafting result) and 46 (past the inventory menu): ignored (`validSlot` is 1..45).
-A second bot sends stone ×100: its codec takes counts of 1 to 99, so vanilla fails the packet and
-disconnects the player.
+- stone ×5 into 0 (the crafting result) and ×7 into 46 (past the inventory menu): ignored
+  (`validSlot` is 1..45), their counts within the codec's 1..99.
+A second bot sends stone ×100 into slot 36 and a third sends stone ×100 into slot 0: the codec takes
+counts of 1 to 99, so vanilla fails the packet and disconnects the player, before `validSlot` or the
+creative-mode check is reached.
 
 horizon-bots stand in for the clients (`--give`). The server runs in a fresh folder with fresh HORIZON_HOME
 and XDG folders (lab.game_env), on a free port. Build first:
@@ -83,7 +85,9 @@ def check(bins, scratch, out):
         items = parse_items(entity_data(s, 'Give0', 'Inventory'))
         offhand = entity_data(s, 'Give0', 'equipment.offhand')
         over_report, over = bot(bins, port, out, 'Over', [(36, STONE, 100)], 8)
+        result_report, result = bot(bins, port, out, 'Result', [(0, STONE, 100)], 8)
         over.wait(timeout=120)
+        result.wait(timeout=120)
         give.wait(timeout=120)
         lines = s.since(0)
     finally:
@@ -94,12 +98,13 @@ def check(bins, scratch, out):
     if 'minecraft:stone' not in offhand or (count and count[1] != '1'):
         raise Failed(f'the offhand (slot 45) holds {offhand.strip()}, not one stone')
     print('slots 1..45 within the stack size are kept; slot 0, slot 46 and oversized stacks are ignored')
-    entry = json.loads(over_report.read_text())['per_bot'][0]
-    if 'count 100' not in (entry['error'] or ''):
-        raise Failed(f'a stack of 100 did not disconnect the player: {entry["error"]!r}')
-    if not any('Over0 sent an invalid creative stack' in l for l in lines):
-        raise Failed('the console did not say why Over0 was disconnected')
-    print(f'a stack of 100 disconnects: {entry["error"]}')
+    for name, path, slot in (('Over0', over_report, 36), ('Result0', result_report, 0)):
+        entry = json.loads(path.read_text())['per_bot'][0]
+        if 'count 100' not in (entry['error'] or ''):
+            raise Failed(f'a stack of 100 into slot {slot} did not disconnect the player: {entry["error"]!r}')
+        if not any(f'{name} sent an invalid creative stack' in l for l in lines):
+            raise Failed(f'the console did not say why {name} was disconnected')
+        print(f'a stack of 100 disconnects from slot {slot}: {entry["error"]}')
 
 
 def main():
