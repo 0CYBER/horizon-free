@@ -10,6 +10,7 @@ pub(super) fn entity_answer(
 ) -> Option<mod_api::InteractionResult> {
     assert_eq!(event.hand, EXPECTED.get());
     assert_eq!(event.entity, 42);
+    assert_eq!(event.dimension, "minecraft:the_nether");
     SEEN.set(true);
     Some(RESULT.get())
 }
@@ -158,6 +159,7 @@ fn generated_guest_item_dispatch_preserves_hands_sides_and_results() {
                         mod_api::HostSide::Server(&mut world)
                     },
                     &mut mod_api::EntityInteractEvent {
+                        dimension: "minecraft:the_nether",
                         hand,
                         entity: 42,
                         kind: "minecraft:zombie",

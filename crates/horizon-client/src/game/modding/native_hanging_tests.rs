@@ -171,3 +171,38 @@ fn a_client_turns_its_painting_with_the_servers_direction() {
         assert_eq!(game.paintings[0].facing, 0);
     });
 }
+
+/// A listener that records the dimension `hanging_break` names, and keeps the frame.
+struct BreakWatcher(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for BreakWatcher {
+    fn hanging_break(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::HangingBreakEvent<'_>,
+    ) -> mod_api::Flow {
+        self.0.lock().unwrap().push(event.dimension.to_owned());
+        mod_api::Flow::Cancel
+    }
+}
+
+/// `hanging_break` names the level the frame hangs in: a frame in the Nether reports
+/// `minecraft:the_nether`, not the overworld.
+#[test]
+#[ignore = "daily"]
+fn hanging_break_names_the_nether_it_happens_in() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "break-watcher",
+        Box::new(BreakWatcher(seen.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_hanging(|game| {
+            game.dim = super::Dim::Nether;
+            assert!(!game.break_frame_by(0, None), "the listener kept the frame");
+            assert_eq!(*seen.lock().unwrap(), vec!["minecraft:the_nether"]);
+        });
+    });
+}

@@ -4,7 +4,7 @@
 pub trait Hooks {
     /// An item frame (`minecraft:item_frame`, `minecraft:glow_item_frame`) or
     /// a painting (`minecraft:painting`), `kind` its entity type and `pos` the
-    /// block it hangs in, is about to break: a server player's hit
+    /// block it hangs in of the level `dimension` (a `&str`), is about to break: a server player's hit
     /// (`player`, their state swapped in, so `PlayerRef::tell` answers them), a
     /// blast, or the wall it hangs on gone (`player` None for both). Where
     /// `BlockAttachedEntity.hurtServer` and its survival check would kill

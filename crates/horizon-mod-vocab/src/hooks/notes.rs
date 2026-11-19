@@ -223,8 +223,8 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   frame, a painting or a leash knot (tying a lead to a fence that has none; `pos` is the fence), once it fits and
   before it is placed or the item used. Set `cancel` and nothing happens; the item stays in the hand. The player's
   state is swapped in, so `PlayerRef::tell` answers them. `/summon` and a lead tied to a mob are not heard.
-- **`hanging_break(player, kind, pos, cancel)`**: an item frame, a glow item frame or a painting (`kind`)
-  hanging in `pos` is about to break: a server player's hit (`player`, whose state is swapped in), a blast, or the
+- **`hanging_break(dimension, player, kind, pos, cancel)`**: an item frame, a glow item frame or a painting (`kind`)
+  hanging in `pos` of the level `dimension` (`&str`, as `entity_join_level` gives it) is about to break: a server player's hit (`player`, whose state is swapped in), a blast, or the
   wall it hangs on gone (`player` None for both), before anything drops or sounds. Set `cancel` and it stays as it
   was. A hit that only takes a frame's item out, the game's own player and `/kill` are not asked.
 - **`bucket_empty(player, name, pos, fluid, cancel)`**: a server player empties a bucket (`fluid` is
@@ -520,7 +520,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   calculated velocity, before it is added to the entity. Replace `knockback_velocity` to change the push;
   `entity` is None for a player, whom `host.players().acting_player` names. The player packet uses the same replacement. Wind bursts are heard too.
 
-- **`fill_bucket(stack, pos, canceled)`** and **`attack_entity(entity, kind, pos, canceled)`**:
+- **`fill_bucket(stack, pos, canceled)`** and **`attack_entity(dimension, entity, kind, pos, canceled)`**:
   a player's bucket at a block, and their blow on an entity, with the acting player swapped in. Canceled, the bucket
   does nothing and the blow does no harm. A fluid or mob bucket also asks about the block beside the clicked face
   whenever that block is not its target, since a block that refuses the fluid passes it there; the fluid may still
@@ -2665,7 +2665,7 @@ registration path.
 
 - A player releases a bow: `arrow_loose(stack, has_ammo, charge, canceled)` may change held-tick `charge` or cancel the shot; negative charge also prevents it. Unlike `living_entity_use_item_stop`, it does not skip the whole item release; `entity_shoot_bow` reports the spawned arrow afterward with read-only force. Fires on the Game running the bow release, including LAN guests; a remote client's own release path, crossbows, and ArrowNockEvent are not covered.
 
-- An item frame or painting about to break: `hanging_break(player, kind, pos, cancel)` is heard before a server player's hit, a blast or the loss of its wall breaks an item frame, a glow item frame or a painting, with the hitting player (None for a blast or a lost wall). A mod sets `cancel` and it stays. The hitting player's state is swapped in. A hit that only takes a frame's item out, the game's own player and `/kill` are not asked.
+- An item frame or painting about to break: `hanging_break(dimension, player, kind, pos, cancel)` is heard before a server player's hit, a blast or the loss of its wall breaks an item frame, a glow item frame or a painting, with the hitting player (None for a blast or a lost wall). A mod sets `cancel` and it stays. The hitting player's state is swapped in. A hit that only takes a frame's item out, the game's own player and `/kill` are not asked.
 
 - A criterion of a server player's advancement was granted or revoked after its progress changed and before any completion rewards, except the `minecraft:tick` criteria granted on a network player's first tick or a reload, which are heard after that tick's rewards and packets; `advancement` is its identifier, such as `minecraft:story/mine_stone`, `criterion` the criterion name and `progress_type` is `ProgressType::Grant` or `ProgressType::Revoke`. A grant or revoke that changes nothing is not heard.
 

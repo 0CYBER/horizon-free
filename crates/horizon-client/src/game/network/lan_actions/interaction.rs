@@ -571,7 +571,8 @@ impl Game<'_> {
         if let Some((kind, at)) = aimed
             && self.as_guest_at(gi, conn, |g| {
                 let mut canceled = false;
-                g.native_attack_entity(id, &kind, at, &mut canceled);
+                let dimension = g.dim.id();
+                g.native_attack_entity(dimension, id, &kind, at, &mut canceled);
                 canceled || g.native_left_click_entity_event(id, &kind)
             }) == Ok(true)
         {

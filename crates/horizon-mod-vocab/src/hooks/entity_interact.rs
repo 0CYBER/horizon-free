@@ -2,7 +2,7 @@
 // catalog-order: 0057
 
 pub trait Hooks {
-    /// A player right-clicks the entity `entity` (`Entity.getId`) of type
+    /// A player right-clicks, in the level `dimension` (a `&str`), the entity `entity` (`Entity.getId`) of type
     /// `kind` (`minecraft:cow`) with `hand` (`Hand::Main` or `Hand::Off`), holding `stack` (none in an
     /// empty hand): where `Player.interactOn` starts, before the entity's own
     /// `interact` and the item's `interactLivingEntity`. Both logical sides

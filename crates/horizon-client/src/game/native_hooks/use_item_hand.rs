@@ -55,7 +55,8 @@ impl Game<'_> {
         let kind = self.target_type(entity);
         let stack = self.with_hand(hand, |g| g.held().cloned());
         let mut result = None;
-        self.native_entity_interact(hand, id, &kind, stack.as_ref(), &mut result);
+        let dimension = self.dim.id();
+        self.native_entity_interact(dimension, hand, id, &kind, stack.as_ref(), &mut result);
         match result? {
             mod_api::InteractionResult::Pass | mod_api::InteractionResult::TryWithEmptyHand => None,
             answer => Some(self.with_hand(hand, |g| g.interaction_consumed(answer))),

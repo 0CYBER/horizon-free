@@ -140,7 +140,15 @@ impl Game<'_> {
                 return Ok(true);
             }
             let mut result = None;
-            self.native_entity_interact(self.hand, id, &kind, stack.as_ref(), &mut result);
+            let dimension = self.dim.id();
+            self.native_entity_interact(
+                dimension,
+                self.hand,
+                id,
+                &kind,
+                stack.as_ref(),
+                &mut result,
+            );
             if let Some(answer) = result
                 && !matches!(
                     answer,

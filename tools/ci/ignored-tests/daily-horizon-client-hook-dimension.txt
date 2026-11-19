@@ -1,0 +1,3 @@
+# Dimension-bearing hook regression added by #17988. Daily resource tests must pass when selected.
+# Rows: PACKAGE TEST TARGET daily REASON.
+horizon-client game::native_hanging_tests::hanging_break_names_the_nether_it_happens_in lib daily resources

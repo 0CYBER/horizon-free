@@ -9,6 +9,7 @@ fn entity_interact_reports_each_typed_hand() {
             event: &mut EntityInteractEvent<'_>,
         ) -> Option<InteractionResult> {
             assert!(matches!(event.hand, Hand::Main | Hand::Off));
+            assert_eq!(event.dimension, "minecraft:the_nether");
             if event.hand == Hand::Off {
                 Some(InteractionResult::SuccessServer)
             } else {
@@ -21,6 +22,7 @@ fn entity_interact_reports_each_typed_hand() {
         let mut result = None;
         dispatch_entity_interact(
             HostSide::Server(&mut TestHost),
+            "minecraft:the_nether",
             hand,
             42,
             "minecraft:zombie",
