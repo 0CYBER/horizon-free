@@ -21,7 +21,7 @@ struct WorldTarget {
     depth: wgpu::TextureView,
     group: wgpu::BindGroup,
     taa: Option<History>,
-    /// The world anti-aliased at its own size, made on first use (`resolved`); `Some(None)`
+    /// The world resolved, at `resolved_size`, made on first use (`resolved`); `Some(None)`
     /// where there was no video memory for it, until the target is made again.
     resolved: Option<Option<wgpu::TextureView>>,
 }
@@ -165,7 +165,8 @@ pub struct Post {
     /// Output pixels per rendered pixel while TAA is on (1: native): the world renders
     /// this much smaller and TAA rebuilds it at the resolution scale's size.
     pub upscale: f32,
-    /// `upscale` is held at 1 (`hold_upscale`): a native pack's world gets TAA at its own size.
+    /// `upscale` is held at 1 (`hold_upscale`): a native pack's world gets TAA at its own size,
+    /// where its `[tonemap]` reads `previous` (`Capabilities::engine_upscale`).
     upscale_held: bool,
     /// TAA runs this frame (`jitter`): not on the title screen, under a `shaders/` pack, or
     /// under a native one the renderer doesn't resolve (`Capabilities::engine_resolve`).
@@ -428,10 +429,12 @@ impl Post {
     }
 
     /// The size a native (API 0.2) pack's world draws at: it always has a target (`prepare`'s
-    /// `always`), and TAA's upscaling is off under it (`hold_upscale`), so it gets TAA's
-    /// sizes, not a `shaders/` pack's.
-    pub(super) fn pack_render_size(&self, window: [u32; 2]) -> [u32; 2] {
-        sizes(window, self.scale, 1.0).0
+    /// `always`) at TAA's sizes, not a `shaders/` pack's. Smaller by the Upscaling ratio only
+    /// where TAA upscales it (`upscaled`: `Capabilities::engine_upscale`); `upscale` is 1
+    /// while TAA is off.
+    pub(super) fn pack_render_size(&self, window: [u32; 2], upscaled: bool) -> [u32; 2] {
+        let upscale = if upscaled { self.upscale } else { 1.0 };
+        self.sizes_with_upscale(window, upscale).0
     }
 
     /// The scaled world's depth where it was drawn at `size`, the window's: what post effects
@@ -677,14 +680,15 @@ impl Post {
         }
     }
 
-    /// A target of the world's size and format for `finish` to draw onto, where something
-    /// after it reads the world at its own size (a native pack without a post chain, #16126).
-    /// Made on first use, and dropped with the world's target. None where there is no video
-    /// memory for it: the pack then reads the world without FXAA.
+    /// A target in the world's format for `finish` or the sharpening to draw onto, where
+    /// something after it reads the world resolved (a native pack without a post chain,
+    /// #16126), at `resolved_size`. Made on first use, and dropped with the world's target.
+    /// None where there is no video memory for it: the pack then reads the world without FXAA,
+    /// or TAA's history unsharpened.
     pub(super) fn resolved(&mut self, device: &wgpu::Device) -> Option<wgpu::TextureView> {
         let format = self.format;
+        let size = self.resolved_size()?;
         let target = self.target.as_mut()?;
-        let size = target.size;
         let view = target.resolved.get_or_insert_with(|| {
             // As the world's own target: an error raised is fatal, so catch running out of
             // memory, and the failed texture's view failing validation.
@@ -710,7 +714,7 @@ impl Post {
             let error = pollster::block_on(memory.pop()).or(pollster::block_on(validation.pop()));
             if let Some(error) = error {
                 log::warn!(
-                    "Horizon renderer: no video memory for the shader pack's FXAA at {size:?}; drawing it without ({error})"
+                    "Horizon renderer: no video memory for the shader pack's FXAA or sharpening at {size:?}; drawing it without ({error})"
                 );
                 return None;
             }
@@ -722,6 +726,13 @@ impl Post {
     /// The size of the world's own target, when it has one.
     pub fn size(&self) -> Option<[u32; 2]> {
         self.target.as_ref().map(|t| t.size)
+    }
+
+    /// The size of the world resolved (`resolve_taa`, `resolved`): TAA's history's, which its
+    /// upscaling makes larger than the world's, else the world's target's.
+    pub(super) fn resolved_size(&self) -> Option<[u32; 2]> {
+        let target = self.target.as_ref()?;
+        Some(target.taa.as_ref().map_or(target.size, |h| h.size))
     }
 
     /// Bindings that copy (or anti-alias) `view` onto the screen in `finish_with`.
@@ -764,18 +775,29 @@ impl Post {
         self.draw_onto(encoder, screen, shown, pipeline, timing);
     }
 
-    /// TAA's resolve of this frame, when `jitter` had it on: the history it writes is the
-    /// world anti-aliased, for a native pack's output to read in the world's place (#16126).
-    /// At the world's size while the upscaling is held (`hold_upscale`).
+    /// TAA's resolve of this frame, when `jitter` had it on: the world anti-aliased, for a
+    /// native pack's output to read in the world's place (#16126). At the world's size while
+    /// the upscaling is held (`hold_upscale`), the history itself. Upscaled, the history
+    /// sharpened as without a pack, at its size onto `resolved`, or unsharpened where there is
+    /// no video memory for that.
     pub(super) fn resolve_taa(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        timing: Option<&mut super::pack_timing::PassTiming>,
+        mut timing: Option<&mut super::pack_timing::PassTiming>,
     ) -> Option<wgpu::TextureView> {
+        // Made only for a frame TAA resolves.
+        let sharpened = (self.taa_frame().is_some() && self.taa_upscale() > 1.0)
+            .then(|| self.resolved(device))
+            .flatten();
         let (res, frame, taa) = self.taa_frame()?;
-        res.resolve(queue, encoder, &frame, taa, timing);
-        Some(taa.history[(frame.index % 2) as usize].clone())
+        let shown = res.resolve(queue, encoder, &frame, taa, timing.as_deref_mut());
+        let Some(sharpened) = sharpened else {
+            return Some(taa.history[(frame.index % 2) as usize].clone());
+        };
+        self.draw_onto(encoder, &sharpened, shown, &self.sharpen, timing);
+        Some(sharpened)
     }
 
     /// What TAA resolves this frame, when `jitter` had it on and the target has a history.
@@ -936,8 +958,8 @@ mod tests {
     }
 
     /// A native (API 0.2) pack's kept resources are made before its first frame at the size
-    /// it draws at: none of TAA's upscaling, which is held under a pack (`hold_upscale`), and
-    /// the scale applied with or without a target yet.
+    /// it draws at: TAA's render size where TAA upscales it, else none of TAA's upscaling
+    /// (`hold_upscale`), and the scale applied with or without a target yet.
     #[test]
     fn a_pack_draws_at_the_scaled_window_without_taa_s_upscaling() {
         for (window, scale, upscale, before, pack) in [
@@ -1005,7 +1027,12 @@ mod tests {
             assert_eq!(post.sizes(window, false).0, expected);
             // A native pack's frame without TAA: what its kept resources are made for.
             post.taa_on = false;
-            assert_eq!(post.pack_render_size(window), post.sizes(window, false).0);
+            assert_eq!(
+                post.pack_render_size(window, false),
+                post.sizes(window, false).0
+            );
+            // One TAA upscales: they are made at TAA's render size.
+            assert_eq!(post.pack_render_size(window, true), expected);
         }
     }
 
@@ -1027,7 +1054,7 @@ mod tests {
         assert_eq!(post.taa_render_size(window), [321, 181]);
         post.hold_upscale(true);
         assert_eq!(post.taa_render_size(window), scaled);
-        assert_eq!(post.pack_render_size(window), scaled);
+        assert_eq!(post.pack_render_size(window, false), scaled);
         post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
         let _ = post.prepare(&device, window, true, false);
         assert_eq!(post.size(), Some(scaled));
@@ -1037,6 +1064,48 @@ mod tests {
         assert_eq!(post.sizes(window, true).0, [321, 181]);
         post.hold_upscale(false);
         assert_eq!(post.taa_render_size(window), [321, 181]);
+    }
+
+    /// Under a native pack TAA may upscale (`Capabilities::engine_upscale`, #16126), the
+    /// world draws at TAA's render size, the size the pack's kept resources are made for,
+    /// while TAA's history and the sharpened picture it resolves to keep the scaled window's.
+    /// At the Upscaling ratio 1 nothing is sharpened: the pack reads the history itself.
+    #[test]
+    fn an_upscaled_pack_draws_small_and_resolves_sharpened_at_the_scaled_window() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = test_device() else {
+            eprintln!("TAA upscaling under a pack GPU skipped: no test device");
+            return;
+        };
+        let mut post = Post::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        if !post.supports_taa() {
+            eprintln!("TAA upscaling under a pack GPU skipped: TAA unsupported");
+            return;
+        }
+        post.taa = true;
+        let (window, scaled, drawn) = ([1281, 721], [641, 361], [321, 181]);
+        post.scale = 0.5;
+        let resolve = |post: &mut Post, upscale| {
+            post.upscale = upscale;
+            post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+            let _ = post.prepare(&device, window, true, false);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let resolved = post.resolve_taa(&device, &queue, &mut encoder, None);
+            queue.submit([encoder.finish()]);
+            let view = resolved.expect("TAA resolves the pack's world");
+            let texture = view.texture();
+            ([texture.width(), texture.height()], texture.format())
+        };
+        post.upscale = 2.0;
+        assert_eq!(post.pack_render_size(window, true), drawn);
+        let sharpened = resolve(&mut post, 2.0);
+        assert_eq!(post.size(), Some(drawn));
+        assert_eq!(post.resolved_size(), Some(scaled));
+        // The sharpening's target is in the world's format; the history is `Rgba16Float`.
+        assert_eq!(sharpened, (scaled, wgpu::TextureFormat::Rgba8Unorm));
+        let history = resolve(&mut post, 1.0);
+        assert_eq!(post.size(), Some(scaled));
+        assert_eq!(history, (scaled, HISTORY_FORMAT));
     }
 
     #[test]

@@ -196,6 +196,14 @@ fn tonemap_entries(default: bool) -> String {
 const DEFAULT_TONEMAP: &str =
     "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n";
 
+/// Whether TAA may upscale the world under a pack without a post chain whose `[tonemap]` is
+/// `tonemap` (`None`: Horizon's, which reads only `input.color`). Upscaled, `previous` is
+/// larger than the world, the size it promises the tonemap: only a tonemap that never reads
+/// it can't tell.
+pub(super) fn tonemap_lets_taa_upscale(tonemap: Option<&CheckedStage>) -> bool {
+    tonemap.is_none_or(|s| !s.reads("previous"))
+}
+
 /// A colour target of `INTERMEDIATE` and `size`, drawn and read.
 fn intermediate(device: &wgpu::Device, label: &str, size: [u32; 2]) -> wgpu::TextureView {
     device
@@ -224,8 +232,9 @@ struct Display {
     /// The pack's `[tonemap]` label, `None` for Horizon's.
     label: Option<String>,
     tonemap: wgpu::RenderPipeline,
-    /// `scene_color` at the world's size; `picture` at the window's (none without a chain:
-    /// the tonemap reads `scene_color`).
+    /// `scene_color` at the world's size, or without a chain at the size of what it decodes
+    /// (`WorldPost::display`); `picture` at the window's (none without a chain: the tonemap
+    /// reads `scene_color`).
     scene: Option<([u32; 2], wgpu::TextureView)>,
     picture: Option<([u32; 2], wgpu::TextureView)>,
 }
@@ -323,6 +332,8 @@ pub struct NativePost {
     format: wgpu::TextureFormat,
     /// The decode, the picture and the tonemap.
     display: Display,
+    /// `tonemap_lets_taa_upscale` of its `[tonemap]`.
+    upscalable: bool,
 }
 
 /// The `frame` every stage of a pack reads (group 3, binding 0), written once a frame, and
@@ -377,6 +388,9 @@ pub struct NativeFrame {
     pub(super) full_lightmap: [f32; 3],
     /// `frame.jitter`, set before `write` from the world's jitter this frame.
     pub(super) jitter: [f32; 2],
+    /// The lens the world is drawn with this frame (`FrameStart::projection`), set before
+    /// `write`: `frame.projection` is it times the pose.
+    pub(super) lens: Mat4,
     /// A pack with kept resources: their epochs (`NativePack::carry` moves them on).
     pub(super) epochs: Option<kept::Epochs>,
     start: std::time::Instant,
@@ -610,6 +624,7 @@ impl NativeFrame {
             ray_distance: None,
             full_lightmap: [0.0; 3],
             jitter: [0.0; 2],
+            lens: Mat4::IDENTITY,
             epochs: None,
             start: std::time::Instant::now(),
             frames: 0,
@@ -850,7 +865,8 @@ impl NativeFrame {
         };
         let since = step.unwrap_or_else(|| self.wetness.1.map_or(0.0, |t| (now - t).as_secs_f32()));
         self.wetness = (wetness(self.wetness.0, frame.pack.rain, since), Some(now));
-        let mut inputs = frame_inputs(frame, size, seconds, index, self.shadow_camera.as_ref());
+        let shadow = self.shadow_camera.as_ref();
+        let mut inputs = frame_inputs(frame, size, self.lens, seconds, index, shadow);
         inputs.wetness = self.wetness.0;
         inputs.full_lightmap = self.full_lightmap;
         inputs.jitter = self.jitter;
@@ -1192,6 +1208,7 @@ impl NativePost {
             kept,
             format,
             display,
+            upscalable: tonemap_lets_taa_upscale(tonemap),
         })
     }
 
@@ -1204,6 +1221,11 @@ impl NativePost {
     /// the tonemap reads the decoded world.
     pub fn chain(&self) -> bool {
         !self.passes.is_empty()
+    }
+
+    /// Whether its tonemap lets TAA upscale the world (`tonemap_lets_taa_upscale`).
+    pub fn upscalable(&self) -> bool {
+        self.upscalable
     }
 
     /// The passes' labels, in order, then the pack's tonemap's.
@@ -1228,18 +1250,21 @@ impl NativePost {
         device: &wgpu::Device,
         world: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
         size: [u32; 2],
+        display: [u32; 2],
         window: [u32; 2],
         scene: Option<&trace::Traced<'_>>,
     ) {
+        let chain = !self.passes.is_empty();
+        // Without a chain `scene_color` is what the output decodes: the world resolved.
+        let scene_size = if chain { size } else { display };
         let d = &mut self.display;
-        if d.scene.as_ref().is_none_or(|s| s.0 != size) {
+        if d.scene.as_ref().is_none_or(|s| s.0 != scene_size) {
             d.scene = Some((
-                size,
-                intermediate(device, "Shader API 0.2 scene_color", size),
+                scene_size,
+                intermediate(device, "Shader API 0.2 scene_color", scene_size),
             ));
             self.groups = None;
         }
-        let chain = !self.passes.is_empty();
         if chain && d.picture.as_ref().is_none_or(|p| p.0 != window) {
             d.picture = Some((
                 window,
@@ -1443,14 +1468,15 @@ impl NativePost {
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
         let timed = timing.as_deref_mut();
-        self.run_chain(device, encoder, world, size, window, timed, scene);
+        self.run_chain(device, encoder, world, size, size, window, timed, scene);
         self.run_display(device, encoder, screen, None, timing);
     }
 
     /// Runs the passes over the world target `world` (colour, depth) of `size`, the last onto
     /// the picture of the `window`'s size, timed by `timing` when it times this frame. With
     /// `scene`, the terrain's scene and the camera (`trace` said this frame's `frame` has it),
-    /// the passes built against it draw. Without passes the world is decoded in `run_display`.
+    /// the passes built against it draw. Without passes the world, or the world resolved at
+    /// `display` (`WorldPost::display`), is decoded in `run_display`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run_chain(
         &mut self,
@@ -1458,12 +1484,13 @@ impl NativePost {
         encoder: &mut wgpu::CommandEncoder,
         world: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
         size: [u32; 2],
+        display: [u32; 2],
         window: [u32; 2],
         mut timing: Option<&mut super::pack_timing::PassTiming>,
         scene: Option<&trace::Traced<'_>>,
     ) {
         self.begin_kept(device, encoder, size);
-        self.prepare(device, world, size, window, scene);
+        self.prepare(device, world, size, display, window, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
         }
@@ -1517,7 +1544,7 @@ impl NativePost {
 
     /// The tonemap onto `screen`, after `run_chain` in the same frame, which set this frame's
     /// version of the kept resources. Without passes it decodes the world first, or
-    /// `resolved`, the world anti-aliased at its size, in its place.
+    /// `resolved`, the world anti-aliased at `run_chain`'s `display`, in its place.
     pub(super) fn run_display(
         &self,
         device: &wgpu::Device,
@@ -1573,19 +1600,20 @@ fn wetness(wetness: f32, rain: f32, dt: f32) -> f32 {
     rain + (wetness - rain) * 0.5f32.powf(dt / half_life)
 }
 
-/// The frame as packs read it (docs/api/shaders-reference-0.2.md), from the renderer's `Frame`.
+/// The frame as packs read it (docs/api/shaders-reference-0.2.md), from the renderer's `Frame`,
+/// for a world of `size` drawn through `lens` (`FrameStart::projection`). The lens is the
+/// renderer's own, not one made again from `size`: the world's size is the window's scaled
+/// and rounded, so its aspect can differ from the window's, which the world is drawn with.
 pub fn frame_inputs(
     frame: &Frame,
     size: [u32; 2],
+    lens: Mat4,
     seconds: f32,
     index: u32,
     shadow: Option<&horizon_shaders::Shadow>,
 ) -> FrameInputs {
-    let aspect = size[0] as f32 / size[1].max(1) as f32;
     let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
-    let projection = super::world_projection(frame.fov_degrees, aspect, frame.depth_far)
-        * frame.bob
-        * frame.spin;
+    let projection = lens * frame.bob * frame.spin;
     // A celestial body's direction at `angle` degrees (SkyRenderer: Y -90°, then X by the
     // angle, of straight up): overhead at 0, rising in the east (+x).
     let body = |angle: f32| {
@@ -1848,7 +1876,7 @@ mod tests {
         let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
         let shadow = crate::gfx::native_shadow::camera(&Default::default());
         let light = |frame: &Frame, shadow| {
-            frame_inputs(frame, [4, 4], 0.0, 0, shadow)
+            frame_inputs(frame, [4, 4], Mat4::IDENTITY, 0.0, 0, shadow)
                 .light_direction
                 .map(f32::to_bits)
         };
@@ -1858,7 +1886,7 @@ mod tests {
             (200.0, 20.0, false, [0xbeaf_1d43, 0x3f70_8fb3, 0xb280_6bc8]),
         ] {
             (frame.sky.sun_angle, frame.sky.moon_angle) = (sun, moon);
-            let inputs = frame_inputs(&frame, [4, 4], 0.0, 0, None);
+            let inputs = frame_inputs(&frame, [4, 4], Mat4::IDENTITY, 0.0, 0, None);
             let body = if by_day {
                 inputs.sun_direction
             } else {
@@ -1867,6 +1895,37 @@ mod tests {
             assert_eq!(light(&frame, None), body.map(f32::to_bits), "{sun}");
             assert_eq!(light(&frame, Some(&shadow)), shadowed, "{sun}");
         }
+    }
+
+    /// A pack rebuilds positions from depth with the projection the world is drawn with
+    /// (unjittered): at an odd window with upscaling, the world's rounded size has another
+    /// aspect than the window's, and `frame.projection` still is the renderer's lens.
+    #[test]
+    fn the_pack_s_projection_is_the_renderer_s_at_an_odd_upscaled_size() {
+        let hud = crate::hud::HudBatch::scratch([4, 4]);
+        let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        (frame.yaw, frame.pitch, frame.fov_degrees) = (30.0, -10.0, 70.0);
+        // A 1281×721 window at scale 0.5 and the Upscaling ratio 2 draws its world at 321×181.
+        let (window, drawn) = ([1281.0f32, 721.0], [321, 181]);
+        let renderer = crate::gfx::view::View::screen(
+            frame.yaw,
+            frame.pitch,
+            frame.fov_degrees,
+            window[0] / window[1],
+            frame.depth_far,
+        );
+        let redone = drawn[0] as f32 / drawn[1] as f32;
+        let at_drawn = crate::gfx::world_projection(frame.fov_degrees, redone, frame.depth_far);
+        assert_ne!(at_drawn, renderer.projection, "the sizes' aspects differ");
+        let inputs = frame_inputs(&frame, drawn, renderer.projection, 0.0, 0, None);
+        let m = Mat4::from_cols_array_2d;
+        let pose = frame.bob * frame.spin;
+        let pack = m(&inputs.projection) * m(&inputs.view);
+        let drawn_with = renderer.view_proj(pose);
+        assert!(pack.abs_diff_eq(drawn_with, 1e-6), "{pack} != {drawn_with}");
+        let inverse = m(&inputs.projection_inverse) * m(&inputs.projection);
+        assert!(inverse.abs_diff_eq(Mat4::IDENTITY, 1e-4), "{inverse}");
+        assert_eq!(inputs.resolution, [321.0, 181.0]);
     }
 
     #[test]
@@ -2666,23 +2725,39 @@ api = \"0.2\"
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> (NativePost, NativeFrame) {
-        let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
-                        [sky]\nfile = \"s.wgsl\"\n[tonemap]\nfile = \"t.wgsl\"\n";
-        let files = [
-            (MANIFEST, manifest),
-            (
-                "s.wgsl",
-                "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
-            ),
-            (
-                "t.wgsl",
-                "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n",
-            ),
-        ]
-        .into_iter()
-        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
-        .collect();
-        let report = check(&Pack::from_files(files).unwrap()).unwrap();
+        let identity = "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n";
+        tonemap_pack(device, queue, format, identity)
+    }
+
+    /// The check's report of a pack without `[[post]]` whose `[tonemap]` is `tonemap` (none:
+    /// Horizon's).
+    fn tonemap_report(tonemap: Option<&str>) -> horizon_shader_api::Report {
+        let stage = if tonemap.is_some() {
+            "[tonemap]\nfile = \"t.wgsl\"\n"
+        } else {
+            ""
+        };
+        let manifest = format!(
+            "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+             [sky]\nfile = \"s.wgsl\"\n{stage}"
+        );
+        let sky = "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n";
+        let files = [(MANIFEST, manifest.as_str()), ("s.wgsl", sky)]
+            .into_iter()
+            .chain(tonemap.map(|t| ("t.wgsl", t)))
+            .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+            .collect();
+        check(&Pack::from_files(files).unwrap()).unwrap()
+    }
+
+    /// A pack without `[[post]]` whose `[tonemap]` is `tonemap`, over an SDR frame.
+    fn tonemap_pack(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        tonemap: &str,
+    ) -> (NativePost, NativeFrame) {
+        let report = tonemap_report(Some(tonemap));
         let tonemap = report.stages.iter().find(|s| s.kind == StageKind::Tonemap);
         let frame = sdr_frame(device, queue);
         let post = NativePost::new(
@@ -2794,7 +2869,7 @@ api = \"0.2\"
             }
             let size = [SIZE, SIZE];
             let inputs = (&world, &depth, &frame.surface_view);
-            post.run_chain(&device, &mut encoder, inputs, size, size, None, None);
+            post.run_chain(&device, &mut encoder, inputs, size, size, size, None, None);
             let resolved = fxaa.then_some(&resolved);
             post.run_display(&device, &mut encoder, &screen_view, resolved, None);
             read_screen(&device, &queue, encoder, &screen, SIZE)
@@ -2868,10 +2943,19 @@ api = \"0.2\"
             let mut encoder = device.create_command_encoder(&Default::default());
             let group = world_post.bind(&device, &source_view);
             world_post.finish_with(&mut encoder, &color, &group, None);
-            let resolved = world_post.resolve_taa(&queue, &mut encoder, None);
+            let resolved = world_post.resolve_taa(&device, &queue, &mut encoder, None);
             let resolved = resolved.expect("TAA resolves the pack's world");
             let inputs = (&color, &depth, &frame.surface_view);
-            post.run_chain(&device, &mut encoder, inputs, window, window, None, None);
+            post.run_chain(
+                &device,
+                &mut encoder,
+                inputs,
+                window,
+                window,
+                window,
+                None,
+                None,
+            );
             post.run_display(&device, &mut encoder, &screen_view, Some(&resolved), None);
             read_screen(&device, &queue, encoder, &screen, SIZE)
         };
@@ -2883,6 +2967,215 @@ api = \"0.2\"
             .filter(|p| (16..=239).contains(&p[0]))
             .count();
         assert!(blended > 0, "TAA kept nothing of the first frame: {next:?}");
+    }
+
+    /// TAA upscales the world only under a pack whose `[tonemap]` can't tell (#16126):
+    /// Horizon's and one reading `input.color` can't; one reading `previous`, itself or
+    /// through a function it calls, would find it larger than the world.
+    #[test]
+    fn taa_upscales_only_under_a_tonemap_that_never_reads_previous() {
+        let lets = |tonemap: Option<&str>| {
+            let report = tonemap_report(tonemap);
+            let stage = report.stages.iter().find(|s| s.kind == StageKind::Tonemap);
+            assert_eq!(stage.is_some(), tonemap.is_some());
+            tonemap_lets_taa_upscale(stage)
+        };
+        assert!(lets(None));
+        assert!(lets(Some(
+            "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color * 0.5; }\n"
+        )));
+        assert!(!lets(Some(READS_PREVIOUS)));
+        assert!(!lets(Some(
+            "fn around(uv: vec2<f32>) -> vec3<f32> {\n\
+             \x20   return textureSampleLevel(previous, linear_sampler, uv, 0.0).rgb;\n}\n\
+             fn tonemap(input: TonemapInput) -> vec3<f32> { return around(input.uv); }\n"
+        )));
+    }
+
+    /// A `[tonemap]` that reads `previous` itself, at the pixel's `uv`.
+    const READS_PREVIOUS: &str = "fn tonemap(input: TonemapInput) -> vec3<f32> {\n\
+        \x20   return textureSampleLevel(previous, nearest_sampler, input.uv, 0.0).rgb;\n}\n";
+
+    /// A square texture of `size` in `format`, for `usage`.
+    fn square(
+        device: &wgpu::Device,
+        size: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    }
+
+    /// One frame of a pack without `[[post]]` through the renderer's resolve slot, as
+    /// `Renderer::render` runs it: `world_post` jitters and prepares for an 8×8 window, the
+    /// square world `pixels` is drawn onto its target, TAA resolves it (`resolve_taa`) and
+    /// the pack's output reads that, decoded at `resolved_size`, onto the window. Returns the
+    /// window's rows and what TAA resolved.
+    fn through_taa(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        (post, frame): (&mut NativePost, &NativeFrame),
+        world_post: &mut crate::gfx::world_post::Post,
+        pixels: &[u8],
+    ) -> (Vec<u8>, wgpu::TextureView) {
+        use glam::{DVec3, Mat4};
+        const WINDOW: u32 = 8;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let window = [WINDOW, WINDOW];
+        world_post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+        let (color, depth) = world_post.prepare(device, window, true, false).unwrap();
+        let size = world_post.size().unwrap();
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+        let source = square(device, size[0], format, usage);
+        queue.write_texture(
+            source.as_image_copy(),
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] * 4),
+                rows_per_image: None,
+            },
+            source.size(),
+        );
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+        let screen = square(device, WINDOW, format, usage);
+        let screen_view = screen.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let group = world_post.bind(device, &source.create_view(&Default::default()));
+        world_post.finish_with(&mut encoder, &color, &group, None);
+        let resolved = world_post.resolve_taa(device, queue, &mut encoder, None);
+        let resolved = resolved.expect("TAA resolves the pack's world");
+        let display = world_post.resolved_size().unwrap();
+        let inputs = (&color, &depth, &frame.surface_view);
+        post.run_chain(
+            device,
+            &mut encoder,
+            inputs,
+            size,
+            display,
+            window,
+            None,
+            None,
+        );
+        post.run_display(device, &mut encoder, &screen_view, Some(&resolved), None);
+        (
+            read_screen(device, queue, encoder, &screen, WINDOW),
+            resolved,
+        )
+    }
+
+    /// Under a pack whose `[tonemap]` never reads `previous`, TAA upscales as without a pack
+    /// (#16126): a 4×4 world at the Upscaling ratio 2 is resolved and sharpened at 8×8, the
+    /// window's size, before the decode. On the second frame, whose history blend leaves the
+    /// edge between its two sides (the reset frame copies the world's nearest pixels, which
+    /// CAS's clamp leaves as they are), a midtone edge (black and white leave CAS no room)
+    /// comes out differently at the Upscaling Sharpness 0 and 100%, while the flat corners
+    /// stay as they are.
+    #[test]
+    fn a_pack_without_a_chain_shows_taa_s_upscaled_and_sharpened_world() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
+            eprintln!("TAA upscaling under a pack GPU skipped: no test device");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        if !crate::gfx::world_post::Post::new(&device, format).supports_taa() {
+            eprintln!("TAA upscaling under a pack GPU skipped: TAA unsupported");
+            return;
+        }
+        // A 4×4 staircase edge from 64 below the diagonal to 192 on and above it.
+        let world: Vec<u8> = staircase(4, 0)
+            .chunks(4)
+            .flat_map(|p| {
+                let v = if p[0] == 255 { 192 } else { 64 };
+                [v, v, v, 255]
+            })
+            .collect();
+        let (mut post, frame) = identity_tonemap_pack(&device, &queue, format);
+        assert!(post.upscalable());
+        // A fresh resolve each: the same jitters, the history's first frame and its second.
+        let mut shown = |sharpness| {
+            let mut world_post = crate::gfx::world_post::Post::new(&device, format);
+            world_post.taa = true;
+            world_post.upscale = 2.0;
+            world_post.set_sharpness(&device, sharpness);
+            through_taa(
+                &device,
+                &queue,
+                (&mut post, &frame),
+                &mut world_post,
+                &world,
+            );
+            let pack = (&mut post, &frame);
+            let (rows, resolved) = through_taa(&device, &queue, pack, &mut world_post, &world);
+            assert_eq!(world_post.size(), Some([4, 4]));
+            let texture = resolved.texture();
+            assert_eq!([texture.width(), texture.height()], [8, 8]);
+            assert_eq!(post.display.scene.as_ref().map(|s| s.0), Some([8, 8]));
+            rows
+        };
+        let soft = shown(0.0);
+        let sharp = shown(1.0);
+        assert_ne!(
+            soft, sharp,
+            "the sharpening left the midtone edge as it was"
+        );
+        // Top right and bottom left, far from the edge, are flat in both.
+        for (x, y, v) in [(7, 0, 192), (0, 7, 64)] {
+            let at = |rows: &[u8]| rows[(y * 8 + x) * 4];
+            assert!(at(&soft).abs_diff(v) <= 1, "{soft:?}");
+            assert!(at(&sharp).abs_diff(v) <= 1, "{sharp:?}");
+        }
+    }
+
+    /// Under a pack whose `[tonemap]` reads `previous`, TAA's upscaling is held
+    /// (`hold_upscale`): at the Upscaling ratio 2 its 4×4 world (an 8×8 window at scale 0.5)
+    /// keeps a 4×4 history, nothing sharpens it, and `previous` is the world's 4×4 picture.
+    #[test]
+    fn a_tonemap_that_reads_previous_keeps_taa_at_the_world_s_size() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
+            eprintln!("TAA upscale hold under a pack GPU skipped: no test device");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut world_post = crate::gfx::world_post::Post::new(&device, format);
+        if !world_post.supports_taa() {
+            eprintln!("TAA upscale hold under a pack GPU skipped: TAA unsupported");
+            return;
+        }
+        world_post.taa = true;
+        world_post.scale = 0.5;
+        world_post.upscale = 2.0;
+        let (mut post, frame) = tonemap_pack(&device, &queue, format, READS_PREVIOUS);
+        assert!(!post.upscalable());
+        // What `replace_executor` holds for it (`engine_resolve` without `engine_upscale`).
+        world_post.hold_upscale(true);
+        let pack = (&mut post, &frame);
+        let world = staircase(4, 0);
+        let (_, resolved) = through_taa(&device, &queue, pack, &mut world_post, &world);
+        assert_eq!(world_post.size(), Some([4, 4]));
+        let texture = resolved.texture();
+        let history = wgpu::TextureFormat::Rgba16Float;
+        assert_eq!(
+            ([texture.width(), texture.height()], texture.format()),
+            ([4, 4], history),
+            "TAA's history, unsharpened"
+        );
+        assert_eq!(post.display.scene.as_ref().map(|s| s.0), Some([4, 4]));
     }
 
     /// A pack's `Frame` describes the HDR display its picture goes to, and SDR

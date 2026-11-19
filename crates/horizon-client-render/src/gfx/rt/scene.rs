@@ -98,8 +98,11 @@ impl Renderer {
         // A frame still on the submit thread binds the kept resources `take_over` or `retire`
         // destroys: its submission would fail on them.
         self.land_frame();
+        let capabilities = pack.as_ref().and_then(|p| p.capabilities());
         // The size the pack's frames draw at (`NativePack::start_frame`), before its first.
-        let size = (self.world_post).pack_render_size([self.config.width, self.config.height]);
+        let window = [self.config.width, self.config.height];
+        let upscaled = capabilities.is_some_and(|c| c.engine_upscale);
+        let size = (self.world_post).pack_render_size(window, upscaled);
         let taken = match (&mut pack, &mut self.external) {
             (Some(new), old) => new.take_over(&self.device, old.as_deref_mut(), size),
             (None, Some(old)) => {
@@ -114,7 +117,6 @@ impl Renderer {
             }
             return Some(refused.why);
         }
-        let capabilities = pack.as_ref().and_then(|p| p.capabilities());
         let traces = capabilities.is_some_and(|c| c.ray_scene);
         follow(
             &mut self.ray_scene,
@@ -125,8 +127,10 @@ impl Renderer {
         if pack.is_some() || self.external.is_some() {
             self.world_post.forget_history();
         }
-        // A pack the renderer resolves gets TAA at its world's size from its first frame on.
-        (self.world_post).hold_upscale(capabilities.is_some_and(|c| c.engine_resolve));
+        // A pack the renderer resolves gets TAA at its world's size from its first frame on,
+        // unless TAA may upscale it.
+        (self.world_post)
+            .hold_upscale(capabilities.is_some_and(|c| c.engine_resolve && !c.engine_upscale));
         // The arenas' looks follow before the next frame (`follow_terrain_looks`).
         self.external = pack;
         self.executor = capabilities;

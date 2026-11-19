@@ -132,7 +132,7 @@ const TONEMAP_RESOURCES: [Resource; 4] = [
         binding: 3,
         name: "previous",
         ty: "var previous: texture_2d<f32>",
-        doc: "The post chain's picture at the window's size (without a post chain, the world's at the world's size), linear light: what `input.color` samples, for a curve that reads around the pixel.",
+        doc: "The post chain's picture at the window's size (without a post chain, the world's at the world's size: a tonemap that reads it keeps TAA from upscaling the world), linear light: what `input.color` samples, for a curve that reads around the pixel.",
     },
     LINEAR_SAMPLER,
     NEAREST_SAMPLER,

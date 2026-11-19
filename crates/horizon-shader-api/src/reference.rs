@@ -564,11 +564,15 @@ pub fn markdown() -> String {
             `frame.previous_view_projection` give it the last frame: nothing moves the camera by a fraction of a texel from one\n\
             frame to the next, so a still camera gives it the same picture twice and there is no sub-pixel detail to gather.\n\n\
             A pack without `[[post]]` whose frame holds gamma light (not `blend = \"linear\"` on the float frame) gets the\n\
-            player's FXAA or TAA: with `fxaa` or `taa` on, Horizon anti-aliases the world at the world's size, in the frame's\n\
+            player's FXAA or TAA: with `fxaa` or `taa` on, Horizon anti-aliases the world, FXAA at its size, in the frame's\n\
             encoding, before the pack's `[tonemap]` (or Horizon's curve) reads it. TAA jitters the world's projection by\n\
             `frame.jitter`, and its history starts over when the pack is loaded or rebuilt and when the display's values\n\
-            change. TAA upscaling and its sharpening stay off, and `resolutionScale` still reaches the window through the tone\n\
-            curve's read. Under any other pack TAA is off.\n\n\
+            change. Where the pack has no `[tonemap]`, or one that never reads `previous`, TAA upscaling applies too: the world\n\
+            draws at the `upscaling` ratio's share of the scaled window, and TAA rebuilds it at the scaled window's size, then\n\
+            sharpens it there, in the frame's encoding, before the decode and the tone curve. `frame.resolution` stays the size\n\
+            the world draws at, and the tonemap's `input.color` samples the picture TAA rebuilt. A `[tonemap]` that reads\n\
+            `previous` keeps the picture at the world's size: TAA runs for it without its upscaling and sharpening. Either way\n\
+            `resolutionScale` still reaches the window through the tone curve's read. Under any other pack TAA is off.\n\n\
             A pack must never write an infinite value into the world's frame: TAA's history would carry it.\n\n\
             Without a pack the settings apply as the player set them.\n\n";
     out += &format!(

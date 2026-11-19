@@ -7729,8 +7729,10 @@ impl Renderer {
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
             && pack_msaa
             && !self.msaa.failed_at(
-                self.world_post
-                    .pack_render_size([self.config.width, self.config.height]),
+                self.world_post.pack_render_size(
+                    [self.config.width, self.config.height],
+                    self.executor.is_some_and(|c| c.engine_upscale),
+                ),
                 pack_surface,
             );
         // Frustum culling and camera-relative origins.
@@ -9404,6 +9406,7 @@ impl Renderer {
                     .size()
                     .filter(|_| scaled.is_some())
                     .unwrap_or([self.config.width, self.config.height]),
+                projection: views.primary().projection,
                 output: &output,
                 lights: &self.light_blocks,
                 light_revision: self.light_revision,
@@ -10914,17 +10917,21 @@ impl Renderer {
                 encoder: &mut encoder,
                 world: (color, depth),
                 size: self.world_post.size().unwrap_or([1, 1]),
+                display: self.world_post.resolved_size().unwrap_or([1, 1]),
                 window: [target_texture.width(), target_texture.height()],
                 scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
             });
             // The engine's resolve of the pack's world goes here, between its chain and its
             // output (#16126), where no chain draws the picture: the player's TAA, whose
             // history the output reads straight, or FXAA onto a target of the world's size.
-            // TAA's upscaling and sharpening stay off (`hold_upscale`).
+            // Where TAA upscales (`Capabilities::engine_upscale`), it sharpens the history
+            // at the history's size, in the frame's encoding, before the decode and the
+            // `[tonemap]`; elsewhere its upscaling is held (`hold_upscale`).
             let engine_resolve = self.executor.is_some_and(|c| c.engine_resolve);
             let taa_resolved = engine_resolve
                 .then(|| {
                     (self.world_post).resolve_taa(
+                        &self.device,
                         &self.queue,
                         &mut encoder,
                         self.own_timing.as_mut(),
