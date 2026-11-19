@@ -18,6 +18,7 @@ pub mod process_memory;
 pub mod profile;
 #[cfg(target_os = "linux")]
 pub mod sampler;
+pub mod sizing;
 pub mod stack_dump;
 /// Alt+Space and a bare Alt never open the window's system menu, as in GLFW.
 #[cfg(target_os = "windows")]
@@ -163,12 +164,27 @@ pub fn default_workers() -> usize {
     workers_for(worker_count(), performance_cores)
 }
 
+/// The cores this process has for its pools: [`worker_count`]'s share, narrowed to
+/// the performance cores where the machine tells them apart (its efficiency cores
+/// don't carry a worker, see [`default_workers`]).
+pub(crate) fn usable_cores() -> usize {
+    usable_cores_for(worker_count(), performance_cores)
+}
+
+/// [`usable_cores`] for `cores` cores, of which `performance` (asked only here, the
+/// sysctl) are performance cores where the machine tells them apart (`None` elsewhere).
+fn usable_cores_for(cores: usize, performance: impl FnOnce() -> Option<usize>) -> usize {
+    let fast = performance().filter(|&n| n > 0).unwrap_or(cores);
+    cores.min(fast)
+}
+
 /// [`default_workers`] for `cores` cores, of which `performance` (asked only here, the
 /// sysctl) are performance cores where the machine tells them apart (`None` elsewhere):
 /// one less than the smaller count, at least 1.
 fn workers_for(cores: usize, performance: impl FnOnce() -> Option<usize>) -> usize {
-    let fast = performance().filter(|&n| n > 0).unwrap_or(cores);
-    cores.min(fast).saturating_sub(1).max(1)
+    usable_cores_for(cores, performance)
+        .saturating_sub(1)
+        .max(1)
 }
 
 /// The machine's performance cores:

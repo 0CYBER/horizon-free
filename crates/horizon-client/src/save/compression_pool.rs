@@ -52,7 +52,9 @@ pub fn pool() -> &'static CompressionPool {
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
             .filter(|&n| n > 0)
-            .unwrap_or_else(|| horizon_threads::worker_count().div_ceil(2).max(1));
+            .unwrap_or_else(|| {
+                horizon_threads::sizing::for_pool(horizon_threads::sizing::Pool::SaveCompression)
+            });
         CompressionPool::new(workers)
     })
 }

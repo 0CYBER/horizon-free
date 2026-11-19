@@ -287,12 +287,9 @@ fn pool() -> &'static rayon::ThreadPool {
     POOL.get_or_init(|| {
         log::info!("Horizon: starting the tick's helper threads");
         rayon::ThreadPoolBuilder::new()
-            .num_threads(
-                horizon_threads::worker_count()
-                    .clamp(1, 8)
-                    .saturating_sub(1)
-                    .max(1),
-            )
+            .num_threads(horizon_threads::sizing::for_pool(
+                horizon_threads::sizing::Pool::TickHelper,
+            ))
             .thread_name(|i| format!("tick-helper-{i}"))
             .build()
             .expect("the tick's helper threads start")
