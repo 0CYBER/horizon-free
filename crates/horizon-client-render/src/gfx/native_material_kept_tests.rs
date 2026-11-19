@@ -470,16 +470,18 @@ fn a_material_reads_eight_resources_within_the_device_s_limits() {
 }
 
 /// A material that traces and reads kept resources: against the scene its group joins the
-/// scene's and the kept resources', a parity's each, made again for another scene; without one
-/// its rays miss and it still reads them.
+/// scene and the kept resources for each parity, with the look binding only for the tint
+/// reader. The second scene has no look store. Without a scene the rays miss.
 #[test]
 fn a_traced_material_reads_kept_resources() {
+    use wgpu::util::DeviceExt;
+
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((_, device, queue)) = ray_device() else {
         return;
     };
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let (near, far) = (
+    let (near_scene, far_scene) = (
         Scene::new(&device, &queue, 4.0, 1),
         Scene::new(&device, &queue, 6.0, 2),
     );
@@ -488,30 +490,52 @@ fn a_traced_material_reads_kept_resources() {
     );
     let material = "fn shown() -> vec4<f32> {\n    \
                     let hit = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0);\n    \
-                    return vec4<f32>(hit.distance, textureLoad(tex_previous, vec2<i32>(0), 0).x, \
+                    return vec4<f32>(RAY_VALUE, textureLoad(tex_previous, vec2<i32>(0), 0).x, \
                     f32(count[0]), f32(frame.has_ray_tracing));\n}\n"
         .to_owned()
         + MATERIAL;
-    let files = [("w.wgsl", COUNTS), ("m.wgsl", material.as_str())];
-    let (mut pack, source, scene_source) =
-        build(&device, &queue, Some(&near), &manifest, &files).unwrap();
-    assert!(pack.material.as_ref().unwrap().scene.is_some());
-    let sources = (source.as_str(), scene_source.as_deref());
-    let (near, far) = (near.traced(), far.traced());
+    let shade = 1 << 24;
+    let look = crate::mesher::QuadLook([shade, !0]);
+    let looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::bytes_of(&look),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let near = Traced {
+        looks: Some(&looks),
+        ..near_scene.traced()
+    };
+    let far = far_scene.traced();
     let gpu = (&device, &queue);
-    for (n, scene, distance) in [
-        (1, Some(&near), 4.0),
-        (2, Some(&near), 4.0),
-        (3, Some(&far), 6.0),
-        (4, Some(&far), 6.0),
+    for (reads_looks, value, [near_value, far_value]) in [
+        (true, "hit.distance * (1.0 + hit.tint.r)", [4.0, 12.0]),
+        (
+            false,
+            "hit.distance + round(hit.emission * 15.0)",
+            [16.0, 18.0],
+        ),
     ] {
-        let got = frame(gpu, &mut pack, sources, n, scene, None);
-        let n = n as f32;
-        assert_eq!(got, [distance, n - 1.0, n, 1.0], "frame {n}");
+        let material = material.replace("RAY_VALUE", value);
+        let files = [("w.wgsl", COUNTS), ("m.wgsl", material.as_str())];
+        let (mut pack, source, scene_source) =
+            build(&device, &queue, Some(&near_scene), &manifest, &files).unwrap();
+        let traced = pack.material.as_ref().unwrap().scene.as_ref().unwrap();
+        assert_eq!(traced.traces_looks(), reads_looks);
+        let sources = (source.as_str(), scene_source.as_deref());
+        for (n, scene, expected) in [
+            (1, Some(&near), near_value),
+            (2, Some(&near), near_value),
+            (3, Some(&far), far_value),
+            (4, Some(&far), far_value),
+        ] {
+            let got = frame(gpu, &mut pack, sources, n, scene, None);
+            let n = n as f32;
+            assert_eq!(got, [expected, n - 1.0, n, 1.0], "{value}, frame {n}");
+        }
+        let got = frame(gpu, &mut pack, sources, 5, None, None);
+        assert!(got[0] < 0.0, "{got:?}");
+        assert_eq!(got[1..], [4.0, 5.0, 0.0]);
     }
-    let got = frame(gpu, &mut pack, sources, 5, None, None);
-    assert!(got[0] < 0.0, "{got:?}");
-    assert_eq!(got[1..], [4.0, 5.0, 0.0]);
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
 }

@@ -280,6 +280,7 @@ fn trace(
             tlas: &tlas,
             solid_instances: 1,
             store: &store,
+            looks: None,
             translucent_instances: 2,
             entities: None,
             generation: 0,

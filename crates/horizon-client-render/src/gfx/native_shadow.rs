@@ -531,7 +531,7 @@ fn shader_source(
             PREFIX
         ),
         super::native_post::line_helpers(false),
-        super::native_material::SECTION_CORNER,
+        super::native_material::section_corner(),
     )
 }
 

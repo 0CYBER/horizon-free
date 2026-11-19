@@ -370,6 +370,15 @@ pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u3
 pub(crate) fn meshed_alone_states(
     blocks: &[(&str, &[(&str, &str)], [i32; 3])],
 ) -> (SectionMesh, Vec<[u32; 6]>) {
+    meshed(blocks, false, false)
+}
+
+/// Mesh stateful blocks with optional looks and Nether shading.
+pub(crate) fn meshed(
+    blocks: &[(&str, &[(&str, &str)], [i32; 3])],
+    looks: bool,
+    nether: bool,
+) -> (SectionMesh, Vec<[u32; 6]>) {
     let f = fixture();
     let mut chunk = Chunk::empty(0, 0);
     for &(name, properties, [x, y, z]) in blocks {
@@ -377,11 +386,11 @@ pub(crate) fn meshed_alone_states(
     }
     let region = [[Some(&chunk); 3]; 3];
     let mut mesher = Mesher {
-        nether_shading: false,
+        nether_shading: nether,
         shader_pack_lighting: false,
         separate_ao: false,
         shader_pack: false,
-        looks: false,
+        looks,
         assets: &f.assets,
         render: &f.render,
         tables: &f.tables,

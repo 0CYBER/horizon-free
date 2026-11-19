@@ -115,7 +115,11 @@ impl Streaming {
     /// dimension's shading.
     pub fn viewed_mesh_source(&self) -> MeshSource {
         let context = self.shared.context.read().unwrap().clone();
-        let settings = self.mesh_settings();
+        let settings = MeshSettings {
+            // These sections draw in the raster view, outside the player's ray scene.
+            looks: self.looks,
+            ..self.mesh_settings()
+        };
         MeshSource {
             looks: settings.looks,
             kind: Kind::Mesher(context, settings),

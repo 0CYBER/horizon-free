@@ -16,7 +16,7 @@ use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
     Composed, GROUP, KEPT_BINDING, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING,
-    RAY_SCENE_BINDING, StageKind, compose_traced, identifiers,
+    RAY_LOOKS_BINDING, RAY_SCENE_BINDING, StageKind, compose_traced, identifiers,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
@@ -98,6 +98,18 @@ impl CheckedStage {
         })
     }
 
+    /// Whether the stage against the scene reads a terrain hit's look (`RAY_LOOK_FIELDS`), so the
+    /// renderer binds the scene's looks for it (`RAY_LOOKS_BINDING`).
+    pub fn traces_looks(&self) -> bool {
+        self.scene.as_ref().is_some_and(|module| {
+            module.global_variables.iter().any(|(_, g)| {
+                g.binding
+                    .as_ref()
+                    .is_some_and(|b| b.group == GROUP && b.binding == RAY_LOOKS_BINDING)
+            })
+        })
+    }
+
     /// Whether the stage's inputs end with `shaded_tint` (`SHADED_TINT`): its pack's files name
     /// it (`stages::names_shaded_tint`), so the renderer's constructors of them pass it.
     pub fn shaded_tint(&self) -> bool {
@@ -131,41 +143,7 @@ impl CheckedStage {
     /// struct, a copy of it (an argument, a `let`, a `var`) or a pointer to it, in whichever file
     /// of the pack: every one is a member access on a value or pointer of the struct's type.
     pub fn reads_looks(&self) -> bool {
-        let m = &self.module;
-        let looked = |ty: naga::Handle<naga::Type>, index: u32| {
-            // Through a pointer (`ptr<function, MaterialInput>`, a `var`): its pointee.
-            let ty = match m.types[ty].inner {
-                naga::TypeInner::Pointer { base, .. } => base,
-                _ => ty,
-            };
-            let t = &m.types[ty];
-            let naga::TypeInner::Struct { members, .. } = &t.inner else {
-                return false;
-            };
-            let field = members.get(index as usize).and_then(|f| f.name.as_deref());
-            LOOK_FIELDS.iter().any(|(name, fields)| {
-                t.name.as_deref() == Some(*name) && field.is_some_and(|f| fields.contains(&f))
-            })
-        };
-        let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo| {
-            f.expressions.iter().any(|(_, e)| {
-                let naga::Expression::AccessIndex { base, index } = *e else {
-                    return false;
-                };
-                // The struct, or a pointer to one, by handle or by value.
-                let ty = match &info[base].ty {
-                    naga::proc::TypeResolution::Handle(ty) => Some(*ty),
-                    naga::proc::TypeResolution::Value(naga::TypeInner::Pointer {
-                        base, ..
-                    }) => Some(*base),
-                    naga::proc::TypeResolution::Value(_) => None,
-                };
-                ty.is_some_and(|ty| looked(ty, index))
-            })
-        };
-        m.functions.iter().any(|(h, f)| reads(f, &self.info[h]))
-            || (m.entry_points.iter().enumerate())
-                .any(|(i, e)| reads(&e.function, self.info.get_entry_point(i)))
+        reads_fields(&self.module, &self.info, &LOOK_FIELDS, false)
     }
 
     /// Whether the stage's function, or a function it calls, reads the prelude's `global`
@@ -189,11 +167,164 @@ impl CheckedStage {
 
 /// The fields of the terrain's inputs that only its quads' looks hold, by struct: the vertex
 /// holds their product (`shaded_tint`). `RayHit`'s aren't among them: a terrain hit reads the
-/// ray scene's own store, not the sections' looks.
+/// ray scene's own looks (`RAY_LOOK_FIELDS`), not the arenas'.
 const LOOK_FIELDS: [(&str, &[&str]); 2] = [
     ("MaterialInput", &["tint", "shade", "ao", "face"]),
     ("VertexInput", &["tint", "shade", "ao", "face"]),
 ];
+
+/// A terrain hit's fields that only its quad's look holds: a stage against the scene that reads
+/// one of them binds the scene's looks, and the renderer keeps them (`Report::ray_looks`).
+/// The vertex already holds `shaded_tint` and the block's light level (`emission`).
+pub(crate) const RAY_LOOK_FIELDS: [(&str, &[&str]); 1] = [("RayHit", &["tint", "shade", "ao"])];
+
+/// Whether the selected functions read one of `fields`, by struct. A direct read, a copy or
+/// a pointer to a struct all resolve to the struct's type. Ray looks count only functions
+/// reachable from an entry point, so an unused helper cannot add a scene binding.
+fn reads_fields(
+    m: &naga::Module,
+    info: &ModuleInfo,
+    fields: &[(&str, &[&str])],
+    reachable_only: bool,
+) -> bool {
+    let looked = |ty: naga::Handle<naga::Type>, index: u32| {
+        // Through a pointer (`ptr<function, MaterialInput>`, a `var`): its pointee.
+        let ty = match m.types[ty].inner {
+            naga::TypeInner::Pointer { base, .. } => base,
+            _ => ty,
+        };
+        let t = &m.types[ty];
+        let naga::TypeInner::Struct { members, .. } = &t.inner else {
+            return false;
+        };
+        let field = members.get(index as usize).and_then(|f| f.name.as_deref());
+        fields.iter().any(|(name, fields)| {
+            t.name.as_deref() == Some(*name) && field.is_some_and(|f| fields.contains(&f))
+        })
+    };
+    struct Reads {
+        field: bool,
+        parameters: Vec<bool>,
+    }
+    let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo, callees: &[Reads]| {
+        let field = |base: naga::Handle<naga::Expression>, index| {
+            let ty = match &info[base].ty {
+                naga::proc::TypeResolution::Handle(ty) => Some(*ty),
+                naga::proc::TypeResolution::Value(naga::TypeInner::Pointer { base, .. }) => {
+                    Some(*base)
+                }
+                naga::proc::TypeResolution::Value(_) => None,
+            };
+            ty.is_some_and(|ty| looked(ty, index))
+        };
+        let mut parameters = vec![false; f.arguments.len()];
+        let mut read_pointer = |mut pointer| loop {
+            match f.expressions[pointer] {
+                naga::Expression::AccessIndex { base, index } => {
+                    if field(base, index) {
+                        break true;
+                    }
+                    pointer = base;
+                }
+                naga::Expression::Access { base, .. } => pointer = base,
+                naga::Expression::FunctionArgument(index) => {
+                    parameters[index as usize] = true;
+                    break false;
+                }
+                _ => break false,
+            }
+        };
+        let reads_field = f
+            .expressions
+            .iter()
+            .any(|(_, expression)| match *expression {
+                naga::Expression::AccessIndex { base, index }
+                    if !reachable_only
+                        || !matches!(
+                            info[base].ty.inner_with(&m.types),
+                            naga::TypeInner::Pointer { .. }
+                        ) =>
+                {
+                    field(base, index)
+                }
+                // A pointer projection alone could be the destination of a store.
+                naga::Expression::Load { pointer } if reachable_only => read_pointer(pointer),
+                _ => false,
+            });
+        let reads_field = reads_field
+            || reachable_only
+                && find_statement(&f.body, &mut |statement| {
+                    let naga::Statement::Call {
+                        function,
+                        arguments,
+                        ..
+                    } = statement
+                    else {
+                        return false;
+                    };
+                    let callee = &callees[function.index()];
+                    callee.field
+                        || callee
+                            .parameters
+                            .iter()
+                            .zip(arguments)
+                            .any(|(&read, &arg)| read && read_pointer(arg))
+                })
+                .is_some();
+        Reads {
+            field: reads_field,
+            parameters,
+        }
+    };
+    if !reachable_only
+        && m.functions
+            .iter()
+            .any(|(h, f)| reads(f, &info[h], &[]).field)
+    {
+        return true;
+    }
+
+    // Naga stores callees before callers. Summarize pointer parameters as well as direct
+    // reads so a caller can distinguish a member passed for reading from one only written.
+    let mut callees = Vec::new();
+    if reachable_only {
+        for (handle, function) in m.functions.iter() {
+            callees.push(reads(function, &info[handle], &callees));
+        }
+    }
+    m.entry_points
+        .iter()
+        .enumerate()
+        .any(|(i, e)| reads(&e.function, info.get_entry_point(i), &callees).field)
+}
+
+#[cfg(test)]
+#[test]
+fn traces_looks_through_a_pointer_parameter_that_reads_the_field() {
+    let shader = |operation| {
+        format!(
+            "struct RayHit {{ ao: f32 }}
+             fn use_ao(p: ptr<function, f32>) {{ {operation} }}
+             fn forward(p: ptr<function, f32>) {{ use_ao(p); }}
+             @compute @workgroup_size(1)
+             fn main() {{ var h: RayHit; if true {{ forward(&h.ao); }} }}"
+        )
+    };
+    assert!(reads_hit_looks(&shader("let ao = *p;")));
+    assert!(!reads_hit_looks(&shader("*p = 1.0;")));
+}
+
+/// Whether the stage composed as `text` (its build where `trace` misses) reads one of
+/// `RAY_LOOK_FIELDS`; false where it doesn't build, which the check reports.
+pub(crate) fn reads_hit_looks(text: &str) -> bool {
+    let Ok(module) = naga::front::wgsl::parse_str(text) else {
+        return false;
+    };
+    let mut validator = Validator::new(ValidationFlags::all(), Capabilities::default());
+    validator
+        .validate(&module)
+        .is_ok_and(|info| reads_fields(&module, &info, &RAY_LOOK_FIELDS, true))
+}
 
 #[derive(Debug)]
 pub struct Report {
@@ -219,6 +350,13 @@ impl Report {
     /// nothing for them.
     pub fn looks(&self) -> bool {
         (self.stages.iter()).any(CheckedStage::reads_looks)
+    }
+
+    /// Whether a stage against the scene reads a terrain hit's look (`CheckedStage::traces_looks`):
+    /// the renderer's scene then keeps its quads' looks. Apart from `looks`: the arenas' stay
+    /// as they are.
+    pub fn ray_looks(&self) -> bool {
+        (self.stages.iter()).any(CheckedStage::traces_looks)
     }
 }
 
@@ -928,38 +1066,38 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
     problems
 }
 
+/// The span of the first statement in a block or its nested control flow that matches.
+fn find_statement(
+    block: &naga::Block,
+    matches: &mut impl FnMut(&naga::Statement) -> bool,
+) -> Option<naga::Span> {
+    for (statement, span) in block.span_iter() {
+        if matches(statement) {
+            return Some(*span);
+        }
+        let found = match statement {
+            naga::Statement::Block(b) => find_statement(b, matches),
+            naga::Statement::If { accept, reject, .. } => {
+                find_statement(accept, matches).or_else(|| find_statement(reject, matches))
+            }
+            naga::Statement::Switch { cases, .. } => {
+                cases.iter().find_map(|c| find_statement(&c.body, matches))
+            }
+            naga::Statement::Loop {
+                body, continuing, ..
+            } => find_statement(body, matches).or_else(|| find_statement(continuing, matches)),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
 /// Where a `discard` is that the function `name` can reach: in its own body, its nested blocks,
 /// or a function it calls, however deep.
 fn reachable_discard(module: &naga::Module, name: &str) -> Option<naga::Span> {
-    fn walk(
-        block: &naga::Block,
-        calls: &mut Vec<naga::Handle<naga::Function>>,
-    ) -> Option<naga::Span> {
-        for (statement, span) in block.span_iter() {
-            let found = match statement {
-                naga::Statement::Kill => return Some(*span),
-                naga::Statement::Block(b) => walk(b, calls),
-                naga::Statement::If { accept, reject, .. } => {
-                    walk(accept, calls).or_else(|| walk(reject, calls))
-                }
-                naga::Statement::Switch { cases, .. } => {
-                    cases.iter().find_map(|c| walk(&c.body, calls))
-                }
-                naga::Statement::Loop {
-                    body, continuing, ..
-                } => walk(body, calls).or_else(|| walk(continuing, calls)),
-                naga::Statement::Call { function, .. } => {
-                    calls.push(*function);
-                    None
-                }
-                _ => None,
-            };
-            if found.is_some() {
-                return found;
-            }
-        }
-        None
-    }
     let (start, _) = module
         .functions
         .iter()
@@ -967,7 +1105,18 @@ fn reachable_discard(module: &naga::Module, name: &str) -> Option<naga::Span> {
     let (mut calls, mut seen) = (vec![start], HashSet::new());
     while let Some(f) = calls.pop() {
         if seen.insert(f)
-            && let Some(span) = walk(&module.functions[f].body, &mut calls)
+            && let Some(span) =
+                find_statement(
+                    &module.functions[f].body,
+                    &mut |statement| match *statement {
+                        naga::Statement::Call { function, .. } => {
+                            calls.push(function);
+                            false
+                        }
+                        naga::Statement::Kill => true,
+                        _ => false,
+                    },
+                )
         {
             return Some(span);
         }

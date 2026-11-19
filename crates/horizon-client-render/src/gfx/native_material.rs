@@ -259,20 +259,14 @@ fn horizon_material_solid(in: HorizonMaterialOut) -> HorizonMaterialSolid {
 /// (terrain.wgsl's `section_corner`), decoded by the engine's own `corner_inputs`: the material's
 /// and the shadow pass's solid entries take the engine's inputs from either layout. And what
 /// they take from a quad's look (`horizon_look`, `mesher::QuadLook`), whose shade code is 0
-/// where the quad has none.
-pub(super) const SECTION_CORNER: &str = "
-// `mesher::SHADES` by code; 1 for none.
-fn horizon_look_shade(code: u32) -> f32 {
-    switch code {
-        case 1u: { return 0.5; }
-        case 2u: { return 0.6; }
-        case 3u: { return 0.8; }
-        case 4u: { return 0.9; }
-        case 6u: { return 0.72; }
-        case 7u: { return 0.54; }
-        default: { return 1.0; }
-    }
+/// where the quad has none: its shade as a ray hit's (`stages::look_shade`).
+pub(super) fn section_corner() -> String {
+    let shade = horizon_shader_api::stages::look_shade("horizon_look_shade");
+    format!("\n// `mesher::SHADES` by code; 1 for none.\n{shade}{SECTION_CORNER}")
 }
+
+/// `section_corner` after the shade.
+const SECTION_CORNER: &str = "\
 // Corner `corner`'s ambient occlusion, 0..1 as vanilla's vertex colour holds it; 1 without a look.
 fn horizon_look_ao(look: vec2<u32>, corner: u32) -> f32 {
     if ((look.x >> 24u) & 7u) == 0u {
@@ -497,7 +491,7 @@ fn shader_source(
     // kin, and by a tracing stage's `hit_normal_map`.
     let pbr = horizon_shader_api::stages::PBR_MAPS_TERRAIN;
     format!(
-        "{source}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{}{}{SECTION_CORNER}{}{pbr}{}{}",
+        "{source}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{}{}{}{}{pbr}{}{}",
         vanilla_terrain(),
         super::native_post::line_helpers(linear),
         if vertex {
@@ -507,6 +501,7 @@ fn shader_source(
         },
         layer_table("horizon_sprite_tags", tags),
         layer_table("horizon_sprite_material", materials),
+        section_corner(),
         shaded(ENTRIES),
         super::displace::RELIEF,
         if displaced {
@@ -566,7 +561,7 @@ impl NativeMaterial {
         }
         let pipelines = built?;
         let scene = stage.scene_source.as_deref().and_then(|source| {
-            let terrain = (shape, stage.traces_entities());
+            let terrain = (shape, (stage.traces_entities(), stage.traces_looks()));
             let own = kept.as_ref().map_or(&[][..], |k| &k.entries);
             TerrainTrace::new(device, frame, terrain, own, |group| build(source, group))
         });
@@ -1130,7 +1125,7 @@ mod tests {
     /// renderer binds for the fragment stage alone.
     #[test]
     fn a_traced_terrain_reads_the_scene_in_its_fragments_only() {
-        use horizon_shader_api::stages::RAY_SCENE_BINDING;
+        use horizon_shader_api::stages::{RAY_LOOKS_BINDING, RAY_SCENE_BINDING};
         let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
             [material]\nfile = \"material.wgsl\"\n[vertex]\nfile = \"vertex.wgsl\"\n\
             [displacement]\n[ray_tracing]\n";
@@ -1169,7 +1164,11 @@ mod tests {
             })
             .map(|(handle, _)| handle)
             .collect();
+        // The hit's emission is decoded from the vertex.
         assert_eq!(scene.len(), 12);
+        assert!(scene.iter().all(|&g| {
+            module.global_variables[g].binding.as_ref().unwrap().binding != RAY_LOOKS_BINDING
+        }));
         for (i, entry) in module.entry_points.iter().enumerate() {
             let reads = scene
                 .iter()

@@ -59,7 +59,7 @@ impl Streaming {
             shader_pack_lighting: self.shader_pack_lighting,
             separate_ao: self.separate_ao,
             shader_pack: self.shader_pack,
-            looks: self.looks,
+            looks: self.looks || self.ray_looks,
             zoom: self.biome_zoom,
             blend_radius: self.biome_blend,
             smooth_lighting: self.smooth_lighting,

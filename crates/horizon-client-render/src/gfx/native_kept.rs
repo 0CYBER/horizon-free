@@ -693,7 +693,7 @@ impl NativePost {
         let layout =
             match traced.and_then(|(trace, scene)| Some((trace.layout(pass)?, trace, scene))) {
                 Some((layout, trace, scene)) => {
-                    entries.extend(trace.entries(scene));
+                    entries.extend(trace.entries(pass, scene));
                     layout
                 }
                 None => &k.passes[pass].layout,

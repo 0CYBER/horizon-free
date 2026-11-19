@@ -1372,10 +1372,13 @@ impl NativePost {
             }
             // The passes built against the scene read it too; the tonemap has no `trace`.
             entries.extend(kept::entries(&self.kept, pass, parity));
-            let with_scene = traced.and_then(|(t, scene)| Some((t.layout(pass?)?, t, scene)));
+            let with_scene = traced.and_then(|(t, scene)| {
+                let pass = pass?;
+                Some((t.layout(pass)?, t, scene, pass))
+            });
             let layout = match with_scene {
-                Some((layout, trace, scene)) => {
-                    entries.extend(trace.entries(scene));
+                Some((layout, trace, scene, pass)) => {
+                    entries.extend(trace.entries(pass, scene));
                     layout
                 }
                 None => kept::pass(&self.kept, pass).map_or(&self.layout, |p| &p.layout),

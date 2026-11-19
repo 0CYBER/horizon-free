@@ -527,6 +527,9 @@ pub const RAY_ENTITY_SAMPLER_BINDING: u32 = 62;
 /// And the block entities the renderer keeps on the GPU (a closed chest), the quads of the
 /// layer's, in the stream's layout and atlas: the last of the layer's bindings.
 pub const RAY_ENTITY_RETAINED_BINDING: u32 = 63;
+/// The look of each quad of the terrain store (`RAY_STORE_BINDING`), only in a stage that reads a
+/// terrain hit's `tint`, `shade` or `ao`: two words a quad, `mesher::QuadLook`.
+pub const RAY_LOOKS_BINDING: u32 = 81;
 /// The bit of an entity vertex's layer that puts its quad in the entity layer, above the
 /// renderer's kind bits: a quad without it lets every ray through.
 pub const RAY_ENTITY_QUAD: u32 = 1 << 28;
@@ -544,6 +547,52 @@ fn layered(text: &str, entities: bool) -> String {
         .map(|line| line.strip_prefix(keep).unwrap_or(line))
         .collect()
 }
+
+/// `text` as the prelude of a stage that reads a terrain hit's look (`looks`: `RayHit.tint`,
+/// `shade` or `ao`) has it, or as every other stage's: a line marked `?|` is only the
+/// first's, one marked `!|` only the others'. As `layered`, the others' is the same as before.
+fn looked(text: &str, looks: bool) -> String {
+    let (keep, drop) = if looks { ("?|", "!|") } else { ("!|", "?|") };
+    text.split_inclusive('\n')
+        .filter(|line| !line.starts_with(drop))
+        .map(|line| line.strip_prefix(keep).unwrap_or(line))
+        .collect()
+}
+
+/// A quad look's shade code as its shade (`mesher::SHADES` by code, 1 for none): the body of the
+/// material wrapper's `horizon_look_shade` and of the scene's `horizon_ray_look_shade`
+/// (`look_shade`), so a hit and the material stage shade a quad alike.
+pub const LOOK_SHADE: &str = "    switch code {
+        case 1u: { return 0.5; }
+        case 2u: { return 0.6; }
+        case 3u: { return 0.8; }
+        case 4u: { return 0.9; }
+        case 6u: { return 0.72; }
+        case 7u: { return 0.54; }
+        default: { return 1.0; }
+    }
+";
+
+/// `LOOK_SHADE` as the WGSL function `name(code: u32) -> f32`.
+pub fn look_shade(name: &str) -> String {
+    format!("fn {name}(code: u32) -> f32 {{\n{LOOK_SHADE}}}\n")
+}
+
+/// The terrain quads' looks a stage that reads a terrain hit's look has besides the scene
+/// (`looked`), then `look_shade`.
+const RAY_LOOKS: &str = "\
+// One look a quad of `horizon_ray_store`, at its first corner's index over 4 (`mesher::QuadLook`):
+// the tint (bits 0-23) with the shade code (24-26, 0 where the quad has no look) and the face, the
+// four corners' ambient occlusion a byte each. Zero past the buffer.
+@group(3) @binding(81) var<storage, read> horizon_ray_looks: array<u32>;
+fn horizon_ray_look(quad: u32) -> vec2<u32> {
+    let first = quad * 2u;
+    if first + 1u >= arrayLength(&horizon_ray_looks) {
+        return vec2<u32>(0u);
+    }
+    return vec2<u32>(horizon_ray_looks[first], horizon_ray_looks[first + 1u]);
+}
+";
 
 /// The scene's layers and the functions that read solid terrain alone, with the scene or without
 /// it: `trace_layers` and `trace_any_layers` come before (`RAY_SCENE`, `RAY_STUB`). `layered`.
@@ -881,9 +930,19 @@ fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, laye
     let translucent = hit.instance_index >= horizon_ray_space.solid_instances;
     let fluid = select(0u, select(2u, 1u, translucent), fluid_quad);
     let emission = f32(15u - (flags >> 4u)) / 15.0;
+?|    // The quad's look, read as the material stage reads it: the tint flat and apart from the
+?|    // shade, the shade from its code, the corners' ambient occlusion blended over the triangle
+?|    // and decoded once. Without a look, use the vertex colour, with shade and AO 1.
+?|    let look = horizon_ray_look(t.corners.x / 4u);
+?|    let has = ((look.x >> 24u) & 7u) != 0u;
+?|    let corners = (vec3<u32>(look.y) >> ((t.corners - vec3<u32>(t.corners.x)) * 8u)) & vec3<u32>(255u);
+?|    let ao = select(1.0, horizon_decode(vec3<f32>(dot(vec3<f32>(corners) / 255.0, t.weights))).x, has);
+?|    let tint = vec4<f32>(horizon_decode(select(color.rgb, unpack4x8unorm(look.x).rgb, has)), 1.0);
+?|    let shade = horizon_decode(vec3<f32>(horizon_ray_look_shade((look.x >> 24u) & 7u))).x;
     let horizon_shaded = vec4<f32>(horizon_decode(color.rgb), 1.0);
     return RayHit(hit.t, origin + direction * hit.t, normal, uv,
-        horizon_decode_rgba(horizon_ray_texel(layer, uv)), horizon_shaded, 1.0, 1.0,
+!|        horizon_decode_rgba(horizon_ray_texel(layer, uv)), horizon_shaded, 1.0, 1.0,
+?|        horizon_decode_rgba(horizon_ray_texel(layer, uv)), tint, shade, ao,
         min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags, emission, fluid,
 -|        translucent, back, horizon_ray_tangent(t, e1, e2, normal), layer@shaded_tint@);
 +|        translucent, back, false, horizon_ray_tangent(t, e1, e2, normal), layer@shaded_tint@);
@@ -1344,7 +1403,7 @@ impl StageKind {
             StageKind::Post | StageKind::Material | StageKind::Compute | StageKind::BeforeWorld
         );
         self.prelude_rays(
-            tracing, rays, false, false, false, false, false, false, false,
+            tracing, rays, false, false, false, false, false, false, false, false,
         )
     }
 
@@ -1358,6 +1417,9 @@ impl StageKind {
     /// `light_source`: the input's `inputs::light_source` fields, for a pack whose files name
     /// one of them (`names_light_source`). `full_lightmap`: the frame's `full_lightmap`, for a
     /// pack whose files name it.
+    /// `looks`: a terrain hit reads its quad's look (`RAY_LOOKS`), for a stage that
+    /// reads one (`check::RAY_LOOK_FIELDS`).
+    #[allow(clippy::too_many_arguments)]
     fn prelude_rays(
         self,
         tracing: Tracing,
@@ -1369,6 +1431,7 @@ impl StageKind {
         moon_phase: bool,
         light_source: bool,
         full_lightmap: bool,
+        looks: bool,
     ) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1419,11 +1482,16 @@ impl StageKind {
         }
         if rays {
             out += &crate::inputs::shaded(&ray_hit(entities), shaded);
+            let looks = looks && tracing == Tracing::Scene;
             let scene = match tracing {
-                Tracing::Scene => RAY_SCENE,
-                _ => RAY_STUB,
+                Tracing::Scene => looked(RAY_SCENE, looks),
+                _ => RAY_STUB.to_owned(),
             };
-            out += &shaded_entries(&layered(scene, entities), shaded);
+            out += &shaded_entries(&layered(&scene, entities), shaded);
+            if looks {
+                out += RAY_LOOKS;
+                out += &look_shade("horizon_ray_look_shade");
+            }
             if tracing == Tracing::Scene && entities {
                 out += &shaded_entries(RAY_ENTITY_SCENE, shaded);
             }
@@ -1944,6 +2012,10 @@ pub(crate) fn compose_traced(
     let moon_phase = names_moon_phase(pack);
     let light = names_light_source(pack);
     let full_lightmap = names_full_lightmap(pack);
+    // Read off the stage as the stub builds it, which has the same files and `RayHit`.
+    let looks = rays
+        && tracing == Tracing::Scene
+        && crate::check::reads_hit_looks(&compose_traced(pack, kind, file, at, false).text);
     let mut prelude = kind.prelude_rays(
         tracing,
         rays,
@@ -1954,6 +2026,7 @@ pub(crate) fn compose_traced(
         moon_phase,
         light,
         full_lightmap,
+        looks,
     ) + &texture_declarations(&pack.manifest.textures);
     if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);

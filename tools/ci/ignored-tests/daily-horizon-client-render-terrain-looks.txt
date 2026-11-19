@@ -1,5 +1,6 @@
 # The daily tests of the terrain look store (horizon-client-render): each is #[ignore = "daily"] in its source and runs once a
 # day in the daily run, where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client-render gfx::rt::scene::looks_tests::a_terrain_hit_has_the_material_s_looks_at_its_point lib daily resources
 horizon-client-render gfx::rt::scene::terrain_tests::a_terrain_hit_gives_its_light_level_and_its_fluid lib daily resources
 horizon-client-render gfx::rt::scene::terrain_tests::a_terrain_hit_is_front_from_outside_a_block_and_back_from_inside lib daily resources
 horizon-client-render lod::tests::far_faces_give_off_their_blocks_light_level lib daily resources
