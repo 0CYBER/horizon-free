@@ -997,6 +997,7 @@ impl Game<'_> {
                     out.push_str(&record.to_string());
                     out.push('\n');
                 }
+                "merchant_save" => self.in_owner_level(|g| g.save_game())?,
                 "merchant_saved_stats" => {
                     let (state, raw) = self.harness_owner(|g| {
                         g.load_stats();

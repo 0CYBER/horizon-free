@@ -1,0 +1,4 @@
+# Prepared-resource tests for merchant restocking.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::lan::merchant_restock_tests::restock_refreshes_the_open_guest_menu_and_survives_close lib daily resources
+horizon-client-lib mobs::villager_brain::restock::tests::work_site_refreshes_real_restock_and_counter_only_catchup lib daily resources

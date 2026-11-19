@@ -10,6 +10,7 @@
 //! other `GateBehavior`s shuffle with a random of their own, seeded with
 //! `Brain::shuffle_seed` when the brain is built.
 mod reputation;
+mod restock;
 pub use reputation::murder_witnesses;
 use reputation::targetable;
 
@@ -23,6 +24,7 @@ use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, LevelRandom, RandomSource},
 };
+pub(super) use restock::restock_if_due;
 
 /// `MemorySlot.NEVER_EXPIRE`.
 pub(super) const NEVER: i64 = i64::MAX;
@@ -1679,7 +1681,7 @@ impl B {
                         pos: site,
                     });
                 }
-                restock_if_due(m, cx.w);
+                restock_if_due(m, cx.w, cx.events);
                 true
             }
             B::HarvestFarmland {
@@ -3339,18 +3341,6 @@ fn play_work_sound(m: &mut Mob, cx: &mut Bx) {
                 pitch,
             ));
         }
-    }
-}
-/// `WorkAtPoi.start`'s restock.
-pub(super) fn restock_if_due(m: &mut Mob, w: &MobWorld) {
-    if w.professions.state_index(&m.extra.profession).is_none() {
-        return;
-    }
-    let day = w.day_time.div_euclid(24000);
-    if let Some(t) = m.extra.trade.as_mut()
-        && t.should_restock(w.game_time, day)
-    {
-        t.restock(w.game_time);
     }
 }
 #[cfg(test)]

@@ -566,7 +566,7 @@ public final class VanillaCommandExecOracle {
                     messages.add(spans(chatType.decorate(message.content())));
                 }
             };
-            if(Boolean.getBoolean("horizon.merchantFixture")||Boolean.getBoolean("horizon.merchantCraftedFixture")) this.tickRateManager().setFrozen(true);
+            if(Boolean.getBoolean("horizon.merchantFixture") || Boolean.getBoolean("horizon.merchantCraftedFixture")) this.tickRateManager().setFrozen(true);
             Connection connection = new Connection(PacketFlow.SERVERBOUND);
             EmbeddedChannel channel = Boolean.getBoolean("horizon.merchantCraftedFixture") ? new EmbeddedChannel(
                 new io.netty.channel.ChannelInitializer<io.netty.channel.Channel>() {
@@ -1111,6 +1111,7 @@ public final class VanillaCommandExecOracle {
                     }
                     case "close_menu" -> player.connection.handleContainerClose(
                         new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(player.containerMenu.containerId));
+                    case "merchant_save" -> saveEverything(true, true, true);
                     case "merchant_saved_stats" -> {
                         player.getStats().save();
                         String raw;

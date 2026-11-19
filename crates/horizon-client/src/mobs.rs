@@ -2416,6 +2416,10 @@ pub enum MobEvent {
     VillagerOffers {
         mob: u32,
     },
+    /// `Villager.restock` / `catchUpDemand`: refresh the trading player.
+    VillagerRestocked {
+        mob: u32,
+    },
     /// Two villagers make a baby (`VillagerMakeLove.tryToGiveBirth`): the
     /// parent has eaten and, with a bed for the child, rests; the partner
     /// eats, and rests too if `child` holds the child's bed and type

@@ -88,6 +88,9 @@ impl Game<'_> {
             state.session.reputation = self.villager_reputation_of(id, uuid);
             state.session.update_special_prices();
         }
+        if let Some(mob) = state.mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
+            mob.extra.trade.get_or_insert_default().offers = state.session.offers.clone();
+        }
         let title = self.merchant_display_name(&state);
         if !self.guest_may_open(conn, "minecraft:merchant", None) {
             self.merchant_closed(&mut state);
@@ -541,7 +544,7 @@ impl Game<'_> {
             }
         }
     }
-    /// Refresh open guest prices after the actual villager reputation event.
+    /// Refresh open guest prices after reputation changes or a restock.
     pub(super) fn lan_merchant_reputation(&mut self, id: u32) {
         let conns: Vec<u32> = self
             .lan
@@ -559,7 +562,7 @@ impl Game<'_> {
             })
             .unwrap_or_default();
         for conn in conns {
-            let Some(uuid) = self
+            let Some((uuid, hero)) = self
                 .lan
                 .as_ref()
                 .and_then(|host| {
@@ -568,7 +571,7 @@ impl Game<'_> {
                         .iter()
                         .find(|g| g.conn == conn && host.hub.here(g))
                 })
-                .map(|g| uuid_words(g.uuid))
+                .map(|g| (uuid_words(g.uuid), g.effects.amplifier("hero_of_the_village")))
             else {
                 continue;
             };
@@ -576,6 +579,7 @@ impl Game<'_> {
             self.lan_merchant_op(conn, None, true, |menu, env| {
                 if let Some(s) = menu.merchant.as_mut() {
                     s.reputation = reputation;
+                    s.hero = hero;
                     s.update_special_prices();
                 }
                 menu.merchant_update(env);

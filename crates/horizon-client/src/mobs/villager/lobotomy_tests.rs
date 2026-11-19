@@ -185,7 +185,10 @@ fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
                         super::super::ProfessionState::from_id("minecraft:librarian");
                     m.extra.home = Some([x, 64, 0]);
                     m.extra.trade = Some(Box::new(used_librarian_offer()));
-                    assert!(step(&mut m, &w, 100), "stuck, so the brain is skipped");
+                    assert!(
+                        step(&mut m, &w, 100, &mut Vec::new()),
+                        "stuck, so the brain is skipped"
+                    );
                     let uses = m.extra.trade.as_ref().unwrap().offers[0].uses;
                     assert_eq!(
                         uses == 0,
@@ -210,13 +213,19 @@ fn a_released_villager_gets_its_brain_back_at_its_next_check() {
                 let mut w = w.clone();
                 let mut m = villager(types, 1);
                 w.game_time = 50;
-                assert!(step(&mut m, &w, 100), "walled in");
+                assert!(step(&mut m, &w, 100, &mut Vec::new()), "walled in");
                 // It leaves the cell; the answer stands until the villager's turn (game time + 1 a multiple of 100).
                 m.position = Vec3::new(3.5, 64.0, 3.5);
                 w.game_time = 60;
-                assert!(step(&mut m, &w, 100), "no recheck before its turn");
+                assert!(
+                    step(&mut m, &w, 100, &mut Vec::new()),
+                    "no recheck before its turn"
+                );
                 w.game_time = 99;
-                assert!(!step(&mut m, &w, 100), "free at its recheck");
+                assert!(
+                    !step(&mut m, &w, 100, &mut Vec::new()),
+                    "free at its recheck"
+                );
             },
         ),
         "vanilla data is missing"
