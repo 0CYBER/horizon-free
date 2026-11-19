@@ -135,7 +135,7 @@ def internal_entries(text):
         for field, kind, required in (("path", str, True), ("kind", str, True), ("signature", str, True),
                                       ("hash", str, True), ("cfg", str, False), ("shape_only", bool, False)):
             if (required or field in entry) and not isinstance(entry.get(field), kind):
-                raise ValueError(f"entry {number} ({entry.get('path')!r}) has no {kind.__name__} `{field}`")
+                raise ValueError(f"entry {number} has no {kind.__name__} `{field}`")
     return entries
 
 
