@@ -57,13 +57,51 @@ Each Rust job keeps its Cargo build folder between runs on a Blacksmith sticky d
 (`tools/ci/build_folder.sh`): one disk per job, so jobs that ran side by side don't replace each other's build. A
 checkout dates every file now; the script gives each file whose Git object is the one the disk's last job saw that
 job's date back (`tools/ci/source_mtimes.py`), so Cargo rebuilds only what changed, and empties a disk past 50 GB
-(`MAX_TARGET_GB`). A failed or cancelled job leaves its disk as it found it. The organisation's branch-protected
-caches setting is on: only main's pushes write the disks, and pull requests and the merge queue build on main's latest
-and discard what they add ("commit denied ... not a trusted trigger" in their logs); a pull request's jobs also say so
-(`commit: false`). So a pull request's disks are warm only once main has pushed since the job's disk was created, and
-a fork's copy of the workflow cannot write this repository's disks. Forks' pull requests mount main's disks as well:
+(`MAX_TARGET_GB`). A failed or cancelled job leaves its disk as it found it. Only main's pushes and the merge queue
+ask to save the disks (`SAVE_BUILD_DISK` in `ci.yml`); pull requests and [try runs](#try-runs) say `commit: false`,
+build on main's latest and discard what they add. The organisation's branch-protected caches setting also refuses,
+on Blacksmith's side, a pull request's save ("... not a trusted trigger" in its logs) and that of a run on any other
+branch than main ("... is not the default branch"), the merge queue's excepted: its save is accepted (run
+44622983852). So a pull request's disks are warm only once main has pushed since the job's disk was created, and a
+fork's copy of the workflow cannot write this repository's disks. Forks' pull requests mount main's disks as well:
 until 2026-11-17 they had a set of their own that nothing could save, so each built the whole workspace (7-10 minutes
 per Rust part, against ~2 for a branch here).
+
+## Try runs
+
+The way to compile and test a branch of this repository without a pull request, and without building on your own PC:
+push the branch, then start `checks` on it. Only who can push here (the organisation's owners, and their agents) can
+start one; a fork can't. Prefer it to a local build.
+
+```sh
+git push origin HEAD:try/<name>                               # any branch here works; try/ starts nothing by itself
+gh workflow run checks --ref try/<name>                       # Linux: verify's parts
+gh workflow run checks --ref try/<name> -f windows=true       # and the game for Windows x64, the launcher's tests there
+gh run list --workflow checks --branch try/<name> --limit 1   # its id; then gh run watch <id>
+gh run download <id> -n horizon-windows-x64                   # the Windows game, for 3 days
+git push origin --delete try/<name>                           # when done
+```
+
+- **Linux**: verify's parts on Blacksmith, as for a push to main: the whole workspace's tests, clippy, the server build,
+  the launcher, the Python tests and the whole history's tree check. Not the mod points comparison (pull requests only).
+  They mount main's disks and never save them, so a branch near main takes about as long as a pull request: 7 minutes
+  on 2026-11-19, the tree check of the whole history the slowest part. The Windows job took 48: 28 for the game, 4 for
+  the folder, 15 for the launcher's tests.
+- **Windows x64** (`-f windows=true`, `windows-x64`, on `windows-latest` as the release build): the game built as
+  `game-build.yml` builds it, uploaded as the artifact `horizon-windows-x64` (kept 3 days): `horizon-client.exe`,
+  `horizon-ctl.exe`, `horizon-prepare.exe`, `horizon-server.exe`, `horizon-wasm-std.wasm` and DXC. No exporters (they
+  are compiled from Minecraft's jars on the Mac mini), so point it at resources an installed Horizon already prepared
+  (`--resources`). Then the launcher's tests. It builds from scratch, with no Rust cache read or saved. The repository
+  is public: anyone signed in to GitHub can download the artifact for its 3 days, so a try run is no private channel.
+- `-f arm64=true` adds the Windows ARM64 job (about 90 minutes) and `-f jfr=true` the JFR analysis on the Linux game
+  runner; every hand-started run ran both before the inputs existed.
+- No job of a try run holds a secret; verify's parts and the Windows x64 job save no disk or cache
+  (`tests/test_ci_runners.py`). Runs of one commit share a concurrency group: a second waits for the first.
+- A try run reports `verify` on the branch's commit, as a pull request's run of that commit does. It is no proof for
+  a pull request: it skips the mod points comparison, and the merge queue still needs its own green `verify` on the
+  queue's commit, which a try run cannot give.
+- The run uses the branch's own copy of `ci.yml`: a branch from before 2026-11-19 has no inputs and always starts the
+  ARM64 and JFR jobs. Rebase it on main first.
 
 ## Which jobs, and when
 

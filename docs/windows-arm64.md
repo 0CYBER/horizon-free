@@ -55,5 +55,5 @@ On Windows ARM64, `Graphics API: Auto` tries DirectX 12 before Vulkan following 
 in testing. Vulkan remains selectable in settings.
 
 The `Windows ARM64 game and launcher` check in `ci.yml` runs only by hand
-(`gh workflow run checks --ref <branch>`); the Nightly and launcher releases build these archives on
+(`gh workflow run checks --ref <branch> -f arm64=true`); the Nightly and launcher releases build these archives on
 every run.

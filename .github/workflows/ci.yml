@@ -16,7 +16,23 @@ on:
   # launcher). verify is the check the queue waits for; parity and the pull request's crate selection skip it.
   merge_group:
     types: [checks_requested]
+  # A maintainer's try run of any branch here, without a pull request (docs/ci-runners.md#try-runs):
+  # `gh workflow run checks --ref <branch>` runs verify's parts on main's disks, which it never saves; the inputs add
+  # the jobs below that run by hand only. A fork cannot start it: dispatching takes write access to this repository.
   workflow_dispatch:
+    inputs:
+      windows:
+        description: Also build the game for Windows x64 (a download kept 3 days) and test the launcher there
+        type: boolean
+        default: false
+      arm64:
+        description: Also run the Windows ARM64 game and launcher job (about 90 minutes)
+        type: boolean
+        default: false
+      jfr:
+        description: Also run the JFR analysis on the Linux game runner
+        type: boolean
+        default: false
 permissions:
   contents: read
   # The push run asks whether the merge queue's run of the same commit passed (the `queued` steps).
@@ -31,11 +47,12 @@ env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   HORIZON_TELEMETRY_URL: "off"
   # Whether a job saves its build folder's sticky disk (see verify below). Only main's pushes and the merge queue do;
-  # every pull request, a fork's too, starts from what they built and its changes are discarded, so nothing a pull
-  # request builds reaches main's disk. Forks once had a disk of their own, but pull_request jobs never save one
-  # (Blacksmith refuses), so it stayed empty and every fork's pull request built the workspace from scratch: 7-10 min
-  # per Rust part on 2026-11-17, against ~2 min for a branch of this repository on main's disk.
-  SAVE_BUILD_DISK: ${{ github.event_name == 'pull_request' && 'false' || 'true' }}
+  # every pull request, a fork's too, and every hand-started run (any branch's) starts from what they built and its
+  # changes are discarded, so nothing a branch builds reaches main's disk. Forks once had a disk of their own, but
+  # pull_request jobs never save one (Blacksmith refuses), so it stayed empty and every fork's pull request built the
+  # workspace from scratch: 7-10 min per Rust part on 2026-11-17, against ~2 min for a branch of this repository on
+  # main's disk.
+  SAVE_BUILD_DISK: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'merge_group') && 'true' || 'false' }}
 
 jobs:
   # verify runs as one job per part, side by side, so a run takes as long as its slowest part, not the sum. It was two
@@ -500,12 +517,12 @@ jobs:
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
-  # (`gh workflow run checks --ref <branch>`): GitHub's runner queue is the bottleneck, and main's runs gate the
-  # releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this
+  # (`gh workflow run checks --ref <branch> -f arm64=true`): GitHub's runner queue is the bottleneck, and main's runs
+  # gate the releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this
   # 90-minute job. The Nightly and launcher releases build and check these binaries on every run.
   windows-arm64:
     name: Windows ARM64 game and launcher
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.arm64
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 90
     env:
@@ -596,6 +613,74 @@ jobs:
           $client = Join-Path $env:HORIZON_NATIVE_TARGET_DIR 'fast/horizon-client.exe'
           python ../tools/check_pe_arch.py arm64 $client
           python ../tools/check_imports.py $client
+  # A try run's Windows part (`gh workflow run checks --ref <branch> -f windows=true`): the game for Windows x64 as
+  # game-build.yml's release build makes it, for a maintainer to download and run instead of building it on a PC. Not
+  # the exporters (compiled from Minecraft's jars on the Mac mini), the Polytone tests, signing or publishing. No Rust
+  # cache, read or saved: it builds from scratch (~48 min). Then the launcher's tests, as launcher.yml runs them.
+  windows-x64:
+    name: Windows x64 game and launcher tests
+    if: github.event_name == 'workflow_dispatch' && inputs.windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    # Reads the checkout only: not the workflow's actions: read, which the push run's `queued` steps need.
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - name: Build the official game, horizon-ctl, horizon-prepare and horizon-server
+        env:
+          # The C runtime linked in, as the release's.
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --locked -p horizon-official --bin horizon-official -p horizon-client-lib --bin horizon-ctl -p horizon-prepare --bin horizon-prepare -p horizon-server --bin horizon-server
+      - name: The release's program folder, without the exporters
+        run: |
+          set -euo pipefail
+          out=dist/horizon-windows-x64
+          mkdir -p "$out"
+          cp target/release/horizon-official.exe "$out/horizon-client.exe"
+          cp target/release/horizon-ctl.exe target/release/horizon-prepare.exe target/release/horizon-server.exe "$out/"
+          cargo run --locked -p cargo-horizon-mod -- wasm-std "$out/horizon-wasm-std.wasm"
+          python tools/ci/fetch_dxc.py "$out"
+          python tools/check_pe_arch.py x64 "$out"/horizon-{client,ctl,prepare,server}.exe
+          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
+            python tools/check_imports.py "$out/$binary.exe"
+          done
+          "$out/horizon-client.exe" --help | grep -q -- '--resources'
+          "$out/horizon-prepare.exe" --help | grep -q -- '--minecraft-dir'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: horizon-windows-x64
+          path: dist/horizon-windows-x64
+          if-no-files-found: error
+          retention-days: 3
+      - name: Test the launcher in a scratch home
+        working-directory: launcher
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+          HORIZON_LAUNCHER_NO_SELF_UPDATE: '1'
+          HORIZON_NO_AUDIO: '1'
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          scratch=$(mktemp -d "${RUNNER_TEMP//\\//}/horizon-launcher-tests-XXXXXX")
+          export HORIZON_LAUNCHER_HOME="$scratch/launcher" HORIZON_HOME="$scratch/game"
+          export HORIZON_LAUNCHER_LOCATION_FILE="$scratch/location.json"
+          export XDG_DATA_HOME="$scratch/data" XDG_CONFIG_HOME="$scratch/config"
+          export HORIZON_LAUNCHER_TRASH="$scratch/trash" HORIZON_LAUNCHER_CLIPBOARD="$scratch/clipboard"
+          export HORIZON_LAUNCHER_DESKTOP="$scratch/desktop"
+          cargo +stable test --release --locked
   # Most pull requests leave the harnesses to parity-main, which runs them on main a batch of merges at a time
   # (.github/workflows/parity-main.yml; releases wait for it). A pull request still runs them itself when it changes
   # a harness, an oracle, a probe or the runner, or carries the run-parity label (run-parity.yml, when it is added).
@@ -635,9 +720,9 @@ jobs:
       full: ${{ contains(github.event.pull_request.labels.*.name, 'full-parity') }}
       frame_identity: ${{ contains(github.event.pull_request.labels.*.name, 'frame-identity') }}
   # JFR analysis uses JDK-generated fixture recordings on the self-hosted Linux runner.
-  # Start a manual checks dispatch with: gh workflow run checks --ref <branch>.
+  # Start a manual checks dispatch with: gh workflow run checks --ref <branch> -f jfr=true.
   jfr-analysis:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.jfr
     runs-on: [self-hosted, linux, horizon-game]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -154,6 +154,9 @@ python3 tools/lang_coverage.py --summary   # one line per language: how many key
 python3 tools/lang_coverage.py --summary --show-keys   # the same, then the keys behind the counts
 ```
 
+- To compile and test on hosted runners instead of this PC, start a try run on your pushed branch:
+  `gh workflow run checks --ref <branch>`, `-f windows=true` for a Windows x64 build to download
+  ([docs/ci-runners.md](docs/ci-runners.md#try-runs)).
 - Harnesses and the game need the vanilla data in `.local/` (`minecraft/`, `horizon-client/26.3`, `datagen/`,
   `tools/`): see [docs/parity-workflow.md](docs/parity-workflow.md). Without it, pr_ready lists the
   harnesses for CI.
