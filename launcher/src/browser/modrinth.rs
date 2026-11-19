@@ -32,12 +32,19 @@ fn kind_of(project_type: &str) -> Option<Kind> {
 pub(super) fn facets(query: &Query) -> String {
     let f = &query.filters;
     let mut all = vec![vec![format!("project_type:{}", project_type(query.kind))]];
+    let mut server_required = false;
     match &f.game_version {
         Some(v) => all.push(vec![format!("versions:{v}")]),
         None if !query.everything
             && matches!(query.kind, Kind::ResourcePack | Kind::Mod | Kind::DataPack) =>
         {
-            all.push(vec![format!("versions:{GAME}")])
+            all.push(vec![format!("versions:{GAME}")]);
+            // A mod that runs ships blocks, items, recipes, loot or worldgen, which the server
+            // must have: client-only mods (`optional`/`unsupported`) almost never run (#18616).
+            if query.kind == Kind::Mod {
+                all.push(vec!["server_side:required".into()]);
+                server_required = true;
+            }
         }
         None => {}
     }
@@ -58,6 +65,8 @@ pub(super) fn facets(query: &Query) -> String {
     }
     match f.environment {
         Some(details::Environment::Client) => all.push(vec!["client_side!=unsupported".into()]),
+        // `server_side:required` already implies it.
+        Some(details::Environment::Server) if server_required => {}
         Some(details::Environment::Server) => all.push(vec!["server_side!=unsupported".into()]),
         None => {}
     }

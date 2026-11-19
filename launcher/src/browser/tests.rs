@@ -179,9 +179,38 @@ fn modrinth_search_asks_for_what_runs() {
         modrinth::facets(&Query::new("", Kind::Modpack)),
         r#"[["project_type:modpack"]]"#
     );
+    // Mods that run are content the server needs: only mods marked server-required (#18616).
     assert_eq!(
         modrinth::facets(&Query::new("", Kind::Mod)),
-        r#"[["project_type:mod"],["versions:26.3"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"]]"#
+        r#"[["project_type:mod"],["versions:26.3"],["server_side:required"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"]]"#
+    );
+    let mut server = Query::new("", Kind::Mod);
+    server.filters.environment = Some(details::Environment::Server);
+    assert_eq!(
+        modrinth::facets(&server),
+        r#"[["project_type:mod"],["versions:26.3"],["server_side:required"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"]]"#
+    );
+    let mut client = Query::new("", Kind::Mod);
+    client.filters.environment = Some(details::Environment::Client);
+    assert!(
+        modrinth::facets(&client)
+            .ends_with(r#"["server_side:required"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"],["client_side!=unsupported"]]"#),
+        "{}",
+        modrinth::facets(&client)
+    );
+    // Show everything: no server facet of its own; the Server filter keeps its own.
+    let mut all_server = Query {
+        everything: true,
+        ..Query::new("", Kind::Mod)
+    };
+    assert_eq!(
+        modrinth::facets(&all_server),
+        r#"[["project_type:mod"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"]]"#
+    );
+    all_server.filters.environment = Some(details::Environment::Server);
+    assert_eq!(
+        modrinth::facets(&all_server),
+        r#"[["project_type:mod"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"],["server_side!=unsupported"]]"#
     );
 }
 
