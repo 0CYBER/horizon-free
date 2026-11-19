@@ -7,9 +7,11 @@
 pub const TERRAIN: &str = include_str!("../terrain.wgsl");
 
 /// What every shader that draws into the world's frame starts with: Horizon's HDR look
-/// (hdr_look.wgsl), then how the frame stores it (hdr_light.wgsl).
+/// (hdr_look.wgsl), then how the frame stores it (hdr_light.wgsl). The look file is the one
+/// copy of its text: it lies in the folder of the shader pack that draws the look on the shader
+/// API, whose shared source it is (`horizon-shader-api`'s `packs/horizon_hdr`).
 pub const HDR_LIGHT: &str = concat!(
-    include_str!("../hdr_look.wgsl"),
+    include_str!("../../../horizon-shader-api/packs/horizon_hdr/hdr_look.wgsl"),
     include_str!("../hdr_light.wgsl")
 );
 

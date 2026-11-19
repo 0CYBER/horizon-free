@@ -1,0 +1,26 @@
+schema = 1
+id = "horizon_hdr"
+name = "Horizon HDR"
+version = "1.0.0"
+api = "0.2"
+description = "Horizon's own HDR look, drawn on the shader API: light sources shine past paper white, each by its kind of light."
+authors = ["Horizon"]
+license = "MIT"
+shared = ["hdr_look.wgsl"]
+
+[material]
+file = "material.wgsl"
+files = ["lift.wgsl"]
+name = "Blocks"
+
+[entity]
+file = "entity.wgsl"
+files = ["lift.wgsl"]
+name = "Entities"
+
+[tonemap]
+file = "tonemap.wgsl"
+name = "Tone curve"
+
+[budget]
+gpu_ms = 1.0

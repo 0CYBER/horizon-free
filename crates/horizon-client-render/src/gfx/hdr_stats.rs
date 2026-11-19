@@ -8,7 +8,8 @@ use super::hdr::Masks;
 
 /// hdr_stats.wgsl after the look whose brightness it measures (hdr_look.wgsl).
 pub(super) fn shader() -> String {
-    include_str!("../hdr_look.wgsl").to_owned() + include_str!("../hdr_stats.wgsl")
+    include_str!("../../../horizon-shader-api/packs/horizon_hdr/hdr_look.wgsl").to_owned()
+        + include_str!("../hdr_stats.wgsl")
 }
 
 pub struct EmissionStats {

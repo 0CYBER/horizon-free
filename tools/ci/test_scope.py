@@ -57,8 +57,10 @@ READERS = {
     "horizon-client-lib": HORIZON_CLIENT,
     # lang.rs embeds the bundled language files.
     "horizon-client-core": ["crates/horizon-client/assets/horizon/lang"],
+    # The world's shaders include the HDR look from its pack, and the look pack's tests load the pack.
     "horizon-client-render": [
         "crates/horizon-client/assets/horizon/lang", "crates/horizon-client/assets/horizon/textures/gui",
+        "crates/horizon-shader-api/packs/horizon_hdr",
     ],
     # The daily Character comparator reads the original public-JDK API helper.
     "horizon-core": ["tools/JavaCharacterTables.java"],

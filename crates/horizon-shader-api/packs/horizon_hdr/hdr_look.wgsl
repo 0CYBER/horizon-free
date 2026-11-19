@@ -2,8 +2,9 @@
 // white with HDR on and no shader pack, how brightly, and the tone curve that fits light to the
 // display. Its numbers and its maths, as plain
 // functions of their arguments: nothing here names the renderer (no binding, uniform or
-// override), so a shader pack of API 0.2 can list this file as a shared source and draw the
-// same look. The renderer's own shaders start with it (gfx/wgsl_prefix.rs `HDR_LIGHT`).
+// override). One file, two users: the renderer's own shaders start with it
+// (horizon-client-render's gfx/wgsl_prefix.rs `HDR_LIGHT`), and it is the shared source of this
+// folder's shader pack, whose stages draw the same look on the shader API (README.md).
 //
 // Light is linear, 1.0 at paper white. A colour is in vanilla's gamma: its 2.2 power is its
 // light.

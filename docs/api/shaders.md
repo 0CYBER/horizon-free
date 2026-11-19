@@ -250,7 +250,9 @@ linear light: decode a constant written for display values with a 2.2 power, com
 `frame.luminance`, and stop returning `input.color.a` from post passes (their alpha is ignored). The example pack,
 `crates/horizon-shader-api/packs/golden_hour`, was moved this way. `packs/traced_shadows` and
 `packs/traced_water` are the smallest packs that trace rays, from a post pass and from the material stage
-([the guide](../shaders.md#ray-tracing)).
+([the guide](../shaders.md#ray-tracing)). `packs/horizon_hdr` is Horizon's own HDR look as a pack, from the look file
+the renderer's own shaders start with: it reads the light-source fields and `frame.full_lightmap` (changelog,
+2026-11-19), and its README lists what a pack can't draw of the look yet.
 
 A 0.2 pack from before 2026-11-16 moves to the terrain's own inputs so: where it drew vanilla's colour with
 `input.tint` or `hit.tint`, it reads `shaded_tint` (the old value, the shade and ambient occlusion in it), or lights

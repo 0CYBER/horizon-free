@@ -843,6 +843,16 @@ pub(in crate::gfx) fn test_shader(source: &str) -> String {
     shader_source(&source, &[], &[], (false, false, false, false), false)
 }
 
+/// The terrain shader of a pack's checked material `stage` for a test's own entry points, its
+/// inputs' `shaded_tint` and light-source fields as the renderer builds them: no vertex stage,
+/// no displacement, a frame of vanilla's gamma, and the quads' looks not bound.
+#[cfg(test)]
+pub(in crate::gfx) fn stage_test_shader(stage: &CheckedStage) -> String {
+    let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
+    let inputs = (false, false, stage.shaded_tint(), stage.light_source());
+    shader_source(&source, &[], &[], inputs, false)
+}
+
 impl super::native_pack::NativePack {
     /// The material stage's terrain layers; none without one.
     pub fn terrain_layers(&self) -> Option<TerrainLayers<'_>> {

@@ -1278,6 +1278,7 @@ fn looks_are_read_by_the_terrain_fields_alone() {
         ("packs/golden_hour", false),
         ("packs/traced_shadows", false),
         ("packs/traced_water", false),
+        ("packs/horizon_hdr", false),
         ("tests/samples/entity-stage", false),
         (
             "../../tools/fixtures/shaderpacks/frame_identity_terrain",

@@ -231,6 +231,8 @@ pub use prepared_model::{
 mod block_entity_positions;
 #[cfg(test)]
 mod inter_stage_tests;
+#[cfg(test)]
+mod look_pack_tests;
 mod section_fade;
 #[cfg(test)]
 mod sprite_arrays_tests;
