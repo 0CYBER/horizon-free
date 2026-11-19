@@ -1,7 +1,7 @@
-//! Serializer/type separation and fatal resolution after conditions.
+//! Serializer/type separation and unread-type resolution after conditions.
 use super::*;
 #[test]
-fn unregistered_serializer_refuses_whole_load_after_false_conditions() {
+fn serializer_of_no_code_skips_one_file_after_false_conditions() {
     let root = tempfile::tempdir().unwrap();
     let folder = root.path().join("data/minecraft/recipe");
     std::fs::create_dir_all(&folder).unwrap();
@@ -14,13 +14,13 @@ fn unregistered_serializer_refuses_whole_load_after_false_conditions() {
     .unwrap();
     let items = Items::for_tests(Default::default());
     let load = crate::test_resources::server_load();
-    let error = Recipes::load(root.path(), &items, &PackOverlay::NONE, &load)
-        .err()
-        .unwrap()
-        .to_string();
+    // No installed code mod owns `absent`: the file is skipped, the load goes on.
+    let recipes = Recipes::load(root.path(), &items, &PackOverlay::NONE, &load).unwrap();
+    assert_eq!(recipes.crafting.len(), 1);
+    assert_eq!(recipes.by_type.len(), 1);
     assert_eq!(
-        error,
-        "recipe data/minecraft/recipe/unknown.json, unregistered recipe serializer absent:serializer"
+        recipes.by_type["minecraft:crafting"][0].id,
+        "minecraft:valid"
     );
     std::fs::write(
         folder.join("unknown.json"),
@@ -53,6 +53,55 @@ fn unregistered_serializer_refuses_whole_load_after_false_conditions() {
     assert!(
         !error.contains("unregistered recipe serializer"),
         "conditions must run before serializer lookup: {error}"
+    );
+}
+
+struct Silent;
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for Silent {}
+
+/// A carried content mod's own recipe type is skipped; the same namespace
+/// owned by installed code stays fatal.
+#[test]
+fn carried_content_recipe_type_is_skipped_and_code_owned_is_fatal() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join(horizon_items::content_namespaces::MARKER),
+        br#"["oritech"]"#,
+    )
+    .unwrap();
+    let vanilla = root.path().join("data/minecraft/recipe");
+    std::fs::create_dir_all(&vanilla).unwrap();
+    std::fs::write(vanilla.join("valid.json"), r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:stick","count":3}}"#).unwrap();
+    let folder = root.path().join("data/oritech/recipe/assembler");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("amethystbud.json"),
+        r#"{"type":"oritech:assembler"}"#,
+    )
+    .unwrap();
+    let items = Items::for_tests(Default::default());
+    let load = crate::test_resources::server_load();
+    let recipes = Recipes::load(root.path(), &items, &PackOverlay::NONE, &load).unwrap();
+    assert_eq!(recipes.crafting.len(), 1);
+    assert_eq!(recipes.by_type.len(), 1);
+    assert_eq!(
+        recipes.by_type["minecraft:crafting"][0].id,
+        "minecraft:valid"
+    );
+    assert!(!recipes.by_type.contains_key("oritech:assembler"));
+    mod_platform::testing::with_mods(
+        vec![mod_api::ModEntry::new("oritech", Box::new(Silent))].into(),
+        || {
+            let error = Recipes::load(root.path(), &items, &PackOverlay::NONE, &load)
+                .err()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                error,
+                "recipe data/oritech/recipe/assembler/amethystbud.json, unregistered recipe serializer oritech:assembler"
+            );
+        },
     );
 }
 struct Machine;

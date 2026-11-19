@@ -73,8 +73,9 @@ impl Game<'_> {
                     .map(|(id, recipe)| (id, recipe)),
             );
         for (id, recipe) in values {
-            if crate::crafting::mod_kinds::recipe_type(id, &recipe.serializer)
-                .is_ok_and(|kind| types.contains(&kind))
+            if let Ok(crate::crafting::mod_kinds::Reading::Type(kind)) =
+                crate::crafting::mod_kinds::recipe_type(id, &recipe.serializer)
+                && types.contains(&kind)
             {
                 match recipe.written().and_then(|text| {
                     serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())

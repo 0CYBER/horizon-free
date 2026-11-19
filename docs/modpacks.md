@@ -288,7 +288,10 @@ How the game loads them, without touching vanilla's path:
   (a multipart value the block does not have), a block model that is missing or does not parse,
   and a recipe that does not parse are logged and skipped: the block gets no model or the
   missing model, the recipe is absent, everything else loads. Vanilla's own files never hit
-  these paths.
+  these paths. A recipe whose `type` no installed mod registers — a carried mod's own machine
+  recipe, `oritech:assembler` before its port exists — is logged and skipped the same way; one
+  whose namespace is vanilla's or an installed code mod's is refused whole, as that code was to
+  register it.
 - Multiplayer works when the server and its players run the same content mods: a client whose
   mods add different blocks, items, effects, entity types or menus is refused when it joins.
 - Not in 0.2: worlds opened without a mod they used (vanilla turns unknown blocks into air; we

@@ -535,7 +535,13 @@ fn synced_sources(
     types: &[String],
 ) -> Vec<(String, serde_json::Value)> {
     let of = |v: &serde_json::Value| horizon_client::crafting::mod_kinds::file_has_type(v, types);
-    let mut all: Vec<_> = own.into_iter().filter(|(_, v)| !of(v)).collect();
+    // The book numbers what the tables keep (`RecipeIndex::from_recipes` on the server):
+    // a window's own recipe no reader here takes leaves both, so the numbers agree.
+    let readable = horizon_client::crafting::mod_kinds::readable;
+    let mut all: Vec<_> = own
+        .into_iter()
+        .filter(|(_, v)| !of(v) && readable(v))
+        .collect();
     all.extend(
         received
             .into_iter()
@@ -681,6 +687,29 @@ mod tests {
             .map(|(name, _)| name)
             .collect();
         assert_eq!(names, ["iron_ingot", "stick", "braid:sticks_from_logs"]);
+    }
+
+    /// A window's own recipe of a type nothing here reads — a carried mod's own —
+    /// leaves the synced set with it, so the book's display numbers are the ones the
+    /// tables keep. A type the server did not ask for stays.
+    #[test]
+    fn synced_sources_drop_a_recipe_nothing_reads() {
+        let own = vec![
+            (
+                "iron_ingot".to_owned(),
+                serde_json::json!({"type": "minecraft:smelting"}),
+            ),
+            (
+                "oritech:amethystbud".to_owned(),
+                serde_json::json!({"type": "oritech:assembler"}),
+            ),
+        ];
+        let types = ["minecraft:crafting".to_owned()];
+        let names: Vec<_> = super::synced_sources(own, Vec::new(), &types)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, ["iron_ingot"]);
     }
 
     /// With the server's crafting recipes synced, the book still holds the
