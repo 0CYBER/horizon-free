@@ -29,8 +29,8 @@ The build a mod is made for is its pin, always a full commit sha in the file:
 - a native mod: `[native] horizon` in `horizon-mod.toml`;
 - a wasm mod: `sdk` under `[package.metadata.horizon]` in `Cargo.toml`.
 
-`cargo horizon-mod new` writes the current Nightly's build, or `--horizon`'s. `cargo horizon-mod update` moves a
-native mod's pin. Wherever a build is given, these forms are accepted:
+`cargo horizon-mod new` writes the current Nightly's build, or `--horizon`'s. `cargo horizon-mod update` moves either
+pin. Wherever a build is given, these forms are accepted:
 
 | Written | Means |
 |---|---|
