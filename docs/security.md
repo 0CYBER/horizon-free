@@ -38,7 +38,7 @@ and some are waiting for Ludovic:
 | Private vulnerability reporting | **Live** (see the end of this page). |
 | Signed checksums on releases | **Live** for new releases (#1011): the `release` environment holds the key, and its public half is in `release-keys.txt` (#1023). Releases from before then are unsigned. |
 | Signed prebuilt native-mod builds | **Being built** (#11859): horizon-mods' `native-builds` environment (deployable from `main` only) holds `NATIVE_BUILD_SIGNING_KEY`, a key of its own, never the release key, because the registry compiles other people's code there. Its public half is in `native-build-keys.txt`. Each signature covers the build's request key (target, base commit, each mod's file SHA-256), its target and the archive's SHA-256 (`horizon_release_sign::native_build`), so it can't pass for another set's file or for a release. `tools/ci/sign_native_build.sh` signs with OpenSSL. |
-| Launchers and servers checking signatures | **Not yet**: #1014 waits as a draft until a signed stable game release and a signed launcher release exist. Until then they trust GitHub's checksum, as before. |
+| Launchers and servers checking signatures | **Live** (#1014): a release the launcher (for the game and for itself) or `horizon-server update` downloads is installed only when its signed checksums match, or, for a release from before signing, when its SHA-256 matches the one pinned in `legacy-releases.txt` ("Signed updates", below). `horizon-server update --archive FILE --version NAME` installs a local archive, such as the owner's own build, without checking a release signature or pinned checksum. |
 | Smoke test and release-blocker before publishing | **Live**: since 2026-10-23 every release is the latest at once (one channel, Ludovic's decision), so it is published only after its smoke test passed and while no `release-blocker` is open. The 6-hour beta of the old Alpha, then stable flow (#1012) is gone. |
 | Reports marked suspicious | **Partly**: the scan of Discord for agents does it. Kira's issues do it once its pull request merges. |
 | Code owners' review of the pipeline | **Not yet**: `.github/CODEOWNERS` and its protection (#1015) wait for the App, below. Until then pipeline changes merge like any other once `verify` passes. |
@@ -63,18 +63,21 @@ and some are waiting for Ludovic:
   built into them, then check the download against the list. Anything unsigned, signed with another key, signed
   for another version, or changed in any way is refused with a message saying why. Releases from before signing
   stay installable, for going back to an older version, but only with the exact files they had when signing
-  began: their checksums are built into the launcher and the server too. The private key exists only as
+  began: their checksums are built into the launcher and the server too. This covers what they download from
+  GitHub's releases: `horizon-server update --archive FILE --version NAME` installs a local archive, such as the
+  owner's own build, without checking a release signature or pinned checksum. The private key exists only as
   a secret of GitHub's `release` environment, which only real releases from main can use. The job that signs runs
   nothing from the repository but a short script calling OpenSSL, so no pull request can read the key by changing
   the code that gets built. Nobody, Ludovic included, ever needs to see it.
-- **A test SDK key, developer builds only.** An SDK is checked against the release keys like a release is. The daily
-  run's `fn-replace-check` checks its own, unpublished SDK, signed with a throwaway key made for that run; it gives
-  the launcher the public key in `HORIZON_SDK_TRUSTED_KEY` (one base64 Ed25519 key, `ephemeral.pub` from
+- **A test SDK key, developer builds only.** An SDK is checked against the release keys like a release is. The
+  function-replacement check (`tools/ci/fn_replace_check.sh`), run by hand as `docs/release-flow.md` describes since
+  the daily run is gone, can check an unpublished SDK signed with a throwaway key made for the dry run that built
+  it; the debug launcher it uses takes that public key in `HORIZON_SDK_TRUSTED_KEY` (one base64 Ed25519 key, `ephemeral.pub` from
   `EPHEMERAL=yes tools/ci/sign_release.sh`). `horizon_release_sign::sdk_keys_for` adds it for SDK checks only (the
   launcher's SDK index and `cargo horizon-mod`'s fetch) and only in a build with `debug_assertions`: a release build
   does not compile the lookup, so no environment adds trust to a shipped launcher, and game and launcher releases
   are never checked with it. A test in both profiles proves the release profile ignores the variable. No release
-  key enters the daily job.
+  key enters that check.
 - **Nightly signatures.** A Nightly carries two signatures over the same `SHA256SUMS`. `SHA256SUMS.sig` is signed
   for the channel (`horizon release nightly`), for launchers and servers from before this change, which read only
   that one. `SHA256SUMS.v2.sig` is signed for the Nightly's own version (`horizon release nightly-<date>-<commit>`),

@@ -36,7 +36,7 @@ rustPlatform.buildRustPackage {
       Minecraft 26.3 with horizon-prepare (docs/hosting.md).
     '';
     homepage = "https://playhorizon.dev";
-    license = lib.licenses.mit;
+    license = lib.licenses.lgpl3Plus;
     mainProgram = "horizon-server";
     platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };

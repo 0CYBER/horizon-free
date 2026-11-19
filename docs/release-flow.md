@@ -279,27 +279,49 @@ FNR_SIDE=client FNR_TARGET=aarch64-apple-darwin FNR_MIXINS_FROM_SOURCE=1 \
 The SDK producer's four hosted legs must also complete `prebuilt_game.py build`, `smoke`, `start`, `exports`
 and `pack` on their real hosts. A local source check does not substitute for these platform results.
 
-### Daily run
+### Tests outside the checks
 
-`.github/workflows/daily.yml` runs its legs once a day, at 09:00 UTC on main's head, and when a maintainer
-dispatches it (`-f commit=<sha>`, `-f dry_run=false` to write). One run runs and at most one waits; a newer waiting
-dispatch replaces an older waiting one. The schedule stops when main's head already has a completed real daily run;
-a hand dispatch never does, so it retries a run whose issues failed. Its legs are the workflows that left main pushes:
-the ignored-tests shards (`ignored-tests.yml`: on GitHub's runners, with no vanilla data, so `--without-data` leaves out
-the tests that need it and says how many), the wasm guest stacks (`wasm-mods.yml`; its fixture job needs the data and
-runs by dispatch only), `fn-replace-check.yml`, the native linkage probe (`native-dylib-probe.yml`) and the launcher's Windows runtime-lease
-tests (`launcher-windows-check.yml`), each called with the commit. The daily run publishes nothing and gates nothing:
-the Nightly does not wait for it. Its summary (`tools/ci/daily_summary.py`) reads each leg's result and its sanitised
-verdict file, never a log, and files issues:
+There is no daily run: `daily.yml` and the workflows it called (`ignored-tests.yml`, `wasm-mods.yml`,
+`fn-replace-check.yml`, `native-dylib-probe.yml`, `launcher-windows-check.yml`), and `hot-paths.yml`,
+`paper-parity.yml` and `wasm-coverage.yml`, are gone from main. The workflows that run Rust tests now:
 
-- a failing test: one issue `Daily: <crate> <test>` (label `bug`) with its panic location and the first daily run that
-  saw it; later runs comment on it, and the first run where it passes closes it. A leg that failed without a test
-  name gets one issue per leg.
+| Workflow (job) | When | What it tests |
+|---|---|---|
+| `ci.yml` (`verify (Rust tests)`) | A pull request that `tools/ci/rust_changes.py` selects (any change except `docs/`, Markdown, and Python under `tools/` and `tests/`; `rust_changes.py` and `release_train.py` themselves count); every merge-queue entry, manual dispatch and push to main (a push only builds when a merge-queue run already passed on its commit) | On Linux: the workspace's unit, binary, integration and doc tests, and the `#[ignore]`d `mod_content::tests::` (they pass at once without the vanilla data, which no GitHub runner holds) |
+| `ci.yml` (`verify (launcher)`) | A pull request or push to main that `rust_changes.py --launcher` selects, or whose earlier commit can't be read; every manual dispatch. Never in the merge queue (the job's condition), and a push to main only builds when a merge-queue run already passed on its commit | On Linux: the launcher's library and binary tests |
+| `ci.yml` (`verify (mod points)`) | A pull request that `rust_changes.py` selects for the mod points (see `needs_mod_points`: crate manifests count, for example); every merge-queue entry, manual dispatch and push to main | On Linux: `horizon-mod-points`' wire loopback test |
+| `ci.yml` (`Windows ARM64 game and launcher`) | Manual dispatch only | The launcher's library tests and the `#[ignore]`d `rust_toolchain::tests::managed_arm64_toolchain_builds_the_game` |
+| `launcher.yml` (`build`) | See the workflow's `on:` (pushes to `main`, `launcher` and `launcher-*` within its path filter, a schedule, manual dispatch) and its `decide` job: it builds when a launcher release is due, and on every dry run (every run off main, and a dispatch with `dry_run`, the default), which publishes nothing | The launcher's tests on Linux, macOS (two builds, one for x86-64) and Windows (x64, ARM64) |
+| `game-build.yml`, from `nightly-build.yml` | Each Nightly build | On Windows x64: `horizon-client-render`'s `particles::polytone::tests::` |
+| `perf-wasm.yml` | Pull requests and pushes to main that change `crates/horizon-perf/`, `crates/horizon-perf-format/`, `crates/horizon-bench/`, `xtask/`, `Cargo.lock`, `Cargo.toml` or the workflow itself; manual dispatch | On Linux: `horizon-perf`'s `wasm` test |
+| `mod-registry.yml` | Pull requests and pushes to main that change `crates/horizon-mod-package/`, `crates/horizon-mod-registry/` or the workflow itself | On Linux: `horizon-mod-registry`'s tests |
+| `telemetry-server.yml` | Pull requests and pushes to main that change `crates/horizon-telemetry/`, `crates/horizon-telemetry-server/` or the workflow itself | On Linux: `horizon-telemetry-server`'s tests |
+| `parity.yml`, from `ci.yml` (`parity`) and `run-parity.yml` | A pull request from this repository that changes a harness, an oracle, a probe or the runner, or carries the `run-parity` or `frame-identity` label; the `run-parity` label being added | On the self-hosted `horizon-game` runners: the harnesses the change can affect (`tools/parity.py --changed`) |
+| `parity-main.yml` | Pushes to main; manual dispatch | On the self-hosted macOS `horizon-parity-main` runner: the harnesses the push can affect |
+| `nightly.yml` (`audit`) | Once a day (03:07 in Paris); manual dispatch | On the self-hosted macOS `horizon-game` runners: every harness (`tools/parity.py --all`) |
 
-Only a run on `main` with `dry_run` false files issues; any other run prints what it would do.
+An `#[ignore]`d test also runs when something else starts it:
 
-The tests that need the vanilla data run nowhere in the daily run, as no GitHub runner holds it. `hot-paths.yml`,
-`paper-parity.yml` and `wasm-coverage.yml` have no schedule either: they run when a maintainer dispatches them.
+- An ordinary test can start it as a child process, as `processes_sharing_the_secrets_file_lose_nothing` starts
+  `secrets_file_writer` (`launcher/src/account/tests.rs`).
+- A parity harness can run it with its oracle's output: the tests in `tools/ci/ignored-tests/parity-harness.txt`, such
+  as `vanilla_bed_poi_states`, which `tools/test_bed_poi_parity.py` (`bed_poi`) runs with `HORIZON_BED_POI_ORACLE` set.
+  Run these through their harness (`python3 tools/parity.py bed_poi`), not with `-- --ignored`: without the
+  oracle's file the test panics.
+
+Run by no workflow: the other `#[ignore]`d tests (many are marked `daily`), the launcher's tests on Windows between
+the runs above, and `horizon-mod-package`'s tests on Windows with its `runtime-process` feature. Run them by hand when
+a change reaches them:
+
+- A crate's ignored tests: `cargo test -p <crate> -- --ignored`, naming the test to run one. In `launcher/`, a
+  separate workspace, `cargo test -- --ignored`.
+- The launcher on Windows: `cargo test` in `launcher/`.
+- `horizon-mod-package` on Windows: `cargo test -p horizon-mod-package --features runtime-process`, and its ignored
+  tests with `-- --ignored` added.
+- Tests that read the vanilla data need resources prepared with `horizon-prepare`; without them they prove nothing.
+
+The function-replacement check above is run by hand too. It compares hashes with `sha256sum`
+(`tools/ci/fn_replace_check.sh`), so on macOS put a `sha256sum` on `PATH` first (GNU coreutils has one).
 
 ### When it releases
 
