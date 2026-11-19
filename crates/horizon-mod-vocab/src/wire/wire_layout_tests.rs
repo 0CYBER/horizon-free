@@ -1175,3 +1175,116 @@ fn out_of_scan_projections_keep_their_fields_both_ways() {
     assert_eq!((identity, generation), (holder, 71));
 }
 
+
+/// The derive's types as a mod writes them, in a module that keeps the prelude.
+mod plain {
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::Wire)]
+    pub(super) struct Record {
+        pub(super) a: u32,
+        pub(super) b: u8,
+    }
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::Wire)]
+    pub(super) enum Choice {
+        A,
+        B(u32),
+        C { x: u8 },
+    }
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::Wire)]
+    #[wire(via = u32)]
+    pub(super) struct Via(pub(super) u32);
+    impl From<&Via> for u32 {
+        fn from(via: &Via) -> Self {
+            via.0
+        }
+    }
+    impl From<u32> for Via {
+        fn from(value: u32) -> Self {
+            Self(value)
+        }
+    }
+}
+
+/// The same types in a module that defines its own prelude names: a bare path in the derive's
+/// expansion would reach these and fail to compile.
+#[allow(dead_code, unused_macros, non_camel_case_types)]
+mod shadowed {
+    macro_rules! stringify {
+        ($($t:tt)*) => {
+            compile_error!("the Wire derive wrote a bare `stringify!`")
+        };
+    }
+    macro_rules! unreachable {
+        ($($t:tt)*) => {
+            compile_error!("the Wire derive wrote a bare `unreachable!`")
+        };
+    }
+    struct Option;
+    struct Some;
+    struct None;
+    struct Result;
+    struct Ok;
+    struct Err;
+    struct Vec;
+    struct String;
+    struct From;
+    struct TryFrom;
+    struct u8;
+    struct u32;
+    struct u64;
+    struct usize;
+    struct str;
+
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::Wire)]
+    pub(super) struct Record {
+        pub(super) a: ::core::primitive::u32,
+        pub(super) b: ::core::primitive::u8,
+    }
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::Wire)]
+    pub(super) enum Choice {
+        A,
+        B(::core::primitive::u32),
+        C { x: ::core::primitive::u8 },
+    }
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::Wire)]
+    #[wire(via = ::core::primitive::u32)]
+    pub(super) struct Via(pub(super) ::core::primitive::u32);
+    impl ::core::convert::From<&Via> for ::core::primitive::u32 {
+        fn from(via: &Via) -> Self {
+            via.0
+        }
+    }
+    impl ::core::convert::From<::core::primitive::u32> for Via {
+        fn from(value: ::core::primitive::u32) -> Self {
+            Self(value)
+        }
+    }
+}
+
+#[test]
+fn the_derive_compiles_where_prelude_names_are_shadowed_and_means_the_same() {
+    fn same<P: Wire, S: Wire + std::fmt::Debug + PartialEq>(plain: P, shadowed: S) {
+        assert_eq!(P::LAYOUT_SEED, S::LAYOUT_SEED);
+        assert_eq!(P::MIN, S::MIN);
+        assert_eq!(P::layout(&mut Vec::new()), S::layout(&mut Vec::new()));
+        let (mut p, mut s) = (Writer::new(), Writer::new());
+        p.put(&plain);
+        s.put(&shadowed);
+        assert_eq!(p.bytes(), s.bytes());
+        assert_eq!(Reader::decode::<S>(s.bytes()).unwrap(), shadowed);
+    }
+    same(
+        plain::Record { a: 7, b: 9 },
+        shadowed::Record { a: 7, b: 9 },
+    );
+    same(plain::Choice::A, shadowed::Choice::A);
+    same(plain::Choice::B(11), shadowed::Choice::B(11));
+    same(plain::Choice::C { x: 3 }, shadowed::Choice::C { x: 3 });
+    same(plain::Via(5), shadowed::Via(5));
+    // A tag no case has is refused the same way.
+    let mut out = Writer::new();
+    out.put(&9u32);
+    assert_eq!(
+        Reader::decode::<plain::Choice>(out.bytes()).unwrap_err(),
+        Reader::decode::<shadowed::Choice>(out.bytes()).unwrap_err()
+    );
+}

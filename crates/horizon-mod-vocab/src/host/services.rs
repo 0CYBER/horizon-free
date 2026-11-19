@@ -214,8 +214,8 @@ pub trait Messages {
 /// The players service, reached through its host.
 pub trait Players {
     /// Side: server.
-    /// The players on this server, in the order they joined. Empty on a
-    /// client and in a world nobody else can join.
+    /// The players on this server, in the order they joined; in single player that
+    /// includes the world's owner, who joins its server like any player. Empty on a client.
     fn server_players(&self) -> Vec<PlayerRef> {
         crate::world::phase::unprovided(
             "Players::server_players",

@@ -1126,8 +1126,8 @@ impl Game<'_> {
         self.player_read_both(player)?.abilities()
     }
 
-    /// The players on this server, in the order they joined. Empty on a
-    /// client and in a world nobody else can join.
+    /// The players on this server, in the order they joined; in single player that
+    /// includes the world's owner, who joins its server like any player. Empty on a client.
     pub(super) fn native_server_players(&self) -> Vec<PlayerRef> {
         let Some(epoch) = self.native_lifecycle.epoch() else {
             return Vec::new();
@@ -1619,7 +1619,7 @@ impl Game<'_> {
     /// a player made an operator meanwhile sees them again. Kept by UUID, even
     /// after this handle disconnects (the player rejoins hidden), until a mod sets it again
     /// or the server stops. Works inside a player's hook too; false for a stale
-    /// world epoch, on a client and in a world nobody else can join.
+    /// world epoch and on a client.
     pub(super) fn player_hide(&mut self, player: PlayerRef, level: Option<u8>) -> bool {
         if self.native_lifecycle.epoch() != Some(player.entity().epoch()) {
             return false;

@@ -4,7 +4,7 @@ use mod_api::PlayerRef;
 
 impl Game<'_> {
     /// The level `player_hide` hides the player from, None when shown. The outer None is a
-    /// stale world epoch, a client, or a world nobody else can join.
+    /// stale world epoch or a client.
     pub(super) fn player_hidden(&self, player: PlayerRef) -> Option<Option<u8>> {
         if self.native_lifecycle.epoch() != Some(player.entity().epoch()) {
             return None;

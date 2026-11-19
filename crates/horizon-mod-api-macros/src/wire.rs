@@ -57,9 +57,9 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         return Ok(quote! {
             #[automatically_derived]
             impl #imp #w::Wire for #name #ty #clause {
-                const MIN: usize = <#via as #w::Wire>::MIN;
-                const LAYOUT_SEED: u64 = #w::layout_name("via");
-                fn layout(visiting: &mut ::std::vec::Vec<&'static str>) -> u64 {
+                const MIN: ::core::primitive::usize = <#via as #w::Wire>::MIN;
+                const LAYOUT_SEED: ::core::primitive::u64 = #w::layout_name("via");
+                fn layout(visiting: &mut ::std::vec::Vec<&'static ::core::primitive::str>) -> ::core::primitive::u64 {
                     <#via as #w::Wire>::layout(visiting)
                 }
                 fn put(&self, out: &mut #w::Writer) {
@@ -68,12 +68,12 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 fn put_owned(self, out: &mut #w::Writer) { self.put(out); }
                 fn take(input: &mut #w::Reader<'_>) -> ::core::result::Result<Self, #w::WireError> {
                     <Self as ::core::convert::TryFrom<#via>>::try_from(input.take::<#via>()?)
-                        .map_err(|_| #w::WireError::Invalid(stringify!(#name)))
+                        .map_err(|_| #w::WireError::Invalid(::core::stringify!(#name)))
                 }
             }
         });
     }
-    let mut layout = quote!(#w::layout_name(stringify!(#name)));
+    let mut layout = quote!(#w::layout_name(::core::stringify!(#name)));
     let mut min = quote!(0usize);
     let mut puts = Vec::new();
     let mut owned = Vec::new();
@@ -111,7 +111,7 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         }
         Data::Enum(data) => {
             shape = "enum";
-            schema.push(quote!(("tag", <u32 as #w::Wire>::layout(&mut ::std::vec::Vec::new()))));
+            schema.push(quote!(("tag", <::core::primitive::u32 as #w::Wire>::layout(&mut ::std::vec::Vec::new()))));
             min = quote!(4usize);
             nested = data
                 .variants
@@ -120,7 +120,8 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
             for (index, variant) in data.variants.iter().enumerate() {
                 let index = index as u32;
                 let case = &variant.ident;
-                layout = quote!(#w::layout_mix(#layout, #w::layout_name(stringify!(#case))));
+                layout =
+                    quote!(#w::layout_mix(#layout, #w::layout_name(::core::stringify!(#case))));
                 let (pat, _, binds) = fields(&variant.fields);
                 let pat = quote!(Self::#case #pat);
                 // `fields` returns a constructor beginning with Self; enum cases supply that prefix.
@@ -152,10 +153,10 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 owned.push(quote!(#pat => { out.put(&#index); #(#os)* }));
                 takes.push(quote!(#index => #build,));
             }
-            puts = vec![quote!(match self { #(#puts,)* _ => unreachable!() })];
-            owned = vec![quote!(match self { #(#owned,)* _ => unreachable!() })];
+            puts = vec![quote!(match self { #(#puts,)* _ => ::core::unreachable!() })];
+            owned = vec![quote!(match self { #(#owned,)* _ => ::core::unreachable!() })];
             takes = vec![
-                quote!(match input.take::<u32>()? { #(#takes)* tag => return ::core::result::Result::Err(#w::WireError::Tag(tag)) }),
+                quote!(match input.take::<::core::primitive::u32>()? { #(#takes)* tag => return ::core::result::Result::Err(#w::WireError::Tag(tag)) }),
             ];
         }
         Data::Union(_) => return Err(syn::Error::new_spanned(name, "Wire cannot encode a union")),
@@ -186,7 +187,7 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
     let schema = internal_field_layouts.then(|| {
         quote! {
             #[cfg(test)]
-            fn __field_layouts() -> ::core::option::Option<::std::vec::Vec<(&'static str, u64)>> { ::core::option::Option::Some(::std::vec![#(#schema),*]) }
+            fn __field_layouts() -> ::core::option::Option<::std::vec::Vec<(&'static ::core::primitive::str, ::core::primitive::u64)>> { ::core::option::Option::Some(::std::vec![#(#schema),*]) }
         }
     });
     Ok(quote! {
@@ -194,9 +195,9 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         #[automatically_derived]
             impl #imp #w::Wire for #name #ty #clause {
             #schema
-            const MIN: usize = #min;
-            const LAYOUT_SEED: u64 = #w::layout_name(stringify!(#name));
-            fn layout(visiting: &mut ::std::vec::Vec<&'static str>) -> u64 {
+            const MIN: ::core::primitive::usize = #min;
+            const LAYOUT_SEED: ::core::primitive::u64 = #w::layout_name(::core::stringify!(#name));
+            fn layout(visiting: &mut ::std::vec::Vec<&'static ::core::primitive::str>) -> ::core::primitive::u64 {
                 let identity = ::core::any::type_name::<Self>();
                 if visiting.contains(&identity) { return #w::layout_name("recursive"); }
                 visiting.push(identity);
