@@ -5,7 +5,7 @@ use std::sync::Arc;
 /// `BannerPattern`: a `banner_pattern` registry reference, or a direct holder
 /// that carries its own `asset_id` and `translation_key`
 /// (`BannerPattern.DIRECT_CODEC`, inline definitions allowed).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternRef {
     /// A registry reference: the pattern's id.
     Id(Arc<str>),
@@ -29,7 +29,7 @@ impl PatternRef {
 }
 
 /// `BannerPatternLayers.Layer`: a pattern and the dye name it is painted in.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BannerLayer {
     pub pattern: PatternRef,
     pub color: Arc<str>,

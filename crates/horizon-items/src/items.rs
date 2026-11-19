@@ -446,6 +446,12 @@ pub struct ItemStack {
     /// Components beyond count and damage (see `item_data`); None when default.
     pub extra: Option<Box<crate::item_data::StackData>>,
 }
+impl std::hash::Hash for ItemStack {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.count, state);
+        self.hash_item_and_components(state);
+    }
+}
 /// `order`'s items in the registry's order (`command-registries.json`'s
 /// `items`, exported from the game); `order` itself when that is missing.
 fn registry_order(root: &Path, order: &[Arc<str>]) -> Vec<Arc<str>> {

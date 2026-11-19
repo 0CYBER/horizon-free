@@ -2,7 +2,7 @@
 //! the dye colours fireworks use.
 
 /// FireworkExplosion.Shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
 pub enum FireworkShape {
     #[default]
     SmallBall,
@@ -51,7 +51,7 @@ pub const DYE_FIREWORK_COLORS: [(&str, u32); 16] = [
     ("black", 0x1E1B1B),
 ];
 /// The `firework_explosion` component.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct FireworkExplosion {
     pub shape: FireworkShape,
     pub colors: Vec<u32>,

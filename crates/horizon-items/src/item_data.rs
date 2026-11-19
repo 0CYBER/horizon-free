@@ -62,7 +62,10 @@ pub fn modifier_rows(tag: &Tag) -> Vec<ModifierRow> {
         })
         .collect()
 }
-use std::sync::Arc;
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 /// Enchantment id and level, in insertion order.
 pub type Levels = Vec<(Arc<str>, u32)>;
@@ -144,6 +147,80 @@ pub struct StackData {
     /// What the server sent for this stack, for sending it back unchanged.
     pub wire: Wire,
 }
+impl Hash for StackData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            damage_set,
+            enchantments,
+            stored_enchantments,
+            repair_cost,
+            explicit_zero_damage,
+            custom_name,
+            kinetic_weapon,
+            consumable,
+            death_protection: _,
+            potion,
+            potion_extra,
+            trim,
+            container,
+            charged,
+            fireworks,
+            map_id,
+            writable_pages,
+            written,
+            banner_patterns,
+            base_color,
+            ominous_banner,
+            ominous_amplifier,
+            dyed_color,
+            firework_explosion,
+            pot_decorations,
+            bundle_contents,
+            bundle_selected: _,
+            stew_effects,
+            map_post_processing,
+            other,
+            wire: _,
+        } = self;
+        damage_set.hash(state);
+        enchantments.hash(state);
+        stored_enchantments.hash(state);
+        repair_cost.hash(state);
+        explicit_zero_damage.hash(state);
+        custom_name.hash(state);
+        kinetic_weapon
+            .as_ref()
+            .map(|component| component.raw())
+            .hash(state);
+        consumable
+            .as_ref()
+            .map(|component| &component.raw)
+            .hash(state);
+        potion.hash(state);
+        potion_extra.hash(state);
+        trim.hash(state);
+        container.hash(state);
+        charged.hash(state);
+        fireworks.hash(state);
+        map_id.hash(state);
+        writable_pages.hash(state);
+        written.hash(state);
+        banner_patterns.hash(state);
+        base_color.hash(state);
+        ominous_banner.hash(state);
+        ominous_amplifier.hash(state);
+        dyed_color.hash(state);
+        firework_explosion.hash(state);
+        pot_decorations.hash(state);
+        bundle_contents.hash(state);
+        stew_effects.hash(state);
+        map_post_processing.hash(state);
+        // Includes the saved death_protection component. The decoded cache
+        // may contain floats and is only used by exact equality.
+        other.hash(state);
+    }
+}
+
 /// A saved consumable decoded once for use animation, countdown and completion.
 #[derive(Clone, Debug, PartialEq)]
 struct ConsumableComponent {
@@ -430,7 +507,7 @@ fn ominous_tooltip_display() -> Tag {
 }
 
 /// `WrittenBookContent` with the pages as plain text.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub struct WrittenBook {
     pub title: String,
     pub author: String,
@@ -836,6 +913,14 @@ impl ItemStack {
     pub fn same_item_same_components(&self, other: &Self) -> bool {
         self.item == other.item && self.damage == other.damage && self.data() == other.data()
     }
+    /// Hash candidates for `same_item_same_components`. Confirm a match with
+    /// that comparison, since fingerprints can collide.
+    pub fn hash_item_and_components(&self, state: &mut impl Hasher) {
+        self.item.hash(state);
+        self.damage.hash(state);
+        self.extra.hash(state);
+    }
+
     /// `ItemStack.matches`: the same item, count and components.
     pub fn matches(&self, other: &Self) -> bool {
         self.count == other.count && self.same_item_same_components(other)
