@@ -151,6 +151,9 @@ pub struct Upgrade {
     /// when they need a mod that is not ported along, `target` when they
     /// name their sets or pools by a tag.
     pub modifiers_left: BTreeMap<String, usize>,
+    /// Biome modifiers of mods' own types written as NeoForge's
+    /// ([`crate::biome_modifiers`]), by type.
+    pub biome_modifiers_translated: BTreeMap<String, usize>,
 }
 
 /// Where a mod's additions to other sets and pools go in its carry:

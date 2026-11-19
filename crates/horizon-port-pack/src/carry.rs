@@ -1098,6 +1098,14 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
         o.remove("replace");
         *bytes = serde_json::to_vec_pretty(&value).expect("a parsed value serializes");
     }
+    // A mod's biome modifier whose biomes no selector says exactly: worldgen is saved into
+    // chunks, so a loose guess would stay in players' worlds.
+    if name.starts_with("data/")
+        && (name.contains("/neoforge/biome_modifier/") || name.contains("/forge/biome_modifier/"))
+        && let Some(why) = crate::biome_modifiers::inexact(&value)
+    {
+        return Some(why);
+    }
     // Vanilla refuses an advancement whose item predicates name a component or sub-predicate
     // nothing registered (a mod's own, from its Java); the game would match it on any item and
     // grant the advancement at once.
@@ -1453,8 +1461,34 @@ pub fn carry(
                 && name.starts_with("data/")
                 && name.ends_with(".json")
             {
-                // The biomes a modifier changes, often by the loader's tags (`#c:is_overworld`).
-                if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                if let Ok(mut v) = serde_json::from_slice::<Value>(&bytes) {
+                    // A mod's own modifier type the game skips, as NeoForge's.
+                    let types = &mut report.worldgen_types;
+                    if let Some((kind, more)) =
+                        crate::biome_modifiers::translate(&mut v, &mut types.rules_lost)
+                    {
+                        *types.biome_modifiers_translated.entry(kind).or_default() += 1;
+                        bytes = serde_json::to_vec_pretty(&v).unwrap_or(bytes);
+                        // What one modifier of the mod's adds more than once, beside it
+                        // (`<name>_2.json`...), under names the jar doesn't use.
+                        let stem = name.strip_suffix(".json").unwrap_or(&name);
+                        let mut n = 2;
+                        for other in &more {
+                            let mut file = format!("{stem}_{n}.json");
+                            while present.contains(file.as_str()) {
+                                n += 1;
+                                file = format!("{stem}_{n}.json");
+                            }
+                            n += 1;
+                            let text = serde_json::to_vec_pretty(other).unwrap_or_default();
+                            write(&inside.join(&file), &text)?;
+                            crate::worldgen::convention_tags(
+                                &other["biomes"],
+                                &mut biome_conventions,
+                            );
+                        }
+                    }
+                    // The biomes a modifier changes, often by the loader's tags (`#c:is_overworld`).
                     crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
                 }
             } else if rel.starts_with("damage_type/")
@@ -2226,6 +2260,49 @@ mod tests {
             zip.write_all(body).unwrap();
         }
         zip.finish().unwrap();
+    }
+
+    /// A mod's modifier that adds once per include becomes one file per add, beside its own;
+    /// one whose biomes no selector says exactly stays outside.
+    #[test]
+    fn mod_biome_modifiers_carry_exactly_or_stay_outside() {
+        let dir = temp_dir("mod-biome-modifiers");
+        let jar = dir.join("fish.jar");
+        write_jar(
+            &jar,
+            &[
+                (
+                    "data/example/neoforge/biome_modifier/sea.json",
+                    br##"{"type": "aquaculture:fish_spawn", "and": false,
+                        "spawn": {"type": "example:cod", "weight": 5, "minCount": 1, "maxCount": 2},
+                        "includeBiomes": ["#c:is_ocean", "#c:is_beach"],
+                        "excludeBiomes": ["#c:is_cold"]}"##,
+                ),
+                (
+                    "data/example/neoforge/biome_modifier/cold_dungeon.json",
+                    br##"{"type": "repurposed_structures:additions_temperature_modifier",
+                        "biomes": "#c:is_ocean", "feature": "example:dungeon",
+                        "step": "underground_structures", "biome_temperature_allowed": "COLD"}"##,
+                ),
+            ],
+        );
+        let out = dir.join("out");
+        let report = carry_alone(&jar, &out).unwrap();
+        let read = |name: &str| -> Value {
+            let file = out.join(format!(
+                "carry/data/example/neoforge/biome_modifier/{name}.json"
+            ));
+            serde_json::from_slice(&fs::read(file).unwrap()).unwrap()
+        };
+        assert_eq!(read("sea")["biomes"]["values"][1], "#c:is_ocean");
+        assert_eq!(read("sea_2")["biomes"]["values"][1], "#c:is_beach");
+        assert_eq!(read("sea_2")["type"], "neoforge:add_spawns");
+        assert!(
+            report
+                .unreadable
+                .contains_key("data/example/neoforge/biome_modifier/cold_dungeon.json")
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     fn carry_alone(jar: &Path, out: &Path) -> Result<Report, String> {

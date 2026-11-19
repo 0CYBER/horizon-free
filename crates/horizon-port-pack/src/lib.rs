@@ -5,6 +5,7 @@
 //! be rerun, resumed and inspected. The work folder belongs to the user: the
 //! jars they downloaded and what is carried over from them stay there and
 //! are never uploaded or committed.
+mod biome_modifiers;
 pub mod carry;
 pub mod check;
 pub mod classes;
