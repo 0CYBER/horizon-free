@@ -27,6 +27,27 @@ use std::time::Duration;
 pub const COMMAND: &str = "apply-update";
 const RESTART: &str = "--restart";
 const SHA256_ENV: &str = "HORIZON_LAUNCHER_UPDATE_SHA256";
+/// On a launcher started by a restart for links.json's `min_launcher` (`min_launcher`): the new
+/// one, or the old one again after a failure, or this one when the new one was already in place.
+/// That launcher doesn't restart for the minimum again. The window gives it to its installer,
+/// which gives it to the launcher it starts; read once at startup and removed
+/// ([`take_min_restarted_env`]), so no game or other program inherits it.
+pub const MIN_RESTARTED_ENV: &str = "HORIZON_LAUNCHER_MIN_RESTARTED";
+static MIN_RESTARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Notes [`MIN_RESTARTED_ENV`] and removes it from this process's environment. Called first at
+/// startup, before other threads run.
+pub fn take_min_restarted_env() {
+    if std::env::var_os(MIN_RESTARTED_ENV).is_some() {
+        MIN_RESTARTED.store(true, std::sync::atomic::Ordering::Relaxed);
+        std::env::remove_var(MIN_RESTARTED_ENV);
+    }
+}
+
+/// Whether a restart for the minimum started this launcher ([`MIN_RESTARTED_ENV`]).
+pub fn min_restarted() -> bool {
+    MIN_RESTARTED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// How long the installer waits for the window to exit before it goes on: the replacement works
 /// under a running launcher too (the old file is moved aside, not overwritten).
@@ -98,11 +119,12 @@ pub fn on_close() {
 
 /// Update was pressed: starts the installer for the staged update with a restart (true; the
 /// caller quits right after), or reports that none is staged (false: the file in place already is
-/// the new launcher, another window or `horizon-launcher update` put it there).
-pub fn start_now() -> Result<bool, String> {
+/// the new launcher, another window or `horizon-launcher update` put it there). `for_minimum`:
+/// the restart is the one for links.json's `min_launcher` ([`MIN_RESTARTED_ENV`]).
+pub fn start_now(for_minimum: bool) -> Result<bool, String> {
     let staged = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take();
     match staged {
-        Some(staged) => hand_over(&staged, true).map(|()| true),
+        Some(staged) => hand_over_with(&staged, true, for_minimum).map(|()| true),
         None => Ok(false),
     }
 }
@@ -110,9 +132,19 @@ pub fn start_now() -> Result<bool, String> {
 /// Starts the installer for `staged`; the caller quits right after. With `restart` the installer
 /// starts the new launcher with this one's arguments.
 pub fn hand_over(staged: &Staged, restart: bool) -> Result<(), String> {
+    hand_over_with(staged, restart, false)
+}
+
+fn hand_over_with(staged: &Staged, restart: bool, for_minimum: bool) -> Result<(), String> {
     backend::mark_handed_over(staged);
     let installer = backend::update_target();
-    let mut cmd = installer_command(&installer, staged, restart, std::env::args_os().skip(1));
+    let mut cmd = installer_command(
+        &installer,
+        staged,
+        restart,
+        for_minimum,
+        std::env::args_os().skip(1),
+    );
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -135,11 +167,27 @@ fn installer_command(
     installer: &Path,
     staged: &Staged,
     restart: bool,
+    for_minimum: bool,
     window_args: impl IntoIterator<Item = OsString>,
 ) -> Command {
     let mut cmd = crate::process::command(installer);
     cmd.args(installer_args(staged, restart, window_args))
         .env(SHA256_ENV, &staged.sha256);
+    if for_minimum {
+        cmd.env(MIN_RESTARTED_ENV, "1");
+    }
+    cmd
+}
+
+/// What the installer starts after it ran: the launcher in place (the new one, or the old one
+/// after a failure) with the window's `args`, and [`MIN_RESTARTED_ENV`] when it was a restart
+/// for the minimum.
+fn restart_command(target: &Path, args: Vec<OsString>, for_minimum: bool) -> Command {
+    let mut cmd = crate::process::command(target);
+    cmd.args(args).env_remove(SHA256_ENV).stdin(Stdio::null());
+    if for_minimum {
+        cmd.env(MIN_RESTARTED_ENV, "1");
+    }
     cmd
 }
 
@@ -218,8 +266,7 @@ pub fn run() -> Option<i32> {
         record_failure(&request.staged.tag, e);
     }
     if let Some(args) = request.restart {
-        let mut cmd = crate::process::command(backend::update_target());
-        cmd.args(args).env_remove(SHA256_ENV).stdin(Stdio::null());
+        let mut cmd = restart_command(&backend::update_target(), args, min_restarted());
         if let Err(e) = cmd.spawn() {
             record_failure(&request.staged.tag, &format!("{e}"));
         }
@@ -353,6 +400,7 @@ mod tests {
             Path::new("horizon-launcher"),
             &staged(),
             true,
+            false,
             window.clone(),
         );
         let sha256 = cmd
@@ -401,6 +449,35 @@ mod tests {
         forget();
         let left = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take();
         assert_eq!(close_with(left, true), Close::Nothing);
+    }
+
+    fn env_of(cmd: &Command, name: &str) -> Option<Option<String>> {
+        cmd.get_envs()
+            .find(|(key, _)| key.to_str() == Some(name))
+            .map(|(_, value)| value.and_then(|v| v.to_str()).map(str::to_owned))
+    }
+
+    /// A restart for links.json's minimum is marked from the window to its installer and from the
+    /// installer to the launcher it starts, the new one or the old one after a failure; any other
+    /// restart is not.
+    #[test]
+    fn a_restart_for_the_minimum_is_marked_through_the_installer() {
+        let marked = Some(Some("1".to_owned()));
+        let installer = |for_minimum| {
+            installer_command(Path::new("i"), &staged(), true, for_minimum, os(&["play"]))
+        };
+        assert_eq!(env_of(&installer(true), MIN_RESTARTED_ENV), marked);
+        assert_eq!(env_of(&installer(false), MIN_RESTARTED_ENV), None);
+
+        let restart = restart_command(Path::new("horizon-launcher"), os(&["play"]), true);
+        assert_eq!(env_of(&restart, MIN_RESTARTED_ENV), marked);
+        assert_eq!(env_of(&restart, SHA256_ENV), Some(None));
+        assert_eq!(
+            restart.get_args().collect::<Vec<_>>(),
+            [std::ffi::OsStr::new("play")]
+        );
+        let plain = restart_command(Path::new("horizon-launcher"), os(&["play"]), false);
+        assert_eq!(env_of(&plain, MIN_RESTARTED_ENV), None);
     }
 
     #[test]

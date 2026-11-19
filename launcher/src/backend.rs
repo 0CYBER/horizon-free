@@ -649,6 +649,21 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     release_order(a).cmp(&release_order(b))
 }
 
+/// Orders two launcher versions or tags (`0.2.80`, `0.2.80-rc.1`, `launcher@0.2.80`) the one way
+/// every launcher check uses: release selection, the minimum (`min_launcher`), the installer's
+/// "already this version or newer" and failure reports. A prerelease comes before its release; a
+/// bare version is read as the 0.2 line's tag.
+pub fn compare_launcher_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let tag = |v: &str| {
+        if v.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("{LAUNCHER_TAG_PREFIX}{v}")
+        } else {
+            v.to_owned()
+        }
+    };
+    compare_versions(&tag(a), &tag(b))
+}
+
 /// Every published release of the repository, both kinds, as GitHub's JSON (kept on disk with its
 /// ETag, and read through Kira's mirror past GitHub's rate limit: [`crate::github`]).
 fn release_list() -> Result<serde_json::Value, String> {
@@ -851,17 +866,29 @@ pub struct Links {
     /// The addresses it had before: a list holding one moves to `official_server`. A move appends
     /// the old address here.
     pub official_server_previous: Vec<String>,
+    /// The oldest launcher that may stay in use; an older one updates at once (`min_launcher`).
+    /// Unset unless a release is broken. Launchers from before it ignore the key. Read only through
+    /// [`crate::min_launcher::version_in`], so a malformed value is no minimum, never a panic.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub min_launcher: Option<String>,
 }
 
 impl Default for Links {
     /// What the launcher uses until (or unless) it can read links.json.
     fn default() -> Self {
-        serde_json::from_str(include_str!("../links.json"))
-            .expect("embedded launcher links must match Links")
+        Self::defaults_from(include_str!("../links.json"))
     }
 }
 
 impl Links {
+    fn defaults_from(text: &str) -> Self {
+        let mut links: Self =
+            serde_json::from_str(text).expect("embedded launcher links must match Links");
+        let file = serde_json::from_str::<serde_json::Value>(text).ok();
+        links.min_launcher = min_launcher_in(file.as_ref().and_then(|f| f.get("min_launcher")));
+        links
+    }
+
     /// Reads links.json. A key that is missing keeps its default, an empty one hides the link,
     /// and text that is not a JSON object gives the defaults.
     pub fn parse(text: &str) -> Self {
@@ -879,6 +906,7 @@ impl Links {
                     *slot = url.trim().to_string();
                 }
             }
+            links.min_launcher = min_launcher_in(map.get("min_launcher"));
             // A list of addresses; anything else keeps the built-in one.
             if let Some(serde_json::Value::Array(previous)) = map.get("official_server_previous") {
                 if previous.iter().all(serde_json::Value::is_string) {
@@ -893,6 +921,10 @@ impl Links {
         }
         links
     }
+}
+
+fn min_launcher_in(value: Option<&serde_json::Value>) -> Option<String> {
+    value?.as_str().and_then(crate::min_launcher::version_in)
 }
 
 /// The links from main, or the built-in ones when offline.
@@ -3240,7 +3272,7 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
     releases
         .iter()
         .find(|r| r.asset.is_some())
-        .filter(|r| compare_versions(&r.tag, own).is_gt())
+        .filter(|r| compare_launcher_versions(&r.tag, own).is_gt())
         .cloned()
 }
 
@@ -3842,7 +3874,7 @@ pub fn place_checked(
 /// Whether `installed`, the launcher in place, is already the release `tag` or a newer one.
 pub(crate) fn already_in_place(installed: Option<&str>, tag: &str) -> bool {
     match (installed, launcher_version(tag)) {
-        (Some(installed), Some(target)) => compare_versions(installed, target).is_ge(),
+        (Some(installed), Some(target)) => compare_launcher_versions(installed, target).is_ge(),
         _ => false,
     }
 }
@@ -3879,7 +3911,7 @@ pub fn stage_update(release: &Release, progress: impl Fn(f32)) -> Result<Option<
         .ok_or("This launcher release has no build for this platform.")?;
     let target = launcher_version(&release.tag).unwrap_or("0");
     if installed_launcher_version(&update_target())
-        .is_some_and(|v| v != VERSION && compare_versions(&v, target).is_ge())
+        .is_some_and(|v| v != VERSION && compare_launcher_versions(&v, target).is_ge())
     {
         return Ok(None);
     }
@@ -4031,9 +4063,14 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
 /// arguments in place of this one: on Unix the process becomes the new binary (exec), on Windows
 /// the new one starts and this one exits. Returns only when the new one could not start.
 pub fn restart() -> String {
+    restart_with(false)
+}
+
+/// [`restart`], marked as the restart for links.json's `min_launcher` when `for_minimum`
+/// (`update_handoff::MIN_RESTARTED_ENV`).
+pub fn restart_with(for_minimum: bool) -> String {
     let target = update_target();
-    let mut cmd = Command::new(&target);
-    cmd.args(std::env::args_os().skip(1));
+    let mut cmd = restart_command(&target, std::env::args_os().skip(1), for_minimum);
     #[cfg(unix)]
     let error = {
         use std::os::unix::process::CommandExt;
@@ -4048,6 +4085,19 @@ pub fn restart() -> String {
         "Could not start {}: {error}. Close the launcher and open it again.",
         target.display()
     )
+}
+
+fn restart_command(
+    target: &Path,
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    for_minimum: bool,
+) -> Command {
+    let mut cmd = Command::new(target);
+    cmd.args(args);
+    if for_minimum {
+        cmd.env(crate::update_handoff::MIN_RESTARTED_ENV, "1");
+    }
+    cmd
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -6469,6 +6519,45 @@ pub fn {f}("
         assert!(!select_after_update(Some("v2026.10.1"), &installed));
     }
 
+    /// A launcher on `0.2.80-rc.1` updates to `0.2.80`: the installer doesn't take the
+    /// prerelease in place for the release (it restarted the same prerelease forever), and the
+    /// update check and the download agree.
+    #[test]
+    fn a_prerelease_launcher_is_below_its_release_everywhere() {
+        assert!(!already_in_place(Some("0.2.80-rc.1"), "launcher@0.2.80"));
+        assert!(already_in_place(Some("0.2.80"), "launcher@0.2.80"));
+        assert!(already_in_place(Some("0.2.81"), "launcher@0.2.80"));
+        assert!(compare_launcher_versions("0.2.80-rc.1", "launcher@0.2.80").is_lt());
+        let release = Release {
+            tag: "launcher@0.2.80".into(),
+            name: String::new(),
+            body: String::new(),
+            date: String::new(),
+            time: String::new(),
+            asset: Some(("u".into(), 1)),
+            prerelease: false,
+            nightly: None,
+        };
+        assert!(
+            launcher_update_from(std::slice::from_ref(&release), "launcher@0.2.80-rc.1").is_some()
+        );
+        assert!(launcher_update_from(&[release], "launcher@0.2.80").is_none());
+    }
+
+    /// The restart when the new launcher is already in place carries the minimum's mark too.
+    #[test]
+    fn a_restart_for_the_minimum_is_marked() {
+        let marked = |cmd: &Command| {
+            cmd.get_envs().any(|(key, value)| {
+                key == crate::update_handoff::MIN_RESTARTED_ENV && value == Some("1".as_ref())
+            })
+        };
+        let command =
+            |for_minimum| restart_command(Path::new("l"), ["play"].map(Into::into), for_minimum);
+        assert!(marked(&command(true)));
+        assert!(!marked(&command(false)));
+    }
+
     #[test]
     fn links_fall_back_to_the_built_in_ones() {
         let defaults = Links::default();
@@ -6490,6 +6579,21 @@ pub fn {f}("
         assert_eq!(Links::parse("<html>404</html>"), defaults);
         assert_eq!(Links::parse("[1]"), defaults);
         assert_eq!(Links::parse(r#"{"discord": 5}"#), defaults);
+        // No minimum launcher unless the file names a version; a malformed one is none, in the
+        // built-in file too, where it must not stop the launcher.
+        assert_eq!(defaults.min_launcher, None);
+        for unset in ["\"\"", "80", r#""0.2.8O""#, "null", "[]"] {
+            let key = format!(r#""min_launcher": {unset}"#);
+            assert_eq!(Links::parse(&format!("{{{key}}}")), defaults);
+            let file = include_str!("../links.json").replacen('{', &format!("{{{key}, "), 1);
+            assert_eq!(Links::defaults_from(&file).min_launcher, None, "{file}");
+        }
+        assert_eq!(
+            Links::parse(r#"{"min_launcher": "0.2.80"}"#)
+                .min_launcher
+                .as_deref(),
+            Some("0.2.80")
+        );
         // A key that is missing keeps its default; a new address replaces it; empty hides it.
         assert_eq!(
             Links::parse(r#"{"discord": "https://x.y/z"}"#),

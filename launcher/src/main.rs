@@ -276,6 +276,9 @@ struct Launcher {
     update_error: Option<String>,
     self_update: SelfUpdate,
     self_update_hidden: bool,
+    /// The restart for links.json's `min_launcher` was tried this start, or this launcher is
+    /// what one started: it isn't tried (again) before the next start.
+    min_restart_tried: bool,
     /// The Horizon version being installed as an update: whether it becomes the selected one is
     /// judged when it finishes.
     update_install: Option<String>,

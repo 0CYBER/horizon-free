@@ -34,6 +34,8 @@ pub(super) fn run() {
 }
 
 fn run_launcher() {
+    // First, before any other thread reads the environment.
+    horizon_launcher::update_handoff::take_min_restarted_env();
     horizon_platform::mod_package::holder::retain_capability();
     if let Some(code) = native_mods::internals_rustc_wrapper() {
         std::process::exit(code);

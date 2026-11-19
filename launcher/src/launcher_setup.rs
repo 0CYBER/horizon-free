@@ -116,6 +116,7 @@ impl Launcher {
             self_update: horizon_launcher::update_handoff::take_failure()
                 .map_or(SelfUpdate::Idle, |e| SelfUpdate::Stuck(Some(e))),
             self_update_hidden: false,
+            min_restart_tried: horizon_launcher::update_handoff::min_restarted(),
             update_install: None,
             instance_install: None,
             install_next: None,
@@ -552,14 +553,43 @@ impl Launcher {
     /// Update: the window closes, the installer puts the new launcher in place and starts it.
     /// When another launcher already put it there, this one only restarts.
     pub(crate) fn apply_launcher_update(&mut self, cx: &mut App) {
-        match horizon_launcher::update_handoff::start_now() {
+        self.hand_over_launcher_update(false, cx)
+    }
+
+    /// `for_minimum`: the restart for links.json's `min_launcher`, which the launcher it starts
+    /// doesn't repeat (`update_handoff::MIN_RESTARTED_ENV`).
+    fn hand_over_launcher_update(&mut self, for_minimum: bool, cx: &mut App) {
+        match horizon_launcher::update_handoff::start_now(for_minimum) {
             Ok(true) => {
                 servers_page::keep_running_through_update();
                 shut_down(cx)
             }
-            Ok(false) => self.self_update = SelfUpdate::Failed(backend::restart()),
+            Ok(false) => self.self_update = SelfUpdate::Failed(backend::restart_with(for_minimum)),
             Err(e) => self.self_update = SelfUpdate::Failed(e),
         }
+    }
+
+    /// A launcher older than links.json's `min_launcher` installs its downloaded update and restarts
+    /// as soon as it is ready, once per start, unless a game it started runs or a version installs
+    /// (`min_launcher`).
+    pub(crate) fn follow_min_launcher(&mut self, cx: &mut App) {
+        use horizon_launcher::min_launcher::{self, Activity, Now};
+        let now = Now {
+            self_update_allowed: backend::self_update_allowed(),
+            package_managed: backend::package_managed_launcher(),
+            ready: matches!(self.self_update, SelfUpdate::Ready(_)),
+            activity: Activity {
+                game: self.client.is_some() || self.starting_client.is_some(),
+                preparing: self.preparing,
+                installing: self.installing.is_some() || !self.removing.is_empty(),
+            },
+            tried: self.min_restart_tried,
+        };
+        if !min_launcher::installs_now(backend::VERSION, self.links.min_launcher.as_deref(), now) {
+            return;
+        }
+        self.min_restart_tried = true;
+        self.hand_over_launcher_update(true, cx);
     }
 
     /// Installs the Horizon version the last check found, keeping the player's choice of

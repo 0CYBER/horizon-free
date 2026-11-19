@@ -60,6 +60,7 @@ impl Launcher {
                     self.multiplayer.stale();
                     telemetry::set_official_server(&links.official_server);
                     self.links = links;
+                    self.follow_min_launcher(cx);
                 }
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
@@ -354,6 +355,7 @@ impl Launcher {
                         }
                         Err(e) => SelfUpdate::Failed(e),
                     };
+                    self.follow_min_launcher(cx);
                 }
                 Msg::PackLine(line) => {
                     self.pack_log.push_back(line);
