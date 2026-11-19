@@ -4148,7 +4148,7 @@ impl Game<'_> {
                     );
                 } else if let Some(at) = at {
                     let mut r = horizon_client::random_source::create();
-                    let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
+                    let pitch = (r.next_float() - r.next_float()) * 1.4 + 2.0;
                     self.audio
                         .play("minecraft:entity.item.pickup", Some(at), 0.2, pitch);
                 }
