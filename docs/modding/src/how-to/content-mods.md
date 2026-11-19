@@ -889,7 +889,10 @@ generation `step` of every biome in `biomes`; `remove_features` takes them out o
 none); `none` does nothing. `biomes` and `features` are an id, a `#tag` or a list of ids; `biomes` may also be
 NeoForge's `any`, `or`, `and` or `not`. Every addition comes before every removal, each in mod and file order, and a
 feature already in the step is not added twice. Configured features use 26.3's `worldgen/feature/` directory
-(registry `minecraft:worldgen/feature`).
+(registry `minecraft:worldgen/feature`). A mod's own carvers (`data/<ns>/worldgen/carver/`, 26.3's name for
+`configured_carver`) join the root's carvers the same way, so its biomes and carver modifiers can name them. One of a
+type the world can't decode, or whose `neoforge:conditions` fail, is left out; a biome naming it drops it once the
+world's data packs are in, unless one of them supplies a carver under that id.
 
 Spawn modifiers also apply to those biomes: `add_spawns` appends `spawners` (one object or a list with `type`,
 `weight`, `minCount` and `maxCount`) to each entity type's category, converting the count range to 26.3's `count`;
@@ -898,9 +901,9 @@ Spawn modifiers also apply to those biomes: `add_spawns` appends `spawners` (one
 accept an id, `#tag`, list of ids, or NeoForge's `any`, `or`, `and` or `not`.
 
 Carver modifiers edit the biome's `carvers`: `add_carvers` appends `carvers` (an id or a list of ids) that it lacks, and
-`remove_carvers` takes them out. They read the root's `worldgen/carvers.json` for the ids that exist, so a carver a
-data pack adds is not known to them, and carver tags are not read. NeoForge's docs call these legacy carvers: noise
-caves are not carvers.
+`remove_carvers` takes them out. `carvers` may also be a `#tag`. They see the root's carvers and carver tags with the
+world's data packs over them, so a carver or tag a pack adds is known to them. NeoForge's docs call these legacy
+carvers: noise caves are not carvers.
 
 NeoForge calls a modifier once in each of five phases (`BEFORE_EVERYTHING`, `ADD`, `REMOVE`, `MODIFY`,
 `AFTER_EVERYTHING`, in that order; its public biome modifier documentation). Horizon applies every addition, then every

@@ -2037,6 +2037,86 @@ fn additions_append_by_priority_then_order_and_skip_unknown_targets() {
     );
 }
 
+/// A mod's own carver joins the carvers bundle, so a biome of the mod that
+/// names it finds it. One of a type the world can't decode, or whose load
+/// conditions fail, is left out and listed for the worldgen loader.
+#[test]
+#[ignore = "daily"]
+fn content_root_carries_a_mods_carver() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-carver-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let dir = scratch.join("hollows");
+    let vanilla: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(base.join("worldgen/carvers.json")).unwrap()).unwrap();
+    let biomes: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(base.join("worldgen/biomes.json")).unwrap()).unwrap();
+    let mut hollow: serde_json::Value = serde_json::from_str(&biomes["minecraft:plains"]).unwrap();
+    let named = serde_json::json!(["hollows:deep_cave", "hollows:vent", "hollows:gated"]);
+    hollow["carvers"] = named.clone();
+    let hollow = hollow.to_string();
+    let mut gated: serde_json::Value = serde_json::from_str(&vanilla["minecraft:cave"]).unwrap();
+    gated["neoforge:conditions"] =
+        serde_json::json!([{"type": "neoforge:mod_loaded", "modid": "absent"}]);
+    let gated = gated.to_string();
+    let files = [
+        (
+            "horizon-mod.toml",
+            "id = \"hollows\"\nname = \"Hollows\"\nversion = \"1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
+        ),
+        // Shaped as 26.3's own cave carver, under the mod's id.
+        (
+            "data/hollows/worldgen/carver/deep_cave.json",
+            vanilla["minecraft:cave"].as_str(),
+        ),
+        // A carver type of the mod's Java.
+        (
+            "data/hollows/worldgen/carver/vent.json",
+            r#"{"type": "hollows:vent", "config": {"probability": 0.1}}"#,
+        ),
+        // A cave carver only for when a mod nobody loads is there.
+        ("data/hollows/worldgen/carver/gated.json", gated.as_str()),
+        ("data/hollows/worldgen/biome/hollow.json", hollow.as_str()),
+    ];
+    for (name, text) in files {
+        let path = dir.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let package = horizon_mod_package::Package::read(&dir).unwrap();
+    let m = ContentMod {
+        id: "hollows".into(),
+        content: Content::read(&dir, &package.manifest).unwrap(),
+        jars: Vec::new(),
+    };
+    let root = resource_root_fixture(
+        &base,
+        Path::new(""),
+        std::slice::from_ref(&m),
+        &scratch.join("cache"),
+    )
+    .unwrap();
+    let carvers: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/carvers.json")).unwrap()).unwrap();
+    assert_eq!(carvers["hollows:deep_cave"], vanilla["minecraft:cave"]);
+    assert!(carvers.contains_key("minecraft:cave"));
+    assert!(!carvers.contains_key("hollows:vent"));
+    assert!(!carvers.contains_key("hollows:gated"));
+    // The biome keeps every name: the worldgen loader drops the left-out ones
+    // after a world's data packs are in, unless one supplies them.
+    let biomes: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/biomes.json")).unwrap()).unwrap();
+    let hollow: serde_json::Value = serde_json::from_str(&biomes["hollows:hollow"]).unwrap();
+    assert_eq!(hollow["carvers"], named);
+    let left_out: Vec<String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/carvers_left_out.json")).unwrap())
+            .unwrap();
+    assert_eq!(left_out, ["hollows:gated", "hollows:vent"]);
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// A structure mod's worldgen reaches the worldgen loader: its structure,
 /// set, pool and templates join the bundles, and its biome tag keeps only
 /// what the loader knows.

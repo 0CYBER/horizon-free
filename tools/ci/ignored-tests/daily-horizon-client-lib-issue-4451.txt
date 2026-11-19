@@ -139,6 +139,7 @@ horizon-client-lib mod_content::tests::block_aliases_keep_the_original_item_in_p
 horizon-client-lib mod_content::tests::blocks_and_items_declared_in_code_get_ids lib daily resources
 horizon-client-lib mod_content::tests::conditional_tag_layers_replace_only_when_server_inventory_accepts_them lib daily resources
 horizon-client-lib mod_content::tests::connecting_blocks_and_vanilla_fences_use_content_tags lib daily resources
+horizon-client-lib mod_content::tests::content_root_carries_a_mods_carver lib daily resources
 horizon-client-lib mod_content::tests::content_root_carries_a_structure_mod lib daily resources
 horizon-client-lib mod_content::tests::content_root_generates_a_biome_modifier_ore lib daily resources
 horizon-client-lib mod_content::tests::content_root_is_reused_until_a_mod_changes lib daily resources

@@ -294,6 +294,11 @@ impl GeneratorData {
         let source_catalog =
             BiomeSourceCatalog::new(&biome_set, &biome_tags, &presets.keys().cloned().collect())?;
         let carvers = CarverCatalog::from_json(&read_bundle(dir, ov, "carvers")?)?;
+        let left_out: BTreeSet<String> =
+            match fs::read_to_string(dir.join(crate::worldgen::carver::LEFT_OUT)) {
+                Ok(text) => serde_json::from_str(&text)?,
+                Err(_) => BTreeSet::new(),
+            };
         let mut biome_names = Vec::new();
         let mut biome_ids = BTreeMap::new();
         let mut biome_json = Vec::new();
@@ -304,7 +309,12 @@ impl GeneratorData {
             biome_names.push(Arc::<str>::from(name.as_str()));
             temperatures.push(BiomeTemperatureSettings::from_json(json)?);
             let value: Value = serde_json::from_str(json)?;
-            biome_carvers.push(carvers.decode_set(&value["carvers"].to_string())?);
+            let (set, dropped) =
+                carvers.decode_set_leaving_out(&value["carvers"].to_string(), &left_out)?;
+            warnings.extend(dropped.into_iter().map(|id| {
+                format!("biome {name}: carver {id} was left out of the mods' content, dropped")
+            }));
+            biome_carvers.push(set);
             biome_json.push(json.clone());
         }
         let carving_blocks = CarvingBlocks::from_registry(

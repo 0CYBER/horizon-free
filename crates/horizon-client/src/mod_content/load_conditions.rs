@@ -200,6 +200,9 @@ pub fn build_with_conditions(
     let mut warnings = Vec::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
+    // Carvers the root leaves out: the worldgen loader drops a biome's
+    // reference to one only when no data pack supplies it.
+    let mut left_out_carvers: BTreeSet<String> = BTreeSet::new();
     let mut modifiers = Vec::new();
     let mut structure_modifiers = Vec::new();
     let mut namespaces: std::collections::BTreeSet<String> = mods
@@ -245,10 +248,13 @@ pub fn build_with_conditions(
                 })?;
                 // Dynamic registry entries use the same owning-load conditions as tags.
                 // Evaluate before parsing required modifier fields.
-                if biomes::is_modifier(&file) || structures::is_modifier(&file) {
+                let carver = worldgen_entry(&file).filter(|(bundle, _)| *bundle == CARVERS);
+                if biomes::is_modifier(&file) || structures::is_modifier(&file) || carver.is_some()
+                {
                     let doc: J = serde_json::from_slice(&bytes)
                         .map_err(|e| format!("mod {}: {file}: {e}", m.id))?;
                     if !tag_conditions_hold(&doc, conditions, &file)? {
+                        left_out_carvers.extend(carver.map(|(_, id)| id));
                         continue;
                     }
                 }
@@ -285,6 +291,16 @@ pub fn build_with_conditions(
                         )?);
                     } else if let Some((bundle, id)) = worldgen_entry(&file) {
                         let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
+                        // The world decodes every carver at start, used or
+                        // not: one it can't read is left out.
+                        if bundle == CARVERS
+                            && let Err(e) =
+                                horizon_world::worldgen::carver::WorldCarver::from_json(&text)
+                        {
+                            warnings.push(format!("mod {}: {file}: carver left out: {e}", m.id));
+                            left_out_carvers.insert(id);
+                            continue;
+                        }
                         let entries = worldgen.entry(bundle).or_default();
                         match Addition::read(bundle, &text).map_err(|e| format!("{file}: {e}"))? {
                             Some(addition) => additions.entry(bundle).or_default().push(addition),
@@ -384,6 +400,10 @@ pub fn build_with_conditions(
             apply_additions(&mut doc, list).map_err(|e| format!("{bundle}: {e}"))?;
         }
         overlay.write(bundle, &serde_json::to_vec(&doc)?)?;
+        if *bundle == CARVERS && !left_out_carvers.is_empty() {
+            let name = format!("worldgen/{}", horizon_world::worldgen::carver::LEFT_OUT);
+            overlay.write(&name, &serde_json::to_vec(&left_out_carvers)?)?;
+        }
         if *bundle == PLACED_FEATURES {
             placed_doc = Some(doc);
         } else if *bundle == BIOMES {
