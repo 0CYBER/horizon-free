@@ -228,6 +228,30 @@ fn reader_matches_brigadier() {
     assert_eq!(e.context().unwrap(), "<--[HERE]");
 }
 
+/// Brigadier reports an error's position, and cuts its ten-character context, in Java `String`
+/// indices (UTF-16 units), not UTF-8 bytes; a character outside the BMP is two units.
+#[test]
+fn error_position_and_context_count_utf16_units() {
+    let error_at = |input: &'static str| {
+        let mut r = Reader::new(input);
+        r.cursor = input.find("1.5").unwrap();
+        r.read_int().unwrap_err()
+    };
+    // Eleven two-byte characters and a space before the number: 12 units, 23 bytes.
+    let e = error_at("ééééééééééé 1.5");
+    assert_eq!(e.java_cursor(), 12);
+    assert_eq!(e.context().unwrap(), "...ééééééééé <--[HERE]");
+    // 'é' (1 unit), '😀' (2 units, 4 bytes), then 9 units: the window of ten
+    // starts inside the emoji's surrogate pair, so the half character is left out.
+    let e = error_at("é😀 abcdefg 1.5");
+    assert_eq!(e.java_cursor(), 12);
+    assert_eq!(e.context().unwrap(), "... abcdefg <--[HERE]");
+    // Exactly ten units before the cursor: no ellipsis, nothing cut.
+    let e = error_at("😀😀abcdef1.5");
+    assert_eq!(e.java_cursor(), 10);
+    assert_eq!(e.context().unwrap(), "😀😀abcdef<--[HERE]");
+}
+
 #[test]
 fn resource_selector_wildcards_preserve_unicode_and_backtracking() {
     let cases = [

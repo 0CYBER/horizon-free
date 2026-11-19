@@ -301,14 +301,10 @@ impl Game<'_> {
             ..Style::default()
         };
         let mut context = Text::empty();
-        if cursor > 10 {
+        if horizon_client::command::java_index(input, cursor) > 10 {
             context.push("...");
         }
-        let start = (0..=cursor.saturating_sub(10))
-            .rev()
-            .find(|&i| input.is_char_boundary(i))
-            .unwrap_or(0);
-        context.push(&input[start..cursor]);
+        context.push(&input[horizon_client::command::context_start(input, cursor)..cursor]);
         if cursor < input.len() {
             context.push(
                 Text::literal(&input[cursor..])

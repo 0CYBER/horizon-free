@@ -90,20 +90,24 @@ impl CommandError {
         e.key = key.to_owned();
         e
     }
+    /// `CommandSyntaxException.getCursor`: the cursor as a Java `String`
+    /// index (UTF-16 units), the position vanilla reports.
+    pub fn java_cursor(&self) -> usize {
+        match &self.input {
+            Some(input) => java_index(input, self.cursor),
+            None => self.cursor,
+        }
+    }
     /// Brigadier's command exception context: up to ten characters before the
     /// cursor followed by "<--[HERE]".
     pub fn context(&self) -> Option<String> {
         let input = self.input.as_ref()?;
-        let cursor = self.cursor.min(input.len());
-        let start = (0..=cursor.saturating_sub(10))
-            .rev()
-            .find(|&i| input.is_char_boundary(i))
-            .unwrap_or(0);
+        let cursor = char_floor(input, self.cursor);
         let mut out = String::new();
-        if cursor > 10 {
+        if java_index(input, cursor) > 10 {
             out.push_str("...");
         }
-        out.push_str(&input[start..cursor]);
+        out.push_str(&input[context_start(input, cursor)..cursor]);
         out.push_str("<--[HERE]");
         Some(out)
     }
@@ -114,7 +118,7 @@ impl CommandError {
                 "command.context.parse_error",
                 &[
                     self.message.clone(),
-                    Text::literal(self.cursor.to_string()),
+                    Text::literal(self.java_cursor().to_string()),
                     Text::literal(context),
                 ],
             ),
@@ -123,6 +127,36 @@ impl CommandError {
     }
 }
 pub type CmdResult<T> = Result<T, CommandError>;
+
+/// `cursor` moved back to the start of the character it falls in, and kept inside `input`.
+fn char_floor(input: &str, cursor: usize) -> usize {
+    let mut end = cursor.min(input.len());
+    while !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// A byte `cursor` into `input` as a Java `String` index: the UTF-16 units before it, which
+/// is how Brigadier counts the positions it reports.
+pub fn java_index(input: &str, cursor: usize) -> usize {
+    input[..char_floor(input, cursor)].encode_utf16().count()
+}
+
+/// The byte where the context of an error at `cursor` starts: ten Java chars (UTF-16 units)
+/// back, as Brigadier's `substring(Math.max(0, cursor - 10), cursor)`. Where that falls inside
+/// a surrogate pair, the half character is left out instead of shown broken.
+pub fn context_start(input: &str, cursor: usize) -> usize {
+    let target = java_index(input, cursor).saturating_sub(10);
+    let mut units = 0;
+    for (i, c) in input.char_indices() {
+        if units >= target {
+            return i;
+        }
+        units += c.len_utf16();
+    }
+    input.len()
+}
 
 /// Brigadier StringReader over a command line (byte cursor on char boundaries).
 #[derive(Clone, Debug)]

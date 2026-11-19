@@ -391,7 +391,7 @@ impl Game<'_> {
                         format!(
                             "Invalid command {line:?}: {} at position {}",
                             error.message.plain(),
-                            error.cursor
+                            error.java_cursor()
                         ),
                     ));
                     return false;
