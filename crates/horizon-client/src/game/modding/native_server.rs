@@ -1893,6 +1893,17 @@ impl Game<'_> {
     /// guest's through `as_guest`, including within another guest's turn.
     /// False when it didn't run: no such player here, or dead.
     pub(super) fn native_as_player(&mut self, uuid: u128, f: impl FnOnce(&mut Self)) -> bool {
+        // A server's player is in place for their own turn only. Outside it (a payload handler,
+        // a server tick) they are their guest record, the single-player owner as well, whose
+        // UUID is `native_acting_id`'s fallback all the same (`player_lookup`'s order).
+        if self.lan_acting_uuid != Some(uuid)
+            && let Some((conn, dead)) = self.lan.as_ref().and_then(|host| {
+                let guest = host.hub.holder_guest(uuid, self.dim.id())?;
+                Some((guest.conn, guest.dead))
+            })
+        {
+            return !dead && self.as_guest(conn, f).is_some();
+        }
         if uuid == self.native_acting_id() {
             if self
                 .player
@@ -1904,15 +1915,7 @@ impl Game<'_> {
             f(self);
             return true;
         }
-        let Some(host) = self.lan.as_ref() else {
-            return false;
-        };
-        let conn = host
-            .hub
-            .holder_guest(uuid, self.dim.id())
-            .filter(|g| !g.dead)
-            .map(|g| g.conn);
-        conn.and_then(|conn| self.as_guest(conn, f)).is_some()
+        false
     }
 }
 

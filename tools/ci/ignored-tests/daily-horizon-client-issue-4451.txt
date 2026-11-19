@@ -1606,6 +1606,7 @@ horizon-client game::native_item_places::tests::living_equipment_moves_through_t
 horizon-client game::native_item_places::tests::one_by_one_shows_one_bucket_of_sixteen_and_fills_one lib daily resources
 horizon-client game::native_item_places::tests::scoped_boat_slots_use_the_open_menu_and_refuse_a_removed_owner lib daily resources
 horizon-client game::native_item_places::tests::stand_equipment_effects_wait_for_root_commit lib daily resources
+horizon-client game::native_item_places::tests::the_owners_places_outside_their_turn_are_their_guest_records lib daily resources
 horizon-client game::native_item_places::tests::whole_stack_component_edit_preserves_slot_and_refuses_item_or_count_changes lib daily resources
 horizon-client game::native_item_places::tests::whole_stack_component_edit_rolls_back_with_its_transaction lib daily resources
 horizon-client game::native_key_mappings::tests::opening_and_closing_a_direct_screen_discards_pending_clicks lib daily resources

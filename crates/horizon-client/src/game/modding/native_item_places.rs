@@ -540,6 +540,29 @@ pub(super) mod tests {
         guest
     }
 
+    /// The single-player owner is a guest of the server thread: outside their own turn (a
+    /// payload handler, a server tick) their places are their guest record's, though their
+    /// UUID is the acting fallback, not the host game's own inventory (#18472).
+    #[test]
+    #[ignore = "daily"]
+    fn the_owners_places_outside_their_turn_are_their_guest_records() {
+        with_game(|game| {
+            open_to_lan(game);
+            let owner = game.native_acting_id();
+            let mut player = guest(1);
+            player.uuid = owner;
+            player.inventory[3] = Some(ItemStack::new("minecraft:paper", 16));
+            game.lan.as_mut().unwrap().hub.guests.push(player);
+            game.inventory[3] = Some(ItemStack::new("minecraft:dirt", 1));
+            let slot = ItemPlace::PlayerSlot {
+                player: owner,
+                slot: 3,
+            };
+            let read = slot.stack(game).map(|stack| stack.item().id(&*game));
+            assert_eq!(read.as_deref(), Some("minecraft:paper"));
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn whole_stack_component_edit_preserves_slot_and_refuses_item_or_count_changes() {
