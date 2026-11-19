@@ -510,17 +510,37 @@ fn warm_pool() -> Option<&'static WarmPool> {
                     .name(format!("horizon-chunk-encode-{i}"))
                     .spawn(move || {
                         let mut done = 0;
+                        let mut release_seen = horizon_threads::release_seen();
                         loop {
                             let job = {
                                 let mut slot = pool.job.lock().unwrap();
                                 while slot.0 == done {
-                                    slot = pool.ready.wait(slot).unwrap();
+                                    // Between jobs, give back what the server
+                                    // freed into this thread's heap when it
+                                    // asks (`release_everywhere`).
+                                    let (next, wait) = pool
+                                        .ready
+                                        .wait_timeout(slot, horizon_threads::RELEASE_POLL)
+                                        .unwrap();
+                                    slot = next;
+                                    if wait.timed_out()
+                                        && horizon_threads::release_asked(&mut release_seen)
+                                    {
+                                        drop(slot);
+                                        horizon_threads::release_free_memory();
+                                        slot = pool.job.lock().unwrap();
+                                    }
                                 }
                                 done = slot.0;
                                 slot.1.clone()
                             };
                             if let Some(job) = job {
                                 job.run();
+                            }
+                            // Asked while jobs keep coming (no gap for the
+                            // timed check above): give it back between two.
+                            if horizon_threads::release_asked(&mut release_seen) {
+                                horizon_threads::release_free_memory();
                             }
                         }
                     })
@@ -672,6 +692,13 @@ impl ChunkEncoder {
             self.column.section_y(self.sections.start),
             16 * self.sections.len() as i32,
         )
+    }
+
+    /// Drop the encoded sections and heightmaps kept for sending again, with
+    /// their tables' memory: nobody is on to send them to.
+    pub fn forget_cache(&self) {
+        *self.cache.lock().unwrap() = FxHashMap::default();
+        *self.heights.lock().unwrap() = HashMap::new();
     }
 
     /// The section entries and the column heightmaps cached, each as (entries, bytes).

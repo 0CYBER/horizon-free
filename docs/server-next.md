@@ -366,6 +366,11 @@ Each step below is one or more PRs. Each one is measured with the bench on three
    shrink back after the last one leaves. Their stacks are sized to what they use.
 6. **Give memory back.** After the last player leaves, unloaded chunks and caches are freed, and the allocator
    returns pages to the OS. The bench checks that RSS drops back under the target 60 s after the last leave.
+   - Done: 5 s and 30 s after the last player leaves, the chunk send caches are dropped and every pool thread
+     (terrain workers, chunk encoders, network threads, save compressors) hands its heap's free pages back. After
+     ten bots explored for two minutes, an empty server holds 506 MB instead of 659 MB; a fresh one holds 356-369 MB.
+   - Left: the structure starts the generator keeps (they also hold starts read from saved chunks, about 25 MB)
+     and pages the allocator can't return while a few small allocations still use them (about 75 MB).
 7. **Start < 0.1 s.** With steps 1 to 4, nothing heavy runs before the listener opens: read `server.properties`
    and the lists, map `server.pack`, read `level.dat`, bind. A startup span log times each step, and the bench
    fails a PR that makes any of them slower.

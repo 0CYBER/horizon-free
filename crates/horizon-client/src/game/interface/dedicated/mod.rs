@@ -876,6 +876,10 @@ struct ServerState {
     lists: Arc<Mutex<Lists>>,
     console: mpsc::Receiver<String>,
     empty_ticks: i32,
+    /// Since when nobody is on, and how many of [`GIVE_BACK_AFTER`]'s passes ran since
+    /// ([`Game::give_memory_back_when_empty`]).
+    empty_since: Option<Instant>,
+    given_back: usize,
     /// The mutable `DedicatedServer.pauseWhenEmptySeconds` setting.
     pause_when_empty_seconds: i32,
     /// When the last passes of the loop ended, for the tick rate horizon-server shows.
@@ -946,6 +950,21 @@ fn ban_ip_info(names: &[&str]) -> Option<Text> {
 /// `MinecraftServer.isAutoSave`: all of Horizon's server levels share this save flag.
 fn auto_save(state: &ServerState) -> bool {
     state.lists.lock().unwrap().autosave
+}
+
+/// How long after the last player left (or the start, with nobody on) the server gives its memory
+/// back: once the chunks around the players are unloaded, then again once the slower ones (saved
+/// last, or kept a while by a ticket) are gone. Horizon's own: vanilla's JVM keeps its heap.
+const GIVE_BACK_AFTER: [Duration; 2] = [Duration::from_secs(5), Duration::from_secs(30)];
+
+/// The passes of [`GIVE_BACK_AFTER`] due at `now` and not yet run: nobody on since `empty_since`
+/// (None while someone is), `given_back` passes run since.
+fn give_back_due(empty_since: Option<Instant>, given_back: usize, now: Instant) -> bool {
+    empty_since.is_some_and(|since| {
+        GIVE_BACK_AFTER
+            .get(given_back)
+            .is_some_and(|after| now.duration_since(since) >= *after)
+    })
 }
 
 /// `MinecraftServer.tickServer`'s pause-when-empty count. `pause_after` is its
@@ -1402,6 +1421,8 @@ impl Game<'_> {
             lists,
             console,
             empty_ticks: 0,
+            empty_since: None,
+            given_back: 0,
             pause_when_empty_seconds: props.pause_when_empty_seconds,
             ticks: Default::default(),
             paused: false,
@@ -1489,6 +1510,7 @@ impl Game<'_> {
                 self.clock.sprinting(),
             );
             state.paused = paused;
+            self.give_memory_back_when_empty(&mut state, players, Instant::now());
             if paused && state.empty_ticks == pause_after {
                 log(
                     "INFO",
@@ -1644,6 +1666,27 @@ impl Game<'_> {
         }
         self.player = None;
         Ok(())
+    }
+
+    /// Once nobody is on for a while ([`GIVE_BACK_AFTER`]), drop what was kept only to send chunks
+    /// again and have every thread give back to the OS the memory its heap holds free, so an empty
+    /// server sits near what it took at the start rather than at its busiest.
+    fn give_memory_back_when_empty(&self, state: &mut ServerState, players: usize, now: Instant) {
+        if players > 0 {
+            state.empty_since = None;
+            state.given_back = 0;
+            return;
+        }
+        let since = *state.empty_since.get_or_insert(now);
+        if !give_back_due(Some(since), state.given_back, now) {
+            return;
+        }
+        state.given_back += 1;
+        if let Some(host) = &self.lan {
+            host.hub.encoder.forget_cache();
+        }
+        horizon_client::lan::conn::forget_shared_frames();
+        horizon_threads::release_everywhere();
     }
 
     /// The chunks to keep loaded: the players' (lan_update_streaming). While
@@ -2884,6 +2927,22 @@ mod tests {
             false
         ));
         assert_eq!(empty_ticks, 5);
+    }
+
+    /// An empty server gives its memory back 5 s after the last player left and again at 30 s,
+    /// then no more until someone has been on again (the loop then starts from None).
+    #[test]
+    fn an_empty_server_gives_memory_back_twice() {
+        use std::time::{Duration, Instant};
+        let left = Instant::now();
+        let at = |s: u64| left + Duration::from_secs(s);
+        let due = |given_back, s| super::give_back_due(Some(left), given_back, at(s));
+        assert!(!due(0, 4));
+        assert!(due(0, 5));
+        assert!(!due(1, 29));
+        assert!(due(1, 30));
+        assert!(!due(2, 3600));
+        assert!(!super::give_back_due(None, 0, at(3600)));
     }
 
     /// A `panic!("literal")` carries a `&str`, a formatted one a `String`; anything else is

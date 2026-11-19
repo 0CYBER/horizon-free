@@ -377,6 +377,7 @@ fn run(mut poll: Poll, worker: &Arc<Worker>) {
     let mut free: Vec<usize> = Vec::new();
     let mut touched: Vec<usize> = Vec::new();
     let mut sweep_at = Instant::now() + SWEEP;
+    let mut release_seen = horizon_threads::release_seen();
     loop {
         let wait = sweep_at.saturating_duration_since(Instant::now());
         if let Err(e) = poll.poll(&mut events, Some(wait))
@@ -431,6 +432,15 @@ fn run(mut poll: Poll, worker: &Arc<Worker>) {
         }
         if now >= sweep_at {
             sweep_at = now + SWEEP;
+            // Give back what was freed into this thread's heap (the packets it
+            // read, the buffers of connections gone) when the server asks.
+            if horizon_threads::release_asked(&mut release_seen) {
+                if conns.iter().all(Option::is_none) {
+                    conns = Vec::new();
+                    free = Vec::new();
+                }
+                horizon_threads::release_free_memory();
+            }
             touched.clear();
             for (i, slot) in conns.iter_mut().enumerate() {
                 if let Some(c) = slot {

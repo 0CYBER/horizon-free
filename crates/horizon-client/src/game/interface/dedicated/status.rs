@@ -50,6 +50,8 @@ impl Game<'_> {
             let reply = match request.line.trim().split_once(' ') {
                 _ if request.line.trim() == "server-status" => self.server_status(state),
                 _ if request.line.trim() == "server-mods" => server_mods(),
+                // `horizon-ctl memory`: what holds the server's memory (memory.rs).
+                _ if request.line.trim() == "memory" => self.memory_value(),
                 // A proxy reading whether it may send players here (transfer.rs).
                 _ if request.line.trim() == "transfer-status" => self.transfer_status(),
                 Some(("server-events", since)) => {

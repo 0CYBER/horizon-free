@@ -2466,6 +2466,13 @@ pub fn shared_frame_census() -> (usize, usize) {
     SharedFrames::get().census()
 }
 
+/// Drop the compressed frames kept for other connections, with their table's
+/// memory: nobody is on to send them to. A frame being made is still handed to
+/// whoever waits for it.
+pub fn forget_shared_frames() {
+    *SharedFrames::get().cache() = FrameCache::default();
+}
+
 /// Frame one packet body into `out`: a large one compressed through
 /// [`SharedFrames`], so a chunk column sent to fifty players is compressed
 /// once, not fifty times. The bytes on the wire are the same.

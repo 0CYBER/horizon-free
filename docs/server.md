@@ -89,6 +89,8 @@ clock `/tick query` uses), players (name, UUID, address, ping, position), loaded
 inventory on this same server thread and answers `{"mods":[{"id":"example","version":"1"}]}`.
 It includes native, wasm and content packages installed in that inventory, in inventory order; an empty
 inventory is `{"mods":[]}`. The supervisor's `GET /api/v1/mods` uses this query, never a build-record fallback.
+`memory` answers what `horizon-ctl memory` shows for a game with a window: the resident set, the allocator's
+committed bytes, and the server's parts (chunks, entities, players, chunk send caches, generation).
 
 **A proxy moving a player between two servers** uses more requests on this endpoint (`lan/arrivals.rs`,
 `game/interface/dedicated/transfer.rs`). They are a built-in module, **off by default**, that the owner turns on in
