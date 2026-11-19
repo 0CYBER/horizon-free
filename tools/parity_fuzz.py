@@ -53,6 +53,18 @@ ALLOWED = [
     (r'LastGossipDecay', 'absolute game time (Villager.maybeDecayGossip)', set_alike),
 ]
 
+# Differences already filed, by signature (family|subject|live/reloaded|first field). A pattern matches
+# the whole signature; the report lists a match under its issue, and only the rest as new. An entry that
+# matches nothing in a round is reported as "not observed" (not evidence of a fix), so the table can be
+# revisited without pretending a bug was fixed.
+KNOWN = [
+    # The issue's own example, and the shape a table entry takes. Add the other filed groups
+    # (#16100 freezing twice, #16128 crystal Rotation, the reload timing family) from a report's
+    # signatures; each entry is a whole-signature regex, and an entry that matches nothing is
+    # reported as "not observed", not as fixed.
+    (r'persist\|trident\|live\|damage', 14823),
+]
+
 
 def area(slot):
     return AREA_X + 48 * slot, FLOOR_Y, AREA_Z
@@ -342,6 +354,29 @@ def signatures(result):
         return ['crash']
     return [] if result['invalid'] else list(dict.fromkeys(failure[0] for failure in result['failures']))
 
+def classify(groups):
+    """(known, new, not_observed): signatures by known issue, the groups no entry names, and entries whose
+    pattern did not match this round.
+
+    `groups` is {signature: members}; the result reuses the members so the caller can shrink only new ones.
+    A pattern that matches nothing only means the round did not exercise it: that is not evidence its bug is
+    fixed, so the caller reports it as "not observed", never as "fixed".
+    """
+    known, new, matched = {}, {}, set()
+    for signature, members in groups.items():
+        issue = None
+        for pattern, candidate in KNOWN:
+            if re.fullmatch(pattern, signature):
+                matched.add(pattern)
+                if issue is None:
+                    issue = candidate
+        if issue is None:
+            new[signature] = members
+        else:
+            known.setdefault(issue, []).append(signature)
+    not_observed = [(issue, pattern) for pattern, issue in KNOWN if pattern not in matched]
+    return known, new, not_observed
+
 
 # ---------------------------------------------------------------------------------------------------------------
 # Shrinking: drop steps, NBT keys and ticks while the same divergence stays.
@@ -455,13 +490,16 @@ def main():
     for scenario, result in failing:
         for sig in signatures(result):
             groups.setdefault(sig, []).append((scenario, result))
-    # One bug, one shrink: each group's smallest scenario stands for it.
-    shrunk = shrink(runner, {sig: min(members, key=lambda m: len(json.dumps(m[0]))) for sig, members in groups.items()},
-                    args.shrink_rounds)
-    report = {'scenarios': len(scenarios), 'invalid': invalid, 'diverging': len(failing), 'groups': [],
+    known, new_groups, not_observed = classify(groups)
+    # One bug, one shrink: each new group's smallest scenario stands for it.
+    shrunk = shrink(runner, {sig: min(members, key=lambda m: len(json.dumps(m[0])))
+                             for sig, members in new_groups.items()}, args.shrink_rounds)
+    report = {'scenarios': len(scenarios), 'invalid': invalid, 'diverging': len(failing),
+              'known': [{'issue': issue, 'signatures': signatures} for issue, signatures in sorted(known.items())],
+              'not_observed': [{'issue': issue, 'pattern': pattern} for issue, pattern in not_observed],
               # Each diverging seed's signatures, to compare runs of the same seeds before and after a change.
-              'by_seed': {s['seed']: signatures(r) for s, r in failing}}
-    for sig, members in sorted(groups.items(), key=lambda g: -len(g[1])):
+              'by_seed': {s['seed']: signatures(r) for s, r in failing}, 'groups': []}
+    for sig, members in sorted(new_groups.items(), key=lambda g: -len(g[1])):
         scenario, result = shrunk[sig]
         report['groups'].append({
             'signature': sig, 'seeds': [s['seed'] for s, _ in members], 'scenario': scenario,
@@ -470,6 +508,10 @@ def main():
             'differences': result.get('crash') or [[cmd, d[:8]] for s, cmd, d in result['failures'] if s == sig][:3]})
     lab.write_json(work / 'report.json', report)
     print(f'{len(failing)} diverging scenarios in {len(groups)} groups ({runner.batches} harness runs):')
+    for entry in report['known']:
+        print(f'  known  #{entry["issue"]}: {", ".join(entry["signatures"])}')
+    for entry in report['not_observed']:
+        print(f'  not observed this round (not evidence of a fix): #{entry["issue"]} ({entry["pattern"]})')
     for group in report['groups']:
         print(f'  {len(group["seeds"]):3d}  {group["signature"]}')
     print(f'report: {work / "report.json"}')
