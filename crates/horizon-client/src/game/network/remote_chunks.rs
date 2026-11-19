@@ -265,7 +265,7 @@ impl ChunkDecoder {
             let builder = std::thread::Builder::new()
                 .name(format!("Chunk decoder {i}"))
                 .spawn(move || {
-                    horizon_threads::favour_current();
+                    horizon_threads::chunk_decoder_current();
                     'worker: loop {
                         let job = {
                             let mut q = match queue.0.lock() {
