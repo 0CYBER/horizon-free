@@ -244,10 +244,7 @@ impl Game<'_> {
     /// the server's view distance when connected
     /// (Options.getEffectiveRenderDistance).
     pub(super) fn view_scale(&self) -> f64 {
-        let distance = match &self.remote {
-            Some(r) => self.settings.render_distance.min(r.view_distance),
-            None => self.settings.render_distance,
-        };
+        let distance = self.effective_render_distance();
         entity_view_scale(distance, self.settings.entity_distance)
     }
 }

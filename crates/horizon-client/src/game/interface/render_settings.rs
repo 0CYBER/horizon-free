@@ -222,6 +222,17 @@ impl Game<'_> {
         }
     }
 
+    /// `Options.getEffectiveRenderDistance`: the render distance option, capped
+    /// by the server's view distance once a login has reported one
+    /// (`serverRenderDistance > 0`). What the border wall and the entity view
+    /// scale follow; the streaming radius keeps its own one-chunk margin.
+    pub(super) fn effective_render_distance(&self) -> i32 {
+        effective_render_distance(
+            self.settings.render_distance,
+            self.remote.as_ref().map_or(0, |remote| remote.view_distance),
+        )
+    }
+
     /// The renderer for the window, with the current block sprites, GUI
     /// atlas and world border texture.
     /// A new renderer's atlas holds only the pack's sprites: what was drawn into it at run time
@@ -283,9 +294,29 @@ impl Game<'_> {
     }
 }
 
+/// `Options.getEffectiveRenderDistance`: a reported server view distance caps
+/// the option; until one arrives, the option stands.
+fn effective_render_distance(option: i32, server: i32) -> i32 {
+    if server > 0 {
+        option.min(server)
+    } else {
+        option
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::FrameAttempt;
+
+    /// The server's view distance caps the option, and only a reported one
+    /// does (`Options.getEffectiveRenderDistance`).
+    #[test]
+    fn the_effective_render_distance_is_vanillas() {
+        assert_eq!(super::effective_render_distance(32, 8), 8);
+        assert_eq!(super::effective_render_distance(8, 32), 8);
+        assert_eq!(super::effective_render_distance(16, 0), 16);
+        assert_eq!(super::effective_render_distance(16, -1), 16);
+    }
 
     #[test]
     fn failed_frame_attempt_waits_for_a_policy_or_setting_change() {
