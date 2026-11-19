@@ -393,12 +393,16 @@ impl Settings {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
                 extras.read_old_options(&extras_text, &text);
+                let parsed = Self::parse(&text);
+                if horizon.api == crate::graphics::GraphicsApi::Auto {
+                    horizon.api = parsed.horizon.api;
+                }
                 Self {
                     horizon,
                     controller,
                     extras,
                     mods,
-                    ..Self::parse(&text)
+                    ..parsed
                 }
             }
             Err(_) => Self {
@@ -521,8 +525,19 @@ impl Settings {
             operator_items_tab: f.bool("operatorItemsTab"),
             quit_shortcuts: f.bool("quitShortcuts"),
             ctrl_click_emulates_right_click: f.bool("ctrlClickEmulatesRightClick"),
-            horizon: Default::default(),
-            startup_api: Default::default(),
+            horizon: crate::graphics::Graphics {
+                api: match f.name("preferredGraphicsBackend").as_str() {
+                    "opengl" => crate::graphics::GraphicsApi::OpenGl,
+                    "vulkan" => crate::graphics::GraphicsApi::Vulkan,
+                    _ => crate::graphics::GraphicsApi::Auto,
+                },
+                ..Default::default()
+            },
+            startup_api: match f.name("preferredGraphicsBackend").as_str() {
+                "opengl" => crate::graphics::GraphicsApi::OpenGl,
+                "vulkan" => crate::graphics::GraphicsApi::Vulkan,
+                _ => crate::graphics::GraphicsApi::Auto,
+            },
             video_modes: Vec::new(),
             fullbright_held: false,
             controller: Default::default(),
@@ -602,6 +617,15 @@ impl Settings {
         put_b(&mut f, "entityShadows", self.entity_shadows);
         put_i(&mut f, "biomeBlendRadius", self.biome_blend);
         put_name(&mut f, "graphicsPreset", &self.graphics_preset);
+        put_name(
+            &mut f,
+            "preferredGraphicsBackend",
+            match self.horizon.api {
+                crate::graphics::GraphicsApi::OpenGl => "opengl",
+                crate::graphics::GraphicsApi::Vulkan => "vulkan",
+                _ => "default",
+            },
+        );
         put_i(&mut f, "mipmapLevels", self.mipmap_levels);
         put_i(&mut f, "weatherRadius", self.weather_radius);
         put_f(&mut f, "chunkSectionFadeInTime", self.chunk_fade);
@@ -689,13 +713,18 @@ impl Settings {
     pub fn with_option(&self, key: &str, value: &str) -> Result<Self, String> {
         let mut file = self.to_file();
         file.set_text(key, value)?;
+        let parsed = Self::from_file(file);
+        let mut horizon = self.horizon.clone();
+        if key == "preferredGraphicsBackend" {
+            horizon.api = parsed.horizon.api;
+        }
         let mut next = Self {
-            horizon: self.horizon.clone(),
+            horizon,
             controller: self.controller.clone(),
             extras: self.extras.clone(),
             mods: self.mods.clone(),
             video_modes: self.video_modes.clone(),
-            ..Self::from_file(file)
+            ..parsed
         };
         // Horizon's own bindings aren't in options.txt.
         next.keys.set("key.emote", self.keys.get("key.emote"));
@@ -1242,5 +1271,73 @@ mod tests {
         assert_eq!(again.sound_device, "Headphones");
         let empty = Settings::parse("");
         assert_eq!(empty.sound_device, "");
+    }
+    #[test]
+    fn options_txt_carries_the_graphics_api_and_the_launchers_graphics_file_wins_at_startup() {
+        use crate::graphics::GraphicsApi;
+        let version = horizon_world::DATA_VERSION;
+
+        // `Options.preferredGraphicsBackend`: written and read back through options.txt.
+        for (stored, expected_api) in [
+            ("opengl", GraphicsApi::OpenGl),
+            ("vulkan", GraphicsApi::Vulkan),
+            ("default", GraphicsApi::Auto),
+        ] {
+            let text = format!("version:{version}\npreferredGraphicsBackend:{stored}\n");
+            let s = Settings::parse(&text);
+            assert_eq!(s.horizon.api, expected_api, "{stored} is read back");
+            assert_eq!(
+                s.startup_api, expected_api,
+                "{stored} is what it started with"
+            );
+
+            let written = Settings::parse(&s.serialize());
+            assert_eq!(
+                written.file.name("preferredGraphicsBackend"),
+                stored,
+                "options.txt stores vanilla's name for {stored}"
+            );
+            assert_eq!(written.horizon.api, expected_api);
+        }
+
+        // Horizon's own page can also pick DirectX 12, which vanilla's option has no name for.
+        let mut s = Settings::default();
+        s.horizon.api = GraphicsApi::Dx12;
+        assert_eq!(
+            Settings::parse(&s.serialize())
+                .file
+                .name("preferredGraphicsBackend"),
+            "default"
+        );
+
+        // A change made through the option keeps the typed field with the file.
+        s.horizon.api = GraphicsApi::OpenGl;
+        s.file.set_name("preferredGraphicsBackend", "opengl");
+        assert_eq!(
+            Settings::parse(&s.serialize()).horizon.api,
+            GraphicsApi::OpenGl
+        );
+        let updated = s.with_option("preferredGraphicsBackend", "vulkan").unwrap();
+        assert_eq!(updated.horizon.api, GraphicsApi::Vulkan);
+
+        // At startup the launcher's `graphicsApi` picks the API; `auto` leaves it to options.txt.
+        let dir = std::env::temp_dir().join(format!("horizon-graphics-api-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let options = dir.join("options.txt");
+        fs::write(
+            &options,
+            format!("version:{version}\npreferredGraphicsBackend:opengl\n"),
+        )
+        .unwrap();
+        fs::write(dir.join(crate::graphics::FILE), "graphicsApi:auto\n").unwrap();
+        let loaded = Settings::load(&options);
+        assert_eq!(loaded.horizon.api, GraphicsApi::OpenGl);
+        assert_eq!(loaded.startup_api, GraphicsApi::OpenGl);
+        fs::write(dir.join(crate::graphics::FILE), "graphicsApi:vulkan\n").unwrap();
+        let loaded = Settings::load(&options);
+        assert_eq!(loaded.horizon.api, GraphicsApi::Vulkan);
+        assert_eq!(loaded.startup_api, GraphicsApi::Vulkan);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
