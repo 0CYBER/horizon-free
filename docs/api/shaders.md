@@ -297,6 +297,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-19: API 0.2 (addition, preview): a pack without `[[post]]` whose frame holds gamma light (not
+  `blend = "linear"` on the float frame) gets the player's FXAA, at the world's size, before its `[tonemap]` (#16126
+  step 6). TAA and upscaling stay off under every pack, and a pack with a post chain is unchanged. With FXAA off
+  nothing changes.
 - 2026-11-19: API 0.2 (addition, preview): `MaterialInput.lit_tint`, vanilla's lit vertex colour as Horizon's terrain
   draws it: `shaded_tint` times the lightmap (coloured lights added under it) at each corner, then smoothed over the
   face, so `albedo * lit_tint` is vanilla's lit colour where multiplying the two smoothed apart is not (6.6 steps of

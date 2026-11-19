@@ -10872,11 +10872,25 @@ impl Renderer {
                 scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
             });
             // The engine's resolve of the pack's world goes here, between its chain and its
-            // output (#16126): none yet.
+            // output (#16126): the player's FXAA, at the world's size, where no chain draws
+            // the picture. TAA, its upscaling and sharpening stay off under every pack.
+            let resolved = (self.executor.is_some_and(|c| c.engine_fxaa)
+                && self.world_post.antialias)
+                .then(|| self.world_post.resolved(&self.device))
+                .flatten();
+            if let Some(resolved) = &resolved {
+                self.world_post.finish(
+                    &self.queue,
+                    &mut encoder,
+                    resolved,
+                    self.own_timing.as_mut(),
+                );
+            }
             native.run_output(external::WorldOutput {
                 device: &self.device,
                 encoder: &mut encoder,
                 screen: &view_target,
+                resolved: resolved.as_ref(),
             });
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let camera = frame_gen::Camera {

@@ -563,6 +563,10 @@ pub fn markdown() -> String {
             `previous` as it is. A temporal pass cannot do what TAA does here, even though a kept resource and\n\
             `frame.previous_view_projection` give it the last frame: nothing moves the camera by a fraction of a texel from one\n\
             frame to the next, so a still camera gives it the same picture twice and there is no sub-pixel detail to gather.\n\n\
+            A pack without `[[post]]` whose frame holds gamma light (not `blend = \"linear\"` on the float frame) gets the\n\
+            player's FXAA: with `fxaa` on, Horizon anti-aliases the world at the world's size, in the frame's encoding, before\n\
+            the pack's `[tonemap]` (or Horizon's curve) reads it. TAA, TAA upscaling and its sharpening stay off under every\n\
+            pack, and `resolutionScale` still reaches the window through the tone curve's read.\n\n\
             Without a pack the settings apply as the player set them.\n\n";
     out += &format!(
         "## Options\n\n\

@@ -772,6 +772,11 @@ A pack that wants smooth edges draws them itself, in a post pass: a spatial filt
 `frame.previous_view_projection` give it the last frame: nothing moves the camera by a fraction of a texel from one
 frame to the next, so a still camera gives it the same picture twice and there is no sub-pixel detail to gather.
 
+A pack without `[[post]]` whose frame holds gamma light (not `blend = "linear"` on the float frame) gets the
+player's FXAA: with `fxaa` on, Horizon anti-aliases the world at the world's size, in the frame's encoding, before
+the pack's `[tonemap]` (or Horizon's curve) reads it. TAA, TAA upscaling and its sharpening stay off under every
+pack, and `resolutionScale` still reaches the window through the tone curve's read.
+
 Without a pack the settings apply as the player set them.
 
 ## Options

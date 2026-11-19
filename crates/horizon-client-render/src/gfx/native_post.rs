@@ -1187,6 +1187,12 @@ impl NativePost {
         self.display.label.is_some()
     }
 
+    /// Whether the pack has post passes, the last of which draws the picture; without them
+    /// the tonemap reads the decoded world.
+    pub fn chain(&self) -> bool {
+        !self.passes.is_empty()
+    }
+
     /// The passes' labels, in order, then the pack's tonemap's.
     pub fn labels(&self) -> Vec<&str> {
         let tonemap = self.display.label.as_deref();
@@ -1425,7 +1431,7 @@ impl NativePost {
         let window = [screen.texture().width(), screen.texture().height()];
         let timed = timing.as_deref_mut();
         self.run_chain(device, encoder, world, size, window, timed, scene);
-        self.run_display(device, encoder, screen, timing);
+        self.run_display(device, encoder, screen, None, timing);
     }
 
     /// Runs the passes over the world target `world` (colour, depth) of `size`, the last onto
@@ -1497,12 +1503,14 @@ impl NativePost {
     }
 
     /// The tonemap onto `screen`, after `run_chain` in the same frame, which set this frame's
-    /// version of the kept resources. Without passes it decodes the world first.
+    /// version of the kept resources. Without passes it decodes the world first, or
+    /// `resolved`, the world anti-aliased at its size, in its place.
     pub(super) fn run_display(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         screen: &wgpu::TextureView,
+        resolved: Option<&wgpu::TextureView>,
         timing: Option<&mut super::pack_timing::PassTiming>,
     ) {
         let Some(((world, _, _), groups)) = &self.groups else {
@@ -1514,7 +1522,8 @@ impl NativePost {
             return;
         };
         if self.passes.is_empty() {
-            d.decoder.run(device, encoder, world, scene);
+            d.decoder
+                .run(device, encoder, resolved.unwrap_or(world), scene);
         }
         let label = d.label.as_deref().unwrap_or("Tonemap");
         fullscreen_pass(encoder, label, screen, &d.tonemap, (GROUP, group), timing);
@@ -2606,6 +2615,128 @@ api = \"0.2\"
                 "{extra}: {pixel:?}"
             );
         }
+    }
+
+    /// A pack without `[[post]]` shows the player's FXAA when the renderer hands it the world
+    /// resolved (#16126): a staircase edge comes out blended, and without the resolve the
+    /// output is the world exactly.
+    #[test]
+    fn a_pack_without_a_chain_shows_the_world_through_fxaa_only_when_it_is_on() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
+            return;
+        };
+        let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+                        [sky]\nfile = \"s.wgsl\"\n[tonemap]\nfile = \"t.wgsl\"\n";
+        let files = [
+            (MANIFEST, manifest),
+            (
+                "s.wgsl",
+                "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
+            ),
+            (
+                "t.wgsl",
+                "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n",
+            ),
+        ]
+        .into_iter()
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .collect();
+        let report = check(&Pack::from_files(files).unwrap()).unwrap();
+        let tonemap = report.stages.iter().find(|s| s.kind == StageKind::Tonemap);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let frame = sdr_frame(&device, &queue);
+        let mut post = NativePost::new(
+            &device,
+            Vec::new(),
+            &report.manifest,
+            &[],
+            format,
+            &frame,
+            tonemap,
+        )
+        .unwrap();
+        assert!(!post.chain());
+        // An 8×8 world, black left of the diagonal and white from it on: a staircase edge.
+        const SIZE: u32 = 8;
+        let world_pixels: Vec<u8> = (0..SIZE * SIZE)
+            .flat_map(|i| {
+                let v = if i % SIZE >= i / SIZE { 255 } else { 0 };
+                [v, v, v, 255]
+            })
+            .collect();
+        let sized = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let world = sized(format, usage | wgpu::TextureUsages::COPY_DST);
+        queue.write_texture(
+            world.as_image_copy(),
+            &world_pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE * 4),
+                rows_per_image: None,
+            },
+            world.size(),
+        );
+        let world = world.create_view(&Default::default());
+        let depth =
+            sized(wgpu::TextureFormat::Depth32Float, usage).create_view(&Default::default());
+        let screen = sized(format, usage | wgpu::TextureUsages::COPY_SRC);
+        let screen_view = screen.create_view(&Default::default());
+        // The renderer's resolve: `world_post` with FXAA on, onto its world-sized target.
+        let mut world_post = crate::gfx::world_post::Post::new(&device, format);
+        world_post.antialias = true;
+        assert!(
+            (world_post.prepare(&device, [SIZE, SIZE], true, false)).is_some(),
+            "a pack's world has a target"
+        );
+        let resolved = world_post.resolved(&device).unwrap();
+        let mut show = |fxaa: bool| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            if fxaa {
+                let group = world_post.bind(&device, &world);
+                world_post.finish_with(&mut encoder, &resolved, &group, None);
+            }
+            let size = [SIZE, SIZE];
+            let inputs = (&world, &depth, &frame.surface_view);
+            post.run_chain(&device, &mut encoder, inputs, size, size, None, None);
+            let resolved = fxaa.then_some(&resolved);
+            post.run_display(&device, &mut encoder, &screen_view, resolved, None);
+            let buffer = crate::gfx::copy_frame(&device, &mut encoder, &screen, size);
+            queue.submit([encoder.finish()]);
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let row = crate::gfx::padded_row(SIZE) as usize;
+            let mapped = buffer.slice(..).get_mapped_range().unwrap();
+            (0..SIZE as usize)
+                .flat_map(|y| mapped[y * row..y * row + SIZE as usize * 4].to_vec())
+                .collect::<Vec<u8>>()
+        };
+        let off = show(false);
+        assert_eq!(
+            off, world_pixels,
+            "without the resolve the output is the world"
+        );
+        let on = show(true);
+        let blended = on.chunks(4).filter(|p| (16..=239).contains(&p[0])).count();
+        assert!(blended > 0, "FXAA left the edge as it was: {on:?}");
     }
 
     /// A pack's `Frame` describes the HDR display its picture goes to, and SDR
