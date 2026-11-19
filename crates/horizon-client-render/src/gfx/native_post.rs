@@ -2659,15 +2659,13 @@ api = \"0.2\"
         }
     }
 
-    /// A pack without `[[post]]` shows the player's FXAA when the renderer hands it the world
-    /// resolved (#16126): a staircase edge comes out blended, and without the resolve the
-    /// output is the world exactly.
-    #[test]
-    fn a_pack_without_a_chain_shows_the_world_through_fxaa_only_when_it_is_on() {
-        let _gpu = crate::gfx::test_gpu::lock();
-        let Some((device, queue)) = device(true) else {
-            return;
-        };
+    /// A pack without `[[post]]` whose `[tonemap]` returns its input, over an SDR frame: its
+    /// output is the world it reads, or the world the renderer resolved in its place.
+    fn identity_tonemap_pack(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> (NativePost, NativeFrame) {
         let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
                         [sky]\nfile = \"s.wgsl\"\n[tonemap]\nfile = \"t.wgsl\"\n";
         let files = [
@@ -2686,10 +2684,9 @@ api = \"0.2\"
         .collect();
         let report = check(&Pack::from_files(files).unwrap()).unwrap();
         let tonemap = report.stages.iter().find(|s| s.kind == StageKind::Tonemap);
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-        let frame = sdr_frame(&device, &queue);
-        let mut post = NativePost::new(
-            &device,
+        let frame = sdr_frame(device, queue);
+        let post = NativePost::new(
+            device,
             Vec::new(),
             &report.manifest,
             &[],
@@ -2699,14 +2696,55 @@ api = \"0.2\"
         )
         .unwrap();
         assert!(!post.chain());
-        // An 8×8 world, black left of the diagonal and white from it on: a staircase edge.
-        const SIZE: u32 = 8;
-        let world_pixels: Vec<u8> = (0..SIZE * SIZE)
+        (post, frame)
+    }
+
+    /// A square world of `size` in RGBA8, black left of the diagonal moved right by `shift`
+    /// and white from it on: a staircase edge.
+    fn staircase(size: u32, shift: u32) -> Vec<u8> {
+        (0..size * size)
             .flat_map(|i| {
-                let v = if i % SIZE >= i / SIZE { 255 } else { 0 };
+                let v = if i % size >= i / size + shift { 255 } else { 0 };
                 [v, v, v, 255]
             })
-            .collect();
+            .collect()
+    }
+
+    /// The rows of the square `screen` of `size`, once the commands in `encoder` ran.
+    fn read_screen(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut encoder: wgpu::CommandEncoder,
+        screen: &wgpu::Texture,
+        size: u32,
+    ) -> Vec<u8> {
+        let buffer = crate::gfx::copy_frame(device, &mut encoder, screen, [size, size]);
+        queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let row = crate::gfx::padded_row(size) as usize;
+        let mapped = buffer.slice(..).get_mapped_range().unwrap();
+        (0..size as usize)
+            .flat_map(|y| mapped[y * row..y * row + size as usize * 4].to_vec())
+            .collect()
+    }
+
+    /// A pack without `[[post]]` shows the player's FXAA when the renderer hands it the world
+    /// resolved (#16126): a staircase edge comes out blended, and without the resolve the
+    /// output is the world exactly.
+    #[test]
+    fn a_pack_without_a_chain_shows_the_world_through_fxaa_only_when_it_is_on() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let (mut post, frame) = identity_tonemap_pack(&device, &queue, format);
+        // An 8×8 world with a staircase edge.
+        const SIZE: u32 = 8;
+        let world_pixels = staircase(SIZE, 0);
         let sized = |format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
@@ -2759,17 +2797,7 @@ api = \"0.2\"
             post.run_chain(&device, &mut encoder, inputs, size, size, None, None);
             let resolved = fxaa.then_some(&resolved);
             post.run_display(&device, &mut encoder, &screen_view, resolved, None);
-            let buffer = crate::gfx::copy_frame(&device, &mut encoder, &screen, size);
-            queue.submit([encoder.finish()]);
-            buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
-            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            let row = crate::gfx::padded_row(SIZE) as usize;
-            let mapped = buffer.slice(..).get_mapped_range().unwrap();
-            (0..SIZE as usize)
-                .flat_map(|y| mapped[y * row..y * row + SIZE as usize * 4].to_vec())
-                .collect::<Vec<u8>>()
+            read_screen(&device, &queue, encoder, &screen, SIZE)
         };
         let off = show(false);
         assert_eq!(
@@ -2779,6 +2807,82 @@ api = \"0.2\"
         let on = show(true);
         let blended = on.chunks(4).filter(|p| (16..=239).contains(&p[0])).count();
         assert!(blended > 0, "FXAA left the edge as it was: {on:?}");
+    }
+
+    /// A pack without `[[post]]` shows the player's TAA when the renderer hands it TAA's
+    /// history (#16126): the first frame after a reset is the world exactly, and the next,
+    /// drawn with another jitter that moved the edge a pixel, comes out blended with it.
+    #[test]
+    fn a_pack_without_a_chain_shows_the_world_through_taa() {
+        use glam::{DVec3, Mat4};
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
+            eprintln!("TAA under a pack GPU skipped: no test device");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut world_post = crate::gfx::world_post::Post::new(&device, format);
+        if !world_post.supports_taa() {
+            eprintln!("TAA under a pack GPU skipped: TAA unsupported");
+            return;
+        }
+        world_post.taa = true;
+        world_post.hold_upscale(true);
+        let (mut post, frame) = identity_tonemap_pack(&device, &queue, format);
+        const SIZE: u32 = 8;
+        let window = [SIZE, SIZE];
+        let sized = |usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let source = sized(wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let source_view = source.create_view(&Default::default());
+        let screen = sized(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        let screen_view = screen.create_view(&Default::default());
+        let mut show = |pixels: &[u8]| {
+            world_post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+            let (color, depth) = world_post.prepare(&device, window, true, false).unwrap();
+            queue.write_texture(
+                source.as_image_copy(),
+                pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(SIZE * 4),
+                    rows_per_image: None,
+                },
+                source.size(),
+            );
+            // The world as drawn this frame, copied onto the target TAA reads.
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let group = world_post.bind(&device, &source_view);
+            world_post.finish_with(&mut encoder, &color, &group, None);
+            let resolved = world_post.resolve_taa(&queue, &mut encoder, None);
+            let resolved = resolved.expect("TAA resolves the pack's world");
+            let inputs = (&color, &depth, &frame.surface_view);
+            post.run_chain(&device, &mut encoder, inputs, window, window, None, None);
+            post.run_display(&device, &mut encoder, &screen_view, Some(&resolved), None);
+            read_screen(&device, &queue, encoder, &screen, SIZE)
+        };
+        let first = staircase(SIZE, 0);
+        assert_eq!(show(&first), first, "the reset frame is the world");
+        let next = show(&staircase(SIZE, 1));
+        let blended = next
+            .chunks(4)
+            .filter(|p| (16..=239).contains(&p[0]))
+            .count();
+        assert!(blended > 0, "TAA kept nothing of the first frame: {next:?}");
     }
 
     /// A pack's `Frame` describes the HDR display its picture goes to, and SDR

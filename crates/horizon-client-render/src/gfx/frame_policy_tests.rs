@@ -146,3 +146,92 @@ fn only_a_no_pack_layered_world_applies_hdr_gain() {
     assert!(!no_pack_hdr_gain(true, true, true));
     assert!(!no_pack_hdr_gain(true, false, false));
 }
+
+/// The player's TAA runs on a world frame without a pack, and under a native pack only where
+/// the renderer resolves its world (#16126): not under one with a post chain or a linear-blend
+/// frame (`engine_resolve` false), a `shaders/` pack, or at the title.
+#[test]
+fn taa_runs_without_a_pack_and_under_a_pack_the_renderer_resolves() {
+    use super::{external::Capabilities, taa_allowed};
+    let resolved = Capabilities {
+        engine_resolve: true,
+        ..Capabilities::default()
+    };
+    let chain_or_linear = Capabilities::default();
+    assert!(taa_allowed(false, false, None));
+    assert!(taa_allowed(false, false, Some(resolved)));
+    assert!(!taa_allowed(false, false, Some(chain_or_linear)));
+    assert!(!taa_allowed(false, true, None));
+    assert!(!taa_allowed(true, false, None));
+    assert!(!taa_allowed(true, false, Some(resolved)));
+}
+
+/// TAA's history is dropped when the light it holds changes meaning (rule 6 of
+/// docs/hdr-passes.md): a pack's frame keys on the display its `Frame` describes, which any
+/// pack may read, and never as a frame without a pack; a frame without a pack keys as before.
+#[test]
+fn a_pack_s_taa_history_follows_the_display_and_a_no_pack_one_its_baked_light() {
+    use super::output::DisplayValues;
+    use super::taa_light_key as key;
+    let sdr = DisplayValues::SDR;
+    let hdr = DisplayValues {
+        hdr: true,
+        headroom: 4.0,
+        paper_white: 250.0,
+        peak: 1000.0,
+        black_level: 0.0,
+    };
+    let settings = [5.0, 4.0, 1.0, 0.0];
+    // Without a pack: the display alone, or settings without gain, keep the history.
+    assert_eq!(
+        key(false, sdr, false, settings),
+        key(false, hdr, false, [0.0; 4])
+    );
+    assert_eq!(
+        key(false, sdr, true, settings),
+        key(false, hdr, true, settings)
+    );
+    assert_ne!(
+        key(false, sdr, true, settings),
+        key(false, sdr, true, [5.0, 4.0, 1.5, 0.0])
+    );
+    // Under a pack: the display does, each of its values, and HDR's gain settings don't.
+    assert_eq!(
+        key(true, hdr, false, settings),
+        key(true, hdr, true, [0.0; 4])
+    );
+    assert_ne!(
+        key(true, sdr, false, settings),
+        key(true, hdr, false, settings)
+    );
+    let changed = [
+        DisplayValues { hdr: false, ..hdr },
+        DisplayValues {
+            headroom: 5.0,
+            ..hdr
+        },
+        DisplayValues {
+            paper_white: 200.0,
+            ..hdr
+        },
+        DisplayValues {
+            peak: 1100.0,
+            ..hdr
+        },
+        DisplayValues {
+            black_level: 0.1,
+            ..hdr
+        },
+    ];
+    for display in changed {
+        assert_ne!(
+            key(true, display, false, settings),
+            key(true, hdr, false, settings)
+        );
+    }
+    // A pack's frame and one without a pack never share a key, even at SDR's values.
+    assert_ne!(
+        key(true, sdr, false, [0.0; 4]),
+        key(false, sdr, false, [0.0; 4])
+    );
+}

@@ -121,6 +121,12 @@ impl Renderer {
             &self.device,
             super::query::wanted(super::query::switch(), traces),
         );
+        // TAA's history holds what the pipeline that ran drew (rule 6 of docs/hdr-passes.md).
+        if pack.is_some() || self.external.is_some() {
+            self.world_post.forget_history();
+        }
+        // A pack the renderer resolves gets TAA at its world's size from its first frame on.
+        (self.world_post).hold_upscale(capabilities.is_some_and(|c| c.engine_resolve));
         // The arenas' looks follow before the next frame (`follow_terrain_looks`).
         self.external = pack;
         self.executor = capabilities;

@@ -297,6 +297,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-19: API 0.2 (change, preview): a pack without `[[post]]` whose frame holds gamma light also gets the
+  player's TAA, at the world's size (#16126 step 7); `frame.jitter` and `frame.previous_jitter` then carry its offset.
+  TAA upscaling and its sharpening stay off, and under any other pack TAA is off. With TAA off nothing changes. A pack
+  must never write an infinite value into the world's frame: TAA's history would carry it.
 - 2026-11-19: API 0.2 (additions, preview): `frame.jitter`, the world's sub-pixel offset this frame in clip space,
   which `frame.projection` leaves out, and `frame.previous_jitter`, last frame's, declared only for a pack whose files
   name either, at the end of `Frame`. Both are `(0, 0)` while the world isn't jittered, today in every pack's frame. A

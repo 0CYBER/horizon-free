@@ -659,7 +659,7 @@ impl NativePack {
             ray_entities: self.traces_entities(),
             ray_looks: self.traces_looks(),
             looks: self.looks,
-            engine_fxaa: !self.post.chain() && !self.frame.linear,
+            engine_resolve: !self.post.chain() && !self.frame.linear,
         }
     }
 
@@ -802,7 +802,7 @@ file = \"material.wgsl\"
         let material = "[material]\nfile = \"material.wgsl\"\n";
         // Without post passes, a pack whose frame holds gamma light keeps the player's FXAA.
         let plain = Capabilities {
-            engine_fxaa: true,
+            engine_resolve: true,
             ..Capabilities::default()
         };
         assert_eq!(does(""), plain);
