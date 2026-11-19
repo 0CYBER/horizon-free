@@ -445,6 +445,13 @@ impl Post {
         Mat4::from_translation(jitter.extend(0.0))
     }
 
+    /// This frame's jitter in clip space, the translation `jitter` multiplies into the
+    /// projection (`frame.jitter` of a 0.2 pack); zero without TAA.
+    pub fn jitter_clip(&self) -> [f32; 2] {
+        let j = self.taa_this_frame.jitter;
+        if self.taa_on { [j[0], j[1]] } else { [0.0; 2] }
+    }
+
     /// This frame's jitter in rendered pixels, y down (FSR's `jitterOffset`); zero
     /// without TAA.
     pub fn jitter_pixels(&self) -> [f32; 2] {

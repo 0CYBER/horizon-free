@@ -542,9 +542,11 @@ impl NativePack {
             sky_visible,
             scene,
             lightmap,
+            jitter,
         } = start;
         let scene = scene.and_then(|s| s.traced(frame.camera));
         self.frame.full_lightmap = super::native_post::full_lightmap(lightmap);
+        self.frame.jitter = jitter;
         self.write(queue, frame, size, output.display(), scene.as_ref());
         self.frame
             .block_light

@@ -365,8 +365,8 @@ pub struct NativeFrame {
     /// (`NativePack::new`): else they stay 1×1 and unwritten, and the world pass doesn't break
     /// before translucent terrain to copy them.
     pub reads_opaque: bool,
-    /// Last frame's view-projection, camera and time (`write`).
-    last: Option<([[f32; 4]; 4], glam::DVec3, std::time::Instant)>,
+    /// Last frame's view-projection, camera, time and jitter (`write`).
+    last: Option<LastFrame>,
     /// The eased eye light (block, sky) and being in water and lava (`write`); NaN until the
     /// first frame sets them.
     eye: [f32; 4],
@@ -375,6 +375,8 @@ pub struct NativeFrame {
     pub(super) ray_distance: Option<f32>,
     /// `frame.full_lightmap`, set before `write` from this frame's lightmap (`full_lightmap`).
     pub(super) full_lightmap: [f32; 3],
+    /// `frame.jitter`, set before `write` from the world's jitter this frame.
+    pub(super) jitter: [f32; 2],
     /// A pack with kept resources: their epochs (`NativePack::carry` moves them on).
     pub(super) epochs: Option<kept::Epochs>,
     start: std::time::Instant,
@@ -607,6 +609,7 @@ impl NativeFrame {
             eye: [f32::NAN; 4],
             ray_distance: None,
             full_lightmap: [0.0; 3],
+            jitter: [0.0; 2],
             epochs: None,
             start: std::time::Instant::now(),
             frames: 0,
@@ -850,6 +853,7 @@ impl NativeFrame {
         let mut inputs = frame_inputs(frame, size, seconds, index, self.shadow_camera.as_ref());
         inputs.wetness = self.wetness.0;
         inputs.full_lightmap = self.full_lightmap;
+        inputs.jitter = self.jitter;
         if let Some(distance) = self.ray_distance {
             (inputs.has_ray_tracing, inputs.ray_distance) = (1, distance);
         }
@@ -873,11 +877,10 @@ impl NativeFrame {
         // `write` skips title frames, so a gap means a pause or another world: the frame
         // before says nothing about this one, and the eased values start over.
         // A scripted clock's frames follow each other however long one takes to draw.
-        match self.last {
-            Some((previous, camera, time))
-                if timing.is_some() || (now - time).as_secs_f32() < MAX_FRAME_GAP =>
-            {
+        match carried(self.last, now, timing.is_some()) {
+            Some((previous, camera, time, jitter)) => {
                 inputs.previous_view_projection = previous;
+                inputs.previous_jitter = jitter;
                 inputs.camera_motion = (frame.camera - camera).as_vec3().to_array();
                 inputs.delta_time = (now - time).as_secs_f32();
             }
@@ -886,7 +889,7 @@ impl NativeFrame {
                 self.eye = [f32::NAN; 4];
             }
         }
-        self.last = Some((view_proj, frame.camera, now));
+        self.last = Some((view_proj, frame.camera, now, inputs.jitter));
         if let Some(epochs) = &mut self.epochs {
             let moved = last.map_or(0.0, |l| frame.camera.distance(l.1));
             [inputs.view_epoch, inputs.world_epoch, inputs.reset_reasons] =
@@ -928,6 +931,16 @@ impl NativeFrame {
         self.wetness = (0.0, None);
         self.start = std::time::Instant::now();
     }
+}
+
+/// A frame's view-projection, camera, time and `frame.jitter`, kept for the next one.
+type LastFrame = ([[f32; 4]; 4], glam::DVec3, std::time::Instant, [f32; 2]);
+
+/// `last` where it carries over into a frame drawn at `now`: always under a scripted clock,
+/// else when it was drawn less than `MAX_FRAME_GAP` before. Without it the frame's
+/// `previous_view_projection` is its own and `previous_jitter` zero, as after a reset.
+fn carried(last: Option<LastFrame>, now: std::time::Instant, scripted: bool) -> Option<LastFrame> {
+    last.filter(|&(_, _, time, _)| scripted || (now - time).as_secs_f32() < MAX_FRAME_GAP)
 }
 
 /// The option values of `constants` that `module` declares as overrides (wgpu refuses others).
@@ -1678,6 +1691,9 @@ pub fn frame_inputs(
         // `NativeFrame::write` sets it from the renderer's lightmap.
         full_lightmap: [0.0; 3],
         full_lightmap_padding: [0; 1],
+        // `NativeFrame::next_inputs` sets them from the world's jitter.
+        jitter: [0.0; 2],
+        previous_jitter: [0.0; 2],
     }
 }
 
@@ -1860,6 +1876,28 @@ mod tests {
         assert_eq!(wetness(0.25, 0.25, 5.0), 0.25);
     }
 
+    /// `previous_jitter` is last frame's jitter where last frame carries over, as
+    /// `previous_view_projection` is, and zero after a gap or a reset (`last` is `None`).
+    #[test]
+    fn the_previous_jitter_is_last_frame_s_unless_a_gap_or_reset_came_between() {
+        let now = std::time::Instant::now();
+        let jitter = [0.25, -0.125];
+        let drawn = |ago: f32| {
+            let time = now - std::time::Duration::from_secs_f32(ago);
+            Some((
+                Mat4::IDENTITY.to_cols_array_2d(),
+                glam::DVec3::ZERO,
+                time,
+                jitter,
+            ))
+        };
+        let previous = |last, scripted| carried(last, now, scripted).map_or([0.0; 2], |l| l.3);
+        assert_eq!(previous(drawn(0.016), false), jitter);
+        assert_eq!(previous(drawn(2.0), false), [0.0; 2]);
+        assert_eq!(previous(drawn(2.0), true), jitter);
+        assert_eq!(previous(None, false), [0.0; 2]);
+    }
+
     /// A scripted clock comes before STILL's ticks, eased values and wetness move by its
     /// delta, and a long wait between its frames is not a gap that starts them over.
     #[test]
@@ -1903,7 +1941,8 @@ mod tests {
     }
 
     /// After a reset, the same frames give the same inputs, to the bit, as a pack just made,
-    /// however the frames before moved the eased values, wetness and the frame count.
+    /// however the frames before moved the eased values, wetness and the frame count, and
+    /// whatever their jitter (`previous_jitter` starts at zero).
     #[test]
     fn a_reset_frame_gives_a_fresh_pack_s_inputs() {
         let _gpu = crate::gfx::test_gpu::lock();
@@ -1924,6 +1963,7 @@ mod tests {
         frame.pack.rain = 1.0;
         frame.pack.eye_light = [12, 3];
         frame.pack.eye_in = 1;
+        used.jitter = [0.25, -0.125];
         for n in 1..=5 {
             frame.pack.frame_timing = Some(FrameTiming::nth(n, 700.0));
             used.next_inputs(&frame, [4, 4], SDR);
@@ -1931,6 +1971,8 @@ mod tests {
         used.reset_history();
         frame.pack.eye_light = [2, 15];
         frame.pack.eye_in = 0;
+        used.jitter = [0.5, 0.5];
+        fresh.jitter = used.jitter;
         for n in 1..=3 {
             frame.pack.frame_timing = Some(FrameTiming::nth(n, 50.0));
             let inputs = [&mut used, &mut fresh].map(|f| f.next_inputs(&frame, [4, 4], SDR));

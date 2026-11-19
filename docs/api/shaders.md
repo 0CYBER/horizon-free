@@ -297,6 +297,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-19: API 0.2 (additions, preview): `frame.jitter`, the world's sub-pixel offset this frame in clip space,
+  which `frame.projection` leaves out, and `frame.previous_jitter`, last frame's, declared only for a pack whose files
+  name either, at the end of `Frame`. Both are `(0, 0)` while the world isn't jittered, today in every pack's frame. A
+  pack that names neither sees the same prelude as before, and its picture is unchanged.
 - 2026-11-19: API 0.2 (addition, preview): a pack without `[[post]]` whose frame holds gamma light (not
   `blend = "linear"` on the float frame) gets the player's FXAA, at the world's size, before its `[tonemap]` (#16126
   step 6). TAA and upscaling stay off under every pack, and a pack with a post chain is unchanged. With FXAA off

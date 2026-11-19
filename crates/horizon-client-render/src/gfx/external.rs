@@ -248,6 +248,9 @@ pub struct FrameStart<'a> {
     pub scene: Option<&'a RayScene>,
     /// This frame's lightmap, RGBA rows of sky level by block level (`Renderer::lightmap_pixels`).
     pub lightmap: &'a [u8; 16 * 16 * 4],
+    /// The world's sub-pixel jitter this frame in clip space (`world_post::Post::jitter_clip`),
+    /// zero while TAA is off.
+    pub jitter: [f32; 2],
 }
 
 /// What the renderer hands the pack after the water mirror (`ExternalPipeline::prepare_world_targets`).

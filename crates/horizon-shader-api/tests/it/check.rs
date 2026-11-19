@@ -1322,6 +1322,43 @@ fn looks_are_read_by_the_terrain_fields_alone() {
          let tier = f32(input.light_source_tier) * f32(input.light_source_whole);\n    \
          return Surface(input.albedo * full * tier);"
     ));
+    // Nor does the frame's jitter.
+    assert!(!material(
+        "    let j = frame.jitter + frame.previous_jitter;\n    \
+         return Surface(input.albedo * (1.0 + j.x * j.y));"
+    ));
+}
+
+/// A pack whose files name either jitter field gets both in its `Frame`, and checks; one that
+/// names neither gets neither.
+#[test]
+fn naming_either_jitter_declares_both() {
+    let jitters = |body: &str| {
+        let mut files = sample().files;
+        let text = format!(
+            "override reflections: bool = true;\nfn material(input: MaterialInput) -> Surface {{\n{body}\n}}\n"
+        );
+        files.insert("material.wgsl".into(), text.into_bytes());
+        let report = check(&Pack::from_files(files).unwrap()).unwrap();
+        let stage = (report.stages.iter()).find(|s| s.kind == StageKind::Material);
+        let module = &stage.unwrap().module;
+        let (_, frame) = (module.types.iter())
+            .find(|(_, t)| t.name.as_deref() == Some("Frame"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, .. } = &frame.inner else {
+            panic!("Frame is a struct")
+        };
+        (members.iter())
+            .filter_map(|m| m.name.clone())
+            .filter(|n| n.contains("jitter"))
+            .collect::<Vec<_>>()
+    };
+    let both = ["jitter", "previous_jitter"];
+    for name in both {
+        let body = format!("    return Surface(input.albedo + frame.{name}.x);");
+        assert_eq!(jitters(&body), both, "{name}");
+    }
+    assert!(jitters("    return Surface(input.albedo);").is_empty());
 }
 
 /// The sample with its material stage's file `material`, its other `files` (the stage's own,
