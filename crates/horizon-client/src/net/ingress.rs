@@ -76,7 +76,14 @@ impl<T> Producer<T> {
     /// Reserve before reporting acceptance. Allocation traversal occurs before
     /// taking the channel lock, and all failure values leave that lock intact.
     pub fn prepare(&self, value: T) -> Result<Prepared<T>, Refused<T>> {
-        match self.sender.reserve((self.charge)(&value)) {
+        let charge = (self.charge)(&value);
+        Self::prepared(self.sender.reserve(charge), value)
+    }
+    fn prepared(
+        permit: Result<byte_channel::Permit<T>, byte_channel::ReserveError>,
+        value: T,
+    ) -> Result<Prepared<T>, Refused<T>> {
+        match permit {
             Ok(permit) => Ok(Prepared { value, permit }),
             Err(error) => Err(Refused {
                 reason: match error {
@@ -89,6 +96,20 @@ impl<T> Producer<T> {
     }
     pub fn send(&self, value: T) -> Result<(), Refused<T>> {
         self.prepare(value)?.publish()
+    }
+    /// Waits for room instead of refusing for pressure, so a network reader stops
+    /// reading and the transport's own flow control holds the peer back. Here
+    /// [`Refusal::Pressure`] means the value's charge exceeds the whole budget.
+    /// Never call it from the consumer's thread, or while holding a lock it needs.
+    pub fn send_waiting(&self, value: T) -> Result<(), Refused<T>> {
+        let charge = (self.charge)(&value);
+        Self::prepared(self.sender.reserve_waiting(charge), value)?.publish()
+    }
+    /// Publishes a small control value in order even when the queue is full, still
+    /// charging it. [`Refusal::Pressure`] means its charge exceeds the whole budget.
+    pub fn send_over_budget(&self, value: T) -> Result<(), Refused<T>> {
+        let charge = (self.charge)(&value);
+        Self::prepared(self.sender.reserve_over_budget(charge), value)?.publish()
     }
     pub fn stats(&self) -> Stats {
         self.sender.stats()

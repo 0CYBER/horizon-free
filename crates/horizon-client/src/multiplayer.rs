@@ -148,6 +148,9 @@ pub enum Screen {
         retry: Option<crate::reconnect::Retry>,
         /// Wrapped reason lines, set by the last draw; the buttons sit below them.
         lines: std::cell::Cell<usize>,
+        /// Back leads to the title screen, not the server list: the world was single player
+        /// (`ClientCommonPacketListenerImpl.createDisconnectScreen` without `ServerData`).
+        to_title: bool,
     },
 }
 mod page;
@@ -1402,6 +1405,7 @@ impl Screen {
                 reason,
                 retry,
                 lines,
+                ..
             } => {
                 // DisconnectedScreen: the reason wraps to width - 50, rendered in the language
                 // the player has now, not the one it was resolved in.
@@ -1691,6 +1695,7 @@ impl Screen {
                 },
                 Some(57),
             ) => return Outcome::Back,
+            (Self::Disconnected { to_title: true, .. }, Some(54)) => return Outcome::Back,
             (
                 Self::Edit { .. }
                 | Self::Direct { .. }
@@ -2019,7 +2024,8 @@ impl Screen {
             | Self::Page(_)
             | Self::Friend {
                 from_title: true, ..
-            } => Outcome::Back,
+            }
+            | Self::Disconnected { to_title: true, .. } => Outcome::Back,
             // ConfirmScreen.keyPressed: Escape answers no.
             Self::ConfirmDelete { list, .. } => Outcome::Open(list.clone()),
             _ => Outcome::Open(Box::new(Self::list(saves))),
@@ -2395,6 +2401,7 @@ mod tests {
             reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
+            to_title: false,
         };
         assert_eq!(at(&lost, 427.0, 253.0), [(113.0, 145.0)]);
         // Taller messages push the button down instead of under the text.
@@ -2907,6 +2914,30 @@ mod tests {
 
     /// DisconnectedScreen.getNarrationMessage: the reason reads as the player's language
     /// renders it, and a plain-text reason is unchanged.
+    /// #18380: `createDisconnectScreen` without `ServerData` (single player) returns to the
+    /// title screen, so Back never opens the server list and its LAN discovery.
+    #[test]
+    fn back_from_a_single_player_disconnect_goes_to_the_title() {
+        let saves =
+            std::env::temp_dir().join(format!("horizon-mp-disconnect-back-{}", std::process::id()));
+        let lost = |to_title| Screen::Disconnected {
+            reason: Text::literal("Disconnected"),
+            retry: None,
+            lines: std::cell::Cell::new(1),
+            to_title,
+        };
+        let size = (427.0, 240.0);
+        assert!(matches!(
+            lost(true).click(Some(54), 0.0, 0.0, size, &saves),
+            Outcome::Back
+        ));
+        assert!(matches!(lost(true).escape(&saves), Outcome::Back));
+        assert!(matches!(
+            lost(false).click(Some(54), 0.0, 0.0, size, &saves),
+            Outcome::Open(list) if matches!(*list, Screen::List { .. })
+        ));
+    }
+
     #[test]
     fn disconnect_screen_narrates_a_translated_reason() {
         let language = crate::lang::Language::of(
@@ -2921,6 +2952,7 @@ mod tests {
                 reason: Text::translate("mymod.kicked", &[]),
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                to_title: false,
             };
             assert_eq!(
                 translated.narration().title,
@@ -2930,6 +2962,7 @@ mod tests {
                 reason: Text::literal("You were kicked"),
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                to_title: false,
             };
             assert_eq!(plain.narration().title, "Connexion perdue. You were kicked");
         });
@@ -2962,6 +2995,7 @@ mod tests {
                 reason,
                 retry: None,
                 lines: std::cell::Cell::new(1),
+                to_title: false,
             }
         });
         let ((), _missed) = crate::lang::scoped(english, || {

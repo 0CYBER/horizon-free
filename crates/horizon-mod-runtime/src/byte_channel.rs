@@ -1,10 +1,13 @@
-//! Nonblocking producers and a blocking consumer sharing a byte budget.
+//! Producers that never wait (or, with [`Sender::reserve_waiting`], wait for room) and a
+//! blocking consumer sharing a byte budget.
 //!
 //! Charge each value's owned heap allocations (for a `Vec`, its capacity, not length).
 //! The channel adds inline value and queue-node storage to that charge. Allocator
 //! metadata is not included, but both allocated bytes and node count are bounded.
 //! Values held before sending or after ordinary receiving are outside the budget.
 //! Owned receiving transfers the original charge to a lease retained by the consumer.
+//! One control value at a time ([`Sender::reserve_over_budget`]) is charged to its own
+//! allowance beside the budget, so it never narrows the room ordinary values have.
 use std::collections::LinkedList;
 use std::sync::mpsc::{RecvError, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -43,7 +46,15 @@ pub enum ReserveError {
 /// Publication after that or receiver closure returns the supplied value.
 pub struct Permit<T> {
     shared: Arc<Shared<T>>,
-    charge: usize,
+    /// Zero bytes once published.
+    charge: Charge,
+}
+
+/// A value's charge, and whether the control allowance holds it rather than the budget.
+#[derive(Clone, Copy)]
+struct Charge {
+    bytes: usize,
+    control: bool,
 }
 
 /// A dequeued value whose original charge stays reserved until its lease drops.
@@ -61,28 +72,52 @@ impl<T> OwnedReceipt<T> {
 /// Opaque retained receive credit. Drop refunds even after endpoint closure.
 pub struct ReceiveLease<T> {
     shared: Arc<Shared<T>>,
-    charge: usize,
+    charge: Charge,
 }
 impl<T> Drop for ReceiveLease<T> {
     fn drop(&mut self) {
         let mut state = self.shared.lock();
-        state.held_bytes -= self.charge;
-        state.stats.reserved_bytes -= self.charge;
+        state.held_bytes -= self.charge.bytes;
+        if self.charge.control {
+            state.control_held -= self.charge.bytes;
+        }
+        state.release(self.charge);
+        drop(state);
+        self.shared.room.notify_all();
     }
 }
 
 struct State<T> {
     pending_bytes: usize,
     held_bytes: usize,
-    queue: LinkedList<(T, usize)>,
+    queue: LinkedList<(T, Charge)>,
     stats: Stats,
     senders: usize,
     receiver_alive: bool,
+    /// The control allowance's share of `stats.reserved_bytes` (at most one value's
+    /// charge), and of that the part still pending and the part held in a lease.
+    control_bytes: usize,
+    control_pending: usize,
+    control_held: usize,
+}
+impl<T> State<T> {
+    /// Ordinary reservations' room: the control allowance doesn't take from it.
+    fn room(&self, capacity: usize) -> usize {
+        capacity.saturating_sub(self.stats.reserved_bytes - self.control_bytes)
+    }
+    fn release(&mut self, charge: Charge) {
+        self.stats.reserved_bytes -= charge.bytes;
+        if charge.control {
+            self.control_bytes -= charge.bytes;
+        }
+    }
 }
 struct Shared<T> {
     capacity: usize,
     state: Mutex<State<T>>,
     ready: Condvar,
+    /// Signalled whenever reserved bytes are released or the receiver closes.
+    room: Condvar,
 }
 impl<T> Shared<T> {
     fn lock(&self) -> MutexGuard<'_, State<T>> {
@@ -98,7 +133,7 @@ pub struct Receiver<T>(Arc<Shared<T>>);
 /// Fixed per-message charge, including list links, inline value and byte charge.
 /// This is nonzero even for zero-sized values and empty payloads.
 pub const fn message_overhead<T>() -> usize {
-    size_of::<((T, usize), [usize; 2])>()
+    size_of::<((T, Charge), [usize; 2])>()
 }
 
 /// Creates a channel. Capacity is connection pressure, not a per-body protocol cap.
@@ -119,8 +154,12 @@ pub fn channel<T>(capacity: usize) -> Result<(Sender<T>, Receiver<T>), InvalidCa
             },
             senders: 1,
             receiver_alive: true,
+            control_bytes: 0,
+            control_pending: 0,
+            control_held: 0,
         }),
         ready: Condvar::new(),
+        room: Condvar::new(),
     });
     Ok((Sender(shared.clone()), Receiver(shared)))
 }
@@ -145,18 +184,76 @@ impl<T> Sender<T> {
         let charge = owned_bytes
             .checked_add(message_overhead::<T>())
             .ok_or(ReserveError::Full)?;
-        if charge > self.0.capacity - state.stats.reserved_bytes {
+        if charge > state.room(self.0.capacity) {
             return Err(ReserveError::Full);
         }
-        state.pending_bytes += charge;
-        state.stats.reserved_bytes += charge;
-        state.stats.peak_reserved_bytes = state
+        self.take(&mut state, charge, false)
+    }
+    /// Like [`Self::reserve`], but waits until released charges make room. Waits
+    /// without a deadline, so the consumer must keep receiving and dropping leases.
+    /// `Full` here means the charge exceeds the whole capacity and could never fit;
+    /// `Disconnected` means the receiver closed, before or while waiting.
+    pub fn reserve_waiting(&self, owned_bytes: usize) -> Result<Permit<T>, ReserveError> {
+        let charge = owned_bytes
+            .checked_add(message_overhead::<T>())
+            .filter(|&charge| charge <= self.0.capacity)
+            .ok_or(ReserveError::Full)?;
+        let mut state = self.0.lock();
+        loop {
+            if !state.receiver_alive {
+                return Err(ReserveError::Disconnected);
+            }
+            if charge <= state.room(self.0.capacity) {
+                return self.take(&mut state, charge, false);
+            }
+            state = self.0.room.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+    /// Admits a control value that must reach the consumer in order, however full the
+    /// budget is. It is charged to a separate allowance that holds one value at a time,
+    /// so ordinary room is exactly what it would be without it. While another control
+    /// value's charge is held, this waits for its release, as [`Self::reserve_waiting`]
+    /// waits for room. `Full` means the charge exceeds the whole capacity, or the total
+    /// reserved bytes would overflow; `Disconnected` means the receiver closed.
+    pub fn reserve_over_budget(&self, owned_bytes: usize) -> Result<Permit<T>, ReserveError> {
+        let charge = owned_bytes
+            .checked_add(message_overhead::<T>())
+            .filter(|&charge| charge <= self.0.capacity)
+            .ok_or(ReserveError::Full)?;
+        let mut state = self.0.lock();
+        loop {
+            if !state.receiver_alive {
+                return Err(ReserveError::Disconnected);
+            }
+            if state.control_bytes == 0 {
+                return self.take(&mut state, charge, true);
+            }
+            state = self.0.room.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+    fn take(
+        &self,
+        state: &mut State<T>,
+        bytes: usize,
+        control: bool,
+    ) -> Result<Permit<T>, ReserveError> {
+        // Checked before any counter moves: the control allowance can take the total
+        // past the capacity.
+        let reserved = state
             .stats
-            .peak_reserved_bytes
-            .max(state.stats.reserved_bytes);
+            .reserved_bytes
+            .checked_add(bytes)
+            .ok_or(ReserveError::Full)?;
+        state.stats.reserved_bytes = reserved;
+        state.pending_bytes += bytes;
+        if control {
+            state.control_bytes += bytes;
+            state.control_pending += bytes;
+        }
+        state.stats.peak_reserved_bytes = state.stats.peak_reserved_bytes.max(reserved);
         Ok(Permit {
             shared: self.0.clone(),
-            charge,
+            charge: Charge { bytes, control },
         })
     }
     pub fn stats(&self) -> Stats {
@@ -171,9 +268,12 @@ impl<T> Permit<T> {
             return Err(value);
         }
         state.queue.push_back((value, self.charge));
-        state.pending_bytes -= self.charge;
+        state.pending_bytes -= self.charge.bytes;
+        if self.charge.control {
+            state.control_pending -= self.charge.bytes;
+        }
         state.stats.queued_items += 1;
-        self.charge = 0;
+        self.charge.bytes = 0;
         drop(state);
         self.shared.ready.notify_one();
         Ok(())
@@ -182,9 +282,14 @@ impl<T> Permit<T> {
 impl<T> Drop for Permit<T> {
     fn drop(&mut self) {
         let mut state = self.shared.lock();
-        if state.receiver_alive && state.senders != 0 {
-            state.pending_bytes -= self.charge;
-            state.stats.reserved_bytes -= self.charge;
+        if state.receiver_alive && state.senders != 0 && self.charge.bytes != 0 {
+            state.pending_bytes -= self.charge.bytes;
+            if self.charge.control {
+                state.control_pending -= self.charge.bytes;
+            }
+            state.release(self.charge);
+            drop(state);
+            self.shared.room.notify_all();
         }
     }
 }
@@ -201,25 +306,31 @@ impl<T> Drop for Sender<T> {
         let closed = state.senders == 0;
         if closed {
             state.stats.reserved_bytes -= state.pending_bytes;
+            state.control_bytes -= state.control_pending;
             state.pending_bytes = 0;
+            state.control_pending = 0;
         }
         drop(state);
         if closed {
             self.0.ready.notify_all();
+            self.0.room.notify_all();
         }
     }
 }
 impl<T> Receiver<T> {
     fn pop(state: &mut State<T>) -> Option<T> {
         let (value, charge) = state.queue.pop_front()?;
-        state.stats.reserved_bytes -= charge;
+        state.release(charge);
         state.stats.queued_items -= 1;
         Some(value)
     }
     fn pop_owned(&self, state: &mut State<T>) -> Option<OwnedReceipt<T>> {
         let (value, charge) = state.queue.pop_front()?;
         state.stats.queued_items -= 1;
-        state.held_bytes += charge;
+        state.held_bytes += charge.bytes;
+        if charge.control {
+            state.control_held += charge.bytes;
+        }
         Some(OwnedReceipt {
             value,
             lease: ReceiveLease {
@@ -257,16 +368,23 @@ impl<T> Receiver<T> {
     }
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut state = self.0.lock();
-        Self::pop(&mut state).ok_or(if state.senders == 0 {
+        let value = Self::pop(&mut state).ok_or(if state.senders == 0 {
             TryRecvError::Disconnected
         } else {
             TryRecvError::Empty
-        })
+        });
+        drop(state);
+        if value.is_ok() {
+            self.0.room.notify_all();
+        }
+        value
     }
     pub fn recv(&self) -> Result<T, RecvError> {
         let mut state = self.0.lock();
         loop {
             if let Some(value) = Self::pop(&mut state) {
+                drop(state);
+                self.0.room.notify_all();
                 return Ok(value);
             }
             if state.senders == 0 {
@@ -313,9 +431,12 @@ impl<T> Drop for Receiver<T> {
             state.receiver_alive = false;
             state.pending_bytes = 0;
             state.stats.reserved_bytes = state.held_bytes;
+            state.control_pending = 0;
+            state.control_bytes = state.control_held;
             state.stats.queued_items = 0;
             std::mem::take(&mut state.queue)
         };
+        self.0.room.notify_all();
         // Arbitrary value destructors must run outside the lock.
         drop(queue);
     }
@@ -563,6 +684,134 @@ mod tests {
         assert_eq!(tx.stats().reserved_bytes, capacity);
         drop(credit);
         assert_eq!(tx.stats().reserved_bytes, 0);
+    }
+
+    #[test]
+    fn waiting_reserve_wakes_when_room_returns_or_the_receiver_closes() {
+        let charge = message_overhead::<u32>() + 4;
+        let (tx, rx) = channel::<u32>(charge).unwrap();
+        let woken = Duration::from_secs(5);
+        // Larger than the whole budget: refused at once instead of waiting forever.
+        assert_eq!(
+            waiting(&tx, charge, 0).recv_timeout(woken),
+            Ok(Err(ReserveError::Full))
+        );
+        tx.try_send(1, 4).unwrap();
+        let receipt = rx.recv_timeout_owned(woken).unwrap();
+        let waiter = waiting(&tx, 4, 2);
+        assert_waits(&waiter);
+        drop(receipt);
+        assert_eq!(waiter.recv_timeout(woken), Ok(Ok(true)));
+        let waiter = waiting(&tx, 4, 3);
+        assert_waits(&waiter);
+        assert_eq!(rx.recv_timeout(woken), Ok(2));
+        assert_eq!(waiter.recv_timeout(woken), Ok(Ok(true)));
+        let waiter = waiting(&tx, 4, 4);
+        assert_waits(&waiter);
+        drop(rx);
+        assert_eq!(
+            waiter.recv_timeout(woken),
+            Ok(Err(ReserveError::Disconnected))
+        );
+    }
+
+    #[test]
+    fn a_control_value_has_its_own_allowance_and_leaves_ordinary_room_alone() {
+        let charge = message_overhead::<u32>() + 4;
+        let (tx, rx) = channel::<u32>(2 * charge).unwrap();
+        let woken = Duration::from_secs(5);
+        tx.try_send(1, 4).unwrap();
+        tx.try_send(2, 4).unwrap();
+        // A full budget still admits the control value, in order, and charges it.
+        let first = control(&tx, 4, 9);
+        assert_eq!(first.recv_timeout(woken), Ok(Ok(true)));
+        assert_eq!(tx.stats().reserved_bytes, 3 * charge);
+        assert!(matches!(tx.reserve(4), Err(ReserveError::Full)));
+        // With it held, ordinary admission has exactly the room it has without it: one
+        // released value's charge, all of it.
+        assert_eq!(rx.recv_timeout(woken), Ok(1));
+        tx.try_send(3, 4).unwrap();
+        assert!(matches!(tx.reserve(0), Err(ReserveError::Full)));
+        assert_eq!(rx.recv_timeout(woken), Ok(2));
+        let (value, lease) = rx.recv_timeout_owned(woken).unwrap().into_parts();
+        assert_eq!(value, 9);
+        // One control value at a time: a second waits for the first's charge.
+        let second = control(&tx, 4, 10);
+        assert_waits(&second);
+        drop(lease);
+        assert_eq!(second.recv_timeout(woken), Ok(Ok(true)));
+        assert_eq!(rx.recv_timeout(woken), Ok(3));
+        assert_eq!(rx.recv_timeout(woken), Ok(10));
+        assert_eq!(tx.stats().reserved_bytes, 0);
+        assert_eq!(
+            control(&tx, 2 * charge, 0).recv_timeout(woken),
+            Ok(Err(ReserveError::Full))
+        );
+        drop(rx);
+        assert_eq!(
+            control(&tx, 0, 0).recv_timeout(woken),
+            Ok(Err(ReserveError::Disconnected))
+        );
+    }
+
+    #[test]
+    fn reservations_refuse_a_total_that_would_overflow() {
+        let (tx, rx) = channel::<u32>(usize::MAX).unwrap();
+        let woken = Duration::from_secs(5);
+        let most = usize::MAX - message_overhead::<u32>();
+        let held = tx.reserve(most).unwrap();
+        // The control allowance would take the total past usize::MAX.
+        assert_eq!(
+            control(&tx, most, 0).recv_timeout(woken),
+            Ok(Err(ReserveError::Full))
+        );
+        assert_eq!(tx.stats().reserved_bytes, usize::MAX);
+        drop(held);
+        assert_eq!(control(&tx, most, 7).recv_timeout(woken), Ok(Ok(true)));
+        assert!(matches!(tx.reserve(most), Err(ReserveError::Full)));
+        assert_eq!(rx.recv_timeout(woken), Ok(7));
+        assert_eq!(tx.stats().reserved_bytes, 0);
+    }
+
+    /// A worker that reserves `bytes` with [`Sender::reserve_over_budget`] and publishes
+    /// `value`. Read with a timeout, so a missed wakeup fails instead of hanging.
+    fn control(
+        tx: &Sender<u32>,
+        bytes: usize,
+        value: u32,
+    ) -> std::sync::mpsc::Receiver<Result<bool, ReserveError>> {
+        let (done, result) = std::sync::mpsc::channel();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(
+                tx.reserve_over_budget(bytes)
+                    .map(|permit| permit.publish(value).is_ok()),
+            );
+        });
+        result
+    }
+
+    /// A thread that reserves `bytes` with [`Sender::reserve_waiting`] and publishes
+    /// `value`. Read with a timeout, so a missed wakeup fails instead of hanging.
+    fn waiting(
+        tx: &Sender<u32>,
+        bytes: usize,
+        value: u32,
+    ) -> std::sync::mpsc::Receiver<Result<bool, ReserveError>> {
+        let (done, result) = std::sync::mpsc::channel();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(
+                tx.reserve_waiting(bytes)
+                    .map(|permit| permit.publish(value).is_ok()),
+            );
+        });
+        result
+    }
+
+    fn assert_waits(waiter: &std::sync::mpsc::Receiver<Result<bool, ReserveError>>) {
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(waiter.try_recv().is_err(), "it did not wait");
     }
 
     #[test]
