@@ -2,6 +2,7 @@ package dev.horizonlab.parity;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -22,18 +23,23 @@ public final class VanillaServerAddressOracle {
             JsonArray output = new JsonArray();
             try (var reader = Files.newBufferedReader(Path.of(args[0]))) {
                 for (var input : JsonParser.parseReader(reader).getAsJsonArray()) {
-                    // Preserve Horizon's existing outer ASCII whitespace trim;
-                    // this corpus compares host/port syntax, not IDN mapping.
-                    String text = input.getAsString().trim();
-                    if (!ServerAddress.isValidAddress(text)) {
-                        output.add(JsonNull.INSTANCE);
-                    } else {
+                    String text = input.getAsString();
+                    JsonObject result = new JsonObject();
+                    result.addProperty("valid", ServerAddress.isValidAddress(text));
+                    try {
                         var address = ServerAddress.parseString(text);
-                        JsonArray parsed = new JsonArray();
-                        parsed.add(address.getHost());
-                        parsed.add(address.getPort());
-                        output.add(parsed);
+                        if (address == null) {
+                            result.add("parsed", JsonNull.INSTANCE);
+                        } else {
+                            JsonArray parsed = new JsonArray();
+                            parsed.add(address.getHost());
+                            parsed.add(address.getPort());
+                            result.add("parsed", parsed);
+                        }
+                    } catch (RuntimeException error) {
+                        result.add("parsed", JsonNull.INSTANCE);
                     }
+                    output.add(result);
                 }
             }
             Files.writeString(Path.of(args[1]), output.toString());

@@ -82,7 +82,7 @@ SkinReport.Builder.build	skip:service		chat and player reporting
 BlockStatePredictionHandler.updateKnownServerState	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::server_block	a predicted block keeps its predicted state; the server state is remembered
 BlockStatePredictionHandler.startPredicting	port	crates/horizon-client/src/game/network/remote/break_prediction.rs::Game::predict_break	gap: minor: the sequence number is passed in by the caller instead of counted here
 AddressCheck.createFromService	missing		minor: no block-list suppliers are loaded, so no address is refused on connect
-ServerAddress.isValidAddress	port	crates/horizon-protocol/src/servers.rs::is_valid_address	parse_address plus the ASCII half of IDN.toASCII (an empty label other than the last, or a label over 63 characters, is refused); gap: minor: a host with a non-ASCII character is accepted unchecked (no nameprep or punycode)
+ServerAddress.isValidAddress	port	crates/horizon-protocol/src/servers.rs::is_valid_address	parse_address plus java.net.IDN.toASCII-compatible nameprep, transitional mapping and Punycode; ASCII labels preserve their case and default-rule characters
 ServerAddress.equals	skip:java		value equality; Horizon compares the strings
 ServerNameResolver.resolveAddress	port	crates/horizon-protocol/src/resolver.rs::resolve	gap: minor: no block-list check on the resolved address
 ServerRedirectHandler.createDnsSrvRedirectHandler	port	crates/horizon-protocol/src/resolver.rs::srv_redirect	SRV lookup of _minecraft._tcp on port 25565

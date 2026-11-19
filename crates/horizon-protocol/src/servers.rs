@@ -226,7 +226,13 @@ fn write(path: &Path, root: &NamedTag) -> std::io::Result<()> {
 
 /// ServerAddress.parseString: `host`, `host:port` or `[v6]:port`; default 25565.
 pub fn parse_address(text: &str) -> Option<(String, u16)> {
-    let text = text.trim();
+    let (host, port) = parse_address_parts(text)?;
+    // ServerAddress.getHost() returns the empty host when IDN conversion fails;
+    // the caller then reports the invalid-address screen instead of connecting.
+    Some((idn_to_ascii(&host).unwrap_or_default(), port))
+}
+
+fn parse_address_parts(text: &str) -> Option<(String, u16)> {
     if text.is_empty() {
         return None;
     }
@@ -258,22 +264,540 @@ pub fn parse_address(text: &str) -> Option<(String, u16)> {
 
 /// ServerAddress.isValidAddress, which the Add/Edit Server screen's Done button
 /// and the Direct Connection screen's Join Server button ask: the text parses as
-/// a host (and port) and `java.net.IDN.toASCII` accepts the host. Only a host
-/// made of ASCII is checked here (an empty label other than the last one, or a
-/// label over 63 characters, is refused); a host with a non-ASCII character is
-/// taken as valid, because the nameprep and punycode steps are not ported.
+/// a host (and port) and `java.net.IDN.toASCII` accepts the host.
 pub fn is_valid_address(text: &str) -> bool {
-    parse_address(text).is_some_and(|(host, _)| idn_accepts(&host))
+    parse_address_parts(text).is_some_and(|(host, _)| idn_to_ascii(&host).is_some())
+}
+
+/// Unicode 3.2 Nameprep's unassigned code points. Java's default
+/// `IDN.toASCII` rejects them; newer IDNA mappings may otherwise accept them.
+const UNASSIGNED_UNICODE_3_2: &[(u32, u32)] = &[
+    (545, 545),
+    (564, 591),
+    (686, 687),
+    (751, 767),
+    (848, 863),
+    (880, 883),
+    (886, 889),
+    (891, 893),
+    (895, 899),
+    (907, 907),
+    (909, 909),
+    (930, 930),
+    (975, 975),
+    (1015, 1023),
+    (1159, 1159),
+    (1231, 1231),
+    (1270, 1271),
+    (1274, 1279),
+    (1296, 1328),
+    (1367, 1368),
+    (1376, 1376),
+    (1416, 1416),
+    (1419, 1424),
+    (1442, 1442),
+    (1466, 1466),
+    (1477, 1487),
+    (1515, 1519),
+    (1525, 1547),
+    (1549, 1562),
+    (1564, 1566),
+    (1568, 1568),
+    (1595, 1599),
+    (1622, 1631),
+    (1774, 1775),
+    (1791, 1791),
+    (1806, 1806),
+    (1837, 1839),
+    (1867, 1919),
+    (1970, 2304),
+    (2308, 2308),
+    (2362, 2363),
+    (2382, 2383),
+    (2389, 2391),
+    (2417, 2432),
+    (2436, 2436),
+    (2445, 2446),
+    (2449, 2450),
+    (2473, 2473),
+    (2481, 2481),
+    (2483, 2485),
+    (2490, 2491),
+    (2493, 2493),
+    (2501, 2502),
+    (2505, 2506),
+    (2510, 2518),
+    (2520, 2523),
+    (2526, 2526),
+    (2532, 2533),
+    (2555, 2561),
+    (2563, 2564),
+    (2571, 2574),
+    (2577, 2578),
+    (2601, 2601),
+    (2609, 2609),
+    (2612, 2612),
+    (2615, 2615),
+    (2618, 2619),
+    (2621, 2621),
+    (2627, 2630),
+    (2633, 2634),
+    (2638, 2648),
+    (2653, 2653),
+    (2655, 2661),
+    (2677, 2688),
+    (2692, 2692),
+    (2700, 2700),
+    (2702, 2702),
+    (2706, 2706),
+    (2729, 2729),
+    (2737, 2737),
+    (2740, 2740),
+    (2746, 2747),
+    (2758, 2758),
+    (2762, 2762),
+    (2766, 2767),
+    (2769, 2783),
+    (2785, 2789),
+    (2800, 2816),
+    (2820, 2820),
+    (2829, 2830),
+    (2833, 2834),
+    (2857, 2857),
+    (2865, 2865),
+    (2868, 2869),
+    (2874, 2875),
+    (2884, 2886),
+    (2889, 2890),
+    (2894, 2901),
+    (2904, 2907),
+    (2910, 2910),
+    (2914, 2917),
+    (2929, 2945),
+    (2948, 2948),
+    (2955, 2957),
+    (2961, 2961),
+    (2966, 2968),
+    (2971, 2971),
+    (2973, 2973),
+    (2976, 2978),
+    (2981, 2983),
+    (2987, 2989),
+    (2998, 2998),
+    (3002, 3005),
+    (3011, 3013),
+    (3017, 3017),
+    (3022, 3030),
+    (3032, 3046),
+    (3059, 3072),
+    (3076, 3076),
+    (3085, 3085),
+    (3089, 3089),
+    (3113, 3113),
+    (3124, 3124),
+    (3130, 3133),
+    (3141, 3141),
+    (3145, 3145),
+    (3150, 3156),
+    (3159, 3167),
+    (3170, 3173),
+    (3184, 3201),
+    (3204, 3204),
+    (3213, 3213),
+    (3217, 3217),
+    (3241, 3241),
+    (3252, 3252),
+    (3258, 3261),
+    (3269, 3269),
+    (3273, 3273),
+    (3278, 3284),
+    (3287, 3293),
+    (3295, 3295),
+    (3298, 3301),
+    (3312, 3329),
+    (3332, 3332),
+    (3341, 3341),
+    (3345, 3345),
+    (3369, 3369),
+    (3386, 3389),
+    (3396, 3397),
+    (3401, 3401),
+    (3406, 3414),
+    (3416, 3423),
+    (3426, 3429),
+    (3440, 3457),
+    (3460, 3460),
+    (3479, 3481),
+    (3506, 3506),
+    (3516, 3516),
+    (3518, 3519),
+    (3527, 3529),
+    (3531, 3534),
+    (3541, 3541),
+    (3543, 3543),
+    (3552, 3569),
+    (3573, 3584),
+    (3643, 3646),
+    (3676, 3712),
+    (3715, 3715),
+    (3717, 3718),
+    (3721, 3721),
+    (3723, 3724),
+    (3726, 3731),
+    (3736, 3736),
+    (3744, 3744),
+    (3748, 3748),
+    (3750, 3750),
+    (3752, 3753),
+    (3756, 3756),
+    (3770, 3770),
+    (3774, 3775),
+    (3781, 3781),
+    (3783, 3783),
+    (3790, 3791),
+    (3802, 3803),
+    (3806, 3839),
+    (3912, 3912),
+    (3947, 3952),
+    (3980, 3983),
+    (3992, 3992),
+    (4029, 4029),
+    (4045, 4046),
+    (4048, 4095),
+    (4130, 4130),
+    (4136, 4136),
+    (4139, 4139),
+    (4147, 4149),
+    (4154, 4159),
+    (4186, 4255),
+    (4294, 4303),
+    (4345, 4346),
+    (4348, 4351),
+    (4442, 4446),
+    (4515, 4519),
+    (4602, 4607),
+    (4615, 4615),
+    (4679, 4679),
+    (4681, 4681),
+    (4686, 4687),
+    (4695, 4695),
+    (4697, 4697),
+    (4702, 4703),
+    (4743, 4743),
+    (4745, 4745),
+    (4750, 4751),
+    (4783, 4783),
+    (4785, 4785),
+    (4790, 4791),
+    (4799, 4799),
+    (4801, 4801),
+    (4806, 4807),
+    (4815, 4815),
+    (4823, 4823),
+    (4847, 4847),
+    (4879, 4879),
+    (4881, 4881),
+    (4886, 4887),
+    (4895, 4895),
+    (4935, 4935),
+    (4955, 4960),
+    (4989, 5023),
+    (5109, 5120),
+    (5751, 5759),
+    (5789, 5791),
+    (5873, 5887),
+    (5901, 5901),
+    (5909, 5919),
+    (5943, 5951),
+    (5972, 5983),
+    (5997, 5997),
+    (6001, 6001),
+    (6004, 6015),
+    (6109, 6111),
+    (6122, 6143),
+    (6159, 6159),
+    (6170, 6175),
+    (6264, 6271),
+    (6314, 7679),
+    (7836, 7839),
+    (7930, 7935),
+    (7958, 7959),
+    (7966, 7967),
+    (8006, 8007),
+    (8014, 8015),
+    (8024, 8024),
+    (8026, 8026),
+    (8028, 8028),
+    (8030, 8030),
+    (8062, 8063),
+    (8117, 8117),
+    (8133, 8133),
+    (8148, 8149),
+    (8156, 8156),
+    (8176, 8177),
+    (8181, 8181),
+    (8191, 8191),
+    (8275, 8278),
+    (8280, 8286),
+    (8292, 8297),
+    (8306, 8307),
+    (8335, 8351),
+    (8370, 8399),
+    (8427, 8447),
+    (8507, 8508),
+    (8524, 8530),
+    (8580, 8591),
+    (9167, 9215),
+    (9255, 9279),
+    (9291, 9311),
+    (9471, 9471),
+    (9748, 9749),
+    (9752, 9752),
+    (9854, 9855),
+    (9866, 9984),
+    (9989, 9989),
+    (9994, 9995),
+    (10024, 10024),
+    (10060, 10060),
+    (10062, 10062),
+    (10067, 10069),
+    (10071, 10071),
+    (10079, 10080),
+    (10133, 10135),
+    (10160, 10160),
+    (10175, 10191),
+    (10220, 10223),
+    (11008, 11903),
+    (11930, 11930),
+    (12020, 12031),
+    (12246, 12271),
+    (12284, 12287),
+    (12352, 12352),
+    (12439, 12440),
+    (12544, 12548),
+    (12589, 12592),
+    (12687, 12687),
+    (12728, 12783),
+    (12829, 12831),
+    (12868, 12880),
+    (12924, 12926),
+    (13004, 13007),
+    (13055, 13055),
+    (13175, 13178),
+    (13278, 13279),
+    (13311, 13311),
+    (19894, 19967),
+    (40870, 40959),
+    (42125, 42127),
+    (42183, 44031),
+    (55204, 55295),
+    (64046, 64047),
+    (64107, 64255),
+    (64263, 64274),
+    (64280, 64284),
+    (64311, 64311),
+    (64317, 64317),
+    (64319, 64319),
+    (64322, 64322),
+    (64325, 64325),
+    (64434, 64466),
+    (64832, 64847),
+    (64912, 64913),
+    (64968, 65007),
+    (65021, 65023),
+    (65040, 65055),
+    (65060, 65071),
+    (65095, 65096),
+    (65107, 65107),
+    (65127, 65127),
+    (65132, 65135),
+    (65141, 65141),
+    (65277, 65278),
+    (65280, 65280),
+    (65471, 65473),
+    (65480, 65481),
+    (65488, 65489),
+    (65496, 65497),
+    (65501, 65503),
+    (65511, 65511),
+    (65519, 65528),
+    (65534, 66303),
+    (66335, 66335),
+    (66340, 66351),
+    (66379, 66559),
+    (66598, 66599),
+    (66638, 118783),
+    (119030, 119039),
+    (119079, 119081),
+    (119262, 119807),
+    (119893, 119893),
+    (119965, 119965),
+    (119968, 119969),
+    (119971, 119972),
+    (119975, 119976),
+    (119981, 119981),
+    (119994, 119994),
+    (119996, 119996),
+    (120001, 120001),
+    (120004, 120004),
+    (120070, 120070),
+    (120075, 120076),
+    (120085, 120085),
+    (120093, 120093),
+    (120122, 120122),
+    (120127, 120127),
+    (120133, 120133),
+    (120135, 120137),
+    (120145, 120145),
+    (120484, 120487),
+    (120778, 120781),
+    (120832, 131071),
+    (173783, 194559),
+    (195102, 917504),
+    (917506, 917535),
+    (917632, 983039),
+    (1048574, 1048575),
+    (1114110, 1114111),
+];
+
+fn is_unassigned_unicode_3_2(c: char) -> bool {
+    let code_point = c as u32;
+    UNASSIGNED_UNICODE_3_2
+        .binary_search_by(|&(start, end)| {
+            if code_point < start {
+                std::cmp::Ordering::Greater
+            } else if code_point > end {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
 }
 
 /// The ASCII half of `java.net.IDN.toASCII`: one trailing dot is allowed (a lone
 /// dot too), every other label must be 1 to 63 characters long.
 fn idn_accepts(host: &str) -> bool {
-    if !host.is_ascii() {
-        return true;
-    }
     let labels = host.strip_suffix('.').unwrap_or(host);
     labels.is_empty() || labels.split('.').all(|l| (1..=63).contains(&l.len()))
+}
+
+/// `java.net.IDN.toASCII` with its default (non-STD3) rules. Nameprep's
+/// Unicode 3.2 mapping is applied before the UTS 46 encoder; the latter still
+/// supplies the DNS length and prohibited-character checks. ASCII labels stay
+/// untouched so their case and permissive default-rule characters are
+/// preserved.
+#[allow(deprecated)]
+fn idn_to_ascii(host: &str) -> Option<String> {
+    // Java's IDN implementation uses the Unicode 3.2 Nameprep table, while
+    // the modern UTS #46 mapper in this crate knows about newer characters.
+    if host.chars().any(is_unassigned_unicode_3_2) {
+        return None;
+    }
+    if host.is_ascii() {
+        return idn_accepts(host).then(|| host.to_owned());
+    }
+    let mapped: String = host
+        .chars()
+        .map(|c| match c {
+            '\u{3002}' | '\u{ff0e}' | '\u{ff61}' => '.',
+            c => c,
+        })
+        .collect();
+    if mapped.is_ascii() {
+        return idn_accepts(&mapped).then_some(mapped);
+    }
+    let trailing_dot = mapped.ends_with('.');
+    let labels = mapped.strip_suffix('.').unwrap_or(&mapped);
+    if labels.is_empty() || labels.split('.').any(str::is_empty) {
+        return None;
+    }
+    let config = idna::Config::default().transitional_processing(true);
+    let adapter = idna_adapter::Adapter::new();
+    let mut ascii = String::with_capacity(mapped.len());
+    for label in labels.split('.') {
+        let converted = if label.is_ascii() {
+            (1..=63).contains(&label.len()).then(|| label.to_owned())?
+        } else {
+            let mut nameprep = String::with_capacity(label.len());
+            for c in label.chars() {
+                match c {
+                    // Nameprep's map-to-nothing step removes joiners before
+                    // the label is checked and encoded.
+                    '\u{200c}' | '\u{200d}' => {}
+                    'ß' | 'ẞ' => nameprep.push_str("ss"),
+                    'ς' => nameprep.push('σ'),
+                    c => nameprep.push(c),
+                }
+            }
+            let nameprep: String = adapter
+                .map_normalize(nameprep.chars())
+                .map(|c| {
+                    // U+04CF was unassigned in Unicode 3.2. Modern UTS 46
+                    // uses it as the lowercase mapping of U+04C0, but
+                    // Nameprep leaves the then-assigned U+04C0 unchanged.
+                    if c == '\u{04cf}' { '\u{04c0}' } else { c }
+                })
+                .collect();
+            if !nameprep_bidi_is_valid(&nameprep, &adapter) {
+                return None;
+            }
+            if nameprep.contains('\u{04c0}') || (nameprep != label && !nameprep.is_ascii()) {
+                config.to_ascii(&format!("a{nameprep}")).ok()?;
+                format!("xn--{}", idna::punycode::encode_str(&nameprep)?)
+            } else {
+                match config.to_ascii(&nameprep) {
+                    Ok(converted) => converted,
+                    Err(_)
+                        if adapter.is_mark(nameprep.chars().next()?)
+                            && config.to_ascii(&format!("a{nameprep}")).is_ok() =>
+                    {
+                        format!("xn--{}", idna::punycode::encode_str(&nameprep)?)
+                    }
+                    Err(_) => return None,
+                }
+            }
+        };
+        if converted.is_empty() || converted.len() > 63 {
+            return None;
+        }
+        if !ascii.is_empty() {
+            ascii.push('.');
+        }
+        ascii.push_str(&converted);
+    }
+    if trailing_dot {
+        ascii.push('.');
+    }
+    Some(ascii)
+}
+
+fn nameprep_bidi_is_valid(label: &str, adapter: &idna_adapter::Adapter) -> bool {
+    let Some(first) = label.chars().next() else {
+        return false;
+    };
+    let rtl = label.chars().any(|c| {
+        adapter
+            .bidi_class(c)
+            .to_mask()
+            .intersects(idna_adapter::RTL_MASK)
+    });
+    if !rtl {
+        return true;
+    }
+    if !adapter
+        .bidi_class(first)
+        .to_mask()
+        .intersects(idna_adapter::RTL_MASK)
+    {
+        return false;
+    }
+    label.chars().last().is_some_and(|last| {
+        adapter
+            .bidi_class(last)
+            .to_mask()
+            .intersects(idna_adapter::RTL_MASK)
+    })
 }
 
 /// HostAndPort uses the default for an empty port, refuses a leading plus,
@@ -371,10 +895,11 @@ mod tests {
             ("127.0.0.1:", "127.0.0.1"),
             ("[::1]:", "::1"),
             ("[2001:db8::1]:", "2001:db8::1"),
-            (" \t[::1]:\r\n", "::1"),
         ] {
             assert_eq!(parse_address(input), Some((host.into(), 25565)), "{input}");
         }
+        assert_eq!(parse_address(" host:25565"), Some((" host".into(), 25565)));
+        assert_eq!(parse_address("host:25565 "), None);
     }
 
     #[test]
@@ -440,7 +965,30 @@ mod tests {
         // What parse_address refuses stays refused.
         assert!(!is_valid_address(""));
         assert!(!is_valid_address("host:notaport"));
-        // A non-ASCII host is not checked here.
-        assert!(is_valid_address("m\u{fc}nchen.de"));
+        for (input, host) in [
+            ("münchen.de", "xn--mnchen-3ya.de"),
+            ("straße.de", "strasse.de"),
+            ("ς.example", "xn--4xa.example"),
+            ("\u{04c0}.example", "xn--d5a.example"),
+            ("א1א.example", "xn--1-zhcb.example"),
+            ("\u{0301}.example", "xn--lsa.example"),
+            ("EXAMPLE.é", "EXAMPLE.xn--9ca"),
+            ("é.EXAMPLE", "xn--9ca.EXAMPLE"),
+            ("a。b", "a.b"),
+        ] {
+            assert!(is_valid_address(input), "{input}");
+            assert_eq!(parse_address(input), Some((host.into(), 25565)), "{input}");
+        }
+        assert!(!is_valid_address("\u{200d}.invalid"));
+        assert_eq!(
+            parse_address("a\u{200d}b.example"),
+            Some(("ab.example".into(), 25565))
+        );
+        assert!(!is_valid_address("א1.example"));
+        assert!(!is_valid_address("א1א\u{0301}.example"));
+        assert!(!is_valid_address("\u{1c80}.example"));
+        assert!(!is_valid_address("\u{1e9e}.example"));
+        let long_unicode_label = "é".repeat(64);
+        assert!(!is_valid_address(&format!("{long_unicode_label}.example")));
     }
 }

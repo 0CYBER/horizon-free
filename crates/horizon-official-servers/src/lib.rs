@@ -79,7 +79,7 @@ pub fn add_official_server(game_dir: &Path) -> std::io::Result<()> {
     };
     if offered
         .as_deref()
-        .is_some_and(|a| address_key(a) == address_key(address))
+        .is_some_and(|a| address_key(a.trim_end_matches(['\r', '\n'])) == address_key(address))
     {
         return Ok(());
     }

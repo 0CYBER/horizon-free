@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Resolved login targets and trimmed ASCII host/port syntax against vanilla.
+"""Resolved login targets and raw host/port plus IDN syntax against vanilla.
 
-No live DNS, server or game. IDN normalization and raw whitespace semantics are
-not claimed: the parsing corpus keeps Horizon's existing outer ASCII trim.
+No live DNS, server or game. The corpus compares ServerAddress's raw host/port
+syntax and its java.net.IDN.toASCII normalization.
 """
 import json
 import os
@@ -18,7 +18,10 @@ except ImportError:
 
 def address_cases():
     hosts = ['localhost', 'play.example.org', '127.0.0.1', 'EXAMPLE.COM', '[::1]',
-             '[2001:db8::1]', '[foo:bar]', '[example.com]', '[]', '[::1]junk', '']
+             '[2001:db8::1]', '[foo:bar]', '[example.com]', '[]', '[::1]junk', '',
+             'münchen.de', 'straße.de', 'faß.de', 'ς.example', 'ẞ.example', '\u04c0.example',
+             'א1.example', 'א1א.example', '\u0301.example', '\u1c80.example', '\u200d.invalid',
+             'EXAMPLE.é', 'é.EXAMPLE', 'a。b', 'a..b']
     ports = ['', '0', '1', '25565', '65535', '65536', '-0', '-00', '-1', '+0',
              '+25565', '2147483647', '2147483648', '-2147483648', '-2147483649',
              '00000000000000025565', ' 25565', '25565 ', '1_0', '0x10',
@@ -26,13 +29,13 @@ def address_cases():
     cases = [host for host in hosts]
     cases += [host + ':' + port for host in hosts for port in ports]
     cases += ['::1', '2001:db8::1', '[::1', '[::1]::', '[::1]]:', '[[::1]]:',
-              ' \tplay.example.org:\r\n', ' \t[::1]:\r\n']
+              'host:25565 ', ' host:25565', ' \tplay.example.org:\r\n',
+              ' \t[::1]:\r\n']
     rng = random.Random(0x10465)
     for _ in range(1000):
         port = ''.join(rng.choices('0123456789+-_: abc\u0661\uff11', k=rng.randrange(13)))
         cases.extend(host + ':' + port for host in ('localhost', '127.0.0.1', '[::1]', ''))
     # Multiple unbracketed colons make the whole value a hostname, not a port.
-    # Unicode in that shape tests IDN normalization, outside this syntax corpus.
     return [value for value in cases
             if value.startswith('[') or value.count(':') <= 1 or value.isascii()]
 
