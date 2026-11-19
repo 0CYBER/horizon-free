@@ -1068,8 +1068,18 @@ impl Creative {
     /// `CreativeModeInventoryScreen.checkTabHovering`: the tab whose icon
     /// rectangle, 3 pixels in from its 26x32 slot (`isHovering(x + 3, y + 3,
     /// 21, 27)`), holds the cursor. The screen draws its display name.
-    pub fn hovered_tab(tabs: &[Tab], origin: (f32, f32), cursor: (f32, f32)) -> Option<usize> {
+    /// Tabs on another page share those slots, so only a tab on `page` (or
+    /// one every page shows) can be hovered, as a click already does.
+    pub fn hovered_tab(
+        tabs: &[Tab],
+        page: u32,
+        origin: (f32, f32),
+        cursor: (f32, f32),
+    ) -> Option<usize> {
         tabs.iter().position(|tab| {
+            if tab.page != page && !Self::on_every_page(tab) {
+                return false;
+            }
             let (x, y) = Self::tab_position(tab);
             let (x, y) = (origin.0 + x + 3.0, origin.1 + y + 3.0);
             cursor.0 >= x && cursor.0 < x + 21.0 && cursor.1 >= y && cursor.1 < y + 27.0
@@ -2240,13 +2250,43 @@ mod tests {
         let tab = &screen.tabs[0];
         let (x, y) = Creative::tab_position(tab);
         let at =
-            |dx: f32, dy: f32| Creative::hovered_tab(&screen.tabs, (0.0, 0.0), (x + dx, y + dy));
+            |dx: f32, dy: f32| Creative::hovered_tab(&screen.tabs, 0, (0.0, 0.0), (x + dx, y + dy));
         assert_eq!(at(4.0, 4.0), Some(0));
         assert_eq!(at(23.5, 4.0), Some(0));
         assert_eq!(at(2.0, 4.0), None);
         assert_eq!(at(24.0, 4.0), None);
         assert_eq!(at(4.0, 2.0), None);
         assert_eq!(at(4.0, 30.0), None);
+    }
+
+    /// Off-page tabs sit in the same slot as the tab drawn there, so hover
+    /// must ignore them and name the tab on the page shown.
+    #[test]
+    fn hovered_tab_follows_the_page_shown() {
+        let stack = |id: &str| format!("{{count:1,id:\"minecraft:{id}\"}}");
+        let tab = |id: &str, column: u32, page: u32| {
+            serde_json::json!({"id": format!("minecraft:{id}"), "type": "CATEGORY", "row": "TOP",
+                "column": column, "page": page, "title": id, "icon": stack("stone"),
+                "visible": true, "items": [stack("stone")]})
+        };
+        let screen = Creative::from_json(&serde_json::json!({"schema": 3, "tabs": [
+            tab("building_blocks", 0, 0),
+            tab("modded", 0, 1),
+            tab("search", 6, 0),
+        ]}))
+        .unwrap();
+        let at = |page: u32, tab: usize| {
+            let (x, y) = Creative::tab_position(&screen.tabs[tab]);
+            Creative::hovered_tab(&screen.tabs, page, (0.0, 0.0), (x + 4.0, y + 4.0))
+        };
+        // Page 0: the vanilla tab in column 0, not the mod tab that shares it.
+        assert_eq!(at(0, 0), Some(0));
+        // Page 1: the same slot is the mod tab; the vanilla tab is not hovered.
+        assert_eq!(at(1, 0), Some(1));
+        assert_eq!(at(1, 1), Some(1));
+        // A right-hand tab (column >= 5) still hovers on every page.
+        assert_eq!(at(0, 2), Some(2));
+        assert_eq!(at(1, 2), Some(2));
     }
 }
 
