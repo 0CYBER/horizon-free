@@ -107,10 +107,13 @@ DISCLAIMER = "Not an official Minecraft product. Not approved by or associated w
 BLOCKER = "release-blocker"
 
 
-def run(*command, check=True):
-    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+def run(*command, check=True, text=True):
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=text)
     if check and result.returncode:
-        raise SystemExit(f"{' '.join(command)}: {result.stderr.strip()}")
+        stderr = result.stderr.strip()
+        if isinstance(stderr, bytes):
+            stderr = os.fsdecode(stderr)
+        raise SystemExit(f"{' '.join(command)}: {stderr}")
     return result.stdout
 
 
@@ -234,8 +237,14 @@ def merged_pull_requests(base, head):
 
 
 def changed_paths(commit):
-    """The files a pull request changed: its merge commit against main before it (first parent)."""
-    return run("git", "diff", "--name-only", f"{commit}^1", commit).split()
+    """The files a pull request changed: its merge commit against main before it (first parent).
+
+    -z asks Git for NUL-delimited, verbatim paths: core.quotePath and whitespace in a name
+    cannot hide a player-facing change. Each raw path is decoded with os.fsdecode, the same
+    filesystem-safe decoding Python uses for on-disk names, so any byte round-trips.
+    """
+    raw = run("git", "diff", "--name-only", "-z", f"{commit}^1", commit, text=False)
+    return [os.fsdecode(path) for path in raw.split(b"\0") if path]
 
 
 def merged_pull_request_metadata():
