@@ -29,6 +29,24 @@ fn mirror(tag: &Tag, key: &str) -> Option<Mirror> {
         .find(|m| Some(m.saved_name()) == text(tag, key).as_deref())
 }
 
+/// Whether [`read`] reads this piece: a `TemplateStructurePiece`'s constructor resets the
+/// orientation to NORTH and rebuilds the box from the template, unlike the other saved
+/// pieces, which keep their saved `BB`/`O`.
+pub(crate) fn is_template_piece(piece: &Tag) -> bool {
+    matches!(
+        crate::worldgen::generator_structures::saved_piece_name(piece).as_deref(),
+        Some(
+            "minecraft:shipwreck"
+                | "minecraft:orp"
+                | "minecraft:iglu"
+                | "minecraft:rupo"
+                | "minecraft:wmp"
+                | "minecraft:nefos"
+                | "minecraft:ecp"
+        )
+    )
+}
+
 /// `TemplateStructurePiece(StructurePieceType, CompoundTag, ...)` and its subclasses' tag
 /// constructors (`ShipwreckPieces.ShipwreckPiece`, `OceanRuinPieces.OceanRuinPiece.create`...):
 /// the box is rebuilt and the orientation reset to NORTH, and each subclass rebuilds its

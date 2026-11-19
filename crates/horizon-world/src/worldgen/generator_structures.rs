@@ -14,7 +14,7 @@ use super::{
         stronghold::RingSearch,
     },
 };
-use horizon_core::{density::Beardifier, position::ChunkPos};
+use horizon_core::{density::Beardifier, geometry::Direction, position::ChunkPos};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::{
@@ -512,6 +512,32 @@ impl StructureState {
             .filter_map(|start| {
                 let index = (self.registry.structures.iter()).position(|s| s.name == start.name)?;
                 let def = &self.registry.structures[index];
+                if matches!(&def.kind, StructureKind::Monument(_)) {
+                    // An old chunk's monument is `StructureStart.loadStaticStart`'s
+                    // `PiecesContainer.load` plus `regeneratePiecesAfterLoad` too: the first
+                    // saved piece that loads supplies the box and orientation, and the
+                    // rooms are built again from the seed.
+                    let top = start.pieces.iter().find_map(|piece| {
+                        saved_anchor(piece, |piece| {
+                            Self::saved_piece(piece, def, &self.resources, &self.bindings)
+                        })
+                    });
+                    if let Some((bounding_box, orientation)) = top {
+                        let piece =
+                            super::structure::monument::MonumentBuilding::regenerate_after_load(
+                                bounding_box,
+                                orientation,
+                                chunk,
+                                context.seed(),
+                            );
+                        return Some(Arc::new(StructureStart::new(
+                            index,
+                            def,
+                            chunk,
+                            vec![Piece::Legacy(Box::new(piece))],
+                        )));
+                    }
+                }
                 if !start.pieces.is_empty()
                     && let Some(pieces) = start
                         .pieces
@@ -950,8 +976,62 @@ fn pieces_box(pieces: &[Piece]) -> Option<[i32; 6]> {
     }
     union.map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
 }
+/// `PiecesContainer.load` keeps one of a monument's own pieces when `StructurePieceType`
+/// registers its id (`OMB` and the eleven room ids) and the `StructurePiece(StructurePieceType,
+/// CompoundTag)` constructor reads its box. An unknown id is logged and dropped, and a
+/// constructor that throws drops the piece too.
+fn monument_piece(piece: &horizon_core::nbt::Tag) -> bool {
+    matches!(
+        saved_piece_name(piece).as_deref(),
+        Some(
+            "minecraft:omb"
+                | "minecraft:omcr"
+                | "minecraft:omdxr"
+                | "minecraft:omdxyr"
+                | "minecraft:omdyr"
+                | "minecraft:omdyzr"
+                | "minecraft:omdzr"
+                | "minecraft:omentry"
+                | "minecraft:ompenthouse"
+                | "minecraft:omsimple"
+                | "minecraft:omsimplet"
+                | "minecraft:omwr"
+        )
+    ) && piece
+        .get("BB")
+        .and_then(super::structure::saved_legacy::read_box)
+        .is_some()
+}
+/// The box and orientation `StructureStart.loadStaticStart` gives the first saved piece
+/// `PiecesContainer.load` keeps, or `None` when the piece does not load. A monument
+/// piece's own constructor keeps the saved `BB` (a `Codec.INT_STREAM`, so an int array or
+/// a numeric list) and `O`; a template piece's constructor resets the orientation to NORTH
+/// and rebuilds its box from the template (`TemplateStructurePiece`); every other loader
+/// keeps the saved `O`.
+fn saved_anchor(
+    piece: &horizon_core::nbt::Tag,
+    decode: impl FnOnce(&horizon_core::nbt::Tag) -> Option<Piece>,
+) -> Option<(horizon_core::bounding_box::BoundingBox, Option<Direction>)> {
+    if monument_piece(piece) {
+        let bounding_box = piece
+            .get("BB")
+            .and_then(super::structure::saved_legacy::read_box)?;
+        return Some((
+            bounding_box,
+            super::structure::monument::saved_orientation(piece),
+        ));
+    }
+    let decoded = decode(piece)?;
+    let orientation = if super::structure::saved_templates::is_template_piece(piece) {
+        Some(Direction::North)
+    } else {
+        super::structure::monument::saved_orientation(piece)
+    };
+    Some((decoded.bounding_box(), orientation))
+}
 /// `StructureStart.loadStaticStart` / `PiecesContainer.load`, restricted to complete supported
-/// starts. Unsupported or unreadable children leave the entire start to regeneration.
+/// starts. Unsupported or unreadable children leave the entire start to regeneration; an
+/// ocean monument keeps the first child that loads and rebuilds its rooms.
 pub(super) fn read_saved_start(
     index: usize,
     def: &StructureDef,
@@ -975,46 +1055,52 @@ pub(super) fn read_saved_start(
     if children.is_empty() {
         return None;
     }
+    // `StructureStart.loadStaticStart` decodes each child through `PiecesContainer.load`,
+    // which drops every piece it cannot read and keeps the rest in saved order.
+    let decode = |piece: &horizon_core::nbt::Tag| -> Option<Piece> {
+        // `PiecesContainer.load`'s RENAMES read the old jigsaw ids as `jigsaw`; the other
+        // supported types are template pieces and the mineshaft, fortress and stronghold
+        // pieces that read their own tags.
+        if saved_piece_id(piece).is_none() {
+            let Tag::String(id) = piece.get("id")? else {
+                return None;
+            };
+            let id = id.to_string_lossy();
+            let id = id.strip_prefix("minecraft:").unwrap_or(&id);
+            return super::structure::saved_templates::read(id, piece, resources, bindings)
+                .or_else(|| super::structure::saved_legacy::read(id, piece, def))
+                .map(Piece::Legacy);
+        }
+        // Pool pieces have no orientation and depth 0. Preserve other values by falling
+        // back until the representation can hold them, rather than silently losing them.
+        if piece.get("O") != Some(&Tag::Int(-1)) || piece.get("GD") != Some(&Tag::Int(0)) {
+            return None;
+        }
+        PoolPiece::from_saved(&tag_json(piece), resources, bindings)
+            .ok()
+            .map(Piece::Pool)
+    };
     if matches!(&def.kind, StructureKind::Monument(_)) {
-        // `OceanMonumentStructure.regeneratePiecesAfterLoad` throws the saved pieces away and
-        // reads only the first one's box and orientation. A first piece that is not the
-        // building (or has no box) leaves the start to regeneration, like any other.
-        let top = children
-            .first()
-            .filter(|piece| saved_piece_name(piece).as_deref() == Some("minecraft:omb"))?;
-        let piece =
-            super::structure::monument::MonumentBuilding::regenerate_after_load(top, chunk, seed)?;
+        // `OceanMonumentStructure.regeneratePiecesAfterLoad` throws the saved rooms away,
+        // reads the box and orientation of the first piece `PiecesContainer.load` kept and
+        // builds the rooms again from the seed. A piece it cannot read (an unknown id, or
+        // no box) is dropped and the next one is tried; no survivor leaves the start to
+        // regeneration.
+        let (bounding_box, orientation) = children
+            .iter()
+            .find_map(|piece| saved_anchor(piece, |piece| decode(piece)))?;
+        let piece = super::structure::monument::MonumentBuilding::regenerate_after_load(
+            bounding_box,
+            orientation,
+            chunk,
+            seed,
+        );
         let mut start =
             StructureStart::new(index, def, chunk, vec![Piece::Legacy(Box::new(piece))]);
         start.references = int("references");
         return Some(start);
     }
-    let pieces = children
-        .iter()
-        .map(|piece| {
-            // `PiecesContainer.load`'s RENAMES read the old jigsaw ids as `jigsaw`; the other
-            // supported types are template pieces and the mineshaft, fortress and stronghold
-            // pieces that read their own tags.
-            if saved_piece_id(piece).is_none() {
-                let Tag::String(id) = piece.get("id")? else {
-                    return None;
-                };
-                let id = id.to_string_lossy();
-                let id = id.strip_prefix("minecraft:").unwrap_or(&id);
-                return super::structure::saved_templates::read(id, piece, resources, bindings)
-                    .or_else(|| super::structure::saved_legacy::read(id, piece, def))
-                    .map(Piece::Legacy);
-            }
-            // Pool pieces have no orientation and depth 0. Preserve other values by falling
-            // back until the representation can hold them, rather than silently losing them.
-            if piece.get("O") != Some(&Tag::Int(-1)) || piece.get("GD") != Some(&Tag::Int(0)) {
-                return None;
-            }
-            PoolPiece::from_saved(&tag_json(piece), resources, bindings)
-                .ok()
-                .map(Piece::Pool)
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let pieces = children.iter().map(decode).collect::<Option<Vec<_>>>()?;
     let mut start = StructureStart::new(index, def, chunk, pieces);
     start.references = int("references");
     Some(start)
@@ -1036,7 +1122,7 @@ fn saved_piece_id(piece: &horizon_core::nbt::Tag) -> Option<&'static str> {
 }
 /// `PiecesContainer.load`'s piece id: lowercased, and with `minecraft:` filled in for an id
 /// with no namespace (`Identifier.parse`).
-fn saved_piece_name(piece: &horizon_core::nbt::Tag) -> Option<String> {
+pub(crate) fn saved_piece_name(piece: &horizon_core::nbt::Tag) -> Option<String> {
     let horizon_core::nbt::Tag::Compound(map) = piece else {
         return None;
     };
@@ -1115,6 +1201,189 @@ mod tests {
             biome_set(&Biomes, &serde_json::json!({"type":"neoforge:any"})).unwrap(),
             BTreeSet::from([BiomeId(0), BiomeId(1)])
         );
+    }
+
+    /// The old-chunk path (`StructureState::saved_starts_at`) and the saved-chunk path
+    /// (`read_saved_start`) are `StructureStart.loadStaticStart` for a monument too: both
+    /// drop the unreadable first child, anchor on the first readable `omb`, and rebuild
+    /// the same rooms from the seed. The 30-room expectation pinned from vanilla 26.3 is
+    /// in `monument`'s saved-monument test; this one drives both Horizon paths over the
+    /// same tag and compares the whole rebuilt building.
+    #[test]
+    fn old_chunk_and_saved_chunk_monuments_read_the_same_first_piece() {
+        use crate::heightmap::HeightmapType;
+        use crate::registry::BlockRegistry;
+        use crate::worldgen::anchor::WorldGenerationContext;
+        use crate::worldgen::{
+            blending::SavedStart,
+            structure::{
+                jigsaw::JigsawContext, mod_types::mod_structure_types, start::NoiseColumnTarget,
+            },
+        };
+        use horizon_core::nbt::Tag;
+
+        let def = r#"{"type":"minecraft:ocean_monument"}"#.to_owned();
+        let registry = StructureRegistry::new(
+            &BTreeMap::from([("minecraft:monument".to_owned(), def)]),
+            &BTreeMap::new(),
+            BTreeMap::new(),
+            &|_| Ok(BTreeSet::new()),
+            mod_structure_types(),
+        )
+        .unwrap();
+        let (mut tag, _) = horizon_core::nbt::parse_snbt(
+            r#"{DataVersion:0,states:[
+            {id:"minecraft:air"},{id:"minecraft:cave_air"},{id:"minecraft:void_air"},
+            {id:"minecraft:water",properties:{level:"0"}},
+            {id:"minecraft:prismarine"},
+            {id:"minecraft:prismarine_bricks"},{id:"minecraft:dark_prismarine"},
+            {id:"minecraft:sea_lantern"}],defaults:{
+            "minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2,
+            "minecraft:water":3,"minecraft:prismarine":4,
+            "minecraft:prismarine_bricks":5,"minecraft:dark_prismarine":6,
+            "minecraft:sea_lantern":7}}"#,
+        )
+        .unwrap();
+        *tag.get_mut("DataVersion").unwrap() = Tag::Int(crate::DATA_VERSION);
+        let blocks: &'static _ = Box::leak(Box::new(BlockRegistry::from_nbt(&tag).unwrap()));
+        let resources = StructureResources::new(
+            blocks,
+            crate::worldgen::structure::StateTransforms::default(),
+            std::path::Path::new("unused"),
+            BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let bindings = FeatureBlockBindings::new(blocks, BTreeSet::new()).unwrap();
+        let chunk = ChunkPos::new(-2, 3);
+        let seed = 12345;
+        let children = vec![
+            Tag::compound([
+                ("id", Tag::String("minecraft:future_room".into())),
+                ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
+                ("O", Tag::Int(0)),
+            ]),
+            Tag::compound([
+                ("id", Tag::String("minecraft:omb".into())),
+                ("BB", Tag::IntArray(vec![100, 20, -300, 157, 42, -243])),
+                ("O", Tag::Int(1)),
+            ]),
+            Tag::compound([
+                ("id", Tag::String("minecraft:omb".into())),
+                ("BB", Tag::IntArray(vec![400, 50, 400, 457, 72, 457])),
+                ("O", Tag::Int(3)),
+            ]),
+        ];
+        let saved = Tag::compound([
+            ("id", Tag::String("minecraft:monument".into())),
+            ("ChunkX", Tag::Int(chunk.x)),
+            ("ChunkZ", Tag::Int(chunk.z)),
+            ("references", Tag::Int(1)),
+            ("Children", Tag::List(children.clone())),
+        ]);
+        let state = StructureState {
+            registry,
+            resources: Arc::new(resources),
+            bindings,
+            possible_sets: Vec::new(),
+            by_step: vec![Vec::new(); crate::worldgen::structure::start::STEPS.len()],
+            starts: StartCache::new(),
+            saved: OnceLock::new(),
+            start_work: ChunkWork::new(),
+            rings: Arc::new(OnceLock::new()),
+            ring_work: OnceLock::new(),
+            ring_seed: None,
+            fixed_biome: false,
+            zone_reach: 0,
+        };
+        let mut context = SavedChunk(vec![SavedStart {
+            name: "minecraft:monument".into(),
+            bounds: None,
+            pieces: children,
+        }]);
+        let old = state.saved_starts_at(&mut context, chunk);
+        let new = read_saved_start(
+            0,
+            &state.registry.structures[0],
+            chunk,
+            &saved,
+            seed,
+            &state.resources,
+            &state.bindings,
+        )
+        .expect("both paths load the first readable piece");
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].bounding_box, new.bounding_box);
+        assert_eq!(
+            format!("{:?}", old[0].pieces[0]),
+            format!("{:?}", new.pieces[0]),
+            "the same anchor, orientation and regenerated rooms"
+        );
+
+        struct SavedChunk(Vec<SavedStart>);
+        impl JigsawContext for SavedChunk {
+            fn min_y(&self) -> i32 {
+                -64
+            }
+            fn max_y(&self) -> i32 {
+                320
+            }
+            fn base_height(&mut self, _x: i32, _z: i32, _kind: HeightmapType) -> i32 {
+                63
+            }
+            fn column_has_valid_biome(
+                &mut self,
+                _x: i32,
+                _z: i32,
+                _min_y: i32,
+                _max_y: i32,
+            ) -> bool {
+                true
+            }
+        }
+        impl StartContext for SavedChunk {
+            fn is_old_chunk(&self, _chunk: ChunkPos) -> bool {
+                true
+            }
+            fn saved_starts(&self, _chunk: ChunkPos) -> Vec<SavedStart> {
+                self.0.clone()
+            }
+            fn seed(&self) -> i64 {
+                12345
+            }
+            fn sea_level(&self) -> i32 {
+                63
+            }
+            fn base_column(&mut self, _x: i32, _z: i32, _kind: HeightmapType) -> Vec<bool> {
+                unimplemented!("not on the monument path")
+            }
+            fn base_columns_by(
+                &mut self,
+                _x: i32,
+                _z: i32,
+                _count: usize,
+                _kind: &dyn Fn(usize) -> HeightmapType,
+            ) -> Vec<Vec<bool>> {
+                unimplemented!("not on the monument path")
+            }
+            fn noise_column_into(&mut self, _x: i32, _z: i32, _column: &mut dyn NoiseColumnTarget) {
+                unimplemented!("not on the monument path")
+            }
+            fn cold_enough_to_snow(&mut self, _biome: BiomeId, _pos: [i32; 3]) -> bool {
+                unimplemented!("not on the monument path")
+            }
+            fn generation(&self) -> WorldGenerationContext {
+                unimplemented!("not on the monument path")
+            }
+            fn noise_biome(&mut self, _quart: [i32; 3]) -> BiomeId {
+                unimplemented!("not on the monument path")
+            }
+            fn noise_biomes(&mut self, _quarts: &[[i32; 3]]) -> Vec<BiomeId> {
+                unimplemented!("not on the monument path")
+            }
+            fn set_valid_biomes(&mut self, _biomes: Option<&BTreeSet<BiomeId>>) {
+                unimplemented!("not on the monument path")
+            }
+        }
     }
 
     #[test]

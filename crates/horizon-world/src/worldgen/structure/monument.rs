@@ -129,7 +129,7 @@ fn room_box(direction: Direction, index: i32, w: i32, h: i32, d: i32) -> Boundin
 /// `StructurePiece(StructurePieceType, CompoundTag)`'s orientation, which
 /// `StructurePiece.createTag` writes as `Direction.get2DDataValue` or -1 for none:
 /// `Direction.from2DDataValue` wraps other values (`Mth.abs(data % 4)`).
-fn saved_orientation(tag: &horizon_core::nbt::Tag) -> Option<Direction> {
+pub(crate) fn saved_orientation(tag: &horizon_core::nbt::Tag) -> Option<Direction> {
     let data = super::saved_legacy::int(tag, "O");
     (data != -1).then(|| {
         [
@@ -141,34 +141,27 @@ fn saved_orientation(tag: &horizon_core::nbt::Tag) -> Option<Direction> {
     })
 }
 impl MonumentBuilding {
-    /// `OceanMonumentStructure.regeneratePiecesAfterLoad`: only the saved top piece's box
-    /// and orientation are read; its saved rooms are thrown away and this building's built
-    /// again from `seed`, as its own world seed and chunk name it. `None` for a tag without
-    /// the box, which vanilla's `StructurePiece` constructor throws on (dropping the piece).
+    /// `OceanMonumentStructure.regeneratePiecesAfterLoad`: only the first surviving saved
+    /// piece's box and orientation are read; its saved rooms are thrown away and this
+    /// building's built again from `seed`, as its own world seed and chunk name it. The
+    /// caller passes the box and orientation that piece's tag constructor gave it: a
+    /// monument piece keeps the saved `BB`/`O`, while a template piece's constructor
+    /// rebuilds its box and resets the orientation to NORTH (`TemplateStructurePiece`).
     pub fn regenerate_after_load(
-        tag: &horizon_core::nbt::Tag,
+        bounding_box: BoundingBox,
+        orientation: Option<Direction>,
         chunk: ChunkPos,
         seed: i64,
-    ) -> Option<Self> {
-        let horizon_core::nbt::Tag::IntArray(box_corners) = tag.get("BB")? else {
-            return None;
-        };
-        // `BoundingBox.CODEC` reads exactly its six ints: minX, minY, minZ, maxX, maxY, maxZ.
-        let [x0, _, z0, x1, _, z1] = <[i32; 6]>::try_from(box_corners.as_slice()).ok()?;
-        // `BoundingBox` normalizes inverted bounds before regeneratePiecesAfterLoad reads them.
-        let (west, north) = (x0.min(x1), z0.min(z1));
-        let saved = saved_orientation(tag);
+    ) -> Self {
+        // `BoundingBox` normalizes inverted bounds before regeneratePiecesAfterLoad reads
+        // them; `minX`/`minZ` are the builder's west and north.
+        let (west, north) = (bounding_box.min[0], bounding_box.min[2]);
         let mut random = WorldgenRandom::new(LegacyRandom::new(0));
         random.set_large_feature_seed(seed, chunk.x, chunk.z);
         // Java eagerly draws the fallback direction even when a saved orientation exists,
         // leaving the random stream at the same point as fresh generation.
         let default = super::legacy::random_horizontal(&mut random);
-        Some(Self::new(
-            &mut random,
-            west,
-            north,
-            saved.unwrap_or(default),
-        ))
+        Self::new(&mut random, west, north, orientation.unwrap_or(default))
     }
     pub fn new(
         random: &mut impl RandomSource,
@@ -1516,6 +1509,23 @@ mod tests {
     use horizon_core::nbt::Tag;
     use std::collections::{BTreeMap, BTreeSet};
 
+    /// The `StructurePieceType` id each fitted room is saved under.
+    fn kind_id(kind: &Kind) -> &'static str {
+        match kind {
+            Kind::Entry => "minecraft:omentry",
+            Kind::Core => "minecraft:omcr",
+            Kind::DoubleX => "minecraft:omdxr",
+            Kind::DoubleXY => "minecraft:omdxyr",
+            Kind::DoubleY => "minecraft:omdyr",
+            Kind::DoubleYZ => "minecraft:omdyzr",
+            Kind::DoubleZ => "minecraft:omdzr",
+            Kind::Simple(_) => "minecraft:omsimple",
+            Kind::SimpleTop => "minecraft:omsimplet",
+            Kind::Wing(_) => "minecraft:omwr",
+            Kind::Penthouse => "minecraft:ompenthouse",
+        }
+    }
+
     /// A hand-built save of one monument start, read back: only the top piece's box and
     /// orientation are kept, and its rooms are rebuilt from the seed exactly as the
     /// generator builds them (`OceanMonumentStructure.regeneratePiecesAfterLoad`).
@@ -1549,7 +1559,7 @@ mod tests {
             kind: StructureKind::Monument(BTreeSet::new()),
             biomes: BTreeSet::new(),
             step: 0,
-            terrain: TerrainAdjustment::BeardThin,
+            terrain: TerrainAdjustment::None,
             enhanced_terrain: None,
         };
         let chunk = ChunkPos::new(-2, 3);
@@ -1644,8 +1654,8 @@ mod tests {
             format!("{:?}", read(&no_orientation).unwrap()),
             format!("{original:?}")
         );
-        // A piece with no box, or a first piece of another type, leaves the start to the
-        // generator (vanilla drops the piece and reads the next one).
+        // A piece with no box does not survive `PiecesContainer.load`; with no other
+        // piece the start is left to the generator.
         for broken in [
             Tag::compound([
                 ("id", Tag::String("minecraft:OMB".into())),
@@ -1655,10 +1665,6 @@ mod tests {
                 ("id", Tag::String("minecraft:OMB".into())),
                 ("BB", Tag::String("0,0,0,1,1,1".into())),
             ]),
-            Tag::compound([
-                ("id", Tag::String("minecraft:msroom".into())),
-                ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
-            ]),
         ] {
             let mut t = tag.clone();
             let Tag::List(children) = t.get_mut("Children").unwrap() else {
@@ -1666,6 +1672,185 @@ mod tests {
             };
             children[0] = broken.clone();
             assert!(read(&t).is_none(), "{broken:?}");
+        }
+        // `PiecesContainer.load` drops the pieces it cannot read and keeps the rest in
+        // order; `OceanMonumentStructure.regeneratePiecesAfterLoad` then builds the rooms
+        // again from the first survivor's box and orientation, not from the seed.
+        for broken in [
+            Tag::compound([
+                ("id", Tag::String("minecraft:OMB".into())),
+                ("BB", Tag::IntArray(vec![0, 0, 0, 1])),
+            ]),
+            Tag::compound([
+                ("id", Tag::String("minecraft:future_room".into())),
+                ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
+            ]),
+        ] {
+            let mut t = tag.clone();
+            let Tag::List(children) = t.get_mut("Children").unwrap() else {
+                unreachable!()
+            };
+            children.insert(0, broken.clone());
+            assert_eq!(
+                format!("{:?}", read(&t).unwrap()),
+                format!("{loaded:?}"),
+                "the next saved piece anchors the rooms: {broken:?}"
+            );
+        }
+        // A first piece of another type is a survivor too: vanilla's version has no type
+        // test, so its box and orientation anchor the building.
+        let mut other = tag.clone();
+        let Tag::List(children) = other.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        children[0] = Tag::compound([
+            ("id", Tag::String("minecraft:msroom".into())),
+            ("BB", Tag::IntArray(vec![100, 20, -300, 157, 42, -243])),
+        ]);
+        assert_eq!(
+            piece(&other).bounding_box(),
+            BoundingBox::new([100, 39, -300], [157, 61, -243]),
+            "the first surviving piece's box, whatever its type"
+        );
+        // A template piece is a survivor too, but its tag constructor rebuilds the box
+        // from the template and resets the orientation to NORTH
+        // (`TemplateStructurePiece`), so its saved `BB`/`O` must not anchor the building.
+        let name = "minecraft:shipwreck/with_mast";
+        let mut template = crate::worldgen::structure::StructureTemplate::empty();
+        template.size = [9, 7, 13];
+        template.location = name.into();
+        resources
+            .templates
+            .loaded
+            .write()
+            .unwrap()
+            .insert(name.to_owned(), std::sync::Arc::new(template));
+        let mut anchored = tag.clone();
+        let Tag::List(children) = anchored.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        children.clear();
+        children.push(Tag::compound([
+            ("id", Tag::String("minecraft:shipwreck".into())),
+            ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
+            ("O", Tag::Int(1)),
+            ("GD", Tag::Int(0)),
+            ("Rot", Tag::String("NONE".into())),
+            ("Template", Tag::String(name.into())),
+            ("TPX", Tag::Int(100)),
+            ("TPY", Tag::Int(20)),
+            ("TPZ", Tag::Int(-300)),
+            ("isBeached", Tag::Byte(0)),
+        ]));
+        let anchored_start = read(&anchored).expect("the template piece decodes");
+        let anchored_top = match anchored_start.pieces.into_iter().next().unwrap() {
+            Piece::Legacy(p) => p,
+            Piece::Pool(_) => unreachable!(),
+        };
+        assert_eq!(
+            anchored_top.bounding_box(),
+            BoundingBox::new([100, 39, -300], [157, 61, -243]),
+            "the template-derived box, not the raw saved BB"
+        );
+        assert_eq!(
+            anchored_top.save().unwrap().get(&"O".into()),
+            Some(&Tag::Int(2)),
+            "the template constructor resets the orientation to NORTH"
+        );
+        // Pinned vanilla 26.3 parity: `StructureStart.loadStaticStart` drops the
+        // unreadable first child and `OceanMonumentStructure.regeneratePiecesAfterLoad`
+        // anchors the rooms at the first readable `omb`'s box (min 100, 20, -300) and
+        // orientation (O=1, WEST), not at the seed's own site. The expected box and the
+        // 30 children below are the pinned server's own output for this tag and seed
+        // 12345 in chunk (-2, 3), printed from `PiecesContainer.load`'s result and
+        // `OceanMonumentPieces.MonumentBuilding.childPieces` in construction order
+        // (`MonumentLoadOracle`, server and client jars 26.3). Both children after the
+        // unreadable one are readable and have distinct boxes and orientations, so only
+        // the first may anchor the building.
+        let mut recovered = tag.clone();
+        let Tag::List(children) = recovered.get_mut("Children").unwrap() else {
+            unreachable!()
+        };
+        children.clear();
+        children.push(Tag::compound([
+            ("id", Tag::String("minecraft:future_room".into())),
+            ("BB", Tag::IntArray(vec![0, 0, 0, 1, 1, 1])),
+            ("O", Tag::Int(0)),
+        ]));
+        children.push(Tag::compound([
+            ("id", Tag::String("minecraft:omb".into())),
+            ("BB", Tag::IntArray(vec![100, 20, -300, 157, 42, -243])),
+            ("O", Tag::Int(1)),
+        ]));
+        children.push(Tag::compound([
+            ("id", Tag::String("minecraft:omb".into())),
+            ("BB", Tag::IntArray(vec![400, 50, 400, 457, 72, 457])),
+            ("O", Tag::Int(3)),
+        ]));
+        let recovered_start = read(&recovered).expect("the first readable child anchors the rooms");
+        assert_eq!(
+            recovered_start.bounding_box,
+            BoundingBox::new([100, 39, -300], [157, 61, -243]),
+            "pinned vanilla final box"
+        );
+        assert_eq!(
+            recovered_start.pieces[0].save().unwrap().get(&"O".into()),
+            Some(&Tag::Int(1)),
+            "pinned vanilla final orientation (WEST)"
+        );
+        let rebuilt = MonumentBuilding::regenerate_after_load(
+            BoundingBox::new([100, 20, -300], [157, 42, -243]),
+            Some(Direction::West),
+            chunk,
+            seed,
+        );
+        let expected: &[(&str, [i32; 6])] = &[
+            ("minecraft:omentry", [128, 39, -275, 135, 42, -268]),
+            ("minecraft:omcr", [104, 39, -275, 119, 46, -260]),
+            ("minecraft:omdzr", [120, 43, -291, 135, 46, -284]),
+            ("minecraft:omsimplet", [104, 43, -259, 111, 46, -252]),
+            ("minecraft:omsimple", [120, 47, -275, 127, 50, -268]),
+            ("minecraft:omdzr", [120, 43, -283, 135, 46, -276]),
+            ("minecraft:omdxr", [120, 39, -283, 127, 42, -268]),
+            ("minecraft:omdzr", [112, 39, -259, 127, 42, -252]),
+            ("minecraft:omsimple", [120, 39, -291, 127, 42, -284]),
+            ("minecraft:omdzr", [120, 39, -267, 135, 42, -260]),
+            ("minecraft:omsimple", [128, 39, -283, 135, 42, -276]),
+            ("minecraft:omsimple", [104, 43, -291, 111, 46, -284]),
+            ("minecraft:omsimple", [104, 39, -259, 111, 42, -252]),
+            ("minecraft:omsimple", [128, 43, -259, 135, 46, -252]),
+            ("minecraft:omsimple", [120, 47, -267, 127, 50, -260]),
+            ("minecraft:omdyzr", [104, 39, -283, 119, 46, -276]),
+            ("minecraft:omdzr", [112, 43, -259, 127, 46, -252]),
+            ("minecraft:omdzr", [120, 43, -275, 135, 46, -268]),
+            ("minecraft:omsimple", [120, 47, -283, 127, 50, -276]),
+            ("minecraft:omsimple", [104, 39, -291, 111, 42, -284]),
+            ("minecraft:omsimplet", [128, 47, -283, 135, 50, -276]),
+            ("minecraft:omsimplet", [120, 43, -267, 127, 46, -260]),
+            ("minecraft:omdyr", [128, 43, -267, 135, 50, -260]),
+            ("minecraft:omsimple", [128, 39, -259, 135, 42, -252]),
+            ("minecraft:omdyr", [112, 39, -291, 119, 46, -284]),
+            ("minecraft:omsimple", [128, 39, -291, 135, 42, -284]),
+            ("minecraft:omsimple", [128, 47, -275, 135, 50, -268]),
+            ("minecraft:omwr", [136, 40, -299, 156, 47, -277]),
+            ("minecraft:omwr", [136, 40, -266, 156, 47, -244]),
+            ("minecraft:ompenthouse", [122, 52, -278, 135, 56, -265]),
+        ];
+        assert_eq!(
+            rebuilt.children.len(),
+            expected.len(),
+            "pinned vanilla regenerated room count"
+        );
+        for (child, (id, corners)) in rebuilt.children.iter().zip(expected) {
+            assert_eq!(kind_id(&child.kind), *id);
+            assert_eq!(
+                child.frame.bounding_box,
+                BoundingBox::new(
+                    [corners[0], corners[1], corners[2]],
+                    [corners[3], corners[4], corners[5]],
+                ),
+                "{id}"
+            );
         }
         let mut empty = tag.clone();
         *empty.get_mut("Children").unwrap() = Tag::List(Vec::new());
