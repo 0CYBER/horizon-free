@@ -94,6 +94,7 @@ READERS = {
         "crates/horizon-theme/fonts", "crates/horizon-theme/icons", "docs/api/server-reference.md",
         "packaging/executable_link.rs",
     ],
+    "horizon-server-launch": ["docs/hosting.md"],
     "horizon-shader-api": ["docs/api/shaders-reference-0.2.md", "tools/fixtures/shaderpacks"],
     "horizon-world": ["crates/horizon-core", "Cargo.lock"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.
@@ -111,6 +112,7 @@ SCANNED = {"horizon-client-core": ["crates"]}
 NOT_READS = {
     "horizon-client": {"crates"}, "horizon-client-lib": {"crates"}, "horizon-mod-package": {"crates"},
     "horizon-mod-vocab": {"."}, "horizon-port-pack": {"mods"}, "horizon-prepare": {"crates"},
+    "horizon-server-launch": {"crates"},
 }
 
 
