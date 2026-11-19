@@ -46,6 +46,8 @@ pub(super) struct NativeLog {
     pub(super) loaded: Option<Result<Log, Missing>>,
     /// Why this attempt's log could not be reset, shown in place of the last attempt's file.
     pub(super) reset: Option<String>,
+    /// Another build or cleanup held the log when this attempt began: it is theirs to write.
+    pub(super) held: bool,
     /// The panel's scroll, kept to land on the newest output.
     pub(super) scroll: ScrollHandle,
     /// What the last Copy log did.
@@ -61,6 +63,7 @@ impl Default for NativeLog {
             reading: false,
             loaded: None,
             reset: None,
+            held: false,
             scroll: ScrollHandle::new(),
             note: None,
         }
@@ -128,7 +131,10 @@ impl Launcher {
     /// file is emptied, or the reason it could not be is shown in its place. An open panel
     /// reads again rather than keep showing the last attempt as the latest.
     pub(super) fn native_log_reset(&mut self) {
-        self.native_log.reset = native_mods::clear_log().err();
+        // A build or cleanup already running keeps its log; this attempt is refused as busy.
+        let begun = native_mods::begin_log();
+        self.native_log.held = begun == Ok(false);
+        self.native_log.reset = begun.err();
         self.native_log.available = true;
         self.native_log.loaded = None;
         self.native_log.note = None;
@@ -138,7 +144,7 @@ impl Launcher {
     /// Records a failure from before the build itself started (no Horizon to build on, no mods
     /// to build), where the build's own output would have gone.
     pub(super) fn native_log_preflight(&mut self, error: &str) {
-        if self.native_log.reset.is_none() {
+        if self.native_log.reset.is_none() && !self.native_log.held {
             self.native_log.reset = native_mods::append_log(error).err();
         }
         self.native_log.stale = true;

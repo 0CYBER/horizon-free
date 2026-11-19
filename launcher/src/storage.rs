@@ -254,28 +254,67 @@ pub fn allocated_bytes(path: &Path) -> Result<u64, Error> {
 }
 
 fn walk(path: &Path, seen: &mut HashSet<(u64, u64)>, links: Links) -> Result<u64, Error> {
+    let mut found = Vec::new();
+    walk_into(path, seen, links, &mut found)?;
+    Ok(found.iter().fold(0u64, |t, (_, b)| t.saturating_add(*b)))
+}
+
+/// One file or folder's identity and allocated bytes.
+pub(crate) type Allocated = Vec<((u64, u64), u64)>;
+
+/// Walks `path` once and keeps every item's identity, so the same folder can be summed again
+/// (per row, alone, with other units) without touching the disk.
+pub(crate) fn survey(path: &Path, links: Links) -> Result<Allocated, Error> {
+    #[cfg(test)]
+    SURVEYS.with(|s| s.borrow_mut().push(path.to_owned()));
+    let mut found = Vec::new();
+    walk_into(path, &mut HashSet::new(), links, &mut found)?;
+    Ok(found)
+}
+
+/// The bytes of `items` not already in `seen`: each file once across calls sharing `seen`.
+pub(crate) fn sum_new(items: &[((u64, u64), u64)], seen: &mut HashSet<(u64, u64)>) -> u64 {
+    items
+        .iter()
+        .filter(|(id, _)| seen.insert(*id))
+        .fold(0u64, |total, (_, bytes)| total.saturating_add(*bytes))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The folders `survey` walked on this thread, in order.
+    pub(crate) static SURVEYS: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn walk_into(
+    path: &Path,
+    seen: &mut HashSet<(u64, u64)>,
+    links: Links,
+    found: &mut Allocated,
+) -> Result<(), Error> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
     if linked(&meta) && links == Links::GameMade {
-        return Ok(0);
+        return Ok(());
     }
     if linked(&meta) || (!meta.is_file() && !meta.is_dir()) {
         return Err(Error::Unsafe(path.to_owned()));
     }
     let (id, bytes) = allocation(path, &meta)?;
     if !seen.insert(id) {
-        return Ok(0);
+        return Ok(());
     }
-    let mut total = bytes;
+    found.push((id, bytes));
     if meta.is_dir() {
         for entry in fs::read_dir(path)? {
-            total = total.saturating_add(walk(&entry?.path(), seen, links)?);
+            walk_into(&entry?.path(), seen, links, found)?;
         }
     }
-    Ok(total)
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -336,6 +336,17 @@ pub fn clear_log() -> Result<(), String> {
     fs::write(log_path(), "").map_err(|e| format!("{}: {e}", log_path().display()))
 }
 
+/// Starts a build attempt's log from the window: [`clear_log`] under the build lease, so a
+/// build or cleanup already holding it keeps its log, result included (#18469). `Ok(false)`
+/// when one does: the attempt will be refused as busy and leaves the log alone.
+pub fn begin_log() -> Result<bool, String> {
+    match crate::native_cache::Cache::acquire(&backend::build_dir()) {
+        Err(crate::native_cache::Error::Busy) => Ok(false),
+        // Any other failure is the build's to report; the log is still this attempt's.
+        _lease => clear_log().map(|()| true),
+    }
+}
+
 /// Appends `message` (with a newline) to the build log, so a failure that happens before any
 /// command runs is still recorded.
 pub fn append_log(message: &str) -> Result<(), String> {
@@ -367,11 +378,7 @@ fn logged<T, E: std::fmt::Display + From<String>>(
         log_warning(warning);
     }
     let result = build(cache.as_ref().map_err(String::as_str));
-    // Keep this build lease through installation/export, including failed builds. It does not
-    // exclude independent game starts; automatic trimming can conservatively retain the cache.
-    if let Ok(cache) = cache {
-        crate::storage::eviction::after_build_logged(&cache, append_log, log_warning);
-    }
+    // The result is written first: the cleanup below can take long on big caches.
     match &result {
         Ok(_) => {
             let _ = append_log("Build completed.");
@@ -379,6 +386,11 @@ fn logged<T, E: std::fmt::Display + From<String>>(
         Err(error) => {
             let _ = append_log(&format!("The build failed: {error}"));
         }
+    }
+    // Keep this build lease through installation/export, including failed builds. It does not
+    // exclude independent game starts; automatic trimming can conservatively retain the cache.
+    if let Ok(cache) = cache {
+        crate::storage::eviction::after_build_logged(&cache, append_log, log_warning);
     }
     result
 }
@@ -1655,7 +1667,7 @@ impl std::fmt::Display for Failed {
         match self {
             Self::Mods { error, .. } | Self::Other(error) => f.write_str(error),
             Self::Worlds(stake) => f.write_str(&stake.text),
-            Self::Nothing => Ok(()),
+            Self::Nothing => f.write_str(tr("There are no mods to build: the folder has none, or every mod was left out.")),
             Self::NoConsent => f.write_str(tr("Native mods run inside your game with your rights; mixins compile code into the game. Allow native mods in Settings, Storage, or pass --trust-native-code.")),
         }
     }
@@ -2370,6 +2382,8 @@ fn isolated(
                 }
                 last = error;
             }
+            // Nothing was left out yet: there is no earlier diagnostic to repeat.
+            Err(Failed::Nothing) if skip.is_empty() => return Err(Failed::Nothing),
             Err(Failed::Nothing) => return Err(said(&skip, last)),
             Err(Failed::NoConsent) => return Err(Failed::NoConsent),
             Err(Failed::Worlds(stake)) => return Err(Failed::Worlds(stake)),
@@ -2687,6 +2701,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nothing_to_build_says_so() {
+        assert!(!Failed::Nothing.to_string().is_empty());
+    }
+
+    #[test]
     fn the_window_says_build_steps_in_player_words() {
         let rust = Step::Rust(0.42).shown();
         assert!(!rust.contains("Rust") && !rust.contains('%'), "{rust}");
@@ -2870,6 +2889,35 @@ mod tests {
         );
         assert_eq!(String::from(result.unwrap_err()), CANCELLED);
         assert_eq!(attempts, 2);
+    }
+
+    /// #18469: a folder with no mods says so instead of failing with an empty message; once
+    /// mods were left out, the error keeps naming them and the diagnostic that left them out.
+    #[test]
+    fn isolation_says_why_nothing_was_built() {
+        let _guard = scratch_state();
+        let result = isolated(|_| Err(Failed::Nothing), &|_| {});
+        assert!(matches!(result, Err(Failed::Nothing)), "{result:?}");
+        let result = isolated(
+            |skip| {
+                if !skip.is_empty() {
+                    return Err(Failed::Nothing);
+                }
+                Err(Failed::Mods {
+                    left: vec![LeftOut {
+                        id: "broken".into(),
+                        version: "1.0.0".into(),
+                        why: isolate::Why::OtherVersion,
+                    }],
+                    error: "compiler failure".into(),
+                    compiling: true,
+                })
+            },
+            &|_| {},
+        );
+        let error = String::from(result.unwrap_err());
+        assert!(error.contains("broken"), "{error}");
+        assert!(error.ends_with("compiler failure"), "{error}");
     }
 
     #[test]
@@ -4234,17 +4282,47 @@ mod tests {
         assert!(failure.is_err());
         let log = fs::read_to_string(log_path()).unwrap();
         assert!(log.starts_with("error[E0425]"), "{log}");
-        assert!(
-            log.ends_with("The build failed: Could not export the engine\n"),
-            "{log}"
-        );
+        assert_result_then_cleanup(&log, "The build failed: Could not export the engine");
         assert!(!log.contains("Build completed."), "{log}");
         let success: Result<(), String> = logged(|_| Ok(()));
         success.unwrap();
         let log = fs::read_to_string(log_path()).unwrap();
-        assert!(log.ends_with("Build completed.\n"), "{log}");
+        assert_result_then_cleanup(&log, "Build completed.");
         assert!(!log.contains("error[E0425]"), "{log}");
         assert!(!log.contains("The build failed:"), "{log}");
+    }
+
+    /// #18469: a build attempt from the window while another build or its cleanup holds the
+    /// lease leaves that build's log, result included, as it is.
+    #[test]
+    fn a_busy_attempt_leaves_the_running_builds_log_alone() {
+        let _guard = scratch_state();
+        clear_log().unwrap();
+        append_log("Build completed.").unwrap();
+        let lease = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+        assert_eq!(begin_log(), Ok(false));
+        assert_eq!(
+            fs::read_to_string(log_path()).unwrap(),
+            "Build completed.\n"
+        );
+        drop(lease);
+        assert_eq!(begin_log(), Ok(true));
+        assert_eq!(fs::read(log_path()).unwrap(), b"");
+    }
+
+    /// The build's result is written before the cache cleanup (#18469), so it is the build's
+    /// last line: only the cleanup's own notes (what it freed, what it kept) may follow it.
+    fn assert_result_then_cleanup(log: &str, result: &str) {
+        let lines: Vec<&str> = log.lines().collect();
+        let Some(at) = lines.iter().rposition(|l| *l == result) else {
+            panic!("no `{result}` line: {log}");
+        };
+        assert!(
+            lines[at + 1..]
+                .iter()
+                .all(|l| l.starts_with("warning: ") || l.starts_with("Freed ")),
+            "only cleanup notes may follow `{result}`: {log}"
+        );
     }
 
     #[test]
