@@ -198,7 +198,10 @@ impl fmt::Display for CatalogError {
                 )
             }
             Self::OwnerNeedsGlobalListener(name) => {
-                write!(f, "{name}: owner needs a global listener")
+                write!(
+                    f,
+                    "{name}: owner needs a global listener or an answered replace hook"
+                )
             }
             Self::ScopeNeedsKey(name) => write!(f, "{name} needs both scope and key, or neither"),
             Self::NoHooks => f.write_str("no native hooks"),
@@ -348,7 +351,10 @@ impl Hook {
         {
             return Err(CatalogError::AnsweredNeedsGlobalOutput(name));
         }
-        if api.owner.is_some() && (api.contract != Contract::Listen || scope.is_some()) {
+        // An owner names the one mod a global listener, or an answered replace hook, is told of.
+        let owner_contract = api.contract == Contract::Listen
+            || (api.contract == Contract::Replace && answered_by_mod);
+        if api.owner.is_some() && (!owner_contract || scope.is_some()) {
             return Err(CatalogError::OwnerNeedsGlobalListener(name));
         }
         // A validator checks the entries a mod edits in place; an answered collector's mods
@@ -1191,9 +1197,21 @@ mod tests {
                 .as_deref(),
             Some("mod_id")
         );
+        // An answered replace hook may name the one mod it asks, too.
+        assert_eq!(
+            owned(json!({
+                "contract": "replace", "out": "o", "answered_by": "mod", "owner": "provider"
+            }))
+            .unwrap()
+            .owner
+            .as_deref(),
+            Some("provider")
+        );
         for api in [
             json!({"contract": "cancel", "out": "c", "owner": "mod_id"}),
             json!({"contract": "listen", "owner": "mod_id", "scope": "item", "key": "k"}),
+            json!({"contract": "replace", "out": "o", "owner": "mod_id"}),
+            json!({"contract": "collect", "out": "o", "answered_by": "mod", "owner": "mod_id"}),
         ] {
             assert_eq!(
                 owned(api).unwrap_err(),
