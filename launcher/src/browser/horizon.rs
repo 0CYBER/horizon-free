@@ -968,11 +968,16 @@ enum Stale {
     /// was before the id came back as a wasm mod), where a plain mod now installs. Left in
     /// `horizon-native-mods/`, it would count as a native mod to build that can't be read.
     Retired,
+    /// A `.hmod` archive right where the new file goes that this Horizon can't read as a mod
+    /// (as `zoom` 1.0.0 was, made for the earlier mod system): it is moved aside
+    /// ([`displace`]) and the new file takes its place.
+    Outdated,
 }
 
-/// Whether `old`'s file is gone or retired. Any other error reading it (a file another program
-/// holds, no permission) is none of these: the install inspects it and refuses.
-fn stale_entry(home: &Path, old: &installed::Entry, native: bool) -> Option<Stale> {
+/// Whether `old`'s file is gone, retired or outdated, where the new file goes to `relative`. Any
+/// other error reading it (a file another program holds, no permission) is none of these: the
+/// install inspects it and refuses.
+fn stale_entry(home: &Path, old: &installed::Entry, native: bool, relative: &str) -> Option<Stale> {
     let path = home.join(&old.file);
     let plain = match fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Stale::Missing),
@@ -980,15 +985,22 @@ fn stale_entry(home: &Path, old: &installed::Entry, native: bool) -> Option<Stal
         Ok(meta) => meta.file_type().is_file(),
     };
     // Only a regular file is opened: a pipe could block here, under the instance's lock.
-    let retired = plain
-        && !native
-        && Path::new(&old.file).starts_with(crate::native_mods::INSTALLED)
-        && fs::File::open(&path)
-            .ok()
-            .filter(|f| f.metadata().is_ok_and(|m| m.is_file()))
-            .and_then(|f| zip::ZipArchive::new(f).ok())
-            .is_some_and(|zip| zip.index_for_name("horizon-native.json").is_some());
-    retired.then_some(Stale::Retired)
+    if !plain || native {
+        return None;
+    }
+    let archive = fs::File::open(&path)
+        .ok()
+        .filter(|f| f.metadata().is_ok_and(|m| m.is_file()))
+        .and_then(|f| zip::ZipArchive::new(f).ok())?;
+    if Path::new(&old.file).starts_with(crate::native_mods::INSTALLED) {
+        let retired = archive.index_for_name("horizon-native.json").is_some();
+        return retired.then_some(Stale::Retired);
+    }
+    // An archive that opens and still isn't a mod won't be one on a later try.
+    let outdated = old.kind == Kind::Mod
+        && old.file == relative
+        && horizon_platform::mod_package::Package::read(&path).is_err();
+    outdated.then_some(Stale::Outdated)
 }
 
 /// Removes `old`'s retired native file, only when it is a plain file (never a link) right in
@@ -1019,6 +1031,90 @@ fn remove_retired<'a>(
             old.title, old.file, old.title
         )
     })
+}
+
+/// A name beside `file` that nothing has yet, made as an empty file so no later call gets it:
+/// `<name>.replaced-<secs>`, then `-1`, `-2`… The game loads only `.hmod` files and mod folders
+/// (`mod_package::find`), so it never reads one.
+fn reserve_backup(file: &Path, secs: u64) -> Result<PathBuf, String> {
+    let name = file.file_name().unwrap_or_default().to_string_lossy();
+    for n in 0u32.. {
+        let suffix = if n == 0 {
+            String::new()
+        } else {
+            format!("-{n}")
+        };
+        let backup = file.with_file_name(format!("{name}.replaced-{secs}{suffix}"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+        {
+            Ok(_) => return Ok(backup),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("{}: {e}", backup.display())),
+        }
+    }
+    unreachable!("a free name comes before u32 runs out")
+}
+
+/// Moves `old`'s outdated file at `target` aside, so the new one never overwrites it. Refused
+/// when the instance's mod folder leads somewhere else (a link or junction) or the path is no
+/// longer a plain file. Whatever file is there at the move is the one kept, even if it changed
+/// since it was inspected: where it is now, beside where it was, under a name the game doesn't
+/// load. It stays there for the player: nothing here says it is of no use (an older launcher
+/// may not read a newer mod). `None` when it is gone by now.
+fn displace(home: &Path, old: &installed::Entry, target: &Path) -> Result<Option<PathBuf>, String> {
+    let folder = target.parent().and_then(|dir| fs::canonicalize(dir).ok());
+    let inside = fs::canonicalize(home)
+        .ok()
+        .zip(folder)
+        .is_some_and(|(home, dir)| {
+            let named = |n: &std::ffi::OsStr| n.eq_ignore_ascii_case(java::MODS_DIR);
+            dir.parent() == Some(&home) && dir.file_name().is_some_and(named)
+        });
+    if !inside {
+        return Err(format!(
+            "{}'s old file {} wasn't replaced: {} leads outside the game folder.",
+            old.title,
+            old.file,
+            java::MODS_DIR
+        ));
+    }
+    match fs::symlink_metadata(target) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(meta) if meta.file_type().is_file() => {}
+        _ => {
+            return Err(format!(
+                "{}'s old file {} wasn't replaced: it isn't a plain file any more.",
+                old.title, old.file
+            ));
+        }
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let backup = reserve_backup(target, secs)?;
+    if let Err(e) = fs::rename(target, &backup) {
+        let _ = fs::remove_file(&backup);
+        return match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(None),
+            _ => Err(format!("{}: {e}", target.display())),
+        };
+    }
+    Ok(Some(backup))
+}
+
+/// `error`, once the displaced file is back at `target`, over the new one if that is there. A
+/// failure to do that says where the file is.
+fn put_back(error: String, backup: &Path, target: &Path) -> String {
+    match fs::rename(backup, target) {
+        Ok(()) => error,
+        Err(e) => format!(
+            "{error}; your previous file is kept as {}: {e}",
+            backup.display()
+        ),
+    }
 }
 
 /// [`install_version`], with `guard` asked about the downloaded file once it passed the index's
@@ -1053,7 +1149,9 @@ fn install_version_guarded(
     let mut list = installed::Installed::load(home);
     let ours = |e: &installed::Entry| e.source == SourceId::Horizon && e.project == p.id;
     let old = list.entries.iter().find(|e| ours(e)).cloned();
-    let stale = old.as_ref().and_then(|old| stale_entry(home, old, native));
+    let stale = old
+        .as_ref()
+        .and_then(|old| stale_entry(home, old, native, &relative));
     if let Some(old) = &old {
         let mut different = old.kind != project.kind;
         let path = home.join(&old.file);
@@ -1131,8 +1229,17 @@ fn install_version_guarded(
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    fs::rename(&path, &target)
-        .map_err(|e| taken_back(format!("{}: {e}", target.display()), &path))?;
+    let displaced = match (stale, &old) {
+        (Some(Stale::Outdated), Some(old)) => {
+            displace(home, old, &target).map_err(|e| taken_back(e, &path))?
+        }
+        _ => None,
+    };
+    fs::rename(&path, &target).map_err(|e| {
+        let e = format!("{}: {e}", target.display());
+        let e = displaced.iter().fold(e, |e, d| put_back(e, d, &target));
+        taken_back(e, &path)
+    })?;
     if let Some(old) = old
         .as_ref()
         .filter(|o| stale.is_none() && o.file != relative)
@@ -1159,10 +1266,20 @@ fn install_version_guarded(
     list.entries.retain(|e| !ours(e));
     list.entries.push(entry.clone());
     // A stale entry stays listed: without the file the new one would be in its way on a retry.
-    list.save(home).map_err(|e| match stale {
-        Some(_) => taken_back(e, &target),
-        None => e,
+    // A displaced file comes back instead: the player keeps the old mod with its old entry.
+    list.save(home).map_err(|e| match (&displaced, stale) {
+        (Some(d), _) => put_back(e, d, &target),
+        (None, Some(_)) => taken_back(e, &target),
+        (None, None) => e,
     })?;
+    if let Some(backup) = displaced {
+        eprintln!(
+            "{}: kept your previous {} as {}",
+            p.name,
+            entry.file,
+            backup.display()
+        );
+    }
     Ok(entry)
 }
 

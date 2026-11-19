@@ -1180,6 +1180,214 @@ fn a_stale_native_entry_is_replaced_by_the_mod_the_id_became() {
     }
 }
 
+/// A zip at `path` holding `name` with `text`: an archive this Horizon can't read as a mod.
+fn outdated(path: &Path, name: &str, text: &str) -> Vec<u8> {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+    zip.start_file(name, zip::write::SimpleFileOptions::default())
+        .unwrap();
+    std::io::Write::write_all(&mut zip, text.as_bytes()).unwrap();
+    zip.finish().unwrap();
+    assert!(horizon_platform::mod_package::Package::read(path).is_err());
+    fs::read(path).unwrap()
+}
+
+/// As `zoom` 1.0.0's manifest was, made for the earlier mod system.
+const EARLIER: &str = "id = \"coords_hud\"\nversion = \"0.0.1\"\ncapabilities = [\"render\"]\n";
+const HUD: &str = "horizon-mods/coords_hud.hmod";
+
+/// [`old_entry`] for [`HUD`], with the checksum of the file that is there.
+fn old_entry_checked(home: &Path) -> Vec<installed::Entry> {
+    let mut list = installed::Installed {
+        entries: old_entry(home, HUD, "0.0.1"),
+    };
+    let hash = index::sha256_file(&home.join(HUD)).unwrap();
+    list.entries[0].checksum = format!("SHA-256:{hash}");
+    list.save(home).unwrap();
+    list.entries
+}
+
+/// The files moved aside in `horizon-mods/`.
+fn backups(home: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = fs::read_dir(home.join("horizon-mods"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().contains(".hmod.replaced-"))
+        .collect();
+    found.sort();
+    found
+}
+
+/// An entry from the earlier mod system (as `zoom` 1.0.0 was) names a `.hmod` right where the new
+/// file goes, an archive this Horizon can't read as a mod. Installing the mod replaces it, and
+/// the old file is kept beside it, though the entry's checksum names it. A file there that is
+/// no archive at all is refused as before and stays.
+#[test]
+fn an_outdated_mod_file_is_replaced_by_the_new_version() {
+    let index = sample();
+    let p = hud(&index);
+
+    let home = scratch("stale-outdated");
+    let old = home.join(HUD);
+    let before = outdated(&old, "horizon-mod.toml", EARLIER);
+    old_entry_checked(&home);
+
+    let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    assert_eq!(done[0].file, HUD);
+    assert_eq!(installed::Installed::load(&home).entries, done);
+    let package = horizon_platform::mod_package::Package::read(&old).unwrap();
+    assert_eq!(package.manifest.version, done[0].version);
+    assert!(java::is_enabled(&home, "coords_hud"));
+    let kept = backups(&home);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(fs::read(&kept[0]).unwrap(), before);
+    fs::remove_dir_all(&home).unwrap();
+
+    let home = scratch("stale-not-an-archive");
+    let old = home.join(HUD);
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    fs::write(&old, "not an archive").unwrap();
+    let list = old_entry(&home, HUD, "0.0.1");
+    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    assert!(e.contains("Cannot inspect installed"), "{e}");
+    assert_eq!(fs::read(&old).unwrap(), b"not an archive");
+    assert_eq!(installed::Installed::load(&home).entries, list);
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// An archive at the entry's path that the entry's checksum doesn't name (a file the player put
+/// there) isn't lost: it is moved aside under a name the game doesn't load, and stays.
+#[test]
+fn an_unrelated_archive_where_the_mod_goes_is_kept_beside_it() {
+    let index = sample();
+    let p = hud(&index);
+    let home = scratch("stale-outdated-unrelated");
+    let before = outdated(&home.join(HUD), "notes.txt", "mine");
+    old_entry(&home, HUD, "0.0.1");
+
+    let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    assert_eq!(installed::Installed::load(&home).entries, done);
+    assert!(horizon_platform::mod_package::Package::read(&home.join(HUD)).is_ok());
+    let kept = backups(&home);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(fs::read(&kept[0]).unwrap(), before);
+    let loaded = horizon_platform::mod_package::manifest::find(&home.join("horizon-mods"));
+    assert_eq!(loaded, [home.join(HUD)]);
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// The list can't be saved once the new file is in: the old file comes back to its place, with
+/// its entry, and nothing of the install is left.
+#[test]
+fn a_failed_save_puts_the_outdated_file_back() {
+    let index = sample();
+    let p = hud(&index);
+    let home = scratch("stale-outdated-save-fails");
+    let before = outdated(&home.join(HUD), "horizon-mod.toml", EARLIER);
+    let list = old_entry_checked(&home);
+    fs::create_dir_all(home.join("mod-browser/downloads")).unwrap();
+
+    // Read but not replaced: held without delete sharing on Windows, in a folder that takes no
+    // new file on Unix.
+    #[cfg(windows)]
+    let held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(home.join("mod-browser.json"))
+            .unwrap()
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(home.join("probe"), "").is_ok() {
+            eprintln!("skipped: permissions don't stop this user (root?)");
+            fs::set_permissions(&home, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::remove_dir_all(&home).unwrap();
+            return;
+        }
+    }
+    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    #[cfg(windows)]
+    drop(held);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(e.contains("mod-browser.json"), "{e}");
+    assert_eq!(fs::read(home.join(HUD)).unwrap(), before);
+    assert_eq!(backups(&home), Vec::<PathBuf>::new());
+    assert_eq!(installed::Installed::load(&home).entries, list);
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// `horizon-mods` is a link (a junction on Windows) to a folder outside the game folder: the
+/// outdated file behind it is not replaced or moved.
+#[test]
+fn an_outdated_file_behind_a_linked_mod_folder_is_left_alone() {
+    let index = sample();
+    let p = hud(&index);
+    let home = scratch("stale-outdated-linked-folder");
+    let outside = scratch("stale-outdated-linked-folder-outside");
+    let before = outdated(
+        &outside.join("coords_hud.hmod"),
+        "horizon-mod.toml",
+        EARLIER,
+    );
+    let link = home.join("horizon-mods");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
+    #[cfg(windows)]
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .args([&link, &outside])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !made {
+        eprintln!("skipped: this account can't make folder links");
+        fs::remove_dir_all(&home).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
+        return;
+    }
+    let list = old_entry_checked(&home);
+
+    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    assert!(e.contains("leads outside the game folder"), "{e}");
+    assert_eq!(fs::read(outside.join("coords_hud.hmod")).unwrap(), before);
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+    assert_eq!(installed::Installed::load(&home).entries, list);
+    let downloads = home.join("mod-browser/downloads");
+    assert_eq!(fs::read_dir(downloads).map_or(0, |d| d.count()), 0);
+    // The link itself goes, never what it points at.
+    #[cfg(windows)]
+    fs::remove_dir(&link).unwrap();
+    #[cfg(unix)]
+    fs::remove_file(&link).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+    fs::remove_dir_all(&outside).unwrap();
+}
+
+/// Two files moved aside in the same second get two names, and an earlier one is never
+/// written over.
+#[test]
+fn a_backup_name_is_never_taken_twice() {
+    let home = scratch("backup-names");
+    let file = home.join("coords_hud.hmod");
+    let first = reserve_backup(&file, 7).unwrap();
+    fs::write(&first, "earlier").unwrap();
+    let second = reserve_backup(&file, 7).unwrap();
+    let third = reserve_backup(&file, 7).unwrap();
+    assert_eq!(first, home.join("coords_hud.hmod.replaced-7"));
+    assert_eq!(second, home.join("coords_hud.hmod.replaced-7-1"));
+    assert_eq!(third, home.join("coords_hud.hmod.replaced-7-2"));
+    assert_eq!(fs::read(&first).unwrap(), b"earlier");
+    fs::remove_dir_all(&home).unwrap();
+}
+
 /// A retired native file the launcher can't read right now (another program holds it, or no
 /// permission) is not taken for gone or retired: the install refuses, as before, and leaves the
 /// file and the list as they were.
