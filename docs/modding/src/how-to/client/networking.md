@@ -63,3 +63,7 @@ fn register(r: &mut dyn Registrar) {
   received body that is not one value of the type closes the session, naming the mod, and the
   handler does not run. A handler that panics is disabled: its transaction rolls back, nothing it
   staged is sent, the session closes, and it is not called again.
+
+## Raw play packets
+
+On the server, `host.player_send_packet(player, ClientboundPlayPacket::new(id, body))` sends one clientbound play packet to one player as it is: `body` is the vanilla packet body, without the packet id, length prefix or compression framing. The body must decode whole as the named packet, or the call returns `Result<(), SendPacketError>` with `InvalidBody` and nothing is sent. `UnknownPacket` names a packet that is not clientbound play, `PayloadTooLarge` a custom payload past vanilla's limit, and `NotConnected` a stale, offline or fake player and any call from a client. Nothing on the server changes; a custom payload on a `horizon:` channel is refused.
