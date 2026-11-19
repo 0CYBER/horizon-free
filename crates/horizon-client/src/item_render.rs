@@ -1181,56 +1181,7 @@ pub fn glam_matrix(m: &horizon_assets::math::Mat4) -> Mat4 {
 
 /// An NBT value as the JSON its component codec reads.
 pub fn tag_json(tag: &Tag) -> Value {
-    match tag {
-        Tag::End => Value::Null,
-        Tag::Byte(v) => Value::from(*v),
-        Tag::Short(v) => Value::from(*v),
-        Tag::Int(v) => Value::from(*v),
-        Tag::Long(v) => Value::from(*v),
-        Tag::Float(bits) => serde_json::Number::from_f64(f64::from(f32::from_bits(*bits)))
-            .map_or(Value::Null, Value::Number),
-        Tag::Double(bits) => {
-            serde_json::Number::from_f64(f64::from_bits(*bits)).map_or(Value::Null, Value::Number)
-        }
-        Tag::ByteArray(a) => Value::Array(a.iter().map(|b| Value::from(*b as i8)).collect()),
-        Tag::String(s) => Value::String(s.to_string_lossy()),
-        Tag::List(l) => Value::Array(l.iter().map(tag_json).collect()),
-        Tag::Compound(c) => Value::Object(
-            c.iter()
-                .map(|(k, v)| (k.to_string_lossy(), tag_json(v)))
-                .collect(),
-        ),
-        Tag::IntArray(a) => Value::Array(a.iter().map(|v| Value::from(*v)).collect()),
-        Tag::LongArray(a) => Value::Array(a.iter().map(|v| Value::from(*v)).collect()),
-    }
-}
-/// Custom model flags use Codec.BOOL even though NBT stores them as numbers.
-/// Keep the other custom-model fields, and generic NBT JSON, numeric.
-fn custom_model_data_json(tag: &Tag) -> Value {
-    let mut value = tag_json(tag);
-    let flags: Option<Vec<Value>> = match tag.get("flags") {
-        Some(Tag::List(flags)) => flags
-            .iter()
-            .map(|flag| crate::item_data::component_bool(flag).map(Value::Bool))
-            .collect(),
-        Some(Tag::ByteArray(flags)) => flags
-            .iter()
-            .map(|flag| crate::item_data::component_bool(&Tag::Byte(*flag as i8)).map(Value::Bool))
-            .collect(),
-        Some(Tag::IntArray(flags)) => flags
-            .iter()
-            .map(|flag| crate::item_data::component_bool(&Tag::Int(*flag)).map(Value::Bool))
-            .collect(),
-        Some(Tag::LongArray(flags)) => flags
-            .iter()
-            .map(|flag| crate::item_data::component_bool(&Tag::Long(*flag)).map(Value::Bool))
-            .collect(),
-        _ => None,
-    };
-    if let (Some(flags), Some(object)) = (flags, value.as_object_mut()) {
-        object.insert("flags".into(), Value::Array(flags));
-    }
-    value
+    horizon_client_core::component_codec::raw_tag_json(tag)
 }
 /// The resolver's view of a client stack: its item, count and component patch.
 pub fn stack_view(stack: &crate::items::ItemStack) -> StackView {
@@ -1242,17 +1193,8 @@ pub fn stack_view(stack: &crate::items::ItemStack) -> StackView {
             match key.strip_prefix('!') {
                 Some(removed) => view.patch.insert(removed.to_owned(), None),
                 None => {
-                    // The component codec turns NBT numeric booleans into JSON booleans.
-                    // Generic NBT conversion must keep unrelated bytes numeric.
-                    let value = if key == "minecraft:enchantment_glint_override" {
-                        crate::item_data::component_bool(v)
-                            .map(Value::Bool)
-                            .unwrap_or_else(|| tag_json(v))
-                    } else if key == "minecraft:custom_model_data" {
-                        custom_model_data_json(v)
-                    } else {
-                        tag_json(v)
-                    };
+                    let value =
+                        horizon_client_core::component_codec::nbt_component_to_json(&key, v);
                     view.patch.insert(key, Some(value))
                 }
             };
@@ -1629,6 +1571,141 @@ mod tests {
             assert_eq!(component["strings"], serde_json::json!(["keep"]));
         }
         assert_eq!(actual, [true, false, false, true, false, false]);
+    }
+
+    #[test]
+    fn custom_name_and_written_book_nbt_match_component_select_models() {
+        let bread_def = ClientItem::decode(&serde_json::json!({
+            "model": {
+                "type": "minecraft:select",
+                "property": "minecraft:component",
+                "component": "minecraft:custom_name",
+                "cases": [{
+                    "when": {
+                        "text": "",
+                        "extra": [{
+                            "text": "Styled Item",
+                            "strikethrough": false,
+                            "obfuscated": false,
+                            "bold": false,
+                            "italic": true,
+                            "underlined": false,
+                            "color": "gold"
+                        }]
+                    },
+                    "model": {"type": "minecraft:model", "model": "example:item/styled"}
+                }],
+                "fallback": {"type": "minecraft:model", "model": "minecraft:item/bread"}
+            }
+        }))
+        .unwrap();
+        let book_def = ClientItem::decode(&serde_json::json!({
+            "model": {
+                "type": "minecraft:select",
+                "property": "minecraft:component",
+                "component": "minecraft:written_book_content",
+                "cases": [{
+                    "when": {
+                        "generation": 1,
+                        "pages": [{"raw": "Page 1\nLine 2"}],
+                        "resolved": true,
+                        "title": {"raw": "Ledger"},
+                        "author": "Alice"
+                    },
+                    "model": {"type": "minecraft:model", "model": "example:item/ledger"}
+                }],
+                "fallback": {"type": "minecraft:model", "model": "minecraft:item/written_book"}
+            }
+        }))
+        .unwrap();
+        let egg_def = ClientItem::decode(&serde_json::json!({
+            "model": {
+                "type": "select",
+                "property": "component",
+                "component": "entity_data",
+                "cases": [{
+                    "when": {"id": "frog", "variant": "cold"},
+                    "model": {"type": "minecraft:model", "model": "example:item/cold_variant"}
+                }],
+                "fallback": {"type": "minecraft:model", "model": "minecraft:item/frog_spawn_egg"}
+            }
+        }))
+        .unwrap();
+
+        let mut models = ItemModels::default();
+        models
+            .definitions
+            .insert("minecraft:bread".into(), bread_def);
+        models
+            .definitions
+            .insert("minecraft:written_book".into(), book_def);
+        models
+            .definitions
+            .insert("minecraft:frog_spawn_egg".into(), egg_def);
+        for id in [
+            "minecraft:bread",
+            "minecraft:written_book",
+            "minecraft:frog_spawn_egg",
+        ] {
+            Arc::make_mut(&mut models.prototypes).insert(
+                id.into(),
+                BTreeMap::from([("minecraft:item_model".into(), Value::String(id.into()))]),
+            );
+        }
+        let ctx = Context {
+            display: DisplayContext::Gui,
+            owner: None,
+            level: None,
+            seed: 0,
+        };
+        let resolve = |stack: &crate::items::ItemStack| {
+            let resolved =
+                models.resolve(&stack_view(stack), &ctx, &horizon_assets::item_model::NoEnv);
+            let LayerContent::Model { model } = &resolved.layers[0].content else {
+                panic!("expected model");
+            };
+            model.clone()
+        };
+
+        let (name_nbt, _) = horizon_core::nbt::parse_snbt(
+            r#"{text:"",extra:[{text:"Styled Item",strikethrough:0b,obfuscated:0b,bold:0b,italic:1b,underlined:0b,color:"gold"}]}"#,
+        )
+        .unwrap();
+        let mut bread = crate::items::ItemStack::new("minecraft:bread", 1);
+        (bread.damage, bread.extra) =
+            crate::item_data::decode_components(Some(&Tag::compound([(
+                "minecraft:custom_name",
+                name_nbt,
+            )])));
+        assert_eq!(resolve(&bread), "example:item/styled");
+
+        let book_nbt = Tag::compound([
+            ("title", Tag::String("Ledger".into())),
+            ("author", Tag::String("Alice".into())),
+            ("generation", Tag::Int(1)),
+            (
+                "pages",
+                Tag::List(vec![Tag::String("Page 1\nLine 2".into())]),
+            ),
+            ("resolved", Tag::Byte(1)),
+        ]);
+        let mut book = crate::items::ItemStack::new("minecraft:written_book", 1);
+        (book.damage, book.extra) = crate::item_data::decode_components(Some(&Tag::compound([(
+            "minecraft:written_book_content",
+            book_nbt,
+        )])));
+        assert_eq!(resolve(&book), "example:item/ledger");
+
+        let egg_nbt = Tag::compound([
+            ("id", Tag::String("minecraft:frog".into())),
+            ("variant", Tag::String("cold".into())),
+        ]);
+        let mut egg = crate::items::ItemStack::new("minecraft:frog_spawn_egg", 1);
+        (egg.damage, egg.extra) = crate::item_data::decode_components(Some(&Tag::compound([(
+            "minecraft:entity_data",
+            egg_nbt,
+        )])));
+        assert_eq!(resolve(&egg), "example:item/cold_variant");
     }
 
     #[test]

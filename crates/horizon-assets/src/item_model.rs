@@ -871,7 +871,9 @@ impl SelectProperty {
                 DisplayContext::by_name(&s).ok_or_else(|| err("invalid display context"))?;
                 Value::String(s)
             }
-            Self::Component(_) => v.clone(),
+            Self::Component(component) => {
+                crate::component_codec::canonicalize_component_json(component, v.clone())
+            }
         })
     }
 }
@@ -1823,7 +1825,9 @@ impl Resolve<'_> {
             SelectProperty::ContextDimension => {
                 self.ctx.level.map(|l| Value::String(l.dimension.clone()))
             }
-            SelectProperty::Component(component) => self.component(component).cloned(),
+            SelectProperty::Component(component) => self
+                .component(component)
+                .map(|v| crate::component_codec::canonicalize_component_json(component, v.clone())),
         }
     }
     fn numeric(&self, property: &NumericProperty) -> f32 {

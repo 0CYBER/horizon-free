@@ -547,15 +547,7 @@ pub fn destroyed_container(stack: &mut ItemStack) -> Vec<ItemStack> {
 /// `NbtOps.getBooleanValue`, used by boolean component codecs: every numeric tag
 /// is true unless its double value is zero. In particular, fractions stay true.
 pub fn component_bool(value: &Tag) -> Option<bool> {
-    Some(match value {
-        Tag::Byte(v) => *v != 0,
-        Tag::Short(v) => *v != 0,
-        Tag::Int(v) => *v != 0,
-        Tag::Long(v) => *v != 0,
-        Tag::Float(bits) => f32::from_bits(*bits) != 0.0,
-        Tag::Double(bits) => f64::from_bits(*bits) != 0.0,
-        _ => return None,
-    })
+    horizon_client_core::component_codec::nbt_bool(value)
 }
 
 /// `FoodProperties.DIRECT_CODEC`: required numeric nutrition/saturation and an

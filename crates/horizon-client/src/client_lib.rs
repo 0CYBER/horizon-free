@@ -201,6 +201,7 @@ pub use horizon_client_core::block_entity_nbt;
 pub use horizon_client_core::block_entity_types;
 pub use horizon_client_core::bossbar;
 pub use horizon_client_core::component;
+pub use horizon_client_core::component_codec;
 pub use horizon_client_core::fastutil_order;
 pub use horizon_client_core::gamerules;
 pub use horizon_client_core::lang;

@@ -4,6 +4,7 @@
 pub mod animation;
 pub mod bake;
 pub mod blockstate;
+pub mod component_codec;
 pub mod item_bake;
 pub mod item_model;
 mod json;

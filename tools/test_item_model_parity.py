@@ -277,6 +277,30 @@ def component_definitions():
     rows['horizon:component_bad_list'] = {'model': condition({})}
     rows['horizon:component_bad_levels'] = {'model': condition([{'levels': 'bad'}])}
     rows['horizon:component_reversed_levels'] = {'model': condition([{'levels': {'min': 5, 'max': 2}}])}
+    def select_component(component, cases, fallback='stick'):
+        return {'type': 'minecraft:select', 'property': 'minecraft:component',
+                'component': component,
+                'cases': [{'when': when, 'model': leaf(model)} for when, model in cases],
+                'fallback': leaf(fallback)}
+    rows['horizon:select_custom_name_plain'] = {'model': select_component(
+        'minecraft:custom_name', [({'text': 'Plain Title'}, 'diamond')])}
+    rows['horizon:select_custom_name_styled'] = {'model': select_component(
+        'minecraft:custom_name', [
+            ({'text': '', 'extra': [{'text': 'Styled Item', 'strikethrough': False, 'obfuscated': False,
+                                     'bold': False, 'italic': True, 'underlined': False, 'color': 'gold'}]}, 'diamond'),
+            ({'text': '', 'extra': [{'text': 'Hex Item', 'bold': True, 'italic': False, 'color': '#123abc'}]}, 'emerald'),
+        ])}
+    rows['horizon:select_written_book'] = {'model': select_component(
+        'minecraft:written_book_content', [
+            ({'generation': 1, 'pages': [{'raw': 'Page 1'}], 'resolved': True,
+              'title': {'raw': 'Ledger'}, 'author': 'Alice'}, 'diamond'),
+            ({'title': {'raw': 'Draft'}, 'author': 'Bob', 'generation': 0,
+              'resolved': False, 'pages': []}, 'emerald'),
+        ])}
+    rows['horizon:select_entity_data'] = {'model': select_component(
+        'minecraft:entity_data', [({'id': 'frog', 'variant': 'cold'}, 'diamond')])}
+    rows['horizon:select_painting_variant'] = {'model': select_component(
+        'minecraft:painting/variant', [('alban', 'diamond')])}
     return {name: json.dumps(row) for name, row in rows.items()}
 
 
@@ -300,7 +324,22 @@ def definition_cases(rows):
         ('minecraft:mace', {'minecraft:enchantments': {'minecraft:breach': 4, 'minecraft:wind_burst': 2}}, 1),
         ('minecraft:enchanted_book', {'minecraft:stored_enchantments': {'minecraft:density': 3}}, 1),
         ('minecraft:mace', {'!minecraft:enchantments': {}}, 1),
-        ('minecraft:mace', {'minecraft:enchantments': {'minecraft:density': 0}}, 1)]
+        ('minecraft:mace', {'minecraft:enchantments': {'minecraft:density': 0}}, 1),
+        ('minecraft:stone', {'minecraft:custom_name': 'Plain Title'}, 1),
+        ('minecraft:stone', {'minecraft:custom_name': ['Plain Title']}, 1),
+        ('minecraft:bread', {'minecraft:custom_name': ['', {'text': 'Styled Item', 'strikethrough': False,
+            'obfuscated': False, 'bold': False, 'italic': True, 'underlined': False, 'color': 'gold'}]}, 1),
+        ('minecraft:bread', {'minecraft:custom_name': {'text': '', 'extra': [{'text': 'Styled Item',
+            'strikethrough': False, 'obfuscated': False, 'bold': False, 'italic': True,
+            'underlined': False, 'color': '#ffaa00'}]}}, 1),
+        ('minecraft:stone', {'minecraft:custom_name': {'text': '', 'extra': [{'text': 'Hex Item',
+            'bold': True, 'italic': False, 'color': '#123ABC'}]}}, 1),
+        ('minecraft:written_book', {'minecraft:written_book_content': {
+            'title': 'Ledger', 'author': 'Alice', 'generation': 1, 'pages': ['Page 1'], 'resolved': True}}, 1),
+        ('minecraft:written_book', {'minecraft:written_book_content': {
+            'title': 'Draft', 'author': 'Bob'}}, 1),
+        ('minecraft:frog_spawn_egg', {'minecraft:entity_data': {'id': 'minecraft:frog', 'variant': 'cold'}}, 1),
+        ('minecraft:painting', {'minecraft:painting/variant': 'minecraft:alban'}, 1)]
     for name in rows:
         for stack_index, (item, components, count) in enumerate(stacks):
             for context in ('gui', 'head', 'firstperson_lefthand', 'ground'):

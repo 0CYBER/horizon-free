@@ -208,38 +208,12 @@ fn object_style<'a>(
     style
 }
 
-/// `TextColor.parseColor` for `#...`: `Integer.parseInt(rest, 16)` (so a sign
-/// and any digit count are accepted), kept only within `0..=0xFFFFFF`.
-pub(crate) fn hex_color(c: &str) -> Option<u32> {
-    let value = i64::from_str_radix(c.strip_prefix('#')?, 16).ok()?;
-    (0..=0xFF_FFFF).contains(&value).then_some(value as u32)
-}
+pub(crate) use horizon_assets::component_codec::hex_color;
+pub use horizon_assets::component_codec::shadow_color;
 
 /// Whether `c` is a style `color` (`TextColor.parseColor`): a named colour or `#` and hex.
 pub fn is_color(c: &str) -> bool {
     named_color(c).is_some() || hex_color(c).is_some()
-}
-
-/// `Style.shadow_color`: a packed ARGB int or normalized RGBA array.
-pub fn shadow_color(value: &Value) -> Option<u32> {
-    if let Some(packed) = value.as_i64() {
-        return i32::try_from(packed).ok().map(|n| n as u32);
-    }
-    let rgba = value.as_array()?;
-    if rgba.len() != 4 {
-        return None;
-    }
-    let channels = rgba
-        .iter()
-        .map(|channel| {
-            // ExtraCodecs.ARGB_COLOR_CODEC reads floats; ARGB.as8BitChannel
-            // floors each normalized channel multiplied by 255.
-            let value = channel.as_f64()? as f32;
-            (value.is_finite() && (0.0..=1.0).contains(&value))
-                .then_some((value * 255.0_f32).floor() as u32)
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(channels[3] << 24 | channels[0] << 16 | channels[1] << 8 | channels[2])
 }
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
 /// are resolved by `resolve` (ComponentUtils.resolve).

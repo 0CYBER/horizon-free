@@ -536,3 +536,95 @@ fn last_index_less_or_equal_linear_and_binary() {
     assert_eq!(last_index_less_or_equal(&zeroes, -0.0), Some(7));
     assert_eq!(last_index_less_or_equal(&zeroes, 0.0), Some(9));
 }
+
+#[test]
+fn component_select_normalizes_text_components_books_and_entity_ids() {
+    let mut models = ItemModels::default();
+    for (item_id, definition) in [
+        (
+            "minecraft:bread",
+            r##"{"model":{
+                "type":"minecraft:select","property":"minecraft:component","component":"minecraft:custom_name",
+                "cases":[
+                    {"when":{"text":"","extra":[{"text":"Styled Item","strikethrough":false,"obfuscated":false,"bold":false,"italic":true,"underlined":false,"color":"gold"}]},"model":{"type":"minecraft:model","model":"example:item/styled"}},
+                    {"when":{"text":"","extra":[{"text":"Hex Item","color":"#FFAA00"}]},"model":{"type":"minecraft:model","model":"example:item/hex"}}
+                ],
+                "fallback":{"type":"minecraft:model","model":"minecraft:item/bread"}
+            }}"##,
+        ),
+        (
+            "minecraft:written_book",
+            r#"{"model":{
+                "type":"minecraft:select","property":"minecraft:component","component":"minecraft:written_book_content",
+                "cases":[{"when":{"generation":1,"pages":[{"raw":"Page 1"}],"resolved":true,"title":{"raw":"Ledger"},"author":"Alice"},"model":{"type":"minecraft:model","model":"example:item/ledger"}}],
+                "fallback":{"type":"minecraft:model","model":"minecraft:item/written_book"}
+            }}"#,
+        ),
+        (
+            "minecraft:frog_spawn_egg",
+            r#"{"model":{
+                "type":"select","property":"component","component":"entity_data",
+                "cases":[{"when":{"id":"frog","variant":"cold"},"model":{"type":"minecraft:model","model":"example:item/cold_variant"}}],
+                "fallback":{"type":"minecraft:model","model":"minecraft:item/frog_spawn_egg"}
+            }}"#,
+        ),
+    ] {
+        models
+            .definitions
+            .insert(item_id.into(), ClientItem::from_json(definition).unwrap());
+        Arc::make_mut(&mut models.prototypes).insert(
+            item_id.into(),
+            BTreeMap::from([("minecraft:item_model".into(), json!(item_id))]),
+        );
+    }
+
+    let ctx = Context {
+        display: DisplayContext::Gui,
+        owner: None,
+        level: None,
+        seed: 0,
+    };
+    let resolve_model = |stack: &StackView| -> String {
+        let resolved = models.resolve(stack, &ctx, &NoEnv);
+        let LayerContent::Model { model } = &resolved.layers[0].content else {
+            panic!("expected model");
+        };
+        model.clone()
+    };
+
+    let mut bread = StackView::new("minecraft:bread", 1);
+    bread.patch.insert(
+        "minecraft:custom_name".into(),
+        Some(json!(["", {"text": "Styled Item", "strikethrough": 0, "obfuscated": 0, "bold": 0, "italic": 1, "underlined": 0, "color": "gold"}])),
+    );
+    assert_eq!(resolve_model(&bread), "example:item/styled");
+
+    // Vanilla's SelectItemModel hashes TextColor(value, name), so `#ffaa00` matches `#FFAA00` but not `gold`.
+    let mut hex_miss = StackView::new("minecraft:bread", 1);
+    hex_miss.patch.insert(
+        "minecraft:custom_name".into(),
+        Some(json!(["", {"text": "Styled Item", "strikethrough": false, "obfuscated": false, "bold": false, "italic": true, "underlined": false, "color": "#ffaa00"}])),
+    );
+    assert_eq!(resolve_model(&hex_miss), "minecraft:item/bread");
+
+    let mut hex_hit = StackView::new("minecraft:bread", 1);
+    hex_hit.patch.insert(
+        "minecraft:custom_name".into(),
+        Some(json!({"text": "", "extra": [{"text": "Hex Item", "color": "#ffaa00"}]})),
+    );
+    assert_eq!(resolve_model(&hex_hit), "example:item/hex");
+
+    let mut book = StackView::new("minecraft:written_book", 1);
+    book.patch.insert(
+        "minecraft:written_book_content".into(),
+        Some(json!({"title": "Ledger", "author": "Alice", "generation": 1, "pages": [{"text": "Page 1"}], "resolved": 1})),
+    );
+    assert_eq!(resolve_model(&book), "example:item/ledger");
+
+    let mut egg = StackView::new("minecraft:frog_spawn_egg", 1);
+    egg.patch.insert(
+        "minecraft:entity_data".into(),
+        Some(json!({"id": "minecraft:frog", "variant": "cold"})),
+    );
+    assert_eq!(resolve_model(&egg), "example:item/cold_variant");
+}
