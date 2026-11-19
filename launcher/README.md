@@ -295,6 +295,9 @@ When the top bar's page tabs overflow, an arrow on a fading edge shows each side
 150 ms, and a click scrolls three quarters of the strip over 240 ms; another click goes on from where
 that one is headed, and the wheel stops it. Performance mode and reduced motion make both instant.
 
+A mouse wheel's notch glides over 240 ms instead of jumping (`src/glide.rs`); trackpads scroll as
+they are. Performance mode and reduced motion (`HORIZON_LAUNCHER_MOTION=off`) turn the glide off.
+
 Pages and Home's landscape fill the window as it resizes. The title bar is transparent over the
 launcher on every platform: Windows keeps native dragging, resizing, Snap, minimize,
 maximize/restore and close; Linux keeps the same controls in its client-side title bar, while
