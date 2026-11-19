@@ -85,8 +85,8 @@ pub struct Report {
     #[serde(skip_serializing_if = "is_zero")]
     pub folders_renamed: usize,
     pub copied: usize,
-    /// Namespaces besides the mod id its content owns ([`extra_namespaces`]),
-    /// listed in the manifest's `namespaces`.
+    /// Namespaces besides the folder mod's id ([`folder_id`]) its content owns: a hyphenated
+    /// mod id first, then [`extra_namespaces`]; listed in the manifest's `namespaces`.
     pub namespaces: Vec<String>,
     /// Files outside what a content mod may hold (other namespaces, vanilla
     /// data other than tags), kept in `outside/` for review.
@@ -1207,6 +1207,17 @@ fn variant_models(overrides: &BTreeMap<String, BTreeSet<String>>) -> BTreeSet<St
     variants
 }
 
+/// The folder mod's id for a jar's mod id: its folder, log and settings key, `[a-z0-9_]{1,64}`.
+/// Fabric ids may hold `-`, which is `_` here; the jar's assets and data keep their namespace,
+/// a legal one (`[a-z0-9_.-]`), listed in the manifest's `namespaces`. None for another id.
+pub fn folder_id(mod_id: &str) -> Option<String> {
+    let ok = (1..=64).contains(&mod_id.len())
+        && mod_id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b));
+    ok.then(|| mod_id.replace('-', "_"))
+}
+
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
 /// the facts give; `allowed` says which vanilla blocks the game has;
@@ -1222,16 +1233,11 @@ pub fn carry(
 ) -> Result<Report, String> {
     let loaded = pack.loaded;
     let id = &info.mod_id;
-    if id.is_empty()
-        || id.len() > 64
-        || !id
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    {
+    let Some(folder) = folder_id(id) else {
         return Err(format!(
-            "mod id {id:?} is not [a-z0-9_]{{1,64}}: rename it before carrying over"
+            "mod id {id:?} is not [a-z0-9_-]{{1,64}}: rename it before carrying over"
         ));
-    }
+    };
     let file = fs::File::open(jar).map_err(|e| format!("{}: {e}", jar.display()))?;
     let mut zip = crate::zip_intake::open(file).map_err(|e| format!("{}: {e}", jar.display()))?;
     // The previous harness verdict describes the content we are about to replace.
@@ -1822,10 +1828,14 @@ pub fn carry(
     let owned: Vec<&str> = owned.iter().map(String::as_str).collect();
     unregistered_recipes(&inside, &outside, id, &owned, &mut report)?;
     let q = |s: &str| toml::Value::String(s.to_owned()).to_string();
+    if folder != *id {
+        report.namespaces.retain(|n| *n != folder);
+        report.namespaces.insert(0, id.clone());
+    }
     let name = if info.name.is_empty() { id } else { &info.name };
     let mut manifest = format!(
         "# Carried over from {jar} by horizon-port-pack, for local use only.\n# Licence: {license}\nid = {}\nname = {}\nversion = {}\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
-        q(id),
+        q(&folder),
         q(name),
         q(&info.version),
         // In a `#` comment: a line break from the jar would end it and write keys of its own.

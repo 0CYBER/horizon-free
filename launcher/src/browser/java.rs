@@ -49,7 +49,36 @@ fn checked_dir(home: &Path, file: &FileRef) -> Option<PathBuf> {
 }
 
 fn read_check(dir: &Path) -> Option<Check> {
-    serde_json::from_str(&fs::read_to_string(dir.join("check.json")).ok()?).ok()
+    let check: Check =
+        serde_json::from_str(&fs::read_to_string(dir.join("check.json")).ok()?).ok()?;
+    (!refused_id(&check)).then_some(check)
+}
+
+/// A `No` from before ids with `-` (Fabric's) carried over (#18616): checked again.
+fn refused_id(check: &Check) -> bool {
+    check.verdict == Verdict::No
+        && check.summary.starts_with("Can't be carried over: mod id ")
+        && check
+            .summary
+            .ends_with(" is not [a-z0-9_]{1,64}: rename it before carrying over")
+}
+
+/// Where an install of mod `id` is copied before it is moved into place.
+fn staging(home: &Path, id: &str) -> PathBuf {
+    home.join(MODS_DIR).join(format!(".{id}.part"))
+}
+
+/// A package the game finds (`mod_package::find`, in both mod folders: they share
+/// `horizon-mods.txt`) whose manifest has mod id `id`, other than the install's own `target`
+/// and its staging folder (an interrupted install leaves one, which the retry replaces).
+fn id_in_use(home: &Path, id: &str, target: &Path) -> Option<PathBuf> {
+    use horizon_platform::mod_package::{find, mod_list, Package};
+    let part = staging(home, id);
+    [mod_list::DIR, mod_list::NATIVE_DIR]
+        .iter()
+        .flat_map(|dir| find(&home.join(dir)))
+        .filter(|path| path != target && *path != part)
+        .find(|path| Package::read(path).is_ok_and(|package| package.manifest.id == id))
 }
 
 /// The check of `file` if it was made before.
@@ -220,6 +249,9 @@ impl Job<'_> {
                 project.title, check.summary
             ));
         }
+        // Refused before any required mod goes in, and again before publishing: one of those
+        // may have taken the id or a namespace.
+        self.refusal(project, &check)?;
         let mut skipped = check.skipped.clone();
         for id in &version.required {
             let Ok(needed) = source.project(id) else {
@@ -239,27 +271,10 @@ impl Job<'_> {
             .expect("checked above")
             .join("carry");
         let relative = format!("{MODS_DIR}/{}", check.mod_id);
-        let mut installed = super::installed::Installed::load(home);
-        let ours = |e: &Entry| e.source == project.source && e.project == project.id;
-        if let Some(other) = installed.entries.iter().find(|e| {
-            e.kind == Kind::Mod
-                && !ours(e)
-                && (e.file == relative || e.namespaces.iter().any(|n| check.namespaces.contains(n)))
-        }) {
-            return Err(format!(
-                "{} shares its id or namespace with {}, installed already: remove one first.",
-                project.title, other.title
-            ));
-        }
         let target = home.join(&relative);
-        let old = installed.entries.iter().find(|e| ours(e)).cloned();
-        if target.exists() && old.as_ref().is_none_or(|o| o.file != relative) {
-            return Err(format!(
-                "{relative} is already there and wasn't installed by the browser: move it away first."
-            ));
-        }
+        let old = self.refusal(project, &check)?;
         progress(&format!("Installing {}", project.title), 1.);
-        let part = home.join(MODS_DIR).join(format!(".{}.part", check.mod_id));
+        let part = staging(home, &check.mod_id);
         let _ = fs::remove_dir_all(&part);
         copy_dir(&carry, &part).inspect_err(|_| {
             let _ = fs::remove_dir_all(&part);
@@ -291,11 +306,50 @@ impl Job<'_> {
             skipped,
             namespaces: check.namespaces.clone(),
         };
-        installed.entries.retain(|e| !ours(e));
+        let mut installed = super::installed::Installed::load(home);
+        installed
+            .entries
+            .retain(|e| e.source != project.source || e.project != project.id);
         installed.entries.push(entry.clone());
         installed.save(home)?;
         done.push(entry);
         Ok(())
+    }
+
+    /// Why `project`, checked as `check`, can't go in, else its own earlier install if any.
+    fn refusal(&self, project: &Project, check: &Check) -> Result<Option<Entry>, String> {
+        let home = self.home;
+        let relative = format!("{MODS_DIR}/{}", check.mod_id);
+        let installed = super::installed::Installed::load(home);
+        let ours = |e: &Entry| e.source == project.source && e.project == project.id;
+        if let Some(other) = installed.entries.iter().find(|e| {
+            e.kind == Kind::Mod
+                && !ours(e)
+                && (e.file == relative || e.namespaces.iter().any(|n| check.namespaces.contains(n)))
+        }) {
+            return Err(format!(
+                "{} shares its id or namespace with {}, installed already: remove one first.",
+                project.title, other.title
+            ));
+        }
+        let target = home.join(&relative);
+        let old = installed.entries.iter().find(|e| ours(e)).cloned();
+        if target.exists() && old.as_ref().is_none_or(|o| o.file != relative) {
+            return Err(format!(
+                "{relative} is already there and wasn't installed by the browser: move it away first."
+            ));
+        }
+        // A Fabric id's `-` is `_` here: `a-b` would take the id of an installed `a_b.hmod`, which
+        // the game refuses twice and whose `mod.a_b` setting removing this mod would clear.
+        if let Some(other) = id_in_use(home, &check.mod_id, &target) {
+            return Err(format!(
+                "Another mod already uses the id {} ({}): remove it first to install {}.",
+                check.mod_id,
+                other.display(),
+                project.title
+            ));
+        }
+        Ok(old)
     }
 }
 

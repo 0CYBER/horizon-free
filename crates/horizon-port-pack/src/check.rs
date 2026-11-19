@@ -152,7 +152,9 @@ pub fn check(jar_path: &Path, out: &Path) -> Result<Check, String> {
             return done(check);
         }
     };
-    check.namespaces = std::iter::once(info.mod_id.clone())
+    // The installed folder and its settings key are the folder mod's id.
+    check.mod_id = carry::folder_id(&info.mod_id).unwrap_or_default();
+    check.namespaces = std::iter::once(check.mod_id.clone())
         .chain(report.namespaces.iter().cloned())
         .collect();
     let c = &info.census;
@@ -353,6 +355,41 @@ displayName = "Ruby"
             "{:?}",
             c.skipped
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Fabric allows `-` in a mod id: its folder mod's id has `_`, its files keep the namespace.
+    #[test]
+    fn a_hyphenated_fabric_id_carries_with_its_namespace() {
+        let dir = temp("hyphen");
+        let meta = br#"{"schemaVersion": 1, "id": "a-little-furniture", "version": "1.0", "name": "A Little Furniture"}"#;
+        let blockstate = br#"{"variants": {"": {"model": "a-little-furniture:block/chair"}}}"#;
+        let files = [
+            ("fabric.mod.json", meta.as_slice()),
+            (
+                "assets/a-little-furniture/blockstates/chair.json",
+                blockstate,
+            ),
+            ("assets/a-little-furniture/models/item/cushion.json", b"{}"),
+        ];
+        let c = check(&jar(&dir, &files), &dir.join("out")).unwrap();
+        assert_eq!(c.verdict, Verdict::Works, "{c:?}");
+        assert_eq!(c.mod_id, "a_little_furniture");
+        assert_eq!(c.namespaces, ["a_little_furniture", "a-little-furniture"]);
+        let carried = dir.join("out/carry");
+        assert!(
+            carried
+                .join("assets/a-little-furniture/blockstates/chair.json")
+                .is_file()
+        );
+        let package = horizon_mod_package::Package::read(&carried).unwrap();
+        assert_eq!(package.manifest.id, "a_little_furniture");
+        assert_eq!(package.manifest.namespaces, ["a-little-furniture"]);
+        let content = horizon_mod_package::Content::read(&carried, &package.manifest).unwrap();
+        let blocks: Vec<&str> = content.blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(blocks, ["a-little-furniture:chair"]);
+        let items: Vec<&str> = content.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(items, ["a-little-furniture:cushion"]);
         fs::remove_dir_all(&dir).unwrap();
     }
 
