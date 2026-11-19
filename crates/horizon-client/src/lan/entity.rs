@@ -850,6 +850,8 @@ pub struct TrackEvent {
 pub struct Tracker {
     seen: crate::fast_hash::FxHashMap<i32, Arc<Tracked>>,
     events: Vec<TrackEvent>,
+    /// The cells this client tracks whole (`cells`).
+    verified: crate::fast_hash::FxHashMap<(i32, i32), cells::Verified>,
 }
 
 impl Tracker {
@@ -868,6 +870,7 @@ impl Tracker {
     /// Stop tracking everything without a packet: the caller removes them
     /// from the client.
     pub fn clear(&mut self) {
+        self.verified.clear();
         let events = &mut self.events;
         events.extend(self.seen.drain().map(|(entity, tracked)| TrackEvent {
             start: false,
@@ -881,6 +884,7 @@ impl Tracker {
         let Some(tracked) = self.seen.remove(&id) else {
             return false;
         };
+        self.verified.clear();
         self.events.push(TrackEvent {
             start: false,
             entity: id,
@@ -945,41 +949,6 @@ struct Probe {
     hidden: Option<u8>,
 }
 
-/// `ServerPlayer.broadcastToPlayer` (`Entity`'s is `true`): to a spectator,
-/// a player is shown only while its camera is itself; to anyone else, a
-/// spectator is hidden. A player a native mod hid is shown only to players
-/// of at least its level.
-fn broadcast_to_player(v: &Viewer, p: &Probe) -> bool {
-    super::player_shown::player_shown(v.spectator, v.permission, p.spectator, p.watching, p.hidden)
-}
-
-/// TrackedEntity.updatePlayer: within the type's range (capped by the view
-/// distance) horizontally, shown to the client (`Entity.broadcastToPlayer`:
-/// `ServerPlayer`'s hides a spectator from players who are not spectators;
-/// a guest's camera is always its own player, so a spectating client sees
-/// every player) and in a chunk the client has. `held` remembers for
-/// each of the tick's chunks whether the client has it (0: not looked up
-/// yet, 1: no, 2: yes), so each chunk is looked up once per client.
-fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]) -> bool {
-    let near = match v.sources {
-        None => {
-            let range = f64::from(p.range.min(v.view_distance * 16));
-            let (dx, dz) = (v.position[0] - p.x, v.position[2] - p.z);
-            dx * dx + dz * dz <= range * range
-        }
-        Some(areas) => {
-            super::viewed_levels::entities::in_reach(areas, chunks[p.chunk as usize], p.range)
-        }
-    };
-    near && broadcast_to_player(v, p) && {
-        let held = &mut held[p.chunk as usize];
-        if *held == 0 {
-            *held = 1 + u8::from(v.chunks.contains(&chunks[p.chunk as usize]));
-        }
-        *held == 2
-    }
-}
-
 /// One level's tracked entities (ChunkMap.entityMap).
 #[derive(Default)]
 pub struct Entities {
@@ -1020,6 +989,8 @@ pub struct Entities {
     /// them, the send pass skips them without looking their state up again.
     /// Thousands of items frozen past the simulation distance cost a flag each.
     quiet: Vec<bool>,
+    /// What each of `chunks` holds (`cells`).
+    cells: cells::Cells,
     /// One entity's packets and their bodies, kept between entities.
     packets: Vec<play::Clientbound>,
     bodies: Bodies,
@@ -1360,6 +1331,14 @@ impl Entities {
                 .range_percent
                 .map_or(range * 16, |p| p * (range * 16) / 100);
         }
+        self.cells.update(
+            now,
+            &self.chunks,
+            &self.chunk_members,
+            &self.probes,
+            &self.is_moved,
+            &self.chunk_index,
+        );
         self.pairs.clear();
         self.pairs.resize(entities.len(), false);
         // The per-player sweep runs shared out (#8158): every player's flags,
@@ -1385,6 +1364,7 @@ impl Entities {
                 &self.is_moved,
                 &self.moved,
             );
+            let (cells_on, stats) = (self.cells.on(), self.cells.stats());
             crate::parallel::par_chunks_mut(&mut players, 16, |players| {
                 for (v, flags, starts) in players {
                     flags.clear();
@@ -1409,12 +1389,21 @@ impl Entities {
                             (v.position[0].floor() as i32) >> 4,
                             (v.position[2].floor() as i32) >> 4,
                         );
-                        for (&(cx, cz), members) in chunks.iter().zip(members) {
+                        for ((&(cx, cz), members), stat) in chunks.iter().zip(members).zip(stats) {
                             if v.sources.is_none()
                                 && ((cx - vx).abs() > reach || (cz - vz).abs() > reach)
                             {
+                                cells::drop_cell(v, (cx, cz));
                                 continue;
                             }
+                            if cells_on
+                                && let Some(tracked) =
+                                    cells::skip(v, (cx, cz), stat, members, probes, flags)
+                            {
+                                kept += tracked;
+                                continue;
+                            }
+                            let (kept_before, starts_before) = (kept, starts.len());
                             for &index in members {
                                 let index = index as usize;
                                 let p = &probes[index];
@@ -1430,6 +1419,10 @@ impl Entities {
                                     flags[index] = SEES;
                                     starts.push(index);
                                 }
+                            }
+                            if cells_on {
+                                let met = (kept - kept_before, starts.len() != starts_before);
+                                cells::record(v, (cx, cz), stat, members, probes, met);
                             }
                         }
                     } else if v.tracker.seen.len() * 4 > probes.len() {
@@ -1742,8 +1735,12 @@ impl Entities {
     }
 }
 
+mod cells;
 #[cfg(test)]
 mod late_pair_tests;
+use cells::sees;
+#[cfg(test)]
+mod cells_tests;
 mod slab;
 
 #[cfg(test)]
