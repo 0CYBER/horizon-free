@@ -605,7 +605,12 @@ impl Mob {
             (Some(current), Some(saved)) => crate::entity_nbt::name_text(saved) != *current,
             (Some(_), None) => true,
             // A plain name with no component (a mod's) still compares as text.
-            (None, _) => saved.and_then(crate::entity_nbt::custom_name) != self.custom_name,
+            (None, _) => {
+                saved
+                    .map(crate::entity_nbt::name_text)
+                    .map(|text| text.plain())
+                    != self.custom_name
+            }
         }
     }
     /// `AgeableMob.isBaby`: `canBeABaby() && getAge() < 0`. The age alone is

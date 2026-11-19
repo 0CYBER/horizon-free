@@ -107,3 +107,23 @@ fn a_named_mobs_custom_name_saves_its_whole_component() {
         "a same-text rename keeps its new colour"
     );
 }
+
+/// A mob named with plain text only (no component, as a mod names it) is not
+/// renamed by its own save: the saved `CustomName`, a string or a styled
+/// compound with the same text, stays as it is.
+#[test]
+fn a_plain_name_matches_its_saved_text() {
+    let mut m = Mob::new(1, kind(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+    m.custom_name = Some("Bob".into());
+    m.custom_name_text = None;
+    let plain = Tag::String("Bob".into());
+    assert!(!m.custom_name_changed(Some(&plain)), "same plain text");
+    let styled = Tag::compound([
+        ("text", Tag::String("Bob".into())),
+        ("color", Tag::String("red".into())),
+    ]);
+    assert!(!m.custom_name_changed(Some(&styled)), "same text, styled");
+    let other = Tag::String("Alice".into());
+    assert!(m.custom_name_changed(Some(&other)), "another name");
+    assert!(m.custom_name_changed(None), "no saved name");
+}

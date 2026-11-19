@@ -1751,7 +1751,7 @@ fn put_sulfur_attributes(map: &mut Compound, m: &Mob) {
 /// `Brain.Packed`: the memories finalizeSpawn set, over the saved ones.
 /// `CustomName`: a text component saved as a string, a compound or a list,
 /// flattened as `Component.getString` does (`translate`, `extra`).
-pub(crate) fn custom_name(tag: &Tag) -> Option<String> {
+fn custom_name(tag: &Tag) -> Option<String> {
     match tag.get("CustomName")? {
         Tag::String(s) => Some(s.to_string_lossy()),
         t @ (Tag::Compound(_) | Tag::List(_)) => Some(name_text(t).plain()),
