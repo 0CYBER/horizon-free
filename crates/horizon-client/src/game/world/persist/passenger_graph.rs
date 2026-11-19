@@ -50,13 +50,18 @@ impl Game<'_> {
         if !self.passenger_object_present(id) {
             return None;
         }
-        self.persist.passenger_slots.iter().find_map(|(&vehicle, slots)| {
-            (self.passenger_object_present(vehicle)
-                && slots
+        // The slot test first: presence walks the level's mobs, boats and carts, so asking it of
+        // every vehicle with riders made each lookup cost all vehicles times all entities.
+        self.persist
+            .passenger_slots
+            .iter()
+            .find_map(|(&vehicle, slots)| {
+                (slots
                     .iter()
-                    .any(|slot| matches!(slot, PassengerSlot::Live(rider) if *rider == id)))
-            .then_some(vehicle)
-        })
+                    .any(|slot| matches!(slot, PassengerSlot::Live(rider) if *rider == id))
+                    && self.passenger_object_present(vehicle))
+                .then_some(vehicle)
+            })
     }
 
     /// Public riding queries still exclude objects refused level residency.
