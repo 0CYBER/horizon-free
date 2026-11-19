@@ -131,6 +131,9 @@ pub(super) struct Mods {
     /// the next build attempt, whatever the player chose.
     pub(super) unbuilt: Option<(String, Vec<String>)>,
     native_files: std::cell::RefCell<Option<(String, Vec<native_status::Installed>)>>,
+    /// Whether any tracked file asks for a native build, by the same key as `native_files`:
+    /// telling an old-format `.hmod` apart reads the archive, never on each draw.
+    tracked_native: std::cell::RefCell<Option<(String, bool)>>,
     /// Java mods' checks, by source and project.
     pub(super) checks: HashMap<(SourceId, String), Checking>,
     /// Horizon registry projects' trust and capabilities, by id ([`horizon::trust_and_capabilities`]).
@@ -226,6 +229,7 @@ impl Mods {
             route_open: None,
             unbuilt: None,
             native_files: Default::default(),
+            tracked_native: Default::default(),
             updates: HashMap::new(),
             confirm_remove: None,
             picked: None,
@@ -1419,6 +1423,32 @@ impl Launcher {
         memo.as_ref().unwrap().1.clone()
     }
 
+    /// Whether a tracked file in `entries` asks for a native build
+    /// ([`native_status::tracked_asks_for_build`]), kept until the native folder changes.
+    fn tracked_asks_for_build(&self, entries: &[&installed::Entry]) -> bool {
+        let home = self.mods.home();
+        let key = format!(
+            "{}{}",
+            native_status::fingerprint(&home, None),
+            entries
+                .iter()
+                .map(|e| e.file.as_str())
+                .collect::<Vec<_>>()
+                .join(
+                    "
+"
+                )
+        );
+        let mut memo = self.mods.tracked_native.borrow_mut();
+        if memo.as_ref().is_none_or(|(k, _)| *k != key) {
+            let asks = entries
+                .iter()
+                .any(|e| native_status::tracked_asks_for_build(&home, &e.file));
+            *memo = Some((key, asks));
+        }
+        memo.as_ref().unwrap().1
+    }
+
     fn mods_installed_list(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let kind = self.mods.kind;
@@ -1455,10 +1485,7 @@ impl Launcher {
         }
         let busy = self.mods.busy.is_some();
         let native = native_status::asks_for_build(&native_entries)
-            || self.mods.java.is_none()
-                && entries
-                    .iter()
-                    .any(|e| native_status::is_native_file(&e.file));
+            || self.mods.java.is_none() && self.tracked_asks_for_build(&entries);
         let left_out = if native {
             self.native_left_out()
         } else {

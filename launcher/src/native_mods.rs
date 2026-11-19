@@ -431,9 +431,10 @@ const NATIVE_MANIFEST: &str = horizon_platform::mod_package::manifest::MANIFEST;
 pub const INSTALLED: &str = horizon_platform::mod_package::mod_list::NATIVE_DIR;
 
 /// The native mods turned on in the game folder `home`, unpacked into a folder [`build`] takes.
-/// Each flat `.hmod` passes the registry's shared package boundary; no code is run.
+/// Each flat `.hmod` passes the registry's shared package boundary; no code is run. Each one in
+/// the format from before the SDK is left out ([`warn_legacy`] says so in the build's log).
 pub fn installed_mods(home: &Path) -> Result<PathBuf, String> {
-    stage_installed(home, root().join("installed.incoming"))?.ok_or_else(|| {
+    stage_installed(home, installed_incoming())?.ok_or_else(|| {
         format!(
             "No native mod is turned on in {}: install one from the Mods page first.",
             home.join(INSTALLED).display()
@@ -441,18 +442,43 @@ pub fn installed_mods(home: &Path) -> Result<PathBuf, String> {
     })
 }
 
-/// [`installed_mods`] into `out`, which it empties first.
-pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBuf>, String> {
-    let _ = fs::remove_dir_all(&out);
+fn installed_incoming() -> PathBuf {
+    root().join("installed.incoming")
+}
+
+/// Warns in the build log of each native mod in `home` in the format from before the SDK, which
+/// [`stage_installed`] left out of the build.
+fn warn_legacy(home: &Path) {
+    for path in installed_files(home) {
+        if crate::native_status::legacy_format(&path) {
+            log_warning(&crate::i18n::trf(
+                "{file} is a native mod in the old format and is left out of this build: it needs a version made for the new SDK.",
+                &[("file", &path.display().to_string())],
+            ));
+        }
+    }
+}
+
+fn installed_files(home: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = fs::read_dir(home.join(INSTALLED))
         .map(|dir| dir.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     paths.retain(|p| p.extension().is_some_and(|e| e == "hmod"));
     paths.sort();
+    paths
+}
+
+/// [`installed_mods`] into `out`, which it empties first. A `.hmod` in the format from before the
+/// SDK is left out, untouched: no build can take it, and it must not stop the others.
+pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBuf>, String> {
+    let _ = fs::remove_dir_all(&out);
     let mut count = 0;
-    for path in paths {
-        let bundle = horizon_platform::mod_package::index::native::Bundle::read(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+    for path in installed_files(home) {
+        let bundle = match horizon_platform::mod_package::index::native::Bundle::read(&path) {
+            Ok(bundle) => bundle,
+            Err(_) if crate::native_status::legacy_format(&path) => continue,
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
         if !crate::browser::java::is_enabled(home, &bundle.manifest.id) {
             continue;
         }
@@ -2392,6 +2418,10 @@ pub fn build(
         return Err(Failed::Other(error));
     }
     logged(|cache| {
+        // After `logged` empties the log: the player reads it to learn why a mod is missing.
+        if folder == installed_incoming() {
+            warn_legacy(&instance.home);
+        }
         let lease = cache.map_err(|error| Failed::Other(error.into()))?;
         let profile = select_build_profile(instance.native_profile, profile, || {
             planning::classify(folder, Some(base), lease)
@@ -3351,8 +3381,95 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A native `.hmod` in the format from before the SDK, as the player's FPS Counter was.
+    fn write_legacy_hmod(path: &Path) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, body) in [
+            ("horizon-native.json", "{\"id\": \"fps_counter\"}"),
+            (
+                "rust/src/lib.rs",
+                "pub fn hook() {}
+",
+            ),
+        ] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn an_old_format_native_mod_is_left_out_and_the_others_build() {
+        let _guard = scratch_state();
+        let d = dir("legacy-src");
+        write_native(&d, "veinminer", A, B);
+        let home = dir("legacy-home");
+        fs::create_dir_all(home.join(INSTALLED)).unwrap();
+        let legacy = home.join(INSTALLED).join("fps_counter.hmod");
+        let bytes = write_legacy_hmod(&legacy);
+        let mut zip = zip::ZipWriter::new(
+            fs::File::create(home.join(INSTALLED).join("veinminer.hmod")).unwrap(),
+        );
+        for file in [NATIVE_MANIFEST, "Cargo.toml", "src/lib.rs"] {
+            zip.start_file(file, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&fs::read(d.join(file)).unwrap()).unwrap();
+        }
+        zip.finish().unwrap();
+        crate::browser::java::set_enabled(&home, "veinminer", true).unwrap();
+
+        let out = installed_mods(&home).unwrap();
+        let ids: Vec<_> = bundles(&out)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.manifest.id)
+            .collect();
+        assert_eq!(ids, ["veinminer"]);
+        let enabled: Vec<_> = crate::native_status::enabled(&home)
+            .into_iter()
+            .map(|m| m.0)
+            .collect();
+        assert_eq!(enabled, ["veinminer"], "the old file asks for no build");
+        clear_log().unwrap();
+        warn_legacy(&home);
+        let log = fs::read_to_string(log_path()).unwrap();
+        assert!(
+            log.starts_with("warning: ") && log.contains("fps_counter.hmod"),
+            "{log}"
+        );
+        assert_eq!(fs::read(&legacy).unwrap(), bytes, "left as it was");
+        let _ = fs::remove_dir_all(d);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn only_old_format_native_mods_means_no_native_mods() {
+        let _guard = scratch_state();
+        let home = dir("legacy-only-home");
+        fs::create_dir_all(home.join(INSTALLED)).unwrap();
+        let legacy = home.join(INSTALLED).join("fullbright.hmod");
+        let bytes = write_legacy_hmod(&legacy);
+
+        let enabled = crate::native_status::enabled(&home);
+        assert!(enabled.is_empty(), "{enabled:?}");
+        assert_eq!(
+            crate::native_status::state(&enabled, None),
+            crate::native_status::State::NoMods,
+            "Play needs no native build"
+        );
+        let error = installed_mods(&home).unwrap_err();
+        assert!(error.contains("No native mod is turned on"), "{error}");
+        assert_eq!(fs::read(&legacy).unwrap(), bytes, "left as it was");
+        let _ = fs::remove_dir_all(home);
+    }
+
     #[test]
     fn installed_mods_are_the_checked_files_of_those_turned_on() {
+        // `installed_mods` empties the one staging folder: the other tests using it wait.
+        let _guard = scratch_state();
         let d = dir("installed-src");
         write_native(&d, "veinminer", A, B);
         let home = dir("installed-home");

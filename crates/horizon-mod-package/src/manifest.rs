@@ -689,6 +689,20 @@ impl Manifest {
     }
 }
 
+/// Top-level paths of the native mod format from before the `.hmod` SDK. A package holding one is
+/// refused: it has to be made again for the new SDK.
+pub const LEGACY_PATHS: [&str; 4] = [
+    "horizon-native.json",
+    "horizon-mixin.toml",
+    "native",
+    "rust",
+];
+
+/// Whether archive path `name` belongs to the native format from before the `.hmod` SDK.
+pub fn legacy_path(name: &str) -> bool {
+    LEGACY_PATHS.contains(&name.split('/').next().unwrap_or(""))
+}
+
 /// Folders of a mod's project that are never part of its package: Git's, Cargo's build output
 /// and the pinned SDK the mod tool fetches into `.horizon/`.
 pub const NOT_PACKAGED: [&str; 3] = [".git", "target", ".horizon"];
@@ -783,12 +797,7 @@ impl Package {
         let mut has_source = false;
         let has_wasm;
         let toml = if metadata.is_dir() {
-            for old in [
-                "horizon-native.json",
-                "horizon-mixin.toml",
-                "native",
-                "rust",
-            ] {
+            for old in LEGACY_PATHS {
                 if std::fs::symlink_metadata(path.join(old)).is_ok() {
                     return Err(format!("{old}: unsupported package path"));
                 }
@@ -884,10 +893,7 @@ impl Package {
             let mode = entry.unix_mode().unwrap_or_default();
             entries.push((name.clone(), entry.size(), entry.is_dir()));
             let first = name.split('/').next().unwrap_or("");
-            if matches!(
-                first,
-                "horizon-native.json" | "horizon-mixin.toml" | "native" | "rust"
-            ) {
+            if legacy_path(&name) {
                 return Err(format!("{name}: unsupported package path"));
             }
             has_source |= first == "src";

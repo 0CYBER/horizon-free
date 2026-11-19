@@ -1291,8 +1291,14 @@ fn game_version_at(dir: &Path) -> String {
 }
 
 pub fn resources(tag: &str) -> PathBuf {
-    let base = crate::native_mods::about(tag).map(|about| about.base);
-    resources_at(&version_dir(base.as_deref().unwrap_or(tag)))
+    resources_at(&version_dir(&prepared_in(tag)))
+}
+
+/// The version whose folder holds `tag`'s prepared files: a native build's base, since the build
+/// shares its base's resources (`native_mods::copy_base`); else `tag`. Preparing `tag` prepares
+/// this one, or [`is_prepared`] would never see the files.
+pub fn prepared_in(tag: &str) -> String {
+    crate::native_mods::about(tag).map_or_else(|| tag.to_owned(), |about| about.base)
 }
 
 fn resources_at(dir: &Path) -> PathBuf {
@@ -4988,6 +4994,12 @@ pub fn {f}("
             "base": base, "horizon": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "target": "client"
         }).to_string()).unwrap();
         assert_eq!(resources(&native), resources(&base));
+        assert_eq!(
+            prepared_in(&native),
+            base,
+            "preparing the build prepares its base"
+        );
+        assert_eq!(prepared_in(&base), base);
         assert!(crate::native_mods::resource_dependents(&base));
         assert!(remove_version(&base).is_err());
         assert!(base_dir.join(COMPLETE).exists());

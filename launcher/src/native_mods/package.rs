@@ -5,12 +5,7 @@ use horizon_platform::mod_package::{manifest, Package};
 use std::{fs, path::Path};
 
 pub(super) fn read(dir: &Path) -> Result<Option<Bundle>, String> {
-    for old in [
-        "horizon-native.json",
-        "horizon-mixin.toml",
-        "native",
-        "rust",
-    ] {
+    for old in manifest::LEGACY_PATHS {
         if dir.join(old).exists() {
             return Err(format!("{}: unsupported package path {old}", dir.display()));
         }
@@ -132,7 +127,9 @@ fn copy_files(to: &Path, files: impl IntoIterator<Item = (String, Vec<u8>)>) -> 
 ///
 /// A package that can't be read stops the scan, naming the mod: every enabled native mod compiles
 /// into one game binary, and every other native refusal stops that build the same way. Leaving
-/// one mod out would quietly build a different set than the player enabled.
+/// one mod out would quietly build a different set than the player enabled. The one exception is
+/// an installed `.hmod` in the format from before the SDK, which [`super::stage_installed`] leaves
+/// out with a warning in the build log: it can never build.
 pub(super) fn checked_bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
     let paths = horizon_platform::mod_package::find(folder)
         .into_iter()

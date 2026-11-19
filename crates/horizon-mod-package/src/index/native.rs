@@ -52,6 +52,18 @@ pub fn read_manifest(path: &Path) -> Result<crate::Manifest, String> {
     Ok(manifest)
 }
 
+/// Whether the `.hmod` at `path` is a native mod in the format from before the `.hmod` SDK
+/// ([`crate::manifest::LEGACY_PATHS`]): it can't be built until its author makes it again.
+pub fn legacy_format(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    zip::ZipArchive::new(file).is_ok_and(|zip| {
+        zip.file_names()
+            .any(|name| name.is_ok_and(|name| crate::manifest::legacy_path(&name)))
+    })
+}
+
 /// A flat native mod and its checked, archive-relative files.
 pub struct Bundle {
     pub manifest: crate::Manifest,

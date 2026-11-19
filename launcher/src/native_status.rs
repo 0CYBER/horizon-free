@@ -178,7 +178,8 @@ pub fn wasm_points(home: &Path) -> Vec<horizon_platform::mod_package::index::nat
 
 /// The native mods turned on in game folder `home`, read from their `.hmod`s. One that can't be
 /// read always counts, with its file name and no version, so it needs a build (which says why):
-/// the on/off list is keyed by the manifest id, which an unreadable file can't give.
+/// the on/off list is keyed by the manifest id, which an unreadable file can't give. One in the
+/// format from before the SDK never counts: no build can take it (`native_mods::stage_installed`).
 pub fn enabled(home: &Path) -> Vec<Mod> {
     let mut out = Vec::new();
     for path in hmods(home) {
@@ -190,6 +191,7 @@ pub fn enabled(home: &Path) -> Vec<Mod> {
                     out.push((b.manifest.id, b.manifest.version, Some(digest)));
                 }
             }
+            Err(_) if legacy_format(&path) => {}
             Err(_) => out.push((stem(&path), String::new(), None)),
         }
     }
@@ -241,6 +243,9 @@ pub struct Installed {
     /// only the file name), nor for a `horizon-mods/` copy whose id another mod has: either
     /// would switch that other mod. The file stays removable.
     pub switch: bool,
+    /// Whether it is a native mod in the format from before the `.hmod` SDK
+    /// ([`legacy_format`]): it stays installed but no build takes it.
+    pub legacy: bool,
 }
 
 impl Installed {
@@ -252,9 +257,12 @@ impl Installed {
 
     /// Why the file can't load, shown instead of where it came from.
     pub fn note(&self) -> Option<&'static str> {
-        self.retired().then(|| {
-            crate::i18n::tr("Old format (.hnmod): ask its author to republish it as .hmod")
-        })
+        if self.retired() {
+            return Some(crate::i18n::tr(
+                "Old format (.hnmod): ask its author to republish it as .hmod",
+            ));
+        }
+        self.legacy.then(legacy_note)
     }
 
     /// Whether the file is in `horizon-native-mods/`; one in `horizon-mods/` is a wasm or
@@ -270,7 +278,25 @@ impl Installed {
 pub fn asks_for_build<'a>(files: impl IntoIterator<Item = &'a Installed>) -> bool {
     files
         .into_iter()
-        .any(|file| file.native() && !file.retired())
+        .any(|file| file.native() && !file.retired() && !file.legacy)
+}
+
+/// Whether the native `.hmod` at `path` is in the format from before the `.hmod` SDK.
+pub fn legacy_format(path: &Path) -> bool {
+    horizon_platform::mod_package::index::native::legacy_format(path)
+}
+
+/// Whether the browser-tracked `file` (relative to the game folder `home`) is a native mod that
+/// asks for a build: a native `.hmod` not in the format from before the SDK. Reads the archive.
+pub fn tracked_asks_for_build(home: &Path, file: &str) -> bool {
+    is_native_file(file) && !legacy_format(&home.join(file))
+}
+
+/// What the Mods page says of a native mod in the format from before the `.hmod` SDK.
+pub fn legacy_note() -> &'static str {
+    crate::i18n::tr(
+        "Made for the old native mod format: Play leaves it out. It needs a version made for the new SDK.",
+    )
 }
 
 /// Discover the actual files, not just GitHub sidecars. Registry files already have a row.
@@ -325,6 +351,7 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 origin,
                 // A retired `.hnmod` never switches the live mod, even when the archive reads.
                 switch: hmod && package.is_ok(),
+                legacy: github && package.is_err() && legacy_format(&path),
                 icon: package.map(|p| p.icon.map(Arc::new)),
             })
         })
@@ -843,6 +870,27 @@ capabilities = ['registries']
         }
         assert!(enabled(home.path()).is_empty(), "nothing to build");
         assert!(bundles_on(home.path()).is_empty());
+    }
+
+    #[test]
+    fn an_old_format_hmod_says_it_needs_a_new_sdk_version_and_asks_for_no_build() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home.path().join(native_mods::INSTALLED);
+        fs::create_dir_all(&folder).unwrap();
+        let mut zip =
+            zip::ZipWriter::new(fs::File::create(folder.join("fullbright.hmod")).unwrap());
+        zip.start_file(
+            "horizon-native.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut zip, b"{\"schema\": 1}").unwrap();
+        zip.finish().unwrap();
+        let files = untracked(home.path());
+        assert!(files[0].legacy && !files[0].retired());
+        assert_eq!(files[0].note(), Some(legacy_note()));
+        assert!(!asks_for_build(&files));
+        assert!(enabled(home.path()).is_empty());
     }
 
     #[test]

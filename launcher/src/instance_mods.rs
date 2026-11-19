@@ -46,6 +46,12 @@ pub(super) struct ModRow {
 }
 
 impl ModRow {
+    /// Whether it is a native mod in the format from before the SDK, which asks for no build:
+    /// its note says so ([`native_status::legacy_note`], set as the list is read).
+    pub(super) fn legacy(&self) -> bool {
+        self.error.as_deref() == Some(native_status::legacy_note())
+    }
+
     /// Its mod id when it is a native mod: one that builds, needs the native permission and has
     /// a build log. A hand-copied `.hmod` in `horizon-mods/` is not one.
     pub(super) fn native_id(&self) -> Option<&str> {
@@ -174,6 +180,13 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                 let package =
                     horizon_platform::mod_package::manifest::Package::read(&home.join(&e.file));
                 let icon = mod_icons::load(package.as_ref().map(|p| p.icon.as_ref()));
+                // An old-format native mod says what it needs, not the package reader's refusal.
+                let error = icon.error.map(|error| {
+                    match native_status::legacy_format(&home.join(&e.file)) {
+                        true => native_status::legacy_note().to_owned(),
+                        false => error,
+                    }
+                });
                 ModRow {
                     file: e.file.clone(),
                     name: e.title.clone(),
@@ -181,7 +194,7 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                     on: horizon::mod_id(&e).is_some_and(|id| java::is_enabled(home, id)),
                     entry: Some(e),
                     icon: icon.image,
-                    error: icon.error.filter(|_| !missing),
+                    error: error.filter(|_| !missing),
                     missing,
                     native: None,
                     internals: package
@@ -577,9 +590,10 @@ impl Launcher {
                     .iter()
                     .filter_map(|r| r.native.as_ref()),
             ) || self.instance_mods.list.iter().any(|r| {
-                r.entry
-                    .as_ref()
-                    .is_some_and(|e| native_status::is_native_file(&e.file))
+                !r.legacy()
+                    && r.entry
+                        .as_ref()
+                        .is_some_and(|e| native_status::is_native_file(&e.file))
             }));
         let build = native.then(|| self.native_build(cx)).flatten();
         let card = plate::cut(

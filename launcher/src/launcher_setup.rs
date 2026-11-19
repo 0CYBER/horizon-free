@@ -248,6 +248,7 @@ impl Launcher {
             perf: perf::Perf::new("session"),
             install_started: None,
             prepare_started: None,
+            prepare_tag: None,
             download_seen: None,
             home_tab: home_tabs::HomeTab::from_env(),
             home_menu: Default::default(),
