@@ -188,6 +188,7 @@ impl Launcher {
             );
         }
         let (accounts, n) = self.account_rows(cx);
+        let (offline, n) = self.offline_rows(n, cx);
         let group = |label: &'static str, icon: &'static str| {
             section_title(label, icon, &t).mt(px(20.)).mb(px(12.))
         };
@@ -206,6 +207,7 @@ impl Launcher {
                     .flex_col()
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
+                    .child(offline)
                     .child(group("Updates", "reload"))
                     .child(index_row(n + 1, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
@@ -380,6 +382,144 @@ impl Launcher {
                         }
                     })
                 ))
+    }
+
+    /// Settings > Game: the folder the game keeps its saves and options.txt in (`game_home`).
+    /// Horizon-free: upstream left the choice out of Settings; the default folder stands if none
+    /// is chosen, and the setting changes which folder the Horizon instance plays in.
+    pub(crate) fn game_folder_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let dir = backend::game_home();
+        let chosen = self.settings.game_dir.is_some();
+        let mut buttons = div()
+            .flex()
+            .gap(px(8.))
+            .child(
+                button("game-folder-open", "Open", Kind::Secondary, &t).on_click(|_, _, cx| {
+                    let dir = backend::game_home();
+                    let _ = std::fs::create_dir_all(&dir);
+                    crate::glass_toast::open(cx, &dir);
+                }),
+            )
+            .child(
+                button("game-folder-change", "Change", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.choose_game_folder(cx)),
+                ),
+            );
+        if chosen {
+            buttons = buttons.child(
+                button("game-folder-reset", "Use the default", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.settings.game_dir = None;
+                        this.save_settings();
+                        this.reload_instances();
+                        cx.notify();
+                    }),
+                ),
+            );
+        }
+        let detail = div()
+            .child(tr(
+                "Saves, options.txt and packs. Point it at the folder you already play in, or at an \
+                 empty one: nothing is moved for you.",
+            ))
+            .child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_size(px(12.))
+                    .child(short(&dir)),
+            )
+            .into_any_element();
+        if glass_ui::flat() {
+            return glass_ui::setting_row_stacked(
+                tr("Game folder"),
+                Some(detail),
+                buttons.into_any_element(),
+            );
+        }
+        index_row(
+            n,
+            tr("Game folder"),
+            Some(detail),
+            Some(buttons.into_any_element()),
+            &t,
+        )
+    }
+
+    /// Settings > Game: the Minecraft: Java Edition install the launcher prepares a version's game
+    /// files from (`Settings::minecraft_dir`). Play's folder menu picks the same one.
+    pub(crate) fn minecraft_folder_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let chosen = self.settings.minecraft_dir.clone();
+        let mut buttons = div().flex().gap(px(8.));
+        if chosen.is_some() {
+            buttons = buttons.child(
+                button("minecraft-folder-open", "Open", Kind::Secondary, &t).on_click(
+                    |_, _, cx| {
+                        let dir = backend::minecraft_dir(None).unwrap_or_default();
+                        let _ = std::fs::create_dir_all(&dir);
+                        crate::glass_toast::open(cx, &dir);
+                    },
+                ),
+            );
+        }
+        buttons = buttons.child(
+            button("minecraft-folder-change", "Change", Kind::Secondary, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_folder(cx))),
+        );
+        let detail = div()
+            .child(tr(
+                "Where Minecraft: Java Edition is installed. The launcher reads the game's sounds, \
+                 assets and libraries from it, and finds the official launcher's folder by itself.",
+            ))
+            .child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_size(px(12.))
+                    .child(
+                        chosen.map_or_else(|| tr("Found automatically").to_string(), |dir| short(&dir)),
+                    ),
+            )
+            .into_any_element();
+        if glass_ui::flat() {
+            return glass_ui::setting_row_stacked(
+                tr("Minecraft folder"),
+                Some(detail),
+                buttons.into_any_element(),
+            );
+        }
+        index_row(
+            n,
+            tr("Minecraft folder"),
+            Some(detail),
+            Some(buttons.into_any_element()),
+            &t,
+        )
+    }
+
+    /// Horizon-free: Settings > Game's own game folder (`Settings::game_dir`): the Horizon
+    /// instance plays in it, so its saves, `options.txt` and packs come from there.
+    pub(crate) fn choose_game_folder(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(tr("Choose").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = paths.await {
+                if let Some(path) = paths.pop() {
+                    let _ = this.update(cx, |this, cx| {
+                        this.settings.game_dir = Some(path);
+                        this.save_settings();
+                        // The Horizon instance's folder is the game folder, which just changed.
+                        this.reload_instances();
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in
@@ -627,7 +767,7 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.play_as(&uuid);
+                            this.play_as(account::Player::Microsoft(uuid.clone()));
                             cx.notify();
                         }),
                     ),
