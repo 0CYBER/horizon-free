@@ -236,6 +236,20 @@ impl Launcher {
             .children(self.location_error.as_ref().map(|message| {
                 text(theme::CAPTION).px(px(if t.glass { 14. } else { 0. })).text_color(t.danger).child(message.clone())
             }));
+        if cfg!(windows) {
+            body = body.child(text(theme::CAPTION).px(px(if t.glass { 14. } else { 0. })).text_color(t.muted).child(tr(
+                "On Windows, folders with spaces or non-English characters use a separate build folder. The chosen drive is preferred; otherwise the previous build drive is used. Allow enough free space in both locations.",
+            ).to_string()));
+        }
+        body = body.child(
+            text(theme::CAPTION)
+                .px(px(if t.glass { 14. } else { 0. }))
+                .text_color(t.muted)
+                .child(trf(
+                    "Build data: {path}",
+                    &[("path", &backend::build_dir().display().to_string())],
+                )),
+        );
         if horizon_launcher::data_location::startup_error().is_some() {
             body = body.child(
                 div()

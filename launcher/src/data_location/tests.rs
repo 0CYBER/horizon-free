@@ -8,8 +8,23 @@ struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let base = fs::canonicalize(std::env::temp_dir()).unwrap();
+        // Keep any separate Windows build directory inside the fixture, even when TEMP
+        // is under a non-ASCII user profile. Use pr_ready's ProgramData fallback.
+        #[cfg(windows)]
+        let base = if tool_safe(&base).is_err() {
+            let public = std::env::var_os("ProgramData")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute() && tool_safe(path).is_ok())
+                .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+            let base = fs::canonicalize(public).unwrap();
+            tool_safe(&base).expect("Set TEMP to a writable ASCII path without spaces");
+            base
+        } else {
+            base
+        };
         loop {
-            let path = std::env::temp_dir().join(format!(
+            let path = base.join(format!(
                 "horizon-location-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
@@ -193,12 +208,24 @@ fn full_move_preserves_aliased_and_nested_build_layouts() {
 }
 
 #[test]
-fn nonempty_destination_preserves_pointer_and_contents() {
+fn nonempty_and_file_destinations_preserve_pointer_and_contents() {
     let f = Fixture::new("build");
-    fs::create_dir(f.target()).unwrap();
-    fs::write(f.target().join("sentinel"), b"keep").unwrap();
-    assert!(f.refuse(&f.target()).contains("empty folder"));
-    assert_eq!(fs::read(f.target().join("sentinel")).unwrap(), b"keep");
+    let folder = f.temp.0.join("Игры with spaces");
+    let file = f.temp.0.join("Existing file");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("sentinel"), b"keep folder contents").unwrap();
+    fs::write(&file, b"keep file contents").unwrap();
+    for target in [&folder, &file] {
+        let error = f.refuse(target);
+        assert!(error.contains("empty folder"), "{error}");
+        assert!(error.contains(&target.display().to_string()), "{error}");
+    }
+    assert_eq!(fs::read_dir(&folder).unwrap().count(), 1);
+    assert_eq!(
+        fs::read(folder.join("sentinel")).unwrap(),
+        b"keep folder contents"
+    );
+    assert_eq!(fs::read(file).unwrap(), b"keep file contents");
 }
 
 #[test]
@@ -536,23 +563,101 @@ fn unit_tests_never_resolve_the_real_profile() {
 
 #[cfg(windows)]
 #[test]
-fn unsupported_windows_destinations_explain_how_to_retry_without_changing_data() {
-    let f = Fixture::new("build");
-    for name in ["My Games", "Игры"] {
-        let target = f.temp.0.join(name).join("Horizon");
-        let error = f.refuse(&target);
-        assert!(
-            error.contains(&target.join("build").display().to_string()),
-            "{error}"
-        );
-        assert!(error.contains("Windows build tools cannot use the build folder"));
-        assert!(error.contains("spaces, other whitespace, or non-ASCII characters"));
-        assert!(error.contains("English letters, numbers, underscores or hyphens"));
-        assert!(error.contains(r"D:\Horizon_Data"));
-        assert!(error.contains("Check every parent folder too"));
-        assert!(!target.exists(), "rejection must precede copying");
+fn windows_moves_unicode_and_spaced_data_with_a_physical_ascii_build_folder() {
+    for build in ["build", "launcher", "launcher/native-build"] {
+        let f = Fixture::new(build);
+        let missing = f.temp.0.join("My Games").join("Horizon");
+        let existing = f.temp.0.join("Users/Ирина/AppData/Local/Horizon");
+        let ordinary = f.temp.0.join("Horizon_Data-2");
+        fs::create_dir_all(&existing).unwrap();
+        let mut source = f.source.clone();
+        for target in [&missing, &existing, &ordinary] {
+            let moved = migrate(&source, target, &f.bootstrap, |_| {}).unwrap();
+            assert_eq!(moved.launcher, target.join("launcher"));
+            assert_eq!(moved.game, target.join("game"));
+            assert_eq!(
+                resolve_at(&f.bootstrap).unwrap(),
+                Some(moved.clone()),
+                "restart"
+            );
+            let physical_build = checked_path(&moved.build).unwrap();
+            tool_safe(&physical_build).unwrap();
+            assert_eq!(physical_build, moved.build, "not an alias");
+            if target == &ordinary {
+                assert_eq!(moved.build, target.join("build"));
+            } else {
+                assert!(within(&moved.build, &f.temp.0));
+                assert!(!within(&moved.build, target));
+            }
+            f.migrated(&moved);
+            source = moved;
+        }
     }
-    let target = f.temp.0.join("Horizon_Data-2");
-    let roots = migrate(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
-    f.migrated(&roots);
+}
+
+#[cfg(windows)]
+#[test]
+fn separate_build_copy_and_commit_failures_keep_the_original_pointer() {
+    use std::os::windows::fs::OpenOptionsExt;
+    for commit_failure in [false, true] {
+        let f = Fixture::new("build");
+        let locked = if commit_failure {
+            f.bootstrap.clone()
+        } else {
+            f.source.build.join("cache/compiled.bin")
+        };
+        let guard = OpenOptions::new()
+            .read(true)
+            .share_mode(if commit_failure { 1 | 2 } else { 0 })
+            .open(locked)
+            .unwrap();
+        let target = f.temp.0.join("Игры with spaces");
+        let mut committing = false;
+        let error = migrate(&f.source, &target, &f.bootstrap, |s| {
+            committing |= s == "Committing data location"
+        })
+        .unwrap_err();
+        drop(guard);
+        assert_eq!(committing, commit_failure);
+        assert!(error.contains("Original data was kept"));
+        assert!(error.contains("horizon-build-"), "{error}");
+        f.old_pointer();
+        let retry = f.temp.0.join("Retry Игры");
+        let moved = migrate(&f.source, &retry, &f.bootstrap, |_| {}).unwrap();
+        f.migrated(&moved);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn separate_build_is_staged_without_publishing_until_preparation_succeeds() {
+    let f = Fixture::new("build");
+    let target = f.temp.0.join("Игры");
+    let error = migrate_with_prepare(
+        &f.source,
+        &target,
+        &f.bootstrap,
+        |_| {},
+        |stage, final_roots| {
+            assert_eq!(stage.build, final_roots.build);
+            assert_eq!(
+                fs::read(stage.build.join("cache/compiled.bin")).unwrap(),
+                b"\0\x01\xfe\xffbuild"
+            );
+            assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(f.source.clone()));
+            Err("fixture preparation failure".into())
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("fixture preparation failure"));
+    assert!(error.contains("horizon-build-"));
+    f.old_pointer();
+    let retry = f.temp.0.join("Retry Игры");
+    let moved = migrate(&f.source, &retry, &f.bootstrap, |_| {}).unwrap();
+    f.migrated(&moved);
+    let offline = moved.build.with_file_name("disconnected");
+    fs::rename(&moved.build, &offline).unwrap();
+    assert!(resolve_at(&f.bootstrap).unwrap_err().contains("missing"));
+    fs::rename(offline, &moved.build).unwrap();
+    assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(moved));
 }
