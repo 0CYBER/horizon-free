@@ -403,7 +403,7 @@ def scenario_controller_profiles():
         g.wait(lambda: any('Editing:' in l and 'P1' in l for l in labels(1)), 'P1 named on its screen')
         g.ctl(1, 'click-button', 'Device')
         g.wait(lambda: any(l.startswith('Vibration') for l in labels(1)), 'P1\'s Device page')
-        check('P1 keeps its own', next(l for l in labels(1) if l.startswith('Vibration')).endswith('ON'), True)
+        check('P1 keeps its own', next(l for l in labels(1) if l.startswith('Vibration')).endswith(': On'), True)
     finally:
         g.quit()
 

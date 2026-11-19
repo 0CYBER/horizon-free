@@ -8,8 +8,6 @@
 //! file stays exactly vanilla's. The game reads the pads with gilrs.
 use std::{
     collections::BTreeMap,
-    fs,
-    path::Path,
     time::{Duration, Instant},
 };
 
@@ -259,6 +257,7 @@ pub const HOTBAR_NEXT: &str = "pad.hotbarNext";
 pub const RADIAL: &str = "pad.radial";
 
 mod radial_file;
+pub mod store;
 pub use radial_file::{RadialMode, RadialStick, opener_refused};
 
 /// The `bindLayout` the settings file is written in. 1: the defaults of the binds list as they
@@ -743,19 +742,6 @@ impl PadSettings {
     /// A pad of `family` goes by its letters: only a Nintendo pad has letters to go by.
     pub fn by_letter(&self, family: GlyphStyle) -> bool {
         self.nintendo_letters && family == GlyphStyle::Nintendo
-    }
-    pub fn load(dir: &Path) -> Self {
-        fs::read_to_string(dir.join(FILE))
-            .map(|t| Self::parse(&t))
-            .unwrap_or_default()
-    }
-    /// Written once something differs from the defaults, so players who
-    /// never touch a controller get no new file.
-    pub fn save(&self, dir: &Path) {
-        let path = dir.join(FILE);
-        if *self != Self::default() || path.exists() {
-            let _ = fs::write(path, self.serialize());
-        }
     }
     pub fn parse(text: &str) -> Self {
         let mut s = Self::default();
@@ -1905,34 +1891,18 @@ bind_key.hotbar.2:north
     }
 
     #[test]
-    fn navigation_preferences_migrate_and_stay_with_each_player() {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-pad-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let p2 = dir.join("P2");
-        fs::create_dir_all(&p2).unwrap();
-        let fresh = PadSettings::load(&dir);
-        assert_eq!(fresh, PadSettings::default());
+    fn navigation_preferences_migrate_and_round_trip() {
         // An older file, with the removed menuNavigation key: bindings kept.
         let legacy =
             PadSettings::parse("menuNavigation:pointer\nbind_key.jump:east\nlookSensitivity:0.7\n");
         assert_eq!(legacy.binding("key.jump"), Some(Button::East));
         assert_eq!(legacy.look_sensitivity, 0.7);
-        fresh.save(&dir);
-        assert!(!dir.join(FILE).exists(), "defaults write no file");
         let mut other = legacy;
         other.pointer_speed = 2.5;
         other.scroll_speed = 24.0;
         other.repeat_delay = 0.6;
         other.repeat_interval = 0.12;
-        other.save(&p2);
-        assert_eq!(PadSettings::load(&p2), other);
-        assert_eq!(PadSettings::load(&dir), fresh, "P2 did not write P1");
+        assert_eq!(PadSettings::parse(&other.serialize()), other);
         let invalid = PadSettings::parse(
             "pointerSpeed:NaN\nscrollSpeed:inf\nrepeatDelay:-10\nrepeatInterval:20\n",
         );
@@ -1946,7 +1916,6 @@ bind_key.hotbar.2:north
             (bounded.repeat_delay, bounded.repeat_interval),
             (0.35, 0.09)
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

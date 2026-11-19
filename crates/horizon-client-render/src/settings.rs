@@ -351,6 +351,8 @@ impl Settings {
     pub fn load_stores(path: &Path) {
         let dir = path.parent();
         horizon_hooks::settings::engine::load(&mut |file| fs::read_to_string(dir?.join(file)).ok());
+        // The controller's lines end their load: the settings made from P1's already hold them.
+        crate::gamepad::store::loaded();
     }
     pub fn load(path: &Path) -> Self {
         let mut horizon = path
@@ -368,10 +370,6 @@ impl Settings {
                 horizon.save(dir);
             }
         }
-        let controller = path
-            .parent()
-            .map(crate::gamepad::PadSettings::load)
-            .unwrap_or_default();
         let extras_text = path
             .parent()
             .and_then(|dir| fs::read_to_string(dir.join(crate::extras::FILE)).ok())
@@ -384,6 +382,8 @@ impl Settings {
             Some(dir) => fs::read_to_string(dir.join(file)).ok(),
             None => None,
         });
+        // `horizon-controller.txt`, through its store, as the seat whose turn it is.
+        let controller = crate::gamepad::store::loaded();
         // The enabled mods are the game folder's, shared by its players (`--player-dir`).
         let mods = path
             .parent()
@@ -712,7 +712,8 @@ impl Settings {
         }
         if let Some(dir) = path.parent() {
             self.horizon.save(dir);
-            self.controller.save(dir);
+            // Written by its store below, with the other stores' own files.
+            crate::gamepad::store::keep(&self.controller);
             let mut extras = self.extras.clone();
             extras.emote_key = self.keys.get("key.emote").to_owned();
             extras.save(dir);

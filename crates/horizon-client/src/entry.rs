@@ -123,6 +123,11 @@ pub fn start<G>(
     // Crates above the engine registered their hooks before this (horizon-official's `main`),
     // then the Horizon parts still in this crate; none registers after this point.
     game::player_hooks::register();
+    // `horizon-controller.txt` (platform, still in this crate's input until the controllers move
+    // out, layer plan M6), one player's side per seat.
+    if let Err(e) = horizon_hooks::settings::register(&horizon_client::gamepad::store::STORE) {
+        log::error!("Controllers: their settings came too late: {e}");
+    }
     horizon_hooks::engine::seal();
     // The text crates ship (`horizon_hooks::lang`), loaded with the game's own languages.
     horizon_client::lang::install_crate_files(horizon_hooks::lang::engine::all());

@@ -1919,6 +1919,7 @@ dependencies = [
  "arboard",
  "horizon-client-core",
  "horizon-engine-slots",
+ "horizon-hooks",
  "horizon-mod-api-macros",
  "horizon-theme",
  "log",
