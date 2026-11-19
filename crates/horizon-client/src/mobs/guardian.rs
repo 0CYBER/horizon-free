@@ -50,7 +50,12 @@ pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(4, GuardianAttack { attack_time: 0 });
     g.add(5, MoveTowardsRestriction::new(1.0).looking());
-    g.add(7, Stroll::new(1.0).interval(if elder { 400 } else { 80 }));
+    g.add(
+        7,
+        Stroll::new(1.0)
+            .interval(if elder { 400 } else { 80 })
+            .looking(),
+    );
     g.add(8, LookAtPlayer::new(8.0));
     // `LookAtPlayerGoal(this, Guardian.class, 12.0F, 0.01F)`: the elder
     // guardians inherit the goal, so its class matches them too.
@@ -87,6 +92,10 @@ impl Goal for GuardianAttack {
         MOVE | LOOK
     }
     fn every_tick(&self) -> bool {
+        true
+    }
+    /// `GuardianAttackGoal.stop`: the guardian strolls as soon as the beam ends.
+    fn strolls_on_stop(&self) -> bool {
         true
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
@@ -315,8 +324,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// are the ones whose direct entity is the living attacker itself (a player's
 /// blow, a mob's melee, a bee's sting, a warden's boom).
 pub fn hurt_server(m: &mut Mob, d: &Damage) {
-    if m.extra.flag2
-        || !matches!(
+    if !m.extra.flag2
+        && matches!(
             d.kind,
             DamageKind::PlayerAttack
                 | DamageKind::MaceSmash
@@ -327,27 +336,29 @@ pub fn hurt_server(m: &mut Mob, d: &Damage) {
                 | DamageKind::SonicBoom
         )
     {
-        return;
+        let from = [m.position.x, m.position.y, m.position.z];
+        match d.attacker {
+            Some(Who::Player) => m.outbox.push(MobEvent::DamagePlayer {
+                amount: 2.0,
+                from,
+                kind: "minecraft:thorns",
+            }),
+            Some(Who::Mob(id)) => m.outbox.push(MobEvent::DamageMob {
+                target: id,
+                amount: 2.0,
+                source: Damage {
+                    kind: DamageKind::Thorns,
+                    attacker: Some(Who::Mob(m.id)),
+                    from: Some(from),
+                    attacker_species: Some(m.species()),
+                },
+            }),
+            None => {}
+        }
     }
-    let from = [m.position.x, m.position.y, m.position.z];
-    match d.attacker {
-        Some(Who::Player) => m.outbox.push(MobEvent::DamagePlayer {
-            amount: 2.0,
-            from,
-            kind: "minecraft:thorns",
-        }),
-        Some(Who::Mob(id)) => m.outbox.push(MobEvent::DamageMob {
-            target: id,
-            amount: 2.0,
-            source: Damage {
-                kind: DamageKind::Thorns,
-                attacker: Some(Who::Mob(m.id)),
-                from: Some(from),
-                attacker_species: Some(m.species()),
-            },
-        }),
-        None => {}
-    }
+    // `Guardian.hurtServer`: after the spikes, any hurt at all triggers the
+    // stroll, before `super.hurtServer`'s guards.
+    m.ai.goals.trigger_stroll();
 }
 /// `GuardianModel.setupAnim`'s eye: it follows `look` (the attack target's
 /// eye, else the camera's), from where the guardian faces.

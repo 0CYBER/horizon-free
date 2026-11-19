@@ -1,7 +1,8 @@
 //! `Guardian.hurtServer`'s spikes and `Guardian.registerGoals`' priority-5
 //! `MoveTowardsRestrictionGoal`: a still guardian's spikes hurt the living
 //! thing that hit it at the instant of the hit, and a guardian taken out of
-//! its home swims back into it.
+//! its home swims back into it. And its stroll: `randomStrollGoal.trigger()`
+//! from the attack goal's stop and from a hurt, and the LOOK flag it keeps.
 use super::*;
 use crate::mobs::goals::{Cx, JUMP, MOVE};
 use crate::mobs::guardian::{elder_server_ai_step, register};
@@ -115,9 +116,12 @@ fn a_still_guardian_spikes_whoever_hits_it() {
     }
 }
 
-/// A pool of water from x -8 to 70, z -4 to 4, y 60 to 66.
-fn pool() -> impl FnOnce(&mut crate::world::World, &horizon_world::registry::BlockRegistry) {
-    |world, registry| {
+/// A pool of water from x -8 to 70, z -4 to 4, y 60 to 66, and with `wall` a
+/// stone wall at x = 20 across it (sight from one side to the other blocked).
+fn pool_with(
+    wall: bool,
+) -> impl FnOnce(&mut crate::world::World, &horizon_world::registry::BlockRegistry) {
+    move |world, registry| {
         let water = registry.default_state("minecraft:water").unwrap();
         for cx in -1..=4 {
             for cz in -1..=0 {
@@ -133,6 +137,188 @@ fn pool() -> impl FnOnce(&mut crate::world::World, &horizon_world::registry::Blo
                 }
             }
         }
+        if wall {
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            for y in 60..=66 {
+                for z in -4..=4 {
+                    world.set(20, y, z, stone).unwrap();
+                }
+            }
+        }
+    }
+}
+fn pool() -> impl FnOnce(&mut crate::world::World, &horizon_world::registry::BlockRegistry) {
+    pool_with(false)
+}
+
+/// One goal tick of a guardian (`GoalSelector.tick` alone, with the sight
+/// cache `ai::tick` clears every tick).
+fn goal_tick(
+    goals: &mut crate::mobs::goals::GoalSelector,
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut crate::health::DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+) {
+    m.ai.seen_cache.clear();
+    goals.tick(m, &mut Cx { w, level, events });
+}
+
+/// `GuardianAttackGoal.stop`'s and `Guardian.hurtServer`'s
+/// `randomStrollGoal.trigger()`: a guardian strolls on the very tick its beam
+/// ends (its target gone from sight) and the tick it is hurt, instead of
+/// waiting for the stroll's 1-in-40 interval draw.
+#[test]
+fn a_guardian_strolls_at_once_when_its_beam_ends_or_it_is_hurt() {
+    // (seed, the beam fired, the stroll after the beam, its target, the stroll after a hurt)
+    let mut out = Vec::new();
+    let ran = with_built_test_world(&[], pool_with(true), |w, types| {
+        let squid = Mob::new(
+            100,
+            Arc::new(types.types["minecraft:squid"].clone()),
+            Vec3::new(12.5, 62.0, 0.5),
+            0.0,
+        );
+        let others = [squid.seen(None, &crate::items::Items::empty())];
+        let mut world = w.clone();
+        world.others = &others;
+        let kind = Arc::new(types.types["minecraft:guardian"].clone());
+        for seed in 0..8 {
+            let mut m = Mob::with_random(
+                1,
+                kind.clone(),
+                Vec3::new(0.5, 62.0, 0.5),
+                0.0,
+                crate::mobs::EntityRandom::own(LegacyRandom::new(seed)),
+            );
+            register(&mut m);
+            m.fluids.in_water = true;
+            m.ai.target = Some(Who::Mob(100));
+            let mut test_level = crate::health::TestLevel::new(seed);
+            let mut events = Vec::new();
+            // The beam charges for ten ticks, then fires.
+            let mut beamed = false;
+            for _ in 0..40 {
+                crate::mobs::ai::tick(&mut m, &world, &mut test_level.level(), &mut events);
+                if m.extra.flag {
+                    beamed = true;
+                    break;
+                }
+            }
+            // Step out of sight behind the wall: the beam's goal stops.
+            m.position = Vec3::new(30.5, 62.0, 0.5);
+            m.previous = m.position;
+            let mut strolled = false;
+            for _ in 0..4 {
+                crate::mobs::ai::tick(&mut m, &world, &mut test_level.level(), &mut events);
+                strolled |= m.ai.goals.is_running("RandomStroll");
+            }
+            let target = m.ai.nav.target_pos;
+
+            let mut hurt = Mob::with_random(
+                1,
+                kind.clone(),
+                Vec3::new(0.5, 62.0, 0.5),
+                0.0,
+                crate::mobs::EntityRandom::own(LegacyRandom::new(seed)),
+            );
+            register(&mut hurt);
+            hurt.fluids.in_water = true;
+            hurt.damage(
+                &mut test_level.level(),
+                1.0,
+                Damage::player([5.5, 62.0, 0.5]),
+            );
+            let mut after_hurt = false;
+            for _ in 0..4 {
+                crate::mobs::ai::tick(&mut hurt, &world, &mut test_level.level(), &mut events);
+                after_hurt |= hurt.ai.goals.is_running("RandomStroll");
+            }
+            out.push((seed, beamed, strolled, target, after_hurt));
+        }
+    });
+    if !ran {
+        return;
+    }
+    for (seed, beamed, strolled, target, _) in &out {
+        assert!(beamed, "seed {seed}: the beam fires at its target");
+        assert!(
+            strolled,
+            "seed {seed}: the guardian strolls on the tick its beam ends"
+        );
+        assert!(target.is_some(), "seed {seed}: and swims somewhere");
+    }
+    for (seed, _, _, _, after_hurt) in &out {
+        assert!(
+            after_hurt,
+            "seed {seed}: a hurt guardian strolls at once too"
+        );
+    }
+}
+
+/// `Guardian.registerGoals`' `randomStrollGoal.setFlags(MOVE, LOOK)`: while a
+/// guardian strolls the look-at-player goal cannot turn its head to a player
+/// standing by (the stroll keeps the head with the body).
+#[test]
+fn a_strolling_guardian_keeps_its_head_with_its_body() {
+    // (seed, still strolling, the furthest the head left the body, in degrees)
+    let mut out = Vec::new();
+    let ran = with_built_test_world(&[], pool(), |w, types| {
+        let mut world = w.clone();
+        world.player = Some(crate::mobs::world::test_player(Vec3::new(5.5, 62.0, 0.5)));
+        let kind = Arc::new(types.types["minecraft:guardian"].clone());
+        for seed in 0..200 {
+            let mut m = Mob::with_random(
+                1,
+                kind.clone(),
+                Vec3::new(0.5, 62.0, 0.5),
+                0.0,
+                crate::mobs::EntityRandom::own(LegacyRandom::new(seed)),
+            );
+            register(&mut m);
+            m.fluids.in_water = true;
+            let mut test_level = crate::health::TestLevel::new(seed);
+            let mut events = Vec::new();
+            let mut goals = std::mem::take(&mut m.ai.goals);
+            // The stroll's first draw is 1 in 40: take a seed where it strolls at once.
+            goal_tick(
+                &mut goals,
+                &mut m,
+                &world,
+                &mut test_level.level(),
+                &mut events,
+            );
+            if !goals.is_running("RandomStroll") {
+                continue;
+            }
+            let mut turned = 0.0_f32;
+            for _ in 0..300 {
+                goal_tick(
+                    &mut goals,
+                    &mut m,
+                    &world,
+                    &mut test_level.level(),
+                    &mut events,
+                );
+                m.look_control_tick();
+                // How far the head left the body it is carried by, in degrees.
+                let off = (m.head_yaw - m.body_yaw + 180.0).rem_euclid(360.0) - 180.0;
+                turned = turned.max(off.abs());
+            }
+            out.push((seed, goals.is_running("RandomStroll"), turned));
+            m.ai.goals = goals;
+        }
+    });
+    if !ran {
+        return;
+    }
+    assert!(!out.is_empty(), "some seed strolls on its first goal tick");
+    for (seed, strolling, turned) in out {
+        assert!(strolling, "seed {seed}: the stroll runs on");
+        assert!(
+            turned < 0.5,
+            "seed {seed}: a strolling guardian does not turn its head to the player ({turned} degrees)"
+        );
     }
 }
 
