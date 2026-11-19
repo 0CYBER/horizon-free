@@ -278,6 +278,13 @@ of P1: the others follow P1's answer.
   `texts/splashes.txt` joins it (`crates/horizon-client/src/splashes.rs`). Read
   on each resource reload.
 
+### Finer far terrain while zoomed (`lodZoomDetail`, default off)
+- No Extras page entry yet: set `lodZoomDetail:true` in `horizon-extras.txt` with
+  the game closed. While a zoom magnifies far terrain (LOD Distance on), its tiles
+  are planned finer, at the cost of more tiles while the zoom is held
+  (`lod::ZoomAim`, `fov.rs`). Off until a measurement shows those tiles arrive
+  while the zoom is still held.
+
 ## Shared rules
 
 - All extras are hidden with F1 and drawn in the HUD layer: under screens, over

@@ -15,7 +15,7 @@ use crate::{
     gamepad::{self, GlyphStyle},
     hdr_calibration::Picture,
     hud::{HudAtlas, HudBatch, rgba},
-    keybinds::{self, CATEGORIES, KeyBinds, MAPPINGS},
+    keybinds::{self, CATEGORIES, KeyBinds},
     lang::{self, LanguageInfo},
     settings::{SOUND_SOURCES, Settings},
     settings_shell as shell,
@@ -1401,7 +1401,7 @@ fn key_conflicts(
     use crate::mod_list::{KeyConflictContext, bindings_conflict};
     let binding = (key, modifiers, context, at_default);
     let mut conflicts = Vec::new();
-    for &(name, _, _) in keybinds::MAPPINGS {
+    for &(name, _, _) in keybinds::all_mappings() {
         if !(owner.is_empty() && name == id)
             && bindings_conflict(
                 binding,
@@ -6708,7 +6708,7 @@ mod tests {
         );
         press(&mut ui, &mut s);
         assert_eq!(
-            ui.key(&mut s, &atlas, K::Escape, None),
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
             vec![Event::Changed]
         );
         assert_eq!(s.controller.binding("key.jump"), None);
@@ -7435,6 +7435,139 @@ mod tests {
         assert_eq!(s.keys.get("key.jump"), "key.mouse.left");
         assert_eq!(ui.scrollbar_drag_y, None);
         assert!(ui.release().is_empty());
+    }
+
+    /// The `Act::Key` rows of the Key Binds page, all of them on one tall screen.
+    fn key_bind_rows(ui: &mut OptionsUi, s: &Settings) -> Vec<&'static str> {
+        let (widgets, _, _, _) = ui.layout(s, 480.0, 8000.0);
+        widgets
+            .iter()
+            .filter_map(|w| match &w.kind {
+                WKind::Button {
+                    act: Act::Key(name),
+                    ..
+                } => Some(*name),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn key_binds_list_the_emote_key_and_escape_unbinds_it() {
+        // `key.emote` is Horizon's own (`HORIZON_MAPPINGS`, kept in horizon-extras.txt). #18361
+        let atlas = atlas();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-key-binds-emote-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = dir.join("options.txt");
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::KeyBinds);
+        assert!(key_bind_rows(&mut ui, &s).contains(&"key.emote"));
+        // Another key put on B warns on the emote row.
+        s.keys.set("key.jump", "key.keyboard.b");
+        let warned = |s: &Settings| {
+            !key_conflicts(
+                s,
+                "",
+                "key.emote",
+                s.keys.get("key.emote"),
+                0,
+                crate::mod_list::KeyConflictContext::Universal,
+                s.keys.is_default("key.emote"),
+            )
+            .is_empty()
+        };
+        assert!(warned(&s));
+        s.keys.reset_all();
+        assert!(!warned(&s));
+        // Click the row, then Escape: "Not Bound".
+        let (widgets, _, _, _) = ui.layout(&s, 480.0, 8000.0);
+        let row = widgets
+            .iter()
+            .find(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::Key("key.emote"),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let (x, y) = (row.x + row.w / 2.0, row.y + row.h / 2.0);
+        assert_eq!(
+            ui.click(
+                &mut s,
+                &atlas,
+                x,
+                y,
+                (480.0, 8000.0),
+                [480, 8000],
+                false,
+                false
+            ),
+            vec![Event::ButtonClick]
+        );
+        assert_eq!(ui.selected_key, Some("key.emote"));
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
+            vec![Event::Changed]
+        );
+        assert_eq!(s.keys.get("key.emote"), "key.keyboard.unknown");
+        // Saved to horizon-extras.txt, options.txt stays vanilla's, and a restart keeps it.
+        s.save(&options);
+        let extras = std::fs::read_to_string(dir.join(crate::extras::FILE)).unwrap();
+        assert!(
+            extras.lines().any(|l| l == "emoteKey:key.keyboard.unknown"),
+            "{extras}"
+        );
+        assert!(!std::fs::read_to_string(&options).unwrap().contains("emote"));
+        assert_eq!(
+            Settings::load(&options).keys.get("key.emote"),
+            "key.keyboard.unknown"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_mapping_the_game_binds_has_a_key_binds_row() {
+        let s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::KeyBinds);
+        let rows = key_bind_rows(&mut ui, &s);
+        let (widgets, _, _, _) = ui.layout(&s, 480.0, 8000.0);
+        for &(name, _, _) in keybinds::all_mappings() {
+            assert_eq!(rows.iter().filter(|r| **r == name).count(), 1, "{name}");
+            assert!(
+                widgets.iter().any(|w| matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ResetKey(n),
+                        ..
+                    } if n == name
+                )),
+                "{name} has no Reset"
+            );
+            // Searching for its name finds it, and only rows that match.
+            let query = lang::get(name);
+            ui.settings_search.value = query.clone();
+            let found = key_bind_rows(&mut ui, &s);
+            assert!(found.contains(&name), "{name}");
+            assert!(found.len() < rows.len(), "{name}");
+            assert!(
+                found
+                    .iter()
+                    .all(|r| lang::get(r).to_lowercase().contains(&query.to_lowercase())),
+                "{name}: {found:?}"
+            );
+            ui.settings_search.value.clear();
+        }
+        assert_eq!(rows.len(), keybinds::all_mappings().count());
     }
 
     #[test]
