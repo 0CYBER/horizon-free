@@ -1834,9 +1834,14 @@ impl Game<'_> {
         match arrival.traveller {
             Arriving::Live(id) => {
                 if let Some(target) = self.level_entity(id as i32) {
-                    // Entity.teleportSameDimension keeps the live entity and
-                    // its motion, and moves every passenger in the same operation.
+                    // Entity.teleportSameDimension keeps the live entity and moves every
+                    // passenger in the same operation. The gateway's transition has
+                    // `Relative.DELTA`: the motion `/tp`'s rule in there stops is put back.
+                    let motion = self.transition_motion(target);
                     self.teleport_to_in_level(target, [at.x, at.y, at.z], None, [false; 3], false);
+                    if let Some(motion) = motion {
+                        self.restore_transition_motion(target, motion);
+                    }
                     self.set_portal_cooldown(id);
                     self.place_portal_ticket(key);
                 }
@@ -2011,6 +2016,50 @@ mod tests {
             assert_eq!(pearl.portal_cooldown(game), Some(300));
             assert!(!pearl.set_portal_cooldown(game, 40));
             assert_eq!(pearl.portal_cooldown(game), Some(300));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn an_entity_keeps_its_motion_through_a_gateway() {
+        use super::super::native_entity_refs::tests::with_game;
+
+        with_game(|game| {
+            // The exit's chunk is loaded, so the arrival does not wait.
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
+            game.spawn_item_own(
+                horizon_client::items::ItemStack::new("minecraft:stick", 1),
+                [2.5, 100.0, 2.5],
+                0,
+            );
+            let id = game.dropped.last().unwrap().id;
+            let target = Vec3::new(12.5, 100.0, 12.5);
+            let motion = Vec3::new(0.117, 0.25, -0.05);
+            game.dropped
+                .iter_mut()
+                .find(|d| d.id == id)
+                .unwrap()
+                .velocity = motion;
+            let arrival = GatewayArrival {
+                traveller: Arriving::Live(id),
+                job: GatewayJob::Known {
+                    exit: [12, 100, 12],
+                    exact: true,
+                },
+                target,
+            };
+            assert!(game.arrive_through_gateway(arrival).is_none());
+            // Entity.teleportSameDimension with the gateway's Relative.DELTA: the
+            // entity is at the exit and its motion is kept.
+            let item = game.dropped.iter().find(|d| d.id == id).unwrap();
+            let (at, to) = (item.position, target);
+            for (a, t) in [(at.x, to.x), (at.y, to.y), (at.z, to.z)] {
+                assert!((a - t).abs() < 1e-3, "{at:?}");
+            }
+            assert_eq!(item.velocity, motion);
         });
     }
 

@@ -294,7 +294,7 @@ impl Game<'_> {
     /// transition that keeps it (`TeleportMotion::Keep`) carries over, a
     /// minecart's clamped (`cart_known_movement`). None for a player, whose
     /// client holds its motion, and an entity no level holds.
-    pub(super) fn transition_motion(&mut self, t: Target) -> Option<Vec3> {
+    pub(in crate::game) fn transition_motion(&mut self, t: Target) -> Option<Vec3> {
         let id = super::native_entities::target_id(t)?;
         let motion = self
             .in_target_level(t, |g| {
@@ -310,7 +310,7 @@ impl Game<'_> {
     }
     /// After a teleport placed `t` in its level: `motion` is its motion again
     /// (`Entity.teleportSetPosition` with `Relative.DELTA`).
-    pub(super) fn restore_transition_motion(&mut self, t: Target, motion: Vec3) {
+    pub(in crate::game) fn restore_transition_motion(&mut self, t: Target, motion: Vec3) {
         let Some(id) = super::native_entities::target_id(t) else {
             return;
         };
