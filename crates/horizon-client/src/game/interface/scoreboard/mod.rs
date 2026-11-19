@@ -702,12 +702,30 @@ impl Game<'_> {
         if self.score.board.teams.is_empty() {
             return Default::default();
         }
+        // No holder is on a team: no mob is, and neither is a pet's owner, so the pass below, which
+        // formats the scoreboard name of every entity of the level every tick, finds nothing.
+        if self.score.board.team_members().next().is_none() {
+            return horizon_client::mobs::Teams {
+                player: self.player_team(),
+                mobs: Default::default(),
+            };
+        }
         // One pass over the mobs, not one per mob.
         let tame_owners: HashMap<u32, [i32; 4]> = self
             .mobs
             .iter()
             .filter_map(|m| Some((m.id, tame_owner(m)?)))
             .collect();
+        // A mob is on a team through its own name (a holder of the team) or, tamed, through its
+        // owner's. Its name is its UUID's text (or a remote player's name), so the holders that
+        // are such texts are read once, and an entity none of them names, with no tame owner,
+        // has no team: the answer `team_with_owner` gives, without formatting its name.
+        let members: Vec<&str> = self.score.board.team_members().collect();
+        let uuids: std::collections::HashSet<[i32; 4]> = members
+            .iter()
+            .filter_map(|m| uuid_from_text(m).filter(|u| uuid_text(*u) == *m))
+            .collect();
+        let names: std::collections::HashSet<&str> = members.into_iter().collect();
         horizon_client::mobs::Teams {
             player: self.player_team(),
             mobs: self
@@ -715,6 +733,19 @@ impl Game<'_> {
                 .uuids
                 .keys()
                 .filter_map(|id| {
+                    if !tame_owners.contains_key(id) {
+                        let own = match self.remote_player_name(*id) {
+                            Some(name) => names.contains(name),
+                            None => self
+                                .persist
+                                .uuids
+                                .get(id)
+                                .is_some_and(|u| uuids.contains(u)),
+                        };
+                        if !own {
+                            return None;
+                        }
+                    }
                     let owner = || tame_owners.get(id).copied();
                     Some((*id, self.team_with_owner(*id, owner)?))
                 })
@@ -1346,6 +1377,8 @@ mod criterion_tests;
 
 #[cfg(test)]
 mod empty_tag_tests;
+#[cfg(test)]
+mod team_without_members_tests;
 #[cfg(test)]
 mod guest_advancement_tests;
 
