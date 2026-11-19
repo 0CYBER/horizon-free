@@ -1478,7 +1478,19 @@ fn merge(kind: Merge, layers: &[Vec<u8>]) -> Option<Vec<u8>> {
             }
             Value::Object(events)
         }
-        Merge::Font => list("providers", &mut parsed.iter().rev()),
+        // A pack's file with a provider vanilla refuses is dropped whole; the
+        // other packs' files still load.
+        Merge::Font => list(
+            "providers",
+            &mut parsed.iter().rev().filter(|l| {
+                let error =
+                    crate::font::font_file_error(l.get("providers").unwrap_or(&Value::Null));
+                if let Some(error) = &error {
+                    log::error!("a pack's font file skipped: {error}");
+                }
+                error.is_none()
+            }),
+        ),
         // SpriteSourceList: the bottom file whole, each layer's sources
         // appended to its own, from the bottom up. A layer whose sources
         // are not a list is skipped, as vanilla logs and skips the file.
@@ -2322,6 +2334,19 @@ mod tests {
             parse(font.unwrap()),
             serde_json::json!({"providers":[3,1,2]})
         );
+        // A pack's file with a provider vanilla refuses goes whole, its valid
+        // `A` too: the lower pack's `A` is the one left.
+        let bitmap = |file: &str, chars: &str| {
+            format!(r#"{{"type":"bitmap","file":"{file}","ascent":7,"chars":{chars}}}"#)
+        };
+        let lower = format!(r#"{{"providers":[{}]}}"#, bitmap("low.png", r#"["A"]"#));
+        let upper = format!(
+            r#"{{"providers":[{},{}]}}"#,
+            bitmap("bad.png", r#"["ab","c"]"#),
+            bitmap("high.png", r#"["A"]"#)
+        );
+        let font = merge(Merge::Font, &[json(&lower), json(&upper)]);
+        assert_eq!(parse(font.unwrap()), parse(json(&lower)));
         // SpriteSourceList: sources from the bottom pack up, and the bottom
         // file keeps the fields a merge must not drop.
         let atlas = merge(

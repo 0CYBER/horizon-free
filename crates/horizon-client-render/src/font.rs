@@ -74,6 +74,22 @@ struct SheetCell {
     h: u32,
     glyph: Glyph,
 }
+impl SheetCell {
+    /// The cell's RGBA rows, or `None` where the cell reaches past the sheet.
+    fn pixels(&self) -> Option<Vec<u8>> {
+        let (stride, pixels) = (self.sheet.0 as usize, &self.sheet.1);
+        let (x, w) = (self.x as usize, self.w as usize);
+        if x + w > stride {
+            return None;
+        }
+        let mut rgba = Vec::with_capacity(w * self.h as usize * 4);
+        for y in self.y as usize..(self.y + self.h) as usize {
+            let at = (y * stride + x) * 4;
+            rgba.extend_from_slice(pixels.get(at..at + w * 4)?);
+        }
+        Some(rgba)
+    }
+}
 enum BitmapGlyph {
     Atlas(Glyph),
     Sheet(SheetCell),
@@ -203,15 +219,84 @@ fn resource_path(id: &str, folder: &str, ext: &str) -> String {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
     format!("assets/{ns}/{folder}/{}{ext}", path.trim_end_matches(ext))
 }
+/// A bitmap provider's `height` (8 when missing or null) and `ascent`, as
+/// vanilla decodes them: any JSON number taken as an integer, a fraction
+/// truncated toward zero, saturated to the 32-bit range (vanilla wraps there).
+/// `None` when either isn't a number or `ascent` is missing.
+fn bitmap_height_ascent(p: &serde_json::Value) -> Option<(i32, i32)> {
+    let int = |v: &serde_json::Value| {
+        v.as_i64()
+            .or_else(|| v.as_f64().map(|f| f as i64))
+            .map(|v| v.clamp(i32::MIN.into(), i32::MAX.into()) as i32)
+    };
+    let height = if p["height"].is_null() {
+        Some(8)
+    } else {
+        int(&p["height"])
+    };
+    Some((height?, int(&p["ascent"])?))
+}
+/// Why vanilla refuses a bitmap provider while its font file decodes
+/// (`BitmapProvider.Definition`): `height` or `ascent` not a number (or no
+/// `ascent`), `ascent` above `height`, or a `chars` grid that is empty or whose
+/// rows differ in length, counted in code points as `String.codePoints` does
+/// (a Rust `char` is one). Other providers pass.
+fn bitmap_error(p: &serde_json::Value) -> Option<String> {
+    if p["type"] != "bitmap" {
+        return None;
+    }
+    let file = p["file"].as_str().unwrap_or("");
+    let Some((height, ascent)) = bitmap_height_ascent(p) else {
+        return Some(format!(
+            "bitmap {file}: height and ascent have to be numbers"
+        ));
+    };
+    if ascent > height {
+        return Some(format!(
+            "bitmap {file}: ascent {ascent} higher than height {height}"
+        ));
+    }
+    let rows = p["chars"].as_array().map(|rows| {
+        rows.iter()
+            .map(|r| r.as_str().map(|s| s.chars().count()))
+            .collect::<Option<Vec<_>>>()
+    });
+    let Some(Some(rows)) = rows else {
+        return Some(format!("bitmap {file}: chars has to be a list of strings"));
+    };
+    match rows.first() {
+        None | Some(0) => Some(format!("bitmap {file}: chars has no characters")),
+        Some(&width) => rows.iter().find(|&&r| r != width).map(|r| {
+            format!(
+                "bitmap {file}: rows of chars have to be the same length \
+                 (found: {r} code points, expected: {width})"
+            )
+        }),
+    }
+}
+/// The first of a font file's `providers` that vanilla refuses, and why: it
+/// then drops the whole file of that pack (`FontManager.loadResourceStack`).
+pub(crate) fn font_file_error(providers: &serde_json::Value) -> Option<String> {
+    providers
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(bitmap_error)
+}
 /// Providers of a font definition with references expanded, in order, with
 /// their `filter` objects.
 fn providers(source: &ResourceSource, id: &str, depth: u32, out: &mut Vec<serde_json::Value>) {
     if depth > 8 {
         return;
     }
-    let Some(def) = read_json(source, &resource_path(id, "font", ".json")) else {
+    let path = resource_path(id, "font", ".json");
+    let Some(def) = read_json(source, &path) else {
         return;
     };
+    if let Some(error) = font_file_error(&def["providers"]) {
+        log::error!("font {path} skipped: {error}");
+        return;
+    }
     for p in def["providers"].as_array().into_iter().flatten() {
         if p["type"] == "reference" {
             let mut nested = Vec::new();
@@ -300,6 +385,16 @@ fn load_bitmap(
     } else {
         format!("{ns}:{name}")
     };
+    // Checked with the whole file (`font_file_error`): rows of one length, none empty.
+    let rows: Vec<Vec<char>> = p["chars"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
+        .collect();
+    let Some(width) = rows.first().map(Vec::len).filter(|w| *w > 0) else {
+        return out;
+    };
     let in_atlas = sheets.get(&atlas_name).copied();
     // The sheet: its size, and its pixels when they are not in the atlas.
     let (sw, sh, sheet) = match in_atlas {
@@ -319,19 +414,29 @@ fn load_bitmap(
             }
         },
     };
-    let rows: Vec<Vec<char>> = p["chars"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
-        .collect();
-    if rows.is_empty() || rows[0].is_empty() {
+    let cell_w = sw / width as u32;
+    let cell_h = sh / rows.len() as u32;
+    // Checked with the whole file (`font_file_error`).
+    let (height, ascent) = bitmap_height_ascent(p).unwrap_or((8, 7));
+    let (height, ascent) = (height as f32, ascent as f32);
+    let top = 7.0 - ascent;
+    // A grid with more rows or columns than the sheet has pixels: each
+    // character is an empty glyph of advance 1, as vanilla's arithmetic ends
+    // there, and still kept from later providers.
+    if cell_w == 0 || cell_h == 0 {
+        for ch in rows.iter().flatten().filter(|c| **c != '\0') {
+            out.entry(*ch).or_insert(BitmapGlyph::Atlas(Glyph {
+                rect: None,
+                left: 0.0,
+                top,
+                right: 0.0,
+                bottom: top,
+                advance: 1.0,
+                offset: 1.0,
+            }));
+        }
         return out;
     }
-    let cell_w = sw / rows[0].len() as u32;
-    let cell_h = sh / rows.len() as u32;
-    let height = p["height"].as_f64().unwrap_or(8.0) as f32;
-    let ascent = p["ascent"].as_f64().unwrap_or(7.0) as f32;
     let scale = height / cell_h as f32;
     let origin = in_atlas.map_or((0, 0), |rect| {
         (
@@ -353,7 +458,6 @@ fn load_bitmap(
                     (origin.0 + x, origin.1 + y, cell_w, cell_h),
                 ),
             };
-            let top = 7.0 - ascent;
             let glyph = Glyph {
                 rect: None,
                 left: 0.0,
@@ -879,12 +983,9 @@ impl Font {
                         Some(BitmapGlyph::Sheet(cell))
                             if !(non_fishy && fishy_advance(cell.glyph.advance)) =>
                         {
-                            let (stride, pixels) = (&cell.sheet.0, &cell.sheet.1);
-                            let mut rgba = Vec::with_capacity((cell.w * cell.h * 4) as usize);
-                            for y in cell.y..cell.y + cell.h {
-                                let at = ((y * stride + cell.x) * 4) as usize;
-                                rgba.extend_from_slice(&pixels[at..at + (cell.w * 4) as usize]);
-                            }
+                            let Some(rgba) = cell.pixels() else {
+                                continue;
+                            };
                             let (x, y) =
                                 region.place(cell.w, cell.h, rgba, self.atlas, self.region)?;
                             return Some(Glyph {
@@ -1797,6 +1898,88 @@ mod tests {
             6.0,
             "excluded from what obfuscated text draws"
         );
+    }
+
+    /// A font whose first provider is `first` (its sheet `sheet`), then a
+    /// valid provider drawing `a` from a sheet with two columns used.
+    fn font_after(name: &str, first: &str, sheet: &[u8]) -> Font {
+        let narrow = png(8, 8, |x, _| x < 2);
+        let def = format!(
+            r#"{{"providers":[{first},{{"type":"bitmap","file":"minecraft:font/narrow.png","ascent":7,"chars":["a"]}}]}}"#
+        );
+        let root = root(
+            name,
+            &[
+                ("assets/minecraft/font/default.json", def.as_bytes()),
+                ("assets/minecraft/textures/font/first.png", sheet),
+                ("assets/minecraft/textures/font/narrow.png", &narrow),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        font
+    }
+
+    /// `BitmapProvider.Definition` refuses these while the file decodes, and
+    /// the whole file goes. Rows of unequal length were sized from the first
+    /// row, so the longer row's last cell reached past the sheet and panicked
+    /// when drawn.
+    #[test]
+    fn a_font_file_with_a_refused_bitmap_provider_is_skipped() {
+        let sheet = png(16, 16, |_, _| true);
+        for (name, first) in [
+            ("uneven", r#""ascent":7,"chars":["ab","cdef"]"#),
+            (
+                "ascent-above-height",
+                r#""height":8,"ascent":9,"chars":["af"]"#,
+            ),
+            ("text-ascent", r#""ascent":"7","chars":["af"]"#),
+            ("no-ascent", r#""chars":["af"]"#),
+            ("empty-row", r#""ascent":7,"chars":["","af"]"#),
+        ] {
+            let first = format!(r#"{{"type":"bitmap","file":"minecraft:font/first.png",{first}}}"#);
+            let font = font_after(name, &first, &sheet);
+            let missing = font.glyph('z');
+            for c in ['a', 'f'] {
+                let g = font.glyph(c);
+                assert_eq!(
+                    g.advance, missing.advance,
+                    "{name}: {c} is the missing glyph"
+                );
+                assert_eq!(g.rect.map(|r| r.u0), missing.rect.map(|r| r.u0), "{name}");
+            }
+        }
+    }
+
+    /// Vanilla reads `height` and `ascent` as integers, a fraction truncated
+    /// toward zero: 8.9 and 6.5 load as 8 and 6.
+    #[test]
+    fn fractional_height_and_ascent_are_truncated() {
+        let sheet = png(16, 16, |_, _| true);
+        let first = r#"{"type":"bitmap","file":"minecraft:font/first.png","height":8.9,"ascent":6.5,"chars":["af"]}"#;
+        let g = font_after("fractional", first, &sheet).glyph('f');
+        // Cells 8x16 at height 8: half scale; top 7 - 6.
+        assert_eq!((g.top, g.bottom), (1.0, 9.0));
+        assert_eq!(g.advance, 5.0, "8 columns used, at half scale, and one");
+    }
+
+    /// More rows or columns than the sheet has pixels leave cells of no size.
+    /// Vanilla keeps the provider: each character is an empty glyph of advance
+    /// 1, and a later provider's glyph for it isn't used.
+    #[test]
+    fn a_grid_larger_than_its_sheet_draws_empty_glyphs() {
+        for (name, sheet, chars) in [
+            ("too-many-rows", png(16, 1, |_, _| true), r#"["a","b"]"#),
+            ("too-many-columns", png(4, 8, |_, _| true), r#"["abcde"]"#),
+        ] {
+            let first = format!(
+                r#"{{"type":"bitmap","file":"minecraft:font/first.png","ascent":7,"chars":{chars}}}"#
+            );
+            let g = font_after(name, &first, &sheet).glyph('a');
+            assert_eq!(g.advance, 1.0, "{name}: not the next provider's 3");
+            assert!(g.rect.is_none(), "{name}: nothing drawn");
+            assert!(g.top.is_finite() && g.bottom.is_finite(), "{name}");
+        }
     }
 
     /// StringDecomposer.iterateFormatted: a `§` that ends a part stops that
