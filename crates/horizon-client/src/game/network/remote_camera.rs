@@ -7,6 +7,9 @@
 #[cfg(test)]
 #[path = "tests/remote_camera_tests.rs"]
 mod camera_tests;
+#[cfg(test)]
+#[path = "tests/remote_camera_display_tests.rs"]
+mod display_camera_tests;
 
 use super::Game;
 use horizon_client::{
@@ -158,6 +161,8 @@ pub(super) struct CameraEntities<'a> {
     pub boats: &'a [super::boats::Boat],
     pub frames: &'a [ItemFrame],
     pub tnts: &'a [super::tnt::PrimedTnt],
+    /// Text, block and item displays (`Display`), by entity id.
+    pub displays: &'a std::collections::HashMap<i32, super::text_displays::RemoteTextDisplay>,
 }
 
 impl CameraEntities<'_> {
@@ -168,6 +173,7 @@ impl CameraEntities<'_> {
             || self.boats.iter().any(|b| b.id == id)
             || self.frames.iter().any(|f| f.id == id)
             || self.tnts.iter().any(|t| t.id == id)
+            || self.displays.contains_key(&(id as i32))
     }
     /// `Camera.alignWithEntity`: the view out of the entity, `None` when the
     /// level does not hold it.
@@ -184,7 +190,12 @@ impl CameraEntities<'_> {
         if let Some(f) = self.frames.iter().find(|f| f.id == id) {
             return Some(frame_camera_entity(f));
         }
-        self.tnts.iter().find(|t| t.id == id).map(tnt_camera_entity)
+        if let Some(t) = self.tnts.iter().find(|t| t.id == id) {
+            return Some(tnt_camera_entity(t));
+        }
+        self.displays
+            .get(&(id as i32))
+            .map(super::text_displays::RemoteTextDisplay::camera_view)
     }
 }
 
@@ -247,6 +258,7 @@ impl Game<'_> {
             boats: &self.boats,
             frames: &self.item_frames,
             tnts: &self.tnts,
+            displays: &self.text_displays,
         }
     }
     /// The entity under a spectator's crosshair (`Minecraft.hitResult` as an

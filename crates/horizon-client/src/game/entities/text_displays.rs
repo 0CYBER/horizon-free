@@ -90,6 +90,23 @@ impl RemoteTextDisplay {
             vehicle: None,
         }
     }
+    /// `Camera.alignWithEntity`'s view of a display, a server cutscene's
+    /// usual camera: its interpolated position and rotation (`Display`'s
+    /// `InterpolationHandler` moves both), with `EntityType.*_DISPLAY`'s
+    /// `sized(0.0F, 0.0F)` putting its eyes at its feet; it is not living.
+    pub(super) fn camera_view(&self) -> horizon_client::camera::CameraEntity {
+        horizon_client::camera::CameraEntity {
+            position: self.position.to_array(),
+            previous: self.previous.to_array(),
+            x_rot: self.rotation[1],
+            y_rot: self.rotation[0],
+            x_rot_o: self.old_rotation[1],
+            y_rot_o: self.old_rotation[0],
+            eye_height: 0.0,
+            living: None,
+            mount: None,
+        }
+    }
     /// Where a passenger of this display sits, this tick and the last
     /// (`Display`'s box is 0 by 0, so its passenger attachment is its feet).
     pub(super) fn seat(&self) -> (glam::DVec3, glam::DVec3) {
