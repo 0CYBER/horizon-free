@@ -1846,10 +1846,11 @@ pub struct Precipitation {
 
 impl Behaviours {
     /// Run due scheduled ticks for the level's current game time, in vanilla
-    /// order: block ticks then fluid ticks (65536 each at most).
+    /// order: block ticks then fluid ticks (65536 each at most). The caller
+    /// runs them inside the level tick's `handlingTick`
+    /// ([`Ticks::begin_handling_tick`]).
     pub fn tick_scheduled<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {
         let time = level.game_time();
-        ticks.handling_tick = true;
         {
             let level_ref: &L = level;
             if ticks
@@ -1859,7 +1860,6 @@ impl Behaviours {
                 })
                 .is_err()
             {
-                ticks.handling_tick = false;
                 return;
             }
         }
@@ -1882,7 +1882,6 @@ impl Behaviours {
                 })
                 .is_err()
             {
-                ticks.handling_tick = false;
                 return;
             }
         }
@@ -1897,13 +1896,14 @@ impl Behaviours {
             }
         }
         let _ = ticks.fluids.finish_tick();
-        ticks.handling_tick = false;
     }
     /// `tick_scheduled` one tick at a time, for a caller that must act on
     /// each tick's side effects before the next runs (as vanilla runs them
     /// inline): `scheduled_begin`, then `scheduled_step` until it returns
     /// false, then `scheduled_finish`; block ticks first, then fluid ticks.
     /// Returns whether ticks are due (false: nothing to step or finish).
+    /// Inside the level tick's `handlingTick`
+    /// ([`Ticks::begin_handling_tick`]), like `tick_scheduled`.
     pub fn scheduled_begin<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
@@ -1911,22 +1911,17 @@ impl Behaviours {
         fluids: bool,
     ) -> bool {
         let time = level.game_time();
-        ticks.handling_tick = true;
         let level_ref: &L = level;
         let queue = if fluids {
             &mut ticks.fluids
         } else {
             &mut ticks.blocks
         };
-        let ok = queue
+        queue
             .begin_tick(time, 65536, |chunk: ChunkPos| {
                 level_ref.is_ticking_chunk(chunk)
             })
-            .is_ok();
-        if !ok {
-            ticks.handling_tick = false;
-        }
-        ok
+            .is_ok()
     }
     /// Run the next due tick; false when none is left.
     pub fn scheduled_step<L: LevelAccess + ?Sized>(
@@ -1968,7 +1963,6 @@ impl Behaviours {
         } else {
             ticks.blocks.finish_tick()
         };
-        ticks.handling_tick = false;
     }
     /// Random-tick one chunk (`ServerLevel.tickChunk` block part). Visits the
     /// sections from the bottom up and draws `randomTickSpeed` positions in
@@ -2004,6 +1998,13 @@ impl Behaviours {
         if speed <= 0 {
             return;
         }
+        // `ServerChunkCache.tick` random-ticks inside the level tick's
+        // `handlingTick` (ServerLevel.java:360 sets it, :406 runs
+        // `chunkSource.tick`, :412 clears it): the caller holds it for the
+        // whole tick ([`Ticks::begin_handling_tick`]), so a piston reached by
+        // a random tick's neighbour change reports event 2 for a pushed block
+        // still in flight, as `PistonBaseBlock.checkIfExtend`
+        // (PistonBaseBlock.java:108) asks.
         let (min_x, min_z) = (chunk.x * 16, chunk.z * 16);
         horizon_threads::work::set_chunk(chunk.x, chunk.z);
         for _ in 0..speed {

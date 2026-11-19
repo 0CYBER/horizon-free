@@ -168,8 +168,7 @@ fn exercise(
         if client {
             b.client_tick_block_entities(&mut level, &mut ticks);
         } else {
-            b.tick_scheduled(&mut level, &mut ticks);
-            b.run_block_events(&mut level, &mut ticks);
+            b.tick_level_blocks(&mut level, &mut ticks);
             b.tick_block_entities(&mut level, &mut ticks);
         }
     }
@@ -206,8 +205,7 @@ fn exercise(
             if client {
                 b.client_tick_block_entities(&mut level, &mut ticks);
             } else {
-                b.tick_scheduled(&mut level, &mut ticks);
-                b.run_block_events(&mut level, &mut ticks);
+                b.tick_level_blocks(&mut level, &mut ticks);
                 b.tick_block_entities(&mut level, &mut ticks);
             }
         }

@@ -315,7 +315,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 && piston.extending
                 && (piston.progress_o < 0.5
                     || self.level.game_time() == piston.last_ticked
-                    || self.ticks.handling_tick)
+                    || self.ticks.is_handling_tick())
             {
                 event = 2;
             }
@@ -943,8 +943,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 }
 
 impl Behaviours {
+    /// `ServerLevel.tick`'s block phases for a caller with nothing to do
+    /// between them: the scheduled block and fluid ticks, then the block
+    /// events, inside the tick's `handlingTick`
+    /// ([`Ticks::begin_handling_tick`] … [`Ticks::end_handling_tick`],
+    /// ServerLevel.java:360 sets it, :394-396 runs the ticks, :409 the
+    /// events, :412 clears it). The game splits the same span to apply each
+    /// scheduled tick's side effects (level events, spilled items) before the
+    /// next runs, as vanilla runs them inline.
+    pub fn tick_level_blocks<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {
+        ticks.begin_handling_tick();
+        self.tick_scheduled(level, ticks);
+        self.run_block_events(level, ticks);
+        ticks.end_handling_tick();
+    }
     /// `ServerLevel.runBlockEvents`: run queued block events (piston moves).
-    /// Call once per tick after scheduled and random ticks.
+    /// Call once per tick after scheduled and random ticks, inside the level
+    /// tick's `handlingTick` ([`Ticks::begin_handling_tick`]): vanilla runs
+    /// these events at ServerLevel.java:409, between :360 and :412.
     pub fn run_block_events<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {
         let mut reschedule = Vec::new();
         while let Some(event) = ticks.pop_block_event() {
@@ -981,7 +997,10 @@ impl Behaviours {
     }
     /// `Level.tickBlockEntities` for moving pistons (the only block entities
     /// whose ticking changes blocks). Entries added during the pass wait for
-    /// the next tick, as vanilla's pending tickers do.
+    /// the next tick, as vanilla's pending tickers do. Outside the level
+    /// tick's `handlingTick`: vanilla ticks block entities at
+    /// ServerLevel.java:455, below :412, so a neighbour change a piston's
+    /// `finalTick` makes here answers `checkIfExtend` with event 1.
     pub fn tick_block_entities<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {
         let tickers: Vec<(BlockPos, u64)> = ticks
             .moving_pistons

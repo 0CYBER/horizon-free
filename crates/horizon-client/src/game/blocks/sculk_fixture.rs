@@ -671,9 +671,14 @@ impl Game<'_> {
         seeded: &mut HashSet<u32>,
     ) -> Result<()> {
         self.world.game_time += 1;
-        // Scheduled block and fluid ticks, then block events.
-        self.tick_scheduled()?;
+        // Scheduled block and fluid ticks, then block events, inside the
+        // level tick's `handlingTick` (ServerLevel.java:360-412), as
+        // `tick_blocks` runs them.
+        self.block_ticks.begin_handling_tick();
+        let stepped = self.tick_scheduled();
         self.with_level(|b, level, ticks| b.run_block_events(level, ticks));
+        self.block_ticks.end_handling_tick();
+        stepped?;
         self.process_level_events()?;
         // The scenario's actions happen among the entities.
         for (tick, words) in &s.actions {

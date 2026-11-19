@@ -131,12 +131,11 @@ impl World {
     fn get(&self, pos: BlockPos) -> BlockStateId {
         self.level.block_state(pos)
     }
-    /// Scheduled ticks, block events and block entities, as `ServerLevel.tick`.
+    /// `ServerLevel.tick`: block phases inside handlingTick, block entities outside.
     fn full_tick(&mut self) {
         let b = &self.f.behaviours;
         self.level.inner.time += 1;
-        b.tick_scheduled(&mut self.level, &mut self.ticks);
-        b.run_block_events(&mut self.level, &mut self.ticks);
+        b.tick_level_blocks(&mut self.level, &mut self.ticks);
         b.tick_block_entities(&mut self.level, &mut self.ticks);
     }
     fn progress(&self, pos: BlockPos) -> Option<f32> {

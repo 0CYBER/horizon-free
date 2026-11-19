@@ -251,11 +251,40 @@ impl Game<'_> {
         self.process_level_events()?;
         self.contact_drops = first_contact_drop..self.next_entity + 1;
         laps.lap("tb_entity_inside");
+        // `ServerLevel.tick` sets `handlingTick` before its block ticks and
+        // clears it after `runBlockEvents` (ServerLevel.java:360, :412), so
+        // every phase below runs inside it: the scheduled ticks (:394-396),
+        // the random ticks of `ServerChunkCache.tick` (:406, whose broadcast is
+        // `lan_broadcast_changes`) and the block events (:409). A piston that
+        // loses its signal in any of them answers `checkIfExtend`'s
+        // `isHandlingTick()` (PistonBaseBlock.java:108) with event 2
+        // (`TRIGGER_DROP`) when the block it pushed is still in flight, as
+        // vanilla does. One flag for the whole tick, not one per phase: phases
+        // between them (the broadcast, an eager save, the level events of the
+        // ticks already run) are inside the same span in vanilla too.
+        //
+        // The phases vanilla runs above :394 but before the bracket here (the
+        // world border, the weather and the clock, `tickTime` with its
+        // scheduled data pack functions, :365-388 and :485; the raids, :402)
+        // run with the flag down: a function that sets a block there still
+        // reaches a piston with event 1 where vanilla answers 2 (see
+        // `Ticks::begin_handling_tick`, which names the gap).
+        //
+        // The entity sweep above is the tick's entity pass in vanilla
+        // (:423-453), moved here to run before the blocks it presses; it
+        // stays outside the flag, as do the entities and the block entities
+        // (`tick_moving_pistons`, `tick_block_entities`, vanilla's :455) that
+        // tick below :412.
+        self.block_ticks.begin_handling_tick();
         // ServerLevel.tick: a Debug world runs no scheduled block or fluid ticks, and
         // ServerChunkCache.tickChunks no random ticks.
         let debug = self.world_debug;
         if !debug {
-            self.tick_scheduled()?;
+            // A failed tick still leaves the flag down behind it.
+            if let Err(e) = self.tick_scheduled() {
+                self.block_ticks.end_handling_tick();
+                return Err(e);
+            }
         }
         horizon_threads::work::clear_work();
         self.with_level(|b, level, ticks| {
@@ -315,6 +344,9 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
         });
         laps.lap("tb_block_events");
+        // `ServerLevel`: `handlingTick = false` right after `runBlockEvents`
+        // (:412), before the entities and the block entities.
+        self.block_ticks.end_handling_tick();
         self.process_level_events()?;
         laps.lap("tb_level_events");
         self.sync_moving_pistons();

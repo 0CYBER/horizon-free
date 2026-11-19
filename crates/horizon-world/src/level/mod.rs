@@ -12,7 +12,16 @@
 //!
 //! # Driving a level
 //!
-//! Per server tick, in vanilla order (`ServerLevel.tick`):
+//! Per server tick, in vanilla order (`ServerLevel.tick`). The tick's
+//! `handlingTick` ([`Ticks::begin_handling_tick`]) stays up from its first
+//! block tick to its last block event (ServerLevel.java:360 sets it, :412
+//! clears it), so raise it once per tick, before the phases below, and lower
+//! it after the block events: a piston that loses its signal in any of them
+//! asks for the block event vanilla asks for (event 2 when the block it pushed
+//! is still in flight, `PistonBaseBlock.checkIfExtend`,
+//! PistonBaseBlock.java:108). The entities and the block entities tick below
+//! :412, outside it, as in vanilla.
+//!
 //! 1. [`Behaviours::tick_scheduled`] runs due block ticks then fluid ticks
 //!    (`blockTicks.tick(time, 65536, ...)`, then `fluidTicks`).
 //! 2. For every ticking chunk, [`Behaviours::tick_chunk_random`] performs
@@ -27,6 +36,9 @@
 //!    moving pistons ([`Ticks::moving_pistons`]).
 //! 4. Player actions call [`Behaviours::place_block`] /
 //!    [`Behaviours::use_without_item`] / [`Behaviours::destroy_block`].
+//!
+//! A caller with nothing to do between the block ticks and the block events
+//! runs them in one go with [`Behaviours::tick_level_blocks`].
 //!
 //! Every block mutation goes through [`Behaviours::set_block`] with vanilla's
 //! update flags ([`flags`]). The library writes storage only through
@@ -68,11 +80,13 @@
 //!
 //! // Every server tick:
 //! level.time += 1;
+//! ticks.begin_handling_tick();                // ServerLevel.java:360
 //! behaviours.tick_scheduled(&mut level, &mut ticks);
 //! for chunk in ticking_chunks {
 //!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, |level, from| level.next_ticking_section(chunk, from));
 //! }
 //! behaviours.run_block_events(&mut level, &mut ticks);
+//! ticks.end_handling_tick();                  // :412
 //! /* tick entities */
 //! behaviours.tick_block_entities(&mut level, &mut ticks);
 //! for event in level.events.drain(..) { /* play sounds, spawn drops/falling blocks, grow trees */ }

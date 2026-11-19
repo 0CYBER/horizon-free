@@ -347,7 +347,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let snap = op.get("snap").and_then(|v| v.as_bool()).unwrap_or(false);
                             for _ in 0..op["n"].as_i64().unwrap() {
                                 level.time += 1;
+                                // The due ticks run inside the level tick's
+                                // `handlingTick` (ServerLevel.java:360, :412).
+                                ticks.begin_handling_tick();
                                 behaviours.tick_scheduled(&mut level, &mut ticks);
+                                ticks.end_handling_tick();
                                 if snap {
                                     let _ = writeln!(result, "tick {}", level.time);
                                     summary(&level, &before, &mut result);

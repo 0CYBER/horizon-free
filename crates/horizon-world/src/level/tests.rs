@@ -461,16 +461,25 @@ impl<'f> World<'f> {
     }
     pub(super) fn tick(&mut self) {
         self.level.time += 1;
+        self.ticks.begin_handling_tick();
         self.f
             .behaviours
             .tick_scheduled(&mut self.level, &mut self.ticks);
+        self.ticks.end_handling_tick();
     }
-    /// Scheduled ticks, block events and block entities, as `ServerLevel.tick`.
+    /// Scheduled ticks, block events and block entities, as `ServerLevel.tick`:
+    /// the ticks and the events inside `handlingTick` (ServerLevel.java:360,
+    /// :412), the block entities below it (:455).
     fn full_tick(&mut self) {
-        self.tick();
+        self.level.time += 1;
+        self.ticks.begin_handling_tick();
+        self.f
+            .behaviours
+            .tick_scheduled(&mut self.level, &mut self.ticks);
         self.f
             .behaviours
             .run_block_events(&mut self.level, &mut self.ticks);
+        self.ticks.end_handling_tick();
         self.f
             .behaviours
             .tick_block_entities(&mut self.level, &mut self.ticks);
@@ -1147,8 +1156,10 @@ fn tick_block_hook_can_change_the_block_and_skip_its_own_tick() {
     let pos = BlockPos::new(1, 1, 1);
     // The due ticks run as the game runs them, stepped (scheduled_begin,
     // scheduled_step, scheduled_finish), or as tests do, through
-    // tick_scheduled.
+    // tick_scheduled; both inside the level tick's `handlingTick`
+    // (ServerLevel.java:360-412).
     let run = |level: &mut Ticked, ticks: &mut Ticks, stepped: bool| {
+        ticks.begin_handling_tick();
         if stepped {
             assert!(b.scheduled_begin(level, ticks, false));
             while b.scheduled_step(level, ticks, false) {}
@@ -1156,6 +1167,7 @@ fn tick_block_hook_can_change_the_block_and_skip_its_own_tick() {
         } else {
             b.tick_scheduled(level, ticks);
         }
+        ticks.end_handling_tick();
     };
     // One tick of the block at `pos` falls due.
     let due = |level: &mut Ticked, ticks: &mut Ticks, stepped: bool| {
@@ -2665,7 +2677,11 @@ fn tnt_duper_3856_piston_keeps_original_and_primes_one_tnt() {
                 base,
                 f.behaviours.block(power),
             );
+            // The event runs inside the level tick's `handlingTick`
+            // (ServerLevel.java:360-412).
+            w.ticks.begin_handling_tick();
             f.behaviours.run_block_events(&mut w.level, &mut w.ticks);
+            w.ticks.end_handling_tick();
         }
         let primed = w
             .level
@@ -4894,7 +4910,7 @@ fn fresh_chunk_block_events_do_not_wait_for_ticking_readiness() {
         w.set(BlockPos::new(0, 0, 0), w.id("redstone_block", &[]));
         w.set(pos, piston);
         assert_eq!(w.ticks.block_events.len(), 1, "placement queues an event");
-        w.f.behaviours.run_block_events(&mut w.level, &mut w.ticks);
+        w.f.behaviours.tick_level_blocks(&mut w.level, &mut w.ticks);
         assert_eq!(
             w.prop(pos, "extended"),
             ticketed.to_string(),
@@ -4912,7 +4928,7 @@ fn fresh_chunk_block_events_do_not_wait_for_ticking_readiness() {
             );
         } else {
             w.level.block_events_ready = true;
-            w.f.behaviours.run_block_events(&mut w.level, &mut w.ticks);
+            w.f.behaviours.tick_level_blocks(&mut w.level, &mut w.ticks);
             assert_eq!(
                 w.prop(pos, "extended"),
                 "true",

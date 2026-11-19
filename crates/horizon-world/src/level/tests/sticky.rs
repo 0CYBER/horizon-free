@@ -99,8 +99,7 @@ fn push_pair(
     }
     for _ in 0..4 {
         level.inner.time += 1;
-        f.behaviours.tick_scheduled(&mut level, &mut ticks);
-        f.behaviours.run_block_events(&mut level, &mut ticks);
+        f.behaviours.tick_level_blocks(&mut level, &mut ticks);
         f.behaviours.tick_block_entities(&mut level, &mut ticks);
     }
     let extended = f.registry.state(level.block_state(BlockPos::new(0, 1, 0)));

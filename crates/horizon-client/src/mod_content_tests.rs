@@ -1544,8 +1544,7 @@ fn content_root_loads_with_every_table() {
             }
             for _ in 0..4 {
                 level.time += 1;
-                independent_behaviours.tick_scheduled(&mut level, &mut ticks);
-                independent_behaviours.run_block_events(&mut level, &mut ticks);
+                independent_behaviours.tick_level_blocks(&mut level, &mut ticks);
                 independent_behaviours.tick_block_entities(&mut level, &mut ticks);
             }
             assert_eq!(

@@ -154,8 +154,10 @@ impl Run<'_> {
             self.left -= 1;
             self.level.time += 1;
             let b = self.behaviours;
-            b.tick_scheduled(&mut self.level, &mut self.ticks);
-            b.run_block_events(&mut self.level, &mut self.ticks);
+            // The block ticks and the block events inside the level tick's
+            // `handlingTick` (ServerLevel.java:360-412), the block entities
+            // below it (:455).
+            b.tick_level_blocks(&mut self.level, &mut self.ticks);
             b.tick_block_entities(&mut self.level, &mut self.ticks);
             let now = self.outputs();
             if now != last {
