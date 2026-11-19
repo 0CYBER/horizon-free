@@ -156,8 +156,11 @@ impl Home {
 fn instance_caches_are_preserved_while_running_and_when_idle() {
     use std::process::Stdio;
     let home = Home::new();
-    home.installed_version();
-    let game = home.file("launcher/versions/v0.0.1/game", b"running");
+    // `in_use` also matches a bare `<tag>/` anywhere in `ps`, so a running `v0.0.1/game` here
+    // would make every parallel test's `v0.0.1` look running. This tag is used nowhere else.
+    home.file("launcher/versions/v0.0.1-running/.installed", b"");
+    home.file("launcher/settings.json", br#"{"selected":"v0.0.1-running"}"#);
+    let game = home.file("launcher/versions/v0.0.1-running/game", b"running");
     let cache = home.file("game/.horizon-cache/held-output", b"active instance cache");
     let mut process = Command::new("sh")
         .args(["-c", "read -r ignored", "storage-instance"])
@@ -412,11 +415,22 @@ fn explicit_version_removal_refuses_before_changing_install_metadata() {
     let home = Home::new();
     let marker = home.file("launcher/versions/spare/.installed", b"installed");
     let game = home.file("launcher/versions/spare/game", b"game binary");
+    // A client without runtime leases is removable since #18405; an installed native build
+    // that takes its resources from `spare` still refuses the removal on every platform.
+    home.file("launcher/versions/native-dependent/.installed", b"installed");
+    home.file(
+        "launcher/versions/native-dependent/native-mods.json",
+        format!(
+            r#"{{"base":"spare","horizon":"{}","target":"client","left_out":[]}}"#,
+            "0".repeat(40)
+        )
+        .as_bytes(),
+    );
     let output = home.run(&["remove", "spare"]);
     assert!(!output.status.success(), "{output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("An older game build can use this cache without runtime leases."),
+            .contains("supplies resources to native build native-dependent"),
         "{output:?}"
     );
     assert_eq!(fs::read(marker).unwrap(), b"installed");
