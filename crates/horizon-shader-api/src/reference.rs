@@ -2,7 +2,8 @@
 //! (`tests/reference.rs` fails when the file drifts).
 use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
 use crate::inputs::{
-    COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SHADED_TINT, SURFACE, Struct,
+    COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, LIT_TINT, MATERIAL_INPUT, RAY_HIT, SHADED_TINT,
+    SURFACE, Struct,
 };
 use crate::kept::{
     Element, Format, MAX_BEFORE_WORLD, MAX_BUFFER_BYTES, MAX_COMPUTE_POST,
@@ -43,13 +44,19 @@ fn shaded_table(s: &Struct) -> String {
     input_table(s, true)
 }
 
-/// `table` with the rows of the fields a pack's files may add (`inputs::light_source`, then
-/// `SHADED_TINT` where `shaded`), in the order the struct has them.
+/// `table` with the rows of the fields a pack's files may add (`inputs::light_source`,
+/// `LIT_TINT` in `MaterialInput`, then `SHADED_TINT` where `shaded`), in the order the struct
+/// has them.
 fn input_table(s: &Struct, shaded: bool) -> String {
     let mut out = table(s, None);
     out.pop();
+    let lit = (s.name == MATERIAL_INPUT.name).then_some(&LIT_TINT);
     let shaded = shaded.then_some(&SHADED_TINT);
-    for f in crate::inputs::light_source(s).iter().chain(shaded) {
+    for f in crate::inputs::light_source(s)
+        .iter()
+        .chain(lit)
+        .chain(shaded)
+    {
         out += &format!("| `{}` | `{}` | {} |\n", f.name, f.ty, one_line(f.doc));
     }
     out + "\n"

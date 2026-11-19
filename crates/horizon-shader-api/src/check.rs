@@ -10,7 +10,7 @@
 //! material stage where that traces, is checked twice: as every device runs it, where `trace`
 //! misses, and against the scene.
 use crate::inputs::{
-    COMPUTE_INPUT, DISPLACEMENT_INPUT, ENTITY_LIGHT_SOURCE, Frame, RAY_HIT, SHADED_TINT,
+    COMPUTE_INPUT, DISPLACEMENT_INPUT, ENTITY_LIGHT_SOURCE, Frame, LIT_TINT, RAY_HIT, SHADED_TINT,
 };
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
@@ -118,6 +118,19 @@ impl CheckedStage {
             naga::TypeInner::Struct { members, .. } => {
                 t.name.as_deref().is_some_and(|n| inputs.contains(&n))
                     && (members.iter()).any(|m| m.name.as_deref() == Some(SHADED_TINT.name))
+            }
+            _ => false,
+        })
+    }
+
+    /// Whether the stage's `MaterialInput` has `lit_tint` (`LIT_TINT`): its pack's files name it
+    /// (`stages::names_lit_tint`), so the renderer's terrain carries its varying and the
+    /// constructor passes it.
+    pub fn lit_tint(&self) -> bool {
+        self.module.types.iter().any(|(_, t)| match &t.inner {
+            naga::TypeInner::Struct { members, .. } => {
+                t.name.as_deref() == Some("MaterialInput")
+                    && (members.iter()).any(|m| m.name.as_deref() == Some(LIT_TINT.name))
             }
             _ => false,
         })

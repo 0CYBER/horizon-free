@@ -67,8 +67,8 @@ struct HorizonMaterialOut {
     // fragment finds it).
     @location(12) base: vec3<f32>,
     @location(13) displaced: f32,
-    @location(14) @interpolate(flat) normal: vec3<f32>,
-}
+    @location(14) @interpolate(flat) normal: vec3<f32>,@lit_varying@
+}@lit_fn@
 // `slot`: the corner's in the arena page, whose look is its quad's (`horizon_look`).
 fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
     light: vec2<u32>, origin: vec4<f32>, slot: u32, corner: u32) -> HorizonMaterialOut {
@@ -122,7 +122,7 @@ fn horizon_material_out(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f
     out.look_tint = look.x & 0xffffffu;
     out.base = pos;
     out.displaced = 0.0;
-    out.normal = vec3(0.0);
+    out.normal = vec3(0.0);@lit_out@
     return out;
 }
 // A vertex's index is its slot in the arena page, and a quad's four come in order.
@@ -202,7 +202,7 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
         horizon_sprite_material(in.layer & 0x7fffu), in.clip.xy / frame.resolution,
         in.look & 7u, fluid, f32((in.look >> 8u) & 15u) / 15.0, normal, tangent,
         horizon_line_in(horizon_terrain_native_colored_light(in.position)),
-        in.displaced@light_source@@shaded_tint@)).color;
+        in.displaced@light_source@@lit_tint@@shaded_tint@)).color;
     return vec4(horizon_line_out(out.rgb), out.a);
 }
 // `MaterialInput.light_source_tier` and `light_source_whole` from the vertex's light-source code
@@ -295,7 +295,7 @@ const DISPLACED_ENTRIES: &str = "
     var out = horizon_material_out(p.position, p.uv, p.layer, p.color, p.light, p.look, p.ao);
     out.base = p.base;
     out.displaced = p.near;
-    out.normal = p.normal;
+    out.normal = p.normal;@lit_displaced@
     return out;
 }
 @fragment fn horizon_material_fs_displaced(in: HorizonMaterialOut) -> HorizonMaterialSolid {
@@ -467,6 +467,83 @@ fn horizon_material_displace(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: v
 /// the packed normal's bits exact.
 pub const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
 
+/// What a pack whose files name `lit_tint` (`CheckedStage::lit_tint`) has at each mark of the
+/// terrain's shader (`ENTRIES`, `DISPLACED_ENTRIES`, `displace::GRID`), and one that doesn't
+/// lacks, so that its shader is the text it was before the field: the varying, in the location
+/// the others leave free (the terrain's 15th, the last the weakest GPUs have), set at each
+/// corner as terrain.wgsl's `terrain_vertex` lights its colour, and on `[displacement]`'s grid
+/// between the face's corners' as the grid's colour is.
+const LIT_MARKS: [(&str, &str); 8] = [
+    (
+        "@lit_varying@",
+        "
+    // `MaterialInput.lit_tint`: the vertex colour lit at each corner (`horizon_material_lit`).
+    @location(11) lit_tint: vec3<f32>,",
+    ),
+    (
+        "@lit_fn@",
+        "
+// The vertex colour `color` lit at a corner as terrain.wgsl's `terrain_vertex` lights it, in
+// vanilla's gamma: by the lightmap at its `light` (sky, block, 16 per level) and Horizon's
+// dynamic block light, and by the coloured lights at `pos` under it.
+fn horizon_material_lit(pos: vec3<f32>, color: vec3<f32>, light: vec2<f32>) -> vec3<f32> {
+    let block = max(light.y, horizon_terrain_dynamic_block_light(pos));
+    var lit = color * horizon_terrain_sample_lightmap(light.x / 16.0, block / 16.0).rgb;
+    if horizon_terrain_globals.colored_count.x > 0u {
+        lit = min(lit + color * horizon_terrain_native_colored_light(pos), vec3(1.0));
+    }
+    return lit;
+}",
+    ),
+    (
+        "@lit_out@",
+        "
+    out.lit_tint = horizon_material_lit(pos, color.rgb, light);",
+    ),
+    ("@lit_displaced@", "\n    out.lit_tint = p.lit;"),
+    (
+        "@lit_point@",
+        "
+    // The lit vertex colour (`horizon_material_lit`), between the corners'.
+    lit: vec3<f32>,",
+    ),
+    (
+        "@lit_corners@",
+        "
+// The lit vertex colour at (`s`, `t`) of a quad, between its corners' as the colour is.
+fn horizon_displace_lit(c0: HorizonDisplaceCorner, c1: HorizonDisplaceCorner,
+    c2: HorizonDisplaceCorner, c3: HorizonDisplaceCorner, origin: vec3<f32>, s: f32, t: f32)
+    -> vec3<f32> {
+    let l0 = horizon_material_lit(c0.position + origin, c0.color.rgb, c0.light);
+    let l1 = horizon_material_lit(c1.position + origin, c1.color.rgb, c1.light);
+    let l2 = horizon_material_lit(c2.position + origin, c2.color.rgb, c2.light);
+    let l3 = horizon_material_lit(c3.position + origin, c3.color.rgb, c3.light);
+    return mix(mix(l0, l1, s), mix(l3, l2, s), t);
+}",
+    ),
+    (
+        "@lit_grid@",
+        "\n    p.lit = horizon_displace_lit(c0, c1, c2, c3, section.origin.xyz, s, t);",
+    ),
+    (
+        "@lit_step@",
+        "\n    p.lit = horizon_displace_lit(q.c0, q.c1, q.c2, q.c3, q.origin, s, t);",
+    ),
+];
+
+/// `text` with the marks of `lit_tint` (`LIT_MARKS`) filled in where `lit`, removed where not.
+/// Only Horizon's own text: a pack's source is left as written.
+pub(super) fn lit_marks(text: &str, lit: bool) -> String {
+    let mut out = text.to_owned();
+    for (mark, wgsl) in LIT_MARKS {
+        out = out.replace(mark, if lit { wgsl } else { "" });
+    }
+    out
+}
+
+/// What `MaterialInput.lit_tint` takes in a pack that names it (`CheckedStage::lit_tint`).
+const LIT_TINT: &str = ", horizon_line_in(in.lit_tint)";
+
 /// What `MaterialInput`'s light-source fields take in a pack that names them
 /// (`CheckedStage::light_source`).
 const LIGHT_SOURCE: &str = ", horizon_material_light_tier(in.look), \
@@ -474,18 +551,22 @@ const LIGHT_SOURCE: &str = ", horizon_material_light_tier(in.look), \
 
 /// The terrain shader for the pack's material stage `source`, with its sprite `tags` and
 /// `materials`, the vertex stage in its module when `vertex`, its inputs' `shaded_tint` where
-/// `shaded` (`CheckedStage::shaded_tint`) and their light-source fields where `light`
-/// (`CheckedStage::light_source`).
+/// `shaded` (`CheckedStage::shaded_tint`), their light-source fields where `light`
+/// (`CheckedStage::light_source`) and `lit_tint` with its varying where `lit`
+/// (`CheckedStage::lit_tint`).
 fn shader_source(
     source: &str,
     tags: &[(u32, u32)],
     materials: &[(u32, u32)],
-    (vertex, displaced, shaded, light): (bool, bool, bool, bool),
+    (vertex, displaced, shaded, light, lit): Inputs,
     linear: bool,
 ) -> String {
     let shaded = |text: &str| {
         let text = horizon_shader_api::stages::shaded_entries(text, shaded);
-        horizon_shader_api::stages::light_source_entries(&text, light.then_some(LIGHT_SOURCE))
+        let text = horizon_shader_api::stages::lit_entries(&text, lit.then_some(LIT_TINT));
+        let text =
+            horizon_shader_api::stages::light_source_entries(&text, light.then_some(LIGHT_SOURCE));
+        lit_marks(&text, lit)
     };
     // The LabPBR maps in the frame's group, read by the prelude's `block_normal_map` and its
     // kin, and by a tracing stage's `hit_normal_map`.
@@ -505,12 +586,17 @@ fn shader_source(
         shaded(ENTRIES),
         super::displace::RELIEF,
         if displaced {
-            super::displace::GRID.to_owned() + DISPLACED_ENTRIES
+            lit_marks(&(super::displace::GRID.to_owned() + DISPLACED_ENTRIES), lit)
         } else {
             String::new()
         }
     )
 }
+
+/// What a material's terrain shader is built with (`shader_source`): the vertex stage in its
+/// module, `[displacement]`'s grid, and its inputs' `shaded_tint`, light-source fields and
+/// `lit_tint`.
+type Inputs = (bool, bool, bool, bool, bool);
 
 /// The material's naga module from the stage's `source` (`CheckedStage::source` or
 /// `scene_source`), its errors in the stage's `file`.
@@ -518,7 +604,7 @@ fn module(
     (source, file): (&str, &str),
     tags: &[(u32, u32)],
     materials: &[(u32, u32)],
-    inputs: (bool, bool, bool, bool),
+    inputs: Inputs,
     linear: bool,
 ) -> Result<naga::Module, String> {
     let text = shader_source(source, tags, materials, inputs, linear);
@@ -635,6 +721,7 @@ impl NativeMaterial {
                 displaced.is_some(),
                 stage.shaded_tint(),
                 stage.light_source(),
+                stage.lit_tint(),
             ),
             linear,
         )?;
@@ -835,21 +922,33 @@ impl NativeMaterial {
 }
 
 /// The terrain shader of a material's composed `source`, for a test's own entry points: no
-/// vertex stage, no displacement, no `shaded_tint` or light-source fields, and the quads' looks
-/// not bound.
+/// vertex stage, no displacement, no `shaded_tint`, light-source fields or `lit_tint`, and the
+/// quads' looks not bound.
 #[cfg(test)]
 pub(in crate::gfx) fn test_shader(source: &str) -> String {
     let source = source.to_owned() + crate::gfx::looks::NO_LOOK_WGSL;
-    shader_source(&source, &[], &[], (false, false, false, false), false)
+    shader_source(
+        &source,
+        &[],
+        &[],
+        (false, false, false, false, false),
+        false,
+    )
 }
 
 /// The terrain shader of a pack's checked material `stage` for a test's own entry points, its
-/// inputs' `shaded_tint` and light-source fields as the renderer builds them: no vertex stage,
-/// no displacement, a frame of vanilla's gamma, and the quads' looks not bound.
+/// inputs' `shaded_tint`, light-source fields and `lit_tint` as the renderer builds them: no
+/// vertex stage, no displacement, a frame of vanilla's gamma, and the quads' looks not bound.
 #[cfg(test)]
 pub(in crate::gfx) fn stage_test_shader(stage: &CheckedStage) -> String {
     let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
-    let inputs = (false, false, stage.shaded_tint(), stage.light_source());
+    let inputs = (
+        false,
+        false,
+        stage.shaded_tint(),
+        stage.light_source(),
+        stage.lit_tint(),
+    );
     shader_source(&source, &[], &[], inputs, false)
 }
 
@@ -965,7 +1064,7 @@ pub(super) fn coverage_test_shader(linear: bool) -> String {
         &(stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL),
         &[],
         &[],
-        (false, true, false, false),
+        (false, true, false, false, false),
         linear,
     ) + r#"
 override TEST_TIER: u32 = 0u;
@@ -1054,7 +1153,7 @@ mod tests {
             (&source, &stage.file),
             &tags,
             &materials,
-            (false, false, false, false),
+            (false, false, false, false, false),
             false,
         )
         .unwrap();
@@ -1070,7 +1169,7 @@ mod tests {
                     &source,
                     &tags,
                     &materials,
-                    (false, false, false, false),
+                    (false, false, false, false, false),
                     false
                 ))
             )
@@ -1121,7 +1220,7 @@ mod tests {
             .unwrap();
         let text = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
         let source = (text.as_str(), stage.file.as_str());
-        let module = module(source, &[], &[], (true, false, false, false), false).unwrap();
+        let module = module(source, &[], &[], (true, false, false, false, false), false).unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -1160,7 +1259,7 @@ mod tests {
             .unwrap();
         let text = stage.scene_source.clone().unwrap() + crate::gfx::looks::NO_LOOK_WGSL;
         let source = (text.as_str(), stage.file.as_str());
-        let module = module(source, &[], &[], (true, true, false, false), false).unwrap();
+        let module = module(source, &[], &[], (true, true, false, false, false), false).unwrap();
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -1195,6 +1294,94 @@ mod tests {
         assert_eq!(fragments.count(), 3);
     }
 
+    /// A pack's own text that happens to hold a `lit_tint` mark's spelling keeps it.
+    #[test]
+    fn a_pack_s_own_text_keeps_a_lit_mark_s_spelling() {
+        let text = test_shader("/* @lit_out@ */\n");
+        assert!(text.starts_with("/* @lit_out@ */\n"), "{text}");
+    }
+
+    /// `MaterialInput.lit_tint`'s varying is the terrain's 15th, the last the weakest GPUs have
+    /// (`inter_stage_tests::LIMIT`), and only a pack's that names it: with and without a vertex
+    /// stage and `[displacement]`'s grid, a pack naming every optional input (`shaded_tint`, the
+    /// light-source fields and `lit_tint`) fits, at 15 in every entry point that carries the
+    /// terrain's varyings; one naming none is at 14, and its shader holds none of the field's
+    /// text, so it is built as before it.
+    #[test]
+    fn lit_tint_takes_the_terrain_s_last_varying_only_where_named() {
+        use super::super::inter_stage_tests::{LIMIT, interfaces};
+        let stage = |material: &str| {
+            let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+                [material]\nfile = \"material.wgsl\"\n[vertex]\nfile = \"vertex.wgsl\"\n\
+                [displacement]\n";
+            let material = format!(
+                "{material}fn displacement(input: DisplacementInput) -> f32 {{ return 0.0; }}\n"
+            );
+            let vertex = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
+            let files = [
+                (MANIFEST, manifest),
+                ("material.wgsl", &material),
+                ("vertex.wgsl", vertex),
+            ]
+            .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+            .into();
+            let report = check(&Pack::from_files(files).unwrap()).unwrap();
+            let at = report
+                .stages
+                .iter()
+                .position(|s| s.kind == StageKind::Material);
+            report.stages.into_iter().nth(at.unwrap()).unwrap()
+        };
+        let named = stage(
+            "fn material(input: MaterialInput) -> Surface {\n    \
+                let t = f32(input.light_source_tier) * input.light_source_threshold;\n    \
+                return Surface(input.shaded_tint * vec4<f32>(input.lit_tint * t, 1.0));\n}\n",
+        );
+        let plain = stage(
+            "fn material(input: MaterialInput) -> Surface {\n    return Surface(input.albedo);\n}\n",
+        );
+        assert!(named.lit_tint() && named.shaded_tint() && named.light_source());
+        assert!(!plain.lit_tint() && !plain.shaded_tint() && !plain.light_source());
+        for vertex in [false, true] {
+            for displaced in [false, true] {
+                let most = |stage: &CheckedStage| {
+                    let inputs = (
+                        vertex,
+                        displaced,
+                        stage.shaded_tint(),
+                        stage.light_source(),
+                        stage.lit_tint(),
+                    );
+                    let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
+                    let text = shader_source(&source, &[], &[], inputs, false);
+                    let module = naga::front::wgsl::parse_str(&text).unwrap();
+                    naga::valid::Validator::new(
+                        naga::valid::ValidationFlags::all(),
+                        naga::valid::Capabilities::all(),
+                    )
+                    .validate(&module)
+                    .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&text)));
+                    let counts: Vec<u32> = (interfaces(&text).iter())
+                        .filter(|i| i.entry.starts_with("horizon_material_"))
+                        .map(|i| i.total())
+                        .collect();
+                    assert_eq!(counts.len(), 6 + 2 * usize::from(displaced));
+                    (counts.into_iter().max().unwrap(), text)
+                };
+                let case = format!("vertex {vertex}, displaced {displaced}");
+                let (lit, text) = most(&named);
+                assert_eq!((lit, LIMIT), (15, 15), "{case}");
+                assert!(text.contains("@location(11) lit_tint"), "{case}");
+                let (unlit, text) = most(&plain);
+                assert_eq!(unlit, 14, "{case}");
+                assert!(
+                    !text.contains("lit_tint") && !text.contains("@lit"),
+                    "{case}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_displaced_grid_validates_with_a_pack() {
         let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -1214,7 +1401,7 @@ mod tests {
             (&source, &stage.file),
             &[],
             &materials,
-            (false, true, false, false),
+            (false, true, false, false, false),
             false,
         )
         .unwrap();
@@ -1224,7 +1411,13 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| {
-            let text = shader_source(&source, &[], &materials, (false, true, false, false), false);
+            let text = shader_source(
+                &source,
+                &[],
+                &materials,
+                (false, true, false, false, false),
+                false,
+            );
             panic!("{}", e.emit_to_string(&text))
         });
         for entry in [
@@ -1404,8 +1597,13 @@ mod tests {
                  return Surface(input.albedo * input.emission * gain);\n}\n",
         );
         let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
-        let source =
-            shader_source(&source, &[], &[], (false, false, false, false), false) + &entries;
+        let source = shader_source(
+            &source,
+            &[],
+            &[],
+            (false, false, false, false, false),
+            false,
+        ) + &entries;
         let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let mut tested = Vec::new();
@@ -1695,7 +1893,7 @@ struct TestOut {{
         assert!(stage.light_source());
         let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
         // A frame of linear light: the material's colour comes out as it returned it.
-        let inputs = (false, false, false, true);
+        let inputs = (false, false, false, true, false);
         let source = shader_source(&source, &[], &[], inputs, true) + &entries;
         // The renderer's lightmap, distinct at full light.
         let mut lightmap = [0u8; 16 * 16 * 4];
@@ -2001,8 +2199,13 @@ struct TestOut {{
              fn material(input: MaterialInput) -> Surface { return Surface(input.albedo * gain); }\n",
         );
         let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
-        let pack = shader_source(&source, &[], &[], (false, false, false, false), false)
-            + &entries(PREFIX);
+        let pack = shader_source(
+            &source,
+            &[],
+            &[],
+            (false, false, false, false, false),
+            false,
+        ) + &entries(PREFIX);
         let instance = crate::gfx::test_gpu::instance();
         let mut tested = Vec::new();
         for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())) {

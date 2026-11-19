@@ -1268,8 +1268,8 @@ fn the_retained_block_entities_store_is_the_layer_s_last_binding() {
 
 /// `Report::looks`: a stage reads a field only the terrain's quad looks hold (`tint`, `shade`,
 /// `ao`, `face`), by member on `MaterialInput` or `VertexInput`, through a `var` too; the
-/// prelude reads none, nor do an entity stage's `tint`, a pack's own `shade`, and `emission` and
-/// `shaded_tint`, which the vertex holds.
+/// prelude reads none, nor do an entity stage's `tint`, a pack's own `shade`, and `emission`,
+/// `shaded_tint` and `lit_tint`, which the vertex holds.
 #[test]
 fn looks_are_read_by_the_terrain_fields_alone() {
     let dir = |path: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
@@ -1310,6 +1310,10 @@ fn looks_are_read_by_the_terrain_fields_alone() {
     assert!(!material(
         "    var i = input;\n    i.light.x = 1.0;\n    \
          return Surface(i.shaded_tint * (1.0 + i.emission));"
+    ));
+    assert!(!material(
+        "    var i = input;\n    \
+         return Surface(vec4(i.lit_tint * input.lightmap, 1.0) * i.shaded_tint);"
     ));
     // Nor do Horizon's look's light sources, which the vertex and the sprite hold, and the
     // frame's full light.
@@ -1439,6 +1443,49 @@ fn shadow_color_and_ray_hits_leave_the_looks_off() {
                       let c = hit.tint.rgb * hit.shade * hit.ao + vec3(hit.emission);\n    \
                       return vec4<f32>(input.color.rgb * c, 1.0);\n}\n";
     assert!(!traced(traced_hit).unwrap().looks());
+}
+
+/// `MaterialInput.lit_tint` is only a pack's whose files name it, outside a comment, in the
+/// material's own file or another of the pack's: only then is it declared, and does the renderer
+/// give the terrain its varying (`CheckedStage::lit_tint`). Every other field stays where it was.
+#[test]
+fn lit_tint_is_the_pack_s_that_names_it() {
+    let checked = |material: &str, lib: &str| {
+        let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+            shared = [\"lib.wgsl\"]\n[material]\nfile = \"material.wgsl\"\n";
+        let files = [
+            (MANIFEST, manifest),
+            ("material.wgsl", material),
+            ("lib.wgsl", lib),
+        ]
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .into();
+        let mut report = check(&Pack::from_files(files).unwrap()).unwrap();
+        report.stages.remove(0)
+    };
+    let plain = "fn material(input: MaterialInput) -> Surface {\n    \
+                 // Not `input.lit_tint`: a comment names nothing.\n    \
+                 return Surface(input.albedo);\n}\n";
+    let lit = "fn material(input: MaterialInput) -> Surface {\n    \
+               return Surface(input.albedo * vec4<f32>(input.lit_tint, 1.0));\n}\n";
+    let helper = "fn unused(i: MaterialInput) -> vec3<f32> { return i.lit_tint; }\n";
+    let declares = |stage: &horizon_shader_api::check::CheckedStage| {
+        stage.source.contains("    lit_tint: vec3<f32>,\n")
+    };
+    let none = checked(plain, "");
+    assert!(!none.lit_tint() && !declares(&none));
+    for stage in [checked(lit, ""), checked(plain, helper)] {
+        assert!(stage.lit_tint() && declares(&stage));
+        assert!(!stage.shaded_tint() && !stage.light_source() && !stage.reads_looks());
+    }
+    // After the light-source fields and before `shaded_tint`, as the constructors pass them.
+    let all = "fn material(input: MaterialInput) -> Surface {\n    \
+               let t = f32(input.light_source_tier);\n    \
+               return Surface(input.shaded_tint * vec4<f32>(input.lit_tint * t, 1.0));\n}\n";
+    let stage = checked(all, "");
+    assert!(stage.lit_tint() && stage.shaded_tint() && stage.light_source());
+    let at = |field: &str| stage.source.find(&format!("    {field}: ")).unwrap();
+    assert!(at("light_source_threshold") < at("lit_tint") && at("lit_tint") < at("shaded_tint"));
 }
 
 /// The ray scene's store of terrain looks is a stage's whose code reads a hit's `tint`, `shade`,

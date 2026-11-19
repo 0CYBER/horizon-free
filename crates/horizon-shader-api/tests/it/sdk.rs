@@ -29,8 +29,8 @@ fn the_example_pack_passes() {
 
 /// Horizon's HDR look as a pack: its shared source is the look file, the one the renderer's own
 /// shaders start with (`horizon-client-render`'s `gfx/wgsl_prefix.rs` reads it from this folder).
-/// It reads the light sources' fields and the full-light lightmap, and `shaded_tint` rather than
-/// the terrain's looks.
+/// It reads the light sources' fields and the full-light lightmap, and `lit_tint` rather than the
+/// terrain's looks.
 #[test]
 fn the_look_pack_passes() {
     let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/packs/horizon_hdr"));
@@ -40,7 +40,7 @@ fn the_look_pack_passes() {
     let labels: Vec<_> = report.stages.iter().map(|s| s.label.as_str()).collect();
     assert_eq!(labels, ["Blocks", "Tone curve", "Entities"]);
     let material = &report.stages[0];
-    assert!(material.light_source() && material.shaded_tint());
+    assert!(material.light_source() && material.lit_tint() && !material.reads_looks());
     assert!(report.stages[2].light_source());
 }
 

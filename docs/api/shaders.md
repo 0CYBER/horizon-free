@@ -251,8 +251,8 @@ linear light: decode a constant written for display values with a 2.2 power, com
 `crates/horizon-shader-api/packs/golden_hour`, was moved this way. `packs/traced_shadows` and
 `packs/traced_water` are the smallest packs that trace rays, from a post pass and from the material stage
 ([the guide](../shaders.md#ray-tracing)). `packs/horizon_hdr` is Horizon's own HDR look as a pack, from the look file
-the renderer's own shaders start with: it reads the light-source fields and `frame.full_lightmap` (changelog,
-2026-11-19), and its README lists what a pack can't draw of the look yet.
+the renderer's own shaders start with: it reads the light-source fields, `frame.full_lightmap` and `lit_tint`
+(changelog, 2026-11-19), and its README lists what a pack can't draw of the look yet.
 
 A 0.2 pack from before 2026-11-16 moves to the terrain's own inputs so: where it drew vanilla's colour with
 `input.tint` or `hit.tint`, it reads `shaded_tint` (the old value, the shade and ambient occlusion in it), or lights
@@ -297,6 +297,13 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-19: API 0.2 (addition, preview): `MaterialInput.lit_tint`, vanilla's lit vertex colour as Horizon's terrain
+  draws it: `shaded_tint` times the lightmap (coloured lights added under it) at each corner, then smoothed over the
+  face, so `albedo * lit_tint` is vanilla's lit colour where multiplying the two smoothed apart is not (6.6 steps of
+  255 off at an occluded corner beside a torch). Decoded as `shaded_tint` is, declared after the light-source fields
+  and before `shaded_tint` only for a pack whose files name it. It takes one varying, the terrain's last on the weakest
+  GPUs, and no look storage; a pack that doesn't name it sees the same prelude and entry points as before, and its
+  picture is unchanged. `packs/horizon_hdr` draws its blocks with it.
 - 2026-11-19: API 0.2 (additions, preview): what Horizon's own HDR look reads of light sources, for a pack that
   draws it. `MaterialInput.light_source_tier` (0 none, 1 low to 4 very bright), `light_source_whole` (the whole sprite
   shines) and `light_source_threshold` (the brightness a texel of the sprite must reach to shine), and

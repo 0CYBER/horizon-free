@@ -123,8 +123,8 @@ struct HorizonDisplacePoint {
     ao: f32,
     // The face's normal, and how much of the relief the point has by its distance.
     normal: vec3<f32>,
-    near: f32,
-}
+    near: f32,@lit_point@
+}@lit_corners@
 // A quad's corners and look, for the steps.
 struct HorizonDisplaceQuad {
     c0: HorizonDisplaceCorner,
@@ -227,7 +227,7 @@ fn horizon_displace_step(v: u32, q: HorizonDisplaceQuad) -> HorizonDisplacePoint
     let c = clamp(vec2(uv_s, uv_t), vec2(0.0), vec2(1.0));
     p.uv = horizon_displace_uv(q, c.x, c.y);
     p.light = mix(mix(q.c0.light, q.c1.light, s), mix(q.c3.light, q.c2.light, s), t);
-    p.color = mix(mix(q.c0.color, q.c1.color, s), mix(q.c3.color, q.c2.color, s), t);
+    p.color = mix(mix(q.c0.color, q.c1.color, s), mix(q.c3.color, q.c2.color, s), t);@lit_step@
     p.layer = q.c0.layer;
     p.normal = q.normal;
     p.look = q.look;
@@ -262,7 +262,7 @@ fn horizon_displace_point(v: u32, instance: u32) -> HorizonDisplacePoint {
     let position = mix(mix(c0.position, c1.position, s), mix(c3.position, c2.position, s), t);
     p.uv = mix(mix(c0.uv, c1.uv, s), mix(c3.uv, c2.uv, s), t);
     p.light = mix(mix(c0.light, c1.light, s), mix(c3.light, c2.light, s), t);
-    p.color = mix(mix(c0.color, c1.color, s), mix(c3.color, c2.color, s), t);
+    p.color = mix(mix(c0.color, c1.color, s), mix(c3.color, c2.color, s), t);@lit_grid@
     p.layer = c0.layer;
     p.normal = normalize(cross(c1.position - c0.position, c2.position - c0.position));
     p.look = look;

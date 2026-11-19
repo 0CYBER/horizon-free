@@ -13,22 +13,25 @@ its maths, with no name of the renderer in it. There is one copy of it. The rend
 very file (`horizon-client-render`'s `gfx/wgsl_prefix.rs`) and the pack lists it as its shared source, so a change to
 the look changes both. The stages only call it:
 
-- `material.wgsl`, blocks: vanilla's colour, `albedo` under `shaded_tint` and the light. On a light source
-  (`light_source_tier`) the texels as bright as `light_source_threshold`, or all of them where `light_source_whole`,
-  take their tier's mark and, as they lift, leave their face's shading behind, down to `frame.full_lightmap`. It
-  reads `shaded_tint`, never the terrain's separate looks, so the world doesn't load again when the pack starts.
+- `material.wgsl`, blocks: vanilla's colour, `albedo` under `lit_tint`, the vertex colour lit at each corner and
+  smoothed over the face as Horizon smooths it. On a light source (`light_source_tier`) the texels as bright as
+  `light_source_threshold`, or all of them where `light_source_whole`, take their tier's mark and, as they lift, leave
+  their face's shading behind, down to `frame.full_lightmap`. It reads `lit_tint`, never the terrain's separate looks,
+  so the world doesn't load again when the pack starts.
 - `entity.wgsl`, entities and block entities: vanilla's colour, and what `light_source_tier` names lifted by its
   tier.
 - `tonemap.wgsl`: the look's tone curve, from the scene's peak to the display's.
 - `lift.wgsl`: what the first two share. The look works on colours in vanilla's gamma, a stage on linear light.
 
 Check it with `horizon-shader check crates/horizon-shader-api/packs/horizon_hdr`. Horizon's render tests hold its
-material and entity stages to the game's own shaders (`horizon-client-render`, `gfx/look_pack_tests.rs`).
+material and entity stages to the game's own shaders (`horizon-client-render`, `gfx/look_pack_tests.rs`), within a
+fortieth of a step of 255: an ambient-occluded corner beside a torch, where the light level and the vertex colour
+both change across a face, among them.
 
 ## What it can't draw yet
 
-With HDR off nothing is lifted, but the points below that aren't about the lift (overlays, coloured lights, the
-light level's smoothing, distant terrain) still differ in SDR.
+With HDR off nothing is lifted, but the points below that aren't about the lift (overlays, distant terrain) still
+differ in SDR.
 
 - **The sun's disc, the moon, stars, lightning, additive particles and beams** reach no stage. Under a pack Horizon
   draws them at paper white.
@@ -46,11 +49,6 @@ light level's smoothing, distant terrain) still differ in SDR.
   them by their front's brightness; a stage is handed the face it draws.
 - **Resource packs' emissive overlays** (OptiFine's `_e` textures), which Horizon lays over a block, in SDR too, and
   lifts: a material stage isn't handed them.
-- **Coloured lights** (native mods', dynamic lights' colours) are added at each corner of a face by Horizon, and at
-  each pixel by a stage. So is the light level against the vertex colour: Horizon smooths their product over a
-  face, a stage multiplies the two after each is smoothed, which differs where both change across a face: in
-  Horizon's render test of an ambient-occluded corner beside a torch, 7 steps of 255 along its edges, and more where
-  light falls off faster across a face.
 - **Screenshots and world icons in HDR.** They are taken from the frame after `[tonemap]`, so they carry its curve,
   and light above white clips channel by channel under a pack, where Horizon's look keeps its hue.
 - **What any running pack turns off**: anti-aliasing (TAA, FXAA, TAA upscaling), Improved Transparency and frame

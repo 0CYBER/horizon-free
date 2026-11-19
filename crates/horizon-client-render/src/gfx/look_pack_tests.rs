@@ -320,12 +320,14 @@ fn measured_threshold() -> u8 {
     (t * 255.0).round() as u8
 }
 
-/// The terrain's draw for the look pack's material stage, its sprites `sprites` (one texel and
-/// one threshold a layer), and `entries` after the module: its group 0, the pack's frame and the
-/// module, built for `rows` rows.
+/// The terrain's draw for the material `stage` (the look pack's unless a test has its own), its
+/// sprites `sprites` (one texel and one threshold a layer), and `entries` after the module: its
+/// group 0, the pack's frame and the module, built for `rows` rows, with the renderer's
+/// `globals`.
 fn material_module(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    (stage, globals): (&CheckedStage, &super::Globals),
     sprites: &[([u8; 3], u8)],
     entries: &str,
     rows: u32,
@@ -335,10 +337,8 @@ fn material_module(
     [wgpu::BindGroup; 2],
     super::native_post::NativeFrame,
 ) {
-    let source =
-        super::native_material::stage_test_shader(&look_stage(StageKind::Material)) + entries;
+    let source = super::native_material::stage_test_shader(stage) + entries;
     let lightmap = lightmap();
-    let globals = globals();
     let (terrain, empty) = super::native_pack::tests::terrain_layouts(device);
     let frame = super::native_post::NativeFrame::new(
         device,
@@ -348,7 +348,7 @@ fn material_module(
         None,
         false,
     );
-    pack_frame(queue, &frame, &globals, &lightmap, rows);
+    pack_frame(queue, &frame, globals, &lightmap, rows);
     let n = sprites.len() as u32;
     let texels: Vec<u8> = sprites
         .iter()
@@ -371,7 +371,7 @@ fn material_module(
     let sampler = device.create_sampler(&Default::default());
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
-        contents: bytemuck::bytes_of(&globals),
+        contents: bytemuck::bytes_of(globals),
         usage: wgpu::BufferUsages::UNIFORM,
     });
     let resource = |binding: u32| match binding {
@@ -538,8 +538,9 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
         let Some((device, queue)) = device(&adapter) else {
             continue;
         };
+        let stage = (&look_stage(StageKind::Material), &globals());
         let (module, layout, [group, none], frame) =
-            material_module(&device, &queue, &sprites, &entries, rows);
+            material_module(&device, &queue, stage, &sprites, &entries, rows);
         let groups = [(0, &group), (1, &none), (2, &none), (3, &frame.group)];
         let draw = Draw {
             device: &device,
@@ -593,14 +594,13 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
 }
 
 /// Where the vertex colour and the light level both change across a face, Horizon's terrain
-/// smooths their product and a material stage multiplies `shaded_tint` by `lightmap`, each
-/// smoothed apart, which the stage's inputs can't avoid: an occluded corner (vertex colour 0.2,
-/// about vanilla's darkest ambient occlusion) beside a torch (block light 14), its far corners open at block light
-/// 11, under this file's lightmap. Measured over a whole face of plain stone as the frame stores
-/// it: 6.6 steps of 255 at worst, midway along the edges from the dark corner. Held there, so a change that widens it
-/// shows.
+/// smooths their product, and so does the pack, which reads it as `lit_tint`: an occluded corner
+/// (vertex colour 0.2, about vanilla's darkest ambient occlusion) beside a torch (block light
+/// 14), its far corners open at block light 11, under this file's lightmap, over a whole face of
+/// plain stone, is Horizon's within `TOLERANCE`. Multiplying `shaded_tint` by `lightmap`, each
+/// smoothed apart, left it 6.6 steps of 255 off, midway along the edges from the dark corner.
 #[test]
-fn an_occluded_corner_beside_a_torch_is_horizons_within_seven_steps() {
+fn an_occluded_corner_beside_a_torch_is_horizons() {
     let _gpu = super::test_gpu::lock();
     let rows = 16;
     let stone = giving_off(emitting(0xFF80_8080, 0), 0) >> 24;
@@ -624,8 +624,9 @@ fn an_occluded_corner_beside_a_torch_is_horizons_within_seven_steps() {
         let Some((device, queue)) = device(&adapter) else {
             continue;
         };
+        let stage = (&look_stage(StageKind::Material), &globals());
         let (module, layout, [group, none], frame) =
-            material_module(&device, &queue, &sprites, &entries, rows);
+            material_module(&device, &queue, stage, &sprites, &entries, rows);
         let groups = [(0, &group), (1, &none), (2, &none), (3, &frame.group)];
         let draw = Draw {
             device: &device,
@@ -654,15 +655,168 @@ fn an_occluded_corner_beside_a_torch_is_horizons_within_seven_steps() {
             worst.see(a, b, || {
                 format!("{backend}: ({x}, {y}), {b:?} against {a:?}")
             });
+            assert!(
+                same_light(a, b),
+                "{backend}: ({x}, {y}), {b:?} against {a:?}"
+            );
         }
         let steps = worst.abs.0 * 255.0;
         eprintln!(
-            "{backend}: occluded corner by a torch, worst {steps:.2} steps of 255: {worst:?}"
+            "{backend}: occluded corner by a torch, worst {steps:.5} steps of 255: {worst:?}"
         );
-        assert!(steps <= 7.0, "{backend}: {worst:?}");
         tested.push(backend);
     }
     eprintln!("the occluded corner ran on {tested:?}");
+}
+
+/// `MaterialInput.lit_tint` is the colour Horizon's terrain smooths over a face (terrain.wgsl's
+/// `terrain_vertex` `color`, its vertex colour lit at each corner, interpolated): on a face of
+/// near terrain whose corners differ in ambient occlusion and light, on water's surface (a fluid
+/// quad's colour byte), and on a far tile as the LOD mesher emits it, each with a dynamic light
+/// and a coloured light reaching across it unevenly, so the product changes across every face.
+/// Read through a stage that returns it, as the entries decode it and encode the result.
+#[test]
+fn lit_tint_is_the_colour_horizon_smooths_over_a_face() {
+    let _gpu = super::test_gpu::lock();
+    let rgba = |[r, g, b]: [f32; 3], alpha: u32| {
+        let byte = |c: f32| (c * 255.0).round() as u32;
+        byte(r) | byte(g) << 8 | byte(b) << 16 | alpha << 24
+    };
+    let plain = giving_off(emitting(0xFF80_8080, 0), 0) >> 24;
+    let tinted = |tint: [f32; 3], shades: [f32; 4], alpha: u32| {
+        shades.map(|s| rgba(tint.map(|c| c * s), alpha))
+    };
+    let far = crate::lod::far_top_vertex((0, 0), 0);
+    let far_light = [u32::from(far.light & 0xff), u32::from(far.light >> 8)];
+    // (what, its four corners' colours and lights: sky, block, 16 a level).
+    let cases: [(&str, [u32; 4], [[u32; 2]; 4]); 3] = [
+        (
+            "near terrain",
+            tinted([0.5, 0.8, 0.4], [0.2, 0.6, 1.0, 0.8], plain),
+            [[240, 224], [160, 176], [64, 0], [240, 96]],
+        ),
+        (
+            "water's surface",
+            tinted(
+                [0.25, 0.46, 0.89],
+                [1.0, 0.9, 0.8, 1.0],
+                as_fluid(plain << 24) >> 24,
+            ),
+            [[240, 0], [200, 48], [120, 160], [240, 240]],
+        ),
+        ("a far tile", [far.color; 4], [far_light; 4]),
+    ];
+    let rows = 3 * 4;
+    // Each case two triangles of a quad over its band of rows, its corners 0 to 3 from the
+    // bottom left, counterclockwise, 4 blocks by 2 in front of the camera.
+    let corners = [0usize, 1, 2, 0, 2, 3];
+    let list = |f: &dyn Fn(&(&str, [u32; 4], [[u32; 2]; 4]), usize) -> String| {
+        let items: Vec<String> = (cases.iter())
+            .flat_map(|c| corners.map(|k| f(c, k)))
+            .collect();
+        items.join(", ")
+    };
+    let n = 6 * cases.len();
+    let entries = TERRAIN_ROUTES.to_owned()
+        + &format!(
+            "fn test_corner(i: u32) -> TestCorner {{
+    var colors = array<u32, {n}>({colors});
+    var lights = array<vec2<u32>, {n}>({lights});
+    var corners = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
+    let k = corners[i % 6u];
+    let band = f32(i / 6u);
+    let x = select(-1.0, 1.0, k == 1u || k == 2u);
+    let y = 1.0 - 2.0 * (band + select(1.0, 0.0, k >= 2u)) / {cases}.0;
+    let position = vec3(select(0.0, 4.0, x > 0.0), select(0.0, 2.0, k >= 2u), -2.0);
+    return TestCorner(vec4(x, y, 0.5, 1.0), position, 0u, unpack4x8unorm(colors[i]), lights[i]);
+}}
+@fragment fn test_engine_lit(w: horizon_terrain_TerrainWire) -> @location(0) vec4<f32> {{
+    return vec4(horizon_terrain_from_wire(w).color.rgb, 1.0);
+}}
+@fragment fn test_pack_lit(in: HorizonMaterialOut) -> @location(0) vec4<f32> {{
+    return horizon_material_color(in, false);
+}}
+",
+            cases = cases.len(),
+            colors = list(&|c, k| format!("{}u", c.1[k])),
+            lights = list(&|c, k| format!("vec2({}u, {}u)", c.2[k][0], c.2[k][1])),
+        );
+    let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+        [material]\nfile = \"material.wgsl\"\n";
+    let material = "fn material(input: MaterialInput) -> Surface {\n    \
+        return Surface(vec4<f32>(input.lit_tint, 1.0));\n}\n";
+    let files = [
+        (horizon_shader_api::MANIFEST, manifest),
+        ("material.wgsl", material),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    let mut report = check(&Pack::from_files(files).unwrap()).unwrap();
+    let stage = report.stages.remove(0);
+    assert!(stage.lit_tint());
+    // A dynamic light at the face's bottom left, level 12, and a warm coloured light reaching
+    // its top right.
+    let mut globals = globals();
+    globals.time[2] = 1.0;
+    globals.dynamic_lights[0] = [0.0, 0.0, -2.0, 12.0];
+    globals.colored_count[0] = 1;
+    globals.colored_lights[0] = [[4.0, 2.0, -2.0, 4.0], [1.0, 0.6, 0.2, 0.9]];
+    let sprites = [([200, 200, 200], 0)];
+    let mut tested = Vec::new();
+    for (adapter, backend) in super::test_gpu::each_adapter() {
+        let Some((device, queue)) = device(&adapter) else {
+            continue;
+        };
+        let (module, layout, [group, none], frame) = material_module(
+            &device,
+            &queue,
+            (&stage, &globals),
+            &sprites,
+            &entries,
+            rows,
+        );
+        let groups = [(0, &group), (1, &none), (2, &none), (3, &frame.group)];
+        let draw = Draw {
+            device: &device,
+            queue: &queue,
+            module: &module,
+            layout: &layout,
+            groups: &groups,
+            constants: &[("horizon_terrain_SPRITE_SPLIT", 1.0)],
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            vertices: n as u32,
+            rows,
+        };
+        let own = draw.texels("test_engine_vs", "test_engine_lit", &[]);
+        let staged = draw.texels("test_pack_vs", "test_pack_lit", &[]);
+        let mut worst = Worst::default();
+        let mut spread = vec![(f32::MAX, 0.0f32); cases.len()];
+        for (i, (&a, &b)) in own.iter().zip(&staged).enumerate() {
+            let (x, y) = (i as u32 % WIDTH, i as u32 / WIDTH);
+            let (what, ..) = cases[(y / 4) as usize];
+            assert!(
+                a[3] >= 0.0 && b[3] >= 0.0,
+                "{backend}: {what} ({x}, {y}) not drawn"
+            );
+            worst.see(a, b, || {
+                format!("{backend}: {what} ({x}, {y}), {b:?} against {a:?}")
+            });
+            assert!(
+                (0..3).all(|c| (a[c] - b[c]).abs() <= 1e-5),
+                "{backend}: {what} ({x}, {y}), {b:?} against {a:?}"
+            );
+            let s = &mut spread[(y / 4) as usize];
+            let sum = a[0] + a[1] + a[2];
+            *s = (s.0.min(sum), s.1.max(sum));
+        }
+        // The lights change the product across every face, the far tile's too.
+        for (s, (what, ..)) in spread.iter().zip(&cases) {
+            assert!(s.1 - s.0 > 0.05, "{backend}: {what} is flat: {s:?}");
+        }
+        eprintln!("{backend}: lit_tint, worst {worst:?}");
+        tested.push(backend);
+    }
+    eprintln!("lit_tint ran on {tested:?}");
 }
 
 /// The pack's entity stage draws an entity as Horizon's own entity shader does with the look

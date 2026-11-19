@@ -1,14 +1,13 @@
 // Blocks, as Horizon's terrain shader draws them with HDR on: vanilla's colour, and on a light
 // source the texels that shine lifted by their tier's gain, free of the face's shading and the
-// light level that would darken them. Vanilla's colour comes from `shaded_tint`, which the vertex
-// holds: reading the terrain's separate looks instead would make the world load again when the
-// pack starts and take a third again its memory.
+// light level that would darken them. Vanilla's lit colour comes from `lit_tint`, the vertex
+// colour lit at each corner and smoothed over the face as Horizon smooths it: reading the
+// terrain's separate looks instead would make the world load again when the pack starts and take
+// a third again its memory.
 fn material(input: MaterialInput) -> Surface {
     let texel = gamma(input.albedo.rgb);
-    // Vanilla's light here, coloured lights added to it under the vertex colour, as Horizon adds
-    // them at each corner.
-    let vertex = gamma(input.shaded_tint.rgb);
-    let lighting = min(vertex * (gamma(input.lightmap) + gamma(input.colored_light)), vec3<f32>(1.0));
+    // Vanilla's light here under the vertex colour, coloured lights added at each corner.
+    let lighting = gamma(input.lit_tint);
     var color = texel * lighting;
     var mark = 1.0;
     let tier = input.light_source_tier;

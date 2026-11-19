@@ -409,10 +409,10 @@ pub const MATERIAL_INPUT: Struct = Struct {
 /// What the material stage returns.
 pub const SURFACE: Struct = Struct {
     name: "Surface",
-    doc: "What `material` returns. Vanilla's own is \
-          `albedo * vec4(tint.rgb * shade * ao * lightmap, 1.0)`, which \
-          `albedo * vec4(shaded_tint.rgb * lightmap, 1.0)` gives within two steps of 255 for nothing; \
-          Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
+    doc: "What `material` returns. Vanilla's own is `albedo * vec4(lit_tint, 1.0)`, its \
+          vertex colour lit at each corner; `albedo * vec4(shaded_tint.rgb * lightmap, 1.0)` \
+          costs nothing and is close, but smooths colour and light apart, so it differs where \
+          both change across a face (an occluded corner beside a torch). Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
           unless `[material] coverage = \"pack\"`) and fog (unless `[frame] fog = \"pack\"`).",
     fields: fields! {
         color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha translucent terrain's opacity, and what the alpha test reads under `[material] coverage = \"pack\"`.",
@@ -556,8 +556,17 @@ pub const SHADED_TINT: Field = Field {
 
 /// `input` with `SHADED_TINT` last where `shaded`.
 pub fn shaded(input: &Struct, shaded: bool) -> String {
-    declared(input, false, shaded)
+    declared(input, false, false, shaded)
 }
+
+/// `lit_tint`, in `MaterialInput` after its light-source fields and before `shaded_tint`, in a
+/// pack whose files name it (`stages::names_lit_tint`): the renderer hands it down in a varying
+/// of its own, the last one the terrain has on the weakest GPUs.
+pub const LIT_TINT: Field = Field {
+    name: "lit_tint",
+    ty: "vec3<f32>",
+    doc: "Only in a pack whose files name `lit_tint`: vanilla's lit vertex colour, `shaded_tint.rgb * lightmap` multiplied at each corner and then smoothed over the face, as Horizon's own terrain draws blocks, with the frame's coloured lights added under the vertex colour at each corner (`min(shaded_tint.rgb * (lightmap + colored_light), 1)` there, wherever any reaches). Those products are taken in vanilla's gamma at each corner, on the corner's own values; the smoothed result is then decoded with the 2.2 power, as `shaded_tint` and `lightmap` are, so the formula doesn't hold for the decoded fields a stage gets. So `albedo.rgb * lit_tint` is vanilla's lit colour, where multiplying `shaded_tint` by `lightmap`, each smoothed apart, differs from it where both change across a face (an occluded corner beside a torch). `[displacement]`'s grid has it at each of its points between the face's four corners' products, as it has the vertex colour, each lit where the mesh puts the corner (before `[vertex]` moves it).",
+};
 
 /// What a pack whose files name one of their names (`stages::names_light_source`) has after
 /// `MaterialInput`'s other fields, before `shaded_tint`: Horizon's own look's light sources,
@@ -597,13 +606,14 @@ pub fn light_source(input: &Struct) -> &'static [Field] {
     }
 }
 
-/// `input` with its `light_source` fields where `light_source`, then `SHADED_TINT` where
-/// `shaded`.
-pub fn declared(input: &Struct, light_source: bool, shaded: bool) -> String {
+/// `input` with its `light_source` fields where `light_source`, `LIT_TINT` where `lit` (only
+/// `MaterialInput` has it), then `SHADED_TINT` where `shaded`.
+pub fn declared(input: &Struct, light_source: bool, lit: bool, shaded: bool) -> String {
     let mut out = input.wgsl();
     out.truncate(out.len() - 2);
     let more = (self::light_source(input).iter()).filter(|_| light_source);
-    for f in more.chain(shaded.then_some(&SHADED_TINT)) {
+    let lit = (lit && input.name == MATERIAL_INPUT.name).then_some(&LIT_TINT);
+    for f in more.chain(lit).chain(shaded.then_some(&SHADED_TINT)) {
         out += &format!("    {}: {},\n", f.name, f.ty);
     }
     out + "}\n"

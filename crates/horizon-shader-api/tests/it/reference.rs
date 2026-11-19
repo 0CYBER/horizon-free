@@ -6,15 +6,16 @@ use horizon_shader_api::{
     Frame, Pack, StageKind, compose,
     package::sha256_hex,
     reference,
-    stages::{Tracing, light_source_entries, shaded_entries},
+    stages::{Tracing, light_source_entries, lit_entries, shaded_entries},
 };
 use naga::valid::Capabilities;
 use std::path::Path;
 
-/// The stage's entry points for a pack that doesn't name `shaded_tint` or the light-source
-/// fields.
+/// The stage's entry points for a pack that doesn't name `shaded_tint`, `lit_tint` or the
+/// light-source fields.
 fn entries_of(kind: StageKind) -> String {
-    light_source_entries(&shaded_entries(kind.entries(), false), None)
+    let entries = lit_entries(&shaded_entries(kind.entries(), false), None);
+    light_source_entries(&entries, None)
 }
 
 fn root() -> &'static Path {

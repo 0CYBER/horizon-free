@@ -8,12 +8,12 @@
 use std::path::{Path, PathBuf};
 
 /// `Limits::downlevel_defaults().max_inter_stage_shader_variables`, the least a GPU offers.
-const LIMIT: u32 = 15;
+pub(in crate::gfx) const LIMIT: u32 = 15;
 
 /// One entry point's variables: the user-defined `@location`s and the built-ins wgpu counts.
 #[derive(Debug, PartialEq, Eq)]
-struct Interface {
-    entry: String,
+pub(in crate::gfx) struct Interface {
+    pub(in crate::gfx) entry: String,
     /// Vertex outputs or fragment inputs, user-defined.
     user: u32,
     /// The fragment stage's `front_facing`, `sample_index`, `sample_mask` and `primitive_index`
@@ -22,7 +22,7 @@ struct Interface {
 }
 
 impl Interface {
-    fn total(&self) -> u32 {
+    pub(in crate::gfx) fn total(&self) -> u32 {
         self.user + self.built_ins
     }
 }
@@ -49,7 +49,7 @@ fn is_location(binding: &naga::Binding) -> bool {
 }
 
 /// The stage interface of every vertex and fragment entry point of `source`.
-fn interfaces(source: &str) -> Vec<Interface> {
+pub(in crate::gfx) fn interfaces(source: &str) -> Vec<Interface> {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     let mut out = Vec::new();
     for entry in &module.entry_points {

@@ -502,7 +502,9 @@ fn shader_source(
                 "{material}{}{table}{}{}{GRID_ENTRIES}",
                 horizon_shader_api::stages::PBR_STUB,
                 super::displace::RELIEF,
-                super::displace::GRID,
+                // The grid's lit colour is the material's (`lit_tint`); the shadow map has no
+                // use for it.
+                super::native_material::lit_marks(super::displace::GRID, false),
             ),
             if vertex.is_some() {
                 super::native_material::DISPLACE_PACK
