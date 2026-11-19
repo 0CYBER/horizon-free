@@ -36,8 +36,9 @@ Only after this fetch does the launcher resolve the actual staged workspace **of
 The game's locked packages, checksums and dependency graph stay immutable. A different mod-owned
 version may coexist where Cargo permits it. If a requested version would replace a game version,
 the build refuses it rather than updating the game. A native library with conflicting providers
-cannot be silently substituted. Feature selections must not introduce unpinned packages or
-change the game's graph.
+cannot be silently substituted. The mod compiles its own copy of every registry package it uses,
+so its features may differ from the game's: the edges they add must be in the mod's lock, and they
+must not introduce unpinned packages or move a locked version.
 
 Git dependencies other than the proven launcher-owned SDK declaration, alternate registries,
 paths escaping the mod, linked dependency paths, `[patch]`, `[replace]`, and mod-owned Cargo source

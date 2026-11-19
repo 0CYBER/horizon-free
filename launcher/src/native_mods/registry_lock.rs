@@ -24,6 +24,9 @@ struct Reference {
     source: Option<String>,
 }
 
+/// Edges that mods' own locks add to game-locked packages, by package.
+pub(super) type ModEdges = BTreeMap<Identity, std::collections::BTreeSet<Identity>>;
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct RegistryLock {
     pub packages: BTreeMap<Identity, Record>,
@@ -224,22 +227,37 @@ impl RegistryLock {
     /// qualifiers before comparing edges. Adding a second version qualifies existing edges.
     #[cfg(test)]
     pub fn check_resolution(&self, resolved: &Self, game: &Self) -> Result<(), String> {
-        self.check_resolved(resolved, game, true)
+        self.check_resolved(resolved, game, &ModEdges::new(), true)
     }
 
     /// A mod-only workspace may omit game packages and their inactive optional edges.
+    #[cfg(test)]
     pub fn check_partial_resolution(&self, resolved: &Self, game: &Self) -> Result<(), String> {
-        self.check_resolved(resolved, game, false)
+        self.check_resolved(resolved, game, &ModEdges::new(), false)
+    }
+
+    /// As `check_partial_resolution`, letting game-locked packages carry the edges that
+    /// [`Self::mod_edges`] authorised.
+    pub fn check_partial_resolution_with(
+        &self,
+        resolved: &Self,
+        game: &Self,
+        extra: &ModEdges,
+    ) -> Result<(), String> {
+        self.check_resolved(resolved, game, extra, false)
     }
 
     fn check_resolved(
         &self,
         resolved: &Self,
         game: &Self,
+        extra: &ModEdges,
         require_game: bool,
     ) -> Result<(), String> {
-        // The prebuilt game retains its features. A narrower Cargo workspace may
-        // drop game-owned edges, but must never add edges or change identities.
+        // Cargo compiles every package in this workspace from source: the prebuilt game's
+        // copies are reached only through the SDK's externs and are never relinked. So a
+        // game-locked package may drop edges or gain the ones `mod_edges` authorised, but
+        // never another edge, and no identity may change.
         for (id, record) in resolved.packages.iter().chain(resolved.local.iter()) {
             let owners: Vec<_> = self
                 .packages
@@ -253,7 +271,10 @@ impl RegistryLock {
             if !owners.iter().any(|(old, pin)| {
                 *old == id
                     && if let Some(owner) = game.packages.get(id).or_else(|| game.local.get(id)) {
-                        record.edges.is_subset(&owner.edges)
+                        record.edges.iter().all(|edge| {
+                            owner.edges.contains(edge)
+                                || extra.get(id).is_some_and(|edges| edges.contains(edge))
+                        })
                     } else {
                         pin.edges == record.edges
                     }
@@ -331,13 +352,14 @@ impl RegistryLock {
         Ok(())
     }
 
-    pub fn check_mod(
+    /// Every identity reachable from a mod's root crate, other mods' roots and `skip_local`
+    /// packages excluded.
+    fn closure(
         &self,
         mod_id: &str,
         root: &str,
         skip_local: &std::collections::BTreeSet<String>,
-        pins: &Self,
-    ) -> Result<(), String> {
+    ) -> Result<std::collections::BTreeSet<Identity>, String> {
         let root = self
             .local
             .keys()
@@ -354,6 +376,25 @@ impl RegistryLock {
                 .get(&id)
                 .or_else(|| self.local.get(&id))
                 .expect("resolved edge identity");
+            pending.extend(
+                record
+                    .edges
+                    .iter()
+                    .filter(|dep| !dep.source.is_empty() || !skip_local.contains(&dep.name))
+                    .cloned(),
+            );
+        }
+        Ok(seen)
+    }
+
+    pub fn check_mod(
+        &self,
+        mod_id: &str,
+        root: &str,
+        skip_local: &std::collections::BTreeSet<String>,
+        pins: &Self,
+    ) -> Result<(), String> {
+        for id in self.closure(mod_id, root, skip_local)? {
             if !id.source.is_empty() && !pins.packages.contains_key(&id) {
                 let versions = pins
                     .packages
@@ -367,13 +408,44 @@ impl RegistryLock {
                     id.name, id.version, versions
                 ));
             }
-            pending.extend(
-                record
-                    .edges
-                    .iter()
-                    .filter(|dep| !dep.source.is_empty() || !skip_local.contains(&dep.name))
-                    .cloned(),
-            );
+        }
+        Ok(())
+    }
+
+    /// The edges one mod's own lock adds to crates.io packages the game also locks, for the
+    /// packages its crate reaches both in the staged resolution and in its own lock. Only edges
+    /// to dependency names the game's record lacks, and only to crates.io packages: a mod's
+    /// features may add a dependency, never move one the game resolved or reach an SDK-patched
+    /// crate. Requiring the package to be reachable in the mod's own lock too only keeps honest
+    /// locks consistent (Cargo writes no orphan records); it doesn't stop a hand-edited lock, and
+    /// once two mods reach a package, either one's lock authorises edges on it. What protects
+    /// the build is elsewhere: every crates.io package must still be pinned, with its checksum,
+    /// by the game's lock or a mod's lock, and every one a mod reaches by the game's lock or that
+    /// mod's own (`check_resolved`'s pin loop and `check_mod`, which never read these edges);
+    /// and these edges only accept an edge already in the lock Cargo wrote for the staged
+    /// workspace, never add one.
+    pub fn mod_edges(
+        &self,
+        mod_id: &str,
+        root: &str,
+        skip_local: &std::collections::BTreeSet<String>,
+        pins: &Self,
+        game: &Self,
+        into: &mut ModEdges,
+    ) -> Result<(), String> {
+        // A lock without the mod's root records no path to anything: it adds no edges.
+        let own = pins.closure(mod_id, root, skip_local).unwrap_or_default();
+        for id in self.closure(mod_id, root, skip_local)? {
+            if !own.contains(&id) {
+                continue;
+            }
+            let (Some(owner), Some(pin)) = (game.packages.get(&id), pins.packages.get(&id)) else {
+                continue;
+            };
+            let added = pin.edges.iter().filter(|edge| {
+                !edge.source.is_empty() && owner.edges.iter().all(|old| old.name != edge.name)
+            });
+            into.entry(id).or_default().extend(added.cloned());
         }
         Ok(())
     }

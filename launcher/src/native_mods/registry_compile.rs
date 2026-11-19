@@ -407,13 +407,9 @@ pub(super) fn compile(
     plan.fetch_with_patches(rust, out, &patches)?;
     let metadata = super::registry_inventory::read(rust, out)
         .map_err(|error| plan.explain_resolution(error))?;
-    plan.check_mods(&super::registry_lock::RegistryLock::parse(
+    plan.check(&super::registry_lock::RegistryLock::parse(
         &super::read_lock(out)?,
     )?)?;
-    plan.allowed.check_partial_resolution(
-        &super::registry_lock::RegistryLock::parse(&super::read_lock(out)?)?,
-        &plan.game,
-    )?;
     let mut game_names = plan.game.game_package_names();
     for registry in patches.values() {
         for name in registry.as_table().expect("validated SDK patches").keys() {
