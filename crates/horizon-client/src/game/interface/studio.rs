@@ -340,6 +340,12 @@ impl Game<'_> {
                         .as_ref()
                         .map_or(0, |driver| driver.position_ms())
                         as u64;
+                    if time_ms < current {
+                        self.system_message(Text::translate(
+                            "horizon.studio.replay.seek.backward_requires_standalone",
+                            &[],
+                        ));
+                    }
                     time_ms.max(current)
                 };
                 self.studio.timeline.current_time_ms = time_ms;
