@@ -1,0 +1,3 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities.
+horizon-client game::lan_actions::tick::building_cache_tests::a_scenario_of_guests_hitting_pushing_and_teleporting_is_the_same_by_write_or_for_every_guest lib daily resources
+horizon-client game::lan_actions::tick::building_cache_tests::bodies_cost lib daily slow
