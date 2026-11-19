@@ -42,6 +42,7 @@ pub(crate) struct Installed {
     pub(crate) dimensions: Vec<crate::world::dimension::DimensionInfo>,
     pub(crate) chunk_generators: Vec<crate::world::chunk_generator::ChunkGeneratorInfo>,
     pub(crate) biome_sources: Vec<crate::world::biome_source::BiomeSourceInfo>,
+    pub(crate) density_function_types: Vec<crate::world::density_function::DensityFunctionTypeInfo>,
     /// Loading warnings, by owning mod id, in registration order.
     pub(crate) warnings: Vec<(String, crate::LoadingMessage)>,
     pub(crate) hook_bits: Vec<bool>,

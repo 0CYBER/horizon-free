@@ -98,7 +98,8 @@ replaces that half of it, in the worlds that have the pack.
 `register_dimension` is the same call in a mod built to `mod.wasm`, as the settings are plain
 data. A wasm mod's dimension can name only the game's own generator, `minecraft:noise`, with a
 vanilla biome source or one a native mod registered: a chunk generator and a biome source are code,
-and `register_chunk_generator` and `register_biome_source` are native only.
+and `register_chunk_generator` and `register_biome_source` are native only, as is
+`register_density_function_type`.
 
 ## Sending a player to a dimension
 
@@ -296,3 +297,58 @@ The source may come from a mod that loads later. A level whose world lacks one o
 biomes refuses to open, naming the source and the biome, as does a level stem naming a source that
 is gone. A wasm mod's registrar refuses `register_biome_source`, naming the source: `BiomeSource`
 is not bound by the generated wasm worker interface.
+
+### Density function types
+
+A density function type is a mod's code for a node of the density graph: any density JSON, a data
+pack's `worldgen/density_function`, a noise router or noise settings, can name it as
+`{"type": "mymod:plates", ...}` and combine it with vanilla's nodes. Register it once, at startup:
+
+```rust,ignore
+{{#include ../../../examples/src/worldgen.rs:density_function}}
+```
+
+A data pack then uses it, here in `data/mymod/worldgen/density_function/plated_continents.json`,
+the Overworld's continents raised and sunk by plate, for the pack's noise settings to name where
+they read `minecraft:overworld/continents`:
+
+```json
+{
+  "type": "minecraft:add",
+  "left": "minecraft:overworld/continents",
+  "right": {"type": "mymod:plates", "size": 512}
+}
+```
+
+`decode` gets the whole JSON object as text, each time worldgen data loads, and reads its own
+fields; an `Err` stops the noise settings that name it from loading, with a message naming the
+type. As it is a node of the one graph, every reader sees the same values: chunk fill, far
+terrain, structure heights, climate and biomes, `/locate biome`, spawn finding, aquifers and ore
+veins.
+
+The function must be pure in the seed and the position: the same seed and block position give the
+same value on every thread, run and machine. It runs on the worldgen worker threads, with no
+`Host`, so it is `Send + Sync` and keeps no mutable state. `range` bounds every value it gives
+(vanilla's interval arithmetic works from it): two finite values, the least first, within
+±1,000,000 (vanilla's bound on density values), or the density JSON fails to load, naming the
+type. `varies_with_y` returning `false` has it asked at y = 0 once per column. `range` and
+`varies_with_y` are asked once, when the density JSON loads.
+
+Chunk fill, far terrain and structure heights ask `fill` for whole volumes, `y` fastest, then `x`,
+then `z`; its default asks `sample` for each position, so override it to share work across a
+column. `fill` must write every slot of `out`. Single-point readers, spawn finding and `/locate
+biome`, ask `sample`, and so do parts of the volume readers: aquifers, `find_top_surface`, and
+`interpolated` off the cell lattice ask a point at a time (#18372).
+
+A density function type must not panic. A panic is not caught: it goes to whatever asked for the
+value, as a panic in any native worldgen hook does. On the worldgen worker threads that is a crash
+report naming your mod and the type, an emergency save on single player, and exit. The far terrain
+server's own worker instead refuses that tile. A NaN, a value outside `range`, or a slot `fill`
+leaves unwritten panics the same way, naming your mod, the type and the slot or position. This may
+be softened later.
+
+A type in another mod's namespace, an empty name, a name an id can't hold and an id registered
+twice stop the game at startup with a message naming the mod. Density JSON naming a type nobody
+registered, say after its mod was removed, fails to load, naming the type. A wasm mod's registrar
+refuses `register_density_function_type`, naming the type, but a wasm mod's data pack can name a
+type a native mod registered. A type can't take other density functions as its inputs yet.

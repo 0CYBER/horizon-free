@@ -77,6 +77,53 @@ pub mod biome_source {
     // ANCHOR_END: biome_source
 }
 
+pub mod density_function {
+    // ANCHOR: density_function
+    use mod_api::{
+        DensityFunction, DensityFunctionType, Hooks, Registrar, RegistrationContext, serde_json,
+    };
+    use std::sync::Arc;
+
+    /// `{"type": "mymod:plates", "size": 512}`: square plates `size` blocks wide, each raised
+    /// (1) or sunk (-1) by the seed.
+    struct Plates;
+    impl DensityFunctionType for Plates {
+        fn decode(&self, json: &str) -> Result<Arc<dyn DensityFunction>, String> {
+            let object: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+            match object["size"].as_i64() {
+                Some(size @ 1..=65536) => Ok(Arc::new(Plate { size: size as i32 })),
+                _ => Err("size must be 1 to 65536 blocks".into()),
+            }
+        }
+    }
+    struct Plate {
+        size: i32,
+    }
+    impl DensityFunction for Plate {
+        fn range(&self) -> [f32; 2] {
+            [-1.0, 1.0]
+        }
+        fn varies_with_y(&self) -> bool {
+            false
+        }
+        fn sample(&self, [x, _, z]: [i32; 3], seed: i64) -> f32 {
+            let cell = (i64::from(x.div_euclid(self.size)) << 32)
+                ^ i64::from(z.div_euclid(self.size))
+                ^ seed;
+            if cell.wrapping_mul(6364136223846793005) < 0 { -1.0 } else { 1.0 }
+        }
+    }
+    #[derive(Default)]
+    pub struct PlatesMod;
+    #[mod_api::horizon_mod]
+    impl Hooks for PlatesMod {
+        fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
+            registrar.register_density_function_type("plates", Plates);
+        }
+    }
+    // ANCHOR_END: density_function
+}
+
 pub mod structures {
     // ANCHOR: structure
     use mod_api::{

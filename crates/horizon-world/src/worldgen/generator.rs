@@ -3125,6 +3125,8 @@ impl GeneratorWorker {
 }
 
 #[cfg(test)]
+mod mod_density_tests;
+#[cfg(test)]
 mod region_tests;
 #[cfg(test)]
 mod tests {

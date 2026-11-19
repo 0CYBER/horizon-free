@@ -154,6 +154,14 @@ impl DensityCompiler {
     pub fn compile_raw(&self, id: FunctionId) -> Result<Arc<dyn DensitySampler>, CompileError> {
         let node = match &self.graph.entry(id)?.definition {
             Definition::Bound { sampler, .. } => return Ok(sampler.clone()),
+            Definition::Seeded { factory, .. } => {
+                let seed = self
+                    .context
+                    .as_ref()
+                    .ok_or(CompileError::MissingSeededContext)?
+                    .seed();
+                return Ok(factory.sampler(seed));
+            }
             Definition::Node(node) => node,
         };
         let sampler: Arc<dyn DensitySampler> = match *node {

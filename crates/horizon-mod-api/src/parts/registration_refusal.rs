@@ -72,6 +72,7 @@ impl PartRegistrar {
             dimensions,
             chunk_generators,
             biome_sources,
+            density_function_types,
             refused
         )
     }

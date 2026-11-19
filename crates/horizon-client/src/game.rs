@@ -11170,9 +11170,11 @@ pub(crate) fn run_with(
     {
         log::warn!("Mod dimensions already installed; keeping the first table");
     }
-    // Their chunk generators and biome sources, which those levels' and the packs' stems name.
+    // Their chunk generators and biome sources, which those levels' and the packs' stems name,
+    // and density function types, which the packs' density JSON names.
     native_chunk_generator::install();
     native_biome_source::install();
+    native_density_function::install();
     mods::register_components(&vanilla_root)?;
     mods::register_standalone_models(options.execution_role);
     mods::register_layer_definitions(options.execution_role, &vanilla_root);

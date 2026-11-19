@@ -380,11 +380,22 @@ impl std::fmt::Display for CompileError {
 }
 impl std::error::Error for CompileError {}
 
+/// A density node whose sampler needs the world seed, which decoding doesn't have: a seeded
+/// compiler asks for it with its own seed (a mod's density function type).
+pub trait SeededDensity: std::fmt::Debug + Send + Sync {
+    fn sampler(&self, seed: i64) -> Arc<dyn DensitySampler>;
+}
+
 #[derive(Clone, Debug)]
 enum Definition {
     Node(GraphNode),
     Bound {
         sampler: Arc<dyn DensitySampler>,
+        range: Interval,
+        axes: u8,
+    },
+    Seeded {
+        factory: Arc<dyn SeededDensity>,
         range: Interval,
         axes: u8,
     },
@@ -526,6 +537,30 @@ impl DensityGraph {
         });
         Ok(id)
     }
+    /// [`Self::bind`] for a node whose sampler a seeded compiler makes with its seed; an unseeded
+    /// compiler refuses it with [`CompileError::MissingSeededContext`].
+    pub fn bind_seeded(
+        &mut self,
+        factory: Arc<dyn SeededDensity>,
+        range: Interval,
+        axes: u8,
+    ) -> Result<FunctionId, CompileError> {
+        if axes & !7 != 0 {
+            return Err(CompileError::InvalidAxes);
+        }
+        let id = FunctionId(self.entries.len());
+        self.entries.push(Entry {
+            definition: Definition::Seeded {
+                factory,
+                range,
+                axes,
+            },
+            depth: 1,
+            equality_id: id,
+            hash_variant: false,
+        });
+        Ok(id)
+    }
     fn entry(&self, id: FunctionId) -> Result<&Entry, CompileError> {
         self.entries.get(id.0).ok_or(CompileError::UnknownFunction)
     }
@@ -585,7 +620,7 @@ impl DensityGraph {
     }
     pub fn domain_axes(&self, id: FunctionId) -> Result<u8, CompileError> {
         let mut node = match &self.entry(id)?.definition {
-            Definition::Bound { axes, .. } => return Ok(*axes),
+            Definition::Bound { axes, .. } | Definition::Seeded { axes, .. } => return Ok(*axes),
             Definition::Node(node) => node.clone(),
         };
         let mask = match node {
@@ -622,7 +657,9 @@ impl DensityGraph {
     }
     pub fn range(&self, id: FunctionId) -> Result<Interval, CompileError> {
         let node = match &self.entry(id)?.definition {
-            Definition::Bound { range, .. } => return Ok(*range),
+            Definition::Bound { range, .. } | Definition::Seeded { range, .. } => {
+                return Ok(*range);
+            }
             Definition::Node(node) => node,
         };
         Ok(match *node {
@@ -767,13 +804,13 @@ impl DensityGraph {
         Ok(Some(bounds))
     }
     /// The node `id` names, past registry and direct references; `None` for
-    /// a bound sampler.
+    /// a bound or seeded sampler.
     fn resolve_references(&self, mut id: FunctionId) -> Result<Option<&GraphNode>, CompileError> {
         loop {
             match &self.entry(id)?.definition {
                 Definition::Node(GraphNode::Reference { input, .. }) => id = *input,
                 Definition::Node(node) => return Ok(Some(node)),
-                Definition::Bound { .. } => return Ok(None),
+                Definition::Bound { .. } | Definition::Seeded { .. } => return Ok(None),
             }
         }
     }

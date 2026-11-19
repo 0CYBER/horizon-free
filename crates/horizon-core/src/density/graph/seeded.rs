@@ -22,6 +22,9 @@ pub(super) struct SeededContext {
     instances: Mutex<HashMap<NoiseId, Arc<dyn Noise>>>,
 }
 impl SeededContext {
+    pub(super) fn seed(&self) -> i64 {
+        self.seed
+    }
     pub(super) fn end_islands(&self) -> Arc<dyn DensitySampler> {
         Arc::new(EndIslandSampler::new(self.seed))
     }
