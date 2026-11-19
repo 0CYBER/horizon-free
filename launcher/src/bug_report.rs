@@ -60,3 +60,37 @@ pub fn write(text: &str, with_log: bool) -> Result<PathBuf, String> {
     std::fs::write(&path, report).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
+
+/// The note a report shows before it leaves when a newer launcher than `current` is out: the bug
+/// may be fixed already (#18631). Sending stays possible.
+pub fn old_launcher_note(current: &str, latest: Option<&str>) -> Option<String> {
+    let tag = |v: &str| format!("{}{v}", backend::LAUNCHER_TAG_PREFIX);
+    let latest =
+        latest.filter(|latest| backend::compare_versions(&tag(latest), &tag(current)).is_gt())?;
+    Some(crate::i18n::trf(
+        "You're on launcher {version}; {latest} may already fix this. Update first?",
+        &[("version", current), ("latest", latest)],
+    ))
+}
+
+/// The newest launcher's version when it is newer than this one; None when none is, or offline.
+pub fn newer_launcher() -> Option<String> {
+    let release = backend::check_updates().ok()?.launcher?;
+    backend::launcher_version(&release.tag).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_report_from_an_older_launcher_says_a_newer_one_is_out() {
+        assert_eq!(
+            old_launcher_note("0.2.79", Some("0.2.81")).as_deref(),
+            Some("You're on launcher 0.2.79; 0.2.81 may already fix this. Update first?")
+        );
+        assert_eq!(old_launcher_note("0.2.81", Some("0.2.81")), None);
+        assert_eq!(old_launcher_note("0.2.82", Some("0.2.81")), None);
+        assert_eq!(old_launcher_note("0.2.79", None), None);
+    }
+}

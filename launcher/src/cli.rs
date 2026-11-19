@@ -1785,6 +1785,9 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
         }
         Cmd::Update { check } => update(check, as_json)?,
         Cmd::BugReport { text, log } => {
+            if let Some(note) = old_launcher_note() {
+                eprintln!("{note}");
+            }
             let path = horizon_launcher::bug_report::write(&text, log)?;
             if as_json {
                 json(serde_json::json!({ "path": path }));
@@ -2089,27 +2092,37 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
     }
     Ok(())
 }
+/// What a bug report says first when a newer launcher is out (#18631).
+fn old_launcher_note() -> Option<String> {
+    use horizon_launcher::bug_report;
+    bug_report::old_launcher_note(backend::VERSION, bug_report::newer_launcher().as_deref())
+}
+
 /// `data`: the same consent as Settings → Data collection.
 fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
     use horizon_launcher::telemetry;
-    let review = |item: &horizon_telemetry::Item, yes: bool| -> Result<bool, String> {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(item).map_err(|e| e.to_string())?
-        );
-        if yes {
-            return Ok(true);
-        }
-        if !std::io::stdin().is_terminal() {
-            return Err("Add --yes to send it without asking.".into());
-        }
-        eprint!("Send this? [y/N] ");
-        let mut line = String::new();
-        std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?;
-        Ok(line.trim().eq_ignore_ascii_case("y"))
-    };
+    let review =
+        |item: &horizon_telemetry::Item, yes: bool, note: Option<String>| -> Result<bool, String> {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(item).map_err(|e| e.to_string())?
+            );
+            if let Some(note) = note {
+                eprintln!("{note}");
+            }
+            if yes {
+                return Ok(true);
+            }
+            if !std::io::stdin().is_terminal() {
+                return Err("Add --yes to send it without asking.".into());
+            }
+            eprint!("Send this? [y/N] ");
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| e.to_string())?;
+            Ok(line.trim().eq_ignore_ascii_case("y"))
+        };
     match action {
         DataCmd::Status => {
             let status = telemetry::status_json();
@@ -2149,14 +2162,14 @@ fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
         DataCmd::Bug { text, log, yes } => {
             telemetry::ensure_allowed(horizon_telemetry::Kind::Bug)?;
             let item = telemetry::bug_report(&text, log)?;
-            if review(&item, yes)? {
+            if review(&item, yes, old_launcher_note())? {
                 println!("{}", telemetry::submit(&item)?);
             }
         }
         DataCmd::Benchmark { file, yes } => {
             telemetry::ensure_allowed(horizon_telemetry::Kind::Benchmark)?;
             let item = telemetry::benchmark_report(&file)?;
-            if review(&item, yes)? {
+            if review(&item, yes, None)? {
                 println!("{}", telemetry::submit(&item)?);
             }
         }
