@@ -132,7 +132,7 @@ fn error(error: Error) -> io::Error {
             io::ErrorKind::WouldBlock.into()
         }
         Error::UnsupportedFilesystem => io::ErrorKind::Unsupported.into(),
-        Error::Unsafe(_) => io::ErrorKind::InvalidInput.into(),
+        Error::Unsafe(_) | Error::Dependent(_) => io::ErrorKind::InvalidInput.into(),
         Error::Io(error) => error,
     }
 }

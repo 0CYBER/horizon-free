@@ -270,7 +270,7 @@ impl Entry {
         if matches!(access, Access::LeasedGame) {
             return crate::cache_cleanup::delete_game_unit_with(&self.path, self.links);
         }
-        access.check()?;
+        access.check(crate::cache_cleanup::Proof::Lease)?;
         let mut parent = root.try_clone()?;
         for part in self.relative.parent().unwrap_or(Path::new("")).components() {
             parent = parent.open_dir_nofollow(part.as_os_str())?;
@@ -596,7 +596,10 @@ impl Storage {
                     Tier::Lru
                 };
                 Ok(Unit {
-                    eligible: entry.access()?.check().is_ok(),
+                    eligible: entry
+                        .access()?
+                        .check(crate::cache_cleanup::Proof::Lease)
+                        .is_ok(),
                     bytes: entry.bytes(&mut seen)?,
                     last_used,
                     tier,
@@ -646,7 +649,7 @@ impl Storage {
                         native_mods::cache_error(
                             entry
                                 .access()?
-                                .check()
+                                .check(crate::cache_cleanup::Proof::Lease)
                                 .err()
                                 .unwrap_or(Error::UnprovenExclusion),
                         )
@@ -696,7 +699,10 @@ impl Storage {
         let mut report = self.apply_retaining(entries, clear, all, true)?;
         if clear.is_none() && !all {
             for entry in self.entries()? {
-                if let Err(error) = entry.access().and_then(|access| access.check()) {
+                if let Err(error) = entry
+                    .access()
+                    .and_then(|access| access.check(crate::cache_cleanup::Proof::Lease))
+                {
                     let bytes = entry.bytes_alone()?;
                     if bytes > 0 {
                         report

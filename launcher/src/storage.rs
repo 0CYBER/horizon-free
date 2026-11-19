@@ -210,7 +210,7 @@ impl Storage {
             crate::cache_cleanup::delete_game_unit(path)?;
             return Ok(bytes.saturating_sub(allocated_bytes(path)?));
         }
-        access.check()?;
+        access.check(crate::cache_cleanup::Proof::Lease)?;
         let relative = path
             .strip_prefix(&self.root)
             .map_err(|_| Error::Unsafe(path.to_owned()))?;

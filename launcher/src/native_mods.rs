@@ -405,6 +405,10 @@ pub fn cache_error(error: crate::storage::Error) -> String {
             "An older game build can use this cache without runtime leases.",
         )
         .into(),
+        crate::native_cache::Error::Dependent(build) => trf(
+            "This version supplies resources to native build {build}. Remove that build first.",
+            &[("build", &build)],
+        ),
         crate::native_cache::Error::UnsupportedFilesystem => {
             tr("Game cache leases require a supported local filesystem.").into()
         }
@@ -775,10 +779,14 @@ fn about_in(dir: &Path) -> Option<About> {
 
 /// The newest installed release or Nightly in `installed` (newest first).
 /// Installed native clients retain their base's prepared data even when not selected.
-pub(crate) fn resource_dependents(tag: &str) -> bool {
+pub(crate) fn resource_dependent(tag: &str) -> Option<String> {
     backend::installed()
-        .iter()
-        .any(|version| about(version).is_some_and(|about| about.base == tag))
+        .into_iter()
+        .find(|version| about(version).is_some_and(|about| about.base == tag))
+}
+
+pub(crate) fn resource_dependents(tag: &str) -> bool {
+    resource_dependent(tag).is_some()
 }
 
 pub(crate) fn newest_installed(installed: &[String]) -> Option<&String> {
