@@ -29,6 +29,9 @@ COMMENT_NAME = re.compile(r"\b([A-Z][A-Za-z0-9]*)(?:(?:\.|::|#)([A-Za-z][A-Za-z0
 JAVA_IMPORT = re.compile(r"\bimport\s+(static\s+)?((?:net\.minecraft|com\.mojang)\.[\w.]+?)(\.\*)?\s*;")
 JAVA_QUALIFIED = re.compile(r"\b((?:net\.minecraft|com\.mojang)(?:\.[a-z][a-z0-9_]*)+(?:\.[A-Z]\w*)+)")
 RUST_USE = re.compile(r"\b(horizon_[a-z_]+|crate)((?:::[a-z_][a-z0-9_]*)+)")
+# Comment markers and literal openers, in the order a Rust line is scanned. Group 1 is a raw string's `#` run.
+COMMENT_TOKEN = re.compile(r'(?<![\w])[bc]?r(#*)"|//|/\*|"|\'')
+STRING_REST = re.compile(r'(?:[^"\\]|\\.)*"', re.S)
 
 
 def humps(name):
@@ -76,8 +79,34 @@ class Names:
 
 
 def comment_text(line):
-    at = line.find("//")
-    return line[at:] if at >= 0 else ""
+    """The `//` comment of a Rust line, ignoring markers inside string, raw-string and char literals."""
+    i, end = 0, len(line)
+    while token := COMMENT_TOKEN.search(line, i):
+        start, pos, hashes = token.start(), token.end(), token.group(1)
+        if hashes is not None:  # r"...", r#"..."#, br#"..."# — skip to its closing quote and hashes
+            close = line.find('"' + hashes, pos)
+            i = end if close < 0 else close + 1 + len(hashes)
+            continue
+        kind = token.group()
+        if kind == "//":
+            return line[start:]
+        if kind == "/*":
+            close = line.find("*/", pos)
+            i = end if close < 0 else close + 2
+            continue
+        if kind == '"':
+            rest = STRING_REST.match(line, pos)
+            i = rest.end() if rest else end
+            continue
+        # A char literal ('x', '\'', '\u{7b}') is skipped; a lifetime or label ('a) is code.
+        if line.startswith("\\", pos):
+            close = line.find("'", pos + 2)
+            i = end if close < 0 else close + 1
+        elif line.startswith("'", pos + 1):
+            i = pos + 2
+        else:
+            i = pos
+    return ""
 
 
 def rust_references(files, names, read=lambda f: (ROOT / f).read_text(errors="replace")):
