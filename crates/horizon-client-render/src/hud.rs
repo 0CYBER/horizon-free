@@ -12,7 +12,8 @@ use std::{
 };
 use wgpu::util::DeviceExt;
 
-use model_reducing::reducible_model_sprites;
+pub use model_reducing::set_mod_namespaces;
+use model_reducing::{full_size_sprites, mod_namespaces, reducible_model_sprites};
 
 mod animate;
 pub mod cit_glint;
@@ -1435,12 +1436,29 @@ impl HudAtlas {
             Self::layout_leaving_out(&mut images, &mut animated, &cit_names, MAX_ATLAS_SIZE)
                 .or_else(|error| -> Result<_> {
                     let models = reducible_model_sprites(root, &images, &bordered);
-                    let layout = Self::layout_reducing_models(
+                    let reduced = Self::layout_reducing_models(
                         &mut images,
                         &mut gui_sizes,
                         &models,
                         MAX_ATLAS_SIZE,
-                    )?;
+                    );
+                    let layout = match reduced {
+                        Ok(layout) => layout,
+                        Err(_) => {
+                            let keep = full_size_sprites(root, &images, &bordered);
+                            let layout = Self::layout_capping_mod_textures(
+                                &mut images,
+                                &mut gui_sizes,
+                                &keep,
+                                &mod_namespaces(),
+                                MAX_ATLAS_SIZE,
+                            )?;
+                            log::warn!(
+                                "reduced the resolution of mods' HUD textures to keep the resource packs: {error}"
+                            );
+                            return Ok(layout);
+                        }
+                    };
                     log::warn!(
                         "reduced HUD model texture resolution to keep the resource pack: {error}"
                     );
@@ -4682,6 +4700,92 @@ texture=wide",
         let slot = images.iter().find(|i| i.0 == "horizon/map").unwrap();
         assert_eq!((slot.1, slot.2), (128, 128));
         assert!(slot.3.is_empty());
+    }
+    /// Past the models, a mod's other textures lose resolution, the largest
+    /// first and keeping their logical size and shape; vanilla's, the kept
+    /// ones (font sheets) and run-time slots don't.
+    #[test]
+    fn overflowing_mod_textures_are_capped_largest_first() {
+        let mut images = vec![
+            (
+                "big:gui/book".into(),
+                1024,
+                512,
+                [1, 2, 3, 255].repeat(1024 * 512),
+            ),
+            (
+                "gui/panel".into(),
+                512,
+                256,
+                [7, 8, 9, 255].repeat(512 * 256),
+            ),
+            (
+                "big:font/glyphs".into(),
+                256,
+                256,
+                [5, 5, 5, 255].repeat(256 * 256),
+            ),
+            (
+                "big:entity/boss".into(),
+                128,
+                128,
+                [4, 5, 6, 255].repeat(128 * 128),
+            ),
+            ("big:gui/slot".into(), 128, 128, Vec::new()),
+        ];
+        let keep = HashSet::from(["big:font/glyphs".to_owned()]);
+        let mods = HashSet::from(["big".to_owned()]);
+        let mut sizes = HashMap::new();
+        assert!(HudAtlas::layout(&images, 1024).is_err());
+        let (width, placements, free) =
+            HudAtlas::layout_capping_mod_textures(&mut images, &mut sizes, &keep, &mods, 1024)
+                .unwrap();
+        assert_inside(&images, width, &placements, free);
+        let find = |name: &str| images.iter().find(|i| i.0 == name).unwrap().clone();
+        let book = find("big:gui/book");
+        assert_eq!((book.1, book.2), (256, 128));
+        assert_eq!(book.3, [1, 2, 3, 255].repeat(256 * 128));
+        assert_eq!(sizes["big:gui/book"], (1024, 512));
+        // Smaller than the cap that was enough: left as it was.
+        let boss = find("big:entity/boss");
+        assert_eq!((boss.1, boss.2), (128, 128));
+        assert!(!sizes.contains_key("big:entity/boss"));
+        for (name, w, h) in [
+            ("gui/panel", 512, 256),
+            ("big:font/glyphs", 256, 256),
+            ("big:gui/slot", 128, 128),
+        ] {
+            let image = find(name);
+            assert_eq!((image.1, image.2), (w, h), "{name}");
+        }
+    }
+    /// The last cap tried is 16 texels, also when halving would pass below it;
+    /// a namespace no mod owns is never capped.
+    #[test]
+    fn mod_textures_are_capped_down_to_16_texels() {
+        let mut images = vec![
+            (
+                "gui/wide".into(),
+                1000,
+                490,
+                [1, 1, 1, 255].repeat(1000 * 490),
+            ),
+            ("m:gui/dot".into(), 31, 31, [2, 2, 2, 255].repeat(31 * 31)),
+        ];
+        assert!(HudAtlas::layout(&images, 1024).is_err());
+        let mut sizes = HashMap::new();
+        // `m` is no mod's (a resource pack's own namespace): its texture stays whole.
+        let none = HashSet::new();
+        assert!(
+            HudAtlas::layout_capping_mod_textures(&mut images, &mut sizes, &none, &none, 1024)
+                .is_err()
+        );
+        assert!(sizes.is_empty());
+        let mods = HashSet::from(["m".to_owned()]);
+        HudAtlas::layout_capping_mod_textures(&mut images, &mut sizes, &none, &mods, 1024).unwrap();
+        let dot = images.iter().find(|i| i.0 == "m:gui/dot").unwrap();
+        assert_eq!((dot.1, dot.2), (16, 16));
+        assert_eq!(sizes["m:gui/dot"], (31, 31));
     }
     #[test]
     fn fitting_models_keep_their_pixels_and_existing_logical_sizes() {
