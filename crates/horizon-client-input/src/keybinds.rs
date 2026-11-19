@@ -301,6 +301,7 @@ pub use horizon_client_core::key_display::{
 /// A key event: what the layout writes on its key, without modifiers, names
 /// that key from now on (`key_display::learn_layout`), so an AZERTY player's
 /// Q key shows A.
+#[cfg(not(target_os = "android"))]
 pub fn learn_layout(event: &winit::event::KeyEvent) {
     use winit::keyboard::{Key, PhysicalKey};
     use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
@@ -317,6 +318,10 @@ pub fn learn_layout(event: &winit::event::KeyEvent) {
         _ => {}
     }
 }
+
+// Android does not expose winit's unmodified key extension.
+#[cfg(target_os = "android")]
+pub fn learn_layout(_event: &winit::event::KeyEvent) {}
 
 /// Vanilla's name for the key the layout produced (`InputEvent.Key.getKeycode`):
 /// `layout` is the event's key without modifiers. A letter or digit names its

@@ -13,6 +13,7 @@ horizon-client-core = { path = "../horizon-client-core" }
 winit = "0.30.13"
 log = "0.4"
 png = "0.18"
+[target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]
