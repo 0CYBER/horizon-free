@@ -150,6 +150,9 @@ pub(super) struct Parked {
     level_events: Vec<LevelEvent>,
     /// Entity portal processes and cooldowns belong to this level's entities.
     pub(super) portal_states: HashMap<u32, horizon_client::nether_portal::PortalState>,
+    /// Which of this level's chunks may hold a portal (`Game::find_portals`), kept per level:
+    /// one cache asked by two levels in turn read every palette of both again each tick.
+    pub(super) portal_sections: horizon_client::portal_sections::PortalSections,
     falling: horizon_client::join_seq::JoinList<FallingBlock, false>,
     paintings: horizon_client::join_seq::JoinList<horizon_client::entities::Painting>,
     item_frames: horizon_client::join_seq::JoinList<horizon_client::entities::ItemFrame>,
@@ -753,6 +756,7 @@ impl Game<'_> {
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
             portal_states: HashMap::new(),
+            portal_sections: Default::default(),
             falling: Default::default(),
             paintings: Default::default(),
             item_frames: Default::default(),
@@ -908,6 +912,7 @@ impl Game<'_> {
         swap(&mut self.random_tick_sections, &mut p.random_tick_sections);
         swap(&mut self.level_events, &mut p.level_events);
         swap(&mut self.portals.entities, &mut p.portal_states);
+        swap(&mut self.portals.sections, &mut p.portal_sections);
         swap(&mut self.falling, &mut p.falling);
         swap(&mut self.paintings, &mut p.paintings);
         swap(&mut self.item_frames, &mut p.item_frames);
@@ -1857,6 +1862,44 @@ mod tests {
         assert_eq!(game.border.size(), 1000.0);
         let nether = game.levels.parked_border(Dim::Nether).unwrap();
         assert_eq!(nether.size(), 100.0);
+    }
+
+    /// `Game::find_portals` asks every tick whether a palette of the level's chunks may hold a
+    /// portal (`PortalSections::any`). A level keeps its answers while another level ticks: its
+    /// unchanged chunks' palettes are not read again, though the other level has chunks at the
+    /// same x and z (a server ticks the Overworld and the Nether one after the other).
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_keeps_its_portal_palettes_while_another_ticks() {
+        let mut game = prepared_game();
+        let columns = |game: &mut Game| {
+            for x in 0..4 {
+                for z in 0..4 {
+                    let chunk = horizon_client::chunk::Chunk::empty(x, z);
+                    game.world.chunks.insert((x, z), Arc::new(chunk));
+                }
+            }
+        };
+        // Asked as `level_may_hold_portal` asks, counting the palette entries read.
+        let reads = |game: &mut Game| {
+            let mut reads = 0;
+            game.portals.sections.any(&game.world.chunks, |_| {
+                reads += 1;
+                false
+            });
+            reads
+        };
+        columns(&mut game);
+        assert!(reads(&mut game) > 0, "the first ask reads the palettes");
+        game.enter_level(Dim::Nether).unwrap();
+        columns(&mut game);
+        reads(&mut game);
+        game.enter_level(Dim::Overworld).unwrap();
+        assert_eq!(
+            reads(&mut game),
+            0,
+            "the Overworld's palettes were read again"
+        );
     }
 
     struct LogCapture;

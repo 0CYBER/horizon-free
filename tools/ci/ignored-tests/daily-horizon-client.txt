@@ -44,6 +44,7 @@ horizon-client game::fishing::impact::tests::removing_a_bobber_in_its_impact_cle
 horizon-client game::gui_clips::dispatch_tests::a_hook_call_clips_what_its_mod_draws_and_closes_what_it_leaves_open lib daily resources
 horizon-client game::gui_entity::tests::a_screen_draws_a_mob_by_type_once_and_refuses_what_it_cant_draw lib daily game-boot
 horizon-client game::launch_api::tests::developer_offline_never_consumes_inherited_sessions lib daily child-process
+horizon-client game::levels::tests::a_level_keeps_its_portal_palettes_while_another_ticks lib daily resources
 horizon-client game::maps::tests::map_on_banner_in_adventure_mode_honours_can_place_on lib daily game-boot
 horizon-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_refuses_each_content_mod_row lib daily child-process
 horizon-client game::mods::tests::content_overlay_validates_dependencies_and_orders_layers lib daily child-process
