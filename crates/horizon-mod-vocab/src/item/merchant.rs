@@ -71,9 +71,28 @@ impl MerchantOffer {
             xp,
         }
     }
+    /// `ItemStack.getMaxStackSize`: the payment stack's own
+    /// `minecraft:max_stack_size` (a removal leaves the default of one), else
+    /// the item's.
+    fn payment_max_stack(&self, host: &dyn Host) -> Option<u32> {
+        let item_max = host.max_stack_size(self.base_cost_a.stack.item())?;
+        let Some(patch) = self.base_cost_a.stack.components() else {
+            return Some(item_max);
+        };
+        let patch = patch.as_nbt();
+        let removed: horizon_core::nbt::JavaString = "!minecraft:max_stack_size".into();
+        if patch.get(&removed).is_some() {
+            return Some(1);
+        }
+        let limit: horizon_core::nbt::JavaString = "minecraft:max_stack_size".into();
+        match patch.get(&limit) {
+            Some(horizon_core::nbt::Tag::Int(n)) if (1..=99).contains(n) => Some(*n as u32),
+            _ => Some(item_max),
+        }
+    }
     /// The adjusted first payment count, or none if its item metadata is unavailable.
     pub fn cost_a_count(&self, host: &dyn Host) -> Option<u32> {
-        let maximum = host.max_stack_size(self.base_cost_a.stack.item())?;
+        let maximum = self.payment_max_stack(host)?;
         Some(horizon_core::trading::modified_cost_count(
             self.base_cost_a.stack.count(),
             self.demand,
@@ -137,5 +156,39 @@ impl MerchantOffer {
             *b = b.take().and_then(|stack| stack.shrink(cost.stack.count()));
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::ItemsHost;
+    use crate::testing::FakeHost;
+    use horizon_core::nbt::{Compound, Tag};
+
+    /// The snapshot's price has to clamp like the game's: a payment stack can
+    /// carry a `minecraft:max_stack_size` override, and vanilla then never
+    /// raises its count above that.
+    #[test]
+    fn cost_clamps_to_the_payments_own_component_limit() {
+        let mut host = FakeHost::new();
+        let id = crate::Identifier::parse("minecraft:emerald").unwrap();
+        host.registries.resolve_items([id.clone()]).unwrap();
+        let item = host.item_key(&id).unwrap();
+        let mut payment = ItemStack::new(item, 10).unwrap();
+        let mut patch = Compound::new();
+        patch.insert("minecraft:max_stack_size".into(), Tag::Int(16));
+        payment.apply_components(&patch).unwrap();
+        let mut offer = MerchantOffer::new(
+            ItemCost::new(payment),
+            None,
+            ItemStack::new(item, 1).unwrap(),
+            12,
+            1,
+            0.2,
+        );
+        // 10 + floor(10 * 20 * 0.2) = 50 before the stack's limit.
+        offer.demand = 20;
+        assert_eq!(offer.cost_a_count(&host), Some(16));
     }
 }

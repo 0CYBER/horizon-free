@@ -618,8 +618,15 @@ fn cost<R: RandomSource>(items: &Items, v: &Value, additional: i32, random: &mut
     let count = v.get("count").map_or(1, |v| int_provider(v, random));
     let count = count.wrapping_add(additional).clamp(0, max);
     let mut stack = ItemStack::new(id, count as u32);
-    if let Some(potion) = v["components"]["minecraft:potion_contents"]["potion"].as_str() {
-        stack = stack.with_potion(potion);
+    // `TradeCost.toItemCost` builds the payment stack from the trade's exact
+    // component predicate (`DataComponentExactPredicate.asPatch`): potion
+    // contents and stack limits both land on the cost, and the price clamp
+    // reads the stack's own limit.
+    if let Some(components) = v.get("components") {
+        let (damage, extra) =
+            crate::item_data::decode_components(Some(&crate::scoreboard::json_to_tag(components)));
+        stack.damage = damage;
+        stack.extra = extra;
     }
     ItemCost { stack }
 }
@@ -960,6 +967,85 @@ mod tests {
         assert_eq!(o.cost_a_count(&items), 13);
         o.special_price_diff = -20;
         assert_eq!(o.cost_a_count(&items), 1);
+    }
+
+    /// `MerchantOffer.getModifiedCostCount` clamps to the payment stack's own
+    /// `getMaxStackSize`, which a saved or networked offer can override.
+    #[test]
+    fn cost_clamps_to_the_payments_own_stack_limit() {
+        let items = items();
+        let mut o = offer(10, None);
+        // 10 + floor(10 * 20 * 0.2) = 50.
+        o.demand = 20;
+        assert_eq!(o.cost_a_count(&items), 50);
+        o.base_cost_a.stack.data_mut().set_other(
+            "minecraft:max_stack_size",
+            Some(horizon_core::nbt::Tag::Int(16)),
+        );
+        assert_eq!(o.cost_a_count(&items), 16);
+        // A removed limit is `getOrDefault(MAX_STACK_SIZE, 1)`: one, not the item's.
+        o.base_cost_a
+            .stack
+            .data_mut()
+            .set_other("minecraft:max_stack_size", None);
+        o.base_cost_a.stack.data_mut().set_other(
+            "!minecraft:max_stack_size",
+            Some(horizon_core::nbt::Tag::compound(Vec::<(
+                &str,
+                horizon_core::nbt::Tag,
+            )>::new())),
+        );
+        assert_eq!(o.cost_a_count(&items), 1);
+    }
+
+    /// `TradeCost.toItemCost` builds the payment with the trade's exact
+    /// component predicate (`DataComponentExactPredicate.asPatch`), so the
+    /// payment must match it and the price clamp reads its stack limit.
+    #[test]
+    fn trade_costs_keep_their_exact_components() {
+        let items = items();
+        let mut random = sequence_random(1, "cost");
+        let t = json!({
+            "id": "minecraft:emerald",
+            "count": 4,
+            "components": {"minecraft:max_stack_size": 16}
+        });
+        let c = cost(&items, &t, 0, &mut random);
+        assert_eq!(c.stack.count, 4);
+        assert_eq!(
+            c.stack
+                .data()
+                .and_then(|d| d.other("minecraft:max_stack_size")),
+            Some(&horizon_core::nbt::Tag::Int(16))
+        );
+        let mut priced = offer(4, None);
+        priced.base_cost_a = c;
+        priced.demand = 20;
+        assert_eq!(priced.cost_a_count(&items), 16);
+        let plain = ItemStack::new("minecraft:emerald", 16);
+        assert!(!priced.base_cost_a.test(&plain));
+        let mut matching = plain.clone();
+        matching.data_mut().set_other(
+            "minecraft:max_stack_size",
+            Some(horizon_core::nbt::Tag::Int(16)),
+        );
+        assert!(priced.base_cost_a.test(&matching));
+        assert_eq!(
+            priced
+                .cost_a(&items)
+                .data()
+                .and_then(|d| d.other("minecraft:max_stack_size")),
+            Some(&horizon_core::nbt::Tag::Int(16))
+        );
+        // The one exact component vanilla's own trade data uses stays modelled.
+        let potion = json!({
+            "id": "minecraft:potion",
+            "components": {"minecraft:potion_contents": {"potion": "minecraft:swiftness"}}
+        });
+        assert_eq!(
+            cost(&items, &potion, 0, &mut random).stack.potion(),
+            Some("minecraft:swiftness")
+        );
     }
 
     #[test]

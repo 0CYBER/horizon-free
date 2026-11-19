@@ -39,7 +39,21 @@ pub struct MerchantOffer {
     pub xp: i32,
 }
 impl MerchantOffer {
+    /// `ItemStack.getMaxStackSize`: the stack's own `minecraft:max_stack_size`
+    /// (a `!minecraft:max_stack_size` removal leaves the default of one), else
+    /// the item's own. A trade's payment stack may carry the component, and the
+    /// price clamp follows the payment stack vanilla builds, not the item.
     fn max_stack(items: &Items, s: &ItemStack) -> u32 {
+        let data = s.data();
+        if data.is_some_and(|d| d.other("!minecraft:max_stack_size").is_some()) {
+            return 1;
+        }
+        if let Some(horizon_core::nbt::Tag::Int(n)) =
+            data.and_then(|d| d.other("minecraft:max_stack_size"))
+            && (1..=99).contains(n)
+        {
+            return *n as u32;
+        }
         items.get(&s.item).map_or(64, |i| i.max_stack)
     }
     /// `getModifiedCostCount` for cost A.
