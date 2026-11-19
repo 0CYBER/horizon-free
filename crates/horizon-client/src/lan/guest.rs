@@ -448,6 +448,8 @@ pub struct Guest {
     pub glide_end_unsent: bool,
     /// Pose last delivered to this player's own entity data, initially Standing.
     pub sent_pose: Pose,
+    /// Avatar.DATA_PLAYER_MAIN_HAND last sent to this player's own entity data, RIGHT (1) first.
+    pub sent_main_hand: i32,
     /// The skin parts (Avatar.DATA_PLAYER_MODE_CUSTOMISATION) last delivered to
     /// this player's own entity data, initially 0: the bits the client's own model
     /// shows, which its player starts at (no layer) until the server sends them.
@@ -834,6 +836,7 @@ impl Guest {
             sent_shared: 0,
             glide_end_unsent: false,
             sent_pose: Pose::Standing,
+            sent_main_hand: 1,
             sent_skin: 0,
             sent_shoulders: [None; 2],
             sent_stuck: (0, 0),

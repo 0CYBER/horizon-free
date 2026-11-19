@@ -3227,6 +3227,7 @@ impl Hub {
         living_flags: i8,
         bed: Option<[i32; 3]>,
         skin: u8,
+        main_hand: i32,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         attributes: Vec<play::AttributeSnapshot>,
@@ -3270,6 +3271,12 @@ impl Hub {
         if skin != 0 {
             meta.push((16, serializer::BYTE, Value::Byte(skin as i8)));
         }
+        // Avatar.DATA_PLAYER_MAIN_HAND (Avatar.java:38): anything but 1 is LEFT
+        // (HumanoidArm.java:17), and RIGHT = 1, its default, is not sent.
+        let arm = if main_hand == 1 { 1 } else { 0 };
+        if arm != 1 {
+            meta.push((15, serializer::HUMANOID_ARM, Value::Id(arm)));
+        }
         meta.extend(effect_meta);
         EntityState {
             id,
@@ -3283,11 +3290,13 @@ impl Hub {
             meta,
             forced_meta: [0; 4],
             // What a client still holds goes back to its default: the effect
-            // swirls to none, and the skin parts to 0, every outer layer hidden
-            // (Avatar.DATA_PLAYER_MODE_CUSTOMISATION).
+            // swirls to none, the hand one holds LEFT back to RIGHT (send_dirty
+            // sends defaults, entity.rs), and the skin parts to 0, every outer
+            // layer hidden (Avatar.DATA_PLAYER_MODE_CUSTOMISATION).
             defaults: vec![
                 (10, serializer::PARTICLES, Value::Particles(Vec::new())),
                 (11, serializer::BOOLEAN, Value::Bool(false)),
+                (15, serializer::HUMANOID_ARM, Value::Id(1)),
                 (16, serializer::BYTE, Value::Byte(0)),
             ],
             equipment,
@@ -3343,6 +3352,7 @@ impl Hub {
                     g.living_flags,
                     g.bed,
                     g.info.model_customisation,
+                    g.info.main_hand,
                     g.health,
                     equipment,
                     g.motion
@@ -3606,6 +3616,16 @@ impl Hub {
                 g.send(&C::SetEntityData(play::SetEntityData {
                     id: g.entity_id,
                     values: vec![(6, serializer::POSE, Value::Id(pose.id()))],
+                }));
+            }
+            // ServerEntity.sendDirtyEntityData: the player's own data goes to
+            // it too (ChunkMap.java:1352-1356); 1 is RIGHT, the rest LEFT.
+            let arm = if g.info.main_hand == 1 { 1 } else { 0 };
+            if arm != g.sent_main_hand {
+                g.sent_main_hand = arm;
+                g.send(&C::SetEntityData(play::SetEntityData {
+                    id: g.entity_id,
+                    values: vec![(15, serializer::HUMANOID_ARM, Value::Id(arm))],
                 }));
             }
             // ServerEntity.sendDirtyEntityData: the parrots on the player's
@@ -4862,6 +4882,9 @@ impl Hub {
         self.respawned(id);
         self.guests.update(i, |g| {
             g.sent_pose = crate::pose::Pose::Standing;
+            // PlayerList.respawn: the new tracker sends the hand again
+            // (ServerEntity.java:311-312); the default is what a fresh one holds.
+            g.sent_main_hand = 1;
             // ClientPacketListener.handleRespawn without KEEP_ENTITY_DATA: the client's new player is
             // built from zero data, so the skin parts its dead one held are gone too. Pairing this
             // reset with the pose's keeps the outer layer sent again on the next tick; without it the
@@ -5274,6 +5297,7 @@ mod tests {
     mod glide_motion_tests;
     mod impulse_grace_tests;
     mod live_player_limit_tests;
+    mod main_hand_tests;
     mod menu_sync_tests;
     mod ordered_inbox_tests;
     mod pending_move_bound_tests;
