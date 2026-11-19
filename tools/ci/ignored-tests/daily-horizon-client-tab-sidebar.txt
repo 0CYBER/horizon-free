@@ -1,0 +1,5 @@
+# horizon-rust/horizon#17844: these mod-API tests read the prepared 26.3 data.
+horizon-client game::native_player_sidebar::tests::player_set_sidebar_sends_the_objective_and_its_lines lib daily resources
+horizon-client game::native_player_sidebar::tests::a_team_players_sidebar_takes_the_team_slot_and_clear_restores_the_worlds lib daily resources
+horizon-client game::native_player_sidebar::tests::clearing_without_a_personal_sidebar_sends_nothing_and_keeps_a_world_objective lib daily resources
+horizon-client game::native_player_sidebar::tests::clearing_after_a_team_change_restores_the_old_teams_slot_too lib daily resources

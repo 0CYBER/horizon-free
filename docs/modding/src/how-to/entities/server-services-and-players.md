@@ -75,6 +75,12 @@ UUID: you can use a retained handle after disconnection until its world epoch
 closes. You cannot target arbitrary offline UUIDs. Retain the handle value, not a
 borrowed service.
 
+`player.set_sidebar(host, Some(Sidebar::new(title, vec![SidebarLine::new(text, Some(value))])))` shows a
+sidebar on that one player's client, in place of the one shown before; `None` takes it away. Up to 15 lines
+are shown, top first, each with its text and an optional right-hand value. The sidebar is not stored in the
+world's scoreboard, so `/scoreboard` and other players do not see it, and it is gone when the player leaves.
+It returns `Ok(false)` for a player who is not online; a text the boundary refuses changes nothing.
+
 To change only the name in the Tab list, use `player.set_list_name(host, Some(text))`.
 Everyone sees the new name at once, colours included; `None` shows the nickname or real
 name again. The name is kept by UUID until a mod sets it again or the server stops, also

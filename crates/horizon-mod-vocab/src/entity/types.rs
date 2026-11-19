@@ -1328,6 +1328,42 @@ impl ApplyEffectTickEvent<'_> {
     }
 }
 
+/// A sidebar a server mod shows one player (`player_set_sidebar`): a title and
+/// up to 15 lines, top first.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct Sidebar {
+    /// The objective's display name over the lines.
+    pub title: Text,
+    /// The lines, top first; past 15 are not shown, as vanilla's sidebar shows 15.
+    pub lines: Vec<SidebarLine>,
+}
+impl Sidebar {
+    /// A sidebar with this title and lines.
+    pub fn new(title: Text, lines: Vec<SidebarLine>) -> Self {
+        Self { title, lines }
+    }
+}
+
+/// One sidebar line: its text on the left and, where a score's number would be,
+/// an optional text on the right (`NumberFormat` `fixed`; none shows nothing, `blank`).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct SidebarLine {
+    /// The line's text.
+    pub text: Text,
+    /// The text in the score's place on the right.
+    pub value: Option<Text>,
+}
+impl SidebarLine {
+    /// A line with this text and right-hand value.
+    pub fn new(text: Text, value: Option<Text>) -> Self {
+        Self { text, value }
+    }
+}
+
 /// A player's server-side abilities (`Abilities`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]

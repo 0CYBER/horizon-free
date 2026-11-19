@@ -61,8 +61,9 @@ pub(crate) struct NativeSidebar {
 }
 
 /// The objective a mod's sidebar is sent as: the player's client only; the
-/// server's scoreboard never holds it.
-const SIDEBAR_OBJECTIVE: &str = "horizon:native_sidebar";
+/// server's scoreboard never holds it. The space keeps it apart from every
+/// objective of the world: commands take only `[A-Za-z0-9_.+-]` in a name.
+pub(super) const SIDEBAR_OBJECTIVE: &str = "horizon native sidebar";
 
 /// The report's name of an operator level (`commands.json`'s
 /// `permissions`).
@@ -1310,17 +1311,43 @@ impl Game<'_> {
     /// before, or takes it away (None). Only their client holds it: the
     /// server's scoreboard, its `/scoreboard` and the other players don't
     /// see it, and it is gone when they leave (a mod sends it again when
-    /// they come back). It takes the sidebar's place from an objective the
-    /// world shows there, for this player, until they rejoin. False when
-    /// they aren't on.
+    /// they come back). It takes the place of the sidebar the client shows:
+    /// slot 1 and, when the player is on a coloured team, that team's slot,
+    /// which the client prefers over slot 1. Clearing it gives every slot it
+    /// may have emptied (slot 1 and all the team colours', whichever team the
+    /// player is on now) back to the objectives the world shows there, and
+    /// sends nothing when no personal sidebar is on. False when they aren't on.
     pub(super) fn native_sidebar(&mut self, uuid: u128, sidebar: Option<&NativeSidebar>) -> bool {
         let objective = SIDEBAR_OBJECTIVE.to_owned();
-        // Removed first, so the new one's lines replace all the old ones.
-        let mut packets = vec![C::SetObjective(play::SetObjective {
-            name: objective.clone(),
-            method: 1,
-            display: None,
-        })];
+        self.load_scoreboard();
+        // The slot of the player's team colour (DisplaySlot ids: list 0, sidebar 1, below name 2, then
+        // the team colours in the order of the chat colours).
+        let found = self
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guests.iter().find(|g| g.uuid == uuid))
+            .map(|g| (g.conn, g.name.clone(), g.personal_sidebar));
+        let board = &self.score.board;
+        let team_slot = found
+            .as_ref()
+            .and_then(|(_, name, _)| board.players_team(name))
+            .and_then(|team| team.color.as_deref())
+            .and_then(|color| {
+                let index = horizon_client::text::COLORS
+                    .iter()
+                    .position(|c| c.1 == color)?;
+                Some(3 + index as i32)
+            });
+        let was_set = found.as_ref().is_some_and(|(_, _, set)| *set);
+        let mut packets = Vec::new();
+        // Removed first, so the new one's lines replace all the old ones; only when one is on.
+        if was_set {
+            packets.push(C::SetObjective(play::SetObjective {
+                name: objective.clone(),
+                method: 1,
+                display: None,
+            }));
+        }
         if let Some(sidebar) = sidebar {
             let title = component_nbt(&sidebar.title.component());
             packets.push(C::SetObjective(play::SetObjective {
@@ -1333,6 +1360,12 @@ impl Game<'_> {
                 slot: 1,
                 objective: objective.clone(),
             }));
+            if let Some(slot) = team_slot {
+                packets.push(C::SetDisplayObjective(play::SetDisplayObjective {
+                    slot,
+                    objective: objective.clone(),
+                }));
+            }
             let lines = &sidebar.lines[..sidebar.lines.len().min(15)];
             for (i, (left, right)) in lines.iter().enumerate() {
                 packets.push(C::SetScore(play::SetScore {
@@ -1349,8 +1382,35 @@ impl Game<'_> {
                     }),
                 }));
             }
+        } else if was_set {
+            // Removing the objective empties every slot that showed it, also the slots of a team the
+            // player has left since; the world's own objectives come back in all of them.
+            let slots = std::iter::once((1, horizon_client::scoreboard::SLOT_SIDEBAR.to_owned()))
+                .chain(
+                    horizon_client::text::COLORS
+                        .iter()
+                        .enumerate()
+                        .map(|(index, color)| {
+                            (3 + index as i32, format!("sidebar.team.{}", color.1))
+                        }),
+                );
+            for (slot, name) in slots {
+                if let Some(world) = board.display_objective(&name) {
+                    packets.push(C::SetDisplayObjective(play::SetDisplayObjective {
+                        slot,
+                        objective: world.name.clone(),
+                    }));
+                }
+            }
         }
-        self.native_send_all(uuid, packets)
+        let sent = self.native_send_all(uuid, packets);
+        if sent && let Some((conn, _, _)) = found {
+            let set = sidebar.is_some();
+            if let Some(host) = self.lan.as_mut() {
+                host.hub.update_guest(conn, |g| g.personal_sidebar = set);
+            }
+        }
+        sent
     }
     /// The lines over and under that player's list of players (Tab):
     /// `ClientboundTabListPacket`, an empty text for none. False when they
