@@ -53,6 +53,7 @@ pub mod block_pattern;
 pub mod block_transform;
 pub mod boss_overlay;
 pub mod breathing;
+pub mod build_mismatch;
 pub mod cauldron;
 pub mod chunk_io;
 pub mod client_perf;

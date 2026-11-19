@@ -1411,17 +1411,38 @@ fn configure(
             None => Err(Reason::plain("Disconnected")),
         }
     };
-    // With only engine declarations the client waits for the server's query, so a vanilla
-    // server is sent nothing new.
-    if payloads.local.has_mod_declarations()
-        && let Some(control) = negotiation.initial()
-    {
+    // The server's build, once it names it (crate::build_mismatch), and whether this end
+    // named its own: both only in the first configuration.
+    let mut server_build = None::<String>;
+    let mut build_sent = !initial;
+    // A message on horizon:payloads, after this build's name the first time.
+    let send_control = |control: horizon_protocol::payload_negotiation::Control,
+                        build_sent: &mut bool|
+     -> Result<(), Reason> {
+        if !std::mem::replace(build_sent, true) {
+            reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+                channel: crate::build_mismatch::CHANNEL.into(),
+                data: crate::build_mismatch::encode(&crate::build_mismatch::this_build()),
+            }))?;
+        }
         reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
             channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
             data: control
                 .encode()
                 .map_err(|error| Reason::plain(error.to_string()))?,
-        }))?;
+        }))
+    };
+    // A failed negotiation names both builds when they differ.
+    let refused = |error: horizon_protocol::payload_negotiation::Error,
+                   server_build: &Option<String>| {
+        negotiation_refused(initial, server_build.as_deref(), &error.to_string())
+    };
+    // With only engine declarations the client waits for the server's query, so a vanilla
+    // server is sent nothing new.
+    if payloads.local.has_mod_declarations()
+        && let Some(control) = negotiation.initial()
+    {
+        send_control(control, &mut build_sent)?;
     }
     loop {
         let (id, payload) = reader
@@ -1431,21 +1452,19 @@ fn configure(
             .map_err(|e| Reason::plain(connection_lost(e, lang)))?
         {
             cfg::Clientbound::KeepAlive(k) => reply(cfg::Serverbound::KeepAlive(k))?,
+            cfg::Clientbound::CustomPayload(p) if p.channel == crate::build_mismatch::CHANNEL => {
+                server_build = crate::build_mismatch::decode(&p.data);
+            }
             cfg::Clientbound::CustomPayload(p)
                 if p.channel == horizon_protocol::payload_negotiation::CHANNEL =>
             {
                 let control = horizon_protocol::payload_negotiation::Control::decode(&p.data)
-                    .map_err(|error| Reason::plain(error.to_string()))?;
+                    .map_err(|error| refused(error, &server_build))?;
                 if let Some(control) = negotiation
                     .receive(control)
-                    .map_err(|error| Reason::plain(error.to_string()))?
+                    .map_err(|error| refused(error, &server_build))?
                 {
-                    reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
-                        channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
-                        data: control
-                            .encode()
-                            .map_err(|error| Reason::plain(error.to_string()))?,
-                    }))?;
+                    send_control(control, &mut build_sent)?;
                 }
                 if let Some(accepted) = negotiation.accepted() {
                     payloads.accept(accepted).map_err(Reason::plain)?;
@@ -1501,12 +1520,7 @@ fn configure(
                         == Some("horizon")
                 {
                     if let Some(control) = negotiation.require_protocol() {
-                        reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
-                            channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
-                            data: control
-                                .encode()
-                                .map_err(|error| Reason::plain(error.to_string()))?,
-                        }))?;
+                        send_control(control, &mut build_sent)?;
                     }
                     let mut w = horizon_protocol::buf::Writer::new();
                     w.string("horizon");
@@ -1594,7 +1608,7 @@ fn configure(
                 } else {
                     negotiation.finish_without_offer().map(|()| false)
                 }
-                .map_err(|error| Reason::plain(error.to_string()))?;
+                .map_err(|error| refused(error, &server_build))?;
                 if silent {
                     log::info!(
                         "The server did not answer horizon:payloads: Horizon's negotiated extensions are off"
@@ -1630,6 +1644,23 @@ fn configure(
             }
             _ => {}
         }
+    }
+}
+
+/// A failed `horizon:payloads` negotiation. In the first configuration it names the server's
+/// build (`None`: one from before builds were named, so older) and this one, unless they are the
+/// same; a reconfiguration keeps the negotiation's own error.
+fn negotiation_refused(initial: bool, server_build: Option<&str>, error: &str) -> Reason {
+    let this = crate::build_mismatch::this_build();
+    match initial
+        .then(|| crate::build_mismatch::refusal(server_build, Some(&this), error))
+        .flatten()
+    {
+        Some(text) => Reason {
+            text: text.plain(),
+            key: Some(crate::build_mismatch::KEY.to_owned()),
+        },
+        None => Reason::plain(error),
     }
 }
 
@@ -1900,6 +1931,22 @@ mod tests {
         crate::raw_payloads::Endpoint,
         ingress::Producer<Event>,
     ) {
+        configure_announced(name, payloads, initial, None, negotiation)
+    }
+
+    /// [`configure_on`] with a server that names its `build` before negotiating, as one
+    /// does since crate::build_mismatch.
+    fn configure_announced(
+        name: &str,
+        payloads: &Arc<crate::raw_payloads::Transport>,
+        initial: bool,
+        build: Option<&str>,
+        negotiation: &[Vec<u8>],
+    ) -> (
+        Result<Dynamic, Reason>,
+        crate::raw_payloads::Endpoint,
+        ingress::Producer<Event>,
+    ) {
         let (root, data) = empty_item_data(name);
         let (client, server) = horizon_protocol::connection::Pipe::pair();
         let (mut reader, writer) = Connection::local(client).split();
@@ -1942,6 +1989,14 @@ mod tests {
             .encode()
         };
         server.send(&custom("minecraft:brand", brand.data)).unwrap();
+        if let Some(build) = build {
+            server
+                .send(&custom(
+                    crate::build_mismatch::CHANNEL,
+                    crate::build_mismatch::encode(build),
+                ))
+                .unwrap();
+        }
         // The client may already have refused and hung up: later sends can fail.
         for control in negotiation {
             let _ = server.send(&custom(
@@ -2010,6 +2065,52 @@ mod tests {
         }
         let (result, ..) = configure_on("raw-protocol-reconfigure-silent", &payloads, false, &[]);
         assert!(result.err().unwrap().text.contains("missing response"));
+    }
+
+    /// A Horizon server of another build that can't negotiate: the refusal names both builds, and
+    /// one that never named its build is older. Never retried.
+    #[test]
+    fn a_failed_negotiation_names_both_builds() {
+        use horizon_protocol::payload_negotiation::RAW_PROTOCOL;
+        let this = crate::build_mismatch::this_build();
+        for (server, shown) in [
+            (
+                Some("Nightly 2000-01-01 · 0000000"),
+                "Horizon Nightly 2000-01-01 · 0000000",
+            ),
+            (None, "an older Horizon build"),
+        ] {
+            let payloads =
+                crate::raw_payloads::Transport::capture(crate::raw_payloads::Side::Client).unwrap();
+            let (result, ..) = configure_announced(
+                "build-mismatch",
+                &payloads,
+                true,
+                server,
+                &[vec![0, RAW_PROTOCOL + 1]],
+            );
+            let error = result.err().unwrap();
+            assert!(
+                error.text.starts_with(&format!(
+                    "This server runs {shown}; your game is Horizon {this}."
+                )),
+                "{}",
+                error.text
+            );
+            if server.is_none() {
+                assert!(
+                    error
+                        .text
+                        .contains("The server needs updating to match your game.")
+                );
+            }
+            assert!(error.text.contains("protocol version"));
+            assert!(!crate::reconnect::allowed(
+                &error.text,
+                error.key.as_deref(),
+                false
+            ));
+        }
     }
 
     #[test]

@@ -1358,6 +1358,15 @@ fn login_and_configure(
     let mut payload_negotiation = horizon_protocol::payload_negotiation::Negotiation::new(
         payload_transport.local.manifest.clone(),
     );
+    // This build's name goes first, so a Horizon client can name it if the negotiation fails
+    // (crate::build_mismatch). A vanilla client discards it, as it discards the Query.
+    send(
+        c,
+        cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+            channel: crate::build_mismatch::CHANNEL.into(),
+            data: crate::build_mismatch::encode(&crate::build_mismatch::this_build()),
+        }),
+    )?;
     // Query must precede known packs even for empty installations: a client
     // answers it before its pack reply, so the barrier cannot overtake its Offer.
     send_payload_control(c, horizon_protocol::payload_negotiation::Control::Query)?;
@@ -1433,16 +1442,14 @@ fn login_and_configure(
                 datapack_offer = Some(p.data);
             }
             cfg::Serverbound::SelectKnownPacks(p) => {
-                let admission = payload_negotiation
-                    .finish_without_offer()
-                    .map_err(|e| e.to_string())
-                    .and_then(|()| {
-                        if payload_transport.epoch().is_some() {
-                            return Ok(());
-                        }
+                // A Horizon client that never answered predates the negotiation.
+                if let Err(error) = payload_negotiation.finish_without_offer() {
+                    return Err(negotiation_disconnect(c, error));
+                }
+                if payload_transport.epoch().is_none()
+                    && let Err(error) =
                         payload_transport.accept(payload_negotiation.accepted().unwrap_or_default())
-                    });
-                if let Err(error) = admission {
+                {
                     return Err(payload_disconnect(c, error));
                 }
                 break p.packs == vec![core.clone()];
@@ -1699,6 +1706,22 @@ fn payload_disconnect(c: &mut ConfigIo<'_>, error: String) -> String {
     c.disconnect(reason);
     error
 }
+/// [`payload_disconnect`] for a failed `horizon:payloads` negotiation: the reason names this
+/// build and the client's when they differ (crate::build_mismatch).
+fn negotiation_disconnect(
+    c: &mut ConfigIo<'_>,
+    error: horizon_protocol::payload_negotiation::Error,
+) -> String {
+    let error = error.to_string();
+    let this = crate::build_mismatch::this_build();
+    match crate::build_mismatch::refusal(Some(&this), c.client_build.as_deref(), &error) {
+        Some(text) => {
+            c.disconnect(super::data::component_nbt(&text.component()));
+            text.plain()
+        }
+        None => payload_disconnect(c, error),
+    }
+}
 
 /// Consume transport metadata in every configuration receive loop. Application
 /// payloads stay ordered for the configuration dispatcher (not implemented here).
@@ -1712,11 +1735,17 @@ fn receive_configuration(
     let packet = cfg::Serverbound::decode_with_payload_codecs(id, bytes, &transport.local.codecs)
         .map_err(|e| payload_disconnect(c, e.to_string()))?;
     if let cfg::Serverbound::CustomPayload(payload) = &packet
+        && payload.channel == crate::build_mismatch::CHANNEL
+    {
+        c.client_build = crate::build_mismatch::decode(&payload.data);
+        return Ok(None);
+    }
+    if let cfg::Serverbound::CustomPayload(payload) = &packet
         && payload.channel == horizon_protocol::payload_negotiation::CHANNEL
     {
         let result = horizon_protocol::payload_negotiation::Control::decode(&payload.data)
             .and_then(|control| negotiation.receive(control));
-        let reply = result.map_err(|e| payload_disconnect(c, e.to_string()))?;
+        let reply = result.map_err(|e| negotiation_disconnect(c, e))?;
         if let Some(reply) = reply {
             send_payload_control(c, reply)?;
         }
@@ -2883,15 +2912,28 @@ mod tests {
                 .encode(),
             )
             .unwrap();
+            // A client that negotiates names its build first; one from before never does.
+            let client_build = "Nightly 2000-01-01 · 0000000";
             if wrong_version {
-                c.send(
-                    &cfg::Serverbound::CustomPayload(cfg::CustomPayload {
-                        channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
-                        data: vec![0, horizon_protocol::payload_negotiation::RAW_PROTOCOL + 1],
-                    })
-                    .encode(),
-                )
-                .unwrap();
+                for (channel, data) in [
+                    (
+                        crate::build_mismatch::CHANNEL,
+                        crate::build_mismatch::encode(client_build),
+                    ),
+                    (
+                        horizon_protocol::payload_negotiation::CHANNEL,
+                        vec![0, horizon_protocol::payload_negotiation::RAW_PROTOCOL + 1],
+                    ),
+                ] {
+                    c.send(
+                        &cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+                            channel: channel.into(),
+                            data,
+                        })
+                        .encode(),
+                    )
+                    .unwrap();
+                }
             }
             loop {
                 let (id, payload) = c.recv().unwrap();
@@ -2923,6 +2965,21 @@ mod tests {
                         } else {
                             "missing response"
                         }));
+                        // The reason says which builds met, and that an older client updates.
+                        let server = crate::build_mismatch::this_build();
+                        assert!(
+                            text.starts_with(&format!("This server runs Horizon {server}; ")),
+                            "{text}"
+                        );
+                        if wrong_version {
+                            assert!(
+                                text.contains(&format!("your game is Horizon {client_build}."))
+                            );
+                        } else {
+                            assert!(text.contains(
+                                "your game is an older Horizon build. Update your game to join."
+                            ));
+                        }
                         break;
                     }
                     cfg::Clientbound::FinishConfiguration(_) => {

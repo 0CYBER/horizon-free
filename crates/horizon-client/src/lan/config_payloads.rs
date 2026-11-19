@@ -86,6 +86,8 @@ pub(super) struct ConfigIo<'a> {
     events: crate::net::ingress::Producer<super::NetEvent>,
     handed_off: bool,
     pub channels: EngineChannels,
+    /// The client's build, once it names it (crate::build_mismatch).
+    pub client_build: Option<String>,
 }
 impl<'a> ConfigIo<'a> {
     pub fn new(
@@ -107,6 +109,7 @@ impl<'a> ConfigIo<'a> {
             events,
             handed_off: false,
             channels: EngineChannels::default(),
+            client_build: None,
         })
     }
     pub fn send(&mut self, body: &[u8]) -> horizon_protocol::Result<()> {

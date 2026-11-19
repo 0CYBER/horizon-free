@@ -69,7 +69,7 @@ fn classified_key(key: &str) -> Option<bool> {
     // whitelists, version refusals, the account's session refusals and
     // Horizon's own refusals: never. Shutdowns, timeouts, a full server, a
     // slow login and the session servers being down: retry.
-    const NEVER: [&str; 15] = [
+    const NEVER: [&str; 16] = [
         "multiplayer.disconnect.banned",
         "multiplayer.disconnect.ip_banned",
         "multiplayer.disconnect.kicked",
@@ -85,6 +85,7 @@ fn classified_key(key: &str) -> Option<bool> {
         "horizon.multiplayer.not_signed_in",
         "horizon.multiplayer.invalid_address",
         "horizon.multiplayer.incoming_too_large",
+        crate::build_mismatch::KEY,
     ];
     const RETRY: [&str; 6] = [
         "multiplayer.disconnect.server_shutdown",
