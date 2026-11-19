@@ -122,6 +122,25 @@ fn lists_what_each_world_is() {
 }
 
 #[test]
+fn a_last_played_that_cannot_be_a_time_lists_the_world_with_its_files_time() {
+    let home = scratch("bad-last-played");
+    // i64::MAX milliseconds overflows SystemTime on Windows and every date format.
+    for (folder, millis) in [("Huge", i64::MAX), ("Negative", -5_000)] {
+        world(&home, folder, vec![("LastPlayed", Tag::Long(millis))]);
+    }
+
+    let all = list(&home);
+    assert_eq!(all.len(), 2);
+    for w in &all {
+        let changed = fs::metadata(w.path.join("level.dat"))
+            .and_then(|m| m.modified())
+            .unwrap();
+        assert_eq!(w.last_played, changed, "{}", w.folder);
+    }
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
 fn a_backup_is_named_and_laid_out_as_vanillas() {
     let home = scratch("backup");
     world(&home, "World", vec![("LevelName", name("World"))]);

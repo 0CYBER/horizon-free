@@ -1804,6 +1804,31 @@ fn world_list_names_every_game_mode_and_hardcore_in_red() {
 }
 
 #[test]
+fn a_last_played_that_cannot_be_a_time_lists_the_world_with_its_files_time() {
+    let f = Fixture::new();
+    // i64::MAX milliseconds overflows SystemTime on Windows.
+    for (folder, millis) in [("Huge", i64::MAX), ("Negative", -5_000)] {
+        f.world(folder, folder);
+        let path = f.title.saves.join(folder).join("level.dat");
+        let mut root = crate::save::read_dat(&path).unwrap();
+        if let Some(Tag::Compound(data)) = root.get_mut("Data") {
+            data.insert("LastPlayed".into(), Tag::Long(millis));
+        }
+        crate::save::write_dat(&path, root).unwrap();
+    }
+
+    let worlds = list_worlds(&f.title.saves);
+    assert_eq!(worlds.len(), 2);
+    for w in &worlds {
+        let changed = fs::metadata(f.title.saves.join(&w.folder).join("level.dat"))
+            .and_then(|m| m.modified())
+            .unwrap();
+        assert_eq!(w.modified, changed, "{}", w.folder);
+        assert!(!w.corrupted, "{}", w.folder);
+    }
+}
+
+#[test]
 fn world_with_unreadable_level_dat_stays_in_the_world_list() {
     let f = Fixture::new();
     f.world("Broken", "My World");
