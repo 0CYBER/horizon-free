@@ -429,6 +429,106 @@ class ReliefPackTests(unittest.TestCase):
         self.assertEqual(json.loads((folder / 'pack.mcmeta').read_text())['pack']['min_format'], 97)
 
 
+class LookGateTests(unittest.TestCase):
+    """Horizon's HDR look drawn by its pack is held to the look the game draws itself, where the pack reaches."""
+    WIDTH, HEIGHT = 240, 64
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def shots(self, changed=None, look=None):
+        """Both sessions' shots of every scene, a flat grey; `changed` and `look` map (scene, kind) to the pack's and
+        the look's own pixels that differ, as {(x, y): (r, g, b)}."""
+        for name, own in (('float_hdr', look), ('horizon_hdr', changed)):
+            for scene in identity.SESSIONS['horizon_hdr'][2]:
+                for kind, depth, grey in (('.png', 8, bytes((100,))), ('-hdr.png', 16, (400 << 6).to_bytes(2, 'big'))):
+                    rows = [bytearray(grey * 3 * self.WIDTH) for _ in range(self.HEIGHT)]
+                    for (x, y), rgb in (own or {}).get((scene, kind), {}).items():
+                        rows[y][x * len(grey) * 3:(x + 1) * len(grey) * 3] = b''.join(
+                            (v << 6).to_bytes(2, 'big') if depth == 16 else bytes((v,)) for v in rgb)
+                    encode(self.dir / f'{name}.{scene}{kind}', self.WIDTH, self.HEIGHT, depth, rows, 0)
+        self.loaded('Blocks, Tone curve, Entities')
+
+    def loaded(self, labels):
+        (self.dir / 'horizon_hdr.log').write_text(
+            f'[10:22:24] [Render thread/INFO]: shader pack horizon_hdr 1.0.0: {labels} in 9 ms\n')
+
+    def gate(self):
+        return identity.look_gates(self.dir, ['float_hdr', 'horizon_hdr'])
+
+    def test_the_hotbar_box_covers_the_selected_slot_at_an_odd_gui_width(self):
+        # 🤖 Agent: 854x480 is scale 2 and 427 GUI pixels wide: the hotbar centres on GUI pixel 213, and its selected
+        # slot's frame starts a GUI pixel before the bar, (213 - 91 - 1) * 2 = 242, and ends at 610.
+        self.assertEqual(identity.hud_boxes(854, 480)[1], (242, 432, 610, 480))
+        self.assertEqual(identity.hud_boxes(1068, 600)[1], (350, 552, 718, 600))
+
+    def test_the_pack_must_have_run_every_stage(self):
+        self.shots()
+        self.assertEqual(self.gate(), [])
+        # 🤖 Agent: Without its [tonemap] the game's own curve draws the same picture.
+        self.loaded('Blocks, Entities')
+        self.assertEqual(self.gate(), ['horizon_hdr: the log has no load line of horizon_hdr with Blocks, Entities, '
+                                       'Tone curve'])
+        (self.dir / 'horizon_hdr.log').unlink()
+        self.assertEqual(len(self.gate()), 1)
+
+    def test_a_shot_that_holds_nothing_or_is_missing(self):
+        white = {(x, y): (255, 255, 255) for x in range(self.WIDTH) for y in range(self.HEIGHT)}
+        self.shots(look={('glass', '.png'): white})
+        self.assertEqual(self.gate(), ['horizon_hdr.glass.png: no pixel is held'])
+        self.shots()
+        (self.dir / 'horizon_hdr.glass-hdr.png').unlink()
+        self.assertEqual(self.gate(), [])
+
+    def test_the_packs_rounding_passes_and_a_larger_step_fails(self):
+        self.shots({('glass', '.png'): {(0, 0): (101, 100, 99)}, ('glass', '-hdr.png'): {(0, 0): (402, 400, 398)}})
+        self.assertEqual(self.gate(), [])
+        self.shots({('glass', '.png'): {(1, 0): (100, 102, 100)},
+                    ('nether', '-hdr.png'): {(2, 0): (400, 400, 403), (3, 0): (397, 400, 400)}})
+        self.assertEqual(self.gate(), [
+            'horizon_hdr.glass.png: 1 pixels differ from float_hdr by more than 1, largest step 2, first at 1,0: '
+            '(100, 100, 100) against (100, 102, 100) (240x64)',
+            'horizon_hdr.nether-hdr.png: 2 pixels differ from float_hdr by more than 2, largest step 3, first at 2,0: '
+            '(400, 400, 400) against (400, 400, 403) (240x64)'])
+
+    def test_what_the_pack_does_not_reach_is_not_held(self):
+        (_, y, x, _), (hx, _, _, hy) = identity.hud_boxes(self.WIDTH, self.HEIGHT)
+        ax, ay = (int(f * size) + 1 for f, size in zip(identity.LOOK_APART['entities'][0], (self.WIDTH, self.HEIGHT)))
+        far = (0, 0, 0)
+        # 🤖 Agent: Under the crosshair and the hotbar, the End crystal, and where the look's screenshot shows white.
+        self.shots({('glass', '.png'): {(x - 1, y): far, (hx, hy - 1): far},
+                    ('glass', '-hdr.png'): {(x - 1, y): far, (hx, hy - 1): far},
+                    ('entities', '.png'): {(ax, ay): far}, ('entities', '-hdr.png'): {(ax, ay): far}},
+                   look={('glass', '.png'): {(5, 5): (255, 90, 90)}})
+        self.assertEqual(self.gate(), [])
+        # 🤖 Agent: The same places in another scene, and beside them; and white the pack's screenshot shows alone.
+        self.shots({('glass', '-hdr.png'): {(ax, ay): far}, ('entities', '.png'): {(x, y): far},
+                    ('nether', '.png'): {(5, 5): (255, 0, 0)}})
+        self.assertEqual(len(self.gate()), 3)
+
+    def test_the_session_check_asks_only_that_the_pack_loaded(self):
+        for name in ('hdr_toggle', 'horizon_hdr'):
+            for scene in identity.SESSIONS[name][2]:
+                for kind in ('.png', '-hdr.png'):
+                    encode(self.dir / f'{name}.{scene}{kind}', 4, 4, 8, picture(4, 4, 8), 0)
+
+        def problems():
+            return [p for p in identity.session_checks(self.dir, ['hdr_toggle', 'horizon_hdr'])
+                    if p.startswith('horizon_hdr')]
+        self.assertEqual(problems(), ['horizon_hdr: the log has no load line of shader pack horizon_hdr'])
+        (self.dir / 'horizon_hdr.log').write_text('INFO shader pack horizon_hdr 1.0.0: Blocks, Entities in 9 ms\n')
+        self.assertEqual(problems(), [])
+
+    def test_the_pack_is_not_drawn_without_the_look_it_is_held_to(self):
+        sessions = 'vanilla,horizon_hdr,float_dim,horizon_hdr_dim'
+        with mock.patch.object(identity.sys, 'argv', ['tool', '--sessions', sessions]), \
+                mock.patch.object(identity, 'base_revision', side_effect=AssertionError('went on to its base')):
+            with self.assertRaises(SystemExit) as stopped:
+                identity.main()
+        self.assertEqual(stopped.exception.code,
+                         '--sessions leaves out a session another is held to: horizon_hdr needs float_hdr')
+
+
 class BaseTests(unittest.TestCase):
     def test_only_files_no_binary_is_built_from_let_the_base_reuse_the_change(self):
         changed = ['tools/test_frame_identity_parity.py', 'tests/test_frame_identity.py', '.github/workflows/ci.yml',

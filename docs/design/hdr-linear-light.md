@@ -280,8 +280,8 @@ peak from the headroom, the tone curve), with no engine name in it. There is one
 - `packs/horizon_hdr` (in `horizon-shader-api`, beside Golden Hour) is a real 0.2 pack that lists the same file as
   its shared source: a material stage, an entity stage and a `[tonemap]` with the scene's peak. It is the proof
   that the API suffices, and the example to copy from. Render tests hold its material and entity stages to the
-  default path's shaders (`gfx/look_pack_tests.rs`); the frame identity harness is to draw it and hold it to the
-  default path's picture within a stated tolerance (decode and encode rounding, glint).
+  default path's shaders (`gfx/look_pack_tests.rs`); the frame identity harness draws it in the game and holds it to
+  the default path's picture within a step of 255 and two of 1023 (`look_gates`).
 
 **What the API gained**, none of it breaking a 0.2 pack (each declared only for a pack whose files name it):
 
@@ -438,8 +438,9 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
    - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The pack
      is in (the SDK's, as Golden Hour is: the game doesn't ship or pick it), the look file moved into its folder
      and the renderer reads it there; render tests hold its material and entity stages to the default path's
-     shaders. The harness's session is next. The gate widens as inputs arrive: terrain and entities first, items
-     and particles with the entity stage's later steps, the sky with `[environment]`.
+     shaders, and the frame identity harness's sessions to the default path's picture. The gate widens as inputs
+     arrive: terrain and entities first, items and particles with the entity stage's later steps, the sky with
+     `[environment]`.
    - 7e and 7g, in one pull request: light sources lift before fog on both paths, and the lift's 8-bit steps go.
      A change of look and of rounding, with captures. It is step 11 of #16126, after the pack steps 9 and 10.
    - 7b and 7c put the look in `hdr_look.wgsl`, compiled into the engine as preparation; that copy goes at the flip
