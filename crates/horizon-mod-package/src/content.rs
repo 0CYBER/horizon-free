@@ -5,8 +5,9 @@
 //!
 //! Content is data, not code: nothing here executes. What a mod
 //! may add is fenced instead. Its own namespaces (its id and the ones its
-//! manifest lists), plus additions to vanilla tags and to the convention
-//! tags (`c`, which NeoForge and Fabric mods share). Paths are plain, files
+//! manifest lists), plus additions to vanilla tags, to the convention
+//! tags (`c`, which NeoForge and Fabric mods share) and to the villagers'
+//! work-block tags (`horizon:villager_secondary_poi/<job>`). Paths are plain, files
 //! and totals are capped, vanilla ids cannot be redefined, and no two mods
 //! share a namespace ([`clash`]).
 use crate::manifest::Manifest;
@@ -73,10 +74,24 @@ pub(crate) fn check_namespace(name: &str, manifest: &Manifest) -> Result<(), Str
     // tags and atlases, and to the convention tags mods share.
     let shared = matches!(namespace, "minecraft" | "c");
     let atlas = top == "assets" && namespace == "minecraft" && rest.starts_with("atlases/");
-    let allowed = owned || (top == "data" && shared && rest.starts_with("tags/")) || atlas;
+    // The blocks each job's villagers also work at, which the villager brain reads: one
+    // `<job>.json` per job, nothing deeper; the rest of the `horizon` namespace stays the game's.
+    let villager_poi = top == "data"
+        && namespace == "horizon"
+        && rest
+            .strip_prefix("tags/block/villager_secondary_poi/")
+            .and_then(|file| file.strip_suffix(".json"))
+            .is_some_and(|job| {
+                !job.is_empty()
+                    && job
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            });
+    let allowed =
+        owned || (top == "data" && shared && rest.starts_with("tags/")) || atlas || villager_poi;
     if !allowed {
         return Err(format!(
-            "{name}: a mod adds files in its own namespaces ({top}/{id}/ and those listed in namespaces), to vanilla and convention (c) tags, or to vanilla's atlases"
+            "{name}: a mod adds files in its own namespaces ({top}/{id}/ and those listed in namespaces), to vanilla and convention (c) tags, to the villagers' work-block tags (data/horizon/tags/block/villager_secondary_poi/<job>.json, <job> of [a-z0-9_]), or to vanilla's atlases"
         ));
     }
 
@@ -3356,6 +3371,43 @@ capabilities = ["registries"]
         );
         let e = tab(r#"{"title": "Gems", "icon": "ruby", "items": []}"#).unwrap_err();
         assert!(e.contains("item ids"), "{e}");
+    }
+
+    #[test]
+    fn adds_villager_work_blocks_but_nothing_else_of_horizon() {
+        let farmer = br#"{"values": ["ruby:ruby_block"]}"#;
+        let files: &[(&str, &[u8])] = &[
+            ("data/ruby/horizon/block/ruby_block.json", BLOCK),
+            (
+                "data/horizon/tags/block/villager_secondary_poi/farmer.json",
+                farmer,
+            ),
+        ];
+        let content = hmod("villager-poi", MANIFEST_TEXT, files).unwrap();
+        assert_eq!(content.files.len(), 2);
+        for name in [
+            "data/horizon/tags/block/other.json",
+            "data/horizon/tags/item/villager_secondary_poi/farmer.json",
+            "data/horizon/recipe/stone.json",
+            "assets/horizon/tags/block/villager_secondary_poi/farmer.json",
+            "data/horizon/tags/block/villager_secondary_poi/nested/farmer.json",
+            "data/horizon/tags/block/villager_secondary_poi/farmer.txt",
+            "data/horizon/tags/block/villager_secondary_poi/farmer.json.",
+            "data/horizon/tags/block/villager_secondary_poi/.json",
+            "data/horizon/tags/block/villager_secondary_poi/far.mer.json",
+        ] {
+            let e = hmod("horizon-ns", MANIFEST_TEXT, &[(name, farmer)]).unwrap_err();
+            assert!(e.contains("own namespaces"), "{name}: {e}");
+        }
+        // A mod can't take the game's namespace as its id to step past the fence.
+        let as_horizon = MANIFEST_TEXT.replacen("id = \"ruby\"", "id = \"horizon\"", 1);
+        let e = hmod(
+            "horizon-id",
+            &as_horizon,
+            &[("data/horizon/recipe/stone.json", b"{}")],
+        )
+        .unwrap_err();
+        assert!(e.contains("no mod may claim"), "{e}");
     }
 
     #[test]

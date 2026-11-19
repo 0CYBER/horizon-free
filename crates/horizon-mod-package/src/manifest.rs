@@ -446,6 +446,13 @@ impl Manifest {
                 m.id
             ));
         }
+        // The id is the mod's first owned namespace, so the reserved ones are refused here too.
+        if RESERVED_NAMESPACES.contains(&m.id.as_str()) {
+            return Err(format!(
+                "{MANIFEST}: id {} is a namespace no mod may claim",
+                m.id
+            ));
+        }
         let rules = m.incompatible.iter().chain(&m.discouraged);
         for id in m
             .dependencies
@@ -1845,6 +1852,15 @@ capabilities = ["registries"]
             assert!(e.contains("not a mod's to claim"), "{e}");
         }
         assert!(with("\"ruby\"").unwrap_err().contains("twice"));
+        for reserved in ["minecraft", "c", "horizon"] {
+            let e = Manifest::parse(&EXAMPLE.replacen(
+                "id = \"ruby\"",
+                &format!("id = \"{reserved}\""),
+                1,
+            ))
+            .unwrap_err();
+            assert!(e.contains("no mod may claim"), "{e}");
+        }
         assert!(with("\"a\", \"a\"").unwrap_err().contains("twice"));
         assert!(with("\"Kaisyn\"").unwrap_err().contains("is not"));
         assert!(with("\"\"").unwrap_err().contains("is not"));

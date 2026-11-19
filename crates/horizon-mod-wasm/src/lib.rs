@@ -1154,14 +1154,14 @@ mod tests {
         let packages = vec![
             package("b", "1.0.0", "lib = \"^1\"", 'b', "t", ""),
             package("lib", "1.2.0", "", 'a', "t", ""),
-            package("c", "1.0.0", "lib = \"^1\"", 'c', "t", ""),
+            package("e", "1.0.0", "lib = \"^1\"", 'c', "t", ""),
             package("alone", "1.0.0", "", 'd', "t", ""),
         ];
         let (groups, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert!(refused.is_empty());
         assert_eq!(
             ids(&packages, &groups),
-            [vec!["lib", "b", "c"], vec!["alone"]]
+            [vec!["lib", "b", "e"], vec!["alone"]]
         );
     }
 
@@ -1217,7 +1217,7 @@ mod tests {
             package("lib", "2.0.0", "", 'a', "t", ""),
             package("b", "1.0.0", "missing = \"^1\"", 'b', "t", ""),
             package(
-                "c",
+                "e",
                 "1.0.0",
                 "b = \"^1\"\nextra = { version = \"^1\", optional = true }",
                 'c',
@@ -1238,7 +1238,7 @@ mod tests {
                     }
                 ),
                 (
-                    "c".to_string(),
+                    "e".to_string(),
                     Refusal::DependencyRefused {
                         dependency: "b".into()
                     }
@@ -1288,7 +1288,7 @@ mod tests {
         let packages = vec![
             package("lib", "1.0.0", "", 'a', "t", ""),
             package("b", "1.0.0", "lib = \"^1\"", 'b', "t", &linked),
-            package("c", "1.0.0", "lib = \"^1\"", 'c', "other", ""),
+            package("e", "1.0.0", "lib = \"^1\"", 'c', "other", ""),
         ];
         let (_, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert_eq!(
@@ -1301,7 +1301,7 @@ mod tests {
                     }
                 ),
                 (
-                    "c".to_string(),
+                    "e".to_string(),
                     Refusal::Toolchain {
                         found: "other".into(),
                         group: "t".into()
