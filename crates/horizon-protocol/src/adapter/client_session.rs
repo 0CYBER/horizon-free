@@ -32,6 +32,7 @@ mod step_1_21_8;
 mod step_26_1;
 mod sync_registries;
 mod synced;
+mod text_down;
 mod world;
 
 use super::{
