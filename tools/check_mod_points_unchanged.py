@@ -21,11 +21,13 @@ signature, and only its body delegates. A mod that needs a moved function asks f
     python3 tools/check_mod_points_unchanged.py                      # the working tree against the merge base with origin/main
     python3 tools/check_mod_points_unchanged.py --base HEAD^1        # against another ref
     python3 tools/check_mod_points_unchanged.py --allow-added        # new points are fine
-    python3 tools/check_mod_points_unchanged.py --target-dir DIR     # the Cargo build folder both runs share (default: target)
+    python3 tools/check_mod_points_unchanged.py --target-dir DIR     # the Cargo build folder of the working tree (default: target)
     python3 tools/check_mod_points_unchanged.py --compare OLD NEW    # compare two snapshot folders, build nothing
 
-The base is built in a temporary `git worktree`, removed afterwards. The first run builds the generator's crates twice
-(two source paths); a shared build folder keeps their dependencies.
+The base is built in a temporary `git worktree`, removed afterwards, into its own build folder (`mod-points-base` inside the
+working tree's): Cargo hashes a workspace member's path relative to the workspace root, so the base's and the working
+tree's generator would be one unit, and the working tree's older files would make Cargo reuse the base's build. The first
+run builds the generator's crates and their dependencies twice.
 """
 
 import argparse
@@ -417,6 +419,13 @@ LOCK_OUT_OF_DATE = "cannot update the lock file"
 TAIL_LINES = 30
 
 
+def base_target(target_dir):
+    """The base's own Cargo build folder, inside the working tree's. A shared one makes Cargo see the working tree's
+    generator, whose files are older than the base's build, as built already, and run the base's generator on the
+    working tree's declarations."""
+    return target_dir / "mod-points-base"
+
+
 def snapshot(root, out, target_dir, side):
     """Run the hook_snapshot example of the tree at `root`, writing into `out`. Cargo's and the example's output is
     captured: it prints nothing on success, and the end of stderr on failure."""
@@ -437,8 +446,8 @@ def snapshot(root, out, target_dir, side):
 
 
 def resolve_target(option, env_value):
-    """The one absolute Cargo build folder both snapshots share: Cargo reads a relative one against its working
-    directory, and the two runs have different ones."""
+    """The one absolute Cargo build folder of the working tree (the base's is inside it): Cargo reads a relative one
+    against its working directory, and the two runs have different ones."""
     return Path(option or env_value or ROOT / "target").resolve()
 
 
@@ -448,7 +457,8 @@ def main(argv=None):
     parser.add_argument("--allow-added", action="store_true",
                         help="accept added points, and added or changed internals")
     parser.add_argument("--target-dir", type=Path,
-                        help="Cargo build folder for both runs (default: $CARGO_TARGET_DIR, else the repository's target)")
+                        help="Cargo build folder of the working tree; the base builds in mod-points-base inside it (default: "
+                             "$CARGO_TARGET_DIR, else the repository's target)")
     parser.add_argument("--compare", nargs=2, metavar=("OLD", "NEW"), type=Path,
                         help="compare two snapshot folders instead of building")
     args = parser.parse_args(argv)
@@ -467,7 +477,7 @@ def main(argv=None):
         print(f"Base {base[:12]}, build folder {target}")
         git("worktree", "add", "--detach", "--quiet", str(worktree), base)
         added_worktree = True
-        snapshot(worktree, scratch / "base-out", target, "base")
+        snapshot(worktree, scratch / "base-out", base_target(target), "base")
         snapshot(ROOT, scratch / "head-out", target, "working tree")
         return compare(scratch / "base-out", scratch / "head-out", args.allow_added, worktree, ROOT)
     except (RuntimeError, OSError, ValueError, KeyError) as error:

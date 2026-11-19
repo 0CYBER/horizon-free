@@ -426,6 +426,11 @@ class TargetFolderTests(unittest.TestCase):
         self.assertEqual(gate.resolve_target(Path("a"), "b"), Path("a").resolve())
         self.assertEqual(gate.resolve_target(None, None), (gate.ROOT / "target").resolve())
 
+    def test_the_base_builds_in_its_own_folder_inside_the_working_trees(self):
+        target = Path("/build/target")
+        self.assertEqual(gate.base_target(target), target / "mod-points-base")
+        self.assertNotEqual(gate.base_target(target), target)
+
 
 if __name__ == "__main__":
     unittest.main()
