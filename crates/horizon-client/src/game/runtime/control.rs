@@ -1551,6 +1551,8 @@ impl Game<'_> {
                 "backend": format!("{:?}", r.info.backend),
                 "size": [r.config.width, r.config.height],
                 "present_mode": format!("{:?}", r.config.present_mode),
+                "msaa_requested": r.msaa_requested(),
+                "msaa_samples": r.msaa_samples(),
                 "drawn_sections": r.drawn_sections,
                 "section_draws": r.section_draws,
                 "section_draw_calls": r.section_draw_calls,

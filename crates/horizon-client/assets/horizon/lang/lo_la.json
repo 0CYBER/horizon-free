@@ -263,7 +263,6 @@
   "Sky": "ທ້ອງຟ້າ",
   "Sky and weather": "ທ້ອງຟ້າ ແລະສະພາບອາກາດ",
   "Smaller copies of block textures for distant terrain: less shimmer.": "ສຳເນົາຂະໜາດນ້ອຍຂອງໂຄງສ້າງທາງຕັນສຳລັບພື້ນທີ່ຫ່າງໄກ: ມີເງົາໜ້ອຍລົງ.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "ລຽບແຄມປວກ. FXAA: ອ່ອນກວ່າ. TAA: ກ້ຽງທີ່ສຸດ, ສິ່ງທີ່ເຄື່ອນຍ້າຍອາດຈະຕິດຕາມ.",
   "Soft shadows in corners. Costs chunk building time only.": "ເງົາອ່ອນໆຢູ່ໃນມຸມ. ຄ່າໃຊ້ຈ່າຍໃນການກໍ່ສ້າງ chunk ເທົ່ານັ້ນ.",
   "Solid": "ແຂງ",
   "Solid Aggressive": "ແຂງກະດ້າງ",

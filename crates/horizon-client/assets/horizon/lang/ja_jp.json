@@ -263,7 +263,6 @@
   "Sky": "空",
   "Sky and weather": "空と天気",
   "Smaller copies of block textures for distant terrain: less shimmer.": "遠くの地形のブロック テクスチャの小さいコピー: きらめきが少なくなります。",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "ギザギザのエッジを滑らかにします。 FXAA: 柔らかめ。 TAA: 最もスムーズですが、動いているものは尾を引く可能性があります。",
   "Soft shadows in corners. Costs chunk building time only.": "コーナーの柔らかい影。チャンクの構築時間のみがかかります。",
   "Solid": "固体",
   "Solid Aggressive": "ソリッドアグレッシブ",

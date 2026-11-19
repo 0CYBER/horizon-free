@@ -263,7 +263,6 @@
   "Sky": "Ciel",
   "Sky and weather": "Ciel et météo",
   "Smaller copies of block textures for distant terrain: less shimmer.": "Textures réduites au loin : moins de scintillement.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "Lisse les bords. FXAA : doux. TAA : lisse, traînées possibles.",
   "Soft shadows in corners. Costs chunk building time only.": "Ombres douces dans les coins. Coût : construction des chunks.",
   "Solid": "Opaque",
   "Solid Aggressive": "Opaque agressif",

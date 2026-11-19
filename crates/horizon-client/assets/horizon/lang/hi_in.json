@@ -263,7 +263,6 @@
   "Sky": "आकाश",
   "Sky and weather": "आकाश और मौसम",
   "Smaller copies of block textures for distant terrain: less shimmer.": "दूर के भू-भाग के लिए ब्लॉक टेक्सचर की छोटी प्रतियां: कम शिमर।",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "टेढ़े-मेढ़े किनारों को चिकना करता है। FXAA: नरम। TAA: सबसे चिकना, गतिमान चीज़ों के पीछे निशान हो सकते हैं।",
   "Soft shadows in corners. Costs chunk building time only.": "कोनों में सॉफ्ट शैडो। इसमें केवल चंक निर्माण का समय लगता है।",
   "Solid": "ठोस",
   "Solid Aggressive": "ठोस आक्रामक",

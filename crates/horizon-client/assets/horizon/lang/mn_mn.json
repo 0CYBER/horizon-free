@@ -263,7 +263,6 @@
   "Sky": "Тэнгэр",
   "Sky and weather": "Тэнгэр ба цаг агаар",
   "Smaller copies of block textures for distant terrain: less shimmer.": "Алс холын газарт зориулсан блок бүтэцтэй жижиг хуулбарууд: бага гялалзах.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "Ховор ирмэгийг тэгшлэнэ. FXAA: илүү зөөлөн. ТАА: Хамгийн зөөлөн, хөдөлж буй зүйлс гүйлгэж магадгүй.",
   "Soft shadows in corners. Costs chunk building time only.": "Булан дахь зөөлөн сүүдэр. Зөвхөн барилгын ажлын зардал.",
   "Solid": "Хатуу",
   "Solid Aggressive": "Хатуу түрэмгий",

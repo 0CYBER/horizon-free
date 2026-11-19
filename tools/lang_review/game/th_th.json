@@ -422,7 +422,6 @@
   "Which chunk rebuilds wait for the frame: none, nearby or yours.": "ส่วนไหนที่สร้างใหม่รอเฟรมอยู่: ไม่มีเลย ใกล้เคียงหรือของคุณ",
   "Animates water, lava, fire and other moving textures.": "ทำให้น้ำ ลาวา ไฟ และพื้นผิวเคลื่อนไหวอื่นๆ เคลื่อนไหวได้",
   "World pixels per screen pixel. Below 100% is faster on the GPU.": "พิกเซลโลกต่อพิกเซลหน้าจอ ต่ำกว่า 100% จะเร็วกว่าบน GPU",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "ปรับขอบหยักให้เรียบ FXAA: นุ่มนวลกว่า TAA: สิ่งของที่เคลื่อนไหวและราบรื่นที่สุดอาจเคลื่อนตัวได้",
   "Renders the world smaller and rebuilds it with TAA. Faster, softer.": "ทำให้โลกเล็กลงและสร้างใหม่ด้วย TAA เร็วขึ้นนุ่มนวลขึ้น",
   "Sharpens the upscaled picture. Higher: crisper edges, more shimmer.": "เพิ่มความคมชัดของภาพที่ขยายแล้ว สูงขึ้น: ขอบคมขึ้น แวววาวมากขึ้น",
   "HDR output on an HDR display: lava, fire and sunlight shine brighter.": "เอาต์พุต HDR บนจอแสดงผล HDR: ลาวา ไฟ และแสงแดดส่องสว่างยิ่งขึ้น",

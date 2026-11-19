@@ -606,6 +606,7 @@ impl Game<'_> {
         self.hold_fullbright();
         let s = &self.settings;
         if let Some(r) = self.renderer.as_mut() {
+            r.set_msaa4x(s.horizon.msaa4x);
             r.gamma = s.gamma;
             r.improved_transparency = s.improved_transparency;
             r.set_present_mode(s.vsync, s.horizon.present_mode);

@@ -953,6 +953,7 @@ file = \"material.wgsl\"
             sprite_views: &[],
             format: wgpu::TextureFormat::Rgba8Unorm,
             linear: false,
+            msaa: false,
             sprite_tags: &[],
             sprite_materials: &[],
             entities: empty,

@@ -267,7 +267,6 @@
   "Sky": "ท้องฟ้า",
   "Sky and weather": "ท้องฟ้าและสภาพอากาศ",
   "Smaller copies of block textures for distant terrain: less shimmer.": "พื้นผิวบล็อกที่มีขนาดเล็กลงสำหรับภูมิประเทศระยะไกล: มีแสงแวววาวน้อยลง",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "ปรับขอบหยักให้เรียบ FXAA: นุ่มนวลกว่า TAA: สิ่งของที่เคลื่อนไหวและราบรื่นที่สุดอาจเคลื่อนตัวได้",
   "Soft shadows in corners. Costs chunk building time only.": "มีเงาอ่อนๆ ตามมุม ต้นทุนเวลาสร้างก้อนเท่านั้น",
   "Solid": "แข็ง",
   "Solid Aggressive": "แข็งก้าวร้าว",

@@ -263,7 +263,6 @@
   "Sky": "ಆಕಾಶ",
   "Sky and weather": "ಆಕಾಶ ಮತ್ತು ಹವಾಮಾನ",
   "Smaller copies of block textures for distant terrain: less shimmer.": "ದೂರದ ಭೂಪ್ರದೇಶಕ್ಕಾಗಿ ಬ್ಲಾಕ್ ಟೆಕಶ್ಚರ್ಗಳ ಸಣ್ಣ ಪ್ರತಿಗಳು: ಕಡಿಮೆ ಮಿನುಗುವಿಕೆ.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "ಮೊನಚಾದ ಅಂಚುಗಳನ್ನು ಸುಗಮಗೊಳಿಸುತ್ತದೆ. FXAA: ಮೃದುವಾದ. TAA: ನಯವಾದ, ಚಲಿಸುವ ವಸ್ತುಗಳು ಜಾಡು ಹಿಡಿಯಬಹುದು.",
   "Soft shadows in corners. Costs chunk building time only.": "ಮೂಲೆಗಳಲ್ಲಿ ಮೃದುವಾದ ನೆರಳುಗಳು. ಚಂಕ್ ನಿರ್ಮಾಣ ಸಮಯಕ್ಕೆ ಮಾತ್ರ ವೆಚ್ಚವಾಗುತ್ತದೆ.",
   "Solid": "ಘನ",
   "Solid Aggressive": "ಘನ ಆಕ್ರಮಣಕಾರಿ",

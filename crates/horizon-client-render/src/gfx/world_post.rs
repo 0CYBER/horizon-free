@@ -396,6 +396,14 @@ impl Post {
         sizes(window, self.scale, 1.0).0
     }
 
+    /// The scaled world's depth where it was drawn at `size`, the window's: what post effects
+    /// read when 4x MSAA drew the world there.
+    pub(super) fn depth_at(&self, size: [u32; 2]) -> Option<&wgpu::TextureView> {
+        (self.target.as_ref())
+            .filter(|t| t.size == size)
+            .map(|t| &t.depth)
+    }
+
     /// The next TAA frame's input size, even before its first jitter or resize.
     pub(super) fn taa_render_size(&self, window: [u32; 2]) -> [u32; 2] {
         self.sizes_with_upscale(window, self.upscale).0

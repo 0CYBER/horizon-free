@@ -159,7 +159,6 @@
   "Which chunk rebuilds wait for the frame: none, nearby or yours.": "Kare tamamlanana kadar hangi parça yeniden oluşturma işlemlerinin bekleyeceğini belirler: Hiçbiri, yakındakiler veya bulunduğunuz parçalar.",
   "Animates water, lava, fire and other moving textures.": "Su, lav, ateş ve diğer hareketli dokuları canlandırır.",
   "World pixels per screen pixel. Below 100% is faster on the GPU.": "Ekrandaki her piksele karşılık gelen dünya pikseli sayısını belirler. %100'ün altındaki değerler GPU performansını artırır.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "Pürüzlü kenarları yumuşatır. FXAA: Daha yumuşak görüntü. TAA: En iyi yumuşatma, ancak hareketli nesnelerin arkasında iz bırakabilir.",
   "Renders the world smaller and rebuilds it with TAA. Faster, softer.": "Dünyayı daha düşük çözünürlükte işler ve TAA kullanarak yeniden oluşturur. Daha hızlı ancak daha yumuşak bir görüntü sağlar.",
   "HDR output on an HDR display: lava, fire and sunlight shine brighter.": "HDR destekli bir ekranda HDR görüntü çıkışı sağlar. Lav, ateş ve güneş ışığı daha parlak görünür.",
   "How frames reach the screen while VSync is off.": "VSync kapalıyken karelerin ekrana nasıl aktarılacağını belirler.",

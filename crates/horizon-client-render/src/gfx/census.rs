@@ -67,7 +67,7 @@ impl Renderer {
     /// Bytes of the renderer's largest GPU resources, by name (`scene_replay --memory`):
     /// the terrain arenas (their pages, and what resident sections and far tiles use of
     /// them), the quad indices, the block sprites with their mips, the LabPBR maps, flat
-    /// draws' buffers and the visibility buffer's.
+    /// draws' buffers, the visibility buffer's and 4x MSAA's targets.
     pub fn gpu_census(&self) -> Vec<(&'static str, u64)> {
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         let used = |s: &SectionGpu| (s.solid_slots + u64::from(s.translucent) * 4) * stride;
@@ -104,6 +104,7 @@ impl Renderer {
                 "visibility_buffer",
                 self.visbuf.as_ref().map_or(0, visbuffer::Visbuffer::bytes),
             ),
+            ("msaa_targets", self.msaa.bytes()),
         ]
     }
     /// Device memory the backend's allocator holds, by the label of what holds

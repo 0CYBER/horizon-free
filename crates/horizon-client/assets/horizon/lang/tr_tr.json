@@ -263,7 +263,6 @@
   "Sky": "Gökyüzü",
   "Sky and weather": "Gökyüzü ve hava",
   "Smaller copies of block textures for distant terrain: less shimmer.": "Uzak arazilerde blok dokularının daha küçük kopyalarını kullanır. Titreşimli görüntüyü azaltır.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "Pürüzlü kenarları yumuşatır. FXAA: Daha yumuşak görüntü. TAA: En iyi yumuşatma, ancak hareketli nesnelerin arkasında iz bırakabilir.",
   "Soft shadows in corners. Costs chunk building time only.": "Köşelerde yumuşak gölgeler oluşturur. Yalnızca parça oluşturma süresini etkiler.",
   "Solid": "Katı",
   "Solid Aggressive": "Agresif Katı",

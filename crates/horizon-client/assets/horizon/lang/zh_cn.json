@@ -263,7 +263,6 @@
   "Sky": "天空",
   "Sky and weather": "天空与天气",
   "Smaller copies of block textures for distant terrain: less shimmer.": "为远处地形生成更小的方块纹理副本：减少闪烁。",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "平滑锯齿边缘。FXAA 更柔和；TAA 最平滑，但移动物体可能拖影。",
   "Soft shadows in corners. Costs chunk building time only.": "角落里的柔和阴影。只占用区块构建时间。",
   "Solid": "实心",
   "Solid Aggressive": "激进实心",

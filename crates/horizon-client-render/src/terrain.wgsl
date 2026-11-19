@@ -723,6 +723,27 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     let in = from_wire(wire);
     return solid_color(in);
 }
+// Shader alpha-to-coverage leaves colour alpha available for HDR's light codes.
+// Smooth the cutout threshold over its pixel footprint, then retain 0..4 samples.
+fn cutout_coverage(alpha: f32, opaque: bool) -> u32 {
+    let width = max(fwidth(alpha), 0.0001);
+    let coverage = clamp((alpha - 0.5) / width + 0.5, 0.0, 1.0);
+    // Masks 0, 1, 5, 13, 15 in four bits each, without a dynamically indexed private
+    // constant array (some Adreno Vulkan compilers cannot link those; see `faded`).
+    let mask = (0xfd510u >> (u32(round(coverage * 4.0)) * 4u)) & 15u;
+    return select(mask, 15u, opaque);
+}
+struct TerrainMsaa {
+    @location(0) color: vec4<f32>,
+    @builtin(sample_mask) coverage: u32,
+}
+// 4x MSAA's solid terrain (gfx/msaa.rs): `solid_color` with its cutout as sample coverage.
+@fragment fn fs_solid_msaa(wire: TerrainWire) -> TerrainMsaa {
+    let in = from_wire(wire);
+    let s = solid_uncut(in);
+    let mask = cutout_coverage(s.color.a, (in.layer & 0x8000u) != 0u);
+    return TerrainMsaa(solid_finish(in, s.texel, s.color), mask);
+}
 // `fs_solid` for the opaque pass (`opaque_quad`): no fade, no cutout, no discard.
 @fragment fn fs_opaque(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
@@ -739,16 +760,26 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     return solid_color(in);
 }
 fn solid_color(in: TerrainOut) -> vec4<f32> {
+    let s = solid_uncut(in);
+    // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
+    if s.color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
+    return solid_finish(in, s.texel, s.color);
+}
+// A solid pixel's sprite texel and colour before its cutout, which `solid_color` discards
+// below half alpha and `fs_solid_msaa` turns into coverage.
+struct SolidUncut {
+    texel: vec4<f32>,
+    color: vec4<f32>,
+}
+fn solid_uncut(in: TerrainOut) -> SolidUncut {
     let dx = dpdx(in.local);
     let dy = dpdy(in.local);
     if faded(in.fade, in.local, dx, dy) { discard; }
-    // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     let texel = sprite(in.uv, in.layer & 0x7fffu);
     var color = texel * in.color;
     // terrain.fsh: the fade-in mixes toward the fog colour.
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
-    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
-    return solid_finish(in, texel, color);
+    return SolidUncut(texel, color);
 }
 // The rest of a solid pixel's colour once it is kept: emission and fog.
 fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32> {

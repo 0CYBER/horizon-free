@@ -296,6 +296,8 @@ pub struct TerrainLayers<'a> {
     /// The layer of its grid of the solid terrain near the camera, where it draws one
     /// (`ExternalPipeline::draw_displaced`).
     pub displaced: Option<&'a wgpu::RenderPipeline>,
+    /// The solid layers for 4x MSAA (instanced, then flat draws), when the pack's material got them.
+    pub msaa: Option<&'a (wgpu::RenderPipeline, Option<wgpu::RenderPipeline>)>,
     /// The solid layers' second target, which they write beside the world's colour.
     pub surface: Option<&'a wgpu::TextureView>,
     /// The layers read the world before translucent terrain: the renderer stops there for

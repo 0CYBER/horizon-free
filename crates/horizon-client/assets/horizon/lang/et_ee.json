@@ -263,7 +263,6 @@
   "Sky": "Taevas",
   "Sky and weather": "Taevas ja ilm",
   "Smaller copies of block textures for distant terrain: less shimmer.": "Plokkide tekstuuride väiksemad koopiad kauge maastiku jaoks: vähem sära.",
-  "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.": "Silustab sakilised servad. FXAA: pehmem. TAA: kõige sujuvamad, liikuvad asjad võivad järele jääda.",
   "Soft shadows in corners. Costs chunk building time only.": "Nurkades pehmed varjud. Maksab ainult ehitusaja osa.",
   "Solid": "Tahke",
   "Solid Aggressive": "Tugev agressiivne",
