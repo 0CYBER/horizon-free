@@ -1909,6 +1909,7 @@ horizon-client game::native_server::fake_action_tests::a_fake_uses_items_through
 horizon-client game::native_server::fake_action_tests::a_fakes_action_is_refused_before_anything_runs lib daily resources
 horizon-client game::native_server::fake_action_tests::a_fakes_action_leaves_the_per_action_state_as_it_was lib daily resources
 horizon-client game::native_server::fake_action_tests::a_fakes_effects_are_stopped_where_they_start lib daily resources
+horizon-client game::native_server::fake_action_tests::a_panic_inside_a_scoped_action_puts_the_fake_back lib daily resources
 horizon-client game::native_server::fake_action_tests::a_real_player_is_unaffected_at_every_effect_site lib daily resources
 horizon-client game::native_server::fake_action_tests::a_shulker_box_and_an_ender_chest_a_fake_player_used_are_left_shut lib daily resources
 horizon-client game::native_server::fake_action_tests::a_trader_a_fake_player_used_trades_with_the_next_one lib daily resources

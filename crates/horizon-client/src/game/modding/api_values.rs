@@ -947,7 +947,7 @@ mod enchantment_boundary_tests {
 }
 
 #[cfg(test)]
-fn prepare_stack_boundary_tests() {
+pub(in crate::game) fn prepare_stack_boundary_tests() {
     install_stack_hooks();
     install_parts(&[]).unwrap();
     mod_api::__private::resolve_items([

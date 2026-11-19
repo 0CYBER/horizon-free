@@ -561,7 +561,11 @@ impl Game<'_> {
         host.hub.guests.update(gi, |guest| state.swap(guest));
         let play = host.play.insert(conn, Default::default());
         let menus = host.menus.insert(conn, Default::default());
-        let outcome = self.perform_fake_action(gi, conn, action);
+        // A hook that panics during the action must not leave the fake on the scoped body: its
+        // own body, inventory, menus and play state are put back before the panic goes on.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.perform_fake_action(gi, conn, action)
+        }));
         let host = self.lan.as_mut().expect("guest turns retain the host");
         let (held, other) = host.hub.guests.update(gi, |guest| {
             let held = guest
@@ -588,16 +592,26 @@ impl Game<'_> {
         if let Some(play) = play {
             host.play.insert(conn, play);
         }
-        outcome.map(|outcome| {
-            ScopedActionResult::new(
-                outcome,
-                held.try_into_api()
-                    .expect("action results use load-resolved item keys"),
-                other
-                    .try_into_api()
-                    .expect("action results use load-resolved item keys"),
-            )
-        })
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        // `state` holds the scoped actor again. The action ran in the level in place, at the
+        // scoped place, so a stack the API can't express is dropped there as an ordinary item
+        // entity, outside any guest turn. It is subject to what any drop is: a mod's
+        // `entity_join_level` veto discards it, it is saved only as its chunk is, and a spawn
+        // hook that panics ends the loop before the stacks after it.
+        let at = state.position;
+        let mut kept = Vec::new();
+        let held = api_stack_or_keep(held, &mut kept);
+        let other = other
+            .into_iter()
+            .filter_map(|stack| api_stack_or_keep(Some(stack), &mut kept))
+            .collect();
+        for stack in kept {
+            self.spawn_item_own(stack, at, 10);
+        }
+        outcome.map(|outcome| ScopedActionResult::new(outcome, held, other))
     }
 
     fn fake_action_actor(
@@ -2221,6 +2235,26 @@ impl Game<'_> {
 
 /// The temporary state of the same persistent guest, not another player or action engine.
 /// Swapped back after the ordinary guest action has restored the server's outer state.
+/// `stack` as the API's value; a stack the API can't express (an unknown item, components it
+/// has no value for) goes into `kept` instead.
+fn api_stack_or_keep(
+    stack: Option<horizon_items::items::ItemStack>,
+    kept: &mut Vec<horizon_items::items::ItemStack>,
+) -> Option<mod_api::ItemStack> {
+    let stack = stack?;
+    match stack.try_into_api() {
+        Ok(api) => Some(api),
+        Err(error) => {
+            log::warn!(
+                "a scoped player action's {} can't be returned ({error:?}): dropped at the actor",
+                stack.item
+            );
+            kept.push(stack);
+            None
+        }
+    }
+}
+
 struct ScopedPlayerState {
     motion: Option<Box<PlayerMotion>>,
     position: [f64; 3],
@@ -2372,6 +2406,33 @@ impl Drop for Acting {
 mod tests {
     use super::*;
     use horizon_client::items::ItemStack;
+
+    /// A stack the API can't express is kept for the world instead of ending the action:
+    /// an item it has no key for, or components it has no value for; the rest converts.
+    #[test]
+    fn a_stack_the_api_cant_express_is_kept() {
+        crate::game::api_values::prepare_stack_boundary_tests();
+        let mut kept = Vec::new();
+        let unknown = ItemStack::new("test:not_an_item", 3);
+        let mut odd_components = ItemStack::new("minecraft:stick", 2);
+        // A removal entry must be the empty compound; this one isn't.
+        odd_components
+            .data_mut()
+            .set_other("!minecraft:damage", Some(horizon_core::nbt::Tag::Int(1)));
+        assert!(matches!(
+            odd_components.try_into_api(),
+            Err(horizon_gameplay::api_values::StackReadError::InvalidComponents(_))
+        ));
+        let plain = ItemStack::new("minecraft:stick", 5);
+        assert_eq!(api_stack_or_keep(Some(unknown.clone()), &mut kept), None);
+        assert_eq!(api_stack_or_keep(Some(odd_components.clone()), &mut kept), None);
+        assert_eq!(api_stack_or_keep(None, &mut kept), None);
+        assert_eq!(
+            api_stack_or_keep(Some(plain.clone()), &mut kept),
+            Some(plain.try_into_api().unwrap())
+        );
+        assert_eq!(kept, vec![unknown, odd_components]);
+    }
 
     /// Box bounds come from mod code: one that is not finite reads no orb and never
     /// panics, and an inverted box reads what the ordered one does.
@@ -4998,6 +5059,49 @@ pub(super) mod fake_action_tests {
                 Err(ActionRefused::InvalidTarget)
             );
         });
+    }
+
+    /// A hook that panics inside a scoped action leaves the fake on its own body: its
+    /// inventory, menus and play state are back once the panic has passed.
+    #[test]
+    #[ignore = "daily"]
+    fn a_panic_inside_a_scoped_action_puts_the_fake_back() {
+        use mod_api::{Flow, Hooks, HostSide, PlayerActionSetup, RightClickBlockEvent};
+        #[derive(Default)]
+        struct Boom;
+        #[mod_api::horizon_mod]
+        impl Hooks for Boom {
+            fn right_click_block(&self, _: HostSide, _: &mut RightClickBlockEvent) -> Flow {
+                panic!("a mod's hook fails mid-action");
+            }
+        }
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("boom", Box::new(Boom))].into(),
+            || {
+                super::super::native_entity_refs::tests::with_game(|game| {
+                    let (player, conn, _) = fake(game, Some("minecraft:diamond"), 0);
+                    let setup = PlayerActionSetup::new(
+                        Some(crate::game::api_values::test_snapshot(&ItemStack::new(
+                            "minecraft:oak_log",
+                            1,
+                        ))),
+                        [0.5, 64.0 + f64::from(1.62_f32), 0.5],
+                        0.0,
+                        0.0,
+                        false,
+                    );
+                    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        game.player_perform_action_scoped(player, on_top([1, 63, 0]), setup)
+                    }));
+                    assert!(panicked.is_err(), "the hook's panic goes on");
+                    assert_eq!(held(game, 2), Some(ItemStack::new("minecraft:diamond", 1)));
+                    let guest = game.lan.as_ref().unwrap().hub.guest(conn).unwrap();
+                    assert_eq!(guest.position, [0.5, 64.0, 0.5]);
+                    assert!(game.lan.as_ref().unwrap().play.contains_key(&conn));
+                    assert!(!game.fake_action.acting());
+                });
+            },
+        );
     }
 
     #[test]
