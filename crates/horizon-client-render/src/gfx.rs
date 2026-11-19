@@ -1335,6 +1335,9 @@ pub struct Renderer {
     msaa: msaa::Msaa,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
+    /// Watched only while HDR is On or Auto, including Auto in SDR; before `surface` and
+    /// `window`, so it's dropped first: its reader thread holds the surface.
+    display: Option<DisplayWatch>,
     /// The window's swapchain; `None` when rendering offscreen (`--offscreen`). Shared
     /// with frame generation's present thread while it runs.
     surface: Option<Arc<wgpu::Surface<'static>>>,
@@ -1364,9 +1367,6 @@ pub struct Renderer {
     pub last_wait: std::time::Duration,
     /// CPU time of the last `render`, waits excluded.
     pub last_encode: std::time::Duration,
-    /// Watched only while HDR is On or Auto, including Auto in SDR;
-    /// before `window`, so it's dropped first.
-    display: Option<DisplayWatch>,
     /// What this renderer's display last reported (`DisplayWatch`), its own: another
     /// renderer's watch never changes it.
     reading: output::DisplayReading,
@@ -4775,6 +4775,7 @@ impl Renderer {
     #[horizon_mod_api_macros::replaceable]
     pub fn release_surface(&mut self) {
         self.frame_gen.stop();
+        self.stop_display_reader();
         self.queue.wait();
         *self
             .spare_surface
@@ -4797,6 +4798,7 @@ impl Renderer {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         self.frame_gen.stop_to_configure();
+        self.stop_display_reader();
         self.surface = None;
         let surface = match spare {
             Some(surface) => surface,
@@ -6095,7 +6097,12 @@ impl Renderer {
     ) -> std::result::Result<(), String> {
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        surface.configure(device, config);
+        {
+            let _queries = output_apply::SURFACE_QUERY
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            surface.configure(device, config);
+        }
         let memory = pollster::block_on(memory.pop());
         if let Some(e) = memory.or(pollster::block_on(validation.pop())) {
             return Err(e.to_string());
@@ -13446,6 +13453,8 @@ struct DisplayWatch {
     /// Without Wayland's event, when to read wgpu's values again: the OS sends no event for
     /// a moved window or a changed SDR brightness slider.
     polled: Option<std::time::Instant>,
+    /// The thread that makes those reads for a window surface (`output_apply::DisplayReader`).
+    reader: Option<output_apply::DisplayReader>,
 }
 
 impl DisplayReading {
@@ -13498,6 +13507,7 @@ impl DisplayWatch {
             let watch = Self {
                 wayland: Some(wayland),
                 polled: None,
+                reader: None,
             };
             return (watch, wayland_reading(now));
         }
@@ -13508,6 +13518,7 @@ impl DisplayWatch {
             #[cfg(target_os = "linux")]
             wayland: None,
             polled: Some(std::time::Instant::now() + DISPLAY_POLL),
+            reader: None,
         };
         (watch, now)
     }
