@@ -28,24 +28,55 @@ static TOTAL: AtomicUsize = AtomicUsize::new(0);
 
 /// How far the download under way is, files done of how many; none when none runs.
 pub fn progress() -> Option<(usize, usize)> {
+    if let Some(p) = crate::downloads::current_progress() {
+        return Some((
+            p.completed as usize,
+            (p.completed + p.pending + p.active + p.failed) as usize,
+        ));
+    }
     let total = TOTAL.load(Relaxed);
     (total > 0).then(|| (DONE.load(Relaxed).min(total), total))
 }
 
-const CANCELLED: &str = "Download cancelled. Download again to go on where it stopped.";
+pub use crate::downloads::CANCELLED;
 
+/// Files downloaded at a time. Most of a version is thousands of small assets, so files in
+/// parallel over the shared HTTP pool is what fills the line.
+pub const JOBS: usize = 16;
 /// One file to download, with the size Mojang lists for it when it lists one.
-struct File {
-    url: String,
-    sha1: String,
-    size: Option<u64>,
-    path: PathBuf,
-}
+type File = crate::downloads::Artifact;
 
 /// Downloads the pinned version into `dir`, `jobs` files at a time; files already there and
 /// whole are kept. An asset that fails is a line in the log (the game is then partly silent),
 /// anything else an error. `cancel` stops it between files.
 pub fn download(
+    pins: &Pins,
+    dir: &Path,
+    os: &str,
+    jobs: usize,
+    fetch: Fetch,
+    cancel: &AtomicBool,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    download_with(None, pins, dir, os, jobs, fetch, cancel, log)
+}
+
+pub fn download_http(
+    pins: &Pins,
+    dir: &Path,
+    os: &str,
+    jobs: usize,
+    fetch: Fetch,
+    cancel: &AtomicBool,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    let http = crate::downloads::shared()?.session();
+    download_with(Some(&http), pins, dir, os, jobs, fetch, cancel, log)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn download_with(
+    http: Option<&crate::downloads::Downloader>,
     pins: &Pins,
     dir: &Path,
     os: &str,
@@ -111,7 +142,6 @@ pub fn download(
     log(format!(
         "Downloading Minecraft {v} from Mojang: the game and {libraries} libraries"
     ));
-    fetch_all(&game, jobs, fetch, cancel, log)?;
     let index = &manifest["assetIndex"];
     let index = File {
         url: text(index, "url")?,
@@ -121,6 +151,31 @@ pub fn download(
             .join("assets/indexes")
             .join(relative(&format!("{}.json", text(index, "id")?))?),
     };
+    if let Some(http) = http {
+        let discovered = crate::downloads::run(http.download(&index, cancel))
+            .and_then(|_| objects(&read_json(&index.path)?, dir));
+        let objects = match discovered {
+            Ok(objects) => objects,
+            Err(e) => {
+                if e == CANCELLED {
+                    return Err(e);
+                }
+                crate::downloads::run(http.batch(&game, cancel, log))?;
+                log(format!("The sounds could not all be downloaded: {e}"));
+                return Ok(());
+            }
+        };
+        log(format!("Downloading the sounds ({} files)", objects.len()));
+        let assets = crate::downloads::run(http.install(&game, &objects, cancel, log))?;
+        if let Err(e) = assets {
+            if e == CANCELLED {
+                return Err(e);
+            }
+            log(format!("The sounds could not all be downloaded: {e}"));
+        }
+        return Ok(());
+    }
+    fetch_all(&game, jobs, fetch, cancel, log)?;
     let assets = fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)
         .and_then(|_| objects(&read_json(&index.path)?, dir))
         .and_then(|objects| {
@@ -174,6 +229,31 @@ pub fn java_runtime(
     cancel: &AtomicBool,
     log: &dyn Fn(String),
 ) -> Result<PathBuf, String> {
+    java_runtime_with(None, component, runtime, jobs, fetch, cancel, log)
+}
+
+pub fn java_runtime_http(
+    component: &str,
+    runtime: &Path,
+    jobs: usize,
+    fetch: Fetch,
+    cancel: &AtomicBool,
+    log: &dyn Fn(String),
+) -> Result<PathBuf, String> {
+    let http = crate::downloads::shared()?.session();
+    java_runtime_with(Some(&http), component, runtime, jobs, fetch, cancel, log)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn java_runtime_with(
+    http: Option<&crate::downloads::Downloader>,
+    component: &str,
+    runtime: &Path,
+    jobs: usize,
+    fetch: Fetch,
+    cancel: &AtomicBool,
+    log: &dyn Fn(String),
+) -> Result<PathBuf, String> {
     let platform = java_platform().ok_or("Mojang has no Java for this system")?;
     let index: Value = serde_json::from_slice(&fetch(JAVA_RUNTIMES)?)
         .map_err(|e| format!("Mojang's Java index: {e}"))?;
@@ -219,7 +299,10 @@ pub fn java_runtime(
         "Downloading Minecraft's Java {name} from Mojang ({} files)",
         downloads.len()
     ));
-    fetch_all(&downloads, jobs, fetch, cancel, log)?;
+    match http {
+        Some(http) => crate::downloads::run(http.batch(&downloads, cancel, log)),
+        None => fetch_all(&downloads, jobs, fetch, cancel, log),
+    }?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

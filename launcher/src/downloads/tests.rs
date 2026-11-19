@@ -555,6 +555,85 @@ async fn global_budget_covers_two_hosts_metadata_and_segment_streams() {
     assert!(a.state.peak.load(Relaxed) <= 2);
     assert!(b.state.peak.load(Relaxed) <= 2);
 }
+#[test]
+fn http_installation_matches_the_existing_layout_and_runtime() {
+    let body = br#"{"objects":{}}"#.to_vec();
+    let server = run(Server::new(body.clone(), Duration::ZERO));
+    let legacy = tempfile::tempdir().unwrap();
+    let concurrent = tempfile::tempdir().unwrap();
+    let hash = format!("{:x}", Sha1::digest(&body));
+    let file = |route: &str| serde_json::json!({"url":format!("{}{route}",server.url),"sha1":hash,"size":body.len(),"path":"org/fake/library.jar"});
+    let manifest=serde_json::json!({"downloads":{"client":file("/client")},"libraries":[{"downloads":{"artifact":file("/library")}}],"assetIndex":{"id":"test","url":format!("{}/index",server.url),"sha1":hash,"size":body.len()}}).to_string();
+    let pins = crate::sources::Pins::for_version(
+        "test",
+        &format!("{:x}", Sha1::digest(manifest.as_bytes())),
+    );
+    let cancel = AtomicBool::new(false);
+    let fetch = |url: &str| {
+        Ok(if url.ends_with("test.json") {
+            manifest.as_bytes().to_vec()
+        } else {
+            body.clone()
+        })
+    };
+    crate::mojang::download(&pins, legacy.path(), "osx", 2, &fetch, &cancel, &|_| {}).unwrap();
+    crate::mojang::download_http(
+        &pins,
+        concurrent.path(),
+        "osx",
+        16,
+        &fetch,
+        &cancel,
+        &|_| {},
+    )
+    .unwrap();
+    for path in [
+        "versions/test/test.json",
+        "versions/test/test.jar",
+        "libraries/org/fake/library.jar",
+        "assets/indexes/test.json",
+    ] {
+        assert_eq!(
+            std::fs::read(legacy.path().join(path)).unwrap(),
+            std::fs::read(concurrent.path().join(path)).unwrap()
+        );
+    }
+    let platform = crate::mojang::java_platform().unwrap();
+    let runtime_manifest=serde_json::json!({"files":{"bin/java":{"type":"file","executable":true,"downloads":{"raw":file("/java")}}}}).to_string();
+    let index=serde_json::json!({platform:{"test-runtime":[{"version":{"name":"test"},"manifest":{"url":"https://manifest.test/runtime","sha1":format!("{:x}",Sha1::digest(runtime_manifest.as_bytes()))}}]}}).to_string();
+    let runtime_fetch = |url: &str| {
+        Ok(if url.ends_with("all.json") {
+            index.as_bytes().to_vec()
+        } else if url == "https://manifest.test/runtime" {
+            runtime_manifest.as_bytes().to_vec()
+        } else {
+            body.clone()
+        })
+    };
+    let old = crate::mojang::java_runtime(
+        "test-runtime",
+        legacy.path(),
+        2,
+        &runtime_fetch,
+        &cancel,
+        &|_| {},
+    )
+    .unwrap();
+    let new = crate::mojang::java_runtime_http(
+        "test-runtime",
+        concurrent.path(),
+        16,
+        &runtime_fetch,
+        &cancel,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(old.join("bin/java")).unwrap(),
+        std::fs::read(new.join("bin/java")).unwrap()
+    );
+}
+
 #[tokio::test]
 #[ignore = "daily"]
 async fn range_probes_honor_retry_after_before_any_followup_request() {

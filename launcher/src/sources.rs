@@ -471,7 +471,11 @@ pub(crate) fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
     ));
     fs::write(&partial, data)
         .and_then(|_| fs::rename(&partial, path))
-        .map_err(error)
+        .map_err(|e| {
+            // A full disk leaves no half-written file behind.
+            let _ = fs::remove_file(&partial);
+            error(e)
+        })
 }
 
 /// Links a launcher's files into the official layout in `linked`: the client jar as

@@ -1843,14 +1843,7 @@ fn refill_own_store(tag: &str) {
     else {
         return;
     };
-    let fetch = |url: &str| -> Result<Vec<u8>, String> {
-        let mut body = Vec::new();
-        get(url)?
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|e| e.to_string())?;
-        Ok(body)
-    };
+    let fetch = crate::downloads::install_metadata;
     if let Err(e) = download_for_owner(&pins, &own, &fetch, &|line| eprintln!("{line}")) {
         eprintln!("{tag}: the missing assets were not downloaded: {e}");
     }
@@ -2023,14 +2016,7 @@ pub fn download_version_for_owner(
     log: &dyn Fn(String),
 ) -> Result<PathBuf, String> {
     let dir = data_dir().join("minecraft");
-    let fetch = |url: &str| -> Result<Vec<u8>, String> {
-        let mut body = Vec::new();
-        get(url)?
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|e| e.to_string())?;
-        Ok(body)
-    };
+    let fetch = crate::downloads::install_metadata;
     let pins = sources::Pins::for_version(id, manifest_sha1);
     download_for_owner(&pins, &dir, &fetch, log)
         .map_err(|e| e.trim_start_matches("\n  • ").to_string())?;
@@ -2157,7 +2143,7 @@ fn download_for(
                 sources::Os::MacOs => "osx",
                 sources::Os::Windows => "windows",
             };
-            mojang::download(pins, dir, os, 8, fetch, &mojang::CANCEL, log).map_err(|e| {
+            mojang::download_http(pins, dir, os, mojang::JOBS, fetch, &mojang::CANCEL, log).map_err(|e| {
                 format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
             })
         }
@@ -2229,16 +2215,9 @@ fn java(
             "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install compatible Java instead."
         ));
     }
-    let fetch = |url: &str| -> Result<Vec<u8>, String> {
-        let mut body = Vec::new();
-        get(url)?
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|e| e.to_string())?;
-        Ok(body)
-    };
+    let fetch = crate::downloads::install_metadata;
     let runtime = data_dir().join("minecraft").join("runtime");
-    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, &mojang::CANCEL, log)
+    let home = mojang::java_runtime_http(&component, &runtime, mojang::JOBS, &fetch, &mojang::CANCEL, log)
         .map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
@@ -2366,14 +2345,7 @@ pub fn preparer(
                 .map(|f| sources::known_folders(sources::Os::current(), &f))
                 .unwrap_or_default(),
         );
-        let fetch = |url: &str| -> Result<Vec<u8>, String> {
-            let mut body = Vec::new();
-            get(url)?
-                .into_reader()
-                .read_to_end(&mut body)
-                .map_err(|e| e.to_string())?;
-            Ok(body)
-        };
+        let fetch = crate::downloads::install_metadata;
         let linked = data_dir().join("linked-minecraft");
         if from == MinecraftFrom::Mojang {
             // Straight from Mojang (what is already there and whole is kept), for an owner only.
@@ -2435,25 +2407,28 @@ pub fn preparer(
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
-    if !reused && !jar.exists() {
-        let json: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&manifest).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-        let url = json["downloads"]["server"]["url"]
-            .as_str()
-            .ok_or_else(|| format!("{} has no server download", manifest.display()))?;
-        log(format!("Downloading the {version} server jar from Mojang"));
-        fs::create_dir_all(jar.parent().unwrap()).map_err(|e| e.to_string())?;
-        let mut body = Vec::new();
-        get(url)?
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|e| e.to_string())?;
-        let partial = jar.with_extension("partial");
-        fs::write(&partial, body)
-            .and_then(|_| fs::rename(&partial, &jar))
-            .map_err(|e| e.to_string())?;
+    if !reused {
+        let json = crate::java_launch::read(&manifest)?;
+        let server = &json["downloads"]["server"];
+        let artifact = crate::downloads::Artifact {
+            url: server["url"]
+                .as_str()
+                .ok_or_else(|| format!("{} has no server download", manifest.display()))?
+                .into(),
+            sha1: server["sha1"]
+                .as_str()
+                .ok_or("The server download has no SHA-1")?
+                .into(),
+            size: server["size"].as_u64(),
+            path: jar.clone(),
+        };
+        log(format!(
+            "Checking and downloading the {version} server jar from Mojang"
+        ));
+        let http = crate::downloads::shared()?.session();
+        crate::downloads::run(http.download(&artifact, &mojang::CANCEL))?;
     }
+
     if let Some(binary) = binary {
         if prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
             == Some(prepare::SOURCES_SHA256)
@@ -4712,7 +4687,7 @@ mod tests {
             .iter()
             .filter(|(_, tests, _)| !tests)
             .flat_map(|(name, _, text)| {
-                text.matches("mojang::download(")
+                text.matches("mojang::download_http(")
                     .map(move |_| name.as_str())
             })
             .collect();
@@ -4722,7 +4697,7 @@ mod tests {
             let start = backend.find(&format!("\nfn {f}(")).unwrap();
             &backend[start..start + backend[start + 1..].find("\n}\n").unwrap()]
         };
-        assert!(body("download_for").contains("mojang::download("));
+        assert!(body("download_for").contains("mojang::download_http("));
         assert!(body("download_for_owner").contains("account::launch("));
         assert!(!body("download_for_owner").contains("launch_for_game("));
         // `download_for` is defined once and called once, by `download_for_owner`.
