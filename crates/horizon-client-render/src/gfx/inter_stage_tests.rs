@@ -63,6 +63,14 @@ pub(in crate::gfx) fn interfaces(source: &str) -> Vec<Interface> {
                     .collect();
                 (outputs.iter().filter(|b| is_location(b)).count(), 0)
             }
+            naga::ShaderStage::Mesh => {
+                let outputs = entry
+                    .mesh_info
+                    .as_ref()
+                    .map(|info| bindings(&module, &None, info.vertex_output_type))
+                    .unwrap_or_default();
+                (outputs.iter().filter(|b| is_location(b)).count(), 0)
+            }
             naga::ShaderStage::Fragment => {
                 let inputs: Vec<_> = function
                     .arguments
@@ -164,6 +172,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             "ray tracing unpack",
             vec!["terrain.wgsl", "rt_unpack.wgsl"],
             super::rt::scene::unpack_shader(),
+        ),
+        (
+            "terrain mesh shader",
+            vec!["terrain.wgsl", "terrain_mesh.wgsl"],
+            super::surface_setup::mesh_shader::shader(),
         ),
         (
             "world primitives",

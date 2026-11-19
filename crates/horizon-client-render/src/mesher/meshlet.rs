@@ -76,6 +76,92 @@ impl MeshletDesc {
     pub fn max_corner(&self) -> [u8; 3] {
         [self.sub_aabb[3], self.sub_aabb[4], self.sub_aabb[5]]
     }
+
+    /// Converts this section-relative meshlet descriptor into a GPU-ready descriptor (`GpuMeshlet`)
+    /// by rebasing its `quad_offset` with the section's solid vertex base (`solid_base`).
+    ///
+    /// - For compact terrain quads in the arena page (`mesher/packed.rs`), `solid_base` is
+    ///   `PACKED_BASE + 4 * slot_base`, yielding `vertex_base = PACKED_BASE + 4 * (slot_base + quad_offset)`.
+    /// - For uncompressed full-vertex quads, `solid_base` is `4 * quad_base`, yielding
+    ///   `vertex_base = 4 * (quad_base + quad_offset)`.
+    #[inline]
+    pub fn to_gpu(&self, solid_base: u32) -> GpuMeshlet {
+        GpuMeshlet {
+            vertex_base: solid_base.wrapping_add(self.quad_offset.wrapping_mul(4)),
+            quad_count: self.quad_count,
+            bucket: self.bucket,
+            flags: self.flags,
+            plane_quant: self.plane_quant,
+            sub_aabb: self.sub_aabb,
+            padding: [0, 0],
+        }
+    }
+}
+
+/// GPU representation of a meshlet descriptor as bound to `@group(2) @binding(0)` in `terrain_mesh.wgsl`.
+///
+/// Has the exact same 16-byte size and field alignment as `MeshletDesc`, but stores an absolute encoded
+/// base vertex index (`vertex_base`) instead of a section-relative quad offset.
+///
+/// Binary layout (16 bytes, `[u32; 4]` / `vec4<u32>` in WGSL):
+/// - `desc.x`: `vertex_base: u32` (`PACKED_BASE + 4 * slot` or uncompressed vertex index).
+/// - `desc.y`: `quad_count: u8` (bits 0..7) | `bucket: u8` (bits 8..15) | `flags: u8` (bits 16..23) | `plane_quant: u8` (bits 24..31).
+/// - `desc.z`: `min_x: u8` (0..7) | `min_y: u8` (8..15) | `min_z: u8` (16..23) | `max_x: u8` (24..31).
+/// - `desc.w`: `max_y: u8` (0..7) | `max_z: u8` (8..15) | `padding: [u8; 2]` (16..31).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuMeshlet {
+    /// Starting encoded vertex base index for the first quad in this meshlet.
+    pub vertex_base: u32,
+    /// Number of quads in this meshlet (1..=64).
+    pub quad_count: u8,
+    /// The directional bucket (0..7, see `Sides::BUCKETS`).
+    pub bucket: u8,
+    /// Flags: bit 0 = is_cutout, bit 1 = contains_full_vertices.
+    pub flags: u8,
+    /// Quantized plane threshold across the bucket's axis.
+    pub plane_quant: u8,
+    /// Sub-section bounding box within 16x16x16 (min_x, min_y, min_z, max_x, max_y, max_z, each 0..16).
+    pub sub_aabb: [u8; 6],
+    /// Reserved alignment padding to 16 bytes.
+    pub padding: [u8; 2],
+}
+
+impl GpuMeshlet {
+    /// Creates a new GPU meshlet descriptor.
+    pub fn new(
+        vertex_base: u32,
+        quad_count: u8,
+        bucket: u8,
+        flags: u8,
+        plane_quant: u8,
+        sub_aabb: [u8; 6],
+    ) -> Self {
+        Self {
+            vertex_base,
+            quad_count,
+            bucket,
+            flags,
+            plane_quant,
+            sub_aabb,
+            padding: [0, 0],
+        }
+    }
+
+    /// Whether this meshlet contains cutout quads.
+    pub fn is_cutout(&self) -> bool {
+        self.flags & MeshletDesc::FLAG_CUTOUT != 0
+    }
+
+    /// Quantized min corner in section coordinates [0..16].
+    pub fn min_corner(&self) -> [u8; 3] {
+        [self.sub_aabb[0], self.sub_aabb[1], self.sub_aabb[2]]
+    }
+
+    /// Quantized max corner in section coordinates [0..16].
+    pub fn max_corner(&self) -> [u8; 3] {
+        [self.sub_aabb[3], self.sub_aabb[4], self.sub_aabb[5]]
+    }
 }
 
 /// Bounding box helper for building quantized sub-AABBs [0..16].
