@@ -3536,6 +3536,45 @@ pub struct Level {
     /// that file, not their own.
     pub singleplayer_file: bool,
 }
+
+/// Whether the player file can hold a stack's saved compound, warning about the
+/// stack it leaves out: the writer refuses a list or compound at
+/// `Limits::saved().max_depth` (`Writer::payload`), and the player compound is
+/// depth 0, so an `Inventory` or `EnderItems` element and an `equipment` value
+/// sit at depth 2. [`nbt::within_writer_depth`] applies the writer's own rule,
+/// including the synthetic layer it puts around a mixed-type list's elements.
+fn stack_fits_the_file(kind: &str, tag: &Tag) -> bool {
+    if nbt::within_writer_depth(tag, Limits::saved().max_depth - 2) {
+        return true;
+    }
+    log::warn!(
+        "Horizon: dropping {} from {kind} slot {} in the player save: its saved data nests past the NBT depth limit; the rest of the player is saved",
+        text(tag.get("id")).unwrap_or_default(),
+        number(tag.get("Slot")).unwrap_or(0),
+    );
+    false
+}
+
+/// A saved item list without the stacks the writer cannot hold. Vanilla writes
+/// such a stack without complaint (`Inventory.save` writes each non-empty slot
+/// through `ItemStackWithSlot.CODEC`, and `TagValueOutput.TypedListWrapper.add`
+/// skips an element whose codec fails, reporting it to the `ProblemReporter`),
+/// then `NbtAccounter.pushDepth` refuses the file on load and
+/// `PlayerDataStorage.load` rolls the player back to `.dat_old`. Dropping the
+/// one stack is what vanilla's list codec does, and the rest of the player
+/// survives instead of being lost whole (#18384).
+fn keep_writable(kind: &str, tag: Tag) -> Tag {
+    match tag {
+        Tag::List(elements) => Tag::List(
+            elements
+                .into_iter()
+                .filter(|element| stack_fits_the_file(kind, element))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 impl Level {
     /// `PrimaryLevelData.setDifficulty`: the level data holds the world's
     /// difficulty, so the game and the file follow each other and a world
@@ -3931,7 +3970,13 @@ impl Level {
                         .iter()
                         .find(|(_, saved)| saved == slot)
                     {
-                        equipment.set(*ordinal, Some(stack));
+                        // The compound `equipment.write` builds, for the check
+                        // alone: a stack past the bound leaves its slot empty.
+                        let mut entries = vec![("Slot", Tag::Byte(*slot as i8))];
+                        entries.extend(encode_item(&stack));
+                        if stack_fits_the_file("equipment", &Tag::compound(entries)) {
+                            equipment.set(*ordinal, Some(stack));
+                        }
                     }
                 }
             }
@@ -4046,8 +4091,14 @@ impl Level {
                 ),
             ),
             ("playerGameType", Tag::Int(self.mode())),
-            ("Inventory", Tag::List(inventory)),
-            ("EnderItems", encode_items(&self.ender_items)),
+            (
+                "Inventory",
+                keep_writable("inventory", Tag::List(inventory)),
+            ),
+            (
+                "EnderItems",
+                keep_writable("ender chest", encode_items(&self.ender_items)),
+            ),
             ("recipeBook", self.recipe_book.write()),
             ("abilities", abilities),
             (
@@ -8543,6 +8594,53 @@ mod tests {
         assert!(dead.inventory_components.is_empty());
         assert!(dead.player_extra.unwrap().get("equipment").is_none());
         assert!(dir.join("data/minecraft/world_gen_settings.dat").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An item nested past the writer's depth bound (a mod's component or an
+    /// `/item ... custom_data`): the player file keeps the rest of the player
+    /// instead of failing whole (#18384).
+    #[test]
+    fn an_item_past_the_save_depth_limit_is_dropped_from_the_player_file() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-deep-item-save-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        // One compound per level, nested here by a loop: the item's depth is
+        // this test's own, and only the bound it passes comes from `Limits`.
+        let mut deep = Tag::compound([("bottom", Tag::Int(1))]);
+        for _ in 0..Limits::saved().max_depth {
+            deep = Tag::compound([("nested", deep)]);
+        }
+        let mut lost = crate::items::ItemStack::new("minecraft:stone", 1);
+        lost.data_mut()
+            .other
+            .push(("minecraft:custom_data".into(), deep));
+        let mut ender = vec![None; 27];
+        ender[0] = Some(lost);
+        ender[1] = Some(crate::items::ItemStack::new("minecraft:diamond", 2));
+        let mut level = Level {
+            inventory: vec![(0, "minecraft:torch".into(), 4, 0)],
+            ender_items: ender,
+            ..Level::default()
+        };
+        level.write_player(&dir).unwrap();
+
+        let file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(level.player_uuid.unwrap())));
+        let saved = read_dat(&file).unwrap();
+        let ender = decode_items(saved.get("EnderItems"), 27);
+        assert_eq!(ender[0], None);
+        assert_eq!(
+            ender[1].as_ref().map(|s| (&*s.item, s.count)),
+            Some(("minecraft:diamond", 2))
+        );
+        let inventory = decode_items(saved.get("Inventory"), 36);
+        assert_eq!(
+            inventory[0].as_ref().map(|s| (&*s.item, s.count)),
+            Some(("minecraft:torch", 4))
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

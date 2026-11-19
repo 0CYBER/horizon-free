@@ -184,6 +184,50 @@ pub fn within_depth(root: &Tag, limit: usize) -> bool {
     true
 }
 
+/// Whether [`write_named`] writes `root` inside the supplied NBT container bound: the same walk
+/// as [`within_depth`], with the writer's own accounting. A mixed-type list writes every element
+/// that is not a compound (and every one-key compound with an empty name) inside a synthetic
+/// compound layer, which costs two writer levels where [`within_depth`] counts one, so a tag that
+/// fits that bound can still be one the writer refuses.
+pub fn within_writer_depth(root: &Tag, limit: usize) -> bool {
+    let mut work = vec![(root, 0)];
+    while let Some((tag, depth)) = work.pop() {
+        match tag {
+            Tag::List(values) => {
+                if depth >= limit {
+                    return false;
+                }
+                let first = values.first().map_or(0, Tag::id);
+                let id = if values.iter().any(|v| v.id() != first) {
+                    10
+                } else {
+                    first
+                };
+                for value in values {
+                    let wrapper = matches!(value, Tag::Compound(c) if c.len() == 1 && c.contains_key(&JavaString::default()));
+                    if id == 10 && (value.id() != 10 || wrapper) {
+                        // The synthetic layer itself, then the value one level below it.
+                        if depth + 1 >= limit {
+                            return false;
+                        }
+                        work.push((value, depth + 2));
+                    } else {
+                        work.push((value, depth + 1));
+                    }
+                }
+            }
+            Tag::Compound(values) => {
+                if depth >= limit {
+                    return false;
+                }
+                work.extend(values.values().map(|v| (v, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamedTag {
     pub name: JavaString,
@@ -1539,6 +1583,41 @@ mod tests {
             };
             let e = write_named(&root, limits).unwrap_err();
             assert_eq!(e.offset, expected.len() - last, "{units:?}");
+        }
+    }
+    #[test]
+    fn writer_depth_counts_the_synthetic_layer_a_mixed_list_adds() {
+        // A mixed-type list writes every element that is not a compound inside a
+        // synthetic compound layer, one writer level deeper than `within_depth` counts.
+        let mixed = |levels: usize| {
+            let mut tag = Tag::List(vec![Tag::Int(1), Tag::Int(2)]);
+            for _ in 0..levels {
+                tag = Tag::List(vec![tag, Tag::Int(0)]);
+            }
+            tag
+        };
+        assert!(within_depth(&mixed(1), 2));
+        assert!(!within_writer_depth(&mixed(1), 2));
+        for levels in 0..8 {
+            let tag = mixed(levels);
+            for max_depth in 1..12 {
+                let written = write_named(
+                    &NamedTag {
+                        name: JavaString::default(),
+                        tag: tag.clone(),
+                    },
+                    Limits {
+                        max_depth,
+                        ..Limits::default()
+                    },
+                )
+                .is_ok();
+                assert_eq!(
+                    within_writer_depth(&tag, max_depth),
+                    written,
+                    "levels {levels}, max_depth {max_depth}"
+                );
+            }
         }
     }
     #[test]
