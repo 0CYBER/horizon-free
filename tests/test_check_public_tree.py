@@ -57,5 +57,82 @@ class HistoryScopeTests(unittest.TestCase):
             self.assertEqual(check(directory, "--history").returncode, 1)
 
 
+TABLE = "".join(f'"minecraft:stone.{index}": 1,\n' for index in range(60))
+
+
+class MergeScopeTests(unittest.TestCase):
+    """A range answers for what its commits add, not for what a merge brings in from main."""
+
+    def commit(self, directory, name, text):
+        (Path(directory) / name).write_text(text)
+        git(directory, "add", "-A")
+        git(directory, "commit", "-qm", name)
+
+    def branch_behind_main(self, directory):
+        """`feature` forks from main's first commit; main then moves on to `moved`."""
+        git(directory, "init", "-q", "-b", "main")
+        self.commit(directory, "readme.md", "public\n")
+        git(directory, "checkout", "-qb", "feature")
+        self.commit(directory, "feature.md", "feature\n")
+        git(directory, "checkout", "-q", "main")
+        self.commit(directory, "moved.md", "main moved\n")
+
+    def test_a_table_main_once_held_does_not_fail_a_branch_that_merged_that_commit(self):
+        with TemporaryDirectory() as directory:
+            self.branch_behind_main(directory)
+            self.commit(directory, "old_table.json", TABLE)
+            git(directory, "tag", "held")
+            (Path(directory) / "old_table.json").unlink()
+            git(directory, "add", "-A")
+            git(directory, "commit", "-qm", "gone")
+            git(directory, "checkout", "-q", "feature")
+            git(directory, "merge", "-q", "--no-edit", "held")
+            result = check(directory, "--range", "main..feature")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_table_a_merge_itself_adds_fails(self):
+        with TemporaryDirectory() as directory:
+            self.branch_behind_main(directory)
+            git(directory, "checkout", "-q", "feature")
+            git(directory, "merge", "-q", "--no-commit", "--no-ff", "main")
+            (Path(directory) / "hidden.json").write_text(TABLE)
+            git(directory, "add", "-A")
+            git(directory, "commit", "-qm", "merge")
+            result = check(directory, "--range", "main..feature")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("hidden.json", result.stderr)
+
+    def test_a_table_in_a_conflict_resolution_fails(self):
+        with TemporaryDirectory() as directory:
+            git(directory, "init", "-q", "-b", "main")
+            self.commit(directory, "data.json", "base\n")
+            git(directory, "checkout", "-qb", "feature")
+            self.commit(directory, "data.json", "feature\n")
+            git(directory, "checkout", "-q", "main")
+            self.commit(directory, "data.json", "main\n")
+            git(directory, "checkout", "-q", "feature")
+            subprocess.run(["git", "-C", directory, "merge", "-q", "main"], capture_output=True)
+            (Path(directory) / "data.json").write_text(TABLE)
+            git(directory, "add", "-A")
+            git(directory, "commit", "-qm", "resolved")
+            result = check(directory, "--range", "main..feature")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("data.json", result.stderr)
+
+    def test_a_table_from_a_side_branch_fails_through_its_own_commit(self):
+        with TemporaryDirectory() as directory:
+            self.branch_behind_main(directory)
+            git(directory, "checkout", "-qb", "side", "feature")
+            self.commit(directory, "side.json", TABLE)
+            (Path(directory) / "side.json").unlink()
+            git(directory, "add", "-A")
+            git(directory, "commit", "-qm", "removed again")
+            git(directory, "checkout", "-q", "feature")
+            git(directory, "merge", "-q", "--no-edit", "--no-ff", "side")
+            result = check(directory, "--range", "main..feature")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("side.json", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

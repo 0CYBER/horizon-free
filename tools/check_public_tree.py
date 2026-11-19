@@ -107,27 +107,30 @@ def candidate_blobs(revisions, baseline):
     paths are seen, and -m includes merge-resolution-only changes. Only the changed blobs are read,
     never a full tree per commit.
     """
-    # Raw merge-parent diffs enumerate the actual outgoing blobs without constructing patches.
-    # A -G shortlist without merge diffs misses merge-only additions; adding -m makes it spend
-    # minutes diffing every large historical merge. Scan each unique changed blob instead, with
-    # table_blobs()' cheap literal filters before the fingerprint regexes. This keeps every merge
-    # parent and the full published history in scope, including tables later deleted.
+    # -c lists a merge's file only when it differs from every parent: what the merge itself adds, a
+    # conflict resolution included. A file taken unchanged from a parent is that parent's own commit's
+    # addition, scanned there when the parent is in scope and already public when it is not. Diffing a
+    # merge against each parent instead lists all of main for a branch that merged it (185,000 blobs,
+    # each its own fetch in CI's blob-less clone, past the job's 30 minutes).
     # Full object ids: baseline blobs come from ls-tree (40 hex in SHA-1, 64 in SHA-256 repos), so a
     # truncated candidate id would never compare equal and a grandfathered blob would look new.
-    out = git_output("log", "--format=", "--raw", "-z", "-m", "--no-renames", "--no-abbrev",
+    out = git_output("log", "--format=", "--raw", "-z", "-c", "--no-renames", "--no-abbrev",
                      *revisions, "--")
     fields = out.decode("utf-8", "surrogateescape").split("\0")
     candidates = set()
     for index in range(0, len(fields) - 1, 2):
         metadata, path = fields[index].lstrip("\n"), fields[index + 1]
-        if not metadata.startswith(":") or not path:
+        # `:mode mode blob blob status` for a commit, one more colon, mode and blob per extra parent
+        # for a merge: the result's mode and blob are the last of each.
+        parents = len(metadata) - len(metadata.lstrip(":"))
+        if not parents or not path:
             continue
-        parts = metadata[1:].split()
-        if len(parts) < 5 or parts[4] not in ("A", "M", "T"):
+        parts = metadata[parents:].split()
+        if len(parts) < 2 * parents + 3:
             continue
-        if parts[1] == "160000":  # A gitlink names a commit, not a file blob.
+        mode, blob = parts[parents], parts[2 * parents + 1]
+        if mode in ("000000", "160000"):  # Deleted, or a gitlink: it names a commit, not a file blob.
             continue
-        blob = parts[3]
         # Retired paths are the documented legacy exception: allowed in history, denied in the tree.
         if path in RETIRED_TABLES or blob in baseline:
             continue
