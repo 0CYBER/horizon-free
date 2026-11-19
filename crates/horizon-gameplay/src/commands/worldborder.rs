@@ -73,7 +73,7 @@ pub fn worldborder(host: &mut dyn WorldborderHost, id: &str, ctx: &Context) -> R
     match id {
         "worldborder.get" => {
             let size = host.border_size();
-            host.feedback(Text::translate(
+            host.feedback_unbroadcast(Text::translate(
                 "commands.worldborder.get",
                 &[Text::literal(percent_f(size, 0))],
             ));
