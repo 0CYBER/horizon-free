@@ -464,14 +464,15 @@ impl StateModels {
             .map(|(name, ..)| library.resolve(name))
             .collect();
         // Every texture the models name, decoded side by side before the bake adds them one
-        // by one in its own order.
-        sprites.prefetch(
-            resolved
-                .iter()
-                .flatten()
-                .flat_map(|model| model.textures.values())
-                .map(|material| material.sprite.as_str()),
-        );
+        // by one in its own order, as many as the renderer's arrays hold.
+        let named: Vec<&str> = resolved
+            .iter()
+            .flatten()
+            .flat_map(|model| model.textures.values())
+            .map(|material| material.sprite.as_str())
+            .collect();
+        sprites.plan_within_capacity(named.iter().copied());
+        sprites.prefetch(named);
         let mut baked = Vec::with_capacity(variants.len());
         let mut index = BTreeMap::new();
         for ((name, turns, lock), model) in variants.into_iter().zip(resolved) {

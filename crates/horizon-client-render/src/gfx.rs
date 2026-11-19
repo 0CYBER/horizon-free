@@ -1887,7 +1887,7 @@ fn adapter_requested_split(info: &wgpu::AdapterInfo, asked: Option<u32>, n: u32)
     asked.or((info.backend == wgpu::Backend::Metal).then(|| n.div_ceil(SPRITE_ARRAYS).max(512)))
 }
 /// The split the CPU mip chains are cut by before the adapter is known.
-fn sprite_split() -> u32 {
+pub(crate) fn sprite_split() -> u32 {
     requested_split().unwrap_or(SPRITE_SPLIT)
 }
 /// The block sprite layers per texture array on an adapter that holds
@@ -1914,7 +1914,7 @@ fn layer_split(
     Ok(split)
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
-const SPRITE_ARRAYS: u32 = 8;
+pub(crate) const SPRITE_ARRAYS: u32 = 8;
 /// The layers to give a square texture of `count` layers viewed as a 2D
 /// array. wgpu's OpenGL backend picks a texture's target from its layer
 /// count when it is created: one layer makes a 2D texture and a multiple of

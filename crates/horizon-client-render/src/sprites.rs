@@ -145,7 +145,22 @@ pub struct Sprites {
     /// Textures [`Sprites::prefetch`] decoded ahead of their insert, by sprite name or
     /// resource path.
     ready: std::collections::HashMap<String, crate::sprite_cache::Decoded>,
+    /// Textures past [`max_layers`] that the missing texture stands in for
+    /// ([`Sprites::plan_within_capacity`]).
+    dropped: std::collections::HashSet<String>,
+    /// The one missing texture layer those share.
+    overflow_layer: Option<u32>,
 }
+/// The most block sprite layers the renderer draws from: its arrays
+/// (`gfx::SPRITE_ARRAYS`) of the layers known before the GPU is (`gfx::sprite_split`,
+/// 2048 unless `HORIZON_SPRITE_SPLIT` asks for fewer). A GPU that holds fewer per array
+/// still refuses more, as before.
+pub fn max_layers() -> usize {
+    crate::gfx::SPRITE_ARRAYS as usize * crate::gfx::sprite_split() as usize
+}
+/// Layers [`Sprites::plan_within_capacity`] keeps free for what later loaders add
+/// (connected-texture tiles, run-time sprites).
+const LATE_LAYERS: usize = 512;
 /// Edge length of vanilla's block textures: the smallest array layer.
 pub const SPRITE_SIZE: u32 = 16;
 /// The largest sprite array (all layers of the top mip level) when the settings leave it to
@@ -396,6 +411,9 @@ impl Sprites {
     }
     /// Like `insert`, but refuses unreadable or oversized PNG data before decoding.
     pub fn insert_limited(&mut self, name: &str, max: u64) -> Result<u32> {
+        if self.dropped.contains(name) {
+            return Ok(self.overflow_layer());
+        }
         let bytes = self.limited_png(name, max)?;
         if let Some(layer) = self.layers.get(name) {
             return Ok(*layer);
@@ -410,6 +428,9 @@ impl Sprites {
         if let Some(layer) = self.layers.get(name) {
             return Ok(*layer);
         }
+        if self.dropped.contains(name) {
+            return Ok(self.overflow_layer());
+        }
         let loaded = self.load(name, None);
         self.or_missing(name, loaded)
     }
@@ -422,28 +443,106 @@ impl Sprites {
                 if name != "minecraft:missingno" {
                     log::warn!("Horizon: using the missing texture for {name}: {e}");
                 }
-                // MissingTextureAtlasSprite.generateMissingImage: 16x16,
-                // magenta and black quarters.
-                let frame: Vec<u8> = (0..SPRITE_SIZE * SPRITE_SIZE)
-                    .flat_map(|i| {
-                        let (x, y) = (i % SPRITE_SIZE, i / SPRITE_SIZE);
-                        if (y < SPRITE_SIZE / 2) ^ (x < SPRITE_SIZE / 2) {
-                            [248, 0, 248, 255]
-                        } else {
-                            [0, 0, 0, 255]
-                        }
-                    })
-                    .collect();
-                let layer = u32::try_from(self.native.len())?;
-                self.opaque.push(true);
-                self.pbr.push([None, None]);
-                self.translucent.push(false);
-                self.mips.push(crate::mipmap::Settings::default());
+                // Past the renderer's layers, the shared missing texture.
+                let layer = if self.full() {
+                    self.overflow_layer()
+                } else {
+                    self.push_missing()?
+                };
                 self.layers.insert(name.to_owned(), layer);
-                self.native.push((SPRITE_SIZE, Arc::new(vec![frame]), 0));
                 Ok(layer)
             }
         }
+    }
+    /// A new layer of vanilla's missing texture (`MissingTextureAtlasSprite.generateMissingImage`:
+    /// 16x16, magenta and black quarters), under no name.
+    fn push_missing(&mut self) -> Result<u32> {
+        let frame: Vec<u8> = (0..SPRITE_SIZE * SPRITE_SIZE)
+            .flat_map(|i| {
+                let (x, y) = (i % SPRITE_SIZE, i / SPRITE_SIZE);
+                if (y < SPRITE_SIZE / 2) ^ (x < SPRITE_SIZE / 2) {
+                    [248, 0, 248, 255]
+                } else {
+                    [0, 0, 0, 255]
+                }
+            })
+            .collect();
+        let layer = u32::try_from(self.native.len())?;
+        self.opaque.push(true);
+        self.pbr.push([None, None]);
+        self.translucent.push(false);
+        self.mips.push(crate::mipmap::Settings::default());
+        self.native.push((SPRITE_SIZE, Arc::new(vec![frame]), 0));
+        Ok(layer)
+    }
+    /// Whether one more layer would pass [`max_layers`] (keeping room for the shared missing
+    /// texture's own).
+    fn full(&self) -> bool {
+        self.native.len() + usize::from(self.overflow_layer.is_none()) >= max_layers()
+    }
+    /// Fit a loader's textures (`names`, about to be inserted) within [`max_layers`], with
+    /// room left for later loaders: past it the GPU arrays can't hold them and the game
+    /// would not start. The mod namespaces with the most new textures give theirs up first,
+    /// in reverse name order, until the rest fit; the missing texture stands in for them.
+    /// Vanilla's textures are never given up. A pack that fits is left as it is.
+    pub fn plan_within_capacity<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) {
+        self.plan_within(names, max_layers().saturating_sub(LATE_LAYERS));
+    }
+    fn plan_within<'a>(&mut self, names: impl IntoIterator<Item = &'a str>, capacity: usize) {
+        let new: std::collections::BTreeSet<&str> = names
+            .into_iter()
+            .filter(|n| !self.layers.contains_key(*n) && !self.dropped.contains(*n))
+            .collect();
+        let mut over = (self.native.len() + new.len()).saturating_sub(capacity);
+        if over == 0 {
+            return;
+        }
+        // The missing texture's own layer.
+        over += usize::from(self.overflow_layer.is_none());
+        let mut by_namespace: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for name in &new {
+            match name.split_once(':') {
+                Some((ns, _)) if ns != "minecraft" => {
+                    by_namespace.entry(ns).or_default().push(name)
+                }
+                _ => {}
+            }
+        }
+        let mut namespaces: Vec<_> = by_namespace.into_iter().collect();
+        namespaces.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
+        let mut given_up = Vec::new();
+        // Each name keeps a layer, the missing texture's: geometry that finds its sprites by
+        // name (`sprite_layers`, a native mod's section geometry) draws the checkerboard
+        // instead of leaving the face out.
+        let missing = self.overflow_layer();
+        for (ns, names) in namespaces {
+            if over == 0 {
+                break;
+            }
+            let take = names.len().min(over);
+            for name in names.iter().rev().take(take) {
+                self.dropped.insert((*name).to_owned());
+                self.layers.insert((*name).to_owned(), missing);
+            }
+            over -= take;
+            given_up.push(format!("{ns} ({take})"));
+        }
+        log::warn!(
+            "Horizon: block textures past the {} layers the renderer draws from; \
+             the missing texture stands in for {}",
+            max_layers(),
+            given_up.join(", ")
+        );
+    }
+    /// The missing texture layer the textures past [`max_layers`] share, under no name of its
+    /// own.
+    fn overflow_layer(&mut self) -> u32 {
+        if let Some(layer) = self.overflow_layer {
+            return layer;
+        }
+        let layer = self.push_missing().unwrap_or(0);
+        self.overflow_layer = Some(layer);
+        layer
     }
     /// Decode on every thread the textures about to be inserted: sprite names, or resource
     /// paths outside `textures/` (as [`Sprites::insert_file`] takes them). A loader that adds
@@ -456,6 +555,7 @@ impl Sprites {
             .into_iter()
             .filter(|name| {
                 !self.layers.contains_key(*name)
+                    && !self.dropped.contains(*name)
                     && !self.ready.contains_key(*name)
                     && self.disk.as_ref().is_none_or(|d| d.get(name).is_none())
             })
@@ -609,7 +709,9 @@ impl Sprites {
             .collect::<Result<Vec<_>>>()?;
         // Where Fusion doesn't draw the sheet (items, other models), the lone tile rather than
         // the whole sheet squeezed square, whose size would set every layer's.
-        if let (Some(&own), Some(&first)) = (self.layers.get(name), tiles.iter().flatten().next()) {
+        if let (Some(&own), Some(&first)) = (self.layers.get(name), tiles.iter().flatten().next())
+            && Some(own) != self.overflow_layer
+        {
             self.show_as(own, first);
         }
         Ok(tiles)
@@ -789,6 +891,13 @@ impl Sprites {
             self.layers.insert(name.to_owned(), same);
             return Ok(same);
         }
+        // Past what the renderer draws from, a texture no plan foresaw shows missing too
+        // (with room for the missing texture's own layer).
+        if self.full() {
+            let layer = self.overflow_layer();
+            self.layers.insert(name.to_owned(), layer);
+            return Ok(layer);
+        }
         if let Some(key) = still {
             self.still.insert(key, layer);
         }
@@ -966,6 +1075,38 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Past the arrays' layers, the namespaces with the most new textures give theirs up
+    /// first and share the missing texture, under their own names; vanilla's are never
+    /// given up.
+    #[test]
+    fn textures_past_the_layers_give_way_by_namespace() {
+        let mut sprites = Sprites::default();
+        let names = [
+            "big:block/a",
+            "big:block/b",
+            "big:block/c",
+            "small:block/x",
+            "minecraft:block/stone",
+        ];
+        sprites.plan_within(names, 4);
+        // Five new and four fit, one of them the missing texture's: two give way.
+        let dropped: std::collections::BTreeSet<_> = sprites.dropped.iter().cloned().collect();
+        assert_eq!(
+            dropped,
+            ["big:block/b".to_owned(), "big:block/c".to_owned()].into()
+        );
+        let missing = sprites.insert("big:block/c").unwrap();
+        assert_eq!(sprites.insert("big:block/b").unwrap(), missing);
+        assert_eq!(sprites.count(), 1);
+        // Found by name too, as geometry that never inserts looks them up.
+        assert_eq!(sprites.layers.get("big:block/b"), Some(&missing));
+        assert_eq!(sprites.layers.get("big:block/a"), None);
+        // A load that fits gives nothing up.
+        let mut fits = Sprites::default();
+        fits.plan_within(names, 5);
+        assert!(fits.dropped.is_empty());
+    }
     use std::fs::{self, File};
     #[test]
     fn archive_sprites_keep_deferred_reads_and_cache_on_their_reload_snapshot() -> Result<()> {
