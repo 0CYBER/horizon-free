@@ -70,6 +70,23 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
     fn empty(&self, p: [i32; 3]) -> bool {
         self.w.facts.is_air(self.w.world.block(p[0], p[1], p[2]))
     }
+    fn inside_collision(&self, at: Vec3) -> bool {
+        let p = BlockPos::containing(at);
+        let state = self.w.world.block(p.x, p.y, p.z);
+        if self.w.facts.is_air(state) {
+            return false;
+        }
+        let mut scene = SceneCollisions {
+            world: self.w.world,
+            binding: self.w.collision,
+            subject: None,
+        };
+        let origin = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+        self.w
+            .collision
+            .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+            .is_ok_and(|s| s.boxes().iter().any(|b| b.move_by(origin).contains(at)))
+    }
     /// `WebBlock.entityInside` and `PowderSnowBlock.entityInside`.
     fn stuck_speed(&self, p: [i32; 3]) -> Option<Vec3> {
         horizon_client::projectiles::stuck_speed_of(

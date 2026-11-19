@@ -445,6 +445,11 @@ pub trait ProjectileWorld {
     fn empty(&self, _p: [i32; 3]) -> bool {
         true
     }
+    /// The check that opens `AbstractArrow.tick`: `at` lies inside one of the
+    /// collision boxes of the block it is in.
+    fn inside_collision(&self, _at: Vec3) -> bool {
+        false
+    }
     /// `Level.loadedAndEntityCanStandOn(p, projectile)` with the projectile's
     /// feet at `entity_y`: the top face of the block's collision shape is
     /// full (`Block.isFaceFull`), as on a top slab, not only a full cube.

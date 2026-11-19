@@ -411,6 +411,18 @@ impl ArrowScene<'_, '_> {
     fn is_air(&self, state: BlockStateId) -> bool {
         self.facts.is_air(state)
     }
+    /// The check that opens `AbstractArrow.tick`: `at` lies inside one of the
+    /// collision boxes of the block it is in.
+    pub fn inside_collision(&self, at: Vec3) -> bool {
+        let p = BlockPos::containing(at);
+        let state = self.block(p);
+        let origin = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+        !self.is_air(state)
+            && self
+                .collision_boxes(state, p)
+                .iter()
+                .any(|b| b.move_by(origin).contains(at))
+    }
     /// `BlockState.getCollisionShape(level, pos)` (an empty collision context).
     fn collision_boxes(&self, state: BlockStateId, p: BlockPos) -> Vec<Aabb> {
         let mut scene = SceneCollisions {
@@ -770,19 +782,13 @@ impl Ticker<'_, '_, '_, '_> {
         let block_pos = self.block_position();
         let state = self.scene.block(block_pos);
         if !self.scene.is_air(state) && physics {
-            let origin = Vec3::new(
-                f64::from(block_pos.x),
-                f64::from(block_pos.y),
-                f64::from(block_pos.z),
-            );
-            let at = self.position();
-            let inside = self
-                .scene
-                .collision_boxes(state, block_pos)
-                .iter()
-                .any(|b| b.move_by(origin).contains(at));
+            let inside = self.scene.inside_collision(self.position());
             if inside && !self.st.canceled_impact_inside {
                 self.p.velocity = Vec3::ZERO;
+                // `setInGround(true)`: `onSyncedDataUpdated` starts the shake.
+                if !self.st.in_ground && !self.st.first_tick && self.st.shake <= 0 {
+                    self.st.shake = 7;
+                }
                 self.st.in_ground = true;
             }
             self.st.canceled_impact_inside &= inside;

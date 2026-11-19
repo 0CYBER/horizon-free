@@ -56,6 +56,11 @@ pub struct ThrownTrident {
     pub last_state: Option<horizon_world::registry::BlockStateId>,
     /// `Projectile.lastDeflectedBy`: the breeze that already turned this trident.
     pub deflected_by: Option<u32>,
+    /// `Entity.firstTick`: cleared by `baseTick`, which a stuck trident never reaches.
+    pub first_tick: bool,
+    /// A mod canceled its block hit and it stands inside that shape: it flies
+    /// on until it has left it.
+    pub canceled_impact_inside: bool,
     /// `Entity.tickCount`: `ProjectileUtil.computeMargin` grows with it.
     pub age: u32,
     /// The entity id a server sent as its owner (the one Loyalty returns it to).
@@ -190,8 +195,24 @@ impl ThrownTrident {
             guest: None,
             random: horizon_client::projectiles::unique_random(position),
             deflected_by: None,
+            first_tick: true,
+            canceled_impact_inside: false,
             last_state: None,
         }
+    }
+    /// The check that opens `AbstractArrow.tick`, with `inside` its answer: a
+    /// position inside the block's collision shape stops the trident.
+    /// `setInGround(true)` starts the shake (`onSyncedDataUpdated`), except on
+    /// the first tick or over a shake still running.
+    pub fn settle_inside_block(&mut self, inside: bool) {
+        if inside && !self.canceled_impact_inside {
+            self.velocity = Vec3::ZERO;
+            if !self.in_ground && !self.first_tick && self.shake <= 0 {
+                self.shake = 7;
+            }
+            self.in_ground = true;
+        }
+        self.canceled_impact_inside &= inside;
     }
     /// `Entity.noPhysics`, with the synced flag a client reads
     /// (`AbstractArrow`'s entity-data flags, bit 1): the tracker sends them
@@ -299,7 +320,6 @@ impl ThrownTrident {
     /// server decides what it hits.
     pub fn remote_tick(&mut self, w: &impl ProjectileWorld, owner_eye: Option<Vec3>) {
         self.previous = self.position;
-        self.shake -= i32::from(self.shake > 0);
         if self.in_ground_time > 4 {
             self.dealt_damage = true;
         }
@@ -311,6 +331,9 @@ impl ThrownTrident {
             self.in_ground = false;
             self.loyalty_pull(eye);
         }
+        // AbstractArrow.tick opens here, before its `--shakeTime`.
+        self.settle_inside_block(!self.no_physics && w.inside_collision(self.position));
+        self.shake -= i32::from(self.shake > 0);
         // AbstractArrow.tick releases a changed block only on the server;
         // clients release from the non-SELF move after a piston push.
         if self.in_ground && !self.no_physics {
@@ -318,6 +341,8 @@ impl ThrownTrident {
             return;
         }
         self.in_ground_time = 0;
+        // A flight reaches `Entity.baseTick`, even one that hits a block below.
+        self.first_tick = false;
         // The same turn as the host's tick: a fifth of the way, `Mth.atan2`.
         self.turn_towards_movement();
         let m = self.velocity;
@@ -640,6 +665,88 @@ mod tests {
         home.remote_tick(&Air, None);
         // atan2(-1, -1) = -135: a fifth of the way is -27.
         assert!((home.yaw + 27.0).abs() < 1e-5, "yaw {}", home.yaw);
+    }
+
+    /// Solid below y 100.
+    struct Solid;
+    impl ProjectileWorld for Solid {
+        fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            None
+        }
+        fn in_water(&self, _: Aabb) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &[]
+        }
+        fn inside_collision(&self, at: Vec3) -> bool {
+            at.y < 100.0
+        }
+    }
+
+    /// `AbstractArrow.tick` runs on a guest too: a position inside a collision
+    /// box stops the trident where it is, unless it flies without physics.
+    #[test]
+    fn a_remote_trident_inside_a_block_stops() {
+        let start = Vec3::new(0.5, 99.5, 0.5);
+        let mut trident = ThrownTrident::remote(1, start, 0.0, 0.0);
+        trident.velocity = Vec3::new(0.5, 0.0, 0.0);
+        trident.remote_tick(&Solid, None);
+        assert!(trident.in_ground);
+        assert_eq!((trident.position, trident.velocity), (start, Vec3::ZERO));
+
+        let mut ghost = ThrownTrident::remote(2, start, 0.0, 0.0);
+        ghost.no_physics = true;
+        ghost.velocity = Vec3::new(0.5, 0.0, 0.0);
+        ghost.remote_tick(&Solid, None);
+        assert!(!ghost.in_ground);
+        assert_eq!(ghost.position, Vec3::new(1.0, 99.5, 0.5));
+    }
+
+    /// `AbstractArrow.onSyncedDataUpdated`: stopping starts a shake of 7, but
+    /// not on the first tick, not over a running shake, and not when it was
+    /// stuck already.
+    #[test]
+    fn stopping_inside_a_block_starts_the_shake_once_it_has_flown() {
+        let flown = || {
+            let mut t = ThrownTrident::remote(1, Vec3::new(0.5, 99.5, 0.5), 0.0, 0.0);
+            t.first_tick = false;
+            t
+        };
+        let mut t = flown();
+        t.settle_inside_block(true);
+        assert_eq!(t.shake, 7);
+
+        let mut first = flown();
+        first.first_tick = true;
+        first.settle_inside_block(true);
+        assert_eq!((first.in_ground, first.shake), (true, 0));
+
+        let mut shaking = flown();
+        shaking.shake = 3;
+        shaking.settle_inside_block(true);
+        assert_eq!(shaking.shake, 3);
+
+        let mut stuck = flown();
+        stuck.in_ground = true;
+        stuck.settle_inside_block(true);
+        assert_eq!(stuck.shake, 0);
+    }
+
+    /// A block hit a mod canceled leaves the trident flying while it stays
+    /// inside that shape; once out, the next shape stops it again.
+    #[test]
+    fn a_canceled_hit_flies_on_until_it_leaves_the_shape() {
+        let mut t = ThrownTrident::remote(1, Vec3::new(0.5, 99.5, 0.5), 0.0, 0.0);
+        t.velocity = Vec3::new(0.5, 0.0, 0.0);
+        t.canceled_impact_inside = true;
+        t.settle_inside_block(true);
+        assert!(!t.in_ground);
+        assert_eq!(t.velocity, Vec3::new(0.5, 0.0, 0.0));
+        t.settle_inside_block(false);
+        assert!(!t.canceled_impact_inside);
+        t.settle_inside_block(true);
+        assert!(t.in_ground);
     }
 
     #[test]
