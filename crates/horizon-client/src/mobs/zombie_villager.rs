@@ -379,6 +379,7 @@ mod tests {
             others_index: None,
             passenger_objects: &[],
             others_villagers: None,
+            species_slots: None,
             others_solid: None,
             daylight: true,
             monsters_burn: false,

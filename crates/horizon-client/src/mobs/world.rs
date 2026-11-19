@@ -1,7 +1,7 @@
 //! What mobs read from the level: block solidity, ray clipping for line of
 //! sight (`ClipContext.Block.COLLIDER`), sky visibility, light-dependent
 //! values and the positions of other entities.
-use super::{MobWorld, Seen, Who, data};
+use super::{MobWorld, Seen, Species, Who, data};
 use crate::{
     blocks::{BlockFacts, Fluid},
     collisions::SceneCollisions,
@@ -125,6 +125,7 @@ impl<'a> MobWorld<'a> {
             others_grid: None,
             others_index: None,
             others_villagers: None,
+            species_slots: None,
             others_solid: None,
             player: None,
             teams: std::sync::Arc::clone(&self.teams),
@@ -712,6 +713,61 @@ impl MobWorld<'_> {
         };
         own.or_else(|| self.foreign?.seen(id))
     }
+    /// [`Self::nearby`] for a `pred` that only accepts the mobs of `species`: the same mobs in the
+    /// same order, read from the species' slots when the loop keeps them and they are few,
+    /// instead of every entry the grid finds near `from`.
+    pub fn nearby_species<'s>(
+        &'s self,
+        from: Vec3,
+        range: f64,
+        species: &[Species],
+        pred: impl Fn(&Seen) -> bool + 's,
+    ) -> impl Iterator<Item = &'s Seen> + 's {
+        /// More slots than this and the grid's few cells are the cheaper read.
+        const MOST_SLOTS: usize = 512;
+        let Some(index) = self.species_slots else {
+            return Either::A(self.nearby(from, range, pred));
+        };
+        let total: usize = species.iter().map(|&s| index.of(s).len()).sum();
+        if total > MOST_SLOTS {
+            return Either::A(self.nearby(from, range, pred));
+        }
+        let r = range + 1.0;
+        let area = Aabb::new(
+            Vec3::new(from.x - r, from.y - r, from.z - r),
+            Vec3::new(from.x + r, from.y + r, from.z + r),
+        );
+        // `others_near`: the grid's candidates, or every entry when it has none for this area.
+        let columns = self
+            .others_grid
+            .and_then(|grid| grid.admission(area).map(|c| (grid, c)));
+        let mut slots: Vec<u32> = Vec::with_capacity(total);
+        for &s in species {
+            slots.extend_from_slice(index.of(s));
+        }
+        slots.sort_unstable();
+        slots.dedup();
+        let mut v: Vec<(f64, &Seen)> = slots
+            .into_iter()
+            .filter(|&i| columns.is_none_or(|(grid, c)| grid.in_columns(i, c)))
+            .map(|i| &self.others[i as usize])
+            .filter(|s| {
+                s.alive
+                    && (s.position.x - from.x).abs() <= range
+                    && (s.position.y - from.y).abs() <= range
+                    && (s.position.z - from.z).abs() <= range
+            })
+            .filter(move |s| pred(s))
+            .map(|s| {
+                let d = (s.position.x - from.x).powi(2)
+                    + (s.position.y - from.y).powi(2)
+                    + (s.position.z - from.z).powi(2);
+                (d, s)
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Either::B(v.into_iter().map(|(_, s)| s))
+    }
     /// Living mobs of the given species within `range` of `from`, nearest first.
     pub fn nearby<'s>(
         &'s self,
@@ -1020,6 +1076,7 @@ fn run_test_world(
         others_index: None,
         passenger_objects: &[],
         others_villagers: None,
+        species_slots: None,
         others_solid: None,
         daylight: true,
         monsters_burn: false,
@@ -1183,3 +1240,18 @@ mod missing_data_report_tests {
 #[cfg(test)]
 #[path = "visual_sight_tests.rs"]
 mod visual_sight_tests;
+
+/// One of two iterators of the same items.
+pub enum Either<A, B> {
+    A(A),
+    B(B),
+}
+impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Either<A, B> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        match self {
+            Self::A(a) => a.next(),
+            Self::B(b) => b.next(),
+        }
+    }
+}

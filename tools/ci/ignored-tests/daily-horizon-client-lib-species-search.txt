@@ -1,0 +1,2 @@
+# A target search reads the slots of its species (the grid search is the oracle).
+horizon-client-lib mobs::species_slots::tests::species_search_is_the_grid_search lib daily resources

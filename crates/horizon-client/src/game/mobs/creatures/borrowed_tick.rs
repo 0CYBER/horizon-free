@@ -142,6 +142,7 @@ impl Game<'_> {
         let mut index = horizon_client::fast_hash::FxHashMap::<u32, u32>::default();
         let mut villager_slots = Vec::new();
         let mut solid_slots = Vec::new();
+        let mut species_slots = horizon_client::mobs::species_slots::SpeciesSlots::new(&snapshot);
         for (i, s) in snapshot.iter().enumerate() {
             index.entry(s.id).or_insert(i as u32);
             if s.may_block_mobs() {
@@ -299,6 +300,7 @@ impl Game<'_> {
                                     others_grid: Some(&grid),
                                     others_index: Some(&index),
                                     others_villagers: Some(&villager_slots),
+                                    species_slots: Some(&species_slots),
                                     others_solid: Some(&solid_slots),
                                     live_mobs: None,
                                     ..base.clone()
@@ -441,6 +443,7 @@ impl Game<'_> {
                         others_grid: Some(&grid),
                         others_index: Some(&index),
                         others_villagers: Some(&villager_slots),
+                        species_slots: Some(&species_slots),
                         others_solid: Some(&solid_slots),
                         difficulty,
                         nearest_player,
@@ -636,7 +639,13 @@ impl Game<'_> {
                     keep[slot] = kept;
                     // ServerLevel ticks entities one after another: the ones
                     // after this mob see it as it is now.
-                    snapshot[slot] = seen(m, uuid, world_items!(self));
+                    let fresh = seen(m, uuid, world_items!(self));
+                    let reclassified = snapshot[slot].species != fresh.species;
+                    snapshot[slot] = fresh;
+                    if reclassified {
+                        species_slots =
+                            horizon_client::mobs::species_slots::SpeciesSlots::new(&snapshot);
+                    }
                     snapshot[slot].alive &= kept;
                     snapshot[slot].removed |= !kept;
                     grid.update(slot, snapshot[slot].bounds);
@@ -744,6 +753,7 @@ impl Game<'_> {
                 }
             }
             villager_slots.clear();
+            species_slots = horizon_client::mobs::species_slots::SpeciesSlots::new(&snapshot);
             solid_slots.clear();
             for (slot, s) in snapshot.iter().enumerate() {
                 if s.species == Species::Villager {

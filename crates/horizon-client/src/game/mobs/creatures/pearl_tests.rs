@@ -88,6 +88,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
         others_index: None,
         passenger_objects: &[],
         others_villagers: None,
+        species_slots: None,
         others_solid: None,
         daylight: true,
         monsters_burn: false,

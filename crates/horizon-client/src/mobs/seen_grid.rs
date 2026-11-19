@@ -77,6 +77,34 @@ impl SeenGrid {
         };
         list.insert(idx, i as u32);
     }
+    /// The columns `candidates(area, ..)` reads, as `((x0, z0), (x1, z1))`; `None` where it gives
+    /// up and the caller scans every entry. An entry `i` is among the candidates exactly when
+    /// [`Self::in_columns`] holds for it.
+    pub fn admission(&self, area: Aabb) -> Option<((i32, i32), (i32, i32))> {
+        let margin = self.reach + 1.0;
+        let min_x = area.min(Axis::X) - margin;
+        let min_z = area.min(Axis::Z) - margin;
+        let max_x = area.max(Axis::X);
+        let max_z = area.max(Axis::Z);
+        if !min_x.is_finite() || !min_z.is_finite() || !max_x.is_finite() || !max_z.is_finite() {
+            return None;
+        }
+        let lo = column(min_x, min_z);
+        let hi = column(max_x, max_z);
+        let span = |a: i32, b: i32| i64::from(b) - i64::from(a) + 1;
+        let (nx, nz) = (span(lo.0, hi.0), span(lo.1, hi.1));
+        let max_cells = (self.cell_of.len().max(self.entries) as i64).max(64);
+        if nx < 1 || nz < 1 || nx.saturating_mul(nz) > max_cells {
+            return None;
+        }
+        Some((lo, hi))
+    }
+    /// Whether entry `i`'s corner column is within the columns [`Self::admission`] gave.
+    #[inline]
+    pub fn in_columns(&self, i: u32, (lo, hi): ((i32, i32), (i32, i32))) -> bool {
+        let c = self.cell_of[i as usize];
+        lo.0 <= c.0 && c.0 <= hi.0 && lo.1 <= c.1 && c.1 <= hi.1
+    }
     /// The indices, ascending, of every entry whose box can meet `area`
     /// (a superset: callers still test it). False when the area spans more
     /// columns than the grid has entries (at least 64), or is not finite:

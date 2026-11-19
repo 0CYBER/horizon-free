@@ -37,6 +37,7 @@ impl Game<'_> {
             others_index: None,
             passenger_objects: &[],
             others_villagers: None,
+            species_slots: None,
             others_solid: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             // day.json: false from tick 12542, true from 23460 (a step track).
