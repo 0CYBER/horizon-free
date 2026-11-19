@@ -1527,7 +1527,8 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 let started = std::time::Instant::now();
-                let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
+                let played =
+                    horizon_launcher::launch::wrap(cmd, &instance.launch).and_then(attached);
                 if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                     eprintln!("Play time not saved: {e}");
                 }
@@ -1576,7 +1577,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
                 horizon_launcher::jars::Permission::headless(allow_jar_downloads),
             )
             .map_err(|error| error.to_string())?;
-            let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
+            let played = horizon_launcher::launch::wrap(cmd, &instance.launch).and_then(attached);
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }

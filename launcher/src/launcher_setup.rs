@@ -225,6 +225,7 @@ impl Launcher {
             owner_screen_open: false,
             starting_client: None,
             starting_instance: None,
+            pre_launch_stop: None,
             play_when_prepared: None,
             friend_code: line_edit::LineEdit::new(String::new(), 256, 32),
             friend_focused: false,

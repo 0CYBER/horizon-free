@@ -296,6 +296,14 @@ impl Launcher {
             .items_center()
             .gap(px(10.))
             .child(play)
+            .children(self.pre_launch_stoppable().then(|| {
+                action("pre-launch-cancel", Action::Quiet, &t)
+                    .child(label(tr("Cancel").to_string()))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.stop_pre_launch();
+                        cx.notify();
+                    }))
+            }))
             // Horizon's versions don't apply to a Java instance.
             .children((!java).then(|| self.picker(cx)))
             .child(

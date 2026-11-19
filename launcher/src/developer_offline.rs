@@ -260,7 +260,7 @@ mod tests {
                 env: [(key.to_string(), "reintroduced".to_string())].into(),
                 ..Default::default()
             };
-            let wrapped = crate::launch::wrap(command, &launch);
+            let wrapped = crate::launch::wrap(command, &launch).unwrap();
             assert!(validate(&wrapped).is_err(), "{key}");
         }
     }

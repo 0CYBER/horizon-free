@@ -109,7 +109,8 @@ impl Launcher {
             self.starting_client = Some(tag);
             // The jar phase keeps the row of the started instance on Starting.
             self.starting_instance = run.clone();
-            jar_launch::client(cmd, profile, launch, run, self.tx.clone());
+            let stop = self.pre_launch_stop_for(&launch);
+            jar_launch::client(cmd, profile, launch, stop, run, self.tx.clone());
         }
     }
 }

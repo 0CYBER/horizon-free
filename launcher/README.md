@@ -143,7 +143,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   (`nice -n 5`), and environment variables (`NAME=value OTHER="two words"`), kept in
   `instances.json` (`horizon_launcher::launch`). The game stays one process the launcher follows:
   on Unix `/bin/sh` runs the command and then `exec`s the wrapper and the game, whose words pass
-  through `"$@"` untouched; on Windows `cmd /C` runs `<command> && <game>`. Both the window's Play
+  through `"$@"` untouched; on Windows `cmd /C` runs the command to its end, then the wrapper and
+  the game start with their words as they are, never through cmd. While that command runs, Play's
+  Stop (Cancel in the classic layout) ends it with what it started, and so does closing the
+  launcher. On Windows a wrapper that is a shell (`cmd` or PowerShell) can't join
+  a server or open a world: it would read their names as commands. Both the window's Play
   and `play` use them. `horizon-launcher instance launch <instance> [--pre-launch …]
   [--wrapper …] [--env …]` (an MCP agent needs `confirm: true`: it sets commands Play runs).
   On Linux the panel also has switches for what the computer has: **GameMode** (`gamemoderun`

@@ -18,6 +18,7 @@ pub fn client(
     mut command: Command,
     profile: impl FnOnce(&mut Command) -> Result<(), String> + Send + 'static,
     launch: Launch,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     run: Option<String>,
     tx: Sender<Msg>,
 ) {
@@ -32,8 +33,8 @@ pub fn client(
             with_consent(&tx, |permission| {
                 jars::prepare_launch(&mut command, &launch, permission)
             })
-            .map(|()| launch::wrap(command, &launch))
             .map_err(|error| error.to_string())
+            .and_then(|()| launch::wrap_stoppable(command, &launch, &stop))
         });
         let _ = tx.send(Msg::JarClient {
             run,
@@ -112,7 +113,14 @@ mod tests {
             }
         };
         let run = Some("port:big".to_owned());
-        client(Command::new("game"), profile, Launch::default(), run, tx);
+        client(
+            Command::new("game"),
+            profile,
+            Launch::default(),
+            Default::default(),
+            run,
+            tx,
+        );
         let wait = std::time::Duration::from_secs(30);
         // It says its step first, then ends.
         let Msg::PlayStep(step) = rx.recv_timeout(wait).unwrap() else {

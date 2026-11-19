@@ -112,6 +112,8 @@ impl Launcher {
                 Msg::JavaGame(id, home, cmd) => {
                     self.starting_client = None;
                     self.starting_instance = None;
+                    let stop = self.pre_launch_stop.take();
+                    let cmd = horizon_launcher::launch::unless_stopped(cmd, stop.as_deref());
                     let spawned = cmd.and_then(|(cmd, vars)| {
                         self.client_vars = vars;
                         backend::spawn(Job::Client, cmd, self.tx.clone())
@@ -149,7 +151,8 @@ impl Launcher {
                 Msg::JarClient { run, prepared } => {
                     self.starting_client = None;
                     self.starting_instance = None;
-                    match *prepared {
+                    let stop = self.pre_launch_stop.take();
+                    match horizon_launcher::launch::unless_stopped(*prepared, stop.as_deref()) {
                         Ok(cmd) => {
                             self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                             match backend::spawn(Job::Client, cmd, self.tx.clone()) {

@@ -263,18 +263,49 @@ impl Launcher {
             Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
         self.starting_client = Some(instance.id.clone());
         self.starting_instance = Some(instance.id.clone());
+        let stop = self.pre_launch_stop_for(&instance.launch);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, server.as_deref(), &log).map(|mut cmd| {
+            let cmd = backend::java_game(&instance, server.as_deref(), &log).and_then(|mut cmd| {
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
-                (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
+                let launch = &instance.launch;
+                Ok((
+                    horizon_launcher::launch::wrap_stoppable(cmd, launch, &stop)?,
+                    vars,
+                ))
             });
             let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
         });
+    }
+
+    /// Whether the start under way can be stopped for its instance's pre-launch command, which
+    /// Windows runs to its end before the game.
+    pub(crate) fn pre_launch_stoppable(&self) -> bool {
+        self.pre_launch_stop.is_some()
+    }
+
+    /// Stops the start under way, its pre-launch command with what it started; once that
+    /// succeeded, the game still does not start.
+    pub(crate) fn stop_pre_launch(&self) {
+        if let Some(stop) = &self.pre_launch_stop {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// The Stop for a start with `launch`, handed to the start's thread; the window keeps it
+    /// ([`Self::pre_launch_stoppable`]) when Windows runs a pre-launch command.
+    pub(crate) fn pre_launch_stop_for(
+        &mut self,
+        launch: &horizon_launcher::launch::Launch,
+    ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        let stop = std::sync::Arc::default();
+        self.pre_launch_stop = (cfg!(windows) && !launch.pre_launch.trim().is_empty())
+            .then(|| std::sync::Arc::clone(&stop));
+        stop
     }
 
     /// Whether `tag` can start now ([`starts_now`]): prepared, no preparation under way, no game
