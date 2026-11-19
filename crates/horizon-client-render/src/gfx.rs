@@ -6126,6 +6126,7 @@ impl Renderer {
         {
             log::warn!("Horizon renderer: the window surface did not configure ({e})");
             self.frame_gen.refused = true;
+            self.surface_refused();
         }
     }
     /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
