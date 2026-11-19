@@ -2,15 +2,11 @@ use super::{loaded_motion, position, rotation};
 use horizon_core::geometry::Vec3;
 use horizon_core::nbt::Tag;
 
-/// `Entity.load` for a record with a saved position: clamp coordinates before
-/// rebuilding the box. Reject invalid positions; motion over 10 resets.
+/// `Entity.load` for a record with a saved position: `position` clamps the
+/// coordinates before the box is rebuilt. Reject invalid positions; motion
+/// over 10 resets.
 pub fn boat_from_nbt(tag: &Tag) -> Option<(Vec3, Vec3, f32)> {
     let p = position(tag)?;
-    let p = Vec3::new(
-        p.x.clamp(-30_000_512.0, 30_000_512.0),
-        p.y.clamp(-20_000_000.0, 20_000_000.0),
-        p.z.clamp(-30_000_512.0, 30_000_512.0),
-    );
     p.is_finite()
         .then(|| (p, loaded_motion(tag), rotation(tag)[0]))
 }

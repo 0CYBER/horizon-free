@@ -272,6 +272,26 @@ fn read_compound(record: &Value, uuid: u128) -> Result<(Tag, u128), String> {
 const MAX_XZ: f64 = 3.000_051_2e7;
 const MAX_Y: f64 = 2.0e7;
 
+/// The record's saved `Pos` as written: three finite doubles inside the world's
+/// limits. `read_player` clamps the position the way `Entity.load` does, so the
+/// raw values decide whether the record is acceptable at all.
+fn check_raw_position(tag: &Tag) -> Result<(), String> {
+    let Some(raw) = tag.get("Pos") else {
+        return Ok(());
+    };
+    // The same numeric decode `read_player` and vanilla's codec accept.
+    let Some(p) = crate::save::read_doubles::<3>(Some(raw)) else {
+        return Err("the record's position is not a number".into());
+    };
+    if !p.iter().all(|v| v.is_finite()) {
+        return Err("the record's position is not a number".into());
+    }
+    if p[0].abs() > MAX_XZ || p[2].abs() > MAX_XZ || p[1].abs() > MAX_Y {
+        return Err("the record's position is out of the world".into());
+    }
+    Ok(())
+}
+
 /// Refuses a compound whose values no player can have. `Entity.load` throws on a position or
 /// rotation that is not finite; a record comes from another machine, so it is checked rather
 /// than clamped, and a health of zero or less (a dead player) is refused too.
@@ -283,12 +303,6 @@ fn check_values(level: &Level, attributes: &Catalog) -> Result<(), String> {
             Err(format!("the record's {what} is not a number"))
         }
     };
-    if let Some(p) = level.position {
-        finite("position", &p)?;
-        if p[0].abs() > MAX_XZ || p[2].abs() > MAX_XZ || p[1].abs() > MAX_Y {
-            return Err("the record's position is out of the world".into());
-        }
-    }
     finite(
         "rotation",
         &[f64::from(level.rotation[0]), f64::from(level.rotation[1])],
@@ -535,6 +549,7 @@ pub fn import_player(
     {
         return Err("that player's record of another hand-over was imported".into());
     }
+    check_raw_position(&tag)?;
     let mut level = Level::default();
     level.read_player(&tag);
     check_values(&level, attributes)?;
@@ -638,5 +653,37 @@ fn playerdata_dimension(level: &Level) -> String {
     match level.dimension.as_str() {
         "" => "minecraft:overworld".to_owned(),
         d => d.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The raw check reads `Pos` with the same numeric codec the load does,
+    /// and refuses what no player can have.
+    #[test]
+    fn a_raw_position_accepts_numeric_tags_and_refuses_nan_and_the_far_world() {
+        let doubles = |v: [f64; 3]| {
+            Tag::compound([(
+                "Pos",
+                Tag::List(v.map(|v| Tag::Double(v.to_bits())).to_vec()),
+            )])
+        };
+        assert!(check_raw_position(&doubles([8.5, 64.0, -2.5])).is_ok());
+        assert!(
+            check_raw_position(&Tag::compound([(
+                "Pos",
+                Tag::List(vec![
+                    Tag::Int(8),
+                    Tag::Float(64.0f32.to_bits()),
+                    Tag::Long(-2),
+                ]),
+            )]))
+            .is_ok()
+        );
+        assert!(check_raw_position(&doubles([f64::NAN, 64.0, 0.0])).is_err());
+        assert!(check_raw_position(&doubles([40_000_000.0, 64.0, 0.0])).is_err());
+        assert!(check_raw_position(&Tag::Compound(Default::default())).is_ok());
     }
 }

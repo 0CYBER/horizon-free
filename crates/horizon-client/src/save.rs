@@ -3763,7 +3763,8 @@ impl Level {
         self.player_fall_particles = None;
         let n = |k: &str| number(p.get(k));
         let f = |k: &str| float(p.get(k));
-        self.position = read_doubles::<3>(p.get("Pos"));
+        self.position =
+            read_doubles::<3>(p.get("Pos")).map(crate::entity_nbt::clamp_loaded_position);
         if let Some(r) = read_doubles::<2>(p.get("Rotation")) {
             self.rotation = [r[0] as f32, r[1] as f32];
         }
