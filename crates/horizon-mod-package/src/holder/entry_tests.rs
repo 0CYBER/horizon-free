@@ -81,6 +81,88 @@ fn bounded_record_authentication_roots_and_file_replacement_are_enforced() {
 }
 #[cfg(unix)]
 #[test]
+fn symlinked_ancestor_in_launch_roots_publishes_and_acquires() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    let var_home = root_path.join("var/home");
+    let player = var_home.join("player");
+    let real_data = player.join(".local/share/horizon-launcher");
+    let real_install = real_data.join("versions/game");
+    let real_game = player.join(".local/share/horizon");
+    for dir in [&real_install, &real_game] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(real_install.join(".installed"), b"").unwrap();
+    let real_executable = real_install.join("horizon-client");
+    fs::write(&real_executable, b"test image").unwrap();
+
+    // Simulate atomic Linux distros (e.g. Fedora Silverblue) where /home -> /var/home.
+    let symlink_home = root_path.join("home");
+    std::os::unix::fs::symlink(&var_home, &symlink_home).unwrap();
+    let aliased_game = symlink_home.join("player/.local/share/horizon");
+    let aliased_executable =
+        symlink_home.join("player/.local/share/horizon-launcher/versions/game/horizon-client");
+
+    let mut command = Command::new(&aliased_executable);
+    command
+        .current_dir(&aliased_game)
+        .env("HORIZON_HOME", &aliased_game);
+    let selection = crate::selection::LaunchArguments::for_command(&command).unwrap();
+    let canonical_exec = aliased_executable.canonicalize().unwrap();
+    let canonical_data = symlink_home
+        .join("player/.local/share/horizon-launcher")
+        .canonicalize()
+        .unwrap();
+    let trees =
+        managed_lease_paths(&canonical_exec, &selection, &canonical_data, &aliased_game).unwrap();
+    let program = Program {
+        executable: aliased_executable.into_os_string(),
+        arguments: vec![],
+        environment: vec![],
+        directory: aliased_game.clone(),
+        raw_windows: None,
+    };
+    let _prepared = Prepared::new(canonical_data, trees, program, &selection.context).unwrap();
+
+    // Also verify record::Reference::publish and acquire succeed when game_dir is canonical
+    // (as from getcwd) while home still traverses the symlinked ancestor (as from $HOME).
+    let registry = Registry::with_release(&real_data, crate::locks::Release::Close).unwrap();
+    let install_snapshot = Snapshot::capture(&real_install, true).unwrap();
+    let game_snapshot = Snapshot::capture(&real_game, false).unwrap();
+    let current_exe = std::env::current_exe().unwrap();
+    let image_snapshot = Snapshot::capture(current_exe.parent().unwrap(), false).unwrap();
+    let entry = Entry {
+        version: crate::local_control::VERSION,
+        data: real_data,
+        trees: vec![
+            install_snapshot.tree.clone(),
+            game_snapshot.tree.clone(),
+            image_snapshot.tree.clone(),
+        ],
+    };
+    for snapshot in [&install_snapshot, &game_snapshot, &image_snapshot] {
+        drop(
+            registry
+                .lock(&snapshot.directory, LockMode::Shared)
+                .unwrap(),
+        );
+    }
+    let aliased_context = ModSelectionContext {
+        game_dir: aliased_game.clone(),
+        home: aliased_game.clone(),
+        dev_mods: vec![],
+    };
+    let (reference, _file) =
+        record::Reference::publish(&install_snapshot, &entry, &aliased_context).unwrap();
+    let mixed_context = ModSelectionContext {
+        game_dir: real_game,
+        home: aliased_game,
+        dev_mods: vec![],
+    };
+    assert!(reference.acquire(&mixed_context).is_ok());
+}
+#[cfg(unix)]
+#[test]
 #[ignore = "daily"]
 fn every_fresh_lease_and_retained_metadata_fd_survives_closed_stdio() {
     use std::os::fd::AsRawFd;

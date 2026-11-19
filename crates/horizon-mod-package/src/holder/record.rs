@@ -24,7 +24,28 @@ struct Record {
     roots: [[u64; 2]; 2],
 }
 fn roots(context: &ModSelectionContext) -> io::Result<[[u64; 2]; 2]> {
-    let root = |path: &Path| identity(&open_directory(path).map_err(lease_error)?);
+    let root = |path: &Path| {
+        if !path.is_absolute() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        // Context roots may traverse system-level directory aliases (e.g. /home -> /var/home
+        // on atomic Linux distros); canonicalize before opening no-follow, matching
+        // managed_lease_paths.
+        let canonical = path.canonicalize().map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("resolve launch directory {}: {error}", path.display()),
+            )
+        })?;
+        let directory = open_directory(&canonical).map_err(|error| {
+            let error = lease_error(error);
+            io::Error::new(
+                error.kind(),
+                format!("open launch directory {}: {error}", canonical.display()),
+            )
+        })?;
+        identity(&directory)
+    };
     Ok([root(&context.game_dir)?, root(&context.home)?])
 }
 impl Reference {
