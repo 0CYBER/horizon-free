@@ -151,6 +151,9 @@ fn light_update(payload: &[u8]) -> Result<Vec<u8>> {
 /// carry none, as the particles they stand for; a stand-in with other options would need them rebuilt.
 fn particle_down(ids: &Ids, p: &Particle) -> Option<Particle> {
     let mut p = p.clone();
+    if ids.quirks.simple_spell_particles {
+        p.without_plain_options();
+    }
     p.id = down_or_substitute(ids.particle_type, ids.substitutes.particle_type, p.id)?;
     if let Some(ParticleData::State(s)) = &mut p.data {
         *s = state_down(ids, *s);

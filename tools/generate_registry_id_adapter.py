@@ -101,7 +101,7 @@ PINNED_NAMES = {
         wayfinder_armor_trim_smithing_template wild_armor_trim_smithing_template
     """.split(),
     "particle_type": """
-        entity_effect explosion explosion_emitter
+        dragon_breath effect entity_effect explosion explosion_emitter flash instant_effect
     """.split(),
 }
 

@@ -151,7 +151,11 @@ pub mod item {
     pub const WILD_ARMOR_TRIM_SMITHING_TEMPLATE: i32 = 1583;
 }
 pub mod particle_type {
+    pub const DRAGON_BREATH: i32 = 15;
+    pub const EFFECT: i32 = 23;
     pub const ENTITY_EFFECT: i32 = 28;
     pub const EXPLOSION: i32 = 30;
     pub const EXPLOSION_EMITTER: i32 = 29;
+    pub const FLASH: i32 = 52;
+    pub const INSTANT_EFFECT: i32 = 56;
 }

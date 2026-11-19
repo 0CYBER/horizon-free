@@ -1,5 +1,5 @@
 //! 1.21's packets in 1.20.6's layout for a 1.20.6 client (and 1.20.5): the mirror of `translate`'s `v1_20_6`
-//! (1.20.6 to 1.21). Clientbound: level_particles puts the particle before its flags, explode's holder sound becomes
+//! (1.20.6 to 1.21). Clientbound: explode's holder sound becomes
 //! an inline sound event (the holder id goes), projectile_power sends a zero vector (1.21 sends only the power), and
 //! merchant_offers' trade items become 1.20.6 stacks, an empty stack for a missing second cost. Serverbound, a 1.20.6
 //! client's use_item gets the head's yaw and pitch, which 1.21 reads and 1.20.6 does not send.
@@ -10,7 +10,7 @@ use crate::{
     Result, State,
     adapter::{
         ids::{self, Ids, Way},
-        translate::client_layout_v1_20_6::{LEVEL_PARTICLES_HEAD, slot},
+        translate::client_layout_v1_20_6::slot,
     },
     buf::{Codec, Reader, Writer},
     ids as packet_ids,
@@ -30,7 +30,6 @@ pub(super) fn clientbound(
         return Ok(None);
     }
     Ok(match id {
-        cb::LEVEL_PARTICLES => Some(level_particles(payload)?),
         cb::EXPLODE => Some(explode(payload)?),
         cb::PROJECTILE_POWER => Some(projectile_power(payload)?),
         cb::MERCHANT_OFFERS => Some(merchant_offers(payload, ids)?),
@@ -84,18 +83,6 @@ pub(super) fn serverbound(
     w.f32(yaw);
     w.f32(pitch);
     Ok(Some(w.data))
-}
-
-/// level_particles: 1.21's count is followed by the particle; 1.20.6 has the particle first.
-fn level_particles(payload: &[u8]) -> Result<Vec<u8>> {
-    let mut r = Reader::new(payload);
-    let head = r.bytes(LEVEL_PARTICLES_HEAD)?;
-    let particle = r.varint()?;
-    let mut w = Writer::new();
-    w.varint(particle);
-    w.bytes(head);
-    w.bytes(r.rest());
-    Ok(w.data)
 }
 
 /// explode: 1.21's sound holder (a VarInt, 0 for an inline sound event) goes; the inline sound follows as it is.
@@ -250,24 +237,24 @@ mod tests {
         w.data
     }
 
+    /// Both 1.20.6's and 1.21's clients (ClientboundLevelParticlesPacket) read the particle after the count, as 1.21
+    /// sends it: the step leaves the packet alone.
     #[test]
-    fn a_particle_comes_before_its_flags_in_1_20_6() {
-        let session = Session::new(ServerVersion::V1_20_6);
+    fn a_particle_stays_after_its_count_in_1_20_6() {
         let original = level_particles_1_21();
         let id = packet_ids::play::clientbound::LEVEL_PARTICLES;
-        let down = clientbound(
-            State::Play,
-            id,
-            &original,
-            ServerVersion::V1_20_6.ids().unwrap(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(Reader::new(&down).varint().unwrap(), 7);
-        let up = translate::client_layout_v1_20_6::clientbound(&session, State::Play, id, &down)
-            .unwrap()
-            .unwrap();
-        assert_eq!(up, original);
+        assert_eq!(
+            clientbound(
+                State::Play,
+                id,
+                &original,
+                ServerVersion::V1_20_6.ids().unwrap()
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(original.len(), 1 + 24 + 16 + 4 + 1);
+        assert_eq!(original.last(), Some(&7));
     }
 
     #[test]
