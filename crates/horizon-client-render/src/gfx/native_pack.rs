@@ -5,7 +5,9 @@ use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
-use super::external::{Capabilities, FrameStart, TimingSetup, WorldPost, WorldTargets};
+use super::external::{
+    Capabilities, FrameStart, TimingSetup, WorldOutput, WorldPost, WorldTargets,
+};
 use super::native_entity::NativeEntity;
 use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::kept::StageReads;
@@ -601,26 +603,37 @@ impl NativePack {
     }
 
     /// The post stage in place of the renderer's own finish of the world: its passes over the
-    /// world's scaled target, the last onto the screen.
+    /// world's scaled target, the last onto its picture of the window's size.
     pub fn run_post(&mut self, post: WorldPost<'_>) {
         let WorldPost {
             device,
             encoder,
             world: (color, depth),
-            screen,
             size,
+            window,
             scene,
         } = post;
         let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
-        self.post.run(
+        self.post.run_chain(
             device,
             encoder,
             (color, depth, &self.frame.surface_view),
-            screen,
             size,
+            window,
             self.timing.as_mut(),
             scene.as_ref(),
         );
+    }
+
+    /// The post stage's output after `run_post`: its tonemap onto the screen.
+    pub fn run_output(&mut self, output: WorldOutput<'_>) {
+        let WorldOutput {
+            device,
+            encoder,
+            screen,
+        } = output;
+        self.post
+            .run_display(device, encoder, screen, self.timing.as_mut());
     }
 
     /// What the pack does in the renderer's place, fixed while it runs: the renderer keeps it

@@ -10867,9 +10867,16 @@ impl Renderer {
                 device: &self.device,
                 encoder: &mut encoder,
                 world: (color, depth),
-                screen: &view_target,
                 size: self.world_post.size().unwrap_or([1, 1]),
+                window: [target_texture.width(), target_texture.height()],
                 scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
+            });
+            // The engine's resolve of the pack's world goes here, between its chain and its
+            // output (#16126): none yet.
+            native.run_output(external::WorldOutput {
+                device: &self.device,
+                encoder: &mut encoder,
+                screen: &view_target,
             });
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let camera = frame_gen::Camera {

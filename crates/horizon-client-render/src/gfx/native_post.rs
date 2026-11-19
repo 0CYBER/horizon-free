@@ -1408,10 +1408,9 @@ impl NativePost {
         self.traced = generation;
     }
 
-    /// Runs the passes over the world target `world` (colour, depth) of `size` and the tonemap
-    /// onto `screen`, timed by `timing` when it times this frame. With `scene`, the terrain's
-    /// scene and the camera (`trace` said this frame's `frame` has it), the passes built against
-    /// it draw.
+    /// The whole post stage in one call: `run_chain`, then `run_display` onto `screen`, of the
+    /// window's size.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run(
         &mut self,
@@ -1424,17 +1423,40 @@ impl NativePost {
         scene: Option<&trace::Traced<'_>>,
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
+        let timed = timing.as_deref_mut();
+        self.run_chain(device, encoder, world, size, window, timed, scene);
+        self.run_display(device, encoder, screen, timing);
+    }
+
+    /// Runs the passes over the world target `world` (colour, depth) of `size`, the last onto
+    /// the picture of the `window`'s size, timed by `timing` when it times this frame. With
+    /// `scene`, the terrain's scene and the camera (`trace` said this frame's `frame` has it),
+    /// the passes built against it draw. Without passes the world is decoded in `run_display`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_chain(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        world: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
+        size: [u32; 2],
+        window: [u32; 2],
+        mut timing: Option<&mut super::pack_timing::PassTiming>,
+        scene: Option<&trace::Traced<'_>>,
+    ) {
         self.begin_kept(device, encoder, size);
         self.prepare(device, world, size, window, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
+        }
+        if self.passes.is_empty() {
+            return;
         }
         let Some((_, groups)) = &self.groups else {
             return;
         };
         let groups = kept::current(&self.kept, groups);
         let d = &self.display;
-        let (Some((_, scene)), Some((group, passes))) = (&d.scene, groups.split_last()) else {
+        let (Some((_, scene)), Some((_, passes))) = (&d.scene, groups.split_last()) else {
             return;
         };
         d.decoder.run(device, encoder, world.0, scene);
@@ -1471,6 +1493,28 @@ impl NativePost {
             });
             pass.set_bind_group(GROUP, group, &[]);
             pass.draw(0..3, 0..1);
+        }
+    }
+
+    /// The tonemap onto `screen`, after `run_chain` in the same frame, which set this frame's
+    /// version of the kept resources. Without passes it decodes the world first.
+    pub(super) fn run_display(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        screen: &wgpu::TextureView,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) {
+        let Some(((world, _, _), groups)) = &self.groups else {
+            return;
+        };
+        let groups = kept::current(&self.kept, groups);
+        let d = &self.display;
+        let (Some((_, scene)), Some((group, _))) = (&d.scene, groups.split_last()) else {
+            return;
+        };
+        if self.passes.is_empty() {
+            d.decoder.run(device, encoder, world, scene);
         }
         let label = d.label.as_deref().unwrap_or("Tonemap");
         fullscreen_pass(encoder, label, screen, &d.tonemap, (GROUP, group), timing);

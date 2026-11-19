@@ -4,7 +4,7 @@
 use super::external::{
     Capabilities, DisplacementPrepare, EntityLayers, ExternalPipeline, FrameStart, FrameState,
     Near, OpaqueCopy, Refused, ShadowDraws, ShadowView, SkyPass, TerrainLayers, TimingSetup,
-    WorldPost, WorldTargets,
+    WorldOutput, WorldPost, WorldTargets,
 };
 use super::native_pack::{NativePack, install_kept};
 use super::pack_timing::PassTiming;
@@ -138,5 +138,9 @@ impl ExternalPipeline for NativePack {
 
     fn run_post(&mut self, post: WorldPost<'_>) {
         NativePack::run_post(self, post);
+    }
+
+    fn run_output(&mut self, output: WorldOutput<'_>) {
+        NativePack::run_output(self, output);
     }
 }
