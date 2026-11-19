@@ -135,12 +135,50 @@ def groups():
             cmd(f'/data get entity {target} PortalCooldown', expect_result=4),
             *setup(f'/kill {target}'),
         ])
+    # Rotation on falling blocks, shulkers and clouds: a summoned value is read back, after ticks, and across a chunk save and reload.
+    extra_kinds = ('falling_block', 'shulker', 'area_effect_cloud')
+    extra = []
+    for kind in extra_kinds:
+        target = f'@e[type={kind},tag=rot_row,limit=1]'
+        for saved in ('', ',Rotation:[90f,10f]', ',Rotation:[400f,100f]', ',Rotation:[0f,0f]',
+                      ',Rotation:[270f,370f]', ',Rotation:[-190f,-100f]', ',Rotation:[180f,45f]'):
+            extra.extend([
+                cmd(f'/summon {kind} 12.5 234 8.5 {{NoGravity:1b,Tags:["rot_row"]{saved}}}'),
+                cmd(f'/data get entity {target} Rotation'),
+                {'op': 'tick', 'n': 3},
+                cmd(f'/data get entity {target} Rotation'),
+                *setup(f'/kill {target}'),
+            ])
+    extra_reload = [*setup(f'/forceload add {chunk}'), wait]
+    for index, kind in enumerate(extra_kinds):
+        extra_reload.append(cmd(
+            f'/summon {kind} {4100 + 4 * index}.5 300 4104.5 {{NoGravity:1b,Tags:["rot_row"],Rotation:[90f,10f]}}'))
+    extra_reload.append({'op': 'tick', 'n': 3})
+    for kind in extra_kinds:
+        extra_reload.append(cmd(f'/data get entity @e[type={kind},tag=rot_row,limit=1] Rotation'))
+    extra_reload.extend([
+        *setup(f'/forceload remove {chunk}'),
+        {'op': 'tick', 'n': 60},
+        cmd('/execute unless loaded 4096 300 4096', expect_result=1),
+        *setup(f'/forceload add {chunk}'),
+        wait,
+    ])
+    for kind in extra_kinds:
+        target = f'@e[type={kind},tag=rot_row,limit=1]'
+        extra_reload.extend([
+            cmd(f'/execute if entity {target}', expect_result=1),
+            cmd(f'/data get entity {target} Rotation'),
+            *setup(f'/kill {target}'),
+        ])
+    extra_reload.extend(setup(f'/forceload remove {chunk}'))
     return [
         ('projectile common state', summon),
         ('projectile common state reload', reloads),
         ('wither skull chunk reload', skull_reload),
         ('projectile fire and water', block_effects),
         ('other projectile codecs', controls),
+        ('Rotation on falling blocks, shulkers and clouds', extra),
+        ('Rotation on falling blocks, shulkers and clouds reload', extra_reload),
     ]
 
 

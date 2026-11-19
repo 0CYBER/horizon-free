@@ -208,11 +208,14 @@ pub(super) fn potion_cloud_to_nbt(c: &Breath, uuid: [i32; 4], raw: Option<&Tag>)
     };
     let at = Vec3::new(c.at[0], c.at[1], c.at[2]);
     let motion = Vec3::new(c.motion[0], c.motion[1], c.motion[2]);
+    // A loaded cloud keeps the Rotation it was saved with (`Entity.load`);
+    // the model has no slot for it, so the saved compound supplies it.
+    let rotation = raw.map_or([0.0; 2], horizon_client::entity_nbt::loaded_rotation);
     let mut tag = horizon_client::entity_nbt::entity_base_tag(
         "minecraft:area_effect_cloud",
         at,
         motion,
-        [0.0, 0.0],
+        rotation,
         uuid,
         raw,
     );

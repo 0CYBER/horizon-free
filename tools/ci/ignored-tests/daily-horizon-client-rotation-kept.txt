@@ -1,0 +1,5 @@
+horizon-client game::rotation_kept_tests::a_summoned_falling_block_shulker_and_cloud_keep_their_rotation lib daily resources
+horizon-client game::rotation_kept_tests::a_teleported_cloud_reads_back_the_rotation_the_teleport_set lib daily resources
+horizon-client game::spawn_yaw_tests::a_new_shulker_faces_yaw_zero_and_a_loaded_one_keeps_its_rotation lib daily resources
+horizon-client game::rotation_kept_tests::a_teleport_to_a_cloud_takes_the_clouds_rotation lib daily resources
+horizon-client game::rotation_kept_tests::a_teleported_cushion_keeps_the_pitch_the_teleport_set lib daily resources

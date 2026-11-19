@@ -1,0 +1,1 @@
+horizon-client-lib mobs::shulker::tests::loaded_rotation_survives_a_shulker_tick lib daily resources

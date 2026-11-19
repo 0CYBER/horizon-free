@@ -319,6 +319,11 @@ impl Game<'_> {
                 let uuid = self.uuid_for(id);
                 let c = self.breath_clouds.iter().find(|c| c.id == id)?;
                 let [x, y, z] = c.at;
+                let [yaw, pitch] = self
+                    .persist
+                    .raw
+                    .get(&id)
+                    .map_or([0.0; 2], horizon_client::entity_nbt::loaded_rotation);
                 // Read the live cloud, including its current radius and age;
                 // the raw compound alone does not contain generated clouds.
                 let mut tag = self.other_to_nbt(
@@ -332,8 +337,8 @@ impl Game<'_> {
                         knot_check: None,
                         eye: None,
                         position: horizon_core::geometry::Vec3::new(x, y, z),
-                        yaw: 0.0,
-                        pitch: 0.0,
+                        yaw,
+                        pitch,
                     },
                     uuid,
                 );
@@ -686,7 +691,7 @@ impl Game<'_> {
                     falling.position = position;
                     falling.previous = position;
                     falling.velocity = velocity;
-                    falling.rotation = entity_nbt::rotation(&tag);
+                    falling.rotation = entity_nbt::loaded_rotation(&tag);
                     falling.age = age;
                     falling.no_gravity = no_gravity;
                     falling.drop_item = drop_item;

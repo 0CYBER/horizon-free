@@ -49,9 +49,23 @@ pub fn peek_height_scale(m: &Mob) -> Option<f32> {
     (m.extra.variant3 == DOWN && peek > 0.0).then_some(1.0 + peek)
 }
 
+/// `Shulker.finalizeSpawn`: a new shulker faces yaw 0 (`setYRot(0.0F)`), its body follows (`yBodyRot`), and
+/// `setOldPosAndRot` brings the previous rotations (and the head's, which a creation path drew at random) to
+/// it. Only the spawn path calls it: a shulker loaded from NBT keeps its saved `Rotation`.
+pub fn finalize_spawn(m: &mut Mob) {
+    if m.species() == crate::mobs::Species::Shulker {
+        m.yaw = 0.0;
+        m.previous_yaw = 0.0;
+        m.body_yaw = 0.0;
+        m.previous_body_yaw = 0.0;
+        m.head_yaw = 0.0;
+        m.previous_head_yaw = 0.0;
+        m.previous_head_pitch = m.head_pitch;
+    }
+}
+
 pub fn register(m: &mut Mob) {
     m.no_gravity = true;
-    m.yaw = 0.0;
     m.body_yaw = 0.0;
     m.previous_body_yaw = 0.0;
     if m.extra.color == 0 && m.extra.variant == 0 {
@@ -526,8 +540,6 @@ pub fn keep_eased_peek(slot: &mut Mob, old: &Mob) {
 pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.velocity = Vec3::ZERO;
     m.body_yaw = 0.0;
-    m.yaw = 0.0;
-    m.head_pitch = 0.0;
     shell_tick(m, w, events);
 }
 /// `Shulker.tick`'s own part, which runs with or without AI: a shell that
@@ -1357,6 +1369,19 @@ mod tests {
         assert_eq!(m.extra.counter, 0);
         assert_eq!(m.extra.scratch[0], 0);
         assert_eq!(render_offset(&m, 0.0), glam::DVec3::ZERO);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn loaded_rotation_survives_a_shulker_tick() {
+        assert!(crate::mobs::world::with_test_world(&[], |world, _| {
+            let mut m = shulker();
+            m.yaw = 73.0;
+            m.head_pitch = -24.0;
+            register(&mut m);
+            tick(&mut m, world, &mut Vec::new());
+            assert_eq!([m.yaw, m.head_pitch], [73.0, -24.0]);
+        }));
     }
 
     #[test]

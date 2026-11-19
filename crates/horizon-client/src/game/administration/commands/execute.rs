@@ -157,6 +157,12 @@ impl Game<'_> {
                 .iter()
                 .find(|o| o.id == id)
                 .map_or([0.0; 2], |o| [o.yaw, o.pitch]),
+            // A cloud keeps its rotation in its saved compound (the model has no slot for it).
+            Target::Cloud(id) => self
+                .persist
+                .raw
+                .get(&id)
+                .map_or([0.0; 2], horizon_client::entity_nbt::loaded_rotation),
             _ => [0.0; 2],
         }
     }

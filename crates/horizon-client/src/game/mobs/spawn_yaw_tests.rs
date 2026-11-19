@@ -119,3 +119,43 @@ fn a_dispensed_mob_takes_the_wrapped_draw_too() {
         horizon_client::camera::wrap_degrees(draw)
     );
 }
+
+/// `Shulker.finalizeSpawn` sets yaw 0 on the spawn path (a spawn egg draws a random one first); a shulker
+/// loaded from NBT keeps its `Rotation`.
+#[test]
+#[ignore = "daily"]
+fn a_new_shulker_faces_yaw_zero_and_a_loaded_one_keeps_its_rotation() {
+    let mut resources = None;
+    let mut game = game(&mut resources);
+    for _ in 0..8 {
+        let id = game
+            .spawn_mob_spawned(
+                "shulker",
+                [4.5, 100.0, 8.5],
+                SpawnSite::Finalizing(SpawnReason::SpawnItemUse),
+            )
+            .expect("shulker");
+        let shulker = game.mobs.iter().find(|m| m.id == id).unwrap();
+        assert_eq!([shulker.yaw, shulker.head_pitch], [0.0, 0.0]);
+        // `setOldPosAndRot`: the previous and the head's rotations follow, whatever the creation path drew
+        assert_eq!(
+            [
+                shulker.previous_yaw,
+                shulker.head_yaw,
+                shulker.previous_head_yaw
+            ],
+            [0.0; 3]
+        );
+    }
+    let before = game.mobs.len();
+    assert!(game.run_command("summon shulker 6.5 100 8.5"));
+    assert_eq!(
+        [game.mobs[before].yaw, game.mobs[before].head_pitch],
+        [0.0, 0.0]
+    );
+    assert!(game.run_command("summon shulker 8.5 100 8.5 {Rotation:[73f,-24f]}"));
+    assert_eq!(
+        [game.mobs[before + 1].yaw, game.mobs[before + 1].head_pitch],
+        [73.0, -24.0]
+    );
+}

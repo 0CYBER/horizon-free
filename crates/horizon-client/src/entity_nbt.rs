@@ -121,6 +121,21 @@ pub fn loaded_motion(tag: &Tag) -> Vec3 {
 pub fn rotation(tag: &Tag) -> [f32; 2] {
     read_doubles::<2>(tag.get("Rotation")).map_or([0.0; 2], |r| [r[0] as f32, r[1] as f32])
 }
+/// A saved Rotation as `Entity.load` takes it (`setRot`, read off vanilla 26.3 by the parity rows): the yaw `% 360`
+/// (so 400 loads as 40 but 270 stays 270 and -190 stays -190: Java's remainder keeps the sign) and the pitch
+/// `% 360` clamped to [-90, 90]; a component that is not finite is discarded (`setYRot`/`setXRot`) and loads as
+/// 0. What a save writes is read with [`rotation`].
+pub fn loaded_rotation(tag: &Tag) -> [f32; 2] {
+    let [yaw, pitch] = rotation(tag);
+    [
+        if yaw.is_finite() { yaw % 360.0 } else { 0.0 },
+        if pitch.is_finite() {
+            (pitch % 360.0).clamp(-90.0, 90.0)
+        } else {
+            0.0
+        },
+    ]
+}
 /// `TagValueInput.getBooleanOr`: a numeric tag's byteValue is nonzero, with a false default.
 pub fn flag(tag: &Tag, key: &str) -> bool {
     flag_or(tag, key, false)
@@ -1775,12 +1790,15 @@ fn mob_from_nbt_at(
     authoritative: bool,
 ) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
-    let [yaw, pitch] = rotation(tag);
+    let [yaw, pitch] = loaded_rotation(tag);
     let mut m = if authoritative {
         Mob::with_random(id, kind, position, yaw, random)
     } else {
         Mob::remote_with_random(id, kind, position, yaw, random)
     };
+    // `Entity.load` runs after the constructor, so the saved yaw wins over
+    // what a type's register does to it (a shulker's register zeroes it).
+    m.yaw = yaw;
     m.velocity = motion(tag);
     m.head_pitch = pitch;
     // LivingEntity.readAdditionalSaveData: `setSharedFlag(7, getBooleanOr(FallFlying, false))`.
@@ -3616,7 +3634,8 @@ pub fn cushion_to_nbt(c: &Cushion, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         uuid,
         position: c.position,
         motion: Vec3::ZERO,
-        rotation: [c.yaw, 0.0],
+        // The cushion never turns: its saved pitch is the one it was loaded with.
+        rotation: [c.yaw, raw.map_or(0.0, |t| loaded_rotation(t)[1])],
         on_ground,
         fall_distance,
     };
@@ -3639,13 +3658,8 @@ pub fn cushion_from_nbt(tag: &Tag, id: u32) -> Option<Cushion> {
             position.z.floor() as i32,
         ],
     };
-    let yaw = match tag.get("Rotation") {
-        Some(Tag::List(l)) => l
-            .first()
-            .and_then(|v| crate::save::float(Some(v)))
-            .unwrap_or(0.0) as f32,
-        _ => 0.0,
-    };
+    // `Entity.load`: the yaw `% 360` (a cushion keeps no pitch of its own: the saved one is read as loaded).
+    let yaw = loaded_rotation(tag)[0];
     let color =
         crate::entities::dye_index(&text(tag.get("color")).unwrap_or_else(|| "white".into()));
     Some(Cushion {
@@ -3707,6 +3721,25 @@ mod cushion_tests {
         assert_eq!(loaded.color_name(), "red");
         assert_eq!(loaded.check_interval, 0);
         assert_eq!(loaded.bounds(), cushion.bounds());
+    }
+
+    #[test]
+    fn a_summoned_cushion_keeps_its_yaw_and_pitch_through_a_save() {
+        // summon ... {Rotation:[75f,20f]}: the saved yaw 75 and pitch 20 come back.
+        let raw = Tag::compound([
+            ("Pos", Tag::List(vec![Tag::Double(0.5f64.to_bits()); 3])),
+            (
+                "Rotation",
+                Tag::List(vec![
+                    Tag::Float(75f32.to_bits()),
+                    Tag::Float(20f32.to_bits()),
+                ]),
+            ),
+        ]);
+        let cushion = cushion_from_nbt(&raw, 1).unwrap();
+        assert_eq!(cushion.yaw, 75.0);
+        let saved = cushion_to_nbt(&cushion, [1, 2, 3, 4], Some(&raw));
+        assert_eq!(rotation(&saved), [75.0, 20.0]);
     }
 }
 /// `ItemFrame.setDirection`: a frame on a wall turns to face away from it
@@ -11220,5 +11253,36 @@ mod sulfur_bucket_content_tests {
         let mut cod = mob(Species::Cod, "minecraft:cod");
         apply_item_components(&mut cod, &bucket);
         assert_eq!(cod.extra.body_id(), None, "only a sulfur cube reads it");
+    }
+}
+
+#[cfg(test)]
+mod loaded_rotation_tests {
+    use super::*;
+
+    fn tag(yaw: f32, pitch: f32) -> Tag {
+        Tag::compound([(
+            "Rotation",
+            Tag::List(vec![Tag::Float(yaw.to_bits()), Tag::Float(pitch.to_bits())]),
+        )])
+    }
+
+    /// vanilla 26.3's values (the parity rows): yaw `% 360`, pitch `% 360` clamped to +-90.
+    #[test]
+    fn a_saved_rotation_loads_like_vanilla() {
+        assert_eq!(loaded_rotation(&tag(400.0, 100.0)), [40.0, 90.0]);
+        assert_eq!(loaded_rotation(&tag(270.0, 370.0)), [270.0, 10.0]);
+        assert_eq!(loaded_rotation(&tag(-190.0, -100.0)), [-190.0, -90.0]);
+        assert_eq!(loaded_rotation(&tag(180.0, 45.0)), [180.0, 45.0]);
+        assert_eq!(loaded_rotation(&tag(73.0, -24.0)), [73.0, -24.0]);
+        // a non-finite component is discarded: it loads as 0 and a save writes 0
+        assert_eq!(loaded_rotation(&tag(f32::NAN, 20.0)), [0.0, 20.0]);
+        assert_eq!(loaded_rotation(&tag(30.0, f32::INFINITY)), [30.0, 0.0]);
+        // a save writes the raw value (a painting's yaw 270 from its facing) and reads it back as it is
+        assert_eq!(rotation(&tag(270.0, 10.0)), [270.0, 10.0]);
+        assert_eq!(
+            loaded_rotation(&Tag::compound(Vec::<(&str, Tag)>::new())),
+            [0.0, 0.0]
+        );
     }
 }

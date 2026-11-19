@@ -1263,7 +1263,7 @@ impl Game<'_> {
         }
         let interaction = super::interactions::is_interaction(kind)
             .then(|| super::interactions::InteractionState::from_tag(tag));
-        let rotation = entity_nbt::rotation(tag);
+        let rotation = entity_nbt::loaded_rotation(tag);
         Some(super::commands::OtherEntity {
             attachment_lifetime: Default::default(),
             join: Default::default(),
