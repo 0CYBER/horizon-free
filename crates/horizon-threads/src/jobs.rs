@@ -107,18 +107,39 @@ impl<T> PerWorker<T> {
     }
 }
 
+/// One counter on a cache line of its own (as [`crate::alloc_count`]'s slots are):
+/// these are written by every worker on every job, and two of them within one
+/// 64-byte line make the cores that own the others re-read it for nothing
+/// (false sharing). Padding is per field, never by position: rustc's field
+/// order is not a contract.
+#[repr(align(64))]
+struct Padded<T>(T);
+
+impl<T> Padded<T> {
+    const fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> std::ops::Deref for Padded<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
 struct Entry {
     id: u64,
     source: Arc<dyn Source>,
     /// Workers running one of its jobs.
-    running: AtomicUsize,
+    running: Padded<AtomicUsize>,
     /// Taken out of the pool: the worker that ends its last job tells
     /// [`Registration`]'s drop, which waits for it.
     retired: AtomicBool,
     /// When one of its jobs last ended (or it was registered).
     last_job: Mutex<Instant>,
     /// It was told it is idle ([`release_quiet_sources`]) since that job.
-    quiet: AtomicBool,
+    quiet: Padded<AtomicBool>,
 }
 
 struct Inner {
@@ -130,17 +151,17 @@ struct Inner {
     /// notify is two atomic operations while every worker is busy, and takes
     /// `sleep` (held by no source code) only to wake one: the thread queuing
     /// work (a frame, a tick) never waits behind a worker's choice.
-    epoch: AtomicU64,
-    sleepers: AtomicUsize,
+    epoch: Padded<AtomicU64>,
+    sleepers: Padded<AtomicUsize>,
     sleep: Mutex<()>,
     wake: Condvar,
     /// Signalled when a retired source's job ends.
     finished: Condvar,
     /// Workers running a [`Class::Far`] job.
-    far: AtomicUsize,
+    far: Padded<AtomicUsize>,
     /// Workers that freed their buffers and took no job since.
-    released: AtomicUsize,
-    threads: AtomicUsize,
+    released: Padded<AtomicUsize>,
+    threads: Padded<AtomicUsize>,
     idle_release: Duration,
 }
 
@@ -224,14 +245,14 @@ impl Pool {
         let inner = Arc::new(Inner {
             sources: RwLock::new(Vec::new()),
             next_id: AtomicU64::new(0),
-            epoch: AtomicU64::new(0),
-            sleepers: AtomicUsize::new(0),
+            epoch: Padded::new(AtomicU64::new(0)),
+            sleepers: Padded::new(AtomicUsize::new(0)),
             sleep: Mutex::new(()),
             wake: Condvar::new(),
             finished: Condvar::new(),
-            far: AtomicUsize::new(0),
-            released: AtomicUsize::new(0),
-            threads: AtomicUsize::new(threads.max(1)),
+            far: Padded::new(AtomicUsize::new(0)),
+            released: Padded::new(AtomicUsize::new(0)),
+            threads: Padded::new(AtomicUsize::new(threads.max(1))),
             idle_release,
         });
         let mut started = 0;
@@ -269,10 +290,10 @@ impl Pool {
             .push(Arc::new(Entry {
                 id,
                 source,
-                running: AtomicUsize::new(0),
+                running: Padded::new(AtomicUsize::new(0)),
                 retired: AtomicBool::new(false),
                 last_job: Mutex::new(Instant::now()),
-                quiet: AtomicBool::new(false),
+                quiet: Padded::new(AtomicBool::new(false)),
             }));
         self.inner.notify(true);
         Registration {
