@@ -166,6 +166,9 @@ impl Names {
         Self { map }
     }
     pub fn item(&self, id: &str) -> String {
+        if let Some(name) = crate::item_data::default_names::of(id) {
+            return name.plain();
+        }
         let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
         self.map
             .get(&format!("item.{namespace}.{path}"))
@@ -176,6 +179,9 @@ impl Names {
     /// An item's display name in the selected language: `item.*` then
     /// `block.*`, then the pinned English map (`Names::item`).
     pub fn display_item(&self, id: &str) -> String {
+        if let Some(name) = crate::item_data::default_names::of(id) {
+            return name.plain();
+        }
         let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
         if let Some(lang) = crate::lang::current() {
             for prefix in ["item", "block"] {

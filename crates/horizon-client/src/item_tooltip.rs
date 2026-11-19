@@ -1484,9 +1484,9 @@ pub fn styled_name(stack: &ItemStack, fallback: impl FnOnce() -> String) -> crat
     }
     // A potion or tipped arrow is named by its contents, not its `item_name`.
     if crate::brewing::contents_name_key(stack).is_none()
-        && let Some(component) = stack.data().and_then(|d| d.other("minecraft:item_name"))
+        && let Some(name) = stack.item_name_text()
     {
-        return crate::entity_nbt::name_text(component);
+        return name;
     }
     crate::text::Text::untrusted_legacy(&fallback())
 }

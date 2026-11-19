@@ -83,7 +83,10 @@ pub(in super::super) fn load_item_data(
         mod_api::__private::RegistrationData::initial_settings_snapshot(),
     );
 
-    Ok(ItemData::load(root, context)?)
+    let data = ItemData::load(root, context)?;
+    // What names a content mod's items, after the mods' changes to the defaults.
+    horizon_client::item_data::default_names::set(data.defaults().entries());
+    Ok(data)
 }
 
 #[cfg(test)]

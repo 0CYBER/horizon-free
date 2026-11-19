@@ -9,6 +9,8 @@ pub mod component_values;
 pub mod cooking_fuel;
 #[path = "item_data/custom_model_data.rs"]
 pub mod custom_model_data;
+#[path = "item_data/default_names.rs"]
+pub mod default_names;
 #[path = "item_data/ingredient_components.rs"]
 pub mod ingredient_components;
 use crate::items::{ItemInfo, ItemStack};
@@ -749,8 +751,15 @@ impl ItemStack {
     /// saves and reaches clients unchanged; the ominous banner's is modelled
     /// by `ominous_banner` instead.
     pub fn item_name(&self) -> Option<String> {
-        let name = self.data()?.other("minecraft:item_name")?;
-        Some(horizon_client_core::component::name_text(name).plain())
+        self.item_name_text().map(|name| name.plain())
+    }
+    /// `getItemName`'s component as text: the stack's own `minecraft:item_name`, else the
+    /// item's default where it is not its description id's ([`default_names`]).
+    pub fn item_name_text(&self) -> Option<horizon_client_core::text::Text> {
+        match self.data().and_then(|d| d.other("minecraft:item_name")) {
+            Some(name) => Some(horizon_client_core::component::name_text(name)),
+            None => default_names::of(&self.item),
+        }
     }
     pub fn potion(&self) -> Option<&str> {
         self.data().and_then(|d| d.potion.as_deref())
