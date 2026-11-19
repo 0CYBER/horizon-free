@@ -309,6 +309,11 @@ impl Instance {
         }
     }
 
+    /// It takes Home's Horizon update offers: it pins no version and plays Horizon, not Java (#18394).
+    pub fn follows_horizon(&self) -> bool {
+        self.version.is_none() && self.java.is_none()
+    }
+
     /// The installed version this instance plays: its pinned one, else `requested` (the
     /// command line's `--version`), else on Stable its channel's ([`crate::nightly::stable_latest`],
     /// as Home's), else the launcher's (`backend::resolve_version`).

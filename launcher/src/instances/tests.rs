@@ -393,6 +393,9 @@ fn a_java_instance_plays_one_minecraft_version_in_its_own_folder() {
     assert_eq!(copy.java, java.java);
     let horizon = create_in(&home, &data, "Horizon two", None, None).unwrap();
     assert_eq!(horizon.java, None);
+    // Home offers Horizon's updates to a Horizon instance only, never to a Java one (#18394).
+    assert!(horizon.follows_horizon());
+    assert!(!java.follows_horizon());
     let store = fs::read_to_string(data.join(FILE)).unwrap();
     assert_eq!(
         store.matches("\"minecraft\": \"1.21.4\"").count(),

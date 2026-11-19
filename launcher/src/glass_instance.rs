@@ -319,7 +319,7 @@ impl Launcher {
     /// and it didn't fail since the list was last read from the network.
     pub(super) fn stable_update(&self, tag: &str) -> Option<Release> {
         self.selected_instance()
-            .filter(|i| i.channel == Channel::Stable && i.version.is_none() && !tag.is_empty())?;
+            .filter(|i| i.channel == Channel::Stable && i.follows_horizon() && !tag.is_empty())?;
         match &self.releases {
             Load::Ready(list) => horizon_launcher::nightly::stable_offer(
                 list,
