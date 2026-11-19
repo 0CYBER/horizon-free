@@ -6,6 +6,9 @@ rust-version.workspace = true
 license = "LGPL-3.0-or-later"
 description = "Prepares Horizon's resources from the player's own Minecraft: imports and checks the pinned jars, runs the vanilla exporters, writes the resource folder"
 
+[lints]
+workspace = true
+
 [dependencies]
 crc32fast = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
