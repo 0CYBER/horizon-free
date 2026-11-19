@@ -2,7 +2,8 @@
 //! parrots (`Util.getRandom(Parrot.Variant.values())`) and axolotls
 //! (`Axolotl.finalizeSpawn` with `AxolotlGroupData`), alone (`/summon`, a spawn
 //! egg: group data null) and in a natural pack, whose members share the group
-//! data the first one made.
+//! data the first one made. A pack of tropical fish also ends at a loner
+//! (`TropicalFish.isSchool`, which `Spawned.school` carries to the spawner).
 use super::LocalDifficulty;
 use super::tests::{run_finalize_in, types};
 use crate::mobs::{Mob, finalize::Group};
@@ -97,4 +98,102 @@ fn a_pack_shares_its_first_members_group_data() {
             assert_eq!(m.is_baby(), i >= 2, "axolotl {i} of pack {seed}");
         }
     }
+}
+
+/// What vanilla's draws settled for one tropical fish: `isSchool`, which the
+/// spawner reads back as `isMaxGroupSizeReached = !isSchool`, and the variant
+/// it wears.
+struct Fish {
+    school: bool,
+    variant: (u8, u8, u8),
+}
+
+/// `Mob.finalizeSpawn` (Mob.java:1081-1089) and `TropicalFish.finalizeSpawn`
+/// (TropicalFish.java:238-252) replayed on `random`, which stands for the
+/// level's: the follow range bonus (`random.triangle(0.0, 0.11485000000000001)`,
+/// two `nextDouble`s) and left-handedness, then the school roll. `shared` is
+/// the variant the pack already rolled (`TropicalFishGroupData`): its members
+/// take that one and draw nothing further.
+fn vanilla_tropical_fish(random: &mut LegacyRandom, shared: Option<(u8, u8, u8)>) -> Fish {
+    let _bonus = random.next_double() - random.next_double();
+    let _left_handed = random.next_float() < 0.05;
+    if let Some(v) = shared {
+        return Fish {
+            school: true,
+            variant: v,
+        };
+    }
+    if f64::from(random.next_float()) < 0.9 {
+        // `Util.getRandom(TropicalFish.COMMON_VARIANTS, random)`: one of that
+        // table's rows, which the pack's first member keeps for the rest.
+        let row = random.next_int_bound(22).unwrap() as usize;
+        Fish {
+            school: true,
+            variant: crate::mobs::aquatic::COMMON_TROPICAL[row],
+        }
+    } else {
+        // A loner wears a random `Pattern` (12 of them) and two random
+        // `DyeColor`s (16).
+        Fish {
+            school: false,
+            variant: (
+                random.next_int_bound(12).unwrap() as u8,
+                random.next_int_bound(16).unwrap() as u8,
+                random.next_int_bound(16).unwrap() as u8,
+            ),
+        }
+    }
+}
+
+/// `NaturalSpawner.spawnCategoryForPosition` breaks a pack at the first member
+/// whose `isMaxGroupSizeReached` answers true (NaturalSpawner.java:212-214);
+/// for a tropical fish that is `!isSchool`, so a pack is a loner alone. A
+/// member after a school's first one takes its `TropicalFishGroupData` variant
+/// and follows it, and the pack goes on.
+#[test]
+fn a_pack_of_tropical_fish_ends_at_its_first_loner() {
+    let Some(types) = types() else { return };
+    let (mut loner_packs, mut schools) = (0u32, 0u32);
+    for seed in 0..64u32 {
+        let mut group = None;
+        let mut shared = None;
+        let mut length = 0;
+        for i in 0..4u32 {
+            let mut m = mob(&types, "minecraft:tropical_fish", seed * 4 + i);
+            let mut replay: LegacyRandom = (*m.random).clone();
+            let expected = vanilla_tropical_fish(&mut replay, shared);
+            group = run_finalize_in(&mut m, normal(), group);
+            assert_eq!(
+                !m.extra.lone, expected.school,
+                "seed {seed}, member {i}: isSchool"
+            );
+            assert_eq!(
+                (m.extra.variant, m.extra.variant2, m.extra.variant3),
+                expected.variant,
+                "seed {seed}, member {i}: variant"
+            );
+            shared = Some(expected.variant);
+            if i > 0 {
+                assert_eq!(
+                    m.extra.leader,
+                    Some(seed * 4),
+                    "seed {seed}, member {i}: leader"
+                );
+            }
+            length += 1;
+            // The pack ends here: the first loner is the whole pack.
+            if !expected.school {
+                break;
+            }
+        }
+        if length == 1 {
+            loner_packs += 1;
+        } else {
+            schools += 1;
+        }
+    }
+    assert!(
+        loner_packs > 0 && schools > 0,
+        "{loner_packs} packs of one loner, {schools} schools"
+    );
 }

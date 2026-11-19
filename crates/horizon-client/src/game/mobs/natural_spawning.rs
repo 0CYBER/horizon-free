@@ -700,10 +700,13 @@ impl<'g, 'a> GameLevel<'g, 'a> {
         let cluster_size = self
             .game
             .spawn_cluster_size(&mut mob, r.reason, None, vanilla);
+        // `TropicalFish.isSchool`: finalizeSpawn clears it for a loner, which
+        // ends the pack (`isMaxGroupSizeReached`).
+        let school = !mob.extra.lone;
         pending.push(mob);
         Some(Spawned {
             bounds,
-            school: true,
+            school,
             cluster_size,
         })
     }
@@ -2351,6 +2354,53 @@ mod tests {
             assert!(refused.0.is_empty(), "a failed check adds nothing");
             assert_eq!(refused.1, 0, "and gives each provisional id back");
             assert!(heard.iter().any(|h| h.hook == "position"));
+        });
+    }
+
+    /// A tropical fish's [`Spawned::school`] is the `TropicalFish.isSchool` its
+    /// `finalizeSpawn` settled: the `nextFloat() < 0.9` else-branch clears it, and
+    /// `isMaxGroupSizeReached = !isSchool` ends the pack there. The draws are replayed
+    /// on a copy of the level's random, before the spawner draws from it.
+    #[test]
+    #[ignore = "daily"]
+    fn a_loner_tropical_fish_reports_its_group_is_full() {
+        use super::super::native_entity_refs::tests::with_game;
+        with_game(|game| {
+            let level = game.natural_level();
+            let (mut loners, mut schools) = (0u32, 0u32);
+            for seed in 0..64u32 {
+                let mut random = LegacyRandom::new(i64::from(seed));
+                // `Mob.finalizeSpawn`: the follow range `random_spawn_bonus`
+                // (`triangle(0.0, 0.11485000000000001)`, two `nextDouble`s) and
+                // left-handedness; then `TropicalFish.finalizeSpawn`'s school roll.
+                let mut replay = random.clone();
+                let _bonus = replay.next_double() - replay.next_double();
+                let _left_handed = replay.next_float() < 0.05;
+                let school = f64::from(replay.next_float()) < 0.9;
+                let request = SpawnRequest {
+                    entity: "minecraft:tropical_fish",
+                    species: Species::TropicalFish,
+                    position: [0.5, 64.0, 0.5],
+                    yaw: 0.0,
+                    group_index: 0,
+                    reason: Reason::Natural,
+                };
+                let mut pending = Vec::new();
+                let spawned = level
+                    .finalize_spawned(&request, &mut pending, &mut random)
+                    .expect("a tropical fish finalizes");
+                assert_eq!(spawned.school, school, "seed {seed}");
+                assert_eq!(pending.len(), 1, "seed {seed}: one mob is added");
+                if school {
+                    schools += 1;
+                } else {
+                    loners += 1;
+                }
+            }
+            assert!(
+                loners > 0 && schools > 0,
+                "{loners} loners, {schools} schools"
+            );
         });
     }
 
