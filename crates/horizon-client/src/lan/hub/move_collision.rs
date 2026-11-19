@@ -125,7 +125,7 @@ where
     // the unobstructed-start check below - belong to the distance test alone
     // (review round 1): an overridden move is refused for a creative guest
     // and from an obstructed start too.
-    let moved_wrongly = !g.creative()
+    let moved_wrongly = g.checks_wrong_moves()
         && done.is_some_and(|done| {
             let (dx, dz) = (requested.x - done.x, requested.z - done.z);
             dx * dx + dz * dz > 0.0625

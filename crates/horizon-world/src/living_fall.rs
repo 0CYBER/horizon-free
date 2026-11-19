@@ -37,6 +37,13 @@ impl ImpulseContext {
     pub fn is_in_grace_time(&self) -> bool {
         self.reset_grace_time > 0
     }
+    /// The end of `LivingEntity.tick`: `currentImpulseContextResetGraceTime--`
+    /// while above 0.
+    pub fn tick_grace_time(&mut self) {
+        if self.reset_grace_time > 0 {
+            self.reset_grace_time -= 1;
+        }
+    }
     pub fn ignores_fall_damage(&self) -> bool {
         self.impact_position.is_some()
     }

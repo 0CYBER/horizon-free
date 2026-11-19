@@ -325,6 +325,10 @@ impl Game<'_> {
                 block_registries: Some(&game.pack.block_registries),
             }
             .server_travel();
+            // LivingEntity.tick, after aiStep: the post-impulse grace counts
+            // down, so a wind charge spares the moved-wrongly check and the
+            // impulse reset for 40 ticks, not for good.
+            player.impulse.tick_grace_time();
             // Player.aiStep's entity contacts run with the player's body,
             // even when the level and its mobs are frozen. Flush their damage
             // events and marked velocity through the existing guest path.

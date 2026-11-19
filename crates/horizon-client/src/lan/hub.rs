@@ -5272,6 +5272,7 @@ mod tests {
     #[path = "../far_tests.rs"]
     mod far_tests;
     mod glide_motion_tests;
+    mod impulse_grace_tests;
     mod live_player_limit_tests;
     mod menu_sync_tests;
     mod ordered_inbox_tests;
