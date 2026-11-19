@@ -408,6 +408,7 @@
   "Turn HDR on to use it.": "Turn HDR on to use it.",
   "The shader pack lights the world. Pick it under Shaders.": "The shader pack lights the world. Pick it under Shaders.",
   "The shader pack's picture is shown at Paper White.": "The shader pack's picture is shown at Paper White.",
+  "In scRGB, your desktop's own color setting applies.": "In scRGB, your desktop's own color setting applies.",
   "Your GPU or graphics API doesn't support it.": "Your GPU or graphics API doesn't support it.",
   "Not with software rendering, which runs it on the CPU.": "Not with software rendering, which runs it on the CPU.",
   "Out of video memory: off until the next start.": "Out of video memory: off until the next start.",

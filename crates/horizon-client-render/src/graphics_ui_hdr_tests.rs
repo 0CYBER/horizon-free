@@ -130,6 +130,29 @@ fn ui_brightness_is_greyed_under_a_shaders_pack() {
     assert_eq!(press(&mut ui, &mut s, (tx + 2.0, peak[1] + 4.0)), [DRAGGED]);
 }
 
+/// scRGB on Wayland is stretched by the compositor itself: Color Boost is greyed there and
+/// says why. PQ on Wayland keeps it.
+#[test]
+fn color_boost_is_greyed_for_scrgb_on_wayland() {
+    use crate::gfx::{HdrOutput, output::tests};
+    let mut s = Settings::default();
+    s.horizon.hdr = HdrMode::On;
+    let boost = Item::Horizon(H::HdrColorBoost);
+    for (hdr, why) in [
+        (HdrOutput::Pq, None),
+        (
+            HdrOutput::ScRgb,
+            Some("In scRGB, your desktop's own color setting applies."),
+        ),
+    ] {
+        let (caps, mut reading) = tests::window(Some(hdr), Some(true));
+        reading.compositor = true;
+        let out = tests::snapshot(&s.horizon, Default::default(), caps, reading);
+        assert!(out.hdr_on());
+        assert_eq!(boost.blocked(&s, &out), why, "{hdr:?}");
+    }
+}
+
 #[test]
 fn hdr_auto_can_be_selected_before_querying_and_brightness_waits_for_output() {
     let mut s = Settings::default();

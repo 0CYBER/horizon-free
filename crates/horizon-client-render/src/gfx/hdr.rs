@@ -217,6 +217,7 @@ pub(super) fn offscreen_display() -> super::DisplayReading {
             Some("off") => Some(false),
             _ => None,
         },
+        compositor: false,
     }
 }
 fn named(name: Option<&str>) -> Option<Output> {

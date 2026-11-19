@@ -13297,6 +13297,7 @@ impl DisplayReading {
             luminance: os_reported(info),
             primaries: os_primaries(info),
             hdr,
+            compositor: false,
         }
     }
 }
@@ -13461,7 +13462,11 @@ fn os_reported(info: &wgpu::DisplayHdrInfo) -> Option<crate::graphics::Reported>
 /// PQ's top, so the metadata never ends below the black level.
 #[cfg(target_os = "linux")]
 fn wayland_reading(now: Option<horizon_hdr::wayland::Luminances>) -> DisplayReading {
-    now.map_or_else(DisplayReading::default, |l| DisplayReading {
+    let compositor = DisplayReading {
+        compositor: true,
+        ..DisplayReading::default()
+    };
+    now.map_or(compositor, |l| DisplayReading {
         luminance: Some(reported(l)),
         primaries: l.target_primaries.and_then(hdr::reported_primaries),
         // The preferred target's headroom is the compositor's live report, not the
@@ -13471,6 +13476,7 @@ fn wayland_reading(now: Option<horizon_hdr::wayland::Luminances>) -> DisplayRead
             && l.target_max.is_finite()
             && l.target_max > 0.0)
             .then_some(l.target_max > l.reference),
+        ..compositor
     })
 }
 #[cfg(target_os = "linux")]

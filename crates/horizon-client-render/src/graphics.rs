@@ -927,9 +927,8 @@ pub struct Graphics {
     pub hdr_ui_nits: u32,
     /// HDR Color Boost, 0..=100 percent: how far HDR output stretches the picture's BT.709
     /// colours toward the display's own primaries (`gfx::hdr::gamut`), as wide-gamut displays
-    /// often show SDR. 0, the default, shows the colours exactly. On KDE, scRGB output also gets
-    /// KWin's own "SDR color intensity", which stretches a BT.709 surface too: the two add up
-    /// there, and both are left to the player.
+    /// often show SDR. 0, the default, shows the colours exactly. scRGB output on Wayland is left
+    /// unboosted (`EffectiveOutput::compositor_stretches`).
     pub hdr_color_boost: u32,
     /// HDR's look with no shader pack running.
     pub hdr_look: HdrLook,

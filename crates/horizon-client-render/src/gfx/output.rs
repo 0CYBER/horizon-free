@@ -63,13 +63,15 @@ pub fn driver_fingerprint(info: &wgpu::AdapterInfo, os: &str) -> String {
 }
 
 /// What the system last reported for a renderer's display: its luminance, its primaries
-/// (Color Boost's target, `hdr::boost_target`), and whether it shows HDR (`None`: it doesn't
-/// say, or nobody asked, as with HDR Off and offscreen).
+/// (Color Boost's target, `hdr::boost_target`), whether it shows HDR (`None`: it doesn't
+/// say, or nobody asked, as with HDR Off and offscreen), and whether a Wayland compositor
+/// reported it (`compositor`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DisplayReading {
     pub(crate) luminance: Option<Reported>,
     pub(crate) primaries: Option<super::hdr::Primaries>,
     pub(crate) hdr: Option<bool>,
+    pub(crate) compositor: bool,
 }
 impl DisplayReading {
     /// The watch stopped (HDR Off asks the system nothing): no system report. The luminance
@@ -161,8 +163,11 @@ pub struct EffectiveOutput {
     pub(crate) ui_brightness: f32,
     /// The display's primaries as last reported (`DisplayReading`).
     pub(crate) primaries: Option<super::hdr::Primaries>,
-    /// Color Boost's BT.709 to BT.2020 for them (`hdr::gamut`); `None` at 0.
+    /// Color Boost's BT.709 to BT.2020 for them (`hdr::gamut`); `None` at 0. HDR output's last
+    /// pass takes it through `boost`.
     pub(crate) gamut: Option<super::hdr::Matrix>,
+    /// A Wayland compositor reported the display (`DisplayReading::compositor`).
+    pub(crate) compositor: bool,
     /// The running shader pack lights the world itself: Horizon lifts none of it, so Look has
     /// nothing to pick (`with_pack`).
     pub(crate) pack_lights: bool,
@@ -208,6 +213,7 @@ impl EffectiveOutput {
         ui_brightness: 1.0,
         primaries: None,
         gamut: None,
+        compositor: false,
         pack_lights: false,
         rays: None,
     };
@@ -224,6 +230,19 @@ impl EffectiveOutput {
     /// the renderer keeps the last world's pack: there the rows read as with none running.
     pub(crate) fn shown(self, world: bool) -> Self {
         self.with_pack(self.pack_lights && world)
+    }
+    /// Whether the compositor stretches the presented colours toward the display itself:
+    /// scRGB on Wayland. An scRGB swapchain is a BT.709 surface there (Mesa's, with the
+    /// perceptual intent), which KWin shows at its "SDR color intensity", as it does the
+    /// desktop. Color Boost on top would stretch them twice, past the display's own, so it is
+    /// left off there; PQ, a BT.2020 surface, is shown exactly and keeps it.
+    pub(crate) fn compositor_stretches(&self) -> bool {
+        self.compositor && self.encoding == Some(Output::ScRgb)
+    }
+    /// The Color Boost HDR output's last pass applies: `gamut`, unless the compositor
+    /// stretches the colours itself (`compositor_stretches`).
+    pub(crate) fn boost(&self) -> Option<super::hdr::Matrix> {
+        self.gamut.filter(|_| !self.compositor_stretches())
     }
     /// Whether the destination offers HDR output.
     pub fn hdr_offered(&self) -> bool {
@@ -332,6 +351,7 @@ pub(crate) fn resolve_output(
             settings.hdr_color_boost as f32 / 100.0,
             super::hdr::boost_target(reading.primaries),
         ),
+        compositor: reading.compositor,
         pack_lights: false,
         rays: None,
     }
@@ -364,6 +384,7 @@ pub(crate) mod tests {
                 }),
                 primaries: None,
                 hdr: system,
+                compositor: false,
             },
         )
     }
@@ -377,6 +398,38 @@ pub(crate) mod tests {
     ) -> EffectiveOutput {
         let frame = resolve_frame(settings, request, caps, reading, Bgra8UnormSrgb);
         resolve_output(settings, caps, reading, frame, true)
+    }
+
+    /// Color Boost stretches PQ anywhere and scRGB off Wayland, but not scRGB that a Wayland
+    /// compositor stretches itself.
+    #[test]
+    fn color_boost_skips_scrgb_on_wayland() {
+        let settings = Graphics {
+            hdr: HdrMode::On,
+            hdr_color_boost: 50,
+            ..Graphics::default()
+        };
+        for (hdr, compositor, boosted) in [
+            (Output::Pq, false, true),
+            (Output::Pq, true, true),
+            (Output::ScRgb, false, true),
+            (Output::ScRgb, true, false),
+        ] {
+            let (caps, mut reading) = window(Some(hdr), Some(true));
+            reading.compositor = compositor;
+            let out = snapshot(&settings, FrameRequest::default(), caps, reading);
+            assert_eq!(out.encoding, Some(hdr));
+            assert_eq!(
+                out.boost().is_some(),
+                boosted,
+                "{hdr:?}, compositor {compositor}"
+            );
+            assert_eq!(
+                out.compositor_stretches(),
+                !boosted,
+                "{hdr:?}, compositor {compositor}"
+            );
+        }
     }
 
     /// Every mode against every offer, system report, pack and device: HDR output only where
