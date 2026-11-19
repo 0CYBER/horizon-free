@@ -88,7 +88,6 @@
   "lan_auth": "#18133: harness runs a daily-ignored test without --include-ignored",
   "level_environment_reads": "#18133: harness expects 5 passed tests, 6 pass",
   "living_damage": "#18133: NaN vs +Inf in a non-finite damage record",
-  "mace": "#18133: health after a hit on armoured mobs differs slightly",
   "menu_click": "#18133: writable_book_content:{pages:[]} and damage:0 kept",
   "mob_ai": "#18133: enderman hurt twice in a tick teleports differently",
   "numeric_damage_component": "#18133: damage:0 kept and readable by /data",
