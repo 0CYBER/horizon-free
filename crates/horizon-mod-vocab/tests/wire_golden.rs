@@ -4,7 +4,10 @@
 //! encoding is pinned: changing one fails here, and needs `CORE_VERSION` bumped with it.
 use horizon_core::nbt::{self, Compound, Limits, Tag};
 use mod_vocab::wire::{Reader, Wire, Writer};
-use mod_vocab::{BlockUpdateFlags, CubeListBuilder, MeshDefinition, PartPose};
+use mod_vocab::{
+    BlockUpdateFlags, CubeListBuilder, HiddenParts, HumanoidPart, MAX_HIDDEN_PARTS, MAX_PART_NAME,
+    MeshDefinition, PartPose,
+};
 
 fn bytes<T: Wire>(value: &T) -> Vec<u8> {
     let mut out = Writer::new();
@@ -117,4 +120,51 @@ fn a_mesh_keeps_its_json() {
         Reader::decode::<MeshDefinition>(&bytes(&mesh)).unwrap(),
         mesh
     );
+}
+
+/// Hidden parts cross as the raw name table, then a humanoid part bit set (`HiddenPartsWire`):
+/// each part keeps its bit, and a name its place in the table.
+#[test]
+fn hidden_parts_keep_their_bits_and_names() {
+    let golden = |names: &[&str], typed: u16| {
+        let mut table = [0u8; MAX_PART_NAME * MAX_HIDDEN_PARTS];
+        let mut lens = [0u8; MAX_HIDDEN_PARTS];
+        for (i, name) in names.iter().enumerate() {
+            table[i * MAX_PART_NAME..][..name.len()].copy_from_slice(name.as_bytes());
+            lens[i] = name.len() as u8;
+        }
+        let mut out = table.to_vec();
+        out.extend(lens);
+        out.push(names.len() as u8);
+        out.extend(typed.to_le_bytes());
+        out
+    };
+    let parts = [
+        HumanoidPart::Head,
+        HumanoidPart::Hat,
+        HumanoidPart::Body,
+        HumanoidPart::Jacket,
+        HumanoidPart::RightArm,
+        HumanoidPart::RightSleeve,
+        HumanoidPart::LeftArm,
+        HumanoidPart::LeftSleeve,
+        HumanoidPart::RightLeg,
+        HumanoidPart::RightPants,
+        HumanoidPart::LeftLeg,
+        HumanoidPart::LeftPants,
+    ];
+    for (bit, part) in parts.into_iter().enumerate() {
+        let mut hidden = HiddenParts::default();
+        hidden.hide(part);
+        let expected = golden(&[], 1 << bit);
+        assert_eq!(bytes(&hidden), expected, "{part:?}");
+        assert_eq!(Reader::decode::<HiddenParts>(&expected).unwrap(), hidden);
+    }
+    let mut hidden = HiddenParts::default();
+    hidden.hide_named("tail").unwrap();
+    hidden.hide_named("wings").unwrap();
+    hidden.hide(HumanoidPart::LeftPants);
+    let expected = golden(&["tail", "wings"], 1 << 11);
+    assert_eq!(bytes(&hidden), expected);
+    assert_eq!(Reader::decode::<HiddenParts>(&expected).unwrap(), hidden);
 }

@@ -1070,3 +1070,108 @@ fn a_manual_codec_carries_a_nested_types_layout_change() {
             .contains(&("runtime", runtime))
     );
 }
+
+/// Decodes `parts` (literal fields) to `value` (built from its raw fields), and encodes `value`
+/// back to `parts`: a codec in a hashed file whose parts come from a helper outside it.
+fn both_ways<T: Wire + Clone + std::fmt::Debug + PartialEq, F: Wire + std::fmt::Debug + PartialEq>(
+    value: T,
+    parts: F,
+) {
+    install_layout_resources();
+    let mut out = Writer::new();
+    out.put(&parts);
+    assert_eq!(Reader::decode::<T>(out.bytes()).unwrap(), value);
+    fields(value, parts);
+}
+
+/// The hash reads these codecs but not the constructors and accessors they call (#18400), so
+/// each projection is pinned both ways. Slots are 1, so a slot dropped to zero shows.
+#[test]
+fn out_of_scan_projections_keep_their_fields_both_ways() {
+    let _keys = Keys::new();
+    let second = crate::parts::REGISTERING_KEYS.with(|keys| {
+        let keys = keys.borrow();
+        let mut requests = keys.as_ref().unwrap().borrow_mut();
+        [
+            requests.items.request("example", "example:cog"),
+            requests.blocks.request("example", "example:slab"),
+            requests.fluids.request("example", "example:oil"),
+            requests.entity_types.request("example", "example:golem"),
+            requests.entity_types.request("example", "example:drone"),
+        ]
+        .map(Result::unwrap)
+    });
+    assert_eq!(second, [1, 1, 1, 0, 1]);
+
+    let gear = Reader::decode::<Identifier>(&{
+        let mut out = Writer::new();
+        out.put(&("example".to_owned(), "gear".to_owned()));
+        out.into_bytes()
+    })
+    .unwrap();
+    assert_eq!((gear.namespace(), gear.path()), ("example", "gear"));
+    both_ways(id("example:gear"), ("example".to_owned(), "gear".to_owned()));
+
+    both_ways(ModelRef(31, 7), (31u64, 7u32));
+    both_ways(RenderPipelineRef(41, 5), (41u64, 5u32));
+    both_ways(InstanceGroupRef(37, 9), (37u64, 9u32));
+
+    both_ways(ItemKey(1), (1u32,));
+    both_ways(BlockKey(1), (1u32,));
+    both_ways(FluidKey(1), (1u32,));
+    // `#[wire(via = u32)]` declares no fields: its bytes are the slot's.
+    let mut out = Writer::new();
+    out.put(&EntityTypeKey(1));
+    assert_eq!(out.bytes(), 1u32.to_le_bytes());
+    assert_eq!(Reader::decode::<EntityTypeKey>(out.bytes()), Ok(EntityTypeKey(1)));
+
+    let mut stack = ItemStack::new(ItemKey(1), 7).unwrap();
+    stack.set_damage(11);
+    both_ways(stack.clone(), (ItemKey(1), 7u32, Some(11u32), None::<Components>));
+    let mut out = Writer::new();
+    out.put(&(ItemKey(1), 7u32, Some(11u32), None::<Components>));
+    let decoded = Reader::decode::<ItemStack>(out.bytes()).unwrap();
+    assert_eq!(
+        (decoded.item(), decoded.count(), decoded.damage_component()),
+        (ItemKey(1), 7, Some(11))
+    );
+
+    let resource = ItemResource::of(&stack);
+    let mut page = StoragePage::new(3).unwrap();
+    assert!(page.push(resource.clone(), 5));
+    fields(page, (vec![(resource.clone(), 5u64)], 3u64));
+    let mut out = Writer::new();
+    out.put(&(vec![(resource.clone(), 5u64)], 3u64));
+    let decoded = Reader::decode::<StoragePage>(out.bytes()).unwrap();
+    assert_eq!(
+        (decoded.entries(), decoded.limit()),
+        (&[(resource, 5u64)][..], 3)
+    );
+
+    use crate::world::ticket_controller::{ControllerInfo, TEST_CONTROLLERS};
+    let table: &'static [ControllerInfo] = Box::leak(Box::new([
+        ControllerInfo {
+            id: "example:quarry".into(),
+            mod_id: "example",
+            validates: false,
+        },
+        ControllerInfo {
+            id: "example:pump".into(),
+            mod_id: "example",
+            validates: true,
+        },
+    ]));
+    let before = TEST_CONTROLLERS.replace(Some(table));
+    let controller = TicketController { slot: 1 };
+    assert_eq!(controller.slot(), 1);
+    both_ways(controller, (1u32,));
+    TEST_CONTROLLERS.set(before);
+
+    let holder = AttachmentHolder::Entity(EntityRef::new(WorldEpoch::new(43), 29));
+    let mut out = Writer::new();
+    out.put(&(holder, 71u64));
+    let token = Reader::decode::<AttachmentWriteToken>(out.bytes()).unwrap();
+    let (identity, generation): (AttachmentHolder, u64) = decode(token);
+    assert_eq!((identity, generation), (holder, 71));
+}
+

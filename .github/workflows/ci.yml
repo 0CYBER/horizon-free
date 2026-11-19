@@ -476,6 +476,10 @@ jobs:
       - name: Mod points and the generated API stay as they were
         if: github.event_name == 'pull_request' && steps.rust.outputs.mod_points != 'false'
         run: python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added
+      # verify-test builds the points' wire loopback empty: it needs a guest build whose table has sites (#18400).
+      - name: The points' wire loopback
+        if: steps.rust.outputs.mod_points != 'false'
+        run: cargo test --locked -p horizon-mod-points --features wasm-guest,listener-fixture --test wire_loopback
   verify:
     needs: [verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-points]
     if: always()

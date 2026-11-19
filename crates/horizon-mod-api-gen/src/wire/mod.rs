@@ -1165,6 +1165,207 @@ mod tests {
 
     const NBT: &str = "impl Tag {\n    pub fn id(&self) -> u8 { match self { Self::End => 0, Self::Int(_) => 3 } }\n    pub fn get(&self) {}\n}\nimpl Default for Limits {\n    fn default() -> Self { Self { max_depth: 512 } }\n}\n";
 
+    /// `codecs` reads a file outside the codec module only when its text says `Wire for`, so an
+    /// `impl Wire` whose header splits that over two lines would cross unhashed (#18400). Every
+    /// hand-written codec of the tree it reads must be in a file it reads.
+    #[test]
+    fn every_hand_written_codec_is_in_a_file_the_core_hash_reads() {
+        use syn::Item;
+        fn test_only(attrs: &[syn::Attribute]) -> bool {
+            attrs.iter().any(|attr| {
+                attr.path().is_ident("cfg")
+                    && quote::ToTokens::to_token_stream(attr)
+                        .to_string()
+                        .contains("test")
+            })
+        }
+        /// Whether `items` hold what `codecs`' `items` hashes: a `Wire` impl or a macro writing one.
+        fn codec(items: &[Item]) -> bool {
+            items.iter().any(|item| match item {
+                Item::Impl(block) => {
+                    !test_only(&block.attrs)
+                        && block.trait_.as_ref().is_some_and(|(_, path, _)| {
+                            path.segments.last().is_some_and(|s| s.ident == "Wire")
+                        })
+                }
+                Item::Macro(mac) => {
+                    mac.mac.path.is_ident("macro_rules")
+                        && mac.mac.tokens.to_string().contains("Wire for")
+                }
+                Item::Mod(module) if !test_only(&module.attrs) => module
+                    .content
+                    .as_ref()
+                    .is_some_and(|(_, content)| codec(content)),
+                _ => false,
+            })
+        }
+        fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut files = Vec::new();
+        // `codecs`' directories; below, the files it skips and the codec module it reads whole.
+        for dir in ["crates/horizon-mod-vocab/src", "crates/horizon-mod-api/src"] {
+            walk(&root.join(dir), &mut files);
+        }
+        let (mut read, mut unread) = (0, Vec::new());
+        for path in files {
+            let key = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if key.contains("tests")
+                || key.contains("golden")
+                || key.starts_with("crates/horizon-mod-vocab/src/wire/")
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            if !codec(&syn::parse_file(&text).unwrap().items) {
+                continue;
+            }
+            // Read by the production filter: the file's codecs move the hash `codecs` gives.
+            if core_hash_of(&key, &text) != core_hash_of(&key, "") {
+                read += 1;
+            } else {
+                unread.push(key);
+            }
+        }
+        assert!(
+            unread.is_empty(),
+            "codecs the core hash doesn't read: {unread:?}"
+        );
+        assert!(
+            read > 0,
+            "no hand-written codec found outside the codec module"
+        );
+    }
+
+    /// `codecs`' hash of a tree holding only `text` at `key` (and the real network NBT codec).
+    fn core_hash_of(key: &str, text: &str) -> u64 {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static RUN: AtomicUsize = AtomicUsize::new(0);
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::env::temp_dir().join(format!(
+            "horizon-core-hash-{}-{}",
+            std::process::id(),
+            RUN.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = root.join(key);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root.join("crates/horizon-mod-vocab/src")).unwrap();
+        std::fs::create_dir_all(root.join("crates/horizon-mod-api/src")).unwrap();
+        std::fs::create_dir_all(root.join(super::NBT).parent().unwrap()).unwrap();
+        std::fs::copy(repo.join(super::NBT), root.join(super::NBT)).unwrap();
+        std::fs::write(&file, text).unwrap();
+        let hash = super::codecs(&root).unwrap().0;
+        std::fs::remove_dir_all(&root).ok();
+        hash
+    }
+
+    /// A codec written with a qualified path (`impl crate::wire::Wire for …`) is in the core
+    /// hash: an edit to its body alone, the bytes it writes, moves it (#18400).
+    #[test]
+    fn a_qualified_wire_impls_body_is_in_the_core_hash() {
+        let key = "crates/horizon-mod-vocab/src/entity/attachment_query.rs";
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let text = std::fs::read_to_string(repo.join(key)).unwrap();
+        assert!(text.contains("impl crate::wire::Wire for AttachmentWriteToken {"));
+        let body = "out.put(&generation);";
+        assert_eq!(text.matches(body).count(), 1);
+        assert_ne!(
+            core_hash_of(key, &text),
+            core_hash_of(key, &text.replace(body, "out.put(&(generation + 1));"))
+        );
+    }
+
+    /// A wasm guest builds an `EntityTypeKey` from its slot without the native `from_slot`
+    /// (`entity/types.rs`), in code neither hash reads and no native test runs (#18400). It is
+    /// pinned here as written; it is the only wasm-only branch of the projections
+    /// `wire_layout_tests` covers outside the codec module (`AttachmentBatch::query`'s is no codec).
+    #[test]
+    fn a_guest_keeps_an_entity_type_keys_slot() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let wasm_only = "#[cfg(target_arch = \"wasm32\")]";
+        let read = |key: &str| std::fs::read_to_string(repo.join(key)).unwrap();
+        let branches: Vec<(&str, usize)> = [
+            "crates/horizon-core/src/identifier.rs",
+            "crates/horizon-mod-runtime/src/attachments/index.rs",
+            "crates/horizon-mod-vocab/src/client/keyframe_animation.rs",
+            "crates/horizon-mod-vocab/src/client/model_instance.rs",
+            "crates/horizon-mod-vocab/src/client/posed_parts.rs",
+            "crates/horizon-mod-vocab/src/client/render_pipeline.rs",
+            "crates/horizon-mod-vocab/src/content/registry_keys.rs",
+            "crates/horizon-mod-vocab/src/entity/attachment_query.rs",
+            "crates/horizon-mod-vocab/src/entity/types.rs",
+            "crates/horizon-mod-vocab/src/item/item_stack.rs",
+            "crates/horizon-mod-vocab/src/item/storage.rs",
+            "crates/horizon-mod-vocab/src/item/types.rs",
+            "crates/horizon-mod-vocab/src/world/ticket_controller.rs",
+        ]
+        .into_iter()
+        .map(|key| (key, read(key).matches(wasm_only).count()))
+        .filter(|(_, count)| *count > 0)
+        .collect();
+        assert_eq!(
+            branches,
+            [
+                ("crates/horizon-mod-vocab/src/entity/attachment_query.rs", 1),
+                ("crates/horizon-mod-vocab/src/entity/types.rs", 1),
+            ],
+            "a new wasm-only branch in a projection's helpers needs pinning here"
+        );
+        let file = syn::parse_file(&read("crates/horizon-mod-vocab/src/entity/types.rs")).unwrap();
+        let try_from = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Impl(block)
+                    if quote::ToTokens::to_token_stream(&block.self_ty).to_string()
+                        == "EntityTypeKey"
+                        && block.trait_.as_ref().is_some_and(|(_, path, _)| {
+                            quote::ToTokens::to_token_stream(path).to_string() == "TryFrom < u32 >"
+                        }) =>
+                {
+                    block.items.iter().find_map(|item| match item {
+                        syn::ImplItem::Fn(f) if f.sig.ident == "try_from" => Some(f),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("EntityTypeKey's TryFrom<u32>");
+        let guest: Vec<String> = try_from
+            .block
+            .stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                syn::Stmt::Expr(syn::Expr::Block(block), _)
+                    if block.attrs.iter().any(|attr| {
+                        quote::ToTokens::to_token_stream(attr).to_string()
+                            == "# [cfg (target_arch = \"wasm32\")]"
+                    }) =>
+                {
+                    Some(quote::ToTokens::to_token_stream(&block.block).to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        let expected = syn::parse_str::<syn::Block>("{ Ok(Self(slot)) }").unwrap();
+        assert_eq!(
+            guest,
+            [quote::ToTokens::to_token_stream(&expected).to_string()]
+        );
+    }
+
     /// The core hash covers the file roots' selectors: swapping two refuses mods built before.
     #[test]
     fn swapped_file_roots_change_the_core_hash() {

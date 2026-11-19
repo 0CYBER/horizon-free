@@ -278,3 +278,99 @@ fn prepared_fingerprint_covers_marker_entries_and_argument_layouts() {
         }
     });
 }
+
+/// The block of every `fn name` in `items`, nested modules included.
+fn blocks(items: &[syn::Item], name: &dyn Fn(&str) -> bool, out: &mut Vec<(String, String)>) {
+    for item in items {
+        match item {
+            syn::Item::Fn(f) if name(&f.sig.ident.to_string()) => out.push((
+                f.sig.ident.to_string(),
+                f.block.to_token_stream().to_string(),
+            )),
+            syn::Item::Mod(module) => {
+                if let Some((_, content)) = &module.content {
+                    blocks(content, name, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+fn block(text: &str) -> String {
+    syn::parse_str::<syn::Block>(text)
+        .unwrap()
+        .to_token_stream()
+        .to_string()
+}
+
+/// A guest answers the host with its output's pointer in the high half of a `u64` and its length
+/// in the low half, as the host unpacks it (`horizon-mod-wasm`'s runtime, pinned by its WAT
+/// guests). The guest side is wasm-only code no native test runs (#18400): `horizon_hook` and each
+/// prepared hook's `prepare_`, `ask_` and `release_` exports are pinned here as written.
+#[test]
+fn guest_exports_pack_the_pointer_high_and_the_length_low() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("crates/horizon-mod-api/src/wire/wire_guest.rs"))
+            .unwrap();
+    let mut hook = Vec::new();
+    blocks(
+        &syn::parse_file(&source).unwrap().items,
+        &|name| name == "horizon_hook",
+        &mut hook,
+    );
+    assert_eq!(
+        hook,
+        [(
+            "horizon_hook".to_owned(),
+            block(
+                "{ let (pointer, len) = run(id); (pointer as usize as u64) << 32 | u64::from(len) }"
+            )
+        )]
+    );
+
+    let types = super::ty::Types::new(crate::index::Index::new(&root, &[])).unwrap();
+    let can_equip = super::Method {
+        owner: "Hooks",
+        via: None,
+        name: "can_equip".to_owned(),
+        access: None,
+        receiver: Some(false),
+        params: Vec::new(),
+        ret: super::ty::Ty::Prim("bool"),
+    };
+    let guest = super::calls::dispatch(
+        &types,
+        &[can_equip],
+        &[("can_equip".to_owned(), "stack".to_owned())],
+    )
+    .0;
+    let mut exports = Vec::new();
+    blocks(
+        &syn::parse_file(&guest).unwrap().items,
+        &|name| name.starts_with("entry_"),
+        &mut exports,
+    );
+    let packed = |id: u32| {
+        block(&format!(
+            "{{ let (p, n) = crate::wire::guest::run({id}); (p as usize as u64) << 32 | u64::from(n) }}"
+        ))
+    };
+    assert_eq!(
+        exports,
+        [
+            (
+                "entry_prepare_can_equip".to_owned(),
+                packed(super::prepared::PREPARE)
+            ),
+            (
+                "entry_ask_can_equip".to_owned(),
+                packed(super::names::export_id("Hooks", "can_equip"))
+            ),
+            (
+                "entry_release_can_equip".to_owned(),
+                packed(super::prepared::RELEASE)
+            ),
+        ]
+    );
+}

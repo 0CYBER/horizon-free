@@ -564,3 +564,80 @@ fn a_holder_crosses_the_wire_only_with_the_types_its_indexes_name() {
     wrong_kind.bones[0].1[0].target = AnimationTarget::Registered(1);
     assert!(matches!(decode(&wrong_kind), Err(WireError::Invalid(_))));
 }
+
+/// The hash sees `AnimationHolderWire`'s layout but not the Rust mapping onto it (#18400): every
+/// target and interpolation keeps its wire case, written out here by hand, both ways.
+#[test]
+fn every_target_and_interpolation_keeps_its_wire_case() {
+    use crate::wire::{Reader, Writer};
+    let bytes = |value: &dyn Fn(&mut Writer)| {
+        let mut out = Writer::new();
+        value(&mut out);
+        out.into_bytes()
+    };
+    let id = |path: &str| Identifier::from_parts("glow", path).unwrap();
+    let types = vec![
+        RegisteredAnimationType {
+            kind: JsonAnimationType::Interpolation(id("ease")),
+            owner: "glow_mod".into(),
+        },
+        RegisteredAnimationType {
+            kind: JsonAnimationType::Target(id("tint")),
+            owner: "glow_mod".into(),
+        },
+    ];
+    let holder = AnimationHolder {
+        id: animation_id(),
+        length: 2.5,
+        looping: true,
+        bones: vec![(
+            "body".into(),
+            [
+                (AnimationTarget::Position, Interpolation::Linear),
+                (AnimationTarget::Rotation, Interpolation::CatmullRom),
+                (AnimationTarget::Scale, Interpolation::Registered(0)),
+                (AnimationTarget::Registered(1), Interpolation::Linear),
+            ]
+            .map(|(target, interpolation)| AnimationChannel {
+                target,
+                keyframes: vec![Keyframe {
+                    time: 0.25,
+                    pre: [1.0, 2.0, 3.0],
+                    post: [4.0, 5.0, 6.0],
+                    interpolation,
+                }],
+            })
+            .to_vec(),
+        )],
+        types: types.clone(),
+    };
+    let wire = AnimationHolderWire {
+        id: animation_id(),
+        length: 2.5,
+        looping: true,
+        bones: vec![(
+            "body".into(),
+            [
+                (TargetWire::Position, InterpolationWire::Linear),
+                (TargetWire::Rotation, InterpolationWire::CatmullRom),
+                (TargetWire::Scale, InterpolationWire::Registered(0)),
+                (TargetWire::Registered(1), InterpolationWire::Linear),
+            ]
+            .map(|(target, interpolation)| ChannelWire {
+                target,
+                keyframes: vec![KeyframeWire {
+                    time: 0.25,
+                    pre: [1.0, 2.0, 3.0],
+                    post: [4.0, 5.0, 6.0],
+                    interpolation,
+                }],
+            })
+            .into_iter()
+            .collect(),
+        )],
+        types,
+    };
+    let golden = bytes(&|out| out.put(&wire));
+    assert_eq!(bytes(&|out| out.put(&holder)), golden);
+    assert_eq!(Reader::decode::<AnimationHolder>(&golden), Ok(holder));
+}
