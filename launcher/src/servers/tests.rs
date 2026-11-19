@@ -70,7 +70,10 @@ fn programs_are_laid_out_as_install_sh_does() {
         fs::read_to_string(rt.join("current").join(PROGRAM)).unwrap(),
         "server"
     );
-    assert!(!rt.join("releases/v1/.installed").exists());
+    // The release is an installation the game runs from: it carries the completion marker, empty.
+    let marker = rt.join("releases/v1/.installed");
+    assert!(marker.is_file());
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
     // The game's macOS bundle is the launcher's, not the server's.
     assert!(!rt.join("releases/v1/Horizon.app").exists());
     // The release finds the game files where horizon-server looks: .local beside it.
@@ -89,6 +92,151 @@ fn programs_are_laid_out_as_install_sh_does() {
         "{\"new\":1}"
     );
     assert!(!game_files(&rt, "26.3").with_extension("old").exists());
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_release_carries_the_completion_marker_the_game_opens() {
+    let root = scratch("runtime-marker");
+    let version = root.join("versions/v1");
+    fs::create_dir_all(version.join(".local/horizon-client/26.3")).unwrap();
+    fs::write(version.join(PROGRAM), "server").unwrap();
+    fs::write(version.join(crate::backend::CLIENT), "game").unwrap();
+    fs::write(version.join(".installed"), "").unwrap();
+    fs::write(
+        version.join(".local/horizon-client/26.3/horizon-resources.json"),
+        "{}",
+    )
+    .unwrap();
+    let rt = root.join("runtime");
+    set_up_in(&rt, &version, "v1", "26.3").unwrap();
+    let marker = rt.join("releases/v1/.installed");
+    assert!(marker.is_file());
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+    // A release an older launcher laid down has no marker: setting up again restores it.
+    fs::remove_file(&marker).unwrap();
+    set_up_in(&rt, &version, "v1", "26.3").unwrap();
+    assert!(marker.is_file());
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+    // The engine opens an empty regular file: a marker that is not one is replaced, not trusted.
+    fs::write(&marker, "installed").unwrap();
+    set_up_in(&rt, &version, "v1", "26.3").unwrap();
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn the_engine_finds_every_unit_it_leases_registered() {
+    use horizon_platform::mod_package::{
+        holder, locks::LockMode, runtime_leases::open_directory, runtime_leases::Registry,
+        selection::LaunchArguments,
+    };
+    // The launcher home and the runtime the launcher publishes there: a child process's own.
+    const ACTOR: &str = "HORIZON_SERVER_LEASES_TEST_ACTOR";
+    if std::env::var_os(ACTOR).is_none() {
+        let launcher_home = tempfile::tempdir().unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--include-ignored",
+                "--exact",
+                "servers::tests::the_engine_finds_every_unit_it_leases_registered",
+                "--nocapture",
+            ])
+            .env(ACTOR, "1")
+            .env("HORIZON_LAUNCHER_HOME", launcher_home.path())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(
+            stdout.contains("test result: ok. 1 passed;"),
+            "exact-name child did not run one test:\n{stdout}\n{stderr}"
+        );
+        return;
+    }
+    // A prepared version, the runtime `set_up` lays down from it, and a server folder.
+    let data = backend::data_dir();
+    let version = data.join("versions/v1");
+    let prepared = version.join(".local/horizon-client/26.3");
+    fs::create_dir_all(&prepared).unwrap();
+    fs::write(version.join(PROGRAM), "server").unwrap();
+    fs::write(version.join(crate::backend::CLIENT), "game").unwrap();
+    fs::write(version.join(".installed"), "").unwrap();
+    fs::write(prepared.join("horizon-resources.json"), "{}").unwrap();
+    let rt = runtime_root();
+    set_up_in(&rt, &version, "v1", "26.3").unwrap();
+    let server = data.join("servers/survival");
+    fs::create_dir_all(&server).unwrap();
+    // A release an older launcher laid down has no marker, and run_managed supplies it.
+    let marker = rt.join("releases/v1/.installed");
+    fs::remove_file(&marker).unwrap();
+    // The engine command `run_managed` prepares: the release's game, its prepared game files.
+    let mut engine = Command::new(rt.join("current").join(crate::backend::CLIENT));
+    engine
+        .arg("--resources")
+        .arg(game_files(&rt, "26.3"))
+        .current_dir(&server);
+    let leases = lease_engine(&engine, &data).unwrap();
+
+    // What the game does at start: lock each unit `lease_paths` names, creating none.
+    let data = data.canonicalize().unwrap();
+    let selection = LaunchArguments::for_command(&engine).unwrap();
+    let units = holder::lease_paths(
+        Path::new(engine.get_program()),
+        &selection,
+        &data,
+        engine.get_current_dir().unwrap(),
+    )
+    .unwrap();
+    let install = units
+        .iter()
+        .find(|(_, complete)| *complete)
+        .map(|(unit, _)| unit)
+        .expect("the release is an installation");
+    assert!(install.ends_with("releases/v1"));
+    assert_eq!(fs::metadata(install.join(".installed")).unwrap().len(), 0);
+    let registry = Registry::existing(&data).unwrap();
+    let missing: Vec<_> = units
+        .iter()
+        .filter(|(unit, _)| {
+            let directory = open_directory(unit).unwrap();
+            registry.lock(&directory, LockMode::Shared).is_err()
+        })
+        .map(|(unit, _)| unit.display().to_string())
+        .collect();
+    drop(leases);
+    assert!(
+        missing.is_empty(),
+        "units the game cannot lease: {missing:?}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn an_engine_from_outside_the_launcher_is_left_alone() {
+    let root = scratch("engine-outside");
+    let data = root.join("data");
+    fs::create_dir_all(&data).unwrap();
+    let version = root.join("version");
+    fs::create_dir_all(&version).unwrap();
+    fs::write(version.join(crate::backend::CLIENT), "game").unwrap();
+    let mut engine = Command::new(version.join(crate::backend::CLIENT));
+    engine.arg("--resources").arg(version.join("resources"));
+    // `[engine] engine.path` and the PATH can name an engine of the player's: the game takes no
+    // leases there, and the launcher writes neither a marker nor a claim into that folder.
+    assert!(lease_engine(&engine, &data).unwrap().is_empty());
+    assert!(!version.join(".installed").exists());
+    // Another installation inside the launcher's data (a version its cleanup invalidated) is not the
+    // launcher's runtime either: completing it would list a deleted version as installed again.
+    let version = data.join("versions/v9");
+    fs::create_dir_all(&version).unwrap();
+    fs::write(version.join(crate::backend::CLIENT), "game").unwrap();
+    let mut engine = Command::new(version.join(crate::backend::CLIENT));
+    engine.arg("--resources").arg(version.join("resources"));
+    assert!(lease_engine(&engine, &data).unwrap().is_empty());
+    assert!(!version.join(".installed").exists());
     fs::remove_dir_all(&root).unwrap();
 }
 

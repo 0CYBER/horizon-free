@@ -267,7 +267,9 @@ pub fn run(dir: &Path) -> Result<(), String> {
         );
         shared.set_phase(Phase::Starting);
         let transfers = config.transfer.engine_arg();
-        let mut child = engine::spawn(
+        // The claims on the folders the game leases live as long as the game: the next start takes
+        // them again on the release `current` points at then.
+        let spawned = engine::spawn(
             &program,
             &resources,
             dir,
@@ -275,8 +277,22 @@ pub fn run(dir: &Path) -> Result<(), String> {
             config.engine.parallel_tick,
             &config.entities,
             transfers.as_deref(),
-        )
-        .map_err(|e| format!("{}: {e}", program.display()))?;
+        );
+        let (mut child, _leases) = match spawned {
+            Ok(spawned) => spawned,
+            // `apply_queued` has already moved `current` to the new release, so a start that never
+            // produced a game goes back like a game that came up and stopped.
+            Err(error) => match watch.take() {
+                Some(w) => {
+                    roll_back(&shared, dir, &config, &w, &error);
+                    if shared.shutdown.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                None => return Err(error),
+            },
+        };
         {
             let mut state = shared.state.lock().unwrap();
             state.engine_pid = Some(child.id());

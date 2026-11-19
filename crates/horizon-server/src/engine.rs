@@ -2,6 +2,11 @@
 //! game/interface/dedicated/mod.rs). It reads the vanilla files the supervisor writes, takes console commands on stdin and
 //! logs on stdout.
 
+use horizon_platform::mod_package::{
+    holder,
+    runtime_leases::{self, Claim},
+    selection::LaunchArguments,
+};
 use horizon_server_launch::config::Entities;
 use std::process::Command;
 use std::{
@@ -139,7 +144,8 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
 }
 
 /// Starts the engine in the server folder, with its console and log piped to the supervisor and its status
-/// on the control endpoint.
+/// on the control endpoint. The returned claims on the folders the game leases must live as long as it
+/// does (empty for a game the launcher does not manage).
 pub fn spawn(
     program: &Path,
     resources: &Path,
@@ -148,8 +154,8 @@ pub fn spawn(
     parallel_tick: bool,
     entities: &Entities,
     transfers: Option<&str>,
-) -> std::io::Result<Child> {
-    command(
+) -> Result<(Child, Vec<Claim>), String> {
+    let mut command = command(
         program,
         resources,
         dir,
@@ -157,8 +163,58 @@ pub fn spawn(
         parallel_tick,
         entities,
         transfers,
-    )?
-    .spawn()
+    )
+    .map_err(|e| format!("{}: {e}", program.display()))?;
+    let claims = lease(program, &command, dir)?;
+    let child = command
+        .spawn()
+        .map_err(|e| format!("{}: {e}", program.display()))?;
+    Ok((child, claims))
+}
+
+/// What the launcher's launch does for a game it starts, for a game the supervisor starts: the release
+/// it runs from carries its completion marker, and the units the game leases by itself are registered
+/// and held. The supervisor re-reads the release before every start, so this covers the restart an
+/// update switches to; a game installed outside a launcher registry takes no leases, and nothing is
+/// written into its folder.
+fn lease(program: &Path, command: &Command, dir: &Path) -> Result<Vec<Claim>, String> {
+    let program =
+        std::path::absolute(program).map_err(|e| format!("{}: {e}", program.display()))?;
+    let folder = program
+        .parent()
+        .ok_or_else(|| format!("the game program {} has no folder", program.display()))?;
+    let install = folder
+        .canonicalize()
+        .unwrap_or_else(|_| folder.to_path_buf());
+    // The game looks for the launcher's registry in the folders above its own, and takes no leases
+    // when it finds none.
+    let Some(data) = install
+        .ancestors()
+        .find(|folder| folder.join("run-leases").is_dir())
+        .map(Path::to_path_buf)
+    else {
+        return Ok(Vec::new());
+    };
+    let data = data.canonicalize().unwrap_or(data);
+    let directory = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let selection = LaunchArguments::for_command(command).map_err(|e| e.to_string())?;
+    let units =
+        holder::lease_paths(&program, &selection, &data, &directory).map_err(|e| e.to_string())?;
+    // A copied release has no marker of the version it came from; the game opens `.installed` in the
+    // folder it runs from. Only the runtime's own release copies are ours to complete: the marker is
+    // what lists a version as installed, so a version under `versions/` that the cleanup invalidated
+    // keeps it missing even when `[engine] engine.path` starts the game from there.
+    let released = install.starts_with(data.join("server-runtime").join("releases"));
+    if released
+        && units
+            .iter()
+            .any(|(unit, complete)| *complete && *unit == install)
+    {
+        runtime_leases::write_completion(&install)
+            .map_err(|e| format!("{}: {e}", install.display()))?;
+    }
+    runtime_leases::lease_units(&program, &selection, &data, &directory)
+        .map_err(|e| format!("{}: {e}", install.display()))
 }
 
 /// The command `spawn` runs.
@@ -582,11 +638,15 @@ mod tests {
                 &Entities::default(),
                 None,
             ) {
-                Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                Err(e) if e.contains("Text file busy") && tries < 50 => {
                     tries += 1;
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
-                child => break child.unwrap().wait(),
+                child => {
+                    // The claims stay held until the game this test started is gone.
+                    let (mut child, _claims) = child.unwrap();
+                    break child.wait();
+                }
             }
         };
         std::fs::remove_dir_all(&root).unwrap();
@@ -634,5 +694,84 @@ mod tests {
             ))
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The launcher's data folder with a registry, a release it copied and the server's folder.
+    fn managed(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let data = root.join("data");
+        std::fs::create_dir_all(data.join("run-leases")).unwrap();
+        let install = data.join("server-runtime/releases/v1");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(data.join("server-runtime/game-files/horizon-client/26.3"))
+            .unwrap();
+        let server = data.join("servers/survival");
+        std::fs::create_dir_all(&server).unwrap();
+        (install, server, data)
+    }
+
+    #[test]
+    fn a_managed_release_gets_its_marker_and_its_units() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-engine-lease-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (install, server, _data) = managed(&root);
+        let program = install.join("horizon-client.exe");
+        std::fs::write(&program, "game").unwrap();
+        let resources = root.join("data/server-runtime/game-files/horizon-client/26.3");
+        let command = horizon_server_launch::command(&program, &resources, &server, false).unwrap();
+        // An update switches `current` to a release nobody prepared: the start prepares it.
+        let claims = lease(&program, &command, &server).unwrap();
+        assert!(!claims.is_empty(), "the units the game leases are held");
+        assert_eq!(
+            std::fs::metadata(install.join(".installed")).unwrap().len(),
+            0
+        );
+        drop(claims);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unmanaged_install_is_left_alone() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-engine-unmanaged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let install = root.join("releases/v1");
+        std::fs::create_dir_all(&install).unwrap();
+        let program = install.join("horizon-client.exe");
+        std::fs::write(&program, "game").unwrap();
+        let server = root.join("server");
+        std::fs::create_dir_all(&server).unwrap();
+        let command = horizon_server_launch::command(&program, &install, &server, false).unwrap();
+        // No launcher registry above the game: the game takes no leases, so nothing is written.
+        assert!(lease(&program, &command, &server).unwrap().is_empty());
+        assert!(!install.join(".installed").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `[engine] engine.path` may name a launcher version whose marker Windows cleanup removed
+    /// because it couldn't rename the folder. The game still takes its leases there, but the marker
+    /// is what lists the version as installed: only the runtime's own release copies are completed.
+    #[test]
+    fn a_launcher_version_keeps_the_marker_the_cleanup_removed() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-engine-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("data");
+        std::fs::create_dir_all(data.join("run-leases")).unwrap();
+        let install = data.join("versions/26.3");
+        std::fs::create_dir_all(&install).unwrap();
+        let program = install.join("horizon-client.exe");
+        std::fs::write(&program, "game").unwrap();
+        let server = data.join("servers/survival");
+        std::fs::create_dir_all(&server).unwrap();
+        let command = horizon_server_launch::command(&program, &install, &server, false).unwrap();
+        let claims = lease(&program, &command, &server).unwrap();
+        assert!(
+            !claims.is_empty(),
+            "the units the game leases are still held"
+        );
+        assert!(!install.join(".installed").exists());
+        drop(claims);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

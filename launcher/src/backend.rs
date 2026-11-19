@@ -1028,7 +1028,7 @@ pub fn version_dir(tag: &str) -> PathBuf {
     versions_dir().join(tag)
 }
 
-const COMPLETE: &str = ".installed";
+pub(crate) const COMPLETE: &str = ".installed";
 
 /// Installed versions, newest tag first.
 pub fn installed() -> Vec<String> {

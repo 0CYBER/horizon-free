@@ -278,6 +278,10 @@ pub fn set_up_in(root: &Path, version: &Path, tag: &str, game_version: &str) -> 
         }
         point(&root.join("current"), &release).map_err(|e| e.to_string())?;
     }
+    // The game leases the folder it is started from and opens its completion marker there. A copy
+    // of a release is an installation, as install.sh lays one out, so it needs the marker too.
+    let running = fs::canonicalize(root.join("current")).unwrap_or(release);
+    complete(&running)?;
     // The game files: a copy (preparing again rewrites files in place), swapped in whole.
     let from = version.join(".local/horizon-client").join(game_version);
     let to = game_files(root, game_version);
@@ -292,6 +296,14 @@ pub fn set_up_in(root: &Path, version: &Path, tag: &str, game_version: &str) -> 
     fs::rename(&fresh, &to).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// The completion marker the game opens in the folder it runs from: an empty ordinary file, as the
+/// launcher's installs have. The copy of a release is an installation, as install.sh lays one out,
+/// and without the marker the engine exits before loading a world.
+fn complete(release: &Path) -> Result<(), String> {
+    horizon_platform::mod_package::runtime_leases::write_completion(release)
+        .map_err(|e| format!("{}: {e}", release.join(backend::COMPLETE).display()))
 }
 
 /// A release folder without the launcher's own files (its prepared copy, install marker and the
@@ -412,7 +424,32 @@ pub fn run_managed(
         )?;
     crate::jars::prepare_launch(&mut engine, &crate::launch::Launch::default(), permission)
         .map_err(|error| Problem::plain(error.to_string()))?;
+    // Windows has no holder for a supervisor-hosted engine: the game only leases units that are
+    // already registered, so the launcher registers and holds the ones it computes, after the
+    // release folder is published and before the supervisor starts the engine. The supervisor does
+    // the same before every start, which covers a release an update switches to.
+    #[cfg(windows)]
+    let _leases = lease_engine(&engine, &backend::data_dir())?;
     stream(dir, supervisor, line)
+}
+
+/// Marks the engine's own folder complete and holds the leases of every unit the game it runs
+/// computes at start. The claims live until [`run_managed`] returns.
+#[cfg(windows)]
+fn lease_engine(engine: &Command, data: &Path) -> Result<Vec<crate::run_leases::Claim>, Problem> {
+    let program = Path::new(engine.get_program());
+    let folder = program.parent().unwrap_or_else(|| Path::new("."));
+    let release = fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let data = fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf());
+    // `[engine] engine.path` and the PATH can name an engine that is not the launcher's copy, and a
+    // version the cleanup invalidated keeps its marker missing: only the launcher's own runtime is
+    // ours to complete and to hold.
+    if !release.starts_with(data.join("server-runtime")) {
+        return Ok(Vec::new());
+    }
+    complete(&release).map_err(Problem::plain)?;
+    crate::run_leases::game_units_in(engine, program, &data)
+        .map_err(|error| Problem::plain(crate::native_mods::cache_error(error)))
 }
 
 fn stream(dir: &Path, mut command: Command, line: &dyn Fn(String)) -> Result<(), Problem> {

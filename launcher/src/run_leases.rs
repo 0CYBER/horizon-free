@@ -80,22 +80,24 @@ fn game_snapshot(command: &Command) -> std::io::Result<Option<Command>> {
 /// registered units, so the launcher registers (and holds) the ones it computes.
 #[cfg(windows)]
 pub(crate) fn game_units(command: &Command, executable: &Path) -> Result<Vec<Claim>, Error> {
+    game_units_in(command, executable, &crate::backend::data_dir())
+}
+
+/// [`game_units`] in the launcher data folder `data` (for tests).
+#[cfg(windows)]
+pub(crate) fn game_units_in(
+    command: &Command,
+    executable: &Path,
+    data: &Path,
+) -> Result<Vec<Claim>, Error> {
     let snapshot = game_snapshot(command)?;
     let selection = horizon_platform::mod_package::selection::LaunchArguments::for_command(
         snapshot.as_ref().unwrap_or(command),
     )?;
-    let data = crate::backend::data_dir().canonicalize()?;
+    let data = data.canonicalize()?;
     let cwd = std::path::absolute(command.get_current_dir().unwrap_or(Path::new(".")))?;
-    let units =
-        horizon_platform::mod_package::holder::lease_paths(executable, &selection, &data, &cwd)?;
-    let registry = Registry::open()?;
-    units
-        .into_iter()
-        .map(|(path, _)| {
-            let directory = Dir::open_ambient_dir(path, cap_std::ambient_authority())?;
-            registry.lock(&directory, LockMode::Shared)
-        })
-        .collect()
+    horizon_platform::mod_package::runtime_leases::lease_units(executable, &selection, &data, &cwd)
+        .map_err(Into::into)
 }
 
 /// Launcher-owned primitives-in-use; this is not a standalone cleanup safety guarantee.

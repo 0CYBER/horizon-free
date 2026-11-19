@@ -384,6 +384,29 @@ fn windows_unit_removal_never_restores_completion_after_a_rename_refusal() {
     assert!(!unit.exists());
 }
 
+#[test]
+fn the_completion_marker_is_an_empty_file_that_a_bad_one_never_hides() {
+    let root = tempfile::tempdir().unwrap();
+    let unit = root.path().join("release");
+    fs::create_dir(&unit).unwrap();
+    write_completion(&unit).unwrap();
+    let marker = unit.join(".installed");
+    assert!(marker.is_file());
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+    // What the game opens is an empty regular file: a marker that is not one is replaced, not trusted.
+    fs::write(&marker, b"installed").unwrap();
+    write_completion(&unit).unwrap();
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+    // A directory there is not ours to delete.
+    fs::remove_file(&marker).unwrap();
+    fs::create_dir(&marker).unwrap();
+    assert!(write_completion(&unit).is_err());
+    assert!(marker.is_dir());
+    fs::remove_dir(&marker).unwrap();
+    write_completion(&unit).unwrap();
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "daily"]
