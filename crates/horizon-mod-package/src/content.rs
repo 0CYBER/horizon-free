@@ -36,7 +36,7 @@ pub fn check_bytes(name: &str, bytes: &[u8]) -> Result<(), String> {
 /// Checks a content path: `assets/` or `data/`, then `/`-separated parts of
 /// `[a-z0-9_.-]`, none of them `.` or `..` and none ending in `.` (vanilla's
 /// resource-location characters, so the path means the same on every OS: Windows
-/// drops a trailing dot).
+/// drops a trailing dot). No part is a Windows device name or over 255 bytes either.
 pub fn check_path(name: &str) -> Result<(), String> {
     let bad = || format!("{name:?} is not a plain assets/ or data/ path");
     let mut parts = name.split('/');
@@ -51,6 +51,9 @@ pub fn check_path(name: &str) -> Result<(), String> {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
         if part.is_empty() || part.ends_with('.') || !chars_ok {
             return Err(bad());
+        }
+        if let Some(why) = crate::manifest::part_problem(part) {
+            return Err(format!("{name:?}: {why}; rename it"));
         }
     }
     // assets/<namespace>/<file> at least.
@@ -957,8 +960,9 @@ impl Content {
                     let name = entry.name().map_err(|e| e.to_string())?.into_owned();
                     // As `Package::read_zip`: the loader reads `\` as `/`, so no entry may
                     // name a path these checks would read differently.
-                    if !crate::manifest::plain_path(name.strip_suffix('/').unwrap_or(&name)) {
-                        return Err(format!("invalid package path: {name}"));
+                    let bare = name.strip_suffix('/').unwrap_or(&name);
+                    if let Some(why) = crate::manifest::path_problem(bare) {
+                        return Err(format!("invalid package path: {name:?}: {why}; rename it"));
                     }
                     if (name.starts_with("assets/") || name.starts_with("data/")) && !entry.is_dir()
                     {
@@ -3703,7 +3707,20 @@ capabilities = ["registries"]
     fn paths_are_plain() {
         assert!(check_path("assets/ruby/textures/block/ruby_block.png").is_ok());
         assert!(check_path("data/ruby/loot_table/blocks/a.json").is_ok());
+        for near in ["console.json", "com0.json", "lpt10.json", "nul_block.json"] {
+            assert!(
+                check_path(&format!("data/ruby/recipe/{near}")).is_ok(),
+                "{near}"
+            );
+        }
+        // 255 bytes is the longest file name the common file systems take.
+        assert!(check_path(&format!("data/ruby/{}.json", "a".repeat(250))).is_ok());
+        assert!(check_path(&format!("data/ruby/{}.json", "a".repeat(251))).is_err());
         for bad in [
+            "data/ruby/recipe/nul.json",
+            "data/ruby/recipe/com1.json",
+            "assets/ruby/aux/a.png",
+            "data/ruby/recipe/lpt9.tar.json",
             "assets/ruby",
             "assets/../x/y",
             "assets/ruby//a",

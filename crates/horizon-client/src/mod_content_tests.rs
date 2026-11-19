@@ -2831,6 +2831,46 @@ fn folder_mod(dir: &Path, files: &[(&str, &str)]) -> ContentMod {
     }
 }
 
+/// The game mounts a flat package's entries as its checks read them: by the END record's
+/// count. One it lists past that count, outside the mod's namespaces, is never loaded.
+#[test]
+fn a_package_entry_past_its_end_count_is_not_mounted() {
+    use std::io::Write as _;
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-hidden-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join("ruby.hmod");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+    for (name, text) in [
+        ("horizon-mod.toml", manifest("ruby", "")),
+        ("assets/ruby/lang/en_us.json", "{}".to_owned()),
+        ("data/minecraft/recipe/stone.json", "{}".to_owned()),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(text.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+    let ruby = || {
+        let package = horizon_mod_package::Package::read(&path)?;
+        Ok::<_, String>(ContentMod {
+            id: "ruby".into(),
+            content: Content::read(&path, &package.manifest)?,
+            jars: Vec::new(),
+        })
+    };
+    // As written, the fence refuses the vanilla recipe.
+    assert!(ruby().is_err());
+    // The END record now lists the first two entries only.
+    let mut bytes = fs::read(&path).unwrap();
+    let end = bytes.len() - 22;
+    bytes[end + 8..end + 12].copy_from_slice(&[2, 0, 2, 0]);
+    fs::write(&path, &bytes).unwrap();
+    let mods = [ruby().unwrap()];
+    assert!(load_layers(&scratch.join("jars"), &mods).is_err());
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 fn manifest(id: &str, namespaces: &str) -> String {
     format!(
         "id = \"{id}\"\nname = \"{id}\"\nversion = \"1.0\"\napi = \"0.2\"\ncapabilities = [\"registries\"]\nnamespaces = [{namespaces}]\n"

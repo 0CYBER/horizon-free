@@ -641,3 +641,29 @@ fn hidden_optional_data_pack_is_command_selectable_and_loads_its_function() {
         );
     });
 }
+
+/// A bundled pack is opened as the package's checks read it: an entry its END record leaves
+/// out (one the checks would refuse, here for its `\` separators) is never mounted.
+#[test]
+fn a_bundled_pack_entry_past_the_end_count_is_not_mounted() {
+    let mut fixture = Fixture::new(true);
+    fixture.files.push((
+        format!("{DATA_PACK}/data\\packmod\\function\\hidden.mcfunction"),
+        b"say hidden\n".to_vec(),
+    ));
+    fixture.publish();
+    assert!(horizon_mod_package::Package::read(&fixture.package).is_err());
+    let mut bytes = fs::read(&fixture.package).unwrap();
+    let end = bytes.len() - 22;
+    let count = u16::from_le_bytes([bytes[end + 8], bytes[end + 9]]) - 1;
+    bytes[end + 8..end + 10].copy_from_slice(&count.to_le_bytes());
+    bytes[end + 10..end + 12].copy_from_slice(&count.to_le_bytes());
+    fs::write(&fixture.package, &bytes).unwrap();
+    let mut registry = Registry::new(PackType::ServerData, fixture.sources());
+    let found = registry.add_pack_finders(PackRegistration::new(
+        Identifier::parse(&format!("packmod:{DATA_PACK}")).unwrap(),
+        PackType::ServerData,
+        mod_api::Text::translate("packmod.optional.title", vec![]),
+    ));
+    assert!(found.is_err());
+}

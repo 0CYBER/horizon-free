@@ -63,7 +63,10 @@ impl PackFinders for Registry {
         let source = if package.is_dir() {
             ResourceSource::directory(package.clone())
         } else {
-            ResourceSource::archive(package).map_err(|_| PackFinderError::MissingPackage)?
+            // Exactly the entries the package's checks read, as for its own layer.
+            horizon_assets::zip::Zip::open_exact(package)
+                .map(ResourceSource::opened_archive)
+                .map_err(|_| PackFinderError::MissingPackage)?
         };
         let source = source
             .subdirectory(location.path())
