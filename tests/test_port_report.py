@@ -110,6 +110,7 @@ class PortReportTests(unittest.TestCase):
 
     def test_regen_results_replace_the_stale_tables(self):
         regen = {"new": "26.3", "candidate": "/ports/26.3", "commit": "0123456789abcdef", "generators": {
+            "version_consts": {"status": "unchanged", "outputs": ["crates/horizon-core/src/version.rs"], "stat": {}},
             "packet_ids": {"status": "regenerated", "outputs": ["crates/horizon-protocol/src/ids.rs"],
                            "stat": {"crates/horizon-protocol/src/ids.rs": [142, 134]}},
             "entity_tracking": {"status": "unchanged", "outputs": ["crates/horizon-client/src/lan/tracking.rs"],
@@ -123,11 +124,25 @@ class PortReportTests(unittest.TestCase):
         self.assertEqual(failed["rank"], 1)
         self.assertIn("no longer compiles", failed["title"])
         self.assertEqual(built["summary"]["generators"],
-                         {"packet_ids": "regenerated", "entity_tracking": "unchanged", "lan_command_order": "failed"})
+                         {"version_consts": "unchanged", "packet_ids": "regenerated",
+                          "entity_tracking": "unchanged", "lan_command_order": "failed"})
         text = report.markdown(built)
-        self.assertIn("regenerated 1, unchanged 1, failed 1", text)
+        self.assertIn("regenerated 1, unchanged 2, failed 1", text)
         self.assertIn("`crates/horizon-protocol/src/ids.rs` (+142 -134)", text)
         self.assertIn("- javac: `ParityData.java:45: cannot find symbol: variable WORLD`", text)
+
+    def test_partial_regen_keeps_omitted_stale_tables(self):
+        regen = {"new": "26.3", "candidate": "/ports/26.3", "commit": "0123456789abcdef", "generators": {
+            "packet_ids": {"status": "regenerated", "outputs": ["crates/horizon-protocol/src/ids.rs"],
+                           "stat": {"crates/horizon-protocol/src/ids.rs": [1, 1]}}}}
+        built = self.build(regen=regen)
+        stale_files = {i["files"][0] for i in built["items"] if i["kind"] == "regenerate"}
+        self.assertEqual(stale_files, {"crates/horizon-core/src/version.rs",
+                                       "crates/horizon-client/src/lan/tracking.rs"})
+        self.assertEqual(built["summary"]["generators"]["crates/horizon-core/src/version.rs"], "stale")
+        self.assertEqual(built["summary"]["generators"]["packet_ids"], "regenerated")
+        text = report.markdown(built)
+        self.assertIn("Regenerate crates/horizon-core/src/version.rs", text)
 
     def test_ranks_and_kinds(self):
         built = self.build()
