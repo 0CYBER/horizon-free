@@ -224,6 +224,8 @@ pub struct FrameStart<'a> {
     pub sky_visible: bool,
     /// The ray scene, when the game traces rays (`ExternalPipeline::start_frame`).
     pub scene: Option<&'a RayScene>,
+    /// This frame's lightmap, RGBA rows of sky level by block level (`Renderer::lightmap_pixels`).
+    pub lightmap: &'a [u8; 16 * 16 * 4],
 }
 
 /// What the renderer hands the pack after the water mirror (`ExternalPipeline::prepare_world_targets`).

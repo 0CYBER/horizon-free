@@ -6,14 +6,15 @@ use horizon_shader_api::{
     Frame, Pack, StageKind, compose,
     package::sha256_hex,
     reference,
-    stages::{Tracing, shaded_entries},
+    stages::{Tracing, light_source_entries, shaded_entries},
 };
 use naga::valid::Capabilities;
 use std::path::Path;
 
-/// The stage's entry points for a pack that doesn't name `shaded_tint`.
+/// The stage's entry points for a pack that doesn't name `shaded_tint` or the light-source
+/// fields.
 fn entries_of(kind: StageKind) -> String {
-    shaded_entries(kind.entries(), false)
+    light_source_entries(&shaded_entries(kind.entries(), false), None)
 }
 
 fn root() -> &'static Path {
@@ -204,10 +205,20 @@ fn the_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
 }
 
 /// The `Frame` struct a prelude declares, for a pack with `[ray_tracing]` or without, with
-/// `[[resource]]` or without, and whose files name `moon_phase` or not, as (name, offset) and
-/// its span.
-fn frame_layout(ray_tracing: bool, kept: bool, moon_phase: bool) -> (Vec<(String, usize)>, usize) {
-    let module = validate(&Frame::declared_wgsl(ray_tracing, kept, moon_phase));
+/// `[[resource]]` or without, and whose files name `moon_phase` or not and `full_lightmap` or
+/// not, as (name, offset) and its span.
+fn frame_layout(
+    ray_tracing: bool,
+    kept: bool,
+    moon_phase: bool,
+    full_lightmap: bool,
+) -> (Vec<(String, usize)>, usize) {
+    let module = validate(&Frame::declared_wgsl(
+        ray_tracing,
+        kept,
+        moon_phase,
+        full_lightmap,
+    ));
     let (_, ty) = module
         .types
         .iter()
@@ -237,25 +248,32 @@ fn the_frame_s_wgsl_layout_is_the_uploaded_struct_s() {
     for ray_tracing in [false, true] {
         for kept in [false, true] {
             for moon_phase in [false, true] {
-                let mut want = rust.clone();
-                let left = |range: std::ops::Range<usize>, on: bool| (!on).then_some(range);
-                for range in [
-                    left(Frame::MOON_FIELDS, moon_phase),
-                    left(Frame::KEPT_FIELDS, kept),
-                    left(Frame::RAY_FIELDS, ray_tracing),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    want.drain(range);
+                for full_lightmap in [false, true] {
+                    let mut want = rust.clone();
+                    let left = |range: std::ops::Range<usize>, on: bool| (!on).then_some(range);
+                    for range in [
+                        left(Frame::FULL_LIGHTMAP_FIELDS, full_lightmap),
+                        left(Frame::MOON_FIELDS, moon_phase),
+                        left(Frame::KEPT_FIELDS, kept),
+                        left(Frame::RAY_FIELDS, ray_tracing),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        want.drain(range);
+                    }
+                    let keys = format!(
+                        "ray tracing {ray_tracing}, kept {kept}, moon phase {moon_phase}, \
+                         full lightmap {full_lightmap}"
+                    );
+                    let (wgsl, span) = frame_layout(ray_tracing, kept, moon_phase, full_lightmap);
+                    assert_eq!(wgsl, want, "{keys}");
+                    // The fog's fields are every pack's, and the moon's phase is in the padding
+                    // of the 16 bytes before the full light's: without that the struct ends
+                    // there, as it did before it, and with it it is the buffer's size.
+                    let end = if full_lightmap { size } else { size - 16 };
+                    assert_eq!(span, end, "{keys}");
                 }
-                let keys =
-                    format!("ray tracing {ray_tracing}, kept {kept}, moon phase {moon_phase}");
-                let (wgsl, span) = frame_layout(ray_tracing, kept, moon_phase);
-                assert_eq!(wgsl, want, "{keys}");
-                // The fog's fields are every pack's, and the moon's phase is in the padding of
-                // the last 16 bytes: the struct is the buffer's size either way.
-                assert_eq!(span, size, "{keys}");
             }
         }
     }

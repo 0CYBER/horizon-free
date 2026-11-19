@@ -401,7 +401,7 @@ pub struct NativeShadow {
 fn entity_source() -> String {
     format!(
         "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{ENTITY_ENTRIES}",
-        FrameInputs::declared_wgsl(true, true, false),
+        FrameInputs::declared_wgsl(true, true, false, false),
         horizon_shader_api::stages::SHADOW_HELPERS,
     )
 }
@@ -517,7 +517,7 @@ fn shader_source(
         (None, None) => (
             format!(
                 "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{UNTAKEN}",
-                FrameInputs::declared_wgsl(true, true, false),
+                FrameInputs::declared_wgsl(true, true, false, false),
                 horizon_shader_api::stages::SHADOW_HELPERS,
             ),
             super::native_material::DISPLACE_VANILLA,
@@ -897,7 +897,7 @@ mod tests {
     #[test]
     fn the_shadow_shaders_declare_the_frame_as_before() {
         use sha2::{Digest, Sha256};
-        let frame = FrameInputs::declared_wgsl(true, true, false);
+        let frame = FrameInputs::declared_wgsl(true, true, false, false);
         assert_eq!(
             format!("{:x}", Sha256::digest(&frame)),
             "88afec7c6709091383bffd26f431131ac68e2f6fd5d1079dd7febb591209211a"

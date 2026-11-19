@@ -9,7 +9,9 @@
 //! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]`, and its
 //! material stage where that traces, is checked twice: as every device runs it, where `trace`
 //! misses, and against the scene.
-use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SHADED_TINT};
+use crate::inputs::{
+    COMPUTE_INPUT, DISPLACEMENT_INPUT, ENTITY_LIGHT_SOURCE, Frame, RAY_HIT, SHADED_TINT,
+};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
@@ -104,6 +106,21 @@ impl CheckedStage {
             naga::TypeInner::Struct { members, .. } => {
                 t.name.as_deref().is_some_and(|n| inputs.contains(&n))
                     && (members.iter()).any(|m| m.name.as_deref() == Some(SHADED_TINT.name))
+            }
+            _ => false,
+        })
+    }
+
+    /// Whether the stage's input has its light-source fields (`inputs::light_source`): its
+    /// pack's files name one (`stages::names_light_source`), so the renderer's constructor of
+    /// it passes them.
+    pub fn light_source(&self) -> bool {
+        let inputs = ["MaterialInput", "EntityInput"];
+        self.module.types.iter().any(|(_, t)| match &t.inner {
+            naga::TypeInner::Struct { members, .. } => {
+                t.name.as_deref().is_some_and(|n| inputs.contains(&n))
+                    && (members.iter())
+                        .any(|m| m.name.as_deref() == Some(ENTITY_LIGHT_SOURCE[0].name))
             }
             _ => false,
         })

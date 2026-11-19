@@ -1088,7 +1088,7 @@ struct HorizonMaterialIn {
     let input = MaterialInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint), in.shade,
         in.ao, in.light, horizon_decode(in.lightmap), in.world, in.uv, in.translucent != 0u, in.tags,
         in.material, in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent,
-        vec3<f32>(0.0), 0.0@shaded_tint@);
+        vec3<f32>(0.0), 0.0@light_source@@shaded_tint@);
     return horizon_encode_rgba(material(input).color);
 }
 "
@@ -1240,7 +1240,7 @@ struct HorizonEntityIn {
     let input = EntityInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint),
         horizon_decode_rgba(in.overlay), horizon_decode(in.lightmap), horizon_decode(vec3<f32>(in.shade)).x,
         in.world, in.full_light != 0u, horizon_entity_normal(in.world), in.kind, vec3<f32>(0.0),
-        in.translucent != 0u, in.light, in.uv, in.position.xy / frame.resolution);
+        in.translucent != 0u, in.light, in.uv, in.position.xy / frame.resolution@light_source@);
     return horizon_encode_rgba(entity(input).color);
 }
 ";
@@ -1343,7 +1343,9 @@ impl StageKind {
             self,
             StageKind::Post | StageKind::Material | StageKind::Compute | StageKind::BeforeWorld
         );
-        self.prelude_rays(tracing, rays, false, false, false, false, false)
+        self.prelude_rays(
+            tracing, rays, false, false, false, false, false, false, false,
+        )
     }
 
     /// `prelude_traced`, with the ray names only where `rays`: a material, compute or
@@ -1353,6 +1355,9 @@ impl StageKind {
     /// `vanilla_fog`, for a pack with `[frame] fog = "pack"`.
     /// `shaded`: `SHADED_TINT` last in the terrain's inputs and `RayHit`, for a pack whose files
     /// name it. `moon_phase`: the frame's `moon_phase`, for a pack whose files name it.
+    /// `light_source`: the input's `inputs::light_source` fields, for a pack whose files name
+    /// one of them (`names_light_source`). `full_lightmap`: the frame's `full_lightmap`, for a
+    /// pack whose files name it.
     fn prelude_rays(
         self,
         tracing: Tracing,
@@ -1362,6 +1367,8 @@ impl StageKind {
         fog: bool,
         shaded: bool,
         moon_phase: bool,
+        light_source: bool,
+        full_lightmap: bool,
     ) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1373,11 +1380,11 @@ impl StageKind {
             crate::API,
             crate::reference::PATH
         );
-        out += &Frame::declared_wgsl(tracing != Tracing::None, kept, moon_phase);
+        out += &Frame::declared_wgsl(tracing != Tracing::None, kept, moon_phase, full_lightmap);
         if kept {
             out += &crate::kept::reasons_wgsl();
         }
-        out += &crate::inputs::shaded(self.input(), shaded && self.terrain());
+        out += &crate::inputs::declared(self.input(), light_source, shaded && self.terrain());
         if matches!(self, StageKind::Material | StageKind::Entity) {
             out += &SURFACE.wgsl();
         }
@@ -1811,6 +1818,55 @@ pub fn names_moon_phase(pack: &Pack) -> bool {
     pack.manifest.files().into_iter().any(named)
 }
 
+/// The names of `inputs::MATERIAL_LIGHT_SOURCE`.
+const LIGHT_SOURCE_NAMES: [&str; 3] = [
+    "light_source_tier",
+    "light_source_whole",
+    "light_source_threshold",
+];
+
+/// Whether the files of `pack` name one of `names` anywhere outside a comment, dead code included.
+fn files_name(pack: &Pack, names: &[&str]) -> bool {
+    let named = |file: &str| {
+        let text = pack.source(file).unwrap_or_default();
+        identifiers(text)
+            .iter()
+            .any(|(_, name)| names.contains(name))
+    };
+    pack.manifest.files().into_iter().any(named)
+}
+
+/// Whether the files of `pack` name `light_source_tier`, `light_source_whole` or
+/// `light_source_threshold`: only then do `MaterialInput` and `EntityInput` have their
+/// `inputs::light_source` fields, so a pack that doesn't is built from the WGSL it had before
+/// them (a false positive only declares the fields).
+pub fn names_light_source(pack: &Pack) -> bool {
+    files_name(pack, &LIGHT_SOURCE_NAMES)
+}
+
+/// Whether the files of `pack` name `full_lightmap`: only then does its `Frame` have the field.
+pub fn names_full_lightmap(pack: &Pack) -> bool {
+    files_name(pack, &["full_lightmap"])
+}
+
+/// Where an entry point's constructor of `MaterialInput` or `EntityInput` takes its
+/// `inputs::light_source` fields in a pack that names them, before `SHADED_TINT_ARGUMENT`.
+pub const LIGHT_SOURCE_ARGUMENT: &str = "@light_source@";
+
+/// `entries` with `LIGHT_SOURCE_ARGUMENT` filled in with `arguments` (each after a comma) for a
+/// pack that names the fields, removed for one that doesn't (`None`).
+pub fn light_source_entries(entries: &str, arguments: Option<&str>) -> String {
+    entries.replace(LIGHT_SOURCE_ARGUMENT, arguments.unwrap_or_default())
+}
+
+/// The check's stand-ins for the light-source fields, by stage (`light_source_entries`).
+fn light_source_stub(kind: StageKind) -> &'static str {
+    match kind {
+        StageKind::Material => ", 0u, false, 0.0",
+        _ => ", 0u",
+    }
+}
+
 /// Whether a material stage's files, `texts`, name a trace function: only then does its prelude
 /// have them and the renderer build its terrain against the scene.
 fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
@@ -1886,8 +1942,19 @@ pub(crate) fn compose_traced(
     let fog = m.fog == crate::Fog::Pack;
     let shaded = names_shaded_tint(pack);
     let moon_phase = names_moon_phase(pack);
-    let mut prelude = kind.prelude_rays(tracing, rays, kept, entities, fog, shaded, moon_phase)
-        + &texture_declarations(&pack.manifest.textures);
+    let light = names_light_source(pack);
+    let full_lightmap = names_full_lightmap(pack);
+    let mut prelude = kind.prelude_rays(
+        tracing,
+        rays,
+        kept,
+        entities,
+        fog,
+        shaded,
+        moon_phase,
+        light,
+        full_lightmap,
+    ) + &texture_declarations(&pack.manifest.textures);
     if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);
     }
@@ -1901,10 +1968,14 @@ pub(crate) fn compose_traced(
     for f in &files {
         push(f, source(f));
     }
+    let entries = |text: &str| {
+        let stub = light.then(|| light_source_stub(kind));
+        light_source_entries(&shaded_entries(text, shaded), stub)
+    };
     if kind == StageKind::Material && m.displacement.is_some() {
         push(
             "<entries>",
-            &(shaded_entries(kind.entries(), shaded) + DISPLACEMENT_ENTRIES),
+            &(entries(kind.entries()) + DISPLACEMENT_ENTRIES),
         );
     } else if let (StageKind::Compute | StageKind::BeforeWorld, Some(stage)) = (kind, stage) {
         push("<entries>", &compute_entries(stage));
@@ -1914,7 +1985,7 @@ pub(crate) fn compose_traced(
     {
         push("<entries>", POST_ENTRIES_KEPT);
     } else {
-        push("<entries>", &shaded_entries(kind.entries(), shaded));
+        push("<entries>", &entries(kind.entries()));
     }
     composed
 }

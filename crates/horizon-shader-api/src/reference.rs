@@ -40,14 +40,19 @@ fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
 
 /// `table` with `SHADED_TINT` as the last row: the struct ends with it in a pack that names it.
 fn shaded_table(s: &Struct) -> String {
+    input_table(s, true)
+}
+
+/// `table` with the rows of the fields a pack's files may add (`inputs::light_source`, then
+/// `SHADED_TINT` where `shaded`), in the order the struct has them.
+fn input_table(s: &Struct, shaded: bool) -> String {
     let mut out = table(s, None);
     out.pop();
-    out + &format!(
-        "| `{}` | `{}` | {} |\n\n",
-        SHADED_TINT.name,
-        SHADED_TINT.ty,
-        one_line(SHADED_TINT.doc)
-    )
+    let shaded = shaded.then_some(&SHADED_TINT);
+    for f in crate::inputs::light_source(s).iter().chain(shaded) {
+        out += &format!("| `{}` | `{}` | {} |\n", f.name, f.ty, one_line(f.doc));
+    }
+    out + "\n"
 }
 
 fn one_line(doc: &str) -> String {
@@ -454,11 +459,10 @@ pub fn markdown() -> String {
     out += "\n";
     for kind in StageKind::ALL {
         out += &format!("## {}\n\n`{}`\n\n", kind.name(), kind.signature());
-        out += &if matches!(kind, StageKind::Material | StageKind::Vertex) {
-            shaded_table(kind.input())
-        } else {
-            table(kind.input(), None)
-        };
+        out += &input_table(
+            kind.input(),
+            matches!(kind, StageKind::Material | StageKind::Vertex),
+        );
         if kind == StageKind::Entity {
             out += ENTITY_NOTES;
         }

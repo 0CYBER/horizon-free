@@ -29,7 +29,8 @@ fn shader_with(entity: &str, more: &str) -> String {
         .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
         .into();
     let report = check(&Pack::from_files(files).unwrap()).unwrap();
-    shader_source(&report.stages[0].source, report.manifest.fog)
+    let stage = &report.stages[0];
+    shader_source(&stage.source, report.manifest.fog, stage.light_source())
 }
 
 /// A stage that fogs its own surfaces, as vanilla would, under `[frame] fog = "pack"`.
@@ -129,6 +130,218 @@ fn the_entries_around_a_stage_horizon_fogs_are_unchanged() {
     let own = entries(OWN_FOG);
     assert!(own.contains("    let f = vanilla_fog(position);\n"));
     assert!(!own.contains("horizon_vanilla_globals.fog"));
+}
+
+/// A pack whose files name `light_source_tier` reads, in `EntityInput`, the tier entity.wgsl's
+/// look reads (its `tier`, from the quad's layer), for every tier a quad carries, through the
+/// stage's own vertex (`horizon_entity_vertex`) and fragment (`horizon_entity_fs`).
+#[test]
+fn a_pack_reads_the_light_source_tier_the_engine_s_look_reads() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        return;
+    };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+    else {
+        return;
+    };
+    let entity = "fn entity(input: EntityInput) -> Surface {\n    \
+        return Surface(vec4<f32>(f32(input.light_source_tier) * 0.125, 0.0, 0.0, 1.0));\n}\n";
+    let tiers = [0u32, 1, 2, 3, 4];
+    let n = tiers.len();
+    let list: Vec<String> = tiers.iter().map(|t| format!("{t}u")).collect();
+    // One point a tier, at its own texel, lit as a mob's quad.
+    let source = shader(entity)
+        + &format!(
+            "
+@vertex fn test_vs(@builtin(vertex_index) v: u32) -> horizon_entity_out {{
+    var tiers = array<u32, {n}>({list});
+    let layer = (tiers[v] << 16u) | {kind}u;
+    var out = horizon_entity_vertex(vec3(0.0, 0.0, -2.0), vec2(0.5), layer, vec4(1.0),
+        vec4(240u), vec4(0.0, 1.0, 0.0, 1.0), vec2(0.0), (layer >> horizon_entity_kind_shift) & 7u);
+    out.clip = vec4((f32(v) + 0.5) / 8.0 - 1.0, 0.0, 0.5, 1.0);
+    return out;
+}}
+@fragment fn test_engine(in: horizon_entity_out) -> @location(0) vec4<f32> {{
+    return vec4(f32(horizon_entity_own(in).tier) * 0.125, 0.0, 0.0, 1.0);
+}}
+",
+            list = list.join(", "),
+            kind = kind_bits(EntityKind::Entity),
+        );
+    let entities = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &super::entity_entries(),
+    });
+    let frame = super::super::native_post::NativeFrame::new(
+        &device,
+        None,
+        Vec::new(),
+        Default::default(),
+        None,
+        false,
+    );
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 4,
+            height: 4,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let sampler = device.create_sampler(&Default::default());
+    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 16384,
+        usage: wgpu::BufferUsages::UNIFORM,
+        mapped_at_creation: false,
+    });
+    let entries: Vec<_> = (0..=7)
+        .map(|binding| wgpu::BindGroupEntry {
+            binding,
+            resource: match binding {
+                0 => uniform.as_entire_binding(),
+                2 | 4 | 6 => wgpu::BindingResource::Sampler(&sampler),
+                _ => wgpu::BindingResource::TextureView(&view),
+            },
+        })
+        .collect();
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &entities,
+        entries: &entries,
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&entities), None, None, Some(&frame.layout)],
+        ..Default::default()
+    });
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+    });
+    // The stage's alpha decides (`[entity] coverage = "pack"`): the blank atlas has none.
+    let constants = [
+        ("horizon_vanilla_HDR_WRITE_LIGHT", 0.0),
+        ("horizon_vanilla_FRAME_LINEAR", 0.0),
+        ("horizon_entity_coverage_pack", 1.0),
+    ];
+    let format = wgpu::TextureFormat::Rgba32Float;
+    let drawn = |fragment: &str| -> Vec<[f32; 4]> {
+        let options = wgpu::PipelineCompilationOptions {
+            constants: &constants,
+            ..Default::default()
+        };
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("test_vs"),
+                compilation_options: options.clone(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::PointList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some(fragment),
+                compilation_options: options,
+                targets: &[Some(format.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        // 16 texels of 16 bytes: the 256 bytes a copy's rows align to.
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 256,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: -1.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(3, &frame.group, &[]);
+        pass.draw(0..n as u32, 0..1);
+        drop(pass);
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &read,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: None,
+                },
+            },
+            target.size(),
+        );
+        queue.submit([encoder.finish()]);
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        bytemuck::pod_collect_to_vec(&read.slice(..).get_mapped_range().unwrap())
+    };
+    // The stage's colour comes out encoded for a frame of vanilla's gamma. A drawn pixel's alpha
+    // is 1; the clear's is 0, so a pixel the stage skipped can't pass as tier 0.
+    let pack: Vec<f32> = drawn("horizon_entity_fs")[..n]
+        .iter()
+        .map(|t| {
+            assert_eq!(t[3], 1.0, "the pack drew every pixel");
+            (t[0].max(0.0).powf(2.2) / 0.125).round()
+        })
+        .collect();
+    let engine: Vec<f32> = (drawn("test_engine")[..n].iter())
+        .map(|t| (t[0] / 0.125).round())
+        .collect();
+    let want = tiers.map(|t| t as f32);
+    assert_eq!(engine, want, "the engine's tiers");
+    assert_eq!(pack, want, "the pack's tiers");
 }
 
 /// The kind is written above every bit the entity shaders read of a layer (the overlay, the

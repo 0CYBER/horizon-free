@@ -9278,6 +9278,7 @@ impl Renderer {
                 light_revision: self.light_revision,
                 sky_visible,
                 scene: self.ray_scene.as_ref(),
+                lightmap: &self.lightmap_pixels,
             });
         }
         // One of Horizon's own packs: its shadow passes, from the shadow camera's lists.

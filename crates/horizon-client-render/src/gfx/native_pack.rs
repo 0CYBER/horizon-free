@@ -532,8 +532,10 @@ impl NativePack {
             light_revision,
             sky_visible,
             scene,
+            lightmap,
         } = start;
         let scene = scene.and_then(|s| s.traced(frame.camera));
+        self.frame.full_lightmap = super::native_post::full_lightmap(lightmap);
         self.write(queue, frame, size, output.display(), scene.as_ref());
         self.frame
             .block_light

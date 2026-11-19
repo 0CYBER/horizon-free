@@ -295,6 +295,14 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-19: API 0.2 (additions, preview): what Horizon's own HDR look reads of light sources, for a pack that
+  draws it. `MaterialInput.light_source_tier` (0 none, 1 low to 4 very bright), `light_source_whole` (the whole sprite
+  shines) and `light_source_threshold` (the brightness a texel of the sprite must reach to shine), and
+  `EntityInput.light_source_tier`, declared after their other fields (before `shaded_tint`) only for a pack whose
+  files name one of the three; and `frame.full_lightmap`, the lightmap at full block and sky light, declared only for
+  a pack whose files name it, at the end of `Frame`. The vertex, the sprite and the lightmap already hold them: they
+  cost no vertex data, no look storage and no reload. A pack that names none of them sees the same prelude and entry
+  points as before, and its picture is unchanged.
 - 2026-11-18: API 0.2 (preview), a fix toward the reference: a terrain hit's `RayHit.emission` is its block's light
   level over 15, as `MaterialInput.emission` (one candle 3/15, a lantern 1), no longer its brightness class (7/15,
   14/15 or 1); an entity hit's stays 0. `MaterialInput.emission` comes with the vertex, as `shaded_tint` does: of

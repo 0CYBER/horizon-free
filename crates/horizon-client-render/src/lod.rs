@@ -13,7 +13,7 @@ mod detail;
 mod kept;
 mod mesh;
 #[cfg(test)]
-pub(crate) use mesh::far_look;
+pub(crate) use mesh::{far_look, far_top_vertex};
 pub mod packed;
 mod samples;
 use horizon_world::registry::BlockStateId;

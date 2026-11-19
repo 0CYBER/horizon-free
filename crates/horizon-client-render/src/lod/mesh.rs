@@ -247,30 +247,14 @@ impl Mesher {
                         Tint::Water => biome.water,
                         Tint::Constant(color) => color,
                     };
-                    let channel = |shift: u32| (((rgb >> shift) & 255u32) as f32 * shade) as u32;
-                    // The colour keeps the Overworld's shades in every dimension; a shader pack's
-                    // `shade` is the dimension's.
-                    let level = || context.tables.facts(span.state).map_or(0, |f| f.emission);
-                    // The HDR tier and light level, as the section mesher writes them, so a light
-                    // source keeps shining across the LOD boundary; and the same fluid flag, so the
-                    // material stage's water reaches the distant tiles too.
-                    let color = crate::mesher::giving_off(
-                        crate::mesher::emitting(
-                            channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
-                            context.tables.hdr_tier(span.state),
-                        ),
-                        level(),
+                    let level = context.tables.facts(span.state).map_or(0, |f| f.emission);
+                    let color = far_color(
+                        rgb,
+                        shade,
+                        (context.tables.hdr_tier(span.state), level),
+                        fluid.then_some(direction),
+                        self.shader_pack,
                     );
-                    let color = if self.shader_pack {
-                        crate::mesher::for_shaders_format(
-                            color,
-                            fluid.then_some(direction as usize),
-                        )
-                    } else if fluid {
-                        as_fluid(color)
-                    } else {
-                        color
-                    };
                     Paint {
                         look: L::make(|| far_look(looks, rgb, direction, fluid)),
                         layer: face.layer,
@@ -284,6 +268,84 @@ impl Mesher {
             opaque: styles.opaque,
         }
     }
+}
+
+/// A far face's vertex colour: tint 0xRRGGBB times `shade`, with its block's HDR tier and light
+/// level (`light`, from `MeshTables::hdr_tier` and the block's emission) as the section mesher
+/// writes them, so a light source keeps shining across the LOD boundary; and the same fluid flag
+/// on a `fluid` face, so the material stage's water reaches the distant tiles too. A
+/// `shader_pack` takes the `shaders/` format (`crate::mesher::for_shaders_format`).
+fn far_color(
+    rgb: u32,
+    shade: f32,
+    light: (u8, u8),
+    fluid: Option<Direction>,
+    shader_pack: bool,
+) -> u32 {
+    // The colour keeps the Overworld's shades in every dimension; a shader pack's `shade` is the
+    // dimension's.
+    let channel = |shift: u32| (((rgb >> shift) & 255u32) as f32 * shade) as u32;
+    let color = crate::mesher::giving_off(
+        crate::mesher::emitting(
+            channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
+            light.0,
+        ),
+        light.1,
+    );
+    if shader_pack {
+        crate::mesher::for_shaders_format(color, fluid.map(|d| d as usize))
+    } else if fluid.is_some() {
+        as_fluid(color)
+    } else {
+        color
+    }
+}
+
+/// The top vertex of a far tile of one block whose HDR tier and light level are `light`, on
+/// sprite `layer`, as the LOD mesher emits it for a pack that isn't `shaders/`.
+#[cfg(test)]
+pub(crate) fn far_top_vertex(light: (u8, u8), layer: u16) -> TerrainVertex {
+    let span = Span {
+        min: 0,
+        max: 4,
+        state: BlockStateId(1),
+        biome: 0,
+        light: 240,
+    };
+    let columns: Vec<Column> = (0..CELLS * CELLS)
+        .map(|_| Column {
+            surface: None,
+            spans: vec![span].into(),
+        })
+        .collect();
+    let refs: Vec<&Column> = columns.iter().collect();
+    let key = TileKey {
+        x: 0,
+        z: 0,
+        level: 0,
+    };
+    let paint = |s: &Span, _, _| Material::<()> {
+        faces: [
+            Some(Paint {
+                layer,
+                light: s.light,
+                color: far_color(0xffffff, 1.0, light, None, false),
+                translucent: false,
+                look: (),
+            }),
+            None,
+        ],
+        fluid: 0,
+        opaque: true,
+    };
+    let (no_edges, covered) = (Default::default(), FxHashSet::default());
+    let mesh = mesh_columns_with_edges(key, &refs, &covered, None, &no_edges, &[], paint);
+    let top = mesh.solid.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
+    let quads = mesh.solid.as_chunks::<4>().0;
+    quads
+        .iter()
+        .find(|q| q.iter().all(|v| v.pos[1] == top))
+        .unwrap()[0]
 }
 
 /// A far face's `QuadLook` words (`Mesher::looks`: 0 none, 1 the Overworld's shades, 2 the

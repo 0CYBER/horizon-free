@@ -250,6 +250,12 @@ uniform! {
         /// this field.
         moon_phase: u32,
         @pad padding: [u32; 1],
+        /// Vanilla's light colour at full block and sky light (15 and 15) this frame, linear: what
+        /// `MaterialInput.lightmap` and `EntityInput.lightmap` are where light is full. Its
+        /// brightest channel is 1 unless something dims all light (the Darkness effect, a
+        /// wither's bar). Only a pack whose files name `full_lightmap` has this field.
+        full_lightmap: [f32; 3],
+        @pad full_lightmap_padding: [u32; 1],
     }
 }
 
@@ -266,14 +272,24 @@ impl Frame {
     /// uploaded struct keeps its size and no field moves.
     pub const MOON_FIELDS: std::ops::Range<usize> = 61..62;
 
+    /// Where `full_lightmap` is among the fields: the last, on 16 bytes of its own after the
+    /// struct it had before, so no other field moves.
+    pub const FULL_LIGHTMAP_FIELDS: std::ops::Range<usize> = 62..63;
+
     /// The fields the prelude declares, by index, for a pack that asks for the scene
     /// (`[ray_tracing]`) or not, keeps resources (`[[resource]]`) or not, and whose files name
-    /// `moon_phase` or not.
-    fn declared_at(ray_tracing: bool, kept: bool, moon_phase: bool) -> Vec<usize> {
+    /// `moon_phase` or not, and `full_lightmap` or not.
+    fn declared_at(
+        ray_tracing: bool,
+        kept: bool,
+        moon_phase: bool,
+        full_lightmap: bool,
+    ) -> Vec<usize> {
         let skipped = |i: usize| {
             (!ray_tracing && Self::RAY_FIELDS.contains(&i))
                 || (!kept && Self::KEPT_FIELDS.contains(&i))
                 || (!moon_phase && Self::MOON_FIELDS.contains(&i))
+                || (!full_lightmap && Self::FULL_LIGHTMAP_FIELDS.contains(&i))
         };
         (0..Self::WGSL.fields.len())
             .filter(|&i| !skipped(i))
@@ -281,17 +297,28 @@ impl Frame {
     }
 
     /// The fields the prelude declares (`declared_at`).
-    pub fn declared(ray_tracing: bool, kept: bool, moon_phase: bool) -> Vec<Field> {
-        let at = Self::declared_at(ray_tracing, kept, moon_phase).into_iter();
+    pub fn declared(
+        ray_tracing: bool,
+        kept: bool,
+        moon_phase: bool,
+        full_lightmap: bool,
+    ) -> Vec<Field> {
+        let at = Self::declared_at(ray_tracing, kept, moon_phase, full_lightmap).into_iter();
         at.map(|i| Self::WGSL.fields[i]).collect()
     }
 
     /// `declared` as WGSL, each field at the offset the uploaded struct has it: a field followed
     /// by bytes WGSL's layout wouldn't leave (a removed field's, or the epochs' without
-    /// `[[resource]]`) keeps them (`@size`).
-    pub fn declared_wgsl(ray_tracing: bool, kept: bool, moon_phase: bool) -> String {
+    /// `[[resource]]`) keeps them (`@size`). Without `full_lightmap` the struct ends where it did
+    /// before it, 16 bytes short of the uploaded one.
+    pub fn declared_wgsl(
+        ray_tracing: bool,
+        kept: bool,
+        moon_phase: bool,
+        full_lightmap: bool,
+    ) -> String {
         let mut out = format!("struct {} {{\n", Self::WGSL.name);
-        let at = Self::declared_at(ray_tracing, kept, moon_phase);
+        let at = Self::declared_at(ray_tracing, kept, moon_phase, full_lightmap);
         for (n, &i) in at.iter().enumerate() {
             let f = Self::WGSL.fields[i];
             out += "    ";
@@ -529,17 +556,57 @@ pub const SHADED_TINT: Field = Field {
 
 /// `input` with `SHADED_TINT` last where `shaded`.
 pub fn shaded(input: &Struct, shaded: bool) -> String {
-    let mut out = input.wgsl();
-    if shaded {
-        out.truncate(out.len() - 2);
-        out += &format!(
-            "    {}: {},
-}}
-",
-            SHADED_TINT.name, SHADED_TINT.ty
-        );
+    declared(input, false, shaded)
+}
+
+/// What a pack whose files name one of their names (`stages::names_light_source`) has after
+/// `MaterialInput`'s other fields, before `shaded_tint`: Horizon's own look's light sources,
+/// which the vertex and the sprite already hold, so they cost nothing.
+pub const MATERIAL_LIGHT_SOURCE: [Field; 3] = [
+    Field {
+        name: "light_source_tier",
+        ty: "u32",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: how Horizon's own HDR look ranks the surface's block as a light source: 0 none, 1 low (magma, a redstone torch, candles, froglights), 2 incandescent (torches, lanterns, fire, lava), 3 bright (glowstone, a beacon, campfires), 4 very bright (the sun and lightning; no block has it). It comes from the block, which `emission` doesn't tell (glow lichen gives light and is 0, a froglight gives 15 and is 1), the same on every face except a model face that gives its own light, which ranks at least by that light (an open eyeblossom's petals are 2); a fluid's surface has the fluid's (lava 2), and distant terrain keeps its block's (with `light_source_whole`), so far glowstone is 3.",
+    },
+    Field {
+        name: "light_source_whole",
+        ty: "bool",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: the whole sprite shines in Horizon's look (froglights, fire, lava, campfires), whatever a texel's brightness; otherwise only its texels as bright as `light_source_threshold` do (a torch's flame, not its handle). False where `light_source_tier` is 0.",
+    },
+    Field {
+        name: "light_source_threshold",
+        ty: "f32",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: the brightness a texel of the surface's sprite reaches where Horizon's look lets it shine (unless `light_source_whole`), 0..1. A texel's brightness is the mean of the luminance and the brightest channel of its colour in linear light: of `c = albedo.rgb`, `0.5 * (dot(c, vec3(0.2126, 0.7152, 0.0722)) + max(c.r, max(c.g, c.b)))`. It is measured from the sprite itself, a set share of the way from its darkest to its brightest opaque texel, when HDR output turns on: 0 for every sprite until the renderer drawing it has measured it (every texel passes), so a renderer made while HDR output is off, as turning it off makes one, reads 0; and 1 for a sprite without an opaque texel.",
+    },
+];
+
+/// What a pack whose files name one of `MATERIAL_LIGHT_SOURCE`'s names has last in `EntityInput`.
+pub const ENTITY_LIGHT_SOURCE: [Field; 1] = [Field {
+    name: "light_source_tier",
+    ty: "u32",
+    doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: how Horizon's own HDR look ranks the surface as a light source, 0..4 as `MaterialInput.light_source_tier` (a blaze, spider and enderman eyes 3; a magma cube, a glow squid, glowing sign text 1). Horizon's look has no threshold or whole sprite for these: every texel shines by its own brightness, `albedo * tint`.",
+}];
+
+/// The fields `input` has after its own, before `shaded_tint`, in a pack whose files name one of
+/// `MATERIAL_LIGHT_SOURCE`'s names: `MaterialInput`'s three and `EntityInput`'s tier.
+pub fn light_source(input: &Struct) -> &'static [Field] {
+    match input.name {
+        "MaterialInput" => &MATERIAL_LIGHT_SOURCE,
+        "EntityInput" => &ENTITY_LIGHT_SOURCE,
+        _ => &[],
     }
-    out
+}
+
+/// `input` with its `light_source` fields where `light_source`, then `SHADED_TINT` where
+/// `shaded`.
+pub fn declared(input: &Struct, light_source: bool, shaded: bool) -> String {
+    let mut out = input.wgsl();
+    out.truncate(out.len() - 2);
+    let more = (self::light_source(input).iter()).filter(|_| light_source);
+    for f in more.chain(shaded.then_some(&SHADED_TINT)) {
+        out += &format!("    {}: {},\n", f.name, f.ty);
+    }
+    out + "}\n"
 }
 
 /// The tonemap stage's input: one pixel of the window.
@@ -560,34 +627,36 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 62);
+        assert_eq!(wgsl.fields.len(), 63);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
         // `luminance` is a `vec3`, on the next 16 bytes, the epochs after it, then the fog's
-        // two pairs and the moon's phase, to the end of the next 16.
+        // two pairs and the moon's phase, to the end of the next 16; the full light's colour on
+        // the 16 after them.
         let size = std::mem::size_of::<Frame>();
-        assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 5 * 16);
+        assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 6 * 16);
         assert_eq!(
             Frame::OFFSETS[55..],
             [
+                size - 64,
+                size - 52,
                 size - 48,
-                size - 36,
+                size - 44,
+                size - 40,
                 size - 32,
-                size - 28,
                 size - 24,
-                size - 16,
-                size - 8
+                size - 16
             ]
         );
         // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
         // `[[resource]]` pack's; the fog's every pack's; the moon's phase, last, only a pack's
         // that names it.
         let names = |s: Vec<Field>| s.iter().map(|f| f.name).collect::<Vec<_>>();
-        let traced = names(Frame::declared(true, false, false));
+        let traced = names(Frame::declared(true, false, false, false));
         assert_eq!(
             traced[Frame::RAY_FIELDS],
             ["has_ray_tracing", "ray_distance"]
         );
-        let untraced = names(Frame::declared(false, false, false));
+        let untraced = names(Frame::declared(false, false, false, false));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
         assert!(
@@ -598,13 +667,19 @@ mod tests {
         let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
         let fog = ["fog_environment", "fog_render"];
         for ray_tracing in [false, true] {
-            let kept = names(Frame::declared(ray_tracing, true, false));
+            let kept = names(Frame::declared(ray_tracing, true, false, false));
             assert_eq!(kept[kept.len() - 5..kept.len() - 2], epochs);
-            let plain = names(Frame::declared(ray_tracing, false, false));
+            let plain = names(Frame::declared(ray_tracing, false, false, false));
             assert_eq!(plain[plain.len() - 3..], ["luminance", fog[0], fog[1]]);
-            let mooned = names(Frame::declared(ray_tracing, false, true));
+            let mooned = names(Frame::declared(ray_tracing, false, true, false));
             assert_eq!(mooned[mooned.len() - 3..], [fog[0], fog[1], "moon_phase"]);
+            let full = names(Frame::declared(ray_tracing, false, false, true));
+            assert_eq!(full[full.len() - 3..], [fog[0], fog[1], "full_lightmap"]);
         }
+        assert_eq!(
+            names(Frame::WGSL.fields.to_vec())[Frame::FULL_LIGHTMAP_FIELDS],
+            ["full_lightmap"]
+        );
         assert_eq!(
             names(Frame::WGSL.fields.to_vec())[Frame::KEPT_FIELDS],
             epochs

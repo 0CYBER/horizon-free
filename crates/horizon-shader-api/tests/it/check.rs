@@ -1253,6 +1253,13 @@ fn looks_are_read_by_the_terrain_fields_alone() {
         "    var i = input;\n    i.light.x = 1.0;\n    \
          return Surface(i.shaded_tint * (1.0 + i.emission));"
     ));
+    // Nor do Horizon's look's light sources, which the vertex and the sprite hold, and the
+    // frame's full light.
+    assert!(!material(
+        "    let full = vec4(frame.full_lightmap * input.light_source_threshold, 1.0);\n    \
+         let tier = f32(input.light_source_tier) * f32(input.light_source_whole);\n    \
+         return Surface(input.albedo * full * tier);"
+    ));
 }
 
 /// The sample with its material stage's file `material`, its other `files` (the stage's own,

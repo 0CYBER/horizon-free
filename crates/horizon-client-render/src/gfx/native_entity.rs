@@ -239,7 +239,7 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
         horizon_decode(lightmap), horizon_decode(vec3(shade)).x, position,
         ((in.flags >> 1u) & 1u) != 0u, horizon_entity_normal(position), kind - 1u,
         horizon_decode(colored), (in.flags & 4u) != 0u, min(light / 240.0, vec2(1.0)),
-        in.uv, in.clip.xy / frame.resolution)).color;
+        in.uv, in.clip.xy / frame.resolution@light_source@)).color;
     // `entity_color`'s alpha test and blend weight: the texture's alpha times the layer's
     // opacity (the vertex alpha, 1 past a dissolve mask), unless the pack's `[entity] coverage`
     // is `pack` and its returned alpha decides.
@@ -278,17 +278,25 @@ const PACK_FOG: &str = "    let f = vanilla_fog(position);
 }
 ";
 
+/// What `EntityInput.light_source_tier` takes in a pack that names it
+/// (`CheckedStage::light_source`): entity.wgsl's `tier`, which its `hdr_entity_mark` takes as 4
+/// from 4 up.
+const LIGHT_SOURCE: &str = ", min((in.flags >> 8u) & 0xffu, 4u)";
+
 /// The entity shader for the pack's entity stage `source`; under `Fog::Pack` the stage fogs
-/// its surfaces itself.
-pub(super) fn shader_source(source: &str, fog: Fog) -> String {
+/// its surfaces itself. `light`: its input has the light-source field
+/// (`CheckedStage::light_source`).
+pub(super) fn shader_source(source: &str, fog: Fog, light: bool) -> String {
     let (unglinted, fog) = match fog {
         Fog::Engine => ("", FOG),
         Fog::Pack => (UNGLINTED, PACK_FOG),
     };
+    let light = light.then_some(LIGHT_SOURCE);
+    let entries = horizon_shader_api::stages::light_source_entries(ENTRIES, light);
     format!(
         "{source}\n// Horizon's entities (entity.wgsl, static_entity.wgsl)\n{}\
          const horizon_entity_kind_shift: u32 = {KIND_SHIFT}u;\n\
-         const horizon_entity_block_entity: u32 = {}u;\n{ENTRIES}{unglinted}{GLINT}{fog}",
+         const horizon_entity_block_entity: u32 = {}u;\n{entries}{unglinted}{GLINT}{fog}",
         super::wgsl_prefix::prefixed(&super::static_entity_shader(), PREFIX),
         EntityKind::BlockEntity as u32 + 1,
     )
@@ -347,7 +355,7 @@ impl NativeEntity {
         if let Some(why) = (kept.as_ref()).and_then(|k| k.over(frame, &entity_entries(), &limits)) {
             return Err(format!("{}: {why}", stage.file));
         }
-        let text = shader_source(&stage.source, manifest.fog);
+        let text = shader_source(&stage.source, manifest.fog, stage.light_source());
         let module = naga::front::wgsl::parse_str(&text)
             .map_err(|e| format!("{}: {}", stage.file, e.emit_to_string(&text)))?;
         let mut constants = present_constants(&module, constants);
