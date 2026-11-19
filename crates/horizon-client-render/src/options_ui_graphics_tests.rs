@@ -284,8 +284,8 @@ fn the_chat_delay_slider_says_its_delay() {
 }
 
 /// Spec #16011 item 5: the picked pack with `[ray_tracing]` says why it draws without it, as the
-/// renderer the options are drawn for has it, after its row and on the pack list; nothing while
-/// it traces or before a renderer, and nothing for a pack without `[ray_tracing]`.
+/// renderer the options are drawn for has it, above its row's and the pack list's descriptions;
+/// nothing while it traces or before a renderer, and nothing for a pack without `[ray_tracing]`.
 #[test]
 fn a_tracing_pack_says_why_it_draws_without_ray_tracing() {
     use crate::gfx::output::RayStatus::{Off, Ready, Restart, Unsupported};
@@ -329,11 +329,21 @@ fn a_tracing_pack_says_why_it_draws_without_ray_tracing() {
         let row = (sheets[0].groups[0].rows.iter())
             .find(|r| r.id == crate::shader_ui::Item::Pack(i))
             .unwrap();
-        (sheets[0].about.clone(), row.about.clone())
+        (
+            sheets[0].about.clone(),
+            sheets[0].warning.clone(),
+            row.about.clone(),
+            row.warning.clone(),
+            row.tag.clone(),
+        )
     };
     s.horizon.shader_pack = "horizon:rt".into();
-    let (list, row) = shown(&s, Some(Ready), 0);
-    assert_eq!(shown(&s, None, 0), (list.clone(), row.clone()));
+    let (list, warning, row, row_warning, tag) = shown(&s, Some(Ready), 0);
+    assert_eq!((warning, row_warning, tag), (None, None, None));
+    assert_eq!(
+        shown(&s, None, 0),
+        (list.clone(), None, row.clone(), None, None)
+    );
     let restart = lang::tr(
         "Ray tracing: %s Until then the pack draws without it.",
         &[&lang::get("options.needsRestart")],
@@ -350,11 +360,16 @@ fn a_tracing_pack_says_why_it_draws_without_ray_tracing() {
         ),
     ] {
         let noted = shown(&s, Some(rays), 0);
-        assert_eq!(noted, (format!("{list} {note}"), format!("{row} {note}")));
+        // The descriptions keep their own text; the note is a separate line above them.
+        assert_eq!((&noted.0, &noted.2), (&list, &row));
+        assert_eq!(noted.1.as_deref(), Some(note.as_str()));
+        assert_eq!(noted.3.as_deref(), Some(note.as_str()));
+        let tag = matches!(rays, Restart).then(|| "Restart needed".to_owned());
+        assert_eq!(noted.4, tag);
     }
     s.horizon.shader_pack = "horizon:plain".into();
-    let (list, row) = shown(&s, Some(Ready), 1);
-    assert_eq!(shown(&s, Some(Restart), 1), (list, row));
+    let plain = shown(&s, Some(Ready), 1);
+    assert_eq!(shown(&s, Some(Restart), 1), plain);
 }
 
 #[test]

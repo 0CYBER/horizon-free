@@ -66,6 +66,8 @@ const RAY_RESTART: &str = "Ray tracing: %s Until then the pack draws without it.
 const RAY_UNSUPPORTED: &str =
     "This GPU or graphics API has no ray tracing: the pack draws without it.";
 const RAY_OFF: &str = "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.";
+/// The row's short tag while the pack waits for a restart to trace rays.
+const RAY_RESTART_TAG: &str = "Restart needed";
 /// Screens this many links from the main one, or fewer, are in the page list.
 const LISTED_DEPTH: u8 = 1;
 
@@ -441,13 +443,17 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
         Some(RayStatus::Unsupported) => lang::get(RAY_UNSUPPORTED),
         Some(RayStatus::Off) => lang::get(RAY_OFF),
     };
+    let tag = matches!(rays, Some(RayStatus::Restart)).then(|| lang::get(RAY_RESTART_TAG));
     for sheet in sheets.iter_mut() {
         if matches!(sheet.id, Tab::Packs | Tab::Screen(0)) {
-            sheet.about = format!("{} {note}", sheet.about);
+            // A line of its own above the description: a long description must not push the
+            // reason the pack draws without rays out of the strip.
+            sheet.warning = Some(note.clone());
         }
         let rows = sheet.groups.iter_mut().flat_map(|g| &mut g.rows);
         for row in rows.filter(|r| r.id == Item::Pack(i as u16)) {
-            row.about = format!("{} {note}", row.about);
+            row.warning = Some(note.clone());
+            row.tag = tag.clone();
         }
     }
 }

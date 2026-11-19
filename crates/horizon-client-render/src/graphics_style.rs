@@ -121,6 +121,10 @@ fn outline() -> u32 {
 pub fn accent() -> u32 {
     hex(b().accent, 255)
 }
+/// The palette's warning colour: a note about the current choice, not an error.
+pub fn warn() -> u32 {
+    hex(b().warn, 255)
+}
 /// Vanilla's white text, and its grey for what can't be used now.
 pub const WHITE: u32 = u32::MAX;
 pub fn muted() -> u32 {

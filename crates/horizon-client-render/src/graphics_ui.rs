@@ -1517,6 +1517,7 @@ impl Screen for GraphicsScreen {
             id: page,
             name: lang::get(page.name()),
             about: lang::get(page.about()),
+            warning: None,
             groups: groups
                 .into_iter()
                 .map(|(name, settings)| Group {
