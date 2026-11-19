@@ -159,7 +159,10 @@ fn instance_caches_are_preserved_while_running_and_when_idle() {
     // `in_use` also matches a bare `<tag>/` anywhere in `ps`, so a running `v0.0.1/game` here
     // would make every parallel test's `v0.0.1` look running. This tag is used nowhere else.
     home.file("launcher/versions/v0.0.1-running/.installed", b"");
-    home.file("launcher/settings.json", br#"{"selected":"v0.0.1-running"}"#);
+    home.file(
+        "launcher/settings.json",
+        br#"{"selected":"v0.0.1-running"}"#,
+    );
     let game = home.file("launcher/versions/v0.0.1-running/game", b"running");
     let cache = home.file("game/.horizon-cache/held-output", b"active instance cache");
     let mut process = Command::new("sh")
@@ -417,7 +420,10 @@ fn explicit_version_removal_refuses_before_changing_install_metadata() {
     let game = home.file("launcher/versions/spare/game", b"game binary");
     // A client without runtime leases is removable since #18405; an installed native build
     // that takes its resources from `spare` still refuses the removal on every platform.
-    home.file("launcher/versions/native-dependent/.installed", b"installed");
+    home.file(
+        "launcher/versions/native-dependent/.installed",
+        b"installed",
+    );
     home.file(
         "launcher/versions/native-dependent/native-mods.json",
         format!(
