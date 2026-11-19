@@ -1,0 +1,4 @@
+# The location trigger reads the player's own tick count (ServerPlayer.doTick): prepared resources.
+# PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::advancements::progress_tests::location_is_read_every_twenty_ticks_of_each_players_own_count lib daily resources
+horizon-client game::advancements::progress_tests::the_tick_count_goes_through_a_change_of_level_and_not_through_a_respawn lib daily resources

@@ -212,9 +212,8 @@ pub struct Guest {
     pub position: [f64; 3],
     /// Where the player's chunk tickets stay while they are not at `position`.
     /// `None`: they are at `position`'s chunk. `Some(chunk)`: a teleport sent
-    /// the player away and they are still at the chunk it left. The hold ends
-    /// (back to `None`) at an accepted move, the teleport's ack, a passenger or
-    /// vehicle move, a camera change and a placement.
+    /// the player away and they are still at the chunk it left. The hold ends (back to `None`) at
+    /// an accepted move or teleport ack, a passenger or vehicle move, a camera change, a placement.
     pub held_ticket_chunk: Option<(i32, i32)>,
     pub previous_position: [f64; 3],
     pub yaw: f32,
@@ -364,18 +363,16 @@ pub struct Guest {
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
     pub motion: Option<Box<PlayerMotion>>,
-    /// What the player's file says of the body (`Entity.load`: the fire
-    /// and air ticks and the fall distance), for the first body it gets.
+    /// What the player's file says of the body (`Entity.load`: fire, air, fall distance), for its first.
     pub loaded_body: Option<SavedBody>,
-    /// The attribute list the player's last body hands to its next one
-    /// (`ServerPlayer.restoreFrom`, `PlayerMotion::carried_attributes`),
-    /// until that body exists: the scale a player has set stays through a
-    /// respawn and a change of level (#3684).
+    /// The attribute list a body hands to the next (`ServerPlayer.restoreFrom`,
+    /// `PlayerMotion::carried_attributes`) until it exists: a set scale stays through a respawn (#3684).
     pub carried_attributes: Option<horizon_core::nbt::Tag>,
     /// The accepted hit follows the same living body through a full teleport restore.
     pub carried_hit: Option<std::sync::Arc<crate::health::AcceptedHit>>,
-    /// The vehicle the player's file names (`ServerPlayer.saveParentVehicle`'s
-    /// "RootVehicle"), for the ride to come back on the next login.
+    /// `Entity.tickCount` across a trip to another level (`ServerPlayer.teleport` keeps the object).
+    pub carried_ticks: Option<i32>,
+    /// The vehicle the player's file names (`saveParentVehicle`'s "RootVehicle"), for the next login.
     pub saved_vehicle: Option<[i32; 4]>,
     /// The hurt and attack logs of the body it had before it respawned,
     /// until the new body takes them over (the control socket's `hurtlog`
@@ -800,6 +797,7 @@ impl Guest {
             loaded_body: None,
             carried_attributes: None,
             carried_hit: None,
+            carried_ticks: None,
             saved_vehicle: None,
             logs_kept: None,
             inventory: vec![None; 36],
@@ -1119,6 +1117,7 @@ impl Guest {
     pub fn new_body(&mut self, restore_all: bool) -> Option<Box<PlayerMotion>> {
         if !restore_all {
             self.carried_hit = None;
+            self.carried_ticks = None;
             self.death_canceled = false;
             self.death_time = 0;
         }
@@ -1126,6 +1125,7 @@ impl Guest {
         self.carried_attributes = Some(m.carried_attributes(restore_all));
         if restore_all {
             self.carried_hit = m.health.accepted_hit.take();
+            self.carried_ticks = Some(m.health.tick_count);
         }
         Some(m)
     }

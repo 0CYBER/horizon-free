@@ -1364,7 +1364,7 @@ impl Game<'_> {
                 )
         });
     }
-    /// `PlayerTrigger.LOCATION` every second, and the other per-tick checks.
+    /// `PlayerTrigger.LOCATION` every 20 of the player's own ticks (`tickCount % 20`), and the others.
     pub(super) fn tick_advancements(&mut self) {
         if self.player.is_none() || self.remote.is_some() {
             return;
@@ -1404,7 +1404,7 @@ impl Game<'_> {
             self.trigger_levitation(start, (self.ticks - since) as i64);
         }
         self.tick_marks();
-        if self.ticks.is_multiple_of(20) {
+        if self.own_tick_count().is_some_and(|n| n % 20 == 0) {
             let me = self.player_entity_for("minecraft:location");
             self.trigger("minecraft:location", |c, w| {
                 let ctx = adv::Entities {

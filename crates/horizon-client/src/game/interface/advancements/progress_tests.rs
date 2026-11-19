@@ -445,3 +445,92 @@ fn progress_events_capture_each_players_full_mutation_state() {
     });
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// `ServerPlayer.doTick` reads `LOCATION` when the player's own `tickCount % 20` is 0, not the
+/// game's tick: two players joined at different ticks are evaluated at different ticks.
+#[test]
+#[ignore = "daily"]
+fn location_is_read_every_twenty_ticks_of_each_players_own_count() {
+    let scratch = std::env::current_dir().unwrap().join("location-data");
+    let dir = scratch.join("data/testmod/advancement");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("here.json"),
+        r#"{"criteria": {"here": {"trigger": "minecraft:location"}}}"#,
+    )
+    .unwrap();
+    with_guests(|game| {
+        game.adv.tree = Arc::new(Tree::load(&scratch.join("data")));
+        game.lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .guests
+            .update_all(|guest| guest.advancements_loaded = true);
+        // The game's tick is a multiple of 20 for both: the old reading evaluates both.
+        game.ticks = 40;
+        let count = |game: &mut Game<'_>, conn, ticks: i32| {
+            game.as_guest(conn, |game| {
+                game.player.as_mut().unwrap().health.tick_count = ticks;
+                game.tick_advancements();
+            })
+            .unwrap();
+            game.lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .guest(conn)
+                .unwrap()
+                .advancements
+                .has("testmod:here", "here")
+        };
+        assert!(!count(game, 12, 7), "7 of its own: not yet");
+        assert!(
+            !count(game, 13, 19),
+            "19 of its own: not yet, on a game tick of 40"
+        );
+        assert!(
+            count(game, 13, 20),
+            "20 of its own: now, the other one still waiting"
+        );
+        assert!(
+            !game
+                .lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .guest(12)
+                .unwrap()
+                .advancements
+                .has("testmod:here", "here")
+        );
+        assert!(count(game, 12, 40), "40 of its own");
+    });
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// `ServerPlayer.teleport` to another level keeps the player object, so its `tickCount` goes on;
+/// `PlayerList.respawn` makes a new one, which starts at 0.
+#[test]
+#[ignore = "daily"]
+fn the_tick_count_goes_through_a_change_of_level_and_not_through_a_respawn() {
+    with_guests(|game| {
+        let count = |game: &mut Game<'_>| {
+            game.as_guest(12, |game| game.player.as_ref().unwrap().health.tick_count)
+                .unwrap()
+        };
+        game.as_guest(12, |game| {
+            game.player.as_mut().unwrap().health.tick_count = 57
+        });
+        let i = game.guest_index(12).unwrap();
+        for (restore_all, expected) in [(true, 57), (false, 0)] {
+            game.as_guest(12, |game| {
+                game.player.as_mut().unwrap().health.tick_count = 57
+            });
+            game.lan.as_mut().unwrap().hub.guests.update(i, |g| {
+                g.new_body(restore_all);
+            });
+            assert_eq!(count(game), expected, "restore_all {restore_all}");
+        }
+    });
+}
