@@ -55,6 +55,10 @@ pub(crate) struct TestLevel {
     pub block_events_ready: bool,
     /// Positions that refuse fluids, fire and piston moves, as a land claim would.
     pub guarded: HashSet<BlockPos>,
+    /// The states `template_suppressed` names: blocks of a mod that is off.
+    pub suppressed: HashSet<BlockStateId>,
+    /// How many times `allow_fluid_tick` was asked.
+    pub fluid_asks: std::cell::Cell<u32>,
     /// What `adjust_signal` answers at a position: the weak and direct signal,
     /// and the only direction they go in, if any.
     pub signals: HashMap<BlockPos, (i32, i32, Option<Direction>)>,
@@ -134,6 +138,8 @@ impl TestLevel {
             tick_ready: true,
             block_events_ready: true,
             guarded: HashSet::new(),
+            suppressed: HashSet::new(),
+            fluid_asks: Default::default(),
             fire_asks: Default::default(),
             source_asks: Default::default(),
             lava_asks: Default::default(),
@@ -293,7 +299,11 @@ impl LevelAccess for TestLevel {
         self.events.push(event);
     }
     fn allow_fluid_tick(&self, pos: BlockPos, _fluid: &'static str) -> bool {
+        self.fluid_asks.set(self.fluid_asks.get() + 1);
         !self.guarded.contains(&pos)
+    }
+    fn template_suppressed(&self, state: BlockStateId) -> bool {
+        self.suppressed.contains(&state)
     }
     fn allow_spread(&self, _kind: Spread, _from: BlockPos, to: BlockPos) -> bool {
         !self.guarded.contains(&to)

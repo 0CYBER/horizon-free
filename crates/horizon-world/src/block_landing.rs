@@ -100,6 +100,11 @@ pub trait BlockLandingWorld: BlockPushWorld {
     ) -> bool {
         false
     }
+    /// Whether `state`'s template must not change it here: the block belongs to a mod that is
+    /// off ([`crate::level::LevelAccess::template_suppressed`]). The landing entity is still hurt.
+    fn template_suppressed(&self, _state: BlockStateId) -> bool {
+        false
+    }
     fn suppressing_bounce(&mut self) -> Result<bool, Self::Error>;
     fn damage_source(
         &mut self,
@@ -300,6 +305,7 @@ impl BlockLandingRegistry {
     ) -> Result<(), LandingError<W::Error>> {
         if !world.is_server_level()
             || matches!(entity, LandingEntityKind::Turtle | LandingEntityKind::Bat)
+            || world.template_suppressed(state)
         {
             return Ok(());
         }
@@ -429,6 +435,7 @@ impl BlockLandingRegistry {
                         let (width, height) = world.entity_dimensions();
                         if width * width * height > 0.512f32
                             && !world.cancel_farmland_trample(position, state, distance)
+                            && !world.template_suppressed(state)
                         {
                             let next = push_entities_up(world, state, base, position)
                                 .map_err(LandingError::Push)?;

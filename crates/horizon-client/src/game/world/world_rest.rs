@@ -20,6 +20,8 @@ pub(super) fn load_world_rest(
     let biomes = resources.biomes();
     let threads = resources.threads();
     let registry = assets.registry;
+    // The world tables of this root tick this registry: it takes the root's own mod owners.
+    crate::game::code_block_owners::bind(registry, root);
     let content = horizon_client::datapack::DataPack::from_source(
         "horizon-content".into(),
         resource_root.data_changes().clone(),

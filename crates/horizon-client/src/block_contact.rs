@@ -10,6 +10,25 @@ use std::{
     sync::OnceLock,
 };
 
+/// Whether `state` is a block of a code mod that is installed and switched off now, so its
+/// template's own behaviour must wait (`LevelAccess::template_suppressed`). The registry's
+/// `code_block_owners` table names each state's owning mod (`u16::MAX`: none); a vanilla block
+/// costs one table read. Ask it only on the authoritative side: a client replays its server.
+#[inline]
+pub fn template_suppressed(
+    registry: &horizon_world::registry::BlockRegistry,
+    state: BlockStateId,
+) -> bool {
+    match registry
+        .code_block_owners
+        .get()
+        .and_then(|owners| owners.get(state.0 as usize))
+    {
+        Some(&owner) if owner != u16::MAX => !mod_api::__private::mod_index_on(usize::from(owner)),
+        _ => false,
+    }
+}
+
 /// `getEntityInsideCollisionShape` as the shared walk sees it: the whole block, boxes
 /// to sweep the move against, or nothing. This is the one point arismoko/horizon#1011 adds the Part's
 /// own shape at.

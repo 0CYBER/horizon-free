@@ -753,6 +753,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `FlowingFluid.tick` for the fluid at `pos`.
     pub(crate) fn fluid_tick(&mut self, pos: BlockPos) {
         let mut state = self.state(pos);
+        // Asked before the fluid tick hook as well as after it, as in `tick_due_block`: the hook
+        // is dispatched and may cancel either way.
+        let suppressed = self.level.template_suppressed(state);
         let mut fluid = self.b.fluid(state);
         let kind = fluid.kind();
         let name = match kind {
@@ -761,7 +764,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             FluidKind::Mod(_) | FluidKind::ModFlowing(_) => kind.name(),
             FluidKind::Empty => return,
         };
-        if !self.level.allow_fluid_tick(pos, name) {
+        if !self.level.allow_fluid_tick(pos, name)
+            || suppressed
+            || self.level.template_suppressed(state)
+        {
             return;
         }
         if !fluid.is_source() {

@@ -29,6 +29,9 @@ pub struct BlockRegistry {
     /// Game-owned, immutable mod worker metadata for this numeric registry snapshot.
     /// Filled at resource resolution before any worker can use it; never shared across registries.
     pub mod_worker_resource: std::sync::OnceLock<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    /// Game-owned: per block state, the index of the installed code mod whose content it is
+    /// (`u16::MAX`: none). Set once from this registry's own mod list, before its world ticks.
+    pub code_block_owners: std::sync::OnceLock<Box<[u16]>>,
     /// Optional higher-layer template data transform, frozen before placement workers start.
     pub structure_block_entity_transform: std::sync::OnceLock<
         std::sync::Arc<
@@ -209,6 +212,7 @@ impl BlockRegistry {
         Ok(Self {
             data: std::sync::Arc::new(result),
             mod_worker_resource: std::sync::OnceLock::new(),
+            code_block_owners: std::sync::OnceLock::new(),
             structure_block_entity_transform: std::sync::OnceLock::new(),
             saved_states: RwLock::new(FxHashMap::default()),
         })

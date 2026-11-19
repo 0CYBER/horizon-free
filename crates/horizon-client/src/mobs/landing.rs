@@ -116,6 +116,11 @@ impl BlockLandingWorld for MobLanding<'_, '_, '_> {
         );
         cancel
     }
+    /// Only a server loop's switch counts: a client replays its server.
+    fn template_suppressed(&self, state: BlockStateId) -> bool {
+        self.w.loop_context.side() != horizon_world::native_load_context::LoopSide::Client
+            && crate::block_contact::template_suppressed(self.w.registry, state)
+    }
     // A mob never sneaks, so nothing suppresses a slime block's bounce.
     fn suppressing_bounce(&mut self) -> Result<bool, String> {
         Ok(false)

@@ -1142,6 +1142,14 @@ impl Game<'_> {
         Ok(())
     }
     fn tick_sculk_block(&mut self, key: (i32, i32, i32), adjacent: bool) -> Result<()> {
+        // A mod block's sculk template (a catalyst spreading, a sensor's vibrations) is the
+        // template's own: it waits while the block's mod is off.
+        let state = self.world.block(key.0, key.1, key.2);
+        if self.native_authoritative()
+            && crate::game::code_block_owners::suppressed(self.pack.assets.registry, state)
+        {
+            return Ok(());
+        }
         let time = self.world.game_time;
         let Some(entity) = self.sculk_entity(key) else {
             self.sculk.index.remove(&key);

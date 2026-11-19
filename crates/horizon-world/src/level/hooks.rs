@@ -33,6 +33,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     ) {
         self.level
             .observe_neighbor_changed(self.ticks, pos, state, changed, moved);
+        if self.level.template_suppressed(state) {
+            return;
+        }
         let b = self.b;
         let block = b.block(state);
         let chain = &b.data(state).chain;
@@ -128,6 +131,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     /// `BlockState.onPlace`.
     pub fn on_place(&mut self, state: BlockStateId, pos: BlockPos, old: BlockStateId, moved: bool) {
+        // A TNT template would prime where a piston lands it, a rail's would reshape.
+        if self.level.template_suppressed(state) {
+            return;
+        }
         let b = self.b;
         let block = b.block(state);
         let same = b.block(old) == block;
@@ -583,6 +590,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn entity_inside(&mut self, pos: BlockPos) {
         let b = self.b;
         let state = self.state(pos);
+        if self.level.template_suppressed(state) {
+            return;
+        }
         let data = b.data(state);
         if data.is(Class::BasePressurePlate) {
             let signal = self.plate_signal_for_state(state);
@@ -613,7 +623,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn boat_inside(&mut self, pos: BlockPos) {
         let b = self.b;
         let state = self.state(pos);
-        if b.data(state).is(Class::LilyPad) {
+        if b.data(state).is(Class::LilyPad) && !self.level.template_suppressed(state) {
             self.destroy_block(pos, true, super::flags::UPDATE_LIMIT);
         }
     }
@@ -759,6 +769,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let state = self.state(pos);
         if !b.data(state).is(Class::BigDripleaf)
+            || self.level.template_suppressed(state)
             || b.table.text(state, b.props.tilt) != "none"
             || !(on_ground && feet_y > f64::from(pos.y) + f64::from(0.6875_f32))
             || self.has_neighbor_signal(pos)

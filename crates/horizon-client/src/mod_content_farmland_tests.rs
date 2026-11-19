@@ -22,6 +22,8 @@ struct World {
     air: BlockStateId,
     random: LegacyRandom,
     time: i64,
+    /// Answers `template_suppressed` for every block: its owner is off.
+    owner_off: bool,
 }
 impl horizon_world::level::BlockEntityNeighbors for World {}
 impl LevelAccess for World {
@@ -79,6 +81,9 @@ impl BlockLandingWorld for World {
     }
     fn entity_dimensions(&self) -> (f32, f32) {
         (1.0, 2.0)
+    }
+    fn template_suppressed(&self, _: BlockStateId) -> bool {
+        self.owner_off
     }
     fn suppressing_bounce(&mut self) -> Result<bool, Self::Error> {
         Ok(false)
@@ -199,6 +204,7 @@ fn farmland_base_reaches_drying_cover_and_trample() {
         air,
         random: LegacyRandom::new(0),
         time: 0,
+        owner_off: false,
     };
     let mut ticks = Ticks::new(0);
     ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
@@ -219,6 +225,23 @@ fn farmland_base_reaches_drying_cover_and_trample() {
             .fall_on(&mut world, state, pos, LandingEntityKind::Player, 2.0)
             .unwrap();
         assert_eq!(world.block_state(pos), expected, "trampling");
+    }
+    // A block whose owner is off keeps still under a landing (#18519). Two eggs: the fixture
+    // breaks one by setting the block, the last by `destroy_block`, which it leaves as it is.
+    let mut eggs = registry
+        .state(registry.default_state("minecraft:turtle_egg").unwrap())
+        .unwrap()
+        .clone();
+    eggs.properties.insert("eggs".into(), "2".into());
+    let egg = registry.id(&eggs).unwrap();
+    world.owner_off = true;
+    for state in [farm, egg] {
+        world.blocks.clear();
+        world.blocks.insert(pos, state);
+        landing
+            .fall_on(&mut world, state, pos, LandingEntityKind::Player, 2.0)
+            .unwrap();
+        assert_eq!(world.block_state(pos), state, "its owner off");
     }
     fs::remove_dir_all(scratch).unwrap();
 }

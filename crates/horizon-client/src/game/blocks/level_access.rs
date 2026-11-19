@@ -548,6 +548,12 @@ impl LevelAccess for GameLevel<'_> {
         }
         output.clamp(0, 15)
     }
+    /// Only the server's switch counts: a client replays what its server sent (a piston's block
+    /// event), whatever its own copy of the mod list says.
+    #[inline]
+    fn template_suppressed(&self, state: BlockStateId) -> bool {
+        self.native_authoritative && super::code_block_owners::suppressed(self.registry, state)
+    }
     fn before_random_tick(
         &mut self,
         ticks: &mut Ticks,

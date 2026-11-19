@@ -35,6 +35,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         neighbour_pos: BlockPos,
         neighbour: BlockStateId,
     ) -> BlockStateId {
+        // Asked before the hooks and again after, as in `tick_due_block`.
+        let suppressed = self.level.template_suppressed(state);
         let mut new = None;
         self.level.before_update_shape(
             self.ticks,
@@ -50,6 +52,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             && (new.0 as usize) < self.b.table.state_count()
         {
             return new;
+        }
+        if suppressed || self.level.template_suppressed(state) {
+            return state;
         }
         self.update_shape_at(0, state, pos, direction, neighbour_pos, neighbour)
     }

@@ -404,7 +404,16 @@ impl Game<'_> {
             horizon_threads::work::set_entity(horizon_threads::work::entity_id(
                 this.world.block_entities.get(&pos).map_or("", ticker_name),
             ));
+            let suppressed = !matches!(kind, TickedKind::Mod)
+                && this.native_authoritative()
+                && crate::game::code_block_owners::suppressed(
+                    this.pack.assets.registry,
+                    this.world.block(pos.0, pos.1, pos.2),
+                );
             match kind {
+                // A mod block's template ticker (a furnace burning its fuel and input) is the
+                // template's own: it waits while the block's mod is off. The slots still run.
+                _ if suppressed => {}
                 TickedKind::Hopper => this.tick_hopper(pos),
                 TickedKind::Crafter => this.tick_crafter(pos),
                 TickedKind::Jukebox => this.tick_jukebox(pos),

@@ -202,6 +202,7 @@ pub(crate) fn restore(snapshot: Snapshot) -> io::Result<(BlockRegistry, Vec<(boo
     Ok((
         BlockRegistry {
             mod_worker_resource: std::sync::OnceLock::new(),
+            code_block_owners: std::sync::OnceLock::new(),
             structure_block_entity_transform: std::sync::OnceLock::new(),
             data: std::sync::Arc::new(super::data::Data {
                 states,

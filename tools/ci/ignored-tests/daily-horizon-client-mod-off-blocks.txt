@@ -1,0 +1,2 @@
+# horizon-rust/horizon#18519: these tests read the prepared 26.3 data.
+horizon-client game::code_block_owners_tests::an_off_code_mods_blocks_keep_still_until_it_is_on_again lib daily resources

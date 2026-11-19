@@ -569,6 +569,9 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
         );
         cancel
     }
+    fn template_suppressed(&self, state: BlockStateId) -> bool {
+        crate::block_contact::template_suppressed(self.assets.registry, state)
+    }
     fn suppressing_bounce(&mut self) -> Result<bool> {
         Ok(self.player.shift_key_down)
     }

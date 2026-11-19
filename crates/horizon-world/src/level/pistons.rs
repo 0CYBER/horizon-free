@@ -144,6 +144,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `BlockState.triggerEvent`.
     fn trigger_event(&mut self, state: BlockStateId, pos: BlockPos, a: i32, b: i32) -> bool {
+        // A piston template would extend or retract; one already moving still lands.
+        if self.level.template_suppressed(state) {
+            return false;
+        }
         let data = self.b.data(state);
         if data.is(super::classes::Class::PistonBase) {
             self.piston_trigger_event(pos, state, a, b)

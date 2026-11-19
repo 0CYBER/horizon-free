@@ -58,3 +58,17 @@ fn refused_non_source_tick_keeps_exact_state_and_schedules_nothing() {
     assert_eq!(w.ticks.fluids.count(), 0);
     assert_eq!(w.ticks.blocks.count(), 0);
 }
+
+/// An off mod's water (#18519): its fluid tick hook is still asked, and the water keeps still.
+#[test]
+fn a_suppressed_fluid_tick_still_asks_its_hook() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let flowing = w.id("water", &[("level", "3")]);
+    w.put(pos, flowing);
+    w.level.suppressed.insert(flowing);
+    w.b().scheduled_fluid_tick(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(w.level.fluid_asks.get(), 1, "the hook is asked");
+    assert_eq!(w.get(pos), flowing, "a lone flowing water would dry");
+    assert_eq!(w.ticks.fluids.count(), 0);
+}
