@@ -146,6 +146,16 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
         run: python3 tools/check_addresses.py ${BASE:+--base "$BASE"}
+      # A nested workspace's Cargo.lock goes stale when a crate it reaches outside its folder changes its dependencies,
+      # and only its own build, after the merge, would notice (tools/ci/nested_locks.py). Index only, no compiling; it
+      # runs only when a resolution input changed against the event's base: the main GitHub's merge commit sits on
+      # (HEAD^1), the merge group's base_sha, or main before the push. No base (a manual run, a new branch): it runs.
+      # Only cargo's --locked mismatch fails it; a registry it cannot reach is a warning.
+      - name: Nested Cargo.lock files match the crates they reach
+        if: steps.queued.outputs.tested != 'true'
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha || github.event.before || '' }}
+        run: python3 tools/ci/nested_locks.py ${BASE:+--base "$BASE"}
       # One module per process, on every core: in one process the suite took ~2 minutes.
       - name: Test offline research tooling
         if: steps.queued.outputs.tested != 'true'
