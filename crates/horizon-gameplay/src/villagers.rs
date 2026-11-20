@@ -122,9 +122,9 @@ pub fn villager_throw<L: VillagerLevel + ?Sized>(
 
 /// `TradeWithVillager.tick` for one pair: gossip (at most once in 1200
 /// ticks for both), then surplus food and wanted wares tossed over.
-pub fn villager_meet<L: VillagerLevel + ?Sized>(l: &mut L, a: u32, b: u32) {
+pub fn villager_meet<L: VillagerLevel + ?Sized>(l: &mut L, a: u32, b: u32) -> usize {
     let (Some(ia), Some(ib)) = (l.villager_index(a), l.villager_index(b)) else {
-        return;
+        return 0;
     };
     let professions = l.stations().professions.clone();
     let p = l.parts();
@@ -136,6 +136,7 @@ pub fn villager_meet<L: VillagerLevel + ?Sized>(l: &mut L, a: u32, b: u32) {
     if meeting.gossiped {
         l.villager_golem_check(a, 5);
     }
+    meeting.new_gossip
 }
 
 /// `Villager.spawnGolemIfNeeded`: when enough villagers nearby that

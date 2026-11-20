@@ -49,7 +49,33 @@ impl Game<'_> {
     /// `TradeWithVillager.tick` for one pair: gossip (at most once in 1200
     /// ticks for both), then surplus food and wanted wares tossed over.
     pub(super) fn villager_meet(&mut self, a: u32, b: u32) {
-        horizon_gameplay::villagers::villager_meet(self, a, b);
+        let new_gossip = horizon_gameplay::villagers::villager_meet(self, a, b);
+        // Villager.gossip: a newly heard gossip refreshes the trading
+        // player's prices (`updateSpecialPrices`) right away.
+        if new_gossip > 0 {
+            self.villager_prices_refresh(a);
+        }
+    }
+
+    /// `Villager.updateSpecialPrices` for an open menu and tracked guests.
+    fn villager_prices_refresh(&mut self, id: u32) {
+        if self
+            .station
+            .as_ref()
+            .and_then(|s| s.merchant.as_ref())
+            .is_some_and(|m| m.mob == Some(id))
+        {
+            let reputation = self.villager_reputation(id);
+            self.menu_session(|menu, env, _| {
+                if let Some(session) = menu.merchant.as_mut() {
+                    session.reputation = reputation;
+                    session.update_special_prices();
+                }
+                menu.merchant_update(env);
+                Some(true)
+            });
+        }
+        self.lan_merchant_reputation(id);
     }
 
     /// `Villager.spawnGolemIfNeeded`: when enough villagers nearby that
