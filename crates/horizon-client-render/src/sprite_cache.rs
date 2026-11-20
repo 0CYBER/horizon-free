@@ -8,13 +8,20 @@ use std::{collections::HashMap, fs, path::PathBuf};
 
 const MAGIC: &[u8; 4] = b"HSPR";
 /// Bump when `Decoded` or the decoding in `Sprites::decode` changes.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const FILE: &str = "horizon-sprites.cache";
+/// The most pixel bytes one entry's frames may hold: a full atlas, the most one decoded image
+/// may be (`hud::read_png`).
+const MAX_ENTRY_BYTES: u64 = (crate::hud::MAX_ATLAS_SIZE as u64).pow(2) * 4;
 
 /// What decoding one texture gives, before it takes a layer.
 #[derive(Clone)]
 pub(crate) struct Decoded {
+    /// The longer side of a frame: its layer's native size.
     pub side: u32,
+    /// Each frame's width and height; `frames` are this size, not squared to `side`, until
+    /// `Sprites::finish` knows the layers' size.
+    pub frame_size: [u32; 2],
     pub frames: Vec<Vec<u8>>,
     /// The `.mcmeta` `animation` value, as text.
     pub animation: Option<String>,
@@ -83,6 +90,8 @@ fn serialize(fingerprint: u64, entries: &HashMap<String, Decoded>) -> Vec<u8> {
     for (name, d) in entries {
         put_bytes(&mut out, name.as_bytes());
         out.extend_from_slice(&d.side.to_le_bytes());
+        out.extend_from_slice(&d.frame_size[0].to_le_bytes());
+        out.extend_from_slice(&d.frame_size[1].to_le_bytes());
         out.extend_from_slice(&(d.frames.len() as u32).to_le_bytes());
         for frame in &d.frames {
             put_bytes(&mut out, frame);
@@ -117,6 +126,14 @@ impl<'a> Reader<'a> {
         self.take(n)
     }
 }
+/// Whether `count` frames of `frame_len` bytes fit both what is left of the file (each record
+/// is a 4-byte length and its bytes) and a full atlas, frame table included.
+fn frames_fit(frame_len: u128, count: u32, remaining: usize) -> bool {
+    let count = u128::from(count);
+    let table_entry = std::mem::size_of::<Vec<u8>>() as u128;
+    count * (frame_len + 4) <= remaining as u128
+        && count * (frame_len + table_entry) <= u128::from(MAX_ENTRY_BYTES)
+}
 fn parse(bytes: &[u8], fingerprint: u64) -> Option<HashMap<String, Decoded>> {
     let mut r = Reader(bytes);
     if r.take(4)? != MAGIC || r.u32()? != VERSION {
@@ -130,10 +147,26 @@ fn parse(bytes: &[u8], fingerprint: u64) -> Option<HashMap<String, Decoded>> {
     for _ in 0..count {
         let name = String::from_utf8(r.bytes()?.to_vec()).ok()?;
         let side = r.u32()?;
+        let frame_size = [r.u32()?, r.u32()?];
         let frame_count = r.u32()?;
+        // Checked before anything is copied: the shape, then the frames' total against what the
+        // file holds and against a full atlas (what one decoded image may be), counting the
+        // frame table too, which for tiny frames outweighs their pixels. The table grows only
+        // as each record's length checks out.
+        if frame_count == 0 || frame_size.contains(&0) || frame_size[0].max(frame_size[1]) != side {
+            return None;
+        }
+        let frame_len = u128::from(frame_size[0]) * u128::from(frame_size[1]) * 4;
+        if !frames_fit(frame_len, frame_count, r.0.len()) {
+            return None;
+        }
         let mut frames = Vec::new();
         for _ in 0..frame_count {
-            frames.push(r.bytes()?.to_vec());
+            let frame = r.bytes()?;
+            if frame.len() as u128 != frame_len {
+                return None;
+            }
+            frames.push(frame.to_vec());
         }
         let animation = String::from_utf8(r.bytes()?.to_vec()).ok()?;
         let has_animation = r.take(1)?[0] != 0;
@@ -147,14 +180,11 @@ fn parse(bytes: &[u8], fingerprint: u64) -> Option<HashMap<String, Decoded>> {
         };
         let alpha_cutoff_bias = f32::from_bits(r.u32()?);
         let flags = r.take(1)?[0];
-        let frame_len = (side as usize).checked_mul(side as usize)?.checked_mul(4)?;
-        if frames.is_empty() || frames.iter().any(|f| f.len() != frame_len) {
-            return None;
-        }
         entries.insert(
             name,
             Decoded {
                 side,
+                frame_size,
                 frames,
                 animation: has_animation.then_some(animation),
                 strategy,
@@ -176,6 +206,7 @@ mod tests {
     fn sample(blue: u8, animation: Option<&str>) -> Decoded {
         Decoded {
             side: 2,
+            frame_size: [2, 2],
             frames: vec![vec![blue; 16], vec![blue + 1; 16]],
             animation: animation.map(str::to_owned),
             strategy: Strategy::Cutout,
@@ -201,8 +232,8 @@ mod tests {
         for (name, d) in &entries {
             let e = &back[name];
             assert_eq!(
-                (d.side, &d.frames, &d.animation),
-                (e.side, &e.frames, &e.animation)
+                (d.side, d.frame_size, &d.frames, &d.animation),
+                (e.side, e.frame_size, &e.frames, &e.animation)
             );
             assert_eq!(d.alpha_cutoff_bias, e.alpha_cutoff_bias);
             assert_eq!(
@@ -224,6 +255,65 @@ mod tests {
         let mut extra = bytes.clone();
         extra.push(0);
         assert!(parse(&extra, 7).is_none());
+    }
+    /// The frame table is charged with the pixels: for tiny frames it is the larger part.
+    #[test]
+    fn a_frame_table_counts_toward_the_entry_budget() {
+        let table = std::mem::size_of::<Vec<u8>>() as u128;
+        let tiny = 100_000_000;
+        // 1x1 frames: 400 MB of pixels fit a full atlas, their table does not.
+        assert!(u128::from(tiny) * 4 <= u128::from(MAX_ENTRY_BYTES));
+        assert!(u128::from(tiny) * (4 + table) > u128::from(MAX_ENTRY_BYTES));
+        assert!(!frames_fit(4, tiny, usize::MAX));
+        assert!(frames_fit(4, 1000, 8000));
+        assert!(!frames_fit(4, 1000, 7999));
+        assert!(!frames_fit(
+            u128::from(u32::MAX) * u128::from(u32::MAX) * 4,
+            u32::MAX,
+            usize::MAX
+        ));
+    }
+    /// Many 1x1 frames claimed over a short payload: a miss, with nothing reserved for them.
+    #[test]
+    fn a_huge_count_of_tiny_frames_is_a_miss() {
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&7u64.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        put_bytes(&mut bytes, b"a:b");
+        for field in [1u32, 1, 1, 30_000_000] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+        put_bytes(&mut bytes, &[0; 4]);
+        assert!(parse(&bytes, 7).is_none());
+    }
+    /// An entry declaring far more frames than the file holds is a miss before anything is
+    /// reserved for them.
+    #[test]
+    fn a_huge_frame_count_with_a_short_payload_is_a_miss() {
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&7u64.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        put_bytes(&mut bytes, b"a:b");
+        for field in [16, 16, 16, u32::MAX] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+        put_bytes(&mut bytes, &[0; 16 * 16 * 4]);
+        assert!(parse(&bytes, 7).is_none());
+    }
+    /// A frame size with a zero side is a miss: its texture is decoded again, never read
+    /// from empty frames.
+    #[test]
+    fn a_zero_frame_side_is_a_miss() {
+        let entry = |frame_size: [u32; 2], frames: Vec<Vec<u8>>| {
+            let mut d = sample(1, None);
+            (d.side, d.frame_size, d.frames) = (16, frame_size, frames);
+            serialize(7, &HashMap::from([("a:b".to_owned(), d)]))
+        };
+        assert!(parse(&entry([0, 16], vec![vec![]]), 7).is_none());
+        let wide = parse(&entry([16, 2], vec![vec![5; 16 * 2 * 4]]), 7).unwrap();
+        assert_eq!(wide["a:b"].frame_size, [16, 2]);
     }
     #[test]
     fn changed_texture_invalidates_and_corrupt_file_is_ignored() {

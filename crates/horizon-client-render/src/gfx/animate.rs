@@ -181,9 +181,18 @@ impl SpriteAnimator {
         let mut counts: Vec<usize> = Vec::new();
         let mut sprites = Vec::with_capacity(animations.len());
         for animation in animations {
-            let pixels: Vec<_> = (0..animation.frame_count())
-                .map(|frame| animation.pixels(frame))
-                .collect();
+            // Charged before anything is built: the frames at the chains' edge, and their mips.
+            let edge = chain_edge(settings, animation.layer, size);
+            let count = animation.frame_count();
+            if chain_budget(edge, count, limit).is_none() {
+                log::warn!(
+                    "Horizon: layer {}'s animation ({count} frames at {edge} px) does not fit in a storage buffer or the sprite budget; it stays still",
+                    animation.layer
+                );
+                continue;
+            }
+            let at_edge: Vec<Vec<u8>> = (0..count).map(|f| animation.frame_at(f, edge)).collect();
+            let pixels: Vec<&[u8]> = at_edge.iter().map(Vec::as_slice).collect();
             let (chains, edge) = source_chains(&pixels, size, settings, animation.layer);
             let bytes: u64 = chains.iter().map(|chain| chain.len() as u64).sum();
             if bytes > limit {
@@ -572,6 +581,28 @@ fn mix_level(frames: &[u8], [_, current, next, millis, edge]: [u32; 5], width: u
     out
 }
 
+/// The first level's edge of a layer's chains: its native side when that is a power of two
+/// below the layers' `size` (the array's upper levels repeat it), else `size`.
+fn chain_edge(settings: &[Settings], layer: u32, size: u32) -> u32 {
+    let s = settings.get(layer as usize).copied().unwrap_or_default();
+    if s.native_size.is_power_of_two() && s.native_size < size {
+        s.native_size
+    } else {
+        size
+    }
+}
+
+/// The bytes `count` frames' chains take at `edge` (every level down to 1x1), or `None` when
+/// they pass `limit`, or the frames at `edge` pass a full atlas (`sprites::check_frames`).
+fn chain_budget(edge: u32, count: usize, limit: u64) -> Option<u64> {
+    crate::sprites::check_frames(edge, u32::try_from(count).ok()?).ok()?;
+    let frame: u64 = (0..=edge.trailing_zeros())
+        .map(|level| u64::from(edge >> level).pow(2) * 4)
+        .sum();
+    let bytes = frame.checked_mul(count as u64)?;
+    (bytes <= limit).then_some(bytes)
+}
+
 /// The mip chain a frame's layer is made of, and its first level's edge.
 /// `mipmap::generate` makes a sprite scaled up by whole pixels to the
 /// array's size from its own size's chain, its first level repeated into the
@@ -596,19 +627,22 @@ fn source_chains(
     layer: u32,
 ) -> (Vec<Vec<u8>>, u32) {
     let s = settings.get(layer as usize).copied().unwrap_or_default();
-    let edge = if s.native_size.is_power_of_two() && s.native_size < size {
-        s.native_size
-    } else {
-        size
-    };
+    let edge = chain_edge(settings, layer, size);
     let mut sheet = crate::mipmap::Image {
         width: edge,
         height: edge * frames.len() as u32,
         pixels: Vec::with_capacity((edge * edge) as usize * frames.len()),
     };
     for frame in frames {
-        let frame = crate::sprites::resample(frame, size, edge);
-        sheet.pixels.extend_from_slice(frame.as_chunks::<4>().0);
+        // Square frames of any side: at the layers' size, or already at `edge`.
+        let from = (frame.len() / 4).isqrt() as u32;
+        match from == edge {
+            true => sheet.pixels.extend_from_slice(frame.as_chunks::<4>().0),
+            false => {
+                let frame = crate::sprites::resample(frame, from, edge);
+                sheet.pixels.extend_from_slice(frame.as_chunks::<4>().0);
+            }
+        }
     }
     let has_transparent = s.has_transparent || sheet.pixels.iter().any(|p| p[3] == 0);
     let levels = crate::mipmap::generate(
@@ -730,6 +764,17 @@ mod tests {
         }
     }
 
+    /// A 1024x4112 sheet of 16x16 frames (16448) beside 128 px layers is charged at its 16 px
+    /// edge: about 21.4 MiB of chains, where squared at 128 its frames were 1,028 MiB.
+    #[test]
+    fn animations_are_charged_at_their_edge() {
+        assert_eq!(chain_budget(16, 16_448, 128 << 20), Some(16_448 * 1364));
+        assert_eq!(chain_budget(16, 16_448, 16 << 20), None);
+        // 65 frames at a 2048 px edge pass a full atlas.
+        assert_eq!(chain_budget(2048, 65, u64::MAX), None);
+        assert!(chain_budget(2048, 64, u64::MAX).is_some());
+    }
+
     #[test]
     fn real_animation_chains_repeat_into_the_array_chain() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -763,7 +808,7 @@ mod tests {
         assert_eq!(sprites.animations.len(), 9);
         for animation in &sprites.animations {
             for frame in 0..animation.frame_count() {
-                let pixels = animation.pixels(frame);
+                let pixels = &animation.frame_at(frame, 64);
                 let (expected, _) =
                     super::super::mip_chain(pixels, 64, &sprites.mips, animation.layer, 1);
                 let (chain, edge) = source_chain(pixels, 64, &sprites.mips, animation.layer);

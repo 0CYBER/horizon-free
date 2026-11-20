@@ -48,6 +48,36 @@ fn animated_materials_keep_the_initial_upload_mip_semantics() {
     assert_uploaded_mips(&a, &expected);
 }
 
+/// A companion frame kept at its stored 16 px uploads at the 128 px array size exactly as the
+/// same frame resampled to 128 px beforehand did.
+#[test]
+fn a_stored_companion_frame_uploads_as_its_resampled_copy() {
+    let stored: Vec<u8> = (0..16 * 16)
+        .flat_map(|i| [i as u8, 0, 255 - i as u8, 255])
+        .collect();
+    let resampled = crate::sprites::resample(&stored, 16, 128);
+    let upload = |frame: Vec<u8>| {
+        let still = [1, 2, 3, 4].repeat(16 * 16);
+        let a = test_material_frames(
+            vec![vec![0; 64]; 2],
+            r#"{"frames":[0,1]}"#,
+            [None, Some(vec![still, frame])],
+        );
+        let mut animator = MaterialAnimations::new(std::slice::from_ref(&a));
+        let mut written = Vec::new();
+        animator.animate([(0, 1)], 128, 8, |_, _, _, _, pixels| {
+            written.extend_from_slice(pixels)
+        });
+        written
+    };
+    let written = upload(stored);
+    assert_eq!(
+        written.len(),
+        (128 * 128 + 64 * 64 + 32 * 32 + 16 * 16 + 64 + 16 + 4 + 1) * 4
+    );
+    assert_eq!(written, upload(resampled));
+}
+
 #[test]
 fn material_uploads_skip_static_maps_and_unchanged_selected_frames() {
     let zero = [10, 20, 30, 40].repeat(4);
