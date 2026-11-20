@@ -3094,6 +3094,11 @@ pub fn write_dat_durable(path: &Path, tag: Tag) -> Result<()> {
 /// `bytes` written to `path` through `<name>_new` and a rename, synced to the disk as
 /// [`write_dat_durable`] syncs: never a half-written file in place.
 pub fn write_durable(path: &Path, bytes: &[u8]) -> Result<()> {
+    Ok(write_durable_io(path, bytes)?)
+}
+
+/// [`write_durable`], keeping the operating system's error (its kind and code).
+pub fn write_durable_io(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -3101,8 +3106,7 @@ pub fn write_durable(path: &Path, bytes: &[u8]) -> Result<()> {
     let temporary = path.with_file_name(format!("{file}_new"));
     write_synced(&temporary, bytes)?;
     fs::rename(&temporary, path)?;
-    sync_folder(path)?;
-    Ok(())
+    sync_folder(path)
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -3117,6 +3121,12 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn sync_folder(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
+        // A bare file name's parent is "": the working directory.
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
         fs::File::open(dir)?.sync_all()?;
     }
     #[cfg(not(unix))]
@@ -5166,6 +5176,13 @@ fn effect_details(e: &crate::effects::SavedEffect) -> Vec<(&'static str, Tag)> {
 #[cfg(test)]
 mod tests {
     use crate::mobs::spawner::SpawnDataExt;
+
+    /// A bare file name lives in the working directory: syncing its folder syncs `.`, not the
+    /// empty path, so a durable write there that renamed its file into place also succeeds.
+    #[test]
+    fn a_bare_file_name_syncs_the_working_directory() {
+        super::sync_folder(std::path::Path::new("level-not-written.json")).unwrap();
+    }
 
     #[test]
     fn saved_preset_editor_stems_supply_shapes_and_facts_below_pack_stems() {

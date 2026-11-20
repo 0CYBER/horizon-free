@@ -1636,9 +1636,7 @@ impl Game<'_> {
         };
         let write = |dir: &str, json: &serde_json::Value| {
             let path = super::stats::player_json(&self.world_root, dir, uuid);
-            let text = serde_json::to_string_pretty(json).map_err(|e| e.to_string())?;
-            horizon_client::save::write_durable(&path, text.as_bytes())
-                .map_err(|e| format!("{} is not saved: {e}", path.display()))
+            super::stats::write_player_json(&path, json)
         };
         write(
             "advancements",

@@ -191,8 +191,8 @@ impl Stats {
             "DataVersion": horizon_world::DATA_VERSION,
         })
     }
-    /// `ServerStatsCounter.save`: written to a sibling temporary file and moved over the old one, so a
-    /// full disk leaves the old file whole; a failure is logged.
+    /// `ServerStatsCounter.save`: written whole (`save::write_durable`), so a crash or a full disk
+    /// leaves the old file; a failure is logged.
     pub fn write(&self, path: &Path) {
         if let Err(e) = self.try_write(path) {
             log::warn!("could not save the statistics file {}: {e}", path.display());
@@ -200,19 +200,8 @@ impl Stats {
     }
     /// [`Self::write`], reporting why it failed. The old file is left as it was then.
     pub fn try_write(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let text = serde_json::to_string_pretty(&self.to_json()).map_err(std::io::Error::other)?;
-        let mut temporary = path.as_os_str().to_owned();
-        temporary.push(".tmp");
-        let temporary = PathBuf::from(temporary);
-        let written =
-            std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, path));
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        written
+        horizon_client::save::write_durable_io(path, text.as_bytes())
     }
     /// The counters of a snapshot a mod hands over (`player_set_statistics`), read strictly: a JSON
     /// object with a `stats` object of type objects of whole numbers that fit an `i32`. Anything else is
@@ -231,6 +220,13 @@ impl Stats {
         }
         Some(stats)
     }
+}
+/// A player's advancements or statistics file written whole (`save::write_durable`): a crash
+/// during the write leaves the old file, and a failure names the file.
+pub fn write_player_json(path: &Path, json: &serde_json::Value) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(json).map_err(|e| e.to_string())?;
+    horizon_client::save::write_durable(path, text.as_bytes())
+        .map_err(|e| format!("{} is not saved: {e}", path.display()))
 }
 /// `players/<dir>/<uuid>.json` of a world (advancements, stats).
 pub fn player_json(world: &Path, dir: &str, uuid: [i32; 4]) -> PathBuf {
@@ -340,6 +336,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&world);
     }
 
+    /// An advancements file is replaced whole: when the new one cannot be written, the old one is
+    /// still there as it was, and the failure names the file.
+    #[test]
+    fn a_failed_player_file_write_keeps_the_old_file_and_is_reported() {
+        let world = std::env::temp_dir().join(format!(
+            "horizon-player-json-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&world);
+        let path = player_json(&world, "advancements", [1, 2, 3, 4]);
+        let good = serde_json::json!({"minecraft:story/root": {"done": true}});
+        write_player_json(&path, &good).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        // A folder where the new file goes: it cannot be created.
+        let file = path.file_name().unwrap().to_str().unwrap();
+        std::fs::create_dir(path.with_file_name(format!("{file}_new"))).unwrap();
+        let error = write_player_json(&path, &serde_json::json!({})).unwrap_err();
+        assert!(error.contains(file), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&world);
+    }
+
     /// ServerPlayer.die zeroes the two timers (and only them) and sends the new zero.
     #[test]
     fn death_resets_the_timers_since_death_and_rest() {
@@ -445,11 +464,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("p.json");
         read.try_write(&path).unwrap();
-        assert!(!dir.join("p.json.tmp").exists());
+        assert!(!dir.join("p.json_new").exists());
         let before = std::fs::read_to_string(&path).unwrap();
         // the temporary file cannot be made (its name is a directory): the old file stays whole
-        std::fs::create_dir(dir.join("p.json.tmp")).unwrap();
-        assert!(Stats::default().try_write(&path).is_err());
+        std::fs::create_dir(dir.join("p.json_new")).unwrap();
+        let error = Stats::default().try_write(&path).unwrap_err();
+        // The operating system's own error, not one rebuilt from its text.
+        assert_ne!(error.kind(), std::io::ErrorKind::Other, "{error}");
+        assert!(error.raw_os_error().is_some(), "{error}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
         let _ = std::fs::remove_dir_all(&dir);
     }

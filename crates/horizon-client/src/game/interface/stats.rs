@@ -6,7 +6,9 @@ use super::native_hooks::PhantomSpawnResult;
 use super::{Dim, Game};
 use horizon_core::geometry::Vec3;
 use horizon_core::random::RandomSource;
-pub(super) use horizon_gameplay::stats::{Stats, locate_player_json, player_json};
+pub(super) use horizon_gameplay::stats::{
+    Stats, locate_player_json, player_json, write_player_json,
+};
 use horizon_gameplay::stats::{namespaced, phantom_group_size};
 use std::path::PathBuf;
 
