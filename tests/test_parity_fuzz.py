@@ -137,6 +137,33 @@ class FamilyTests(unittest.TestCase):
                 self.assertTrue(any(op.get('read') for op in fuzz.render(scenario, 1)), (name, seed))
 
 
+class ShulkerHitTests(unittest.TestCase):
+    def test_live_bullet_scenario_requires_the_vanilla_target_to_take_damage(self):
+        scenario = families.shulker(random.Random(10), 10)
+        guard, = (op for op in fuzz.render(scenario, 0) if op.get('guard'))
+        missed, hit = {'results': [[True, 30]]}, {'results': [[True, 26]]}
+        invalid, failure = fuzz.witness('shulker', guard, missed, missed)
+        self.assertIsNotNone(invalid)
+        self.assertIsNone(failure)
+
+        invalid, failure = fuzz.witness('shulker', guard, hit, missed)
+        self.assertIsNone(invalid)
+        self.assertEqual(failure[2], [('<hit>', [[True, 26]], [[True, 30]])])
+
+        reduced = fuzz.reduce(scenario, set(fuzz.edits(scenario)))
+        retained, = (op for op in fuzz.render(reduced, 0) if op.get('guard'))
+        self.assertEqual(retained['cmd'], guard['cmd'])
+
+    def test_shulker_shooting_observes_a_survival_player_then_restores_creative(self):
+        scenario = families.shulker(random.Random(0), 0)
+        ops = fuzz.render(scenario, 0)
+        player_modes = [op for op in ops if op.get('cmd', '').startswith('/gamemode')]
+        self.assertEqual([op['cmd'] for op in player_modes], ['/gamemode survival @a', '/gamemode creative @a'])
+        ticks = [i for i, op in enumerate(ops) if op['op'] == 'tick']
+        self.assertLess(ops.index(player_modes[0]), min(ticks))
+        self.assertGreater(ops.index(player_modes[1]), max(ticks))
+
+
 class ReloadWitnessTests(unittest.TestCase):
     def test_a_reload_gives_the_oracle_time_to_unload_the_chunk(self):
         scenario = {'family': 'persist', 'seed': 1, 'steps': [{'k': 'reload'}, {'k': 'tick', 'n': 4}]}
