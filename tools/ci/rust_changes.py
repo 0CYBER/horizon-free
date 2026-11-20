@@ -27,7 +27,32 @@ LAUNCHER_CHECK = {".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools
 RUST_DECIDES = {"tools/ci/rust_changes.py", "tools/release_train.py"}
 
 
+# Files needs_rust's rules would skip that Rust compiles in (include_str!, include_bytes!, include!), each with the
+# Rust files that embed it: a change to one selects what a change to those files would. Kept exact by
+# tests/test_ci_rust_changes.py, which finds every embed in the Rust sources.
+EMBEDDED = {
+    "crates/horizon-mod-api-gen/coverage-notes.md": ("crates/horizon-mod-api-gen/src/wire/host.rs",),
+    "docs/media/nether.webp": ("launcher/src/glass_server_dialog.rs",),
+    "docs/media/underwater.webp": ("launcher/src/glass_server_dialog.rs",),
+    "docs/media/village.webp": ("launcher/src/glass_server_dialog.rs",),
+    "docs/modpacks/atm10-mods.csv": ("crates/horizon-port-pack/src/classify.rs",),
+    "docs/parity/random-chance-seeded.jsonl": (
+        "crates/horizon-client/src/advancements.rs",
+        "crates/horizon-client/src/game/interface/advancements/mod.rs",
+    ),
+}
+
+
+def with_embedders(paths):
+    return [embedder for path in paths for embedder in (path, *EMBEDDED.get(path, ()))]
+
+
 def needs_rust(paths):
+    return needs_rust_alone(with_embedders(paths))
+
+
+def needs_rust_alone(paths):
+    """needs_rust without EMBEDDED."""
     return any(not (
         path.startswith("docs/") or path.endswith(".md")
         or path.startswith(("tools/", "tests/")) and path.endswith(".py") and path not in RUST_DECIDES
@@ -50,7 +75,7 @@ def needs_launcher(paths):
         path.startswith(tuple(release_train.LAUNCHER_PATHS))
         and not path.startswith(tuple(release_train.LAUNCHER_IGNORED))
         and not path.endswith(".md")
-    ) for path in paths)
+    ) for path in with_embedders(paths))
 
 
 # Stands for "everything changed" when no diff can be computed: a root manifest every check and shard selector

@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
+import posixpath
+import re
 import subprocess
 import tempfile
 import unittest
 
 from tools.ci.rust_changes import (
-    UNKNOWN_CHANGE, changed_entries, changed_paths, mentions_replaceable, needs_launcher, needs_mod_points, needs_rust, needs_server_build, needs_tooling,
+    EMBEDDED, needs_rust_alone, UNKNOWN_CHANGE, changed_entries, changed_paths, mentions_replaceable, needs_launcher, needs_mod_points, needs_rust, needs_server_build, needs_tooling,
     selections,
 )
 
@@ -180,6 +182,52 @@ class RustChangesTests(unittest.TestCase):
             self.assertEqual(paths, [UNKNOWN_CHANGE])
             self.assertTrue(needs_rust(paths))
             self.assertTrue(needs_launcher(paths))
+
+
+ROOT = Path(__file__).resolve().parents[1]
+# include_str!/include_bytes!/include! of a literal path, beside the file or under CARGO_MANIFEST_DIR.
+# Any of a macro's delimiters: include_str!("a"), include_str!["a"], include_str! {"a"}.
+INCLUDE = re.compile(
+    r'include(?:_str|_bytes)?!\s*[(\[{]\s*'
+    r'(concat!\s*[(\[{]\s*env!\s*[(\[{]\s*"CARGO_MANIFEST_DIR"\s*[)\]}]\s*,\s*)?"([^"]*)"')
+
+
+def rust_embeds():
+    """Every tracked file a tracked Rust file embeds: {target: {embedding files}}."""
+    tracked = set(subprocess.check_output(["git", "-C", str(ROOT), "ls-files"], text=True, encoding="utf-8").splitlines())
+    embeds = {}
+    for source in sorted(path for path in tracked if path.endswith(".rs")):
+        text = (ROOT / source).read_text(encoding="utf-8", errors="replace")
+        for match in INCLUDE.finditer(text):
+            base = posixpath.dirname(source)
+            if match.group(1):
+                while base and f"{base}/Cargo.toml" not in tracked:
+                    base = posixpath.dirname(base)
+            path = match.group(2).lstrip("/") if match.group(1) else match.group(2)
+            target = posixpath.normpath(posixpath.join(base, path))
+            if target in tracked:
+                embeds.setdefault(target, set()).add(source)
+    return embeds
+
+
+class EmbeddedFileTests(unittest.TestCase):
+    def test_files_rust_embeds_select_the_rust_checks(self):
+        for path in ["docs/modpacks/atm10-mods.csv", "docs/parity/random-chance-seeded.jsonl",
+                     "crates/horizon-mod-api-gen/coverage-notes.md"]:
+            with self.subTest(path=path):
+                self.assertTrue(needs_rust([path]))
+        self.assertTrue(needs_launcher(["docs/media/village.webp"]))
+        self.assertFalse(needs_rust(["docs/setup.md", "docs/modpacks.md", "README.md"]))
+
+    def test_the_embedded_list_is_every_embed_the_rules_would_skip(self):
+        embeds = rust_embeds()
+        # The scan finds the embeds at all: one the list has always had.
+        self.assertIn("crates/horizon-port-pack/src/classify.rs", embeds["docs/modpacks/atm10-mods.csv"])
+        skipped = {
+            target: sources for target, sources in embeds.items()
+            if not needs_rust_alone([target]) and any(needs_rust_alone([source]) for source in sources)
+        }
+        self.assertEqual({target: set(sources) for target, sources in EMBEDDED.items()}, skipped)
 
 
 class ModPointSelectionTests(unittest.TestCase):
