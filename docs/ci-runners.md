@@ -47,18 +47,25 @@ per part, side by side, each on a size that fits it:
 
 | Job | Runner | Merge queue |
 | --- | --- | --- |
-| `verify (which parts run)` (`verify-scope`): `tools/ci/rust_changes.py`'s answers for the launcher and lint parts, so a change that doesn't reach them never starts their 16 vCPU runner | 2 vCPU | yes |
+| `verify (which parts run)` (`verify-scope`): `tools/ci/rust_changes.py`'s answers for the launcher and Rust parts, so a change that doesn't reach a part never starts its runner | 2 vCPU | yes |
 | `verify (tree and Python tests)` (`verify-tree`) | 8 vCPU: the Python tests run one module per process (`tools/ci/unittest_parallel.py`) | yes |
-| `verify (format and lint)` (`verify-lint`), when `verify-scope` finds a Rust change (always on main's pushes) | 16 vCPU | no |
-| `verify (server build lint)` (`verify-server`) | 16 vCPU | no |
-| `verify (launcher)` (`verify-launcher`), when `verify-scope` (`rust_changes.py --launcher`) says the change reaches it | 16 vCPU | no |
-| `verify (Rust tests)` (`verify-test`) | 16 vCPU | yes |
-| `verify (mod points)` (`verify-mod-points`): the comparison runs on pull requests only; elsewhere it builds the generator to warm its disk | 16 vCPU | yes |
+| `verify (format and lint)` (`verify-lint`), when `verify-scope` finds a Rust change (always on main's pushes) | 16 vCPU: clippy keeps them busy | no |
+| `verify (server build lint)` (`verify-server`), when `verify-scope` finds a Rust change | 4 vCPU: its clippy keeps about two cores busy | no |
+| `verify (launcher)` (`verify-launcher`), when `verify-scope` (`rust_changes.py --launcher`) says the change reaches it | 8 vCPU | no |
+| `verify (Rust tests)` (`verify-test`), when `verify-scope` finds a Rust change | 16 vCPU: a cold build folder compiles the workspace | yes |
+| `verify (mod points)` (`verify-mod-points`), when `verify-scope` says the change can reach the points: the comparison runs on pull requests only; elsewhere it builds the generator to warm its disk | 8 vCPU: the generator and the comparison use one core; only its compiles use more | yes |
 
 Only `verify`, which waits for them all, is a required check; `tests/test_ci_runners.py` pins that the parts share one
-`runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners. `verify` passes a skipped launcher or lint
-part only where `verify-scope` (or the merge queue) left it out. Each part ends with a `load probe:` line
-(`tools/ci/load_probe.sh`: cores, load, CPU and memory use, seconds) for choosing runner sizes.
+`runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners. `verify` passes a skipped part only where
+its own `if` left it out: `verify-scope`'s answer for it exactly `false`, or the merge queue for the lint, server build
+and launcher parts. A failed or cancelled `verify-scope` fails `verify`. Each part ends with a `load probe:` line
+(`tools/ci/load_probe.sh`: cores, load, CPU and memory use, seconds) for choosing runner sizes; its `peak` is the job's
+cgroup peak, file cache included, so it reads higher than the memory the processes held.
+
+The sizes came from those lines and the step times of 39 pull requests' runs on 2026-11-20. A size halved halves a
+minute's price (Blacksmith bills by vCPU, 2 vCPU and 8 GB at a time; 4 vCPU has 16 GB, 8 vCPU 32 GB), and only the
+compiles in a part slow down on fewer cores. The sticky disks' keys don't name the size, so a resized part keeps its
+build folder.
 
 Each Rust job keeps its Cargo build folder between runs on a Blacksmith sticky disk, as the VPS keeps its own
 (`tools/ci/build_folder.sh`): one disk per job, so jobs that ran side by side don't replace each other's build. A

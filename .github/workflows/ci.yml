@@ -73,12 +73,11 @@ jobs:
   # On Blacksmith each Rust part keeps its build folder on a sticky disk instead (tools/ci/build_folder.sh), one disk per
   # part: parts that ran side by side on one disk would each replace the other's build. A cold disk builds everything
   # once; after that a pull request rebuilds what it changed.
-  # Which parts a change reaches, decided on the smallest runner before the launcher and lint parts start: a part that
-  # starts only to find nothing to do still bills a whole 16 vCPU minute (433 of the launcher's 577 jobs on 2026-11-19,
-  # #18843). The Rust tests, the slowest part of most pull requests, and the server build (every pull request with Rust,
-  # below) decide for themselves; the launcher and lint parts start ~17 s later, which lengthens only a run whose slowest
-  # part is the launcher's (a pull request that changes only the launcher finishes ~15 s later). Only the scripts it
-  # runs are checked out.
+  # Which parts a change reaches, decided on the smallest runner before the Rust parts start: a part that starts only to
+  # find nothing to do still bills a whole minute of its runner (433 of the launcher's 577 jobs on 2026-11-19, #18843).
+  # Every Rust part waits for it, so each starts 10-16 s later; the decision itself takes under a second. Only the
+  # scripts it runs are checked out: `git grep` of a revision (the mod points' search of file contents) reads the whole
+  # tree whatever the sparse checkout leaves out, and fetches the blobs it needs.
   verify-scope:
     name: verify (which parts run)
     runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-2vcpu-ubuntu-2404' }}
@@ -86,6 +85,7 @@ jobs:
     outputs:
       rust: ${{ steps.answers.outputs.rust }}
       launcher: ${{ steps.answers.outputs.launcher }}
+      mod_points: ${{ steps.answers.outputs.mod_points }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,14 +93,15 @@ jobs:
           filter: blob:none
           sparse-checkout: tools
           persist-credentials: false
-      # --all: the same needs_rust the Rust tests' own step asks, without the mod points' search of file contents.
+      # The Rust parts' answers: `required` (needs_rust) for the lint, server build and Rust tests parts, `mod_points`
+      # for the mod points part. Only a pull request asks; on any other event every Rust part runs.
       - name: Does this pull request need Rust checks?
         if: github.event_name == 'pull_request'
         id: rust
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py --all "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Does this change the launcher or a crate it builds?
         if: github.event_name != 'workflow_dispatch'
         id: launcher
@@ -119,10 +120,11 @@ jobs:
       - name: Every answer is true or false
         id: answers
         env:
-          RUST: ${{ steps.rust.outputs.rust_required }}
+          RUST: ${{ steps.rust.outputs.required }}
           LAUNCHER: ${{ steps.launcher.outputs.required }}
+          MOD_POINTS: ${{ steps.rust.outputs.mod_points }}
         run: |
-          for answer in "rust=$RUST" "launcher=$LAUNCHER"; do
+          for answer in "rust=$RUST" "launcher=$LAUNCHER" "mod_points=$MOD_POINTS"; do
             name=${answer%%=*} value=${answer#*=}
             case "$value" in
               true | false) ;;
@@ -279,40 +281,35 @@ jobs:
   # change is in (tools/ci/rust_changes.py's server_build answer goes unread on purpose): the merge queue doesn't, so a
   # change that breaks only the server build must stop on its own pull request (a crate below the client can break it
   # without touching one).
+  # 4 vCPU: its clippy keeps about two cores busy (load 1-3, 8-19% of 16 cores on 39 pull requests, 2026-11-20).
+  # No ALSA or udev headers: without `audio` and `controllers` nothing in its build reaches alsa-sys or libudev-sys
+  # (cpal and gilrs are optional dependencies behind them), as game-build.yml's server build shows.
   verify-server:
     name: verify (server build lint)
-    if: github.event_name != 'merge_group'
-    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    needs: verify-scope
+    if: github.event_name != 'merge_group' && needs.verify-scope.outputs.rust != 'false'
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
-      - name: Does this pull request need Rust checks?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      - name: Install Rust toolchain and the ALSA and udev headers the client links against
-        if: steps.rust.outputs.required != 'false'
+      - name: Install Rust toolchain
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
-        run: tools/ci/install_rust.sh libasound2-dev libudev-dev
+        run: tools/ci/install_rust.sh
       - name: Mount the build folder
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
           key: ${{ github.repository }}-verify-server-own
           path: ~/horizon-target
           commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
       - name: Lint the server build
-        if: steps.rust.outputs.required != 'false'
         run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
       - name: Load probe
         if: always()
@@ -323,11 +320,12 @@ jobs:
   # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
   # after their merge shows it. A push's range is the commits it added to main; a range verify-scope cannot read (a push
   # with no earlier commit, or one a force push removed) runs everything. Not in the merge queue, as verify-lint.
+  # 8 vCPU: load 2.7-6.7 at its end, 13-21% of 16 cores busy (14 pull requests, 2026-11-20), well inside 32 GB.
   verify-launcher:
     name: verify (launcher)
     needs: verify-scope
     if: github.event_name != 'merge_group' && needs.verify-scope.outputs.launcher != 'false'
-    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -382,6 +380,8 @@ jobs:
         run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   verify-test:
     name: verify (Rust tests)
+    needs: verify-scope
+    if: needs.verify-scope.outputs.rust != 'false'
     runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
@@ -402,16 +402,8 @@ jobs:
             tested=true
           fi
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
-      - name: Does this pull request need Rust checks?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       # Before the next step, so that the toolchain downloads beside apt and the next step finds it installed.
       - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
-        if: steps.rust.outputs.required != 'false'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
         run: tools/ci/install_rust.sh libasound2-dev libudev-dev mold
@@ -422,21 +414,21 @@ jobs:
           rustup default stable
           echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
       - name: Mount the build folder
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
           key: ${{ github.repository }}-verify-test-own
           path: ~/horizon-target
           commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
       # The mold linker, Blacksmith's runners only (installed above): linking the test binaries was a large part of this
       # job. Rust uses its own lld on x86_64 Linux by default; -linker-features=-lld turns that off so mold's
       # -fuse-ld applies. The same on every event, so the build folder's artifacts match between main and pull requests.
       # The variable replaces .cargo/config.toml's rustflags, so it repeats the parallel front end (-Zthreads=8).
       - name: Link with mold
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold -Zthreads=8" >> "$GITHUB_ENV"
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
@@ -449,7 +441,6 @@ jobs:
       # warm, the workspace build costs only what changed; running every test costs ~35 s (#18025's cold run: unit
       # tests 17 s, content-root 4 s, doc tests 13 s).
       - name: Test Rust core and voxel kernel correctness
-        if: steps.rust.outputs.required != 'false'
         env:
           TESTED: ${{ steps.queued.outputs.tested }}
           # main's pushes record per-crate build times (#18047); the later runs rebuild nothing, so only the first has it.
@@ -468,7 +459,7 @@ jobs:
           cargo +stable test --locked --workspace --doc
       - name: Upload the cargo build timings
         # Also after a failed test: the build, and so its timings, finished before the tests ran.
-        if: "!cancelled() && github.ref == 'refs/heads/main' && steps.rust.outputs.required != 'false'"
+        if: "!cancelled() && github.ref == 'refs/heads/main'"
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cargo-timings
@@ -486,7 +477,10 @@ jobs:
   # for the pull request's tree (the merge commit) and for HEAD^1 (main, as in verify-tree): the generator's few
   # crates and their dependencies, not the game. A pull request runs it when tools/ci/rust_changes.py says its change
   # can reach the points (`mod_points`: the game module, the generator's crates, the check, manifests, or a Rust file
-  # that mentions `replaceable` before or after); the rest skip the setup and the check.
+  # that mentions `replaceable` before or after; verify-scope asks); the rest never start it.
+  # 8 vCPU: the generator and the comparison run on one core (2-10 min of a run), and only the compiles use more (the
+  # wire loopback's 25-77 s, a missing base snapshot's ~55 s more), so 16 cores sat mostly idle. 4 vCPU may do: its
+  # load probe below has no lines yet.
   # It is its own job beside verify-test, with a build folder of its own, so it adds no time to the slowest job (as a
   # step of verify-test it came after the tests and added ~2.5 min to every pull request that touches game/). Like
   # verify-test it runs on every event, because only main's pushes and the merge queue save a build folder's disk:
@@ -494,7 +488,9 @@ jobs:
   # checkout is whole, as the other parts'.
   verify-mod-points:
     name: verify (mod points)
-    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
+    needs: verify-scope
+    if: needs.verify-scope.outputs.mod_points != 'false'
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -503,40 +499,26 @@ jobs:
           filter: blob:none
           # Nothing later pushes, and the pull request's code runs from here on: it needs no token.
           persist-credentials: false
-      - name: Does this pull request change the mod points?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      - name: Our runners as GitHub's (a default Rust toolchain)
-        if: steps.rust.outputs.mod_points != 'false'
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+      # apt beside rustup (tools/ci/install_rust.sh), as verify-test: one after the other they took 10-18 s here.
       - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
-        if: steps.rust.outputs.mod_points != 'false'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev mold
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        run: tools/ci/install_rust.sh libasound2-dev libudev-dev mold
+      - name: Our runners as GitHub's (a default Rust toolchain)
+        run: rustup default stable
       - name: Mount the build folder
-        if: steps.rust.outputs.mod_points != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
           key: ${{ github.repository }}-verify-mod-points-own
           path: ~/horizon-target
           commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
-        if: steps.rust.outputs.mod_points != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
       # The same mold flags as verify-test's.
       - name: Link with mold
-        if: steps.rust.outputs.mod_points != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold -Zthreads=8" >> "$GITHUB_ENV"
       # On main's pushes and in the merge queue, where the build folder's disk is saved (SAVE_BUILD_DISK), the job only
       # builds what the check builds: the same cargo package, example, profile and features, in this folder, so a pull
@@ -557,7 +539,7 @@ jobs:
             cargo build --locked -p horizon-mod-api-gen --example hook_snapshot
           fi
       - name: Mod points and the generated API stay as they were
-        if: github.event_name == 'pull_request' && steps.rust.outputs.mod_points != 'false'
+        if: github.event_name == 'pull_request'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
         run: |
@@ -580,8 +562,11 @@ jobs:
           HORIZON_STAGE_TOOL="${CARGO_TARGET_DIR:-$PWD/target}/debug/horizon-stage" python3 tools/ci/surface_report.py
       # verify-test builds the points' wire loopback empty: it needs a guest build whose table has sites (#18400).
       - name: The points' wire loopback
-        if: steps.rust.outputs.mod_points != 'false'
         run: cargo test --locked -p horizon-mod-points --features wasm-guest,listener-fixture --test wire_loopback
+      - name: Load probe
+        if: always()
+        continue-on-error: true
+        run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   verify:
     needs: [verify-scope, verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-points]
     if: always()
@@ -600,18 +585,21 @@ jobs:
           EVENT: ${{ github.event_name }}
           RUST_ANSWER: ${{ needs.verify-scope.outputs.rust }}
           LAUNCHER_ANSWER: ${{ needs.verify-scope.outputs.launcher }}
-        # A skipped lint or launcher part passes only where its own `if` left it out: the merge queue, or verify-scope's
-        # answer exactly `false` (compared with case, as `if` doesn't). Anywhere else it was never decided for
-        # (verify-scope failed, or the run was cancelled first), which fails.
+          MODPOINTS_ANSWER: ${{ needs.verify-scope.outputs.mod_points }}
+        # A skipped part passes only where its own `if` left it out: verify-scope's answer for it exactly `false`
+        # (compared with case, as `if` doesn't), or, for the parts the merge queue leaves out (lint, server build,
+        # launcher), the merge queue. Anywhere else it was never decided for (verify-scope failed, or the run was
+        # cancelled first), which fails.
         run: |
           echo "which parts run: $SCOPE, tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST, mod points: $MODPOINTS"
           [ "$SCOPE" = success ] || exit 1
-          for result in "$TREE" "$SERVER" "$TEST" "$MODPOINTS"; do
-            [ "$result" = success ] || [ "$result" = skipped ] || exit 1
-          done
+          [ "$TREE" = success ] || [ "$TREE" = skipped ] || exit 1
           left_out() { [ "$EVENT" = merge_group ] || [ "$1" = false ]; }
           [ "$LINT" = success ] || { [ "$LINT" = skipped ] && left_out "$RUST_ANSWER"; } || exit 1
+          [ "$SERVER" = success ] || { [ "$SERVER" = skipped ] && left_out "$RUST_ANSWER"; } || exit 1
           [ "$LAUNCHER" = success ] || { [ "$LAUNCHER" = skipped ] && left_out "$LAUNCHER_ANSWER"; } || exit 1
+          [ "$TEST" = success ] || { [ "$TEST" = skipped ] && [ "$RUST_ANSWER" = false ]; } || exit 1
+          [ "$MODPOINTS" = success ] || { [ "$MODPOINTS" = skipped ] && [ "$MODPOINTS_ANSWER" = false ]; } || exit 1
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
   # (`gh workflow run checks --ref <branch> -f arm64=true`): GitHub's runner queue is the bottleneck, and main's runs
   # gate the releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this

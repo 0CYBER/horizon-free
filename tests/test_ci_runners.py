@@ -22,7 +22,7 @@ WORKFLOWS = ROOT / ".github/workflows"
 LIGHT = ("horizon-light", "playhorizon-light", "playhorizon-ci")
 CHECKS = ("horizon-checks",)
 FORK_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
-# verify-scope decides on a small runner which of the launcher and lint parts start; it goes where they go.
+# verify-scope decides on a small runner which of the launcher and Rust parts start; it goes where they go.
 VERIFY_PARTS = ("verify-scope", "verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test",
                 "verify-mod-points")
 # On Windows the bash on PATH is Git's; a bare "bash" there would be WSL's (tests/test_pr_ready.py).
@@ -526,12 +526,19 @@ class HostedParityTests(unittest.TestCase):
 
 
 class VerifyGateTests(unittest.TestCase):
-    """verify, the check main requires, when verify-scope leaves the launcher or lint part out (#18843): a part left out
-    passes, and one that failed, was cancelled or was never decided for fails."""
+    """verify, the check main requires, when verify-scope leaves a part out (#18843): a part left out passes, and one
+    that failed, was cancelled or was never decided for fails."""
 
     PASSED = {"SCOPE": "success", "TREE": "success", "LINT": "success", "SERVER": "success", "LAUNCHER": "success",
               "TEST": "success", "MODPOINTS": "success", "EVENT": "pull_request", "RUST_ANSWER": "true",
-              "LAUNCHER_ANSWER": "true"}
+              "LAUNCHER_ANSWER": "true", "MODPOINTS_ANSWER": "true"}
+    # Each part verify-scope can leave out: its result's variable, its job, the answer that decides it, that answer's
+    # output, and whether the merge queue leaves the part out too.
+    GATED = [("LINT", "verify-lint", "RUST_ANSWER", "rust", True),
+             ("SERVER", "verify-server", "RUST_ANSWER", "rust", True),
+             ("LAUNCHER", "verify-launcher", "LAUNCHER_ANSWER", "launcher", True),
+             ("TEST", "verify-test", "RUST_ANSWER", "rust", False),
+             ("MODPOINTS", "verify-mod-points", "MODPOINTS_ANSWER", "mod_points", False)]
 
     @classmethod
     def setUpClass(cls):
@@ -562,91 +569,124 @@ class VerifyGateTests(unittest.TestCase):
         self.assertEqual(self.gate["env"]["EVENT"], "${{ github.event_name }}")
         self.assertEqual(self.gate["env"]["RUST_ANSWER"], "${{ needs.verify-scope.outputs.rust }}")
         self.assertEqual(self.gate["env"]["LAUNCHER_ANSWER"], "${{ needs.verify-scope.outputs.launcher }}")
+        self.assertEqual(self.gate["env"]["MODPOINTS_ANSWER"], "${{ needs.verify-scope.outputs.mod_points }}")
         self.assertTrue(self.passes())
 
     def test_the_parts_wait_for_the_checked_answers(self):
-        for part, output in [("verify-lint", "rust"), ("verify-launcher", "launcher")]:
+        for _, part, _, output, queue_skips in self.GATED:
             with self.subTest(part=part):
                 self.assertEqual(self.jobs[part]["needs"], "verify-scope")
-                self.assertEqual(self.jobs[part]["if"], "github.event_name != 'merge_group' && "
-                                                        "needs.verify-scope.outputs.%s != 'false'" % output)
+                condition = "needs.verify-scope.outputs.%s != 'false'" % output
+                if queue_skips:
+                    condition = "github.event_name != 'merge_group' && " + condition
+                self.assertEqual(self.jobs[part]["if"], condition)
+                # Decided once, in verify-scope: no step of the part asks again.
+                self.assertNotIn("rust_changes.py", json.dumps(self.jobs[part]))
         # Decided on every event, and published only through the step that checks them.
         self.assertNotIn("if", self.jobs["verify-scope"])
         self.assertNotIn("if", self.answers)
-        self.assertEqual(self.jobs["verify-scope"]["outputs"], {"rust": "${{ steps.answers.outputs.rust }}",
-                                                                "launcher": "${{ steps.answers.outputs.launcher }}"})
-        self.assertEqual(self.answers["env"], {"RUST": "${{ steps.rust.outputs.rust_required }}",
-                                               "LAUNCHER": "${{ steps.launcher.outputs.required }}"})
+        self.assertEqual(self.jobs["verify-scope"]["outputs"], {
+            "rust": "${{ steps.answers.outputs.rust }}", "launcher": "${{ steps.answers.outputs.launcher }}",
+            "mod_points": "${{ steps.answers.outputs.mod_points }}"})
+        self.assertEqual(self.answers["env"], {"RUST": "${{ steps.rust.outputs.required }}",
+                                               "LAUNCHER": "${{ steps.launcher.outputs.required }}",
+                                               "MOD_POINTS": "${{ steps.rust.outputs.mod_points }}"})
 
-    def answer(self, rust, launcher):
+    def test_the_decision_is_the_one_the_parts_made_themselves(self):
+        # The selector's default answer, which the server build, Rust tests and mod points parts each asked on a pull
+        # request: `required` is needs_rust, `mod_points` needs_mod_points with its search of the changed files.
+        (rust,) = [step for step in self.jobs["verify-scope"]["steps"] if step.get("id") == "rust"]
+        self.assertEqual(rust["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(rust["run"], 'python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"')
+        self.assertEqual(rust["env"], {"BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+                                       "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"})
+
+    def answer(self, rust, launcher, mod_points):
         """(exit code, GITHUB_OUTPUT) of verify-scope's answers step."""
         with tempfile.TemporaryDirectory() as scratch:
             output = Path(scratch) / "output"
             output.write_text("")
-            result = self.bash(self.answers["run"], {"RUST": rust, "LAUNCHER": launcher, "GITHUB_OUTPUT": str(output)})
+            result = self.bash(self.answers["run"], {"RUST": rust, "LAUNCHER": launcher, "MOD_POINTS": mod_points,
+                                                     "GITHUB_OUTPUT": str(output)})
             return result.returncode, output.read_text()
 
     def test_the_answers_are_exactly_true_or_false(self):
-        self.assertEqual(self.answer("true", "false"), (0, "rust=true\nlauncher=false\n"))
-        self.assertEqual(self.answer("false", "true"), (0, "rust=false\nlauncher=true\n"))
+        self.assertEqual(self.answer("true", "false", "false"), (0, "rust=true\nlauncher=false\nmod_points=false\n"))
+        self.assertEqual(self.answer("false", "true", "true"), (0, "rust=false\nlauncher=true\nmod_points=true\n"))
         # A step that didn't run (a push, a manual run, no earlier commit): the part runs.
-        self.assertEqual(self.answer("", ""), (0, "rust=true\nlauncher=true\n"))
+        self.assertEqual(self.answer("", "", ""), (0, "rust=true\nlauncher=true\nmod_points=true\n"))
         # `if` compares without case: FALSE would skip a part as false does. Refused, as anything else.
-        for rust, launcher in [("FALSE", "false"), ("false", "False"), ("true", "yes"), ("0", "true"),
-                               ("true", "false\nrust=false")]:
-            with self.subTest(rust=rust, launcher=launcher):
-                self.assertNotEqual(self.answer(rust, launcher)[0], 0)
-
-    def test_the_server_build_and_rust_tests_still_start_on_every_pull_request(self):
-        # The server build: whatever crate a change is in (ci.yml says why). The Rust tests decide for themselves, so
-        # waiting for verify-scope never lands on the slowest part of most pull requests.
-        self.assertEqual(self.jobs["verify-server"]["if"], "github.event_name != 'merge_group'")
-        for part in ("verify-server", "verify-test"):
-            self.assertNotIn("needs", self.jobs[part], part)
+        for answers in [("FALSE", "false", "false"), ("false", "False", "false"), ("true", "yes", "true"),
+                        ("0", "true", "true"), ("true", "false\nrust=false", "true"), ("true", "true", "FALSE"),
+                        ("true", "true", "false\nrust=false"), ("true", "true", "no")]:
+            with self.subTest(answers=answers):
+                self.assertNotEqual(self.answer(*answers)[0], 0)
 
     def test_a_part_left_out_passes(self):
-        self.assertTrue(self.passes(LAUNCHER="skipped", LAUNCHER_ANSWER="false"))
-        self.assertTrue(self.passes(LINT="skipped", RUST_ANSWER="false"))
-        self.assertTrue(self.passes(LINT="skipped", RUST_ANSWER="false", LAUNCHER="skipped", LAUNCHER_ANSWER="false"))
+        for name, _, answer, _, _ in self.GATED:
+            with self.subTest(part=name):
+                self.assertTrue(self.passes(**{name: "skipped", answer: "false"}))
+        # All of them at once: a pull request that changes only documentation.
+        self.assertTrue(self.passes(LINT="skipped", SERVER="skipped", LAUNCHER="skipped", TEST="skipped",
+                                    MODPOINTS="skipped", RUST_ANSWER="false", LAUNCHER_ANSWER="false",
+                                    MODPOINTS_ANSWER="false"))
 
     def test_a_skip_passes_only_on_exactly_false(self):
         # The gate compares with case, as the answers step publishes: FALSE or an empty answer is no decision.
-        for answer in ("true", "FALSE", "False", "", "false "):
-            with self.subTest(answer=answer):
-                self.assertFalse(self.passes(LAUNCHER="skipped", LAUNCHER_ANSWER=answer))
-                self.assertFalse(self.passes(LINT="skipped", RUST_ANSWER=answer))
+        for value in ("true", "FALSE", "False", "", "false "):
+            for name, _, answer, _, _ in self.GATED:
+                with self.subTest(part=name, answer=value):
+                    self.assertFalse(self.passes(**{name: "skipped", answer: value}))
+
+    def test_a_skip_passes_only_on_its_own_answer(self):
+        # The answers are independent: a change to the mod points check alone needs no Rust tests, and a Rust change
+        # that can't reach the points needs no comparison.
+        self.assertFalse(self.passes(TEST="skipped", MODPOINTS_ANSWER="false", LAUNCHER_ANSWER="false"))
+        self.assertFalse(self.passes(SERVER="skipped", MODPOINTS_ANSWER="false", LAUNCHER_ANSWER="false"))
+        self.assertFalse(self.passes(MODPOINTS="skipped", RUST_ANSWER="false", LAUNCHER_ANSWER="false"))
+        self.assertFalse(self.passes(LAUNCHER="skipped", RUST_ANSWER="false", MODPOINTS_ANSWER="false"))
+        self.assertFalse(self.passes(LINT="skipped", LAUNCHER_ANSWER="false", MODPOINTS_ANSWER="false"))
 
     def test_a_failed_or_cancelled_part_fails(self):
         for result in ("failure", "cancelled"):
-            for answer in ("true", "false"):
-                with self.subTest(result=result, answer=answer):
-                    self.assertFalse(self.passes(LAUNCHER=result, LAUNCHER_ANSWER=answer))
-                    self.assertFalse(self.passes(LINT=result, RUST_ANSWER=answer))
-                    self.assertFalse(self.passes(LAUNCHER=result, EVENT="merge_group"))
+            for value in ("true", "false"):
+                for name, _, answer, _, _ in self.GATED:
+                    with self.subTest(result=result, part=name, answer=value):
+                        self.assertFalse(self.passes(**{name: result, answer: value}))
+                        self.assertFalse(self.passes(**{name: result, "EVENT": "merge_group"}))
 
     def test_a_part_skipped_without_a_decision_fails(self):
         # verify-scope failed or was cancelled: what waits on it is skipped, and its outputs are empty.
+        skipped = {name: "skipped" for name, _, _, _, _ in self.GATED}
         for scope in ("failure", "cancelled", "skipped"):
             with self.subTest(scope=scope):
-                self.assertFalse(self.passes(SCOPE=scope, LINT="skipped", LAUNCHER="skipped", RUST_ANSWER="",
-                                             LAUNCHER_ANSWER=""))
-                self.assertFalse(self.passes(SCOPE=scope, LINT="skipped", LAUNCHER="skipped", RUST_ANSWER="false",
-                                             LAUNCHER_ANSWER="false"))
+                self.assertFalse(self.passes(SCOPE=scope, **skipped, RUST_ANSWER="", LAUNCHER_ANSWER="",
+                                             MODPOINTS_ANSWER=""))
+                self.assertFalse(self.passes(SCOPE=scope, **skipped, RUST_ANSWER="false", LAUNCHER_ANSWER="false",
+                                             MODPOINTS_ANSWER="false"))
+            for name, _, _, _, _ in self.GATED:
+                with self.subTest(scope=scope, part=name):
+                    self.assertFalse(self.passes(SCOPE=scope, **{name: "skipped"}, RUST_ANSWER="", LAUNCHER_ANSWER="",
+                                                 MODPOINTS_ANSWER=""))
 
     def test_the_merge_queue_shape_passes(self):
-        self.assertTrue(self.passes(EVENT="merge_group", LINT="skipped", SERVER="skipped", LAUNCHER="skipped",
-                                    RUST_ANSWER="true", LAUNCHER_ANSWER="true"))
+        self.assertTrue(self.passes(EVENT="merge_group", LINT="skipped", SERVER="skipped", LAUNCHER="skipped"))
 
-    def test_the_other_parts_are_judged_as_before(self):
-        for name in ("TREE", "SERVER", "TEST", "MODPOINTS"):
+    def test_the_merge_queue_still_runs_the_rust_tests_and_mod_points(self):
+        # Their `if`s don't leave the merge queue out and verify-scope answers true there, so a skip is no decision.
+        for name in ("TEST", "MODPOINTS"):
             with self.subTest(part=name):
-                self.assertTrue(self.passes(**{name: "skipped"}))
-                self.assertFalse(self.passes(**{name: "failure"}))
-                self.assertFalse(self.passes(**{name: "cancelled"}))
+                self.assertFalse(self.passes(EVENT="merge_group", LINT="skipped", SERVER="skipped",
+                                             LAUNCHER="skipped", **{name: "skipped"}))
+
+    def test_the_tree_part_is_judged_as_before(self):
+        self.assertTrue(self.passes(TREE="skipped"))
+        self.assertFalse(self.passes(TREE="failure"))
+        self.assertFalse(self.passes(TREE="cancelled"))
 
     def test_every_part_ends_with_a_bounded_load_probe_that_cannot_fail_it(self):
-        # Not verify (mod points) yet: another change is reworking that job.
-        for part in ("verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test"):
+        for part in ("verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test",
+                     "verify-mod-points"):
             with self.subTest(part=part):
                 probe = self.jobs[part]["steps"][-1]
                 self.assertEqual(probe["name"], "Load probe")
