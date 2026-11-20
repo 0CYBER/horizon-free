@@ -92,7 +92,7 @@ pub(super) fn picked_pack(settings: &horizon_client::settings::Settings) -> &str
 
 /// What a renderer readies for the pick, unless it was refused with no version of it left
 /// drawing (`native_shaders::remember_look`), is missing or its owner is off.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PickedPack {
     /// It draws flat where the device can (`pack_draws_flat`): the sections are laid out so.
     pub draws_flat: bool,
@@ -120,8 +120,32 @@ impl PickedPack {
     }
 }
 
+/// `follow_frame`'s key for the pick: its path and outcome, which `look` reads from disk; with
+/// no pick, nothing is read (#19216: it asks every frame).
+pub(super) fn pick_key(
+    picked: &str,
+    look: impl FnOnce() -> (std::path::PathBuf, Option<bool>),
+) -> (std::path::PathBuf, Option<bool>) {
+    if picked.is_empty() {
+        return (std::path::PathBuf::new(), Some(false));
+    }
+    look()
+}
+
 pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -> PickedPack {
     let picked = picked_pack(settings);
+    shape_of(picked, || shape_on_disk(settings, picked))
+}
+
+/// The shape of `picked`, which `look` reads from disk; with no pick, nothing is read.
+fn shape_of(picked: &str, look: impl FnOnce() -> PickedPack) -> PickedPack {
+    if picked.is_empty() {
+        return PickedPack::default();
+    }
+    look()
+}
+
+fn shape_on_disk(settings: &horizon_client::settings::Settings, picked: &str) -> PickedPack {
     let dir = Game::shader_packs_dir();
     let path = if dev_pack().is_some() {
         dir.join(picked)
@@ -1221,6 +1245,17 @@ mod rendered_item_tests {
 mod native_pack_tests {
     use super::{active_pack, pack_draws_flat, pack_reads_vertices, picked_pack_shape};
     use horizon_client::mod_list::{Installed, ModList, NativePage};
+
+    /// With no pick neither the frame's key nor the shape looks at the disk (`follow_frame`
+    /// asks every frame), so neither depends on whether `shaderpacks/` is there.
+    #[test]
+    fn no_pick_reads_nothing_from_disk() {
+        use super::{PickedPack, pick_key, shape_of};
+        let key = pick_key("", || panic!("the key looks at the disk"));
+        assert_eq!(key, (std::path::PathBuf::new(), Some(false)));
+        let shape = shape_of("", || panic!("the shape looks at the disk"));
+        assert_eq!(shape, PickedPack::default());
+    }
 
     #[test]
     fn unknown_pack_is_optimistic_but_refusal_owner_and_presence_override_it() {

@@ -116,6 +116,15 @@ impl NativeShaders {
         self.resolved.clone()
     }
 
+    /// No pick: the next `resolve_path` looks again, as one asked with no pick would, without
+    /// the disk now (`follow_frame` asks every frame; title screens don't call `resolve_path`).
+    pub fn forget_selection(&mut self) {
+        if !self.selection.is_empty() {
+            self.selection.clear();
+            self.resolved_at = None;
+        }
+    }
+
     pub fn select(&mut self, name: &str) {
         self.picked = name.to_owned();
         self.stamp = None;
