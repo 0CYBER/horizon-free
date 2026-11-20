@@ -8,13 +8,15 @@ name: launcher
 # feature. The version and the tag are given to the build (HORIZON_LAUNCHER_VERSION, HORIZON_LAUNCHER_TAG): no bump
 # commits.
 # Never marked latest. Pushes to launcher branches only build. RELEASES_PAUSED=1 stops releases.
+# Branch builds (any ref but main, a dispatch on a tag too) run on GitHub-hosted runners, unsigned, and save no cache;
+# signing stays on main (tests/test_launcher_workflow.py).
 # Linux ships two archives of one binary: the .tar.gz the launcher updates itself from, and an
 # AppImage (packaging/linux/appimage.sh) for players without a distribution package, which replaces
 # itself instead (launcher/src/backend.rs).
 # macOS: Apple Silicon, and Intel cross-built for x86_64-apple-darwin on the same runner, its tests and smoke test
 # under Rosetta 2 (#1161). With the repository variable MACOS_SIGN_IDENTITY set, Horizon.app and the .dmg are signed with
 # Developer ID, notarized and stapled, from the runner's signing keychain (packaging/macos/README.md);
-# unset (forks), they are signed ad hoc.
+# unset (forks) or off main, they are signed ad hoc.
 # Windows ships each architecture's launcher in its ZIP (what a launcher updates itself from) and as
 # horizon-launcher-setup.exe or horizon-launcher-setup-arm64.exe, which opens the per-user installer instead of Home
 # (launcher/src/installer.rs).
@@ -101,13 +103,22 @@ jobs:
       head: ${{ steps.decide.outputs.head }}
       version: ${{ steps.decide.outputs.version }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
+      main: ${{ steps.mode.outputs.main }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: mode
-        # Off main every run is a dry run (a launcher branch's push only builds).
-        run: echo "dry_run=${{ github.ref != 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}" >> "$GITHUB_OUTPUT"
+        # Off main every run is a dry run (a launcher branch's push only builds), and main=false: the build signs and
+        # takes main's runner only on main. Compared in the shell, case-sensitively: an expression's == ignores case,
+        # and refs/heads/Main is another branch.
+        shell: bash
+        env:
+          DISPATCH_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          main=false; [[ "$GITHUB_REF" == refs/heads/main ]] && main=true
+          dry_run=true; [[ $main == true && "$DISPATCH_DRY_RUN" != true ]] && dry_run=false
+          { echo "main=$main"; echo "dry_run=$dry_run"; } >> "$GITHUB_OUTPUT"
       - id: decide
         shell: bash
         env:
@@ -175,7 +186,7 @@ jobs:
             setup_asset: horizon-launcher-setup-arm64.exe
             # The C runtime linked in, so the standalone ARM64 launcher needs no redistributable.
             rustflags: -C target-feature=+crt-static
-    runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
+    runs-on: ${{ matrix.mac && (needs.decide.outputs.main == 'true' && (vars.MAC_RUNNER || 'ludovics-mac-mini') || 'macos-15') || matrix.os }}
     # Notarizing the app and then the .dmg can take a few minutes each.
     timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
@@ -213,6 +224,7 @@ jobs:
         with:
           workspaces: launcher
           shared-key: launcher-${{ matrix.name }}
+          save-if: ${{ needs.decide.outputs.main == 'true' }}
       - name: Linux libraries GPUI links to
         if: runner.os == 'Linux'
         run: |
@@ -343,13 +355,13 @@ jobs:
           fi
           rm -rf "$HORIZON_LAUNCHER_HOME"
       - name: The signing keychain, unlocked
-        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        if: needs.decide.outputs.main == 'true' && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
         env:
           MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
         run: ../packaging/macos/keychain.sh unlock
       - name: Package
         env:
-          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
+          MACOS_SIGN_IDENTITY: ${{ needs.decide.outputs.main == 'true' && vars.MACOS_SIGN_IDENTITY || '' }}
         run: |
           rm -rf dist out && mkdir -p out
           if [[ "$RUNNER_OS" == "macOS" ]]; then
@@ -388,7 +400,7 @@ jobs:
           path: launcher/out/*
           retention-days: 3
       - name: The signing keychain, locked again
-        if: always() && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        if: always() && needs.decide.outputs.main == 'true' && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
         run: ../packaging/macos/keychain.sh lock
 
   sign:
@@ -398,7 +410,8 @@ jobs:
     # The only job that holds the release signing key, a secret of the `release` environment, which only main's real
     # releases enter (dry runs sign with a throwaway key). It runs no code from the repository but
     # tools/ci/sign_release.sh, which calls only the runner's sha256sum and OpenSSL (docs/release-flow.md).
-    environment: ${{ needs.decide.outputs.dry_run != 'true' && 'release' || '' }}
+    # Every gate below asks for main == 'true' and dry_run == 'false': an empty or other answer is a dry run.
+    environment: ${{ needs.decide.outputs.main == 'true' && needs.decide.outputs.dry_run == 'false' && 'release' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -412,9 +425,9 @@ jobs:
           merge-multiple: true
       - name: Sign the checksums (SHA256SUMS, SHA256SUMS.sig)
         env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
-          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
+          RELEASE_SIGNING_KEY: ${{ needs.decide.outputs.main == 'true' && needs.decide.outputs.dry_run == 'false' && secrets.RELEASE_SIGNING_KEY || '' }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ needs.decide.outputs.main == 'true' && needs.decide.outputs.dry_run == 'false' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
+          EPHEMERAL: ${{ (needs.decide.outputs.main != 'true' || needs.decide.outputs.dry_run != 'false') && 'yes' || '' }}
           TAG: ${{ needs.decide.outputs.tag }}
         run: bash tools/ci/sign_release.sh "$TAG" dist/horizon-launcher-*
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -424,18 +437,20 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: needs.decide.outputs.dry_run == 'true'
+        if: needs.decide.outputs.main != 'true' || needs.decide.outputs.dry_run != 'false'
         with:
           name: ephemeral.pub
           path: dist/ephemeral.pub
           retention-days: 3
 
   release:
+    # Notes and the signature check, on every run: it runs the checked-out commit's code, so its token only reads.
+    # Publishing is the publish job's.
     needs: [decide, build, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -454,11 +469,10 @@ jobs:
       - name: The signature, checked as launchers check it
         env:
           TAG: ${{ needs.decide.outputs.tag }}
-          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
+          EPHEMERAL: ${{ (needs.decide.outputs.main != 'true' || needs.decide.outputs.dry_run != 'false') && 'yes' || '' }}
         run: |
           key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
           cargo run --locked --quiet -p horizon-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "$TAG" --publishing "${key[@]}" dist
-      # Never marked latest: Horizon's own releases stay the repository's latest.
       - name: The Windows ARM64 launcher, if it built
         # Its build may fail without holding the release (continue-on-error): the release then has no ARM64
         # files, and ARM64 launchers stay on their version until one has (backend::launcher_update_from).
@@ -466,17 +480,8 @@ jobs:
           for file in horizon-launcher-windows-arm64.zip horizon-launcher-setup-arm64.exe; do
             [[ -f "dist/$file" ]] || echo "::warning::$file is missing: this release goes out without it"
           done
-      - name: Publish ${{ needs.decide.outputs.tag }}
-        if: needs.decide.outputs.dry_run != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.decide.outputs.tag }}
-        run: |
-          signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
-          gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
-            --notes-file notes/body.md --latest=false dist/horizon-launcher-* dist/SHA256SUMS "${signature[@]}"
       - name: Dry run, the release that would be published
-        if: needs.decide.outputs.dry_run == 'true'
+        if: needs.decide.outputs.main != 'true' || needs.decide.outputs.dry_run != 'false'
         run: |
           echo "Would publish ${{ needs.decide.outputs.tag }} at ${{ needs.decide.outputs.head }}: $(cat notes/title.txt)"
           ls -l dist
@@ -485,3 +490,38 @@ jobs:
           name: launcher-release-notes
           path: notes/
           retention-days: 3
+
+  publish:
+    # Only main's real release, after the release job checked the signature: the one job whose token writes. It runs
+    # no code from the repository, only gh with the files this run built, signed and checked.
+    needs: [decide, release]
+    if: needs.decide.outputs.main == 'true' && needs.decide.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: horizon-launcher-*
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signature
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: launcher-release-notes
+          path: notes
+      # Never marked latest: Horizon's own releases stay the repository's latest.
+      - name: Publish ${{ needs.decide.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.decide.outputs.tag }}
+        run: |
+          signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
+          gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
+            --notes-file notes/body.md --latest=false dist/horizon-launcher-* dist/SHA256SUMS "${signature[@]}"

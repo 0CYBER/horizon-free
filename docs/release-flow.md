@@ -694,7 +694,10 @@ No SDK compilation is needed to evaluate this design.
 
 `.github/workflows/launcher.yml` releases the launcher the same way. It starts on a push to main that changes
 `launcher/`, `crates/horizon-prepare/` or `crates/horizon-theme/` (what the launcher builds in), every hour at :47,
-and by hand; pushes to `launcher` and `launcher-*` branches only build.
+and by hand; pushes to `launcher` and `launcher-*` branches only build. Branch builds of the launcher (any run off
+main) are unsigned and run on GitHub-hosted runners; signing stays on main. The notes and the signature check
+run on every run with a token that only reads; a separate publish job, only for main's real release, creates the
+release.
 
 - `tools/release_train.py decide --kind launcher` counts the pull requests merged since the last published
   launcher release that changed those paths (not `launcher/links.json`, which the launcher reads from main, nor
