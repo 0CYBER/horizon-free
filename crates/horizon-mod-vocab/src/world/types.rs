@@ -1612,6 +1612,24 @@ impl StructureAt {
     }
 }
 
+/// A loaded block entity from `LevelRef::block_entities`: its block's position and its type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct BlockEntityAt {
+    /// The position of its block.
+    pub pos: [i32; 3],
+    /// Registry id of its type (`BlockEntity.getType`): `minecraft:chest`.
+    pub id: String,
+}
+
+impl BlockEntityAt {
+    /// A block entity at `pos` of type `id`.
+    pub fn new(pos: [i32; 3], id: String) -> Self {
+        Self { pos, id }
+    }
+}
+
 /// Why a server-wide game rule read was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
 #[non_exhaustive]

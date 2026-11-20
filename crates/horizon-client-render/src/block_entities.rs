@@ -727,6 +727,11 @@ impl BlockEntities {
     pub fn mods_in(&self, chunk: (i32, i32)) -> impl Iterator<Item = &Pos> {
         self.mods.get(&chunk).into_iter().flatten()
     }
+    /// The positions of the block entities in `chunk` (`LevelChunk.getBlockEntities`), in no
+    /// order; one taken out for its tick is not among them until `put`.
+    pub fn in_chunk(&self, chunk: (i32, i32)) -> impl Iterator<Item = &Pos> {
+        self.by_chunk.get(&chunk).into_iter().flatten()
+    }
     /// `SignBlockEntity.playerWhoMayEdit` of the sign at `pos`.
     pub fn sign_editor(&self, pos: &Pos) -> Option<u128> {
         match self.map.get(pos) {

@@ -72,6 +72,21 @@ pub trait LevelsBackend {
     /// holds).
     #[access(WorldOnly)]
     fn level_structures_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<Vec<StructureAt>>;
+    /// Side: server.
+    /// The block entities in the box from `min` to `max`, maxima exclusive, in the chunks of it
+    /// that are loaded (`LevelChunk.getBlockEntities` over those chunks; Paper's
+    /// `Chunk.getTileEntities`): each one's position and type id, sorted by position (x, then y,
+    /// then z). Reads the level in place or parked and loads nothing; a block entity out for its
+    /// own tick is not listed during that tick. None on a client, for a stale or unavailable
+    /// level, for an empty box (a minimum not below its maximum), for one wholly outside the
+    /// level's height and for one over more than 64 chunks.
+    #[access(WorldOnly)]
+    fn level_block_entities(
+        &self,
+        level: LevelRef,
+        min: [i32; 3],
+        max: [i32; 3],
+    ) -> Option<Vec<BlockEntityAt>>;
     /// Side: both.
     /// `Level.getSkyDarken`: the sky-light reduction from dimension, time and weather.
     /// Reads any loaded server level, including parked levels, or the current client level.

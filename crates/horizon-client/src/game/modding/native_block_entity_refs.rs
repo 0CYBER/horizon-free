@@ -17,6 +17,9 @@ use mod_api::{
     BlockEntityTypeKey, LevelRef, PlayerRef, Transaction,
 };
 
+/// The most chunks one `level_block_entities` read spans.
+const MAX_BLOCK_ENTITY_CHUNKS: i64 = 64;
+
 impl Game<'_> {
     fn native_block_entity_target(&self, entity: BlockEntityRef) -> Option<(&World, &BlockEntity)> {
         let world = self.native_level_read_world(entity.fields().level)?;
@@ -58,6 +61,64 @@ impl Game<'_> {
         Some(mod_api::__private::game::block_entity_ref(
             level, pos, generation,
         ))
+    }
+
+    /// The block entities in the box `min` to `max` (maxima exclusive) of an open server
+    /// level, in its loaded chunks, sorted by position (`LevelChunk.getBlockEntities` over the
+    /// box's chunks). None for an empty box, one wholly outside the level's height and one over
+    /// more than 64 chunks.
+    pub(super) fn level_block_entities(
+        &self,
+        level: LevelRef,
+        min: [i32; 3],
+        max: [i32; 3],
+    ) -> Option<Vec<mod_api::BlockEntityAt>> {
+        let world = self.native_level_world(level)?;
+        if (0..3).any(|axis| min[axis] >= max[axis]) {
+            return None;
+        }
+        let bottom = world.shape.min_y;
+        if max[1] <= bottom || i64::from(min[1]) >= i64::from(bottom) + i64::from(world.shape.height)
+        {
+            return None;
+        }
+        // `max` is past the box, so its last block is `max - 1`: no overflow, min < max.
+        let (chunk_min, chunk_max) = ([min[0] >> 4, min[2] >> 4], [(max[0] - 1) >> 4, (max[2] - 1) >> 4]);
+        let across = |axis: usize| i64::from(chunk_max[axis]) - i64::from(chunk_min[axis]) + 1;
+        if across(0) * across(1) > MAX_BLOCK_ENTITY_CHUNKS {
+            return None;
+        }
+        let inside = |(x, y, z): (i32, i32, i32)| {
+            (min[0]..max[0]).contains(&x) && (min[1]..max[1]).contains(&y) && (min[2]..max[2]).contains(&z)
+        };
+        let mut found = Vec::new();
+        for chunk_x in chunk_min[0]..=chunk_max[0] {
+            for chunk_z in chunk_min[1]..=chunk_max[1] {
+                if !world.chunks.contains_key(&(chunk_x, chunk_z)) {
+                    continue;
+                }
+                for &pos in world.block_entities.in_chunk((chunk_x, chunk_z)) {
+                    if !inside(pos) {
+                        continue;
+                    }
+                    let Some(entity) = world
+                        .block_entities
+                        .get(&pos)
+                        .filter(|entity| !save::block_entity_placeholder(entity))
+                    else {
+                        continue;
+                    };
+                    let (x, y, z) = pos;
+                    let Some(block) = self.pack.assets.registry.state(world.block(x, y, z)) else {
+                        continue;
+                    };
+                    let id = save::block_entity_id(entity, &block.name).to_owned();
+                    found.push(mod_api::BlockEntityAt::new([x, y, z], id));
+                }
+            }
+        }
+        found.sort_unstable_by_key(|at| at.pos);
+        Some(found)
     }
 
     /// The data of the block entity at `pos`, as saved without identity or position
@@ -750,6 +811,68 @@ mod tests {
                 replacement.set_data_slots(game, vec![99]),
                 Err(BlockEntityDataError::Stale)
             );
+        });
+    }
+
+    /// `LevelRef::block_entities`: the box's block entities in loaded chunks, by position, with
+    /// the type their block gives them; a mod block entity out for its tick is left out.
+    #[test]
+    #[ignore = "daily"]
+    fn block_entities_in_a_box_are_listed_by_position() {
+        use super::super::native_entity_refs::tests::with_game;
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            for chunk in [(0, 0), (1, 0)] {
+                game.world
+                    .chunks
+                    .insert(chunk, Arc::new(Chunk::empty(chunk.0, chunk.1)));
+            }
+            let level = game.level("minecraft:overworld").unwrap();
+            let state = |id: &str| game.pack.assets.registry.default_state(id).unwrap();
+            let placed = [
+                ((20, 70, 3), state("minecraft:daylight_detector"), BlockEntity::DaylightDetector),
+                ((1, 64, 1), state("minecraft:chest"), BlockEntity::Chest(vec![None; 27])),
+                ((1, 64, 0), state("minecraft:barrel"), BlockEntity::Chest(vec![None; 27])),
+            ];
+            for ((x, y, z), block, entity) in placed {
+                game.world.set(x, y, z, block).unwrap();
+                game.world.block_entities.insert((x, y, z), entity);
+            }
+            // Out for its tick, and in a chunk that isn't loaded.
+            game.world
+                .block_entities
+                .insert((2, 64, 2), BlockEntity::Mod(Box::default()));
+            game.world
+                .block_entities
+                .insert((40, 64, 1), BlockEntity::Chest(vec![None; 27]));
+            let listed = |game: &Game<'_>, min, max| {
+                game.level_block_entities(level, min, max).map(|found| {
+                    found
+                        .into_iter()
+                        .map(|at| (at.pos, at.id))
+                        .collect::<Vec<_>>()
+                })
+            };
+            let kind = str::to_owned;
+            assert_eq!(
+                listed(game, [0, -64, 0], [48, 320, 16]),
+                Some(vec![
+                    ([1, 64, 0], kind("minecraft:barrel")),
+                    ([1, 64, 1], kind("minecraft:chest")),
+                    ([20, 70, 3], kind("minecraft:daylight_detector")),
+                ])
+            );
+            assert_eq!(
+                listed(game, [0, 64, 1], [16, 65, 2]),
+                Some(vec![([1, 64, 1], kind("minecraft:chest"))]),
+                "maxima are exclusive"
+            );
+            assert_eq!(listed(game, [-128, 0, -128], [0, 1, 0]), Some(vec![]));
+            assert_eq!(listed(game, [0, 64, 0], [16, 64, 16]), None, "empty");
+            assert_eq!(listed(game, [0, 320, 0], [16, 400, 16]), None, "above");
+            assert_eq!(listed(game, [0, -100, 0], [16, -64, 16]), None, "below");
+            assert!(listed(game, [0, 0, 0], [128, 1, 128]).is_some(), "8 by 8");
+            assert_eq!(listed(game, [0, 0, 0], [129, 1, 128]), None, "9 by 8");
         });
     }
 

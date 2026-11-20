@@ -1082,6 +1082,7 @@ horizon-client game::native_block_entity_item_tests::storage_asks_a_game_contain
 horizon-client game::native_block_entity_item_tests::storage_writes_abort_to_the_exact_state_of_every_container_kind lib daily resources
 horizon-client game::native_block_entity_refs::tests::a_level_hook_set_block_replaces_whole_states_and_their_block_entities lib daily resources
 horizon-client game::native_block_entity_refs::tests::an_abort_puts_back_the_lock_and_the_loot_table_roll lib daily resources
+horizon-client game::native_block_entity_refs::tests::block_entities_in_a_box_are_listed_by_position lib daily resources
 horizon-client game::native_block_entity_refs::tests::player_opens_provider_and_refuses_non_provider lib daily resources
 horizon-client game::native_block_entity_refs::tests::retained_handles_reject_replacements_and_rollback_restores_identity lib daily resources
 horizon-client game::native_block_entity_refs::tests::viewers_follow_open_menus_per_level_and_leave_out_fake_players lib daily resources
