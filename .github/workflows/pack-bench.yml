@@ -38,10 +38,34 @@ jobs:
             sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           fi
           rustup toolchain install stable --profile minimal
+      # Before anything is built: a run started on main writes cache entries main's later runs restore, so only a run
+      # of main whose base is main's own commit of this run saves the Rust cache; any other base (a pull request's
+      # head too) restores only (tests/test_cache_saves.py). The base is resolved once, here, and built by its SHA.
+      - name: The base, and whether this run saves the Rust cache
+        id: gate
+        env:
+          REF: ${{ github.ref }}
+          BASE: ${{ inputs.base || 'main' }}
+        run: |
+          set -euo pipefail
+          # One source ref or SHA: no destination (`:`), no second ref, no option, no forced update (`+`).
+          if ! [[ "$BASE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+            echo "::error::base must be one ref or commit SHA"
+            exit 1
+          fi
+          git fetch --no-tags -- https://github.com/horizon-rust/horizon.git "$BASE"
+          [ "$(wc -l < "$(git rev-parse --git-path FETCH_HEAD)")" -eq 1 ]
+          base=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
+          saves=false
+          if [ "$REF" = refs/heads/main ] && [ "$base" = "$GITHUB_SHA" ]; then
+            saves=true
+          fi
+          { echo "base=$base"; echo "saves=$saves"; } >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: runner.environment == 'github-hosted'
         with:
           shared-key: pack-bench
+          save-if: ${{ steps.gate.outputs.saves == 'true' }}
       - name: Bench the branch
         env:
           SCALE: ${{ inputs.scale || '1' }}
@@ -49,14 +73,13 @@ jobs:
           cargo run --profile fast -p horizon-client-render --example pack_load_bench -- --scale "$SCALE" > head.md
       - name: Bench the base, with the branch's bench
         env:
-          BASE: ${{ inputs.base || 'main' }}
+          BASE_SHA: ${{ steps.gate.outputs.base }}
           SCALE: ${{ inputs.scale || '1' }}
         run: |
-          git fetch https://github.com/horizon-rust/horizon.git "$BASE"
           # Our runners keep the folder beside the checkout between jobs.
           git worktree remove --force ../base 2> /dev/null || rm -rf ../base
           git worktree prune
-          git worktree add ../base FETCH_HEAD
+          git worktree add --detach ../base "$BASE_SHA"
           cp crates/horizon-client-render/examples/pack_load_bench.rs ../base/crates/horizon-client-render/examples/
           # A bench row that times a function the base lacks keeps it from building there: then
           # the branch's own rows compare the two ways.
