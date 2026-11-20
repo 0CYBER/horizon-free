@@ -1,4 +1,5 @@
-//! The target of `get_enchantment_level` (`GetEnchantmentLevelEvent`).
+//! The targets of `get_enchantment_level` and `get_enchantment_level_for`
+//! (`GetEnchantmentLevelEvent` and `GetEnchantmentLevelForEvent`).
 use crate::item::item_stack::ItemStack;
 #[allow(unused_imports)]
 use crate::*;
@@ -19,4 +20,22 @@ pub fn native_get_enchantment_level(
     enchantments: &mut ItemEnchantments,
 ) {
     crate::dispatch_get_enchantment_level(stack, target, enchantments);
+}
+
+/// `GetEnchantmentLevelForEvent`: the same read with the wearer `owner` and
+/// the caller's `mod_slot` (`curios:ring`) named. Both are optional: `None`
+/// for a caller that only has a stack. The game never calls this on its own;
+/// a mod calls it from the moment it knows the wearer to apply a per-wearer
+/// level. The original three-argument entry point above is unchanged and
+/// keeps asking `get_enchantment_level` alone.
+#[inline(never)]
+pub fn native_get_enchantment_level_for(
+    host: &dyn Host,
+    stack: &ItemStack,
+    target: Option<&Identifier>,
+    owner: Option<EntityRef>,
+    mod_slot: Option<&str>,
+    enchantments: &mut ItemEnchantments,
+) {
+    crate::dispatch_get_enchantment_level_for(host, stack, target, owner, mod_slot, enchantments);
 }
