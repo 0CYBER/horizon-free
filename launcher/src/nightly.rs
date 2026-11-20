@@ -62,58 +62,77 @@ pub fn day(date: &str) -> String {
     }
 }
 
-/// The Nightlies of the last release list read that share their day with another, and the time
-/// (`HH:MM` UTC) each came out: [`same_day_time`] reads it for every screen that names a version.
-static SAME_DAY: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+/// When each Nightly the release lists read came out: its tag, and its publication date and
+/// time (`HH:MM` UTC). A Nightly's tag keeps the day its cut started, which can be the day before
+/// it came out, so every name of it reads its day from here ([`published`]).
+static PUBLISHED: std::sync::RwLock<Vec<(String, String, String)>> =
+    std::sync::RwLock::new(Vec::new());
 
-/// Keeps, from the release list `releases`, when each Nightly that shares its day with another
-/// came out, so every name of it says its time. A Nightly the list no longer has (older than a
-/// week, say) keeps the time it was seen with, and still counts toward its day.
+/// Keeps, from the release list `releases`, when each Nightly came out, so every name of it says
+/// that day, and its time when another came out the same day. A Nightly the list no longer has
+/// (older than a week, say) keeps what it was seen with, and still counts toward its day.
 pub fn note_published(releases: &[Release]) {
-    let mut kept = SAME_DAY
+    let mut kept = PUBLISHED
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut known: Vec<(&str, &str, &str)> = releases
+    let mut known: Vec<(String, String, String)> = releases
         .iter()
-        .filter(|r| r.nightly.is_some())
-        .map(|r| (r.tag.as_str(), r.date.as_str(), r.time.as_str()))
+        .filter(|r| r.nightly.is_some() && is_date(&r.date))
+        .map(|r| (r.tag.clone(), r.date.clone(), r.time.clone()))
         .collect();
-    for (tag, time) in kept.iter() {
-        if let Some(date) = date_of(tag).filter(|_| known.iter().all(|(t, ..)| t != tag)) {
-            known.push((tag, date, time));
+    for old in kept.iter() {
+        if known.iter().all(|(t, ..)| *t != old.0) {
+            known.push(old.clone());
         }
     }
-    let same_day = known
+    *kept = known;
+}
+
+/// When Nightly `version` came out, as its names say it: the day it was published (its tag's
+/// day if no release list said), and the time (`HH:MM` UTC) when another came out that day, so
+/// two never share a name. None for anything that is not a Nightly.
+pub fn published(version: &str) -> Option<(String, Option<String>)> {
+    let tag_date = date_of(version)?;
+    let kept = PUBLISHED
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((_, date, time)) = kept.iter().find(|(tag, ..)| tag == version) else {
+        return Some((tag_date.to_owned(), None));
+    };
+    let shared = kept.iter().filter(|(_, d, _)| d == date).count() > 1;
+    Some((
+        date.clone(),
+        (shared && !time.is_empty()).then(|| time.clone()),
+    ))
+}
+
+/// When Nightly `version` came out, `YYYY-MM-DD HH:MM` UTC (the day alone when the list gave no
+/// time), if a release list said; for ordering two of one day.
+pub fn published_at(version: &str) -> Option<String> {
+    PUBLISHED
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
-        .filter(|(_, date, time)| {
-            !time.is_empty() && known.iter().filter(|(_, d, _)| d == date).count() > 1
-        })
-        .map(|(tag, _, time)| (tag.to_string(), time.to_string()))
-        .collect();
-    *kept = same_day;
+        .find(|(tag, ..)| tag == version)
+        .map(|(_, date, time)| format!("{date} {time}").trim_end().to_owned())
 }
 
 /// When Nightly `version` came out, `HH:MM` UTC, if another came out the same day.
 pub fn same_day_time(version: &str) -> Option<String> {
-    SAME_DAY
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .find(|(tag, _)| tag == version)
-        .map(|(_, time)| time.clone())
+    published(version)?.1
 }
 
 /// A Nightly as the Versions page names it, "the Nov 13 update" for `nightly-2026-11-13` (with
 /// or without its commit), with its time when another came out that day ("the Nov 13, 07:22 UTC
-/// update"); None for anything that is not one.
+/// update"); None for anything that is not one. The day is the one it came out ([`published`]).
 pub fn update_name(version: &str) -> Option<String> {
-    let date = date_of(version)?;
-    Some(match same_day_time(version) {
+    let (date, time) = published(version)?;
+    Some(match time {
         Some(time) => crate::i18n::trf(
             "the {day}, {time} UTC update",
-            &[("day", &day(date)), ("time", &time)],
+            &[("day", &day(&date)), ("time", &time)],
         ),
-        None => crate::i18n::trf("the {day} update", &[("day", &day(date))]),
+        None => crate::i18n::trf("the {day} update", &[("day", &day(&date))]),
     })
 }
 
@@ -133,11 +152,21 @@ pub fn label(version: &str) -> Option<String> {
         return Some(label);
     }
     date_of(version)?;
-    let commit = version.strip_prefix("nightly-")?.get(11..);
-    Some(match commit {
-        Some(commit) if !commit.is_empty() => format!("Nightly · {commit}"),
-        _ => "Nightly".to_owned(),
+    Some(match commit_of(version) {
+        Some(commit) => format!("Nightly · {commit}"),
+        None => "Nightly".to_owned(),
     })
+}
+
+/// A Nightly's commit, `4baa571` of `nightly-2026-10-29-4baa571`: what follows its date. None
+/// for a Nightly without one, or anything that is not a Nightly.
+pub fn commit_of(version: &str) -> Option<&str> {
+    let date = date_of(version)?;
+    version
+        .strip_prefix("nightly-")?
+        .strip_prefix(date)?
+        .strip_prefix('-')
+        .filter(|c| !c.is_empty())
 }
 
 fn is_date(text: &str) -> bool {
@@ -594,6 +623,67 @@ mod tests {
             same_day_time("nightly-2032-05-06-bbbbbbb").as_deref(),
             Some("18:05")
         );
+    }
+
+    #[test]
+    fn a_nightly_is_named_by_when_it_came_out_and_reads_its_commit_after_the_date() {
+        let nightly = |version: &str, date: &str, time: &str| Release {
+            tag: version.into(),
+            time: time.into(),
+            nightly: Some(NIGHTLY.into()),
+            ..release("", date)
+        };
+        // The 2026-11-19 cut of 5ef7734 came out on 11-20: its tag's day and its publication
+        // day differ.
+        note_published(&[
+            nightly("nightly-2026-11-20-0a875da", "2026-11-20", "11:18"),
+            nightly("nightly-2026-11-19-5ef7734", "2026-11-20", "02:32"),
+            nightly("nightly-2026-11-19-f00125f", "2026-11-19", "15:33"),
+            nightly("nightly-2026-11-18-dd67b76", "2026-11-18", "09:41"),
+        ]);
+        // The launcher's language may not be English: build the names it should say.
+        let name = |v: &str| update_name(v).unwrap();
+        let at = |date: &str, time: &str| {
+            crate::i18n::trf(
+                "the {day}, {time} UTC update",
+                &[("day", &day(date)), ("time", time)],
+            )
+        };
+        let on = |date: &str| crate::i18n::trf("the {day} update", &[("day", &day(date))]);
+        assert_eq!(
+            name("nightly-2026-11-20-0a875da"),
+            at("2026-11-20", "11:18")
+        );
+        assert_eq!(
+            name("nightly-2026-11-19-5ef7734"),
+            at("2026-11-20", "02:32")
+        );
+        // Alone on the day it came out, a Nightly is named by that day alone, even if another
+        // shares its tag's day.
+        assert_eq!(name("nightly-2026-11-19-f00125f"), on("2026-11-19"));
+        assert_eq!(name("nightly-2026-11-18-dd67b76"), on("2026-11-18"));
+        assert_eq!(same_day_time("nightly-2026-11-19-f00125f"), None);
+        assert_eq!(
+            published("nightly-2026-11-19-5ef7734"),
+            Some(("2026-11-20".into(), Some("02:32".into())))
+        );
+        // A Nightly no list said anything about keeps its tag's day.
+        assert_eq!(
+            published("nightly-2026-11-17-1234567"),
+            Some(("2026-11-17".into(), None))
+        );
+        for (tag, commit) in [
+            ("nightly-2026-11-20-0a875da", "0a875da"),
+            ("nightly-2026-11-19-5ef7734", "5ef7734"),
+            ("nightly-2026-11-19-f00125f", "f00125f"),
+            ("nightly-2026-11-18-dd67b76", "dd67b76"),
+        ] {
+            assert_eq!(commit_of(tag), Some(commit));
+            assert_eq!(label(tag), Some(format!("Nightly · {commit}")));
+        }
+        assert_eq!(commit_of("nightly-2026-11-18"), None);
+        assert_eq!(commit_of("nightly-2026-11-18-"), None);
+        assert_eq!(commit_of("v0.2.97"), None);
     }
 
     #[test]

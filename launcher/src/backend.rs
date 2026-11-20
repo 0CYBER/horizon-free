@@ -1075,8 +1075,42 @@ fn installed_in(versions: &Path) -> Vec<String> {
         .filter(|e| e.path().join(COMPLETE).exists())
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
-    tags.sort_by(|a, b| compare_versions(b, a));
+    // Read once: a later release list notes the times itself.
+    static READ_KEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !newest_first(&mut tags, crate::nightly::published_at)
+        && !READ_KEPT.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        // Two Nightlies of one day before a release list was read: when they came out is in the
+        // copy of the list kept on disk.
+        if let Some(list) = crate::github::kept(&release_list_url()) {
+            crate::nightly::note_published(&game_releases(&list));
+        }
+        newest_first(&mut tags, crate::nightly::published_at);
+    }
     tags
+}
+
+/// Sorts `tags` newest first: by [`release_order`], then Nightlies of one day by when they came
+/// out (`published`, `YYYY-MM-DD HH:MM` UTC), then by the tag, so the order never depends on the
+/// folder listing. False when two Nightlies of one day had no time to tell them apart.
+fn newest_first(tags: &mut [String], published: impl Fn(&str) -> Option<String>) -> bool {
+    let mut keyed: Vec<_> = tags
+        .iter()
+        .map(|t| {
+            let when = crate::nightly::date_of(t).and_then(|_| published(t));
+            (release_order(t), when, t.clone())
+        })
+        .collect();
+    keyed.sort_by(|a, b| b.cmp(a));
+    let told_apart = keyed.windows(2).all(|w| {
+        !(matches!(w[0].0, ReleaseOrder::Nightly(_))
+            && w[0].0 == w[1].0
+            && (w[0].1.is_none() || w[1].1.is_none()))
+    });
+    for (slot, (_, _, tag)) in tags.iter_mut().zip(keyed) {
+        *slot = tag;
+    }
+    told_apart
 }
 
 /// A small release file (its checksums or their signature), whole; None when it has none.
@@ -3045,7 +3079,7 @@ pub fn remove_version(tag: &str) -> Result<(), String> {
     crate::storage::eviction::request_cleanup();
     let mut settings = Settings::load();
     if settings.selected.as_deref() == Some(tag) {
-        settings.selected = installed().first().cloned();
+        settings.keep_installed_selection(&installed());
         settings.save()?;
     }
     Ok(())
@@ -3457,7 +3491,7 @@ pub fn check_updates() -> Result<Updates, String> {
 }
 
 mod update_selection;
-pub use update_selection::select_after_update;
+pub use update_selection::{select_after_update, selection_after_install, InstallCause};
 
 /// Installs `tag` (or with "latest" the newest release, pre-releases left out), then updates the selection as
 /// `select_after_update` says when `as_update`, or always selects it otherwise.
@@ -3486,12 +3520,25 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
             eprintln!("Could not mark updated Nightly {}: {e}", release.tag);
         }
     }
-    let mut settings = Settings::load();
+    let mut settings = Settings::load_for_install(&before);
     // An older Nightly is a deliberate rollback: installed, but an update never moves the selection back.
-    let select = !as_update
-        || (downgrade.is_none() && select_after_update(settings.selected.as_deref(), &before));
-    if select {
-        settings.selected = Some(release.tag.clone());
+    let changed = match (as_update, &downgrade) {
+        (false, _) => {
+            settings.pick(release.tag.clone());
+            true
+        }
+        (true, Some(_)) => false,
+        (true, None) => settings.apply_install(
+            &release.tag,
+            &before,
+            &installed(),
+            InstallCause {
+                update: true,
+                instance: None,
+            },
+        ),
+    };
+    if changed {
         settings.save()?;
     }
     if as_update && release.nightly.is_some() {
@@ -4422,6 +4469,13 @@ impl WhilePlaying {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
+    /// The version the launcher itself selected (an update, or a newer Nightly installed for an
+    /// instance): while `selected` is this one, it follows each newer Nightly. A person's pick
+    /// leaves it behind, and a settings file from before it has none: neither follows
+    /// ([`selection_after_install`]). Always written, `null` for a pick, so a file from before
+    /// it is told apart ([`Settings::load`]).
+    #[serde(default)]
+    pub following: Option<String>,
     /// Game asset architecture. Auto preserves the launcher's process-architecture behavior.
     #[serde(default)]
     pub game_architecture: GameArchitecture,
@@ -4537,6 +4591,20 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Takes the selection (`selected`, `following`) as `saved` has it: what the command line,
+    /// or another window, saved meanwhile.
+    pub fn selection_from(&mut self, saved: &Settings) {
+        self.selected = saved.selected.clone();
+        self.following = saved.following.clone();
+    }
+
+    /// A person picks `tag` (Use, an import, the command line): it stays until a person picks
+    /// another, or an update finds it the newest ([`selection_after_install`]).
+    pub fn pick(&mut self, tag: String) {
+        self.selected = Some(tag);
+        self.following = None;
+    }
+
     /// Remember an explicit approval; merely finding an installed toolchain never grants it.
     pub fn allow_native_mods(&mut self) -> Result<(), String> {
         self.native_mods_allowed_at = Some(
@@ -4548,8 +4616,102 @@ impl Settings {
         self.save()
     }
 
+    /// The saved settings. Only reads: a file from before `following` is migrated in memory
+    /// ([`Settings::adopt_legacy_selection`] against what is installed now), and written as such
+    /// at the next save.
     pub fn load() -> Self {
-        Self::parse(&fs::read_to_string(data_dir().join("settings.json")).unwrap_or_default())
+        Self::load_from(&data_dir().join("settings.json"))
+    }
+
+    fn load_from(path: &Path) -> Self {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        Self::from_saved(&text, installed).0
+    }
+
+    /// The saved settings when an install of a version just ended, `before` being what was
+    /// installed before it. A file from before `following` is judged against `before`, as the
+    /// update rule of launchers before it judged it before moving the selection: against the list
+    /// with the new version in it, a follower would read as a pick. [`Settings::apply_install`]
+    /// then decides, and the caller's save writes `following` from then on.
+    pub fn load_for_install(before: &[String]) -> Self {
+        Self::load_for_install_from(&data_dir().join("settings.json"), before)
+    }
+
+    fn load_for_install_from(path: &Path, before: &[String]) -> Self {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        Self::from_saved(&text, || before.to_vec()).0
+    }
+
+    /// The settings saved as `text`, and whether it is a file from before `following`, whose
+    /// selection is then judged against `installed` (read only for such a file).
+    fn from_saved(text: &str, installed: impl FnOnce() -> Vec<String>) -> (Self, bool) {
+        let mut settings = Self::parse(text);
+        let legacy = serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|v| v.as_object().map(|o| !o.contains_key("following")))
+            .unwrap_or(false);
+        if legacy
+            && settings
+                .selected
+                .as_deref()
+                .is_some_and(|s| crate::nightly::date_of(s).is_some())
+        {
+            settings.adopt_legacy_selection(&installed());
+        }
+        (settings, legacy)
+    }
+
+    /// Settles the selection after `tag` was installed for `cause`, `installed` being every
+    /// installed version newest first and `before` the same without `tag`
+    /// ([`selection_after_install`]). True when it changed; the caller saves.
+    pub fn apply_install(
+        &mut self,
+        tag: &str,
+        before: &[String],
+        installed: &[String],
+        cause: InstallCause,
+    ) -> bool {
+        let Some(follow) = selection_after_install(
+            self.selected.as_deref(),
+            self.following.as_deref(),
+            tag,
+            before,
+            installed,
+            cause,
+        ) else {
+            return false;
+        };
+        self.selected = Some(tag.to_owned());
+        self.following = follow.then(|| tag.to_owned());
+        true
+    }
+
+    /// A settings file from before `following`: its selection follows when it is the newest
+    /// installed Nightly. That is exactly when the update rule of launchers before it moved the
+    /// selection on ([`select_after_update`]), so those players keep the behaviour they had; it
+    /// can't tell a pick of the newest from following, and doesn't need to. An older one stays a
+    /// pick.
+    fn adopt_legacy_selection(&mut self, installed: &[String]) {
+        let newest = installed
+            .iter()
+            .find(|t| crate::nightly::date_of(t).is_some());
+        if self.following.is_none() && newest.is_some() && newest == self.selected.as_ref() {
+            self.following = self.selected.clone();
+        }
+    }
+
+    /// Keeps the selection if `installed` (newest first) still has it; else the newest, which
+    /// the launcher chose and so follows. Both fields change together, so a save in between never
+    /// writes one without the other.
+    pub fn keep_installed_selection(&mut self, installed: &[String]) {
+        if self
+            .selected
+            .as_ref()
+            .is_none_or(|s| !installed.contains(s))
+        {
+            self.selected = installed.first().cloned();
+            self.following = self.selected.clone();
+        }
     }
     pub fn parse(text: &str) -> Self {
         let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
@@ -6666,6 +6828,343 @@ pub fn {f}("
             Some("imported-2026-11-01-abcdef0"),
             &["imported-2026-11-01-abcdef0".to_string()]
         ));
+    }
+
+    #[test]
+    fn an_instance_install_of_a_newer_nightly_moves_a_following_selection_not_a_pick() {
+        let (n18, n19, n20) = (
+            "nightly-2026-11-18-dd67b76",
+            "nightly-2026-11-19-f00125f",
+            "nightly-2026-11-20-0a875da",
+        );
+        let list = |tags: &[&str]| tags.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        let pinned = |nightly| InstallCause {
+            update: false,
+            instance: Some(nightly),
+        };
+        let update = InstallCause {
+            update: true,
+            instance: None,
+        };
+        // A follower on n18; an instance pinned to n19 on Nightly installs it: the selection
+        // follows, and the next update moves it on again.
+        let (before, now) = (list(&[n18]), list(&[n19, n18]));
+        assert_eq!(
+            selection_after_install(Some(n18), Some(n18), n19, &before, &now, pinned(true)),
+            Some(true)
+        );
+        let (before, now) = (list(&[n19, n18]), list(&[n20, n19, n18]));
+        assert_eq!(
+            selection_after_install(Some(n19), Some(n19), n20, &before, &now, update),
+            Some(true)
+        );
+        // Use on the older n18 over n19: neither an instance's n20 nor the update moves it.
+        assert_eq!(
+            selection_after_install(Some(n18), Some(n19), n20, &before, &now, pinned(true)),
+            None
+        );
+        assert_eq!(
+            selection_after_install(Some(n18), Some(n19), n20, &before, &now, update),
+            None
+        );
+        // n19 installed by hand while it was the newest (or a settings file from before
+        // `following`): a pick, which an instance's n20 leaves. An update still moves it, as
+        // before, and from then on it follows.
+        assert_eq!(
+            selection_after_install(Some(n19), None, n20, &before, &now, pinned(true)),
+            None
+        );
+        assert_eq!(
+            selection_after_install(Some(n19), None, n20, &before, &now, update),
+            Some(true)
+        );
+        // Use on the newest, the way back the picker names: the next update follows on.
+        assert_eq!(
+            selection_after_install(Some(n19), Some(n18), n20, &before, &now, update),
+            Some(true)
+        );
+        // Home's Stable update, or a Stable instance: never moves a selection the launcher has.
+        assert_eq!(
+            selection_after_install(Some(n19), Some(n19), n20, &before, &now, pinned(false)),
+            None
+        );
+        // An older build for an instance never moves the selection back.
+        let (before, now) = (list(&[n20, n19]), list(&[n20, n19, n18]));
+        assert_eq!(
+            selection_after_install(Some(n20), Some(n20), n18, &before, &now, pinned(true)),
+            None
+        );
+        // Installed by hand: selected as a pick, never followed.
+        let by_hand = InstallCause {
+            update: false,
+            instance: None,
+        };
+        assert_eq!(
+            selection_after_install(Some(n20), Some(n20), n18, &before, &now, by_hand),
+            Some(false)
+        );
+        // A launcher without a selection takes what an instance installed, as before.
+        assert_eq!(
+            selection_after_install(None, None, n18, &[], &list(&[n18]), pinned(false)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_selection_set_on_the_command_line_during_a_download_stays() {
+        let (n17, n18, n19) = (
+            "nightly-2026-11-17-1234567",
+            "nightly-2026-11-18-dd67b76",
+            "nightly-2026-11-19-f00125f",
+        );
+        // The window saw a follower on n18. While n19 downloaded for a pinned instance,
+        // `settings selected-version` saved n17.
+        let window = Settings {
+            selected: Some(n18.into()),
+            following: Some(n18.into()),
+            ..Settings::default()
+        };
+        // The command saves only `selected`.
+        let mut saved = Settings::parse(&serde_json::to_string(&window).unwrap());
+        saved.selected = Some(n17.into());
+        let mut window = window;
+        window.selection_from(&saved);
+        let installed = [n19.to_string(), n18.to_string(), n17.to_string()];
+        let cause = InstallCause {
+            update: false,
+            instance: Some(true),
+        };
+        assert_eq!(
+            selection_after_install(
+                window.selected.as_deref(),
+                window.following.as_deref(),
+                n19,
+                &installed[1..],
+                &installed,
+                cause
+            ),
+            None
+        );
+        assert_eq!(window.selected.as_deref(), Some(n17));
+    }
+
+    #[test]
+    fn a_followed_build_picked_again_stays_picked() {
+        let (n18, n19, n20, n21) = (
+            "nightly-2026-11-18-dd67b76",
+            "nightly-2026-11-19-f00125f",
+            "nightly-2026-11-20-0a875da",
+            "nightly-2026-11-21-1111111",
+        );
+        // A follower on n19 picks n18, n20 arrives, then it picks n19 again, now older.
+        let mut settings = Settings {
+            selected: Some(n19.into()),
+            following: Some(n19.into()),
+            ..Settings::default()
+        };
+        settings.pick(n18.into());
+        settings.pick(n19.into());
+        let now = [n21, n20, n19, n18].map(String::from);
+        for instance in [None, Some(true)] {
+            let cause = InstallCause {
+                update: instance.is_none(),
+                instance,
+            };
+            assert_eq!(
+                selection_after_install(
+                    settings.selected.as_deref(),
+                    settings.following.as_deref(),
+                    n21,
+                    &now[1..],
+                    &now,
+                    cause
+                ),
+                None,
+                "{cause:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_follower_on_the_newest_follows_an_instance_install() {
+        let (n19, n20) = ("nightly-2026-11-19-f00125f", "nightly-2026-11-20-0a875da");
+        let n18 = "nightly-2026-11-18-dd67b76";
+        // A settings file from before `following`, on the newest installed Nightly.
+        let legacy = format!(r#"{{"selected": "{n19}"}}"#);
+        let mut settings = Settings::parse(&legacy);
+        settings.adopt_legacy_selection(&[n19.into(), n18.into()]);
+        assert_eq!(settings.following.as_deref(), Some(n19));
+        // n20 installed for a pinned instance before the next update: the selection follows.
+        let now = [n20, n19, n18].map(String::from);
+        let pinned = InstallCause {
+            update: false,
+            instance: Some(true),
+        };
+        let after = |s: &Settings| {
+            selection_after_install(
+                s.selected.as_deref(),
+                s.following.as_deref(),
+                n20,
+                &now[1..],
+                &now,
+                pinned,
+            )
+        };
+        assert_eq!(after(&settings), Some(true));
+        // On an older one, it stays a pick.
+        let mut older = Settings::parse(&format!(r#"{{"selected": "{n18}"}}"#));
+        older.adopt_legacy_selection(&[n19.into(), n18.into()]);
+        assert_eq!(older.following, None);
+        assert_eq!(after(&older), None);
+        // Once saved, a pick reads back as a pick, not as a file from before `following`.
+        let mut picked = Settings::default();
+        picked.pick(n19.into());
+        let text = serde_json::to_string(&picked).unwrap();
+        assert!(text.contains(r#""following":null"#), "{text}");
+    }
+
+    #[test]
+    fn a_legacy_selection_is_judged_at_install_completion_against_the_list_before_it() {
+        let (n18, n19, n20) = (
+            "nightly-2026-11-18-dd67b76",
+            "nightly-2026-11-19-f00125f",
+            "nightly-2026-11-20-0a875da",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let before = [n19, n18].map(String::from);
+        let now = [n20, n19, n18].map(String::from);
+        let stable = InstallCause {
+            update: false,
+            instance: Some(false),
+        };
+        // A file from before `following` on f00125f, the newest; Home's Stable update installs
+        // 0a875da and its completion reads the file. The selection stays and follows, and the
+        // completion's save writes that.
+        fs::write(&file, format!(r#"{{"selected": "{n19}"}}"#)).unwrap();
+        let mut settings = Settings::load_for_install_from(&file, &before);
+        assert!(!settings.apply_install(n20, &before, &now, stable));
+        assert_eq!(settings.selected.as_deref(), Some(n19));
+        assert_eq!(settings.following.as_deref(), Some(n19));
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert!(
+            saved.contains(&format!(r#""following":"{n19}""#)),
+            "{saved}"
+        );
+        // The next update moves it on.
+        let next = "nightly-2026-11-21-1111111";
+        let later = [next, n20, n19, n18].map(String::from);
+        let update = InstallCause {
+            update: true,
+            instance: None,
+        };
+        let mut reloaded = Settings::parse(&saved);
+        assert!(reloaded.apply_install(next, &now, &later, update));
+        assert_eq!(reloaded.following.as_deref(), Some(next));
+        // A legacy pick of an older build stays a pick through the same completion.
+        fs::write(&file, format!(r#"{{"selected": "{n18}"}}"#)).unwrap();
+        let mut picked = Settings::load_for_install_from(&file, &before);
+        assert!(!picked.apply_install(n20, &before, &now, stable));
+        assert_eq!(
+            (picked.selected.as_deref(), picked.following.as_deref()),
+            (Some(n18), None)
+        );
+        assert!(serde_json::to_string(&picked)
+            .unwrap()
+            .contains(r#""following":null"#));
+    }
+
+    #[test]
+    fn loading_a_legacy_settings_file_never_writes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let text = r#"{"selected": "nightly-2026-11-19-f00125f", "a_newer_key": 1}"#;
+        fs::write(&file, text).unwrap();
+        let modified = fs::metadata(&file).unwrap().modified().unwrap();
+        let _ = Settings::load_from(&file);
+        let _ = Settings::load_for_install_from(&file, &[]);
+        assert_eq!(fs::read_to_string(&file).unwrap(), text);
+        assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_removed_selection_moves_to_the_newest_left_which_follows() {
+        let left = ["v0.2.49".to_string(), "v0.2.48".to_string()];
+        let mut kept = Settings::default();
+        kept.pick("v0.2.48".into());
+        kept.keep_installed_selection(&left);
+        assert_eq!(
+            (kept.selected.as_deref(), kept.following.as_deref()),
+            (Some("v0.2.48"), None)
+        );
+        let mut gone = Settings::default();
+        gone.pick("v0.2.47".into());
+        gone.keep_installed_selection(&left);
+        assert_eq!(
+            (gone.selected.as_deref(), gone.following.as_deref()),
+            (Some("v0.2.49"), Some("v0.2.49"))
+        );
+        let mut none = Settings::default();
+        none.keep_installed_selection(&left);
+        assert_eq!(none.selected.as_deref(), Some("v0.2.49"));
+        let mut empty = Settings::default();
+        empty.pick("v0.2.47".into());
+        empty.keep_installed_selection(&[]);
+        assert_eq!((empty.selected, empty.following), (None, None));
+    }
+
+    #[test]
+    fn nightlies_of_one_day_are_ordered_by_when_they_came_out() {
+        let (a, b, c) = (
+            "nightly-2026-11-19-5ef7734",
+            "nightly-2026-11-19-f00125f",
+            "nightly-2026-11-20-0a875da",
+        );
+        let published = |t: &str| {
+            match t {
+                "nightly-2026-11-19-5ef7734" => Some("2026-11-20 02:32"),
+                "nightly-2026-11-19-f00125f" => Some("2026-11-19 15:33"),
+                "nightly-2026-11-20-0a875da" => Some("2026-11-20 11:18"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        };
+        for listing in [[a, b, c], [b, a, c], [c, b, a]] {
+            let mut tags: Vec<String> = listing.iter().map(|t| t.to_string()).collect();
+            assert!(newest_first(&mut tags, published));
+            assert_eq!(tags, [c, a, b]);
+        }
+        // Not known yet: still one order whatever the folder listing, and said so.
+        for listing in [[a, b], [b, a]] {
+            let mut tags: Vec<String> = listing.iter().map(|t| t.to_string()).collect();
+            assert!(!newest_first(&mut tags, |_| None));
+            assert_eq!(tags, [b, a]);
+        }
+    }
+
+    #[test]
+    fn a_nightly_reads_when_it_came_out_from_the_release_list() {
+        let list = serde_json::json!([{
+            "tag_name": "nightly-2026-11-19",
+            "name": "Nightly 2026-11-19 · 5ef7734",
+            "published_at": "2026-11-20T02:32:23Z",
+            "prerelease": true,
+            "assets": [],
+        }]);
+        let r = &parse_releases(&list, None, |_| true)[0];
+        assert_eq!((r.date.as_str(), r.time.as_str()), ("2026-11-20", "02:32"));
+        let nightly = Release {
+            nightly: Some(r.tag.clone()),
+            tag: crate::nightly::version_of(r),
+            ..r.clone()
+        };
+        assert_eq!(nightly.tag, "nightly-2026-11-19-5ef7734");
+        crate::nightly::note_published(&[nightly]);
+        assert_eq!(
+            crate::nightly::published_at("nightly-2026-11-19-5ef7734").as_deref(),
+            Some("2026-11-20 02:32")
+        );
     }
 
     /// The Nightly is the only build Horizon ships (docs/release-flow.md): every launcher takes the

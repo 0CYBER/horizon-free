@@ -112,8 +112,7 @@ impl Launcher {
         self.install_error = None;
         self.removing.push(tag.to_string());
         self.installed.retain(|t| t != tag);
-        self.settings.selected =
-            selection_after_removal(&self.installed, self.settings.selected.take());
+        self.settings.keep_installed_selection(&self.installed);
         let (tag, tx) = (tag.to_string(), self.tx.clone());
         std::thread::spawn(move || {
             let result = backend::remove_version(&tag);

@@ -117,7 +117,7 @@ pub fn import(path: &Path, requested: Option<&str>) -> Result<String, String> {
     backend::reuse_prepared_for(&tag);
     // Read again: the window may have saved other settings during the copy.
     let mut settings = backend::Settings::load();
-    settings.selected = Some(tag.clone());
+    settings.pick(tag.clone());
     settings.save()?;
     Ok(tag)
 }

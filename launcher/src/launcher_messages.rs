@@ -37,12 +37,15 @@ impl Launcher {
                     }
                     if let Ok(list) = &r {
                         horizon_launcher::nightly::note_published(list);
+                        // Nightlies of one day are ordered by when they came out, known now.
+                        self.installed = backend::installed();
                     }
                     self.releases = r.map_or_else(Load::Failed, Load::Ready);
                     self.notes.clear();
                 }
                 Msg::ReleasesFromNetwork(list) => {
                     horizon_launcher::nightly::note_published(&list);
+                    self.installed = backend::installed();
                     self.stable_failed = None;
                     self.releases = Load::Ready(list);
                     self.notes.clear();
@@ -206,24 +209,48 @@ impl Launcher {
                             if self.updates.horizon.as_ref().is_some_and(|r| r.tag == tag) {
                                 self.updates.horizon = None;
                             }
-                            // An instance's own version leaves the other instances on theirs.
-                            // Judged now, not when the download started: a version picked on
-                            // Versions meanwhile stays picked.
                             let before: Vec<String> = self
                                 .installed
                                 .iter()
                                 .filter(|t| **t != tag)
                                 .cloned()
                                 .collect();
-                            let select = as_update.is_none_or(|_| {
-                                backend::select_after_update(
-                                    self.settings.selected.as_deref(),
-                                    &before,
-                                )
-                            }) && (!for_instance || self.launcher_version().is_none());
-                            if select {
-                                self.settings.selected = Some(tag);
+                            // Judged on the selection as saved now, not when the download
+                            // started: a version picked on Versions or with `settings
+                            // selected-version` meanwhile stays picked. A file from before
+                            // `following` is read against the list before this install.
+                            // A saved selection that isn't installed is the one the window
+                            // replaced at start: the window's stays then.
+                            let saved = Settings::load_for_install(&before);
+                            if self.settings_save_error.is_none()
+                                && saved
+                                    .selected
+                                    .as_ref()
+                                    .is_some_and(|s| self.installed.contains(s))
+                            {
+                                self.settings.selection_from(&saved);
                             }
+                            // An instance's own version leaves the selection where it is, unless
+                            // an instance on the Nightly channel is pinned to it and the
+                            // selection follows the newest. Home's Stable update never moves it.
+                            let instance = (for_instance || stable.is_some()).then(|| {
+                                stable.is_none()
+                                    && horizon_launcher::instances::list().iter().any(|i| {
+                                        i.java.is_none()
+                                            && i.channel
+                                                == horizon_launcher::instances::Channel::Nightly
+                                            && i.version.as_deref() == Some(tag.as_str())
+                                    })
+                            });
+                            self.settings.apply_install(
+                                &tag,
+                                &before,
+                                &self.installed,
+                                backend::InstallCause {
+                                    update: as_update.is_some(),
+                                    instance,
+                                },
+                            );
                             // Pruning reads settings from disk: protect the selection only once
                             // it has been saved there. A failed save leaves all versions in place.
                             if self.save_settings() {
@@ -251,12 +278,10 @@ impl Launcher {
                 Msg::Removed(tag, result) => {
                     self.removing.retain(|t| *t != tag);
                     self.installed = backend::installed();
-                    let selected = if self.settings_save_error.is_some() {
-                        self.settings.selected.take()
-                    } else {
-                        Settings::load().selected
-                    };
-                    self.settings.selected = selection_after_removal(&self.installed, selected);
+                    if self.settings_save_error.is_none() {
+                        self.settings.selection_from(&Settings::load());
+                    }
+                    self.settings.keep_installed_selection(&self.installed);
                     if let Err(e) = result {
                         self.install_error = Some((tag, e));
                     }
@@ -268,7 +293,7 @@ impl Launcher {
                     self.installed = backend::installed();
                     match result {
                         // `build_import::import` saved the selection; this keeps the window's copy.
-                        Ok(tag) => self.settings.selected = Some(tag),
+                        Ok(tag) => self.settings.pick(tag),
                         Err(e) => self.import_error = Some(e),
                     }
                 }

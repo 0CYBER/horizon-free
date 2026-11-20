@@ -573,17 +573,6 @@ pub(crate) fn removable(
         && !removing.iter().any(|t| t == tag)
 }
 
-/// The selected version once one has been removed: the saved choice if it is still installed,
-/// else the newest left.
-pub(crate) fn selection_after_removal(
-    installed: &[String],
-    saved: Option<String>,
-) -> Option<String> {
-    saved
-        .filter(|s| installed.contains(s))
-        .or_else(|| installed.first().cloned())
-}
-
 /// The row menu a press on a sidebar row leaves open: that row's, or none when it was already
 /// that row's (the ⋮ and a right click on the row toggle the same way).
 pub(crate) fn row_menu_after_press(

@@ -38,7 +38,7 @@ impl Launcher {
                 d.child(
                     button(format!("use-{tag}"), "Use", Kind::Ghost, &t).on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
-                            this.settings.selected = Some(t1.clone());
+                            this.settings.pick(t1.clone());
                             this.save_settings();
                             cx.notify();
                         },

@@ -66,13 +66,7 @@ impl Launcher {
             });
         }
         let installed = backend::installed();
-        if settings
-            .selected
-            .as_ref()
-            .is_none_or(|s| !installed.contains(s))
-        {
-            settings.selected = installed.first().cloned();
-        }
+        settings.keep_installed_selection(&installed);
         // Pin the window's chrome (macOS title bar) to the choice before the theme reads
         // `window.appearance()`, so both draw the same look.
         titlebar::apply_appearance(window, settings.appearance);

@@ -261,6 +261,11 @@ struct Kept {
     body: serde_json::Value,
 }
 
+/// The answer to `url` kept on disk, however old, without asking anyone.
+pub(crate) fn kept(url: &str) -> Option<serde_json::Value> {
+    read_kept(&cache_dir().join(cache_name(url)), url).map(|k| k.body)
+}
+
 fn read_kept(file: &Path, url: &str) -> Option<Kept> {
     let kept: Kept = serde_json::from_slice(&fs::read(file).ok()?).ok()?;
     (kept.url == url).then_some(kept)
