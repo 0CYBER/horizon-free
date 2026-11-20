@@ -79,6 +79,9 @@ impl Renderer {
         if let (Some(flat), Some(old)) = (&mut self.flat, &mut from.flat) {
             flat.take_tables(old);
         }
+        if let (Some(mesh), Some(old)) = (&mut self.mesh_terrain, &mut from.mesh_terrain) {
+            mesh.take_store(&self.device, old);
+        }
         true
     }
 }

@@ -11,8 +11,25 @@ use super::*;
 pub(super) fn move_off_page<'a>(
     arena: &mut arena::Arena,
     encoder: &mut wgpu::CommandEncoder,
+    flat: Option<(&mut flat::Flat, &wgpu::Device, &mut upload::Uploads)>,
+    records: Option<&mut gpu_culling::Records>,
+    meshes: impl Iterator<Item = &'a mut SectionGpu>,
+    page: u32,
+    part: Part,
+    budget: &mut u64,
+) -> bool {
+    move_off_page_with_meshlets(
+        arena, encoder, flat, records, None, meshes, page, part, budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn move_off_page_with_meshlets<'a>(
+    arena: &mut arena::Arena,
+    encoder: &mut wgpu::CommandEncoder,
     mut flat: Option<(&mut flat::Flat, &wgpu::Device, &mut upload::Uploads)>,
     mut records: Option<&mut gpu_culling::Records>,
+    mut meshlets: Option<&mut surface_setup::mesh_shader::MeshSectionStore>,
     meshes: impl Iterator<Item = &'a mut SectionGpu>,
     page: u32,
     part: Part,
@@ -45,12 +62,18 @@ pub(super) fn move_off_page<'a>(
             };
             flat.place(device, encoder, uploads, id, key, to.1, vertices);
         }
+        let old_solid_base = s.solid_base();
         part.set(s, to);
         // Its solid quads start the range in either layout.
         if let (Part::Section { .. }, Some(records), Some(id)) =
             (part, records.as_deref_mut(), s.gpu_id)
         {
             records.relocate(id, to.0, u64::from(s.solid_base()));
+        }
+        if let (Part::Section { .. }, Some(store)) = (part, meshlets.as_deref_mut())
+            && s.solid > 0
+        {
+            store.relocate_section(page, old_solid_base, to.0, s.solid_base());
         }
         *budget = budget.saturating_sub(bytes);
         moved = true;

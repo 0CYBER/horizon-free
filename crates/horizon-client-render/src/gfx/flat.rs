@@ -439,12 +439,20 @@ impl Flat {
     ) -> Self {
         let vertex = wgpu::ShaderStages::VERTEX;
         let compute = wgpu::ShaderStages::COMPUTE;
+        let (vtm, vm) = if super::surface_setup::mesh_shader::on(device) {
+            (
+                vertex | wgpu::ShaderStages::TASK | wgpu::ShaderStages::MESH,
+                vertex | wgpu::ShaderStages::MESH,
+            )
+        } else {
+            (vertex, vertex)
+        };
         let draw_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Flat section draws"),
             entries: &[
-                storage(0, vertex, true),
-                storage(1, vertex, true),
-                storage(ARENA_BINDING, vertex, true),
+                storage(0, vtm, true),
+                storage(1, vtm, true),
+                storage(ARENA_BINDING, vm, true),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -713,6 +721,45 @@ impl Flat {
             }
         }
     }
+    /// Uploads the frame's camera-relative origins by section id into `self.origins`, growing
+    /// the storage buffer if needed and resetting cached page bind groups so `bind_pages` rebinds.
+    pub fn write_origins(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        uploads: &mut super::upload::Uploads,
+        origins: impl Iterator<Item = (u32, [f32; 4])>,
+    ) {
+        self.origin_data.clear();
+        self.origin_data.resize(self.next_id as usize, [0.0; 4]);
+        for (id, o) in origins {
+            let id = id as usize;
+            if self.origin_data.len() <= id {
+                self.origin_data.resize(id + 1, [0.0; 4]);
+            }
+            self.origin_data[id] = o;
+        }
+        if self.origin_data.len() as u64 > self.origin_capacity {
+            self.origin_capacity = (self.origin_data.len() as u64).next_power_of_two();
+            self.origins = buffer(
+                device,
+                "Section origins by id",
+                self.origin_capacity * 16,
+                wgpu::BufferUsages::STORAGE,
+            );
+            for page in self.pages.iter_mut().flatten() {
+                page.group = None;
+            }
+        }
+        if !self.origin_data.is_empty() {
+            uploads.buffer(
+                encoder,
+                &self.origins,
+                0,
+                bytemuck::cast_slice(&self.origin_data),
+            );
+        }
+    }
     /// Builds the frame's index list from `draws` (`DrawIndexedIndirectArgs`:
     /// index count, instances, first index, base vertex, first instance),
     /// solid ones first, with their (vertex page, sorted index page) and
@@ -748,34 +795,7 @@ impl Flat {
             solid_draws
         };
         // Origins by section id.
-        self.origin_data.clear();
-        for (id, o) in origins {
-            let id = id as usize;
-            if self.origin_data.len() <= id {
-                self.origin_data.resize(id + 1, [0.0; 4]);
-            }
-            self.origin_data[id] = o;
-        }
-        if self.origin_data.len() as u64 > self.origin_capacity {
-            self.origin_capacity = (self.origin_data.len() as u64).next_power_of_two();
-            self.origins = buffer(
-                device,
-                "Section origins by id",
-                self.origin_capacity * 16,
-                wgpu::BufferUsages::STORAGE,
-            );
-            for page in self.pages.iter_mut().flatten() {
-                page.group = None;
-            }
-        }
-        if !self.origin_data.is_empty() {
-            uploads.buffer(
-                encoder,
-                &self.origins,
-                0,
-                bytemuck::cast_slice(&self.origin_data),
-            );
-        }
+        self.write_origins(device, encoder, uploads, origins);
         let Plan {
             phase1_calls,
             solid_calls,

@@ -1460,6 +1460,8 @@ pub struct Renderer {
     /// The visibility buffer for flat frames' solid terrain (`visbuffer`,
     /// `HORIZON_VISBUFFER=1`).
     visbuf: Option<visbuffer::Visbuffer>,
+    /// Hardware task+mesh solid terrain (`mesh_shader`, `HORIZON_MESH_SHADER=1`).
+    mesh_terrain: Option<surface_setup::mesh_shader::MeshTerrain>,
     /// `flat` draws this frame's sections (off: the per-section draws).
     flat_on: bool,
     /// Occlusion culling of solid section draws, where the GPU's instance
@@ -2522,9 +2524,14 @@ impl Renderer {
             ("SPRITE_ARRAYS", f64::from(sprite_arrays)),
             ("SPRITE_SPLIT", f64::from(split)),
         ];
+        let terrain_entries = if surface_setup::mesh_shader::on(&device) {
+            surface_setup::mesh_shader::terrain_entries()
+        } else {
+            native_material::terrain_entries()
+        };
         let bindings = kept.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Horizon terrain bindings"),
-            entries: &native_material::terrain_entries(),
+            entries: &terrain_entries,
         });
         let layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Horizon terrain layout"),
@@ -4265,6 +4272,16 @@ impl Renderer {
                     &sprite_constants,
                 )
             });
+        let mesh_terrain = flat.as_ref().and_then(|f| {
+            surface_setup::mesh_shader::MeshTerrain::new(
+                &device,
+                &bindings,
+                &f.draw_layout,
+                (frame_format, linear_light),
+                &sprite_constants,
+                hdr_output.is_some(),
+            )
+        });
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
@@ -4457,6 +4474,7 @@ impl Renderer {
             cull,
             flat,
             visbuf,
+            mesh_terrain,
             sky,
             sky_base,
             sunrise_pipeline,
@@ -5224,6 +5242,11 @@ impl Renderer {
         if let Some(s) = section.as_mut().filter(|_| self.ray_looks) {
             s.ray_looks = [&mesh.solid_looks, &mesh.translucent_looks].map(|l| l[..].into());
         }
+        if let (Some(mesh_terrain), Some(s)) = (&mut self.mesh_terrain, section.as_ref())
+            && s.solid > 0
+        {
+            mesh_terrain.insert_section_mesh(s.page, s.solid_base(), s.packed, &s.sides, mesh);
+        }
         let drawn = section.is_some() || facts.empty;
         if drawn {
             self.upload_retries.uploaded(key);
@@ -5549,6 +5572,11 @@ impl Renderer {
         if let (Some(gpu), Some(id)) = (&mut self.gpu_culling, s.gpu_id) {
             gpu.records.remove(id);
         }
+        if let Some(mesh_terrain) = &mut self.mesh_terrain
+            && s.solid > 0
+        {
+            mesh_terrain.store.remove_section(s.page, s.solid_base());
+        }
         if let Some((page, start)) = s.sorted_indices {
             self.sorted_indices
                 .release(page, start, u64::from(s.translucent) * 6);
@@ -5597,9 +5625,20 @@ impl Renderer {
             .map(|f| (f, &self.device, &mut self.section_uploads));
         // GPU culling's records move with the sections.
         let gpu = self.gpu_culling.as_mut().map(|g| &mut g.records);
+        let meshlets = self.mesh_terrain.as_mut().map(|m| &mut m.store);
         let split = self.translucent_arena.is_some();
         let (arena, part) = (&mut self.arena, Part::Section { split });
-        if !move_off_page(arena, encoder, flat, gpu, meshes, page, part, &mut budget) {
+        if !off_page::move_off_page_with_meshlets(
+            arena,
+            encoder,
+            flat,
+            gpu,
+            meshlets,
+            meshes,
+            page,
+            part,
+            &mut budget,
+        ) {
             // The other pages have no room after all.
             arena.reopen();
         }
@@ -5864,6 +5903,9 @@ impl Renderer {
         }
         if let Some(flat) = &mut self.flat {
             flat.clear();
+        }
+        if let Some(mesh_terrain) = &mut self.mesh_terrain {
+            mesh_terrain.store.clear();
         }
         self.graveyard.add(self.sorted_indices.clear());
         self.translucency_cursor = 0;
@@ -6136,6 +6178,11 @@ impl Renderer {
         if let Some(gpu) = &mut self.gpu_culling {
             gpu.records
                 .remove_all(released.iter().filter_map(|s| s.gpu_id));
+        }
+        if let Some(mesh_terrain) = &mut self.mesh_terrain {
+            for s in released.iter().filter(|s| s.solid > 0) {
+                mesh_terrain.store.remove_section(s.page, s.solid_base());
+            }
         }
         self.sorted_indices
             .release_all(released.iter().filter_map(|s| {
@@ -7370,6 +7417,9 @@ impl Renderer {
                 Some(page) => translucent.is_some_and(|a| a.has_page(page)),
                 None => self.arena.has_page(key),
             });
+        }
+        if let Some(mesh_terrain) = &mut self.mesh_terrain {
+            mesh_terrain.store.trim(|page| self.arena.has_page(page));
         }
         if self.suspended {
             return Ok(false);
@@ -9241,6 +9291,38 @@ impl Renderer {
             }
             _ => false,
         };
+        let mesh_frame = self.mesh_terrain.is_some()
+            && self.flat.is_some()
+            && self.visbuf.is_none()
+            && !gpu_frame
+            && !culling
+            && !msaa_on
+            && !frame.title
+            && !pack_terrain
+            && !self.terrain_looks
+            && self.external.is_none()
+            && shadow_view.is_none()
+            && self.lods.is_empty()
+            && !self.own_timing.as_ref().is_some_and(|t| t.counters_frame());
+        if mesh_frame
+            && !flat_frame
+            && let Some(flat) = &mut self.flat
+        {
+            let sections = &self.sections;
+            flat.write_origins(
+                &self.device,
+                &mut encoder,
+                &mut self.uploads,
+                visible.iter().filter_map(|v| {
+                    let section = sections.get(v.slot);
+                    let code = fade_code(section, &v.key);
+                    Some((
+                        section.flat_id?,
+                        section_instance(v.origin, code, visibility(v.key)),
+                    ))
+                }),
+            );
+        }
         // Each page's group binds the page for the solid draws, flat or not.
         if let Some(looks) = &mut self.look_groups {
             looks.refresh(&self.device, &self.arena, self.translucent_arena.as_ref());
@@ -9270,6 +9352,32 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&self.draws),
             );
+        }
+        if mesh_frame && let Some(mesh_terrain) = &mut self.mesh_terrain {
+            let eye_xyz = eye.map_or([0.0; 3], |e| e.to_array());
+            let low_y = mirror_low.unwrap_or(eye_xyz[1]).min(eye_xyz[1]);
+            let mesh_calls = mesh_terrain.prepare_frame(
+                &self.device,
+                &self.queue,
+                self.arena.page_buffers().map(|(page, _)| page),
+                view.planes.map(|p| p.to_array()),
+                [eye_xyz[0], eye_xyz[1], eye_xyz[2], low_y],
+                eye.is_none(),
+            );
+            let translucent_calls = if flat_frame {
+                self.flat
+                    .as_ref()
+                    .map_or(0, |f| f.translucent_calls().len())
+            } else if self.multi_draw && self.info.backend != wgpu::Backend::Metal {
+                (solid_draws as usize..section_draws)
+                    .filter(|&i| {
+                        i == solid_draws as usize || self.draw_pages[i] != self.draw_pages[i - 1]
+                    })
+                    .count()
+            } else {
+                translucent_draws as usize
+            };
+            section_draw_calls = mesh_calls + translucent_calls;
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.output.frame.format),
@@ -9887,7 +9995,7 @@ impl Renderer {
             match self
                 .flat
                 .as_ref()
-                .filter(|_| flat_frame && !pack_draws_terrain)
+                .filter(|_| (flat_frame || mesh_frame) && !pack_draws_terrain)
             {
                 _ if pack_draws_terrain => {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -9936,6 +10044,18 @@ impl Renderer {
                     );
                     pass.set_bind_group(0, &self.group, &[]);
                     pack_frame(&mut pass);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                Some(flat) if mesh_frame => {
+                    let mesh_terrain = self.mesh_terrain.as_ref().expect("a mesh shader frame");
+                    pass.stage(self.own_timing.as_mut(), "solid terrain");
+                    mesh_terrain.draw_solid(
+                        &mut pass,
+                        flat,
+                        self.arena.page_buffers().map(|(page, _)| page),
+                        hdr,
+                    );
+                    pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 Some(flat) => {
@@ -12701,8 +12821,9 @@ mod tests {
                 // The shared maths: it needs the file it is appended to. GPU culling's
                 // occlusion test is appended to gpu_culling.wgsl, on Vulkan alone.
                 continue;
-            } else if name == "rt_unpack.wgsl" {
-                // Appended to terrain.wgsl (`rt::scene`'s `Unpacker`), on ray tracing devices.
+            } else if name == "rt_unpack.wgsl" || name == "terrain_mesh.wgsl" {
+                // Appended to terrain.wgsl (`rt::scene`'s `Unpacker` and `mesh_shader`), on
+                // ray tracing or mesh-shader devices.
                 continue;
             } else if name == "terrain.wgsl"
                 || name == "entity.wgsl"
