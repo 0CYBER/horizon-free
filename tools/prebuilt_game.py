@@ -146,6 +146,40 @@ def head() -> str:
     return run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
 
 
+def prebuilt_target() -> Path:
+    """Cargo's target folder for the prebuilt game; the staging tool builds in its `tools` folder."""
+    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "prebuilt"
+
+
+# `horizon-stage`, built and run by cargo in the prebuilt target's `tools` folder.
+STAGE_TOOL = ["cargo", "run", "--locked", "--release", "-q", "-p", "horizon-mod-api-gen", "--bin", "horizon-stage", "--"]
+
+
+def staged_tool() -> Path:
+    """The `horizon-stage` that staging built ([`STAGE_TOOL`] in `prebuilt_target() / "tools"`)."""
+    return prebuilt_target() / "tools" / "release" / ("horizon-stage.exe" if sys.platform == "win32" else "horizon-stage")
+
+
+def surface_tool() -> tuple[list[str], dict | None]:
+    """How `pack` runs horizon-stage, and with which environment (None: this one).
+
+    The binary staging built, as it is: Cargo from the checkout would build a second copy (up to 2.6 min per SDK leg),
+    since the staged copy's own .cargo/config.toml adds its rustflags to the checkout's. Without one, Cargo builds it
+    in staging's target folder. `pack` checks the package is this commit's; a tool left by another commit's staging in
+    the same target folder is not detected."""
+    tool = staged_tool()
+    if tool.is_file():
+        print(f"Surface export with the staged tool {tool}", flush=True)
+        return [str(tool.resolve())], None
+    print("No staged tool: Cargo builds horizon-stage for the surface export", flush=True)
+    return STAGE_TOOL, {**os.environ, "CARGO_TARGET_DIR": str(prebuilt_target() / "tools")}
+
+
+# Set (to anything) for `cargo rustc --timings` on the SDK build: dry runs only (prebuilt-game-build.yml). Cargo fails
+# the build when it can't write the report, so a release build never asks for one.
+TIMINGS = "HORIZON_SDK_TIMINGS"
+
+
 def stage(target_dir: Path, stage_tool: Path | None = None, prepare=None) -> Path:
     """A copy of HEAD's tracked source with the staging pass run over it (arismoko/horizon#589): every point method gets its
     `#[point]`, internals become public, and the build data is written with HEAD's commit in its header.
@@ -164,8 +198,7 @@ def stage(target_dir: Path, stage_tool: Path | None = None, prepare=None) -> Pat
         (staged / name).parent.mkdir(parents=True, exist_ok=True)
         (staged / name).write_bytes(data)
     arguments = [str(staged), str(staged / POINTS), str(staged / INTERNALS), commit]
-    command = ([str(stage_tool.resolve())] if stage_tool is not None else
-               ["cargo", "run", "--locked", "--release", "-q", "-p", "horizon-mod-api-gen", "--bin", "horizon-stage", "--"])
+    command = [str(stage_tool.resolve())] if stage_tool is not None else STAGE_TOOL
     print(f"stage_phase=copy_setup seconds={time.monotonic() - setup_started:.3f}", flush=True)
     started = time.monotonic()
     print(run(command + arguments, cwd=staged,
@@ -442,7 +475,7 @@ def dylib_crate_types(staged: Path) -> None:
 def build(out: Path, server: bool) -> None:
     layout = package_format(ROOT)
     # Resolved here: the staging and build steps run from the staged copy.
-    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "prebuilt"
+    target_dir = prebuilt_target()
     staged = stage(target_dir, prepare=dylib_crate_types)
     host = rustc_host()
 
@@ -458,8 +491,9 @@ def build(out: Path, server: bool) -> None:
     # Encoded flags take precedence over RUSTFLAGS in Cargo.
     environment = {key: value for key, value in os.environ.items() if key != "CARGO_ENCODED_RUSTFLAGS"}
     messages = run(
+        # --timings writes target/prebuilt/cargo-timings/, outside the package; the workflow uploads it on its own.
         ["cargo", "rustc", "--locked", "-p", GAME, "--lib", "--crate-type", "dylib",
-         "--target", host, "--profile", PROFILE, "--message-format", "json-render-diagnostics", *features, *link],
+         *(["--timings"] if os.environ.get(TIMINGS) else []), "--target", host, "--profile", PROFILE, "--message-format", "json-render-diagnostics", *features, *link],
         cwd=staged,
         env={**environment, "HORIZON_GAME_BUILD_ID": head(), "RUSTFLAGS": rustflags + " -D warnings", "CARGO_TARGET_DIR": str(target_dir)},
     )
@@ -870,9 +904,10 @@ def pack(out: Path, dist: Path, stage_tool: Path | None = None) -> None:
                     if (error := future.exception()) is not None]
     if failures:
         sys.exit("SDK archive compression failed: " + "; ".join(failures))
-    command = ([str(stage_tool.resolve())] if stage_tool is not None else
-               ["cargo", "run", "--locked", "--release", "-q", "-p", "horizon-mod-api-gen", "--bin", "horizon-stage", "--"])
-    run(command + ["surface", str(ROOT), str(dist / SURFACE)], cwd=ROOT)
+    command, env = ([str(stage_tool.resolve())], None) if stage_tool is not None else surface_tool()
+    started = time.monotonic()
+    run(command + ["surface", str(ROOT), str(dist / SURFACE)], cwd=ROOT, env=env)
+    print(f"Surface export: {time.monotonic() - started:.3f}s", flush=True)
     for asset in sorted(dist.iterdir()):
         print(f"{asset.name}: {asset.stat().st_size} bytes")
 

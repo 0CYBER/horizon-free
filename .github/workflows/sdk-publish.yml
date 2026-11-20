@@ -52,20 +52,30 @@ jobs:
         with:
           pattern: sdk-leg-*
           path: legs
+      # `phase <name> start|end` lines, UTC, with seconds: where this job's time goes. Printed only.
       - name: Gather matching build data and surfaces
-        run: python3 tools/prebuilt_game.py gather legs dist
+        run: |
+          echo "phase gather start $(date -u +%T)"
+          python3 tools/prebuilt_game.py gather legs dist
+          echo "phase gather end $(date -u +%T)"
       - name: Package the complete generated API source
         run: |
+          echo "phase api-source-build start $(date -u +%T)"
           python3 tools/sdk_api_source.py build "$RUNNER_TEMP/api-source"
+          echo "phase api-source-build end, api-source-archive start $(date -u +%T)"
           python3 tools/sdk_api_source.py archive "$RUNNER_TEMP/api-source" dist/api-source.tar.xz
+          echo "phase api-source-archive end $(date -u +%T)"
       - name: Compare with the previous authenticated SDK surface
         id: previous
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "phase sdk-previous start $(date -u +%T)"
           previous=$(python3 tools/ci/nightly.py sdk-previous "$COMMIT" previous-surface.json)
+          echo "phase sdk-previous end $(date -u +%T)"
           echo "build=$previous" >> "$GITHUB_OUTPUT"
           if [[ -n "$previous" ]]; then
+            echo "phase surface-diff start $(date -u +%T)"
             mkdir -p base
             if git cat-file -e "$previous:crates/horizon-mod-vocab/changes" 2>/dev/null; then
               git archive "$previous" crates/horizon-mod-vocab/changes | tar -x -C base
@@ -74,14 +84,18 @@ jobs:
               previous-surface.json dist/surface.json --notes crates/horizon-mod-vocab/changes \
               --base-notes base/crates/horizon-mod-vocab/changes --json surface-diff.json | tee -a "$GITHUB_STEP_SUMMARY"
             test -s surface-diff.json
+            echo "phase surface-diff end $(date -u +%T)"
           fi
       - name: Index and validate every exact-host asset and patch
         env:
           PREVIOUS: ${{ steps.previous.outputs.build }}
         run: |
           previous=(); [[ -n "$PREVIOUS" ]] && previous=(--previous "$PREVIOUS" surface-diff.json)
+          echo "phase index start $(date -u +%T)"
           python3 tools/prebuilt_game.py index dist "${previous[@]}"
+          echo "phase index end, validate-release start $(date -u +%T)"
           python3 tools/prebuilt_game.py validate-release dist "$COMMIT"
+          echo "phase validate-release end $(date -u +%T)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sdk-release

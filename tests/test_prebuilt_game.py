@@ -431,6 +431,31 @@ class SdkAssetTests(unittest.TestCase):
                 legs / "sdk-linux-client/engine-x86_64-unknown-linux-gnu.tar.xz", leg))
             refused("no build-data.tar.xz", lambda leg: (leg / "build-data.tar.xz").unlink())
 
+    def test_pack_exports_the_surface_with_the_tool_staging_built(self):
+        # Staging builds horizon-stage in <target>/prebuilt/tools: the surface export runs that binary, and builds one
+        # in the same place only when staging left none, never a second copy in <target>/release.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "cargo-target"
+            tools = (target / "prebuilt" / "tools").resolve()
+            for platform, name in (("linux", "horizon-stage"), ("darwin", "horizon-stage"), ("win32", "horizon-stage.exe")):
+                with self.subTest(platform=platform), patch.object(sys, "platform", platform), \
+                        patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    # No staged tool: Cargo builds it in staging's target folder.
+                    command, env = prebuilt_game.surface_tool()
+                    self.assertEqual(command, ["cargo", "run", "--locked", "--release", "-q", "-p",
+                                               "horizon-mod-api-gen", "--bin", "horizon-stage", "--"])
+                    self.assertEqual(env["CARGO_TARGET_DIR"], str(tools))
+                    # Another platform's name is not this platform's tool.
+                    other = tools / "release" / ("horizon-stage" if name.endswith(".exe") else "horizon-stage.exe")
+                    other.parent.mkdir(parents=True, exist_ok=True)
+                    other.write_bytes(b"")
+                    self.assertEqual(prebuilt_game.surface_tool()[0][0], "cargo")
+                    tool = tools / "release" / name
+                    tool.write_bytes(b"")
+                    self.assertEqual(prebuilt_game.surface_tool(), ([str(tool)], None))
+                    shutil.rmtree(tools)
+
     def test_pack_refuses_another_commits_package(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -505,15 +530,23 @@ class AllocatorSelectionTests(unittest.TestCase):
             self.assertEqual(kwargs["env"]["HORIZON_GAME_BUILD_ID"], "fixture-commit")
             self.assertIn("-C prefer-dynamic", kwargs["env"]["RUSTFLAGS"])
             self.assertNotIn("CARGO_ENCODED_RUSTFLAGS", kwargs["env"])
+            commands.append(command)
             raise Captured
 
-        with patch.object(prebuilt_game, "stage", return_value=Path("staged")), \
-             patch.object(prebuilt_game, "head", return_value="fixture-commit"), \
-             patch.object(prebuilt_game, "rustc_host", return_value="fixture-host"), \
-             patch.object(prebuilt_game, "run", side_effect=capture), \
-             patch.dict(prebuilt_game.os.environ, {"CARGO_ENCODED_RUSTFLAGS": "-Cprefer-dynamic=no"}):
-            with self.assertRaises(Captured):
-                prebuilt_game.build(Path("unused-sdk"), False)
+        commands = []
+        # The timing report only when the workflow asks for one (dry runs): writing it can fail a build that compiled.
+        for timings in (None, "1"):
+            with patch.object(prebuilt_game, "stage", return_value=Path("staged")), \
+                 patch.object(prebuilt_game, "head", return_value="fixture-commit"), \
+                 patch.object(prebuilt_game, "rustc_host", return_value="fixture-host"), \
+                 patch.object(prebuilt_game, "run", side_effect=capture), \
+                 patch.dict(prebuilt_game.os.environ, {"CARGO_ENCODED_RUSTFLAGS": "-Cprefer-dynamic=no"}):
+                prebuilt_game.os.environ.pop("HORIZON_SDK_TIMINGS", None)
+                if timings:
+                    prebuilt_game.os.environ["HORIZON_SDK_TIMINGS"] = timings
+                with self.assertRaises(Captured):
+                    prebuilt_game.build(Path("unused-sdk"), False)
+        self.assertEqual(["--timings" in command for command in commands], [False, True])
 
 
 class ExecutableLinkPolicyTests(unittest.TestCase):
