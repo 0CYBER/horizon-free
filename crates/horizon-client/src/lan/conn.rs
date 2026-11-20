@@ -819,6 +819,22 @@ fn serve_connection(
             Ok(())
         }
         handshake::LOGIN | handshake::TRANSFER => {
+            // `player_handshake`: the mods read, rewrite or refuse the handshake before the login.
+            let mut intention = intention;
+            match shared.handshake.pass(
+                (!c.is_memory()).then_some(address.ip()),
+                &intention.host,
+                intention.port,
+                intention.protocol,
+                super::handshake_gate::WAIT,
+                || translatable("multiplayer.disconnect.generic", &[]),
+            ) {
+                Ok(host) => intention.host = host,
+                Err(reason) => {
+                    login_disconnect(&mut c, &reason);
+                    return Ok(());
+                }
+            }
             if let Some(version) = older_client(&shared, intention.protocol) {
                 c.serve_older(version);
             } else if intention.protocol != PROTOCOL_VERSION {
@@ -4135,6 +4151,84 @@ mod outgoing_budget_tests {
 #[cfg(test)]
 #[path = "datapack_offer_tests.rs"]
 mod datapack_offer_tests;
+
+#[cfg(test)]
+mod handshake_hook_tests {
+    use super::*;
+
+    fn lan() -> crate::lan::Lan {
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            ..crate::lan::NetConfig::loopback(0, "Handshake".into(), 8)
+        };
+        crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config).unwrap()
+    }
+
+    fn send_handshake(c: &mut Connection, host: &str, intent: i32) {
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: host.into(),
+                port: 25570,
+                intent,
+            })
+            .encode(),
+        )
+        .unwrap();
+    }
+
+    /// A mod that refuses the handshake gets its reason to the client as a login disconnect,
+    /// before any login packet; the question carries what the client sent, once.
+    #[test]
+    fn a_refused_handshake_disconnects_before_the_login() {
+        let lan = lan();
+        lan.shared.handshake.set_listened(true);
+        let mut c = Connection::local(lan.connect_local().unwrap());
+        send_handshake(&mut c, "play.example\0data", handshake::LOGIN);
+        let ask = loop {
+            if let Some(ask) = lan.shared.handshake.take().pop() {
+                break ask;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(
+            (ask.host.as_str(), ask.port, ask.address),
+            ("play.example\0data", 25570, None)
+        );
+        assert_eq!(ask.protocol, horizon_protocol::PROTOCOL_VERSION);
+        let reason = crate::text::Text::literal("Bedrock key rejected").component();
+        ask.answer(crate::lan::handshake_gate::Answer {
+            host: "play.example".into(),
+            refusal: Some(crate::lan::data::component_nbt(&reason)),
+        });
+        let (id, payload) = c.recv().unwrap();
+        match login::Clientbound::decode(id, &payload).unwrap() {
+            login::Clientbound::Disconnect(d) => {
+                assert_eq!(d.reason_json, "\"Bedrock key rejected\"")
+            }
+            other => panic!("expected a disconnect, got {other:?}"),
+        }
+        assert!(lan.shared.handshake.take().is_empty(), "asked once");
+    }
+
+    /// A status ping is not a login: the mods are not asked.
+    #[test]
+    fn a_status_ping_is_not_asked() {
+        let lan = lan();
+        lan.shared.handshake.set_listened(true);
+        let mut c = Connection::local(lan.connect_local().unwrap());
+        send_handshake(&mut c, "play.example", handshake::STATUS);
+        c.send(&status::Serverbound::StatusRequest(Empty).encode())
+            .unwrap();
+        let (id, payload) = c.recv().unwrap();
+        assert!(matches!(
+            status::Clientbound::decode(id, &payload).unwrap(),
+            status::Clientbound::StatusResponse(_)
+        ));
+        assert!(lan.shared.handshake.take().is_empty());
+    }
+}
 
 #[cfg(test)]
 mod counted_id_tests {

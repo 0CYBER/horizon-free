@@ -2455,6 +2455,8 @@ impl Game<'_> {
         if self.level_pass.packets_drained {
             return;
         }
+        // The mods hear the handshakes the connection threads wait on before the tick's joins.
+        self.answer_handshakes();
         let Some(mut host) = self.lan.take() else {
             return;
         };

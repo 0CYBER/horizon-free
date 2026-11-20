@@ -7,6 +7,12 @@ impl Game<'_> {
     pub(in crate::game) fn sync_hub_mod_flags(hub: &mut Hub) {
         hub.mods_loaded = !mod_api::__private::mods().is_empty();
         hub.moves_listened = mod_api::__private::listened(mod_api::HookId::PlayerMove);
+        hub.lan
+            .shared
+            .handshake
+            .set_listened(mod_api::__private::enabled_listened(
+                mod_api::HookId::PlayerHandshake,
+            ));
     }
 
     /// The hub holds guest `conn`'s movement report: the mods hear it with the player's state
