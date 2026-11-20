@@ -142,6 +142,7 @@ impl Launcher {
             importing_build: false,
             import_error: None,
             native_step: None,
+            native_prepare_first: None,
             native_progress: None,
             first_build: None,
             play_after_build: None,
@@ -603,16 +604,6 @@ impl Launcher {
         }
         self.update_install = Some(release.tag.clone());
         self.install(&release);
-    }
-
-    /// The native mods turned on in the instance Play starts, unpacked and checked, with their
-    /// bundles: what the warning names and the build compiles.
-    pub(crate) fn native_mods_to_build(
-        &self,
-    ) -> Result<(std::path::PathBuf, Vec<native_mods::Bundle>), String> {
-        let folder = native_mods::installed_mods(&instances::selected().home)?;
-        let found = native_mods::bundles(&folder)?;
-        Ok((folder, found))
     }
 
     /// What installed native build `version` was made from (`native_status::Build`), read once.

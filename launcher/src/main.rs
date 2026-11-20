@@ -330,6 +330,9 @@ struct Launcher {
     /// Native mods (`native_mods`, on the Mods page): the build's step while it runs, why it
     /// failed, and the warning before a build while it is open, with the mods it names.
     native_step: Option<String>,
+    /// A build waiting for its base version's preparation, or for an install of it, kept as it
+    /// was started (#18659).
+    native_prepare_first: Option<native_mods::prepare_first::Waiting>,
     /// Where the build under way is, for the card's stages and bar.
     native_progress: Option<native_mods::Progress>,
     /// The first build's one-time download (the compiler), in bytes; `None` once it is there.

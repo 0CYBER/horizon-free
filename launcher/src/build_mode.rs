@@ -700,8 +700,8 @@ impl Launcher {
             .child(
                 ui::icon_button("native-build-cancel", "stop", 32., 16., radius, false, &t)
                     .tooltip(ui::tip(tr("Stop the build")))
-                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
-                        native_mods::cancel();
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.stop_native_build();
                         cx.notify();
                     })),
             );

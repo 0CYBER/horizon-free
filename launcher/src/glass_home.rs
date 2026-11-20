@@ -534,8 +534,7 @@ impl Launcher {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     if building {
-                        this.play_after_build = None;
-                        native_mods::cancel();
+                        this.stop_native_build();
                     } else {
                         this.stop_pre_launch();
                     }

@@ -351,6 +351,8 @@ impl Launcher {
         self.native_error = None;
         self.native_worlds = None;
         self.native_failed_mods.clear();
+        // A build waiting for a preparation is dropped now, not asked about later.
+        self.native_look_again(None, None);
         let task = cx.background_executor().spawn(async move {
             let mut failure = None;
             for instance in instances::list() {

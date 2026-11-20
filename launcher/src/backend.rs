@@ -3091,15 +3091,45 @@ pub fn server_dir(requested: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| data_dir().join("server"))
 }
 
-/// Whether `tag` is prepared, with the run-time reports it needs completed when another copy has them.
-pub fn need_prepared(tag: &str) -> Result<(), String> {
+/// Why `tag` can't run or be built on yet ([`ready`]).
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotReady {
+    /// A native build whose base version isn't installed: the words to show.
+    Reinstall(String),
+    /// This version, `tag`'s own or a native build's base, is installed but not prepared.
+    Unprepared(String),
+}
+
+impl From<NotReady> for String {
+    fn from(not: NotReady) -> Self {
+        match not {
+            NotReady::Reinstall(error) => error,
+            NotReady::Unprepared(tag) => prepare_hint(&tag),
+        }
+    }
+}
+
+/// What the command line says when `tag` (a version that is prepared itself, never a native
+/// build) is not prepared. The window prepares it instead (#18659).
+pub fn prepare_hint(tag: &str) -> String {
+    format!(
+        "{tag} is not prepared yet. Prepare it first: `horizon-launcher prepare --version {tag}` \
+         uses your own Minecraft {v}, or downloads it from Mojang for the signed-in account \
+         that owns it.",
+        v = game_version(tag)
+    )
+}
+
+/// Whether `tag` is prepared, with the run-time reports it needs completed when another copy has
+/// them; else why not, naming the version to prepare.
+pub fn ready(tag: &str) -> Result<(), NotReady> {
     let about = crate::native_mods::about(tag);
     if let Some(about) = &about {
         if !version_dir(&about.base).join(COMPLETE).is_file() {
-            return Err(crate::i18n::trf(
+            return Err(NotReady::Reinstall(crate::i18n::trf(
                 "This native build needs its base version {base}; reinstall it.",
                 &[("base", &about.base)],
-            ));
+            )));
         }
     }
     let tag = about.as_ref().map_or(tag, |about| about.base.as_str());
@@ -3107,13 +3137,13 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
         complete_reports(&versions_dir(), tag);
         Ok(())
     } else {
-        Err(format!(
-            "{tag} is not prepared yet. Prepare it first: `horizon-launcher prepare --version {tag}` \
-             uses your own Minecraft {v}, or downloads it from Mojang for the signed-in account \
-             that owns it.",
-            v = game_version(tag)
-        ))
+        Err(NotReady::Unprepared(tag.to_owned()))
     }
+}
+
+/// [`ready`], its refusal as the command line words it.
+pub fn need_prepared(tag: &str) -> Result<(), String> {
+    ready(tag).map_err(String::from)
 }
 
 /// Says on stderr which step Play is at, one line each: a terminal run shows where it stops when

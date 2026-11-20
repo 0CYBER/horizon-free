@@ -41,6 +41,7 @@ mod package;
 mod patch;
 mod picker;
 mod prebuilt;
+pub mod prepare_first;
 pub mod sdk_cache;
 
 pub use isolate::{LeftOut, Why};
@@ -360,7 +361,8 @@ pub fn append_log(message: &str) -> Result<(), String> {
 }
 
 /// Records the whole attempt, including selection or export after compilation.
-fn logged<T, E: std::fmt::Display + From<String>>(
+fn logged<T, E: From<String>>(
+    said: impl Fn(&E) -> String,
     build: impl FnOnce(Result<&crate::native_cache::Cache, &str>) -> Result<T, E>,
 ) -> Result<T, E> {
     // Another build or a cleanup holds the lease on the same target/: refuse. Any other
@@ -384,7 +386,7 @@ fn logged<T, E: std::fmt::Display + From<String>>(
             let _ = append_log("Build completed.");
         }
         Err(error) => {
-            let _ = append_log(&format!("The build failed: {error}"));
+            let _ = append_log(&format!("The build failed: {}", said(error)));
         }
     }
     // Keep this build lease through installation/export, including failed builds. It does not
@@ -1653,6 +1655,9 @@ pub enum Failed {
     /// Mods this build can't use were saved into worlds: the player chooses (stay, or back the
     /// worlds up and build without them).
     Worlds(Box<AtStake>),
+    /// The base version (named) is installed but not prepared. The command line says how to
+    /// prepare it; the window prepares it (`prepare_first`).
+    NotPrepared(String),
     Other(String),
 }
 
@@ -1667,12 +1672,42 @@ impl std::fmt::Display for Failed {
         match self {
             Self::Mods { error, .. } | Self::Other(error) => f.write_str(error),
             Self::Worlds(stake) => f.write_str(&stake.text),
+            Self::NotPrepared(tag) => f.write_str(&backend::prepare_hint(tag)),
             Self::Nothing => f.write_str(tr("There are no mods to build: the folder has none, or every mod was left out.")),
             Self::NoConsent => f.write_str(tr("Native mods run inside your game with your rights; mixins compile code into the game. Allow native mods in Settings, Storage, or pass --trust-native-code.")),
         }
     }
 }
 impl std::error::Error for Failed {}
+
+/// Who started a build: what its failures say, in its log and to its caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caller {
+    Window,
+    CommandLine,
+}
+
+/// What the player asked of a [`build`]: who asked, and whether the worlds saved with mods it
+/// switches off are backed up first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asked {
+    pub caller: Caller,
+    pub back_up: bool,
+}
+
+impl Failed {
+    /// What this failure says to `caller`: the window prepares an unprepared base itself, so
+    /// it never shows the command line's hint (#18659).
+    pub fn said(&self, caller: Caller) -> String {
+        match (self, caller) {
+            (Self::NotPrepared(tag), Caller::Window) => trf(
+                "{version} is not prepared yet. Build again to prepare it first.",
+                &[("version", tag)],
+            ),
+            _ => self.to_string(),
+        }
+    }
+}
 impl From<Failed> for String {
     fn from(failed: Failed) -> Self {
         failed.to_string()
@@ -1874,7 +1909,10 @@ fn pipeline(
 ) -> Result<Built, Failed> {
     let started = std::time::Instant::now();
     let built_on = checked_about(base)?;
-    backend::need_prepared(base)?;
+    backend::ready(base).map_err(|not| match not {
+        backend::NotReady::Unprepared(tag) => Failed::NotPrepared(tag),
+        not => Failed::Other(not.into()),
+    })?;
     let platform = platform_for_game(base)?;
     fs::create_dir_all(root()).map_err(|e| e.to_string())?;
     // The mods are copied first: the build and its key use the copy, whatever happens to the
@@ -2387,6 +2425,7 @@ fn isolated(
             Err(Failed::Nothing) => return Err(said(&skip, last)),
             Err(Failed::NoConsent) => return Err(Failed::NoConsent),
             Err(Failed::Worlds(stake)) => return Err(Failed::Worlds(stake)),
+            Err(Failed::NotPrepared(tag)) => return Err(Failed::NotPrepared(tag)),
             Err(Failed::Other(error)) if error == CANCELLED => return Err(Failed::Other(error)),
             Err(Failed::Other(error)) => return Err(said(&skip, error)),
         }
@@ -2422,16 +2461,18 @@ pub fn build(
     folder: &Path,
     instance: &Instance,
     profile: Option<Profile>,
-    back_up: bool,
+    asked: Asked,
     progress: impl Fn(Step),
     registry_consent: impl Fn(&RegistryInventory) -> bool,
 ) -> Result<String, Failed> {
+    let Asked { caller, back_up } = asked;
     require_consent()?;
     CANCEL.store(false, Ordering::Relaxed);
     if let Some(error) = backend::native_mod_architecture_error() {
         return Err(Failed::Other(error));
     }
-    logged(|cache| {
+    let said = |error: &Failed| error.said(caller);
+    logged(said, |cache| {
         // After `logged` empties the log: the player reads it to learn why a mod is missing.
         if folder == installed_incoming() {
             warn_legacy(&instance.home);
@@ -2439,6 +2480,7 @@ pub fn build(
         let lease = cache.map_err(|error| Failed::Other(error.into()))?;
         let profile = select_build_profile(instance.native_profile, profile, || {
             planning::classify(folder, Some(base), lease)
+                .map_err(|error| Failed::Other(error.said(caller)))
         })?;
         let built = isolated(
             |skip| {
@@ -2520,7 +2562,8 @@ pub fn build_server(
 ) -> Result<PathBuf, Failed> {
     require_consent()?;
     CANCEL.store(false, Ordering::Relaxed);
-    logged(|cache| {
+    // Only the command line exports a server: its errors are already the command line's words.
+    logged(String::clone, |cache| {
         if output.symlink_metadata().is_ok() {
             return Err(trf(
                 "{path} already exists. Move it away, or build into another folder.",
@@ -4126,7 +4169,10 @@ mod tests {
             &folder,
             &instance,
             None,
-            false,
+            Asked {
+                caller: Caller::CommandLine,
+                back_up: false,
+            },
             |_| {},
             |_| false,
         )
@@ -4203,7 +4249,10 @@ mod tests {
                 &folder,
                 &instances::selected(),
                 choice,
-                false,
+                Asked {
+                    caller: Caller::CommandLine,
+                    back_up: false,
+                },
                 |_| {},
                 |_| false,
             ));
@@ -4273,9 +4322,12 @@ mod tests {
         assert!(err.contains("is not prepared yet"), "{err}");
         let log = fs::read_to_string(log_path()).unwrap();
         assert!(log.contains("is not prepared yet"), "{log}");
+        // The command line's log names the command that prepares it (#18659).
+        assert!(log.contains("`horizon-launcher prepare --version"), "{log}");
+        assert!(!log.contains("Build again"), "{log}");
         assert!(!log.contains("the last build's output"), "{log}");
         // A failure after compiler output keeps those diagnostics and the final reason.
-        let failure: Result<(), String> = logged(|_| {
+        let failure: Result<(), String> = logged(String::clone, |_| {
             append_log("error[E0425]: cannot find value `missing` in this scope")?;
             Err("Could not export the engine".into())
         });
@@ -4284,7 +4336,7 @@ mod tests {
         assert!(log.starts_with("error[E0425]"), "{log}");
         assert_result_then_cleanup(&log, "The build failed: Could not export the engine");
         assert!(!log.contains("Build completed."), "{log}");
-        let success: Result<(), String> = logged(|_| Ok(()));
+        let success: Result<(), String> = logged(String::clone, |_| Ok(()));
         success.unwrap();
         let log = fs::read_to_string(log_path()).unwrap();
         assert_result_then_cleanup(&log, "Build completed.");
