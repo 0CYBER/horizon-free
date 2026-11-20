@@ -20,9 +20,12 @@ received in each step are compared exactly: operation, player, style, colour and
 import os
 from pathlib import Path
 import platform
+import queue
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 try:
     from . import lab, test_rust_parity as base
@@ -146,6 +149,57 @@ def server_dir(directory, world=None, *, port=None):
     return port
 
 
+class ClientOutput:
+    """A script client's stdout, read by one thread from start to exit: the harness waits for an acknowledgment line
+    (`synced NAME`, `dumped now`), with a deadline where it gives one, and every other line goes to the client's
+    log. No second reader ever competes for the pipe, at shutdown either."""
+
+    def __init__(self, process, log, label):
+        self.lines, self.log, self.label = queue.Queue(), log, label
+        threading.Thread(target=self._read, args=(process.stdout,), daemon=True).start()
+
+    def _read(self, stream):
+        for line in stream:
+            self.lines.put(line)
+        self.lines.put(None)
+
+    def _next(self, deadline, what):
+        """The next line, or the failure `what` once the monotonic `deadline` has passed: checked before every
+        dequeue, so neither a backlog nor a client that keeps printing can carry a wait past it."""
+        if deadline is None:
+            return self.lines.get()
+        remaining = deadline - time.monotonic()
+        try:
+            if remaining <= 0:
+                raise queue.Empty
+            return self.lines.get(timeout=remaining)
+        except queue.Empty:
+            raise AssertionError(f'{self.label}: {what}') from None
+
+    def expect(self, wanted, timeout=None):
+        """Waits for the line `wanted` (no newline), for at most `timeout` s if given."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while (line := self._next(deadline, f'no {wanted!r} from the client in {timeout} s')) != wanted + '\n':
+            if line is None:
+                raise AssertionError(f'{self.label}: the client exited')
+            self.log.write(line)
+
+    def drain(self, timeout):
+        """Everything the client prints until it exits, into its log."""
+        deadline = time.monotonic() + timeout
+        while (line := self._next(deadline, f'the client did not exit in {timeout} s')) is not None:
+            self.log.write(line)
+
+
+def keep_snapshot(out, snapshot):
+    """Puts the transcript text `snapshot` back at `out`, and what the client wrote there since under
+    `<name>-end.txt`: the compared transcript is the file the report hashes and a failure names. Returns its lines."""
+    if out.exists():
+        out.replace(out.with_name(f'{out.stem}-end{out.suffix}'))
+    out.write_text(snapshot, encoding='utf-8')
+    return snapshot.splitlines()
+
+
 class Client:
     """A LocatorBarClient process driven by a script on its stdin. A step ends by the server's clock, not the wall's:
     every script line has run (`sync`), the server has ticked `ticks` more times, and each client holds what the
@@ -157,6 +211,9 @@ class Client:
         self.process = subprocess.Popen([*map(str, command), '127.0.0.1', str(port), str(out)], cwd=lab.ROOT,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True)
+        # Harnesses read `process.stdout` themselves until `dump` starts a ClientOutput: from then on it is the
+        # pipe's only reader, through `end`.
+        self.output = None
 
     def tell(self, line):
         self.process.stdin.write(line + '\n')
@@ -168,6 +225,9 @@ class Client:
         for name in names:
             self.tell(f'sync {name}')
         for name in names:
+            if self.output:
+                self.output.expect(f'synced {name}')
+                continue
             while (line := self.process.stdout.readline()) != f'synced {name}\n':
                 if not line:
                     raise AssertionError(f'the client exited (see {self.log.name})')
@@ -178,9 +238,21 @@ class Client:
         wait_ticks(server, ticks)
         self.sync(names)
 
+    def dump(self, timeout):
+        """Has the client write its transcript so far, within `timeout` s."""
+        if self.output is None:
+            self.output = ClientOutput(self.process, self.log, f'the client (see {self.log.name})')
+        self.tell('dump now')
+        self.output.expect('dumped now', timeout)
+
     def end(self):
         self.tell('end')
-        self.log.write(self.process.communicate(timeout=60)[0])
+        if self.output is None:
+            self.log.write(self.process.communicate(timeout=60)[0])
+            return
+        self.process.stdin.close()
+        self.output.drain(60)
+        self.process.wait(timeout=10)
 
     def kill(self):
         if self.process.poll() is None:
@@ -275,19 +347,31 @@ def sides(name, binary=None):
 VANILLA_ATTEMPTS = 5
 
 
-def one_player(name, script, shown, check, scope, step_seconds=4.0):
+def one_player(name, script, shown, check, scope, step_seconds=4.0, facts=None):
     """A harness of one player, Alice: on each server she joins, then runs `script`, a list of (step, client
     actions) that each last `step_seconds` of the server's time (20 ticks a second). The lines `shown(transcript)` keeps must match vanilla's exactly, and
     `check(vanilla's shown lines, vanilla's transcript)` returns why vanilla's run is no proof (the script did
-    not run), or None."""
+    not run), or None. `facts(server)`, if given, gathers diagnostics from the console while Alice is still there,
+    only for the run that matters: vanilla's run `check` accepts, and Horizon's when its lines differ from vanilla's.
+    They are printed with a mismatch and can never fail or change the comparison: with `facts`, what is compared is
+    the transcript the client wrote just before them."""
     lock, build, vanilla_server, horizon_server, client = sides(name)
     ticks = round(step_seconds * 20)
 
-    def run(label, server_command, world):
+    def sample(server, lines, expected):
+        """`facts(server)` when the transcript `lines` calls for it (see above), else None."""
+        try:
+            wanted = check(shown(lines), lines) is None if expected is None else shown(lines) != expected
+            return facts(server) if wanted else None
+        except Exception as error:  # diagnostics never decide the outcome
+            return f'diagnostics unavailable ({error!r})'[:300]
+
+    def run(label, server_command, world, expected=None):
         directory = build / label
         port = server_dir(directory, world)
         out = build / f'{label}.txt'
         out.unlink(missing_ok=True)
+        snapshot = None
         server = Server(server_command, directory, label)
         try:
             server.wait_for(r'Done \(')
@@ -303,15 +387,28 @@ def one_player(name, script, shown, check, scope, step_seconds=4.0):
                         for action in actions:
                             session.tell(action)
                         session.wait(server, ['Alice'], ticks)
+                    if facts:
+                        # What is compared is this snapshot, taken before the diagnostics: they can't change it.
+                        try:
+                            session.dump(10)
+                            snapshot = out.read_text(encoding='utf-8')
+                        except (AssertionError, OSError) as error:
+                            seen[label] = f'diagnostics unavailable ({error})'
+                        else:
+                            seen[label] = sample(server, snapshot.splitlines(), expected)
                     session.end()
                 finally:
                     session.kill()
         finally:
             server.stop()
+        if snapshot is not None:
+            # The diff, the failure message and the report's hash all use the snapshot, not what `end` rewrote.
+            return keep_snapshot(out, snapshot)
         if not out.exists():
             raise AssertionError(f'{label}: the client wrote no transcript (see {build}/{label}-client.log)')
         return out.read_text(encoding='utf-8').splitlines()
 
+    seen = {}
     world = generate_world(vanilla_server, build)
     # Vanilla's run is the specification only when `check` accepts it. On a loaded machine a real-time step can
     # miss its moment (a bobber that lands before the armor stand is there), so a run it rejects is made again,
@@ -324,14 +421,15 @@ def one_player(name, script, shown, check, scope, step_seconds=4.0):
         print(f'{name}: vanilla run {attempt} of {VANILLA_ATTEMPTS} is no proof ({why})', flush=True)
     else:
         raise AssertionError(f'{why}: the script did not run on vanilla in {VANILLA_ATTEMPTS} runs (see {build})')
-    horizon_all = run('horizon', horizon_server, world)
+    horizon_all = run('horizon', horizon_server, world, expected=shown(vanilla_all))
     errors = [l for l in vanilla_all + horizon_all if ' error ' in f' {l} ' or 'disconnected' in l]
     vanilla, horizon = shown(vanilla_all), shown(horizon_all)
     if errors or vanilla != horizon:
         import difflib
         diff = '\n'.join(difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=1, lineterm=''))
         raise AssertionError(f'{len(errors)} errors, transcripts differ (see {build}/vanilla.txt and horizon.txt):\n'
-                             + '\n'.join(errors[:10]) + '\n' + diff[:6000])
+                             + '\n'.join(errors[:10]) + '\n' + diff[:6000]
+                             + ''.join(f'\n{side}: {seen[side]}' for side in ('vanilla', 'horizon') if seen.get(side)))
     lab.write_json(build / 'report.json', dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],

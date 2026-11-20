@@ -22,8 +22,9 @@ players made of vanilla's protocol code, joins them both and runs one script on 
 
 The script waits on the server, not on the wall: `ticks N` is N ticks of its game clock (with a `sync` round trip
 before and after, so each client holds what the server sent), `tickstep` is one `/tick step` that has run, `frozen`
-a frozen game that has stopped, and `hit` a hit that has landed (a frozen server still ticks its players, so a hit
-lands in Alice's next tick). A server that stalls under load gets the same ticks as an idle one.
+a frozen game that has stopped, `hit` a hit that has landed (a frozen server still ticks its players, so a hit
+lands in Alice's next tick), and `blast` a right click whose blast has moved a given entity (test_bed_explosion_parity).
+A server that stalls under load gets the same ticks as an idle one.
 
 Each case is compared on its own. KNOWN lists the cases Horizon still gets wrong and why; one that matches
 again is reported, and should leave the list.
@@ -40,12 +41,12 @@ import time
 try:
     from . import lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port, game_time, wait_ticks
-    from .test_locator_bar_parity import generate_world, ops_json
+    from .test_locator_bar_parity import ClientOutput, generate_world, ops_json
 except ImportError:
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, free_port, game_time, wait_ticks
-    from test_locator_bar_parity import generate_world, ops_json
+    from test_locator_bar_parity import ClientOutput, generate_world, ops_json
 
 NAME = 'server-knockback-parity'
 PLAYERS = ('Alice', 'Bob')
@@ -256,6 +257,43 @@ def server_data(server, selector, path, timeout=120):
     raise AssertionError(f'{server.log_path.name}: no entity data in {timeout} s')
 
 
+TICK_STATUS = re.compile(r'The game is (frozen|running)')
+# Seconds a client may take to acknowledge a `sync`: KnockbackClient gives up on a server reply after 30 s and
+# acknowledges anyway, so a client that is silent for longer has stopped.
+SYNC_TIMEOUT = 60
+
+
+def left(deadline, what):
+    """The seconds left before `deadline`, or the failure `what` once there are none."""
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        raise AssertionError(what)
+    return remaining
+
+
+def frozen(server, timeout=60):
+    """Waits until the server reports ticking frozen (`/tick query`) and its game clock stands still across four
+    ticks' time, and returns that clock. Two equal clock reads alone can fall inside one live tick."""
+    deadline = time.time() + timeout
+    failure = f'{server.log_path.name}: ticking was not reported frozen with a still clock in {timeout} s'
+    while True:
+        start = len(server.lines)
+        server.console('tick query')
+        status = None
+        while status is None:
+            status = next((m.group(1) for line in server.lines[start:] if (m := TICK_STATUS.search(line))), None)
+            if status is None:
+                left(deadline, failure)
+                time.sleep(0.02)
+        if status == 'frozen':
+            clock = game_time(server, left(deadline, failure))
+            time.sleep(0.2)
+            if game_time(server, left(deadline, failure)) == clock:
+                return clock
+        left(deadline, failure)
+        time.sleep(0.05)
+
+
 def server_dir(directory, world):
     if directory.exists():
         shutil.rmtree(directory)
@@ -283,6 +321,7 @@ def run_side(label, server_command, client_command, build, world):
             client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
                                       cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT, text=True)
+            output = ClientOutput(client, log, f'{label} (see {build}/{label}-client.log)')
 
             def sync():
                 """Every script line sent so far has run, and each client holds what its server sent before."""
@@ -290,10 +329,7 @@ def run_side(label, server_command, client_command, build, world):
                     client.stdin.write(f'sync {name}\n')
                 client.stdin.flush()
                 for name in PLAYERS:
-                    while (reply := client.stdout.readline()) != f'synced {name}\n':
-                        if not reply:
-                            raise AssertionError(f'{label}: the client exited (see {build}/{label}-client.log)')
-                        log.write(reply)
+                    output.expect(f'synced {name}', SYNC_TIMEOUT)
 
             def send(line):
                 """A script line for the client, or one of ours: the waits are on the server's game clock, not the
@@ -306,10 +342,8 @@ def run_side(label, server_command, client_command, build, world):
                     wait_ticks(server, int(line.split()[1]))
                     sync()
                 elif word == 'frozen':
-                    # The tick in flight when ticking was frozen has finished: the clock reads the same twice.
                     sync()
-                    while game_time(server) != game_time(server):
-                        pass
+                    frozen(server)
                 elif word == 'hit':
                     # Alice hits the mob. A frozen server still ticks its players, and the hit lands in Alice's
                     # next tick, not when the packet arrives: the mob's motion says when it has.
@@ -320,6 +354,27 @@ def run_side(label, server_command, client_command, build, world):
                     client.stdin.flush()
                     while server_data(server, mob, 'Motion') == before:
                         time.sleep(0.05)
+                    sync()
+                elif word == 'blast':
+                    # `blast X Y Z SELECTOR`: Alice right-clicks the block's top, and the wait ends once the blast
+                    # has moved the selected entity. Like a hit, a frozen server may apply the click in Alice's
+                    # next tick, not when the packet arrives.
+                    sync()
+                    x, y, z, selector = line.split()[1:5]
+                    deadline = time.time() + 30
+                    failure = f'{server.log_path.name}: the click on {x} {y} {z} did not move {selector} in 30 s'
+                    try:
+                        before = server_data(server, selector, 'Motion', timeout=left(deadline, failure))
+                        client.stdin.write(f'useblock Alice {x} {y} {z}\n')
+                        client.stdin.flush()
+                        while True:
+                            motion = server_data(server, selector, 'Motion', timeout=left(deadline, failure))
+                            left(deadline, failure)  # a reply after the deadline is no success
+                            if motion != before:
+                                break
+                            time.sleep(0.05)
+                    except AssertionError as error:
+                        raise AssertionError(f'{failure} ({error})') from None
                     sync()
                 elif word == 'waitage':
                     # Hold until an entity's `Age` has reached N. A value that
@@ -376,7 +431,9 @@ def run_side(label, server_command, client_command, build, world):
                         send(line)
                     send('ticks 10')
                 send('end')
-                log.write(client.communicate(timeout=60)[0])
+                client.stdin.close()
+                output.drain(60)
+                client.wait(timeout=10)
             finally:
                 if client.poll() is None:
                     client.kill()

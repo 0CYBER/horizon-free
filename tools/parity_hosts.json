@@ -85,7 +85,7 @@
  "known_flaky": {
   "world_reopen": "counted 4 minecarts instead of 3 once on a loaded Mac mini runner, then passed at the same head (10-26)",
   "lunge_motion": "a loaded Mac mini runner: the server catches up with two ticks for one of the jump's moves (Alice falls a tick of gravity more, -0.3015 vs -0.2277; the harness now names it), and vanilla's own run once sent an extra motion while sprinting; the same trees pass alone (#5656, 11-01)",
-  "server_wool_vibration": "real-time dedicated servers: the player cases send one client position per 50 ms sleep, so on a loaded machine the sensor's phase check sometimes runs before or after the landing (shrieker-jump-stone, Horizon's side, 1 of 4 runs on playhorizon at load 15-25, 11-07); the drop and corpse leaks between cow and item cases are cleared in the harness"
+  "server_wool_vibration": "real-time dedicated servers: walk-stone missed Horizon's active sensor in 29 of 35 parity-main tries from 11-19 (#18133). Suspected cause: the phase was read 1 to 3 ticks before the sensor's 30 active ticks ended (hosted, 11-20: active 10-39 on vanilla and 12-41 on Horizon, read at 38-39). The hosted reads landed inside both windows, so the failure did not reproduce there. The walks are stepped a tick at a time since, compared tick by tick (the same on both servers); the other cases still run in real time. Off the list once parity-main passes it with no retry"
  },
  "known_failing": {
   "block_removal": "#18133: keeps banner_patterns:[] on dropped banners; no `set` record when a block-entity block is replaced",

@@ -107,8 +107,13 @@ def scene(index, facing, place):
             # `Motion` from one snapshot) at two pinned ages, with the age it had
             # when the blast landed read first. That is enough to compare both
             # the push itself and the rate it decays at, whatever the pacing.
+            # Ticking is frozen from that read until the blast has landed, so
+            # the age read is the blast's: with the server ticking freely, the
+            # click could land a tick after the read (#18133).
+            'cmd Alice tick freeze', 'frozen',
             'cmd Alice data get entity @e[tag=edge-item,limit=1] Age',
-            f'useblock Alice {hx} 200 {hz}',
+            f'blast {hx} 200 {hz} @e[tag=edge-item,limit=1]',
+            'cmd Alice tick unfreeze',
             'waitage @e[tag=edge-item,limit=1] 81',
             'cmd Alice data get entity @e[tag=edge-item,limit=1]',
             'waitage @e[tag=edge-item,limit=1] 91',
@@ -172,28 +177,34 @@ def age_pinned(blast_age, shots):
     either server spent between commands:
 
     - the blast's push: the first snapshot's motion carried back over the ticks
-      since `blast_age` with vanilla's `Entity.getAirDrag`. A tick of slack
-      between the blast and the read is worth 2%, so it is compared to two
-      decimals; the divergences this looks for are tens of percent.
+      since `blast_age` with vanilla's `Entity.getAirDrag`, compared to two
+      decimals; the divergences this looks for are tens of percent. `scene`
+      reads `blast_age` with ticking frozen until the blast has landed, so it
+      is the blast's own age, with no tick of slack (2% each) to round away.
     - the decay itself, `(|motion| later / |motion| earlier) ** (1 / ticks)`,
       which is `getAirDrag`'s 0.98 per tick whatever ages the reads landed on.
+
+    Returns the compared line and, for a mismatch's report, the push unrounded
+    with both ages.
     """
     if blast_age is None or not shots:
-        return None
+        return None, None
     age1, motion1, _, health1 = shots[0]
     scale = AIR_DRAG ** -(age1 - blast_age)
     line = ('data push ' + ' '.join(f'{v * scale:.2f}' for v in motion1)
             + f' health {health1}')
+    detail = f'push {[v * scale for v in motion1]} (blast at Age {blast_age}, read at Age {age1})'
     if len(shots) > 1 and shots[1][0] != age1:
         age2, motion2, _, _ = shots[1]
         first = sum(v * v for v in motion1) ** 0.5
         second = sum(v * v for v in motion2) ** 0.5
         if first > 0.0:
             line += f' keep {(second / first) ** (1.0 / (age2 - age1)):.4f}'
-    return line
+    return line, detail
 
 
-def compared(lines):
+def compared(lines, details=None):
+    """Per case, the lines compared; `details` gets each case's unrounded push and ages."""
     cases = {}
     last_age = {}
     shots_of = {}
@@ -212,7 +223,10 @@ def compared(lines):
             shots = shots_of.setdefault(step, [])
             shots.append(shot)
             if len(shots) == 2:
-                kept.append(age_pinned(last_age.get(step), shots))
+                line, detail = age_pinned(last_age.get(step), shots)
+                kept.append(line)
+                if details is not None:
+                    details[step] = detail
         elif 'has the following entity data' in text:
             kept.append(nine(text))
         elif text.startswith(('explode push', 'error', 'disconnected')):
@@ -246,15 +260,17 @@ def main():
     kb.CASES, kb.SETUP, kb.PLAYERS = CASES, SETUP, ('Alice',)
     kb.PROPERTIES['allow-flight'] = 'true'
     world = generate_world(vanilla_server, build)
-    vanilla = compared(kb.run_side('vanilla', vanilla_server, client, build, world))
-    horizon = compared(kb.run_side('horizon', horizon_server, client, build, world))
+    vanilla_details, horizon_details = {}, {}
+    vanilla = compared(kb.run_side('vanilla', vanilla_server, client, build, world), vanilla_details)
+    horizon = compared(kb.run_side('horizon', horizon_server, client, build, world), horizon_details)
     differ = []
     for case in CASES:
         want, got = vanilla.get(case, []), horizon.get(case, [])
         if not any('entity data' in l for l in want) or any(l.startswith(('error', 'disconnected')) for l in want):
             raise AssertionError(f'{case}: vanilla recorded no health or failed: {want}')
         if want != got:
-            differ.append(f'{case}:\n' + '\n'.join(difflib.unified_diff(want, got, 'vanilla', 'horizon', n=1, lineterm='')))
+            differ.append(f'{case}:\n' + '\n'.join(difflib.unified_diff(want, got, 'vanilla', 'horizon', n=1, lineterm=''))
+                          + f'\nvanilla {vanilla_details.get(case)}\nhorizon {horizon_details.get(case)}')
     if differ:
         raise AssertionError(f'{len(differ)} cases differ:\n' + '\n'.join(differ)[:8000])
     print(f'bed explosion: {len(CASES)} of {len(CASES)} cases identical')
