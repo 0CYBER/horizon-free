@@ -119,7 +119,8 @@ pub enum Refusal {
     /// a hand-written codec changed, or it predates calls by name.
     Layout { built: u64, game: u64 },
     /// The mod calls or answers `call` (`Owner::method`), which this game changed (`changed`) or
-    /// no longer has: it was built against another version of that call.
+    /// doesn't have: it was built against another version of that call. A missing call may be one
+    /// this game dropped or one added after it, and the package records nothing that says which.
     Call { call: String, changed: bool },
     /// Two mods of one linked group were built against different mod APIs.
     MixedGroup { first: String, second: String },
@@ -189,7 +190,7 @@ impl std::fmt::Display for Refusal {
                 changed: false,
             } => write!(
                 f,
-                "calls `{call}`, which this game no longer has: rebuild it"
+                "calls `{call}`, which this game doesn't have: it was built for an older or newer game and needs a build for this one"
             ),
             Self::MixedGroup { first, second } => write!(
                 f,

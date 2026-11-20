@@ -126,7 +126,7 @@ fn listen_checked(manifest: &Manifest, module: &WasmMod) -> Result<(), String> {
         // By name: the guest's place ids are its own build's, and may differ from the game's.
         let point = mod_points::point_by_name(&name).ok_or_else(|| {
             format!(
-                "{}: {id}: listens at point {name}, which this game no longer has: rebuild it",
+                "{}: {id}: listens at point {name}, which this game doesn't have: it was built for an older or newer game and needs a build for this one",
                 manifest.id
             )
         })?;
