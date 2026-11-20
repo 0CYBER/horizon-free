@@ -29,6 +29,12 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
+
+try:
+    from . import file_lock
+except ImportError:
+    import file_lock  # run as a script (the java and javac links): its own folder is on sys.path
 
 CACHE = Path(os.environ.get("PARITY_SHIM_CACHE", ".local/parity-runner/oracle-cache"))
 PATH_OPTIONS = {"-cp", "-classpath", "--class-path", "-sourcepath", "--source-path", "-p", "--module-path"}
@@ -61,14 +67,87 @@ def enter():
     os.environ["PATH"] = os.environ.get("PARITY_SHIM_REAL_PATH", "")
 
 
+# How long a shim waits for the hash database to be ready before it runs its oracle without the cache. Creating it
+# takes milliseconds (a few writes and fsyncs); the rest is waiting for the shims ahead of it, each holding the lock
+# for as long. Well past that, a holder is stuck (suspended, or on a disk that stalls): waiting longer gains nothing.
+INIT_SECONDS = 15
+# Setup's own waits on SQLite are short, so the deadline is checked between them: it runs over by about this at most.
+SETUP_BUSY_SECONDS = 0.1
+TABLE = "select 1 from sqlite_master where type = 'table' and name = 'hashes'"
+
+
+class Uncached(Exception):
+    """The hash database was not ready in time: this run goes to the real program, as with PARITY_JAVA_CACHE=0."""
+
+
+def in_wal_mode(path):
+    """The database exists and is in WAL mode: its header's read and write versions are 2."""
+    try:
+        with open(path, "rb") as stream:
+            return stream.read(20)[18:20] == b"\x02\x02"
+    except OSError:
+        return False
+
+
+def busy(error):
+    return isinstance(error, sqlite3.OperationalError) and any(word in str(error) for word in ("locked", "busy"))
+
+
+def prepare(path, deadline):
+    """Make the hash database ready, in place: created if missing, switched to WAL, its table made; each step does
+    nothing if already done. Shims starting together on an empty cache each switched it to WAL, and those that lost
+    failed ("database is locked": 63 of 960 on Linux, 2026-11-20), failing their harness's first run. Now one does it
+    under hashes.lock while the others wait for the lock. A shim from before this lock ignores it: meeting one
+    mid-way, this retries until the deadline. The file is never replaced, as another process may have it open."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name("hashes.lock"), "a+b") as handle:
+        while not file_lock.lock(handle, wait=False):
+            if time.monotonic() >= deadline:
+                raise Uncached("another process held hashes.lock throughout")
+            time.sleep(0.02)
+        def in_time():
+            if time.monotonic() >= deadline:
+                raise Uncached("the database stayed locked")
+            return True
+
+        while in_time():
+            try:
+                db = sqlite3.connect(path, timeout=SETUP_BUSY_SECONDS)
+                try:
+                    # Answers the mode it is in: still another while a connection keeps it from switching.
+                    if db.execute("pragma journal_mode=wal").fetchone()[0] == "wal" and in_time():
+                        db.execute("create table if not exists hashes (path text primary key, size int, mtime int, "
+                                   "sha text)")
+                        db.commit()
+                        return
+                finally:
+                    db.close()
+            except sqlite3.OperationalError as error:
+                if not busy(error):
+                    raise
+            time.sleep(0.02)
+
+
 class Hashes:
     """Content hashes keyed by path, size and mtime, shared by parallel harnesses."""
 
     def __init__(self):
-        CACHE.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(CACHE / "hashes.sqlite", timeout=60)
-        self.db.execute("pragma journal_mode=wal")
-        self.db.execute("create table if not exists hashes (path text primary key, size int, mtime int, sha text)")
+        path = CACHE / "hashes.sqlite"
+        # The clock starts before the warm probe, which keeps the usual busy timeout (no less patient than before
+        # the lock): time it spent waiting counts against the setup that may follow.
+        deadline = time.monotonic() + INIT_SECONDS
+        # A warm cache: the header and one schema query, no lock.
+        if in_wal_mode(path):
+            self.db = sqlite3.connect(path, timeout=60)
+            try:
+                if self.db.execute(TABLE).fetchone():
+                    return
+            except sqlite3.OperationalError as error:
+                if not busy(error):
+                    raise
+            self.db.close()
+        prepare(path, deadline)
+        self.db = sqlite3.connect(path, timeout=60)
 
     def file(self, path):
         stat = os.stat(path)
@@ -193,7 +272,12 @@ def main():
     enter()
     if os.environ.get("PARITY_JAVA_CACHE") == "0" or "-version" in arguments or "--version" in arguments:
         os.execv(program, [program, *arguments])
-    hashes = Hashes()
+    try:
+        hashes = Hashes()
+    except Uncached as reason:
+        print(f"parity shim: the oracle cache in {CACHE} was not ready within {INIT_SECONDS} s ({reason}): "
+              f"{name} runs without it", file=sys.stderr, flush=True)
+        os.execv(program, [program, *arguments])
     stdin = stdin_identity(hashes)
     if stdin is None:
         os.execv(program, [program, *arguments])

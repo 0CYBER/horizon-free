@@ -568,6 +568,186 @@ class OracleReuseTests(unittest.TestCase):
             self.assertEqual(Path(parity_shim.real("java")), self.bin / "java")
 
 
+# Each child imports the shim, says it is ready, waits for the go file, and only then opens the cache: all of them
+# open the empty cache together, as shims do at a cold start.
+RACE_CHILD = """import os, sys
+sys.path.insert(0, sys.argv[1])
+import parity_shim
+open(sys.argv[3], "w").close()
+while not os.path.exists(sys.argv[2]):
+    pass
+parity_shim.Hashes().file(parity_shim.__file__)
+"""
+
+# What a shim from before hashes.lock runs, ignoring the lock.
+OLD_SHIM = ("pragma journal_mode=wal",
+            "create table if not exists hashes (path text primary key, size int, mtime int, sha text)")
+
+
+def shim_race(tools, shims=16, rounds=8, seconds=60):
+    """[round, exit code, last stderr line] for each shim that failed, in `rounds` rounds of `shims` shims released
+    at once on an empty cache; each round has one deadline."""
+    failures = []
+    for round in range(rounds):
+        with tempfile.TemporaryDirectory() as temp:
+            go, ready = Path(temp) / "go", [Path(temp) / f"ready{index}" for index in range(shims)]
+            env = dict(os.environ, PARITY_SHIM_CACHE=str(Path(temp) / "oracle-cache"))
+            deadline = time.monotonic() + seconds
+            children = []
+            try:
+                for flag in ready:
+                    children.append(subprocess.Popen([sys.executable, "-c", RACE_CHILD, str(tools), str(go), str(flag)],
+                                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                                     text=True))
+                while not all(flag.exists() for flag in ready):
+                    if time.monotonic() > deadline or any(child.poll() is not None for child in children):
+                        break
+                    time.sleep(0.005)
+                go.touch()
+                for child in children:
+                    error = child.communicate(timeout=max(0.1, deadline - time.monotonic()))[1]
+                    if child.returncode:
+                        failures.append([round, child.returncode, (error.strip().splitlines() or [""])[-1]])
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                    child.communicate()
+    return failures
+
+
+class OracleCacheCreationTests(unittest.TestCase):
+    """Parallel harnesses start their oracles at once: on an empty cache every shim opens the hash database together,
+    and none may fail ("database is locked" when they all switched it to WAL, 2026-11-20)."""
+
+    def test_shims_starting_at_once_on_an_empty_cache_all_get_it(self):
+        self.assertEqual(shim_race(Path(parity.__file__).parent), [])
+
+    def test_a_shim_from_before_the_lock_creating_it_meanwhile_keeps_its_writes(self):
+        import sqlite3
+        from tools import parity_shim
+        connect, old = sqlite3.connect, []
+
+        def old_shim_first(*args, **kwargs):
+            # As the new shim, having found no database, opens one, an old shim creates it, writes a hash and stays
+            # connected: the new shim must go on with that file, never replace it.
+            if not old:
+                old.append(connect(parity_shim.CACHE / "hashes.sqlite"))
+                for statement in OLD_SHIM:
+                    old[0].execute(statement)
+                old[0].execute("insert into hashes values ('kept', 1, 1, 'x')")
+                old[0].commit()
+            return connect(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity_shim, "CACHE", Path(temp) / "cache"):
+            parity_shim.CACHE.mkdir()
+            try:
+                with mock.patch.object(sqlite3, "connect", side_effect=old_shim_first):
+                    hashes = parity_shim.Hashes()
+                self.assertEqual(hashes.db.execute("select sha from hashes where path = 'kept'").fetchone(), ("x",))
+                hashes.db.close()
+                # Nothing beside the database but its lock: no temporary copy.
+                self.assertEqual([entry.name for entry in parity_shim.CACHE.iterdir()
+                                  if not entry.name.startswith("hashes.sqlite")], ["hashes.lock"])
+            finally:
+                for connection in old:
+                    connection.close()
+
+    def test_a_shim_from_before_the_lock_holding_the_database_is_waited_for(self):
+        import sqlite3, threading
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity_shim, "CACHE", Path(temp) / "cache"):
+            parity_shim.CACHE.mkdir()
+            old = sqlite3.connect(parity_shim.CACHE / "hashes.sqlite", check_same_thread=False, isolation_level=None)
+            old.execute("begin exclusive")  # mid-way through its own creation: nobody else may read or switch it
+            connect, attempts, released = sqlite3.connect, [], threading.Event()
+
+            def release():
+                old.execute("commit")
+                released.set()
+
+            def counted(*args, **kwargs):
+                # The lock is released only after the shim's first attempt has met it.
+                attempts.append(time.monotonic())
+                if len(attempts) == 1:
+                    threading.Timer(0.5, release).start()
+                return connect(*args, **kwargs)
+
+            try:
+                with mock.patch.object(sqlite3, "connect", side_effect=counted):
+                    hashes = parity_shim.Hashes()
+                # It waited for the release, through more than one attempt, instead of failing or giving up.
+                self.assertTrue(released.is_set())
+                self.assertGreater(len(attempts), 1)
+                self.assertTrue(parity_shim.in_wal_mode(parity_shim.CACHE / "hashes.sqlite"))
+                hashes.db.close()
+            finally:
+                released.wait(5)
+                old.close()
+
+    def test_a_database_locked_throughout_gives_up_soon_after_the_deadline(self):
+        import sqlite3
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity_shim, "CACHE", Path(temp) / "cache"), \
+                mock.patch.object(parity_shim, "INIT_SECONDS", 0.5):
+            parity_shim.CACHE.mkdir()
+            old = sqlite3.connect(parity_shim.CACHE / "hashes.sqlite", isolation_level=None)
+            old.execute("begin exclusive")
+            try:
+                started = time.monotonic()
+                with self.assertRaises(parity_shim.Uncached):
+                    parity_shim.Hashes()
+                # Each wait on SQLite is SETUP_BUSY_SECONDS at most, checked against the deadline between them.
+                self.assertLess(time.monotonic() - started, 0.5 + 1.0)
+            finally:
+                old.execute("rollback")
+                old.close()
+
+    def test_a_lock_held_past_the_deadline_runs_the_oracle_uncached(self):
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity_shim, "CACHE", Path(temp) / "cache"), \
+                mock.patch.object(parity_shim, "INIT_SECONDS", 0.3):
+            parity_shim.CACHE.mkdir()
+            with open(parity_shim.CACHE / "hashes.lock", "a+b") as holder:
+                self.assertTrue(parity_shim.file_lock.lock(holder))
+                started = time.monotonic()
+                with self.assertRaises(parity_shim.Uncached):
+                    parity_shim.Hashes()
+                self.assertLess(time.monotonic() - started, 5)
+        # main() then runs the real program, as PARITY_JAVA_CACHE=0 does, instead of failing the harness.
+        with mock.patch.object(parity_shim, "Hashes", side_effect=parity_shim.Uncached("held")), \
+                mock.patch.object(parity_shim, "real", return_value="/real/java"), \
+                mock.patch.object(parity_shim, "enter"), mock.patch.object(sys, "argv", ["java", "-cp", "x", "A"]), \
+                mock.patch.dict(os.environ, {"PARITY_JAVA_CACHE": ""}), \
+                mock.patch.object(parity_shim.os, "execv", side_effect=SystemExit(0)) as execv, \
+                mock.patch("builtins.print") as said, self.assertRaises(SystemExit):
+            parity_shim.main()
+        execv.assert_called_once_with("/real/java", ["/real/java", "-cp", "x", "A"])
+        self.assertIn("runs without it", said.call_args.args[0])
+
+    def test_a_warm_cache_takes_no_lock(self):
+        import hashlib
+        from tools import parity_shim
+        expected = hashlib.sha256(Path(parity_shim.__file__).read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity_shim, "CACHE", Path(temp) / "cache"):
+            parity_shim.Hashes().db.close()
+            with mock.patch.object(parity_shim.file_lock, "lock", side_effect=AssertionError("locked")):
+                hashes = parity_shim.Hashes()
+            self.assertEqual([hashes.file(parity_shim.__file__) for _ in range(2)], [expected, expected])
+            hashes.db.close()
+
+    def test_a_wal_database_without_its_table_is_completed(self):
+        import sqlite3
+        from tools import parity_shim
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity_shim, "CACHE", Path(temp) / "cache"):
+            parity_shim.CACHE.mkdir()
+            db = sqlite3.connect(parity_shim.CACHE / "hashes.sqlite")
+            db.execute(OLD_SHIM[0])  # an older shim stopped here, before its create table
+            db.close()
+            hashes = parity_shim.Hashes()
+            self.assertEqual(len(hashes.file(parity_shim.__file__)), 64)
+            hashes.db.close()
+
 
 class LargeOutputTests(unittest.TestCase):
     def test_a_pass_clears_only_its_own_directory(self):
