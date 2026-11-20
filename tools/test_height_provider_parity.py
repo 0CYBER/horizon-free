@@ -8,9 +8,10 @@ import platform
 import random
 import subprocess
 try:
-    from . import lab,test_rust_parity as base
+    from . import lab,oracle_folders,test_rust_parity as base
 except ImportError:
     import lab
+    import oracle_folders
     import test_rust_parity as base
 
 
@@ -79,8 +80,10 @@ def main():
     run([binary,"height_provider_fixture",build],"rust")
     references=[]
     for side,jar in jars.items():
-        reference=build/f"{side}.txt"
-        run(["java","-Xmx512M","-cp",os.pathsep.join([str(classes),str(jar),dependency_path]),"dev.horizonlab.parity.VanillaHeightProviderOracle",side,build],side)
+        (build/f"{side}.txt").unlink(missing_ok=True)  # the layout before: the reference beside the work files
+        folder=oracle_folders.folder(build/f"oracle-{side}",*fixture_paths,call=(classes,jar,side))
+        reference=folder/f"{side}.txt"
+        run(["java","-Xmx512M","-cp",os.pathsep.join([str(classes),str(jar),dependency_path]),"dev.horizonlab.parity.VanillaHeightProviderOracle",side,folder],side)
         matched=base.compare(reference,build/"rust.txt")
         references.append({"side":side,"jar_sha256":lab.digest(jar,"sha256"),"output_sha256":lab.digest(reference,"sha256"),"matched_output_lines":matched})
         print(f"{side}: {matched:,} height-provider output lines match Rust",flush=True)

@@ -29,9 +29,10 @@ import sys
 from pathlib import Path
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import lab, oracle_folders, test_rust_parity as base
 except ImportError:
     import lab
+    import oracle_folders
     import test_rust_parity as base
 
 PARITY = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity'
@@ -244,7 +245,9 @@ def main():
     oracle = ['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaScoreboardOracle']
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-cp', dependencies, '-d', classes,
          PARITY / 'VanillaScoreboardOracle.java'], 'compile-java')
-    run([*oracle, 'export', build], 'export')
+    export = oracle_folders.folder(build / 'oracle-export', call=(classes, jars['server'], 'export'))
+    run([*oracle, 'export', export], 'export')
+    oracle_folders.copy(export, build, 'registries.json')
     registries = json.loads((build / 'registries.json').read_text())
     chosen = cases(args.count, registries)
     inputs = build / 'inputs.jsonl'

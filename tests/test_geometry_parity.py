@@ -26,6 +26,13 @@ class GeometryRunnerTests(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises((AssertionError, KeyError)):
                 collision.counts(output)
 
+    def test_the_collision_oracle_runs_with_its_reuse_property_off(self):
+        # Turned on from the environment (JDK_JAVA_OPTIONS=@file, whose content the oracle folder's digest can't see),
+        # `generate` would exit 0 without inputs.txt and leave the last run's corpus to be compared.
+        command = collision.oracle_command("classes", "generate", Path("folder"))
+        self.assertIn("-Dhorizon.prepare.reuse=false", command)
+        self.assertLess(command.index("-Dhorizon.prepare.reuse=false"), command.index("dev.horizonlab.parity.VanillaCollisionOracle"))
+
     def test_geometry_inputs_are_repeatable_and_include_ieee_boundaries(self):
         commands = list(geometry.corpus())
         self.assertEqual(commands, list(geometry.corpus()))

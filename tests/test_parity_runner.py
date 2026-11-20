@@ -789,6 +789,89 @@ class OracleReuseTests(unittest.TestCase):
         self.oracle(PARITY_SHIM_RUN="two")
         self.assertNotEqual(self.last()["call"], first)
 
+    def folder_oracle(self):
+        """A fake oracle given one folder (tools/test_food_parity.py's shape): it writes server.txt from inputs.txt, plus
+        "+tags" when a tags.json is beside it, and writes nothing (exiting 0) when the input is "skip"."""
+        fake = self.bin / "java"
+        fake.write_text(f"#!{sys.executable}\nimport sys, pathlib\n"
+                        "if sys.argv[1:] == ['-version']: sys.exit(print('fake java 1', file=sys.stderr))\n"
+                        "folder = pathlib.Path(sys.argv[1])\n"
+                        "text = (folder / 'inputs.txt').read_text()\n"
+                        "if text != 'skip':\n"
+                        "    (folder / 'server.txt').write_text(text + ('+tags' if (folder / 'tags.json').exists() else ''))\n"
+                        "print('done')\n")
+        fake.chmod(0o755)
+
+    def folder_harness(self, build, folder_for, text="cases", tags=False):
+        """One run of a harness around the fake folder oracle: its inputs written, the call's log truncated before the
+        call, then the Rust side's output and the report beside them. The call's folder and its decisions."""
+        build.mkdir(exist_ok=True)
+        inputs = [build / "inputs.txt"]
+        inputs[0].write_text(text)
+        if tags:
+            inputs.append(build / "tags.json")
+            inputs[1].write_text("{}")
+        folder = folder_for(build, inputs)
+        with (build / "server-server.log").open("w") as log:
+            self.subprocess.run(["java", str(folder)], env=self.env, stdout=log, stdin=self.subprocess.DEVNULL, check=True)
+        (build / "rust.txt").write_text("rust")
+        (build / "report.json").write_text("{}")
+        return folder, self.reasons()
+
+    @staticmethod
+    def own_folder(build, inputs):
+        from tools import oracle_folders
+        return oracle_folders.folder(build / "oracle-server", *inputs, call=("server",))
+
+    def test_a_call_in_an_oracle_folder_replays_while_the_harness_writes_around_it(self):
+        """Handed the work folder itself, the call never replays; handed a folder of its own (tools/oracle_folders.py),
+        it does from the second run, while the same inputs give the same folder."""
+        self.folder_oracle()
+        root = Path(self.temp.name)
+        shared = [self.folder_harness(root / "shared", lambda build, inputs: build) for _ in range(3)]
+        self.assertEqual([reasons for _, reasons in shared], [["no-record"], ["input-set"], ["output-stamp"]])
+        own = [self.folder_harness(root / "own", self.own_folder) for _ in range(3)]
+        self.assertEqual([reasons for _, reasons in own], [["no-record"], ["hit"], ["hit"]])
+        self.assertEqual(len({folder for folder, _ in own}), 1)
+        self.assertEqual((own[-1][0] / "server.txt").read_text(), "cases")
+
+    def test_a_call_with_other_inputs_runs_in_an_empty_folder(self):
+        # Its first call's output stays behind nowhere: a second call that writes none finds none.
+        self.folder_oracle()
+        build = Path(self.temp.name) / "build"
+        first, reasons = self.folder_harness(build, self.own_folder)
+        self.assertEqual(((first / "server.txt").read_text(), reasons), ("cases", ["no-record"]))
+        second, reasons = self.folder_harness(build, self.own_folder, text="skip")
+        self.assertEqual(reasons, ["no-record"])
+        self.assertNotEqual(second, first)
+        self.assertFalse(first.exists())
+        self.assertEqual(sorted(path.name for path in second.iterdir()), ["inputs.txt"])
+
+    def test_an_input_no_longer_given_is_not_in_the_folder(self):
+        self.folder_oracle()
+        build = Path(self.temp.name) / "build"
+        first, _ = self.folder_harness(build, self.own_folder, tags=True)
+        self.assertEqual((first / "server.txt").read_text(), "cases+tags")
+        second, reasons = self.folder_harness(build, self.own_folder)
+        self.assertEqual(reasons, ["no-record"])
+        self.assertFalse((second / "tags.json").exists())
+        self.assertEqual((second / "server.txt").read_text(), "cases")
+
+    def test_jvm_options_from_the_environment_give_another_folder(self):
+        # They can change what an oracle writes (VanillaCollisionOracle's horizon.prepare.reuse), and the shim runs such
+        # a call each time: it must not find the outputs of a call without them.
+        from tools import oracle_folders
+        self.assertEqual(oracle_folders.UNKEYED, UNKEYED_VARIABLES)
+        build = Path(self.temp.name) / "build"
+        build.mkdir()
+        (build / "inputs.txt").write_text("cases")
+        plain = self.own_folder(build, [build / "inputs.txt"])
+        (plain / "server.txt").write_text("cases")
+        with mock.patch.dict(os.environ, {"JAVA_TOOL_OPTIONS": "-Dhorizon.prepare.reuse=true"}):
+            reusing = self.own_folder(build, [build / "inputs.txt"])
+        self.assertNotEqual(reusing, plain)
+        self.assertEqual(sorted(path.name for path in reusing.iterdir()), ["inputs.txt"])
+
     def test_a_java_killed_by_a_signal_gives_the_same_status_keyed_or_not(self):
         # 256 - 9, as the shim's run of a recorded call has always given; the new passthroughs keep it.
         self.input.write_text("kill")

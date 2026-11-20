@@ -10,9 +10,10 @@ import random
 import struct
 import math
 try:
-    from . import lab, test_rust_parity as base
+    from . import lab, oracle_folders, test_rust_parity as base
 except ImportError:
     import lab
+    import oracle_folders
     import test_rust_parity as base
 
 
@@ -75,7 +76,8 @@ def main():
     binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary,'simple_container_fixture',build],'rust');references=[]
     for side,jar in jars.items():
-        java(side,side,build);reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
+        (build/f'{side}.txt').unlink(missing_ok=True)  # the layout before: the reference beside the work files
+        folder=oracle_folders.folder(build/f'oracle-{side}',*fixture_paths,call=(classes,jars[side],side));java(side,side,folder);reference=folder/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
         print(f'{side}: {matched:,} simple container output lines match Rust',flush=True)
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)

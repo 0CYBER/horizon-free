@@ -8,9 +8,10 @@ import platform
 import random
 import subprocess
 try:
-    from . import lab,test_rust_parity as base
+    from . import lab,oracle_folders,test_rust_parity as base
 except ImportError:
     import lab
+    import oracle_folders
     import test_rust_parity as base
 
 
@@ -63,8 +64,10 @@ def main():
                 if result!='s '+str(int.from_bytes(digest[:8],'little',signed=True)):raise AssertionError('seed SHA-256 disagrees with hashlib')
     references=[]
     for side,jar in jars.items():
-        reference=build/f"{side}.txt"
-        run(["java","-Xmx512M","-cp",os.pathsep.join([str(classes),str(jar),dependency_path]),"dev.horizonlab.parity.VanillaBiomeZoomOracle",side,build],side)
+        (build/f"{side}.txt").unlink(missing_ok=True)  # the layout before: the reference beside the work files
+        folder=oracle_folders.folder(build/f"oracle-{side}",*fixture_paths,call=(classes,jar,side))
+        reference=folder/f"{side}.txt"
+        run(["java","-Xmx512M","-cp",os.pathsep.join([str(classes),str(jar),dependency_path]),"dev.horizonlab.parity.VanillaBiomeZoomOracle",side,folder],side)
         matched=base.compare(reference,build/"rust.txt")
         references.append({"side":side,"jar_sha256":lab.digest(jar,"sha256"),"output_sha256":lab.digest(reference,"sha256"),"matched_output_lines":matched})
         print(f"{side}: {matched:,} biome-zoom output lines match Rust",flush=True)
