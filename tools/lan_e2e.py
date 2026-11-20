@@ -15,7 +15,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              dimension change, a death and respawn); the inventory opens as its own menu, items kept;
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
              leaves the host's screen and mouse look alone;
-- datapack-recipe: (--server-thread) a crafting recipe from the world's data pack shows its result in the
+- datapack-recipe: a crafting recipe from the world's data pack shows its result in the
              table of the host's window and of a guest, and taking it crafts (#6733);
 - recipes-hmod: opt-in, requires native Recipes: search original .hmod content, fill the server's
              crafting grid, consume inputs and preserve both players' output after save/rejoin (#9647);
@@ -7480,8 +7480,6 @@ def main():
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--check', action='append', choices=CHECKS, help='run only these checks (repeatable)')
     parser.add_argument('--out', default=str(ROOT / '.local/lan-e2e'), help='screenshots and game logs go here')
-    # The host's world always runs on its server thread; the flag stays for existing callers.
-    parser.add_argument('--server-thread', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()

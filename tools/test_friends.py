@@ -377,8 +377,6 @@ def main():
     parser.add_argument('--hold', type=float, default=0, help='guest: stay this many seconds before leaving')
     parser.add_argument('--baseline', action='store_true', help='first run the same checks over plain LAN')
     parser.add_argument('--offscreen', action='store_true', help='run the games without a window')
-    # The host always runs on its server thread; the flag stays for existing callers.
-    parser.add_argument('--server-thread', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--xvfb', action='store_true', help='run the games under xvfb-run (headless Linux)')
     args = parser.parse_args()
     Game.prefix = ['xvfb-run', '-a'] if args.xvfb else []
