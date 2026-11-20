@@ -159,6 +159,18 @@ pub(super) enum Slot {
     Saddle,
 }
 impl Slot {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::MainHand => "mainhand",
+            Self::OffHand => "offhand",
+            Self::Feet => "feet",
+            Self::Legs => "legs",
+            Self::Chest => "chest",
+            Self::Head => "head",
+            Self::Body => "body",
+            Self::Saddle => "saddle",
+        }
+    }
     pub(super) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "mainhand" => Self::MainHand,
@@ -1077,6 +1089,7 @@ impl Game<'_> {
             stack.count -= 1;
         }
         // setItemSlot: onEquipItem plays the equip sound and the equip event.
+        let hook_stack = one.clone();
         let (at, sound) = match target {
             Target::Guest(conn) => {
                 // The guest's own turn: their state in place, so the slot, the
@@ -1109,6 +1122,7 @@ impl Game<'_> {
                 return true;
             }
             Target::Stand(i) => {
+                let sound = self.mod_equip_sound(&hook_stack, slot.name(), sound);
                 let stand = &mut self.armor_stands[i];
                 if let Some(s) = slot.stand_index() {
                     stand.equipment[s] = Some(one);
@@ -1120,12 +1134,15 @@ impl Game<'_> {
                 mob_set_slot(m, slot, one);
                 // setGuaranteedDrop / setPersistenceRequired.
                 m.persistent = true;
-                let sound = if m.silent {
+                let silent = m.silent;
+                let at = m.position;
+                let sound = if silent {
                     None
                 } else {
                     equip_sound(m, slot, sound)
                 };
-                (Some(m.position), sound)
+                let sound = self.mod_equip_sound(&hook_stack, slot.name(), sound);
+                (Some(at), sound)
             }
         };
         if let Some(at) = at {

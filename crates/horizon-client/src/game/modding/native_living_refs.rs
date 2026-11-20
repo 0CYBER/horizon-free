@@ -962,6 +962,7 @@ impl Game<'_> {
         };
         let stack = equipment_stack(stack);
         let equippable = stack.as_ref().and_then(|s| self.equippable_slot_sound(s));
+        let hook_stack = stack.clone();
         if let Target::Mob(id) = t {
             let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id) else {
                 return false;
@@ -988,6 +989,12 @@ impl Game<'_> {
                         })
                         .flatten()
                 });
+                let sound = match (sound, &hook_stack) {
+                    (Some(sound), Some(stack)) => {
+                        self.mod_equip_sound(stack, self.equip_slot_name(slot), Some(sound))
+                    }
+                    (sound, _) => sound,
+                };
                 if defer {
                     self.after_commit(super::transactions::After::Equip {
                         at: [at.x, at.y, at.z],
@@ -1046,6 +1053,12 @@ impl Game<'_> {
                 let sound = equippable.as_ref().and_then(|(equip_slot, sound)| {
                     (*equip_slot as usize == slot as usize).then(|| sound.clone())
                 });
+                let sound = match (sound, &hook_stack) {
+                    (Some(sound), Some(stack)) => {
+                        self.mod_equip_sound(stack, self.equip_slot_name(slot), Some(sound))
+                    }
+                    (sound, _) => sound,
+                };
                 let (Target::Stand(id) | Target::Dragon(id)) = t else {
                     unreachable!("only a stand or the dragon gets here")
                 };

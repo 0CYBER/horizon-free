@@ -283,6 +283,11 @@ impl Game<'_> {
                     .unwrap_or_else(|| "minecraft:item.armor.equip_generic".into())
             })
         };
+        let slot = if saddle_put_on { "saddle" } else { "body" };
+        let sound = match (sound, put_on) {
+            (Some(sound), Some(stack)) => self.mod_equip_sound(stack, slot, Some(sound)),
+            (sound, _) => sound,
+        };
         let m = &mut self.mobs[index];
         let id = m.id;
         let pos = m.position;
