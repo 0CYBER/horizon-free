@@ -1908,18 +1908,20 @@ pub fn complete_assets(tag: &str) {
     });
 }
 
-/// Horizon's own download (an owner's) may have stopped before the sounds and the languages,
-/// and the copies of `complete_assets` read them from its store: asked again, once per run, through
-/// the same owner gate as any download from Mojang (`download_for_owner`), which keeps the files
-/// already whole. Called where a download is expected (`reuse_prepared_everywhere`), never on Play.
+fn should_refill_own_store(own: &Path, resources: &Path) -> bool {
+    own.join("assets/indexes").is_dir() && !prepare::missing_extras(resources).is_empty()
+}
+
+/// Horizon's own download (an owner's) may have stopped before the extras (such as fonts, sounds,
+/// or languages), and the copies of `complete_assets` read them from its store: asked again, once per
+/// run, through the same owner gate as any download from Mojang (`download_for_owner`), which keeps
+/// the files already whole. Called where a download is expected (`reuse_prepared_everywhere`), never
+/// on Play.
 fn refill_own_store(tag: &str) {
     static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let own = data_dir().join("minecraft");
     let resources = resources_at(&versions_dir().join(tag));
-    if !own.join("assets/indexes").is_dir()
-        || !prepare::missing_extras(&resources)
-            .iter()
-            .any(|(kind, _)| matches!(*kind, "languages" | "sounds"))
+    if !should_refill_own_store(&own, &resources)
         || ASKED.swap(true, std::sync::atomic::Ordering::Relaxed)
     {
         return;
@@ -7915,6 +7917,38 @@ pub fn {f}("
             asset("v0.2.2", &format!("{background}/panorama_0.png")).as_deref(),
             Some(&placeholder[..])
         );
+
+        // Only fonts missing: should_refill_own_store is true, complete_assets_in fills only fonts.
+        lines.borrow_mut().clear();
+        release("v0.2.4", true);
+        for (name, data) in &assets {
+            let path = resources_at(&versions.join("v0.2.4"))
+                .join("assets")
+                .join(name);
+            write(path, data);
+        }
+        let font_json = resources_at(&versions.join("v0.2.4"))
+            .join("assets/minecraft/font/include/unifont.json");
+        let font_zip =
+            resources_at(&versions.join("v0.2.4")).join("assets/minecraft/font/unifont.zip");
+        let _ = fs::remove_file(&font_json);
+        let _ = fs::remove_file(&font_zip);
+        let res_v4 = resources_at(&versions.join("v0.2.4"));
+        assert_eq!(
+            prepare::missing_extras(&res_v4),
+            [("fonts", "the Unifont glyphs")]
+        );
+        assert!(should_refill_own_store(&store, &res_v4));
+        complete_assets_in(
+            &versions,
+            "v0.2.4",
+            || vec![empty.clone(), store.clone()],
+            &log,
+        );
+        assert_eq!(*lines.borrow(), ["Font assets ready: 2 files, 0.0 MB"]);
+        assert!(prepare::missing_extras(&res_v4).is_empty());
+        assert!(!should_refill_own_store(&store, &res_v4));
+        assert!(font_zip.is_file());
 
         // Not prepared, or complete: nothing to do, without even looking for a Minecraft folder.
         lines.borrow_mut().clear();
