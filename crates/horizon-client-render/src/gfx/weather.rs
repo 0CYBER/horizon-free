@@ -254,7 +254,8 @@ pub(super) fn native_pipeline(
         bind_group_layouts: &groups,
         ..Default::default()
     });
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&super::dx12_compiler::module_label(&stage.label)),
         source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
@@ -305,7 +306,8 @@ pub(super) fn native_pipeline(
         multiview_mask: None,
         cache: None,
     });
-    if let Some(e) = pollster::block_on(scope.pop()) {
+    let internal = pollster::block_on(internal.pop());
+    if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
         return Err(format!("{}: {e}", stage.file));
     }
     Ok(pipeline)

@@ -276,10 +276,14 @@ impl NativePack {
     ) -> Result<(Self, Vec<String>), String> {
         // A backend may refuse a layout or pipeline the pack asks for (a stage's bindings
         // past its sampled-texture limit, say, as OpenGL's 16 was before #10095): the pack
-        // is refused with that error instead of a validation panic in the renderer.
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        // is refused with that error instead of a validation panic in the renderer. A stage
+        // the backend can't translate (OpenGL and a depth `textureLoad`, #18349) is an
+        // internal error, which a validation scope lets through: each scope takes both.
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let built = Self::build(device, queue, terrain, report, constants, lights);
-        let refused = pollster::block_on(scope.pop());
+        let internal = pollster::block_on(internal.pop());
+        let refused = internal.or(pollster::block_on(validation.pop()));
         match (built, refused) {
             (Ok(built), None) => Ok(built),
             (Ok(_), Some(e)) => Err(e.to_string()),
@@ -776,6 +780,77 @@ file = \"material.wgsl\"
             Default::default(),
         );
         assert!(built.is_err(), "the pack should be refused");
+    }
+
+    /// OpenGL can't translate a stage that loads from a depth texture (naga's GLSL writer has
+    /// no `textureLoad` for them): a material that reads `opaque_depth`, and any post stage
+    /// (its entry reads `scene_depth` through `depth_at`), refuse the pack instead of reaching
+    /// the device's panicking handler (#18349).
+    #[test]
+    fn a_stage_opengl_cannot_translate_refuses_the_pack() {
+        use horizon_shader_api::{MANIFEST, Pack, check};
+        // OpenGL, which `test_gpu::instance` leaves out on Windows: WGL instances made on many
+        // test threads at once deadlocked NVIDIA's driver (#5238). The lock keeps this one alone.
+        // CI's `WGPU_BACKEND=dx12` keeps GPU tests off Mesa's software drivers (ci.yml); honour it.
+        if wgpu::Backends::from_env().is_some_and(|b| !b.contains(wgpu::Backends::GL)) {
+            eprintln!("skipped: WGPU_BACKEND leaves out OpenGL");
+            return;
+        }
+        let _gpu = crate::gfx::test_gpu::lock();
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::GL;
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("skipped: no OpenGL adapter");
+            return;
+        };
+        let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: adapter.limits(),
+                ..Default::default()
+            }))
+        else {
+            eprintln!("skipped: no OpenGL device");
+            return;
+        };
+        eprintln!("OpenGL: {}", adapter.get_info().name);
+        let (globals, empty) = terrain_layouts(&device);
+        let sky = "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n";
+        let material = "fn material(input: MaterialInput) -> Surface {
+    return Surface(input.albedo * textureLoad(opaque_depth, vec2<i32>(0), 0));
+}\n";
+        let post = "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n";
+        for (stages, file, text) in [
+            ("[[post]]\nfile = \"post.wgsl\"\n", "post.wgsl", post),
+            (
+                "[material]\nfile = \"material.wgsl\"\n",
+                "material.wgsl",
+                material,
+            ),
+        ] {
+            let manifest = format!(
+                "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+                 [sky]\nfile = \"sky.wgsl\"\n{stages}"
+            );
+            let files = [
+                (MANIFEST, manifest.as_str()),
+                ("sky.wgsl", sky),
+                (file, text),
+            ]
+            .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+            .into();
+            let report = check(&Pack::from_files(files).unwrap()).unwrap();
+            let shape = terrain_shape(&globals, &empty);
+            let built = NativePack::new(&device, &queue, &shape, report, &[], Default::default());
+            let Err(refused) = built else {
+                panic!("{file}: the pack should be refused");
+            };
+            let refused = refused.to_string();
+            assert!(
+                refused.contains("textureLoad"),
+                "{file}: refused for another reason: {refused}"
+            );
+        }
     }
 
     /// What the renderer keeps of a pack from its install on: each answer as its manifest and

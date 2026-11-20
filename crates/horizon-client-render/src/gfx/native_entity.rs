@@ -365,7 +365,8 @@ impl NativeEntity {
         constants.push(("horizon_vanilla_FRAME_LINEAR", linear));
         let pack = manifest.entity_coverage == horizon_shader_api::Coverage::Pack;
         constants.push(("horizon_entity_coverage_pack", f64::from(u8::from(pack))));
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&stage.label),
             source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
@@ -449,7 +450,8 @@ impl NativeEntity {
             retained,
             kept,
         };
-        if let Some(e) = pollster::block_on(scope.pop()) {
+        let internal = pollster::block_on(internal.pop());
+        if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
             return Err(format!("{}: {e}", stage.file));
         }
         Ok(built)

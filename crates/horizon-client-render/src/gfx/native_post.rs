@@ -1136,12 +1136,14 @@ impl NativePost {
         });
         let mut passes = Vec::with_capacity(stages.len());
         for (i, stage) in stages.into_iter().enumerate() {
-            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
             let target = kept::target(&kept, plan[i].writes);
             let layout = kept::pass(&kept, Some(i)).map_or(&pipeline_layout, |p| &p.pipeline);
             let label = &stage.label;
             let pipeline = post_pipeline(device, label, layout, stage.module, constants, target);
-            if let Some(e) = pollster::block_on(scope.pop()) {
+            let internal = pollster::block_on(internal.pop());
+            if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
                 return Err(format!("{}: {e}", stage.file));
             }
             passes.push((stage.label, pipeline));
@@ -1154,7 +1156,8 @@ impl NativePost {
         let module = naga::front::wgsl::parse_str(&source)
             .map_err(|e| format!("{file}: {}", e.emit_to_string(&source)))?;
         let present = present_constants(&module, constants);
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tonemap"),
             source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
@@ -1165,7 +1168,8 @@ impl NativePost {
             "horizon_fs_tonemap",
         );
         let pipeline = fullscreen_pipeline(device, "Tonemap", &module, stages, format, &present);
-        if let Some(e) = pollster::block_on(scope.pop()) {
+        let internal = pollster::block_on(internal.pop());
+        if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
             return Err(format!("{file}: {e}"));
         }
         let display = Display {

@@ -319,9 +319,11 @@ pub(super) fn chain(
             return Err(format!("{}: no checked compute stage", entry.file));
         };
         let layout = &store.passes[ordinary.len() + store.computes.len()].pipeline;
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let pipeline = compute_pipeline(device, &stage.label, layout, stage.module, constants);
-        if let Some(e) = pollster::block_on(scope.pop()) {
+        let internal = pollster::block_on(internal.pop());
+        if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
             return Err(format!("{}: {e}", stage.file));
         }
         store.computes.push(ComputePass {

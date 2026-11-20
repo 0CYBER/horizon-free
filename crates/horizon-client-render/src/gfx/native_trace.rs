@@ -302,7 +302,8 @@ fn with_scene<T>(
         return None;
     }
     // A scope of its own: a backend that refuses these leaves the pack the ones that miss.
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let layouts: Vec<_> = (groups.iter())
         .map(|(entries, _)| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -312,7 +313,10 @@ fn with_scene<T>(
         })
         .collect();
     let built = build(&layouts);
-    let refused = pollster::block_on(scope.pop()).map(|e| e.to_string());
+    let internal = pollster::block_on(internal.pop());
+    let refused = internal
+        .or(pollster::block_on(validation.pop()))
+        .map(|e| e.to_string());
     let built = match (built, refused) {
         (Ok(built), None) => built,
         (Err(e), _) | (_, Some(e)) => {
