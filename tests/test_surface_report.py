@@ -84,18 +84,25 @@ exit {diff_exit}
             code, text = surface_report.report(str(tool), work / "base", work / "head", work, gate_on)
             return code, text, (work / "calls").read_text()
 
-    def test_a_base_the_head_tool_cannot_read_passes_with_one_line(self):
+    def test_a_base_the_head_tool_cannot_read_passes_with_one_line_and_fails_the_gate(self):
         code, text, calls = self.run_report(base_export=1)
         self.assertEqual(code, 0)
         self.assertEqual(text, "No surface report: the head's horizon-stage cannot read the base tree "
                                "(horizon-stage surface: unknown key `access`).\n")
         self.assertNotIn("surface-diff", calls)
+        code, text, _ = self.run_report(base_export=1, gate_on=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(text, "No surface comparison: the head's horizon-stage cannot read the base tree "
+                               "(horizon-stage surface: unknown key `access`). The gate fails without one.\n")
 
-    def test_a_base_surface_of_another_schema_passes_with_one_line(self):
+    def test_a_base_surface_of_another_schema_passes_with_one_line_and_fails_the_gate(self):
         code, text, _ = self.run_report(diff_exit=2, diff_err="surface schema 1, this tool reads 2")
         self.assertEqual(code, 0)
         self.assertTrue(text.startswith("No surface report: the head's horizon-stage cannot read the base surface "), text)
         self.assertIn("surface schema 1, this tool reads 2", text)
+        code, text, _ = self.run_report(diff_exit=2, diff_err="surface schema 1, this tool reads 2", gate_on=True)
+        self.assertEqual(code, 1)
+        self.assertTrue(text.startswith("No surface comparison: "), text)
 
     def test_this_tree_failing_to_export_fails_the_step(self):
         for base_export in (0, 1):
@@ -109,6 +116,9 @@ exit {diff_exit}
         self.assertEqual((code, text), (0, "Surface: report\n"))
         self.assertNotIn("--gate", calls)
         self.assertIn(f"--notes ", calls)
+        # Both exports write their calls, and the diff compares them.
+        self.assertIn("--calls ", calls.splitlines()[0])
+        self.assertRegex(calls, r"surface-diff \S+base\.json \S+head\.json --calls \S+base-calls\.json \S+head-calls\.json ")
         code, text, calls = self.run_report(diff_exit=1, gate_on=True)
         self.assertEqual(code, 1)
         self.assertIn("fn:a", text)
@@ -160,20 +170,33 @@ class MainTests(unittest.TestCase):
                 code = surface_report.main()
             return code, out.getvalue(), summary_file.read_text()
 
-    def test_an_unfetchable_base_reports_and_passes(self):
+    def test_an_unfetchable_base_fails_the_gate_and_passes_without_it(self):
         def git(*args):
             raise subprocess.CalledProcessError(128, ["git", *args])
 
-        code, out, summary = self.run_main(git=git)
+        code, out, summary = self.run_main(git=git, gate=lambda _: False)
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("No surface report: the base could not be fetched: "), out)
         self.assertIn("No surface report", summary)
+        code, out, summary = self.run_main(git=git, gate=lambda _: True)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("No surface comparison: the base could not be fetched: "), out)
+        self.assertIn(". The gate fails without one.\n", out)
+        self.assertIn("No surface comparison", summary)
+
+    def test_no_base_commit_fails_the_gate(self):
+        code, out, _ = self.run_main(base_commit=lambda *a: (None, "the checkout is not a merge commit"),
+                                     gate=lambda _: True)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("No surface comparison: the checkout is not a merge commit. "
+                                       "The gate fails without one.\n"), out)
 
     def test_a_dispatch_whose_api_call_fails_reports_and_passes(self):
         def api(path):
             raise urllib.error.URLError("no route")
 
-        code, out, _ = self.run_main("workflow_dispatch", "7", github_api=api, git=lambda *a: "cccc\n")
+        code, out, _ = self.run_main("workflow_dispatch", "7", github_api=api, git=lambda *a: "cccc\n",
+                                     gate=lambda _: False)
         self.assertEqual(code, 0)
         self.assertIn("the base could not be fetched", out)
 

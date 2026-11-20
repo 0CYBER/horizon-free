@@ -334,7 +334,7 @@ fn export_fixture(edits: &[(&str, &str, &str)], hooks: &str) -> Export {
     }
     let catalog = Catalog::parse(&[("hooks/ping.rs".into(), hooks.into())]).unwrap();
     let mut index = Index::new(root, &[]);
-    build(root, &mut index, &catalog.hooks, &boundary()).unwrap()
+    build(root, &mut index, &catalog.hooks, &boundary(), None).unwrap()
 }
 
 const LIB: &str = "crates/horizon-mod-vocab/src/lib.rs";
@@ -953,7 +953,7 @@ fn a_listed_boundary_trait_an_older_tree_lacks_is_a_note() {
     let mut index = Index::new(root, &[]);
     let mut listed = boundary();
     listed.roles.push(("FluidsHost".into(), Role::Call));
-    let export = build(root, &mut index, &catalog.hooks, &listed).unwrap();
+    let export = build(root, &mut index, &catalog.hooks, &listed, None).unwrap();
     assert!(
         export.notes.iter().any(|note| note
             == "boundary trait FluidsHost: not found in mod_api, its role is not recorded"),

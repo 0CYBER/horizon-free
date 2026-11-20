@@ -1,15 +1,16 @@
-"""The mod API surface report: what a pull request changes in what mods can name.
+"""The mod API surface report: what a pull request changes in what mods can name, and in what wasm mods are checked by.
 
-Exports the surface of the merge base and of the checked-out tree with the head's `horizon-stage`, diffs them, and
-writes the classified report to the job summary. The base comes from the event: on `pull_request` the checkout is
+Exports the surface of the merge base and of the checked-out tree with the head's `horizon-stage`, each with its calls
+and core (`--calls`: what the game compares when a wasm mod loads), diffs them, and writes the classified report to the
+job summary. The base comes from the event: on `pull_request` the checkout is
 GitHub's merge commit, whose first parent is the base; on a dispatch with `pr`, GitHub's compare API gives the merge
 base of that pull request's head and its base branch. Only that one commit is fetched (`--depth 1`), and only its
 `crates/` and `tools/layering` are unpacked.
 
-It passes when the base cannot be found or fetched, or when the head's tool cannot read
-the base tree (a change to the declaration format), saying so in one line. It fails for a new change note that names
-an id that did not change or cannot be read, and, with `gate = true` in tools/ci/surface.toml (on), for a breaking
-change no new note names.
+It fails for a new change note that names an id that did not change or cannot be read, and, with `gate = true` in
+tools/ci/surface.toml (on), for a breaking change no new note names and whenever there is nothing to compare with: the
+base cannot be found or fetched, or the head's tool cannot read the base tree or surface (a change to the declaration
+format). With the gate off those pass, saying so in one line.
 """
 
 import json
@@ -84,7 +85,8 @@ def last_line(text: str) -> str:
 
 def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool) -> tuple[int, str]:
     """Exports both trees at once, diffs them; (exit code, report text)."""
-    exports = {name: subprocess.Popen([tool, "surface", str(tree), str(work / f"{name}.json")],
+    exports = {name: subprocess.Popen([tool, "surface", str(tree), str(work / f"{name}.json"),
+                                       "--calls", str(work / f"{name}-calls.json")],
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                for name, tree in (("base", base), ("head", head))}
     results = {name: process.communicate() for name, process in exports.items()}
@@ -93,8 +95,9 @@ def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool) -> tupl
     if exports["head"].returncode != 0:
         return 1, f"The surface export of this tree failed: {last_line(results['head'][1])}.\n"
     if exports["base"].returncode != 0:
-        return 0, f"No surface report: the head's horizon-stage cannot read the base tree ({last_line(results['base'][1])}).\n"
+        return unchecked(gate_on, f"the head's horizon-stage cannot read the base tree ({last_line(results['base'][1])})")
     command = [tool, "surface-diff", str(work / "base.json"), str(work / "head.json"),
+               "--calls", str(work / "base-calls.json"), str(work / "head-calls.json"),
                "--notes", str(head / NOTES), "--base-notes", str(base / NOTES), "--json", str(work / "diff.json")]
     if gate_on:
         command.append("--gate")
@@ -102,9 +105,16 @@ def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool) -> tupl
     # A base surface of another schema is an unreadable base, like a tree the exporter cannot read.
     base_schema = f"{work / 'base.json'}: surface schema "
     if diff.returncode == 2 and base_schema in diff.stderr:
-        return 0, f"No surface report: the head's horizon-stage cannot read the base surface ({last_line(diff.stderr)}).\n"
+        return unchecked(gate_on, f"the head's horizon-stage cannot read the base surface ({last_line(diff.stderr)})")
     text = diff.stdout + diff.stderr
     return (0 if diff.returncode == 0 else 1), text
+
+
+def unchecked(gate_on: bool, why: str) -> tuple[int, str]:
+    """No comparison ran: a failure with the gate on, which can't pass what it never compared."""
+    if gate_on:
+        return 1, f"No surface comparison: {why}. The gate fails without one.\n"
+    return 0, f"No surface report: {why}.\n"
 
 
 def summary(text: str) -> str:
@@ -143,7 +153,7 @@ def main() -> int:
             code, text = report(tool, work / "base", ROOT, work, gate_on)
             text += f"Base {sha}; fetch {fetched:.1f}s, total {time.monotonic() - started:.1f}s\n"
         else:
-            code, text = 0, f"No surface report: {why}.\n"
+            code, text = unchecked(gate_on, why)
     print(text, end="")
     if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary_path, "a") as out:

@@ -14,7 +14,7 @@ use super::ty::{BorrowedShape, Ty, Types};
 use super::{Method, exports};
 use std::fmt::Write as _;
 
-fn fnv(text: &str) -> u64 {
+pub(super) fn fnv(text: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for byte in text.bytes() {
         hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
@@ -329,7 +329,7 @@ fn answer_crossing(m: &Method) -> Option<&'static str> {
 
 /// Every call both sides know, as `(key, signature hash, owned types reached, export)`: the
 /// imports, the methods of held handlers and the exports.
-fn calls(
+pub(super) fn calls(
     types: &Types<'_>,
     methods: &[Method],
     dropped: &[Method],

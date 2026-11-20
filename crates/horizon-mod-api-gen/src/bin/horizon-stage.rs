@@ -2,8 +2,9 @@
 //! source copy, then write the build data (`points.json`, `internals.json`, `loops.json`) with the
 //! header naming COMMIT, the source's full commit sha (arismoko/horizon#589). Never run on a working tree.
 //!
-//! `horizon-stage surface ROOT OUT`: write the surface export (`surface.json`) of the source tree
-//! at ROOT to OUT, and nothing else. It only reads the tree, so a working tree is fine.
+//! `horizon-stage surface ROOT OUT [--calls CALLS]`: write the surface export (`surface.json`) of
+//! the source tree at ROOT to OUT, and with `--calls` the calls and core a wasm mod is checked by
+//! (`mod_surface::boundary`) to CALLS. It only reads the tree, so a working tree is fine.
 //!
 //! `horizon-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]`: list
 //! what the mod in MOD_DIR uses of SURFACE, each item with the place that brought it in, then
@@ -13,8 +14,9 @@
 //! `horizon-stage fits USES_JSON TARGET_SURFACE`: whether a uses table fits a build's surface,
 //! naming each changed item. Exit 0 fits, 1 does not fit, 2 error.
 //!
-//! `horizon-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]`:
-//! print what changed between two surface exports, breaking changes first. `--notes` attaches
+//! `horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS] [--notes DIR] [--base-notes DIR]
+//! [--json OUT] [--gate]`: print what changed between two surface exports, breaking changes first.
+//! `--calls` adds the changes to the calls and core both builds' wasm mods are checked by. `--notes` attaches
 //! the change notes of DIR (`crates/horizon-mod-vocab/changes`) whose file names are not in
 //! `--base-notes` (the base tree's folder; required with `--notes`). Exits 1 when a new note
 //! names an id that did not change, or with `--gate` when a breaking change has no note; 2 when
@@ -25,7 +27,7 @@ use mod_surface::Surface;
 use mod_surface::uses::{Fit, ManifestFacts, Origin, UsesTable, fits, uses_contained};
 use std::path::PathBuf;
 
-fn surface(root: &std::path::Path, out: &std::path::Path) {
+fn surface(root: &std::path::Path, out: &std::path::Path, calls: Option<&std::path::Path>) {
     let started = std::time::Instant::now();
     // The generator writes source paths into `#[path]`s it then reads: they must be absolute.
     let root = match std::fs::canonicalize(root) {
@@ -45,6 +47,16 @@ fn surface(root: &std::path::Path, out: &std::path::Path) {
     if let Err(error) = std::fs::write(out, export.surface.to_json()) {
         eprintln!("horizon-stage surface: {}: {error}", out.display());
         std::process::exit(1);
+    }
+    if let Some(calls) = calls {
+        let table = export
+            .boundary
+            .as_ref()
+            .expect("an export of a tree has its calls");
+        if let Err(error) = std::fs::write(calls, table.to_json()) {
+            eprintln!("horizon-stage surface: {}: {error}", calls.display());
+            std::process::exit(1);
+        }
     }
     for note in &export.notes {
         eprintln!("unclassified: {note}");
@@ -172,15 +184,23 @@ fn surface_diff(args: &[PathBuf]) -> ! {
     use horizon_mod_api_gen::surface::notes;
     let [old, new, options @ ..] = args else {
         fail(
-            "usage: horizon-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]",
+            "usage: horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS] [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]",
         )
     };
     let (mut notes_dir, mut base_notes, mut json, mut gate) = (None, None, None, false);
+    let mut calls = None;
     let mut options = options.iter();
     while let Some(option) = options.next() {
         let slot = match option.to_str() {
             Some("--gate") => {
                 gate = true;
+                continue;
+            }
+            Some("--calls") => {
+                let (Some(old), Some(new)) = (options.next(), options.next()) else {
+                    fail("--calls needs OLD_CALLS and NEW_CALLS")
+                };
+                calls = Some((old, new));
                 continue;
             }
             Some("--notes") => &mut notes_dir,
@@ -193,7 +213,17 @@ fn surface_diff(args: &[PathBuf]) -> ! {
             .unwrap_or_else(|| fail(format!("{} needs a value", option.display())));
         *slot = Some(value);
     }
-    let mut diff = mod_surface::diff(&read_surface(old), &read_surface(new));
+    let (old, new) = (read_surface(old), read_surface(new));
+    let mut diff = mod_surface::diff(&old, &new);
+    if let Some((old_calls, new_calls)) = calls {
+        let read = |path: &PathBuf| {
+            let bytes =
+                std::fs::read(path).unwrap_or_else(|e| fail(format!("{}: {e}", path.display())));
+            mod_surface::boundary::Boundary::read(&bytes)
+                .unwrap_or_else(|e| fail(format!("{}: {e}", path.display())))
+        };
+        mod_surface::boundary::apply(&mut diff, &old, &new, &read(old_calls), &read(new_calls));
+    }
     let mut stale = Vec::new();
     if let Some(dir) = notes_dir {
         // Without the base's notes every older note would read as new, and stale.
@@ -236,14 +266,16 @@ fn main() {
         Some("surface-diff") => surface_diff(&args[1..]),
         _ => {}
     }
-    if let [command, root, out] = &args[..]
-        && command == "surface"
-    {
-        return surface(root, out);
+    match &args[..] {
+        [command, root, out] if command == "surface" => return surface(root, out, None),
+        [command, root, out, flag, calls] if command == "surface" && flag == "--calls" => {
+            return surface(root, out, Some(calls));
+        }
+        _ => {}
     }
     let usage = || {
         eprintln!(
-            "usage: horizon-stage ROOT POINTS_JSON INTERNALS_JSON COMMIT [--sync-internals]\n       horizon-stage surface ROOT OUT\n       horizon-stage surface-diff OLD NEW [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]\n       horizon-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]\n       horizon-stage fits USES_JSON TARGET_SURFACE"
+            "usage: horizon-stage ROOT POINTS_JSON INTERNALS_JSON COMMIT [--sync-internals]\n       horizon-stage surface ROOT OUT [--calls CALLS]\n       horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS] [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]\n       horizon-stage uses SURFACE MOD_DIR [--json OUT --made-for BUILD]\n       horizon-stage fits USES_JSON TARGET_SURFACE"
         );
         std::process::exit(2)
     };

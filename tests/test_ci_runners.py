@@ -744,6 +744,19 @@ class TryRunTests(unittest.TestCase):
         self.assertIn("HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}\n", read[0])
         self.assertIn('if [ "$HOSTED" = true ]; then\n', read[0])
 
+    def test_the_surface_report_gates_pull_requests_beside_the_mod_point_check(self):
+        # The surface report left with the fork's gate workflow (878ac391) and with it the only pull request check
+        # that sees a changed wire layout or a new hook argument (#18742, #18874).
+        steps = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["verify-mod-points"].split("\n      - ")
+        report = [step for step in steps if "python3 tools/ci/surface_report.py" in step]
+        self.assertEqual(len(report), 1)
+        self.assertIn("github.event_name == 'pull_request'", report[0])
+        self.assertIn("steps.rust.outputs.mod_points != 'false'", report[0])
+        self.assertIn("cargo build --locked --quiet -p horizon-mod-api-gen --bin horizon-stage\n", report[0])
+        self.assertIn("HORIZON_STAGE_TOOL=", report[0])
+        self.assertIn("EVENT: ${{ github.event_name }}\n", report[0])
+        self.assertNotIn("continue-on-error", report[0])
+
     def test_the_windows_build_runs_by_hand_and_saves_no_cache(self):
         block = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["windows-x64"]
         self.assertIn("    if: github.event_name == 'workflow_dispatch' && inputs.windows\n", block)

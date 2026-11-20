@@ -566,6 +566,18 @@ jobs:
           else
             python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added
           fi
+      # The mod API surface of the merge base and of this tree, diffed (tools/ci/surface_report.py). With
+      # tools/ci/surface.toml's gate on, a breaking change that no new note in crates/horizon-mod-vocab/changes/ names
+      # fails, and so does a change that makes the game refuse wasm mods built before it: a changed wire layout of a
+      # type that crosses, or an argument added to a hook (the point check above compares the generated text, which
+      # shows neither). horizon-stage is built from the package and profile the check built hook_snapshot from.
+      - name: The mod API keeps what mods built before it use
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.rust.outputs.mod_points != 'false' }}
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          cargo build --locked --quiet -p horizon-mod-api-gen --bin horizon-stage
+          HORIZON_STAGE_TOOL="${CARGO_TARGET_DIR:-$PWD/target}/debug/horizon-stage" python3 tools/ci/surface_report.py
       # verify-test builds the points' wire loopback empty: it needs a guest build whose table has sites (#18400).
       - name: The points' wire loopback
         if: steps.rust.outputs.mod_points != 'false'
