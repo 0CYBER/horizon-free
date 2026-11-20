@@ -47,15 +47,18 @@ per part, side by side, each on a size that fits it:
 
 | Job | Runner | Merge queue |
 | --- | --- | --- |
+| `verify (which parts run)` (`verify-scope`): `tools/ci/rust_changes.py`'s answers for the launcher and lint parts, so a change that doesn't reach them never starts their 16 vCPU runner | 2 vCPU | yes |
 | `verify (tree and Python tests)` (`verify-tree`) | 8 vCPU: the Python tests run one module per process (`tools/ci/unittest_parallel.py`) | yes |
-| `verify (format and lint)` (`verify-lint`) | 16 vCPU | no |
+| `verify (format and lint)` (`verify-lint`), when `verify-scope` finds a Rust change (always on main's pushes) | 16 vCPU | no |
 | `verify (server build lint)` (`verify-server`) | 16 vCPU | no |
-| `verify (launcher)` (`verify-launcher`), when `tools/ci/rust_changes.py --launcher` says the change reaches it | 16 vCPU | no |
+| `verify (launcher)` (`verify-launcher`), when `verify-scope` (`rust_changes.py --launcher`) says the change reaches it | 16 vCPU | no |
 | `verify (Rust tests)` (`verify-test`) | 16 vCPU | yes |
 | `verify (mod points)` (`verify-mod-points`): the comparison runs on pull requests only; elsewhere it builds the generator to warm its disk | 16 vCPU | yes |
 
 Only `verify`, which waits for them all, is a required check; `tests/test_ci_runners.py` pins that the parts share one
-`runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners.
+`runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners. `verify` passes a skipped launcher or lint
+part only where `verify-scope` (or the merge queue) left it out. Each part ends with a `load probe:` line
+(`tools/ci/load_probe.sh`: cores, load, CPU and memory use, seconds) for choosing runner sizes.
 
 Each Rust job keeps its Cargo build folder between runs on a Blacksmith sticky disk, as the VPS keeps its own
 (`tools/ci/build_folder.sh`): one disk per job, so jobs that ran side by side don't replace each other's build. A

@@ -6,7 +6,12 @@
 - Neither takes a job that holds a secret or whose token can push, publish or start workflows: playhorizon is a
   partner's server, and a checks runner keeps what a fork's job left behind.
 """
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,7 +20,11 @@ WORKFLOWS = ROOT / ".github/workflows"
 LIGHT = ("horizon-light", "playhorizon-light", "playhorizon-ci")
 CHECKS = ("horizon-checks",)
 FORK_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
-VERIFY_PARTS = ("verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test", "verify-mod-points")
+# verify-scope decides on a small runner which of the launcher and lint parts start; it goes where they go.
+VERIFY_PARTS = ("verify-scope", "verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test",
+                "verify-mod-points")
+# On Windows the bash on PATH is Git's; a bare "bash" there would be WSL's (tests/test_pr_ready.py).
+BASH = shutil.which("bash")
 # verify's parts: our checks runners only with SELF_HOSTED_CI=all, Blacksmith's otherwise.
 ONLY_WITH_ALL = re.compile(r"^\$\{\{ vars\.SELF_HOSTED_CI == 'all' && fromJSON\('\[\"self-hosted\", \"linux\", "
                            r"\"horizon-checks\"\]'\) \|\| 'blacksmith-\d+vcpu-ubuntu-2404' \}\}$")
@@ -157,7 +166,6 @@ class HostedParityTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import sys
         sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
         import yaml
         cls.text = (WORKFLOWS / "parity-hosted.yml").read_text()
@@ -203,6 +211,199 @@ class HostedParityTests(unittest.TestCase):
                 self.assertNotIn("parity-hosted", path.read_text(), path.name)
         verify = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["verify"]
         self.assertNotIn("hosted", verify)
+
+
+class VerifyGateTests(unittest.TestCase):
+    """verify, the check main requires, when verify-scope leaves the launcher or lint part out (#18843): a part left out
+    passes, and one that failed, was cancelled or was never decided for fails."""
+
+    PASSED = {"SCOPE": "success", "TREE": "success", "LINT": "success", "SERVER": "success", "LAUNCHER": "success",
+              "TEST": "success", "MODPOINTS": "success", "EVENT": "pull_request", "RUST_ANSWER": "true",
+              "LAUNCHER_ANSWER": "true"}
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
+        import yaml
+        cls.jobs = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())["jobs"]
+        (cls.gate,) = cls.jobs["verify"]["steps"]
+        (cls.answers,) = [step for step in cls.jobs["verify-scope"]["steps"] if step.get("id") == "answers"]
+
+    def bash(self, script, env):
+        if not BASH:
+            self.skipTest("no bash")
+        # As GitHub runs a `run:` step: bash -e with pipefail.
+        return subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                              env={**os.environ, **env}, capture_output=True, text=True)
+
+    def passes(self, **results):
+        return self.bash(self.gate["run"], {**self.PASSED, **results}).returncode == 0
+
+    def test_the_gate_reads_every_part_and_always_runs(self):
+        self.assertEqual(self.jobs["verify"]["needs"], list(VERIFY_PARTS))
+        # Without always() a failed or skipped part would skip verify, which GitHub counts as passed.
+        self.assertEqual(self.jobs["verify"]["if"], "always()")
+        for name, part in [("SCOPE", "verify-scope"), ("TREE", "verify-tree"), ("LINT", "verify-lint"),
+                           ("SERVER", "verify-server"), ("LAUNCHER", "verify-launcher"), ("TEST", "verify-test"),
+                           ("MODPOINTS", "verify-mod-points")]:
+            self.assertEqual(self.gate["env"][name], "${{ needs.%s.result }}" % part)
+        self.assertEqual(self.gate["env"]["EVENT"], "${{ github.event_name }}")
+        self.assertEqual(self.gate["env"]["RUST_ANSWER"], "${{ needs.verify-scope.outputs.rust }}")
+        self.assertEqual(self.gate["env"]["LAUNCHER_ANSWER"], "${{ needs.verify-scope.outputs.launcher }}")
+        self.assertTrue(self.passes())
+
+    def test_the_parts_wait_for_the_checked_answers(self):
+        for part, output in [("verify-lint", "rust"), ("verify-launcher", "launcher")]:
+            with self.subTest(part=part):
+                self.assertEqual(self.jobs[part]["needs"], "verify-scope")
+                self.assertEqual(self.jobs[part]["if"], "github.event_name != 'merge_group' && "
+                                                        "needs.verify-scope.outputs.%s != 'false'" % output)
+        # Decided on every event, and published only through the step that checks them.
+        self.assertNotIn("if", self.jobs["verify-scope"])
+        self.assertNotIn("if", self.answers)
+        self.assertEqual(self.jobs["verify-scope"]["outputs"], {"rust": "${{ steps.answers.outputs.rust }}",
+                                                                "launcher": "${{ steps.answers.outputs.launcher }}"})
+        self.assertEqual(self.answers["env"], {"RUST": "${{ steps.rust.outputs.rust_required }}",
+                                               "LAUNCHER": "${{ steps.launcher.outputs.required }}"})
+
+    def answer(self, rust, launcher):
+        """(exit code, GITHUB_OUTPUT) of verify-scope's answers step."""
+        with tempfile.TemporaryDirectory() as scratch:
+            output = Path(scratch) / "output"
+            output.write_text("")
+            result = self.bash(self.answers["run"], {"RUST": rust, "LAUNCHER": launcher, "GITHUB_OUTPUT": str(output)})
+            return result.returncode, output.read_text()
+
+    def test_the_answers_are_exactly_true_or_false(self):
+        self.assertEqual(self.answer("true", "false"), (0, "rust=true\nlauncher=false\n"))
+        self.assertEqual(self.answer("false", "true"), (0, "rust=false\nlauncher=true\n"))
+        # A step that didn't run (a push, a manual run, no earlier commit): the part runs.
+        self.assertEqual(self.answer("", ""), (0, "rust=true\nlauncher=true\n"))
+        # `if` compares without case: FALSE would skip a part as false does. Refused, as anything else.
+        for rust, launcher in [("FALSE", "false"), ("false", "False"), ("true", "yes"), ("0", "true"),
+                               ("true", "false\nrust=false")]:
+            with self.subTest(rust=rust, launcher=launcher):
+                self.assertNotEqual(self.answer(rust, launcher)[0], 0)
+
+    def test_the_server_build_and_rust_tests_still_start_on_every_pull_request(self):
+        # The server build: whatever crate a change is in (ci.yml says why). The Rust tests decide for themselves, so
+        # waiting for verify-scope never lands on the slowest part of most pull requests.
+        self.assertEqual(self.jobs["verify-server"]["if"], "github.event_name != 'merge_group'")
+        for part in ("verify-server", "verify-test"):
+            self.assertNotIn("needs", self.jobs[part], part)
+
+    def test_a_part_left_out_passes(self):
+        self.assertTrue(self.passes(LAUNCHER="skipped", LAUNCHER_ANSWER="false"))
+        self.assertTrue(self.passes(LINT="skipped", RUST_ANSWER="false"))
+        self.assertTrue(self.passes(LINT="skipped", RUST_ANSWER="false", LAUNCHER="skipped", LAUNCHER_ANSWER="false"))
+
+    def test_a_skip_passes_only_on_exactly_false(self):
+        # The gate compares with case, as the answers step publishes: FALSE or an empty answer is no decision.
+        for answer in ("true", "FALSE", "False", "", "false "):
+            with self.subTest(answer=answer):
+                self.assertFalse(self.passes(LAUNCHER="skipped", LAUNCHER_ANSWER=answer))
+                self.assertFalse(self.passes(LINT="skipped", RUST_ANSWER=answer))
+
+    def test_a_failed_or_cancelled_part_fails(self):
+        for result in ("failure", "cancelled"):
+            for answer in ("true", "false"):
+                with self.subTest(result=result, answer=answer):
+                    self.assertFalse(self.passes(LAUNCHER=result, LAUNCHER_ANSWER=answer))
+                    self.assertFalse(self.passes(LINT=result, RUST_ANSWER=answer))
+                    self.assertFalse(self.passes(LAUNCHER=result, EVENT="merge_group"))
+
+    def test_a_part_skipped_without_a_decision_fails(self):
+        # verify-scope failed or was cancelled: what waits on it is skipped, and its outputs are empty.
+        for scope in ("failure", "cancelled", "skipped"):
+            with self.subTest(scope=scope):
+                self.assertFalse(self.passes(SCOPE=scope, LINT="skipped", LAUNCHER="skipped", RUST_ANSWER="",
+                                             LAUNCHER_ANSWER=""))
+                self.assertFalse(self.passes(SCOPE=scope, LINT="skipped", LAUNCHER="skipped", RUST_ANSWER="false",
+                                             LAUNCHER_ANSWER="false"))
+
+    def test_the_merge_queue_shape_passes(self):
+        self.assertTrue(self.passes(EVENT="merge_group", LINT="skipped", SERVER="skipped", LAUNCHER="skipped",
+                                    RUST_ANSWER="true", LAUNCHER_ANSWER="true"))
+
+    def test_the_other_parts_are_judged_as_before(self):
+        for name in ("TREE", "SERVER", "TEST", "MODPOINTS"):
+            with self.subTest(part=name):
+                self.assertTrue(self.passes(**{name: "skipped"}))
+                self.assertFalse(self.passes(**{name: "failure"}))
+                self.assertFalse(self.passes(**{name: "cancelled"}))
+
+    def test_every_part_ends_with_a_bounded_load_probe_that_cannot_fail_it(self):
+        # Not verify (mod points) yet: another change is reworking that job.
+        for part in ("verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test"):
+            with self.subTest(part=part):
+                probe = self.jobs[part]["steps"][-1]
+                self.assertEqual(probe["name"], "Load probe")
+                self.assertEqual(probe["if"], "always()")
+                self.assertIs(probe["continue-on-error"], True)
+                self.assertTrue(probe["run"].startswith("timeout -k 5 10 tools/ci/load_probe.sh || echo "), probe["run"])
+
+    def test_the_load_probe_prints_one_line_and_succeeds(self):
+        if not BASH:
+            self.skipTest("no bash")
+        result = subprocess.run([BASH, str(ROOT / "tools/ci/load_probe.sh")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.stdout.splitlines()), 1, result.stdout)
+        self.assertTrue(result.stdout.startswith("load probe: "), result.stdout)
+
+
+class InstallRustTests(unittest.TestCase):
+    """tools/ci/install_rust.sh with stand-ins for rustup, sudo and apt-get: apt beside rustup, always reaped, bounded,
+    and either one's failure fails the step."""
+
+    STAND_INS = {
+        "rustup": 'echo "rustup $*"\nexit "${FAKE_RUSTUP:-0}"\n',
+        "sudo": 'echo "sudo $*"\nexec "$@"\n',
+        "apt-get": 'echo "apt-get $*"\nsleep "${FAKE_APT_SLEEP:-0}"\nexit "${FAKE_APT:-0}"\n',
+    }
+
+    def install(self, *packages, **env):
+        if not BASH:
+            self.skipTest("no bash")
+        with tempfile.TemporaryDirectory() as scratch:
+            for name, body in self.STAND_INS.items():
+                path = Path(scratch) / name
+                path.write_text("#!/usr/bin/env bash\n" + body, newline="\n")
+                path.chmod(0o755)
+            env = {**os.environ, "HOSTED": "true", **env, "PATH": scratch + os.pathsep + os.environ["PATH"]}
+            return subprocess.run([BASH, str(ROOT / "tools/ci/install_rust.sh"), *packages], env=env,
+                                  capture_output=True, text=True, timeout=60)
+
+    def test_both_succeed(self):
+        result = self.install("libudev-dev", "mold")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("rustup toolchain install stable", result.stdout)
+        install = "apt-get install -y --no-install-recommends -o Dpkg::Use-Pty=false libudev-dev mold"
+        self.assertIn(install, result.stdout)
+        self.assertIn("::group::apt-get (exit 0)", result.stdout)
+        # The bound runs as root, so it can stop apt-get and the dpkg it starts, not only sudo.
+        self.assertIn("sudo timeout -k 30 300 apt-get update", result.stdout)
+        self.assertIn(f"sudo timeout -k 30 300 {install}", result.stdout)
+
+    def test_a_rustup_failure_still_reaps_apt_and_shows_it(self):
+        result = self.install("libudev-dev", FAKE_RUSTUP="3", FAKE_APT_SLEEP="1")
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("::group::apt-get (exit 0)", result.stdout)
+        self.assertIn("apt-get install -y --no-install-recommends -o Dpkg::Use-Pty=false libudev-dev", result.stdout)
+
+    def test_an_apt_failure_fails_the_step(self):
+        result = self.install("libudev-dev", FAKE_APT="5")
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+        self.assertIn("::group::apt-get (exit 5)", result.stdout)
+
+    def test_a_stalled_apt_is_stopped(self):
+        result = self.install("libudev-dev", FAKE_APT_SLEEP="40", APT_TIMEOUT="1")
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        self.assertIn("::group::apt-get (exit 124)", result.stdout)
+
+    def test_no_apt_off_blacksmith(self):
+        result = self.install("libudev-dev", HOSTED="false")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("apt-get", result.stdout)
 
 
 class TryRunTests(unittest.TestCase):

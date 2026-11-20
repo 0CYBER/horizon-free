@@ -1,7 +1,7 @@
 name: checks
 # verify: every pull request and every push to main, its parts side by side (below). It is the check main
 # requires, so it runs in every run of this workflow, even a cancelled one: a skipped job counts as passed, and every
-# run must report a real verify (a pull request that changes no Rust finishes its Rust parts in seconds instead).
+# run must report a real verify (a pull request that changes no Rust skips its Rust parts or finishes them in seconds).
 # parity: the vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the
 # maintainer's own Minecraft files (Horizon never downloads the game); .github/workflows/parity.yml. Only for a pull
 # request that changes a harness, oracle, probe or the runner: the rest are checked on main by parity-main. A fork's pull
@@ -63,6 +63,7 @@ jobs:
   # `verify` itself is the check main requires: it waits for the parts and passes only when each passed or had nothing
   # to do. It runs even in a cancelled run (`always()`), so it fails there instead of being skipped, which GitHub
   # would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the others.
+  # Each part's last step prints a load line (tools/ci/load_probe.sh) for choosing runner sizes.
   #
   # Where (docs/ci-runners.md): Blacksmith's runners (blacksmith.sh sponsors our minutes), each part on a size that
   # fits it, for every pull request (a fork's once a maintainer approves it), the merge queue and main's pushes. They are
@@ -72,6 +73,64 @@ jobs:
   # On Blacksmith each Rust part keeps its build folder on a sticky disk instead (tools/ci/build_folder.sh), one disk per
   # part: parts that ran side by side on one disk would each replace the other's build. A cold disk builds everything
   # once; after that a pull request rebuilds what it changed.
+  # Which parts a change reaches, decided on the smallest runner before the launcher and lint parts start: a part that
+  # starts only to find nothing to do still bills a whole 16 vCPU minute (433 of the launcher's 577 jobs on 2026-11-19,
+  # #18843). The Rust tests, the slowest part of most pull requests, and the server build (every pull request with Rust,
+  # below) decide for themselves; the launcher and lint parts start ~17 s later, which lengthens only a run whose slowest
+  # part is the launcher's (a pull request that changes only the launcher finishes ~15 s later). Only the scripts it
+  # runs are checked out.
+  verify-scope:
+    name: verify (which parts run)
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-2vcpu-ubuntu-2404' }}
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.answers.outputs.rust }}
+      launcher: ${{ steps.answers.outputs.launcher }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: tools
+          persist-credentials: false
+      # --all: the same needs_rust the Rust tests' own step asks, without the mod points' search of file contents.
+      - name: Does this pull request need Rust checks?
+        if: github.event_name == 'pull_request'
+        id: rust
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py --all "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Does this change the launcher or a crate it builds?
+        if: github.event_name != 'workflow_dispatch'
+        id: launcher
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
+            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "No earlier commit to compare with: the launcher is checked"
+          else
+            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          fi
+      # Each answer exactly `true` or `false`: the parts' `if`s compare without case, the gate with it. No answer (a
+      # step that didn't run) means the part runs; anything else fails this job, and so verify.
+      - name: Every answer is true or false
+        id: answers
+        env:
+          RUST: ${{ steps.rust.outputs.rust_required }}
+          LAUNCHER: ${{ steps.launcher.outputs.required }}
+        run: |
+          for answer in "rust=$RUST" "launcher=$LAUNCHER"; do
+            name=${answer%%=*} value=${answer#*=}
+            case "$value" in
+              true | false) ;;
+              '') value=true ;;
+              *) echo "::error::$name: '$value' is neither true nor false"; exit 1 ;;
+            esac
+            echo "$name=$value" | tee -a "$GITHUB_OUTPUT"
+          done
   verify-tree:
     name: verify (tree and Python tests)
     runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-8vcpu-ubuntu-2404' }}
@@ -160,12 +219,17 @@ jobs:
       - name: Test offline research tooling
         if: steps.queued.outputs.tested != 'true'
         run: python tools/ci/unittest_parallel.py
+      - name: Load probe
+        if: always()
+        continue-on-error: true
+        run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   # Format and lint are not in the merge queue: every pull request passed them on its own head, and main's push after
   # the merge still runs clippy (a combination that breaks a lint shows there). A commit the queue verified skips the
-  # format check but still runs clippy.
+  # format check but still runs clippy. A pull request that changes no Rust skips it (verify-scope).
   verify-lint:
     name: verify (format and lint)
-    if: github.event_name != 'merge_group'
+    needs: verify-scope
+    if: github.event_name != 'merge_group' && needs.verify-scope.outputs.rust != 'false'
     runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
@@ -186,43 +250,35 @@ jobs:
             tested=true
           fi
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
-      - name: Does this pull request need Rust checks?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
-        if: steps.rust.outputs.required != 'false'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        run: tools/ci/install_rust.sh libasound2-dev libudev-dev
       - name: Mount the build folder
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
           key: ${{ github.repository }}-verify-lint-own
           path: ~/horizon-target
           commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
-        if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
       - name: Check formatting and lint
-        if: steps.rust.outputs.required != 'false'
         env:
           TESTED: ${{ steps.queued.outputs.tested }}
         run: |
           [ "$TESTED" = true ] || cargo +stable fmt --all -- --check
           cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+      - name: Load probe
+        if: always()
+        continue-on-error: true
+        run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   # The server build (released as horizon-engine): the game without sound or controllers. Its libraries and binaries,
-  # not the tests and examples verify-lint checks. Every pull request runs it: the merge queue doesn't, so a change that
-  # breaks only the server build must stop on its own pull request (a crate below the client can break it without
-  # touching one).
+  # not the tests and examples verify-lint checks. Every pull request that changes Rust runs it, whatever crate the
+  # change is in (tools/ci/rust_changes.py's server_build answer goes unread on purpose): the merge queue doesn't, so a
+  # change that breaks only the server build must stop on its own pull request (a crate below the client can break it
+  # without touching one).
   verify-server:
     name: verify (server build lint)
     if: github.event_name != 'merge_group'
@@ -244,11 +300,7 @@ jobs:
         if: steps.rust.outputs.required != 'false'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        run: tools/ci/install_rust.sh libasound2-dev libudev-dev
       - name: Mount the build folder
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
@@ -262,14 +314,19 @@ jobs:
       - name: Lint the server build
         if: steps.rust.outputs.required != 'false'
         run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
+      - name: Load probe
+        if: always()
+        continue-on-error: true
+        run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   # The launcher is its own workspace (launcher/Cargo.toml), so verify's other cargo runs never build it. A pull request
   # that changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
   # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
-  # after their merge shows it. A push's range is the commits it added to main; a range the job cannot read (a push with
-  # no earlier commit, or one a force push removed) runs everything. Not in the merge queue, as verify-lint.
+  # after their merge shows it. A push's range is the commits it added to main; a range verify-scope cannot read (a push
+  # with no earlier commit, or one a force push removed) runs everything. Not in the merge queue, as verify-lint.
   verify-launcher:
     name: verify (launcher)
-    if: github.event_name != 'merge_group'
+    needs: verify-scope
+    if: github.event_name != 'merge_group' && needs.verify-scope.outputs.launcher != 'false'
     runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
@@ -290,41 +347,23 @@ jobs:
             tested=true
           fi
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
-      - name: Does this change the launcher or a crate it builds?
-        if: github.event_name != 'workflow_dispatch'
-        id: launcher
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
-            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "No earlier commit to compare with: the launcher is checked"
-          else
-            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          fi
       - name: Install Rust and the headers GPUI links against
-        if: steps.launcher.outputs.required != 'false'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
         run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
-              libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          tools/ci/install_rust.sh libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev \
+            libasound2-dev libudev-dev
       - name: Mount the build folder
-        if: steps.launcher.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
         with:
           key: ${{ github.repository }}-verify-launcher-own
           path: ~/horizon-target
           commit: ${{ env.SAVE_BUILD_DISK }}
       - name: Build in it, rebuilding only what changed
-        if: steps.launcher.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
+        if: startsWith(runner.name, 'blacksmith-')
         run: tools/ci/build_folder.sh ~/horizon-target
       - name: Check the launcher's formatting, lint and tests
-        if: steps.launcher.outputs.required != 'false'
         working-directory: launcher
         env:
           TESTED: ${{ steps.queued.outputs.tested }}
@@ -337,6 +376,10 @@ jobs:
           else
             cargo +stable test --locked --lib --bins
           fi
+      - name: Load probe
+        if: always()
+        continue-on-error: true
+        run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   verify-test:
     name: verify (Rust tests)
     runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-16vcpu-ubuntu-2404' }}
@@ -366,21 +409,18 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      # Before the next step, so that the toolchain downloads beside apt and the next step finds it installed.
+      - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
+        if: steps.rust.outputs.required != 'false'
+        env:
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
+        run: tools/ci/install_rust.sh libasound2-dev libudev-dev mold
       # As in verify-tree: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
       - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
           echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
-      - name: Install Rust toolchain, the ALSA and udev headers the client links against, and the mold linker
-        if: steps.rust.outputs.required != 'false'
-        env:
-          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev mold
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Mount the build folder
         if: steps.rust.outputs.required != 'false' && startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
@@ -435,6 +475,10 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR || 'target' }}/cargo-timings/cargo-timing-*.html
           if-no-files-found: warn
           retention-days: 30
+      - name: Load probe
+        if: always()
+        continue-on-error: true
+        run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   # docs/layers.md#mod-points-stay-put: every eligible `Game` method is a mod injection point, so a change to `Game`'s
   # source or to the generator must leave the point catalog and the generated API as they were. A point's name,
   # target and signature are part of the mod API: a removed or changed point or any other change to the generated API
@@ -527,24 +571,35 @@ jobs:
         if: steps.rust.outputs.mod_points != 'false'
         run: cargo test --locked -p horizon-mod-points --features wasm-guest,listener-fixture --test wire_loopback
   verify:
-    needs: [verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-points]
+    needs: [verify-scope, verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-points]
     if: always()
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Every part of verify passed or had nothing to do
         env:
+          SCOPE: ${{ needs.verify-scope.result }}
           TREE: ${{ needs.verify-tree.result }}
           LINT: ${{ needs.verify-lint.result }}
           SERVER: ${{ needs.verify-server.result }}
           LAUNCHER: ${{ needs.verify-launcher.result }}
           TEST: ${{ needs.verify-test.result }}
           MODPOINTS: ${{ needs.verify-mod-points.result }}
+          EVENT: ${{ github.event_name }}
+          RUST_ANSWER: ${{ needs.verify-scope.outputs.rust }}
+          LAUNCHER_ANSWER: ${{ needs.verify-scope.outputs.launcher }}
+        # A skipped lint or launcher part passes only where its own `if` left it out: the merge queue, or verify-scope's
+        # answer exactly `false` (compared with case, as `if` doesn't). Anywhere else it was never decided for
+        # (verify-scope failed, or the run was cancelled first), which fails.
         run: |
-          echo "tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST, mod points: $MODPOINTS"
-          for result in "$TREE" "$LINT" "$SERVER" "$LAUNCHER" "$TEST" "$MODPOINTS"; do
+          echo "which parts run: $SCOPE, tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST, mod points: $MODPOINTS"
+          [ "$SCOPE" = success ] || exit 1
+          for result in "$TREE" "$SERVER" "$TEST" "$MODPOINTS"; do
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
+          left_out() { [ "$EVENT" = merge_group ] || [ "$1" = false ]; }
+          [ "$LINT" = success ] || { [ "$LINT" = skipped ] && left_out "$RUST_ANSWER"; } || exit 1
+          [ "$LAUNCHER" = success ] || { [ "$LAUNCHER" = skipped ] && left_out "$LAUNCHER_ANSWER"; } || exit 1
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
   # (`gh workflow run checks --ref <branch> -f arm64=true`): GitHub's runner queue is the bottleneck, and main's runs
   # gate the releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this
