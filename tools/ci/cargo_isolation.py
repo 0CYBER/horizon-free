@@ -15,6 +15,7 @@ and nothing newer than Python 3.9 except tomllib, which is optional (without it 
 Usage: cargo_isolation.py <checkout> [--top <dir>]  (--top stops the ancestor walk; for tests)
 """
 import os
+import re
 import shutil
 import sys
 
@@ -30,6 +31,26 @@ FORBIDDEN_PREFIXES = (
 )
 # What these jobs set themselves, with the one value they set (dtolnay/rust-toolchain exports it).
 ALLOWED = {"CARGO_INCREMENTAL": "0"}
+# The runners' own job count (docs/release-flow.md): accepted as a plain positive integer, nothing else, not empty.
+JOBS = "CARGO_BUILD_JOBS"
+JOBS_VALUE = re.compile(r"[1-9][0-9]{0,3}")
+# Cargo's documented keys in the prefix families whose names have no free-form part: printed by exact name when the
+# whole variable name is one of these. Any other name in a family (a registry, alias, source or target triple, a
+# custom profile) is only counted.
+_BUILD_KEYS = (
+    "JOBS", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTDOC", "TARGET", "TARGET_DIR", "RUSTFLAGS",
+    "RUSTDOCFLAGS", "INCREMENTAL", "DEP_INFO_BASEDIR", "BUILD_DIR",
+)
+_PROFILES = ("DEV", "RELEASE", "TEST", "BENCH")
+_PROFILE_KEYS = (
+    "OPT_LEVEL", "DEBUG", "SPLIT_DEBUGINFO", "STRIP", "DEBUG_ASSERTIONS", "OVERFLOW_CHECKS", "LTO", "PANIC",
+    "INCREMENTAL", "CODEGEN_UNITS", "RPATH",
+)
+KNOWN_NAMES = frozenset(
+    ["CARGO_BUILD_" + key for key in _BUILD_KEYS]
+    + ["CARGO_TARGET_DIR"]
+    + ["CARGO_PROFILE_" + profile + "_" + key for profile in _PROFILES for key in _PROFILE_KEYS]
+)
 
 
 def forbidden(name):
@@ -74,6 +95,11 @@ def table_names(path):
     return known + ([f"other ({others})"] if others else [])
 
 
+def job_count_allowed(environ):
+    """CARGO_BUILD_JOBS is set to a plain positive integer of at most four digits (an empty value is refused)."""
+    return JOBS in environ and JOBS_VALUE.fullmatch(environ[JOBS]) is not None
+
+
 def problems(checkout, environ, top=None):
     found = []
     for directory in ancestors(checkout, top):
@@ -86,13 +112,15 @@ def problems(checkout, environ, top=None):
                 found.append(f"cargo configuration outside the checkout: {path} (could not be parsed)")
             else:
                 found.append(f"cargo configuration outside the checkout: {path} (tables: {', '.join(names) or 'none'})")
-    # A single name is printed as it is; a prefix family only by its prefix and a count: the rest of such a name is
-    # free text (a registry's name, an alias, a target triple).
+    # A single name, or a family name on the fixed KNOWN_NAMES list, is printed as it is; any other family name only
+    # by its prefix and a count: the rest of such a name is free text (a registry's name, an alias, a target triple).
+    if JOBS in environ and not job_count_allowed(environ):
+        found.append(f"variable set: {JOBS} (not a plain job count)")
     families = {}
     for name in sorted(environ):
-        if not forbidden(name) or environ[name] == "" or ALLOWED.get(name) == environ[name]:
+        if name == JOBS or not forbidden(name) or environ[name] == "" or ALLOWED.get(name) == environ[name]:
             continue
-        if name in FORBIDDEN:
+        if name in FORBIDDEN or name in KNOWN_NAMES:
             found.append(f"variable set: {name}")
         else:
             prefix = next(prefix for prefix in FORBIDDEN_PREFIXES if name.startswith(prefix))
@@ -110,18 +138,34 @@ def main(argv):
         top = os.path.abspath(args[index + 1])
         del args[index:index + 2]
     [checkout] = args
-    found = problems(checkout, dict(os.environ), top)
+    environ = dict(os.environ)
+    try:
+        found = problems(checkout, environ, top)
+    except OSError:
+        # realpath() can fail on a link that changes while it is read; its error names the path.
+        print("::error::could not read the checkout's parent folders")
+        return 1
     if found:
         for line in found:
             print(f"::error::{line}")
         print("::error::cargo would use configuration from outside the checkout; remove it from the runner")
         return 1
-    home = os.path.join(os.environ["RUNNER_TEMP"], "cargo-home")
-    shutil.rmtree(home, ignore_errors=True)
-    os.mkdir(home)
-    with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-        env.write(f"CARGO_HOME={home}\n")
-    print(f"CARGO_HOME={home}")
+    # Fixed messages only, no path and no exception text: both would show the runner's variables in a public log.
+    try:
+        home = os.path.join(os.environ["RUNNER_TEMP"], "cargo-home")
+        shutil.rmtree(home, ignore_errors=True)
+        os.mkdir(home)
+    except Exception:
+        print("::error::could not create the run's cargo home")
+        return 1
+    try:
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+            env.write(f"CARGO_HOME={home}\n")
+    except Exception:
+        print("::error::could not write the run's environment file")
+        return 1
+    if job_count_allowed(environ):
+        print(f"allowed: {JOBS}")
     # game-build.yml accepts the run only when this is its last line: an empty or cut-off download prints nothing.
     print(CLEAN)
     return 0

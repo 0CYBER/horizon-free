@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: Ref to compare against
+        description: "Ref or commit SHA to compare against: letters, digits, ., _, / and -, starting with a letter or digit"
         default: main
       scale:
         description: How many times the default pack sizes
