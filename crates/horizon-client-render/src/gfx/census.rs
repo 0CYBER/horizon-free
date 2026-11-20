@@ -8,6 +8,22 @@ use super::{
     Renderer, SectionGpu, SectionKey, TerrainVertex, arena, flat, lod, texture_bytes, visbuffer,
 };
 
+/// What the backend's allocator holds (`Renderer::gpu_memory_by_label`).
+pub struct GpuMemory {
+    pub allocated: u64,
+    pub reserved: u64,
+    /// Bytes by label of what holds them, largest first.
+    pub labels: Vec<(String, u64)>,
+    pub blocks: Vec<GpuBlock>,
+}
+
+/// One block of device memory: its size, the bytes allocated in it and its largest allocations.
+pub struct GpuBlock {
+    pub size: u64,
+    pub used: u64,
+    pub names: Vec<String>,
+}
+
 impl Renderer {
     /// Sections with GPU buffers, for soak tests watching residency.
     pub fn resident_sections(&self) -> usize {
@@ -110,19 +126,45 @@ impl Renderer {
     /// Device memory the backend's allocator holds, by the label of what holds
     /// it, largest first, with its allocated and reserved totals (Vulkan and
     /// DirectX 12; none on Metal and OpenGL) (`horizon-ctl memory`).
-    pub fn gpu_memory_by_label(&self) -> Option<(u64, u64, Vec<(String, u64)>)> {
+    pub fn gpu_memory_by_label(&self) -> Option<GpuMemory> {
         let report = self.device.generate_allocator_report()?;
         let mut by_label: HashMap<String, u64> = HashMap::new();
-        for a in report.allocations {
-            *by_label.entry(a.name).or_default() += a.size;
+        for a in &report.allocations {
+            *by_label.entry(a.name.clone()).or_default() += a.size;
         }
         let mut labels: Vec<_> = by_label.into_iter().collect();
         labels.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        Some((
-            report.total_allocated_bytes,
-            report.total_reserved_bytes,
+        // Each block with what is used in it, to see where reserved memory sits empty.
+        let blocks = report
+            .blocks
+            .iter()
+            .map(|block| {
+                let inside = report.allocations.get(block.allocations.clone());
+                let used: u64 = inside.iter().flat_map(|a| a.iter()).map(|a| a.size).sum();
+                let mut names: Vec<(&str, u64)> = inside
+                    .iter()
+                    .flat_map(|a| a.iter())
+                    .map(|a| (a.name.as_str(), a.size))
+                    .collect();
+                names.sort_by_key(|a| std::cmp::Reverse(a.1));
+                let names = names
+                    .iter()
+                    .take(3)
+                    .map(|(n, s)| format!("{n} {s}"))
+                    .collect();
+                GpuBlock {
+                    size: block.size,
+                    used,
+                    names,
+                }
+            })
+            .collect();
+        Some(GpuMemory {
+            allocated: report.total_allocated_bytes,
+            reserved: report.total_reserved_bytes,
             labels,
-        ))
+            blocks,
+        })
     }
     /// Heap bytes of the renderer's per-section bookkeeping (`horizon-ctl memory`):
     /// resident sections, far tiles, block entities and light sources by section.
@@ -159,5 +201,49 @@ impl Renderer {
                 ),
             ),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Shared blocks stay at or under 16 MiB, so a block a few long-lived buffers hold is
+    /// small, and a larger buffer gets a block of its own size (#15723).
+    #[test]
+    fn larger_buffers_get_their_own_block_and_shared_blocks_stay_small() {
+        let instance = crate::gfx::test_gpu::instance();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let Ok((device, _queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                memory_hints: super::super::surface_setup::MEMORY_HINTS,
+                ..Default::default()
+            }))
+        else {
+            return;
+        };
+        let buffer = |mb: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("census test"),
+                size: mb << 20,
+                usage: wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        // Six-MiB buffers: enough of them to open the largest shared block size.
+        let buffers: Vec<_> = (0..12).map(|_| buffer(6)).chain([buffer(40)]).collect();
+        let Some(report) = device.generate_allocator_report() else {
+            return; // Metal and OpenGL have none.
+        };
+        for block in &report.blocks {
+            let inside = &report.allocations[block.allocations.clone()];
+            assert!(
+                block.size <= 16 << 20 || inside.len() == 1,
+                "a {} MiB block shared by {} allocations",
+                block.size >> 20,
+                inside.len()
+            );
+        }
+        drop(buffers);
     }
 }

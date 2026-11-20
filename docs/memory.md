@@ -31,7 +31,7 @@ The reply is built in `crates/horizon-client/src/game/memory.rs`. Sizes are MiB 
 | `far_tiles` | Far terrain tiles: `active` and `cached`, and the tiles `kept` for a return with their `kept_mb` |
 | `renderer.section_arenas_mb`, `section_vertices_mb` | The GPU buffers of the section vertex arenas, and the vertices that resident sections and far tiles hold in them |
 | `renderer.cpu` | The renderer's CPU-side bookkeeping: `resident_sections_mb`, `far_tiles_mb`, `block_entities_mb`, `light_sources_mb` |
-| `renderer.gpu` | The GPU allocator's `allocated_mb` and `reserved_mb`, and the 40 largest resources as `["label", mb]` rows in `by_label_mb`; `null` without Vulkan or DirectX 12 |
+| `renderer.gpu` | The GPU allocator's `allocated_mb` and `reserved_mb`, and the 40 largest resources as `["label", mb]` rows in `by_label_mb`, and `blocks`, each block of device memory as `[size_mb, used_mb, its largest allocations]` (reserved memory sitting empty shows as `used_mb` below `size_mb`); `null` without Vulkan or DirectX 12 |
 | `named_mb`, `unattributed_mb` | `named_mb` adds up the columns (a section both the window and its server thread hold once), `server_generation`, `entities`, `players`, `chunk_send`, the two queues, `renderer.cpu` and the far tiles' `kept_mb`. `unattributed_mb` is `process.resident_mb` less that; it can be negative where a census overlaps another, and `null` where the resident set is not read |
 | `heap_by_tag_mb` | Only in an `alloc-census` build, otherwise `null`: see [the heap census](#who-allocated-it-the-heap-census) |
 
