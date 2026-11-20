@@ -53,6 +53,8 @@ def all_finite_nonnegative(value):
     return True
 
 
+@unittest.skipUnless(hasattr(os, "wait4") and hasattr(os, "getloadavg"),
+                     "the profiler measures its runs with os.wait4 and os.getloadavg, which Windows lacks")
 class MeasurementAdmissionTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

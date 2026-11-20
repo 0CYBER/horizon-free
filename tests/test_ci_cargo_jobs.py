@@ -27,6 +27,7 @@ class CargoJobsTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(cargo_jobs.jobs(*args), expected)
 
+    @unittest.skipUnless(sys.platform == "linux", "limits() reads a Linux runner's cgroup and CPU affinity")
     def test_limits_read_the_runner_cgroup(self):
         machine_cpus = len(os.sched_getaffinity(0))
         machine_memory = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
