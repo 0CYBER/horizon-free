@@ -25,4 +25,18 @@ impl Game<'_> {
     ) {
         self.fire_dispense_method(dimension, pos, facing, state, stack, answer);
     }
+
+    /// A dispenser acts on `stack`, before the faced block's `dispense_method` and the item's
+    /// `dispense_item`: one global answer for any block or item. A mod's answer wins and no
+    /// part is asked. Server-side, not droppers.
+    pub(in crate::game) fn native_dispenser_acts(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        facing: Direction,
+        stack: &ItemStack,
+        answer: &mut Option<mod_api::Dispensed>,
+    ) {
+        self.fire_dispenser_acts(dimension, pos, facing, stack, answer);
+    }
 }

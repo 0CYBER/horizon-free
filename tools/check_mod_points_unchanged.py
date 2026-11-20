@@ -10,9 +10,10 @@ added, removed (accepted and failing) and changed, and fails on:
 - a removed point unless tools/mod_points_removed.txt lists it (`name | #PR | reason`) and it is not a `Game` method or
   a published loop, and no fixture (tools/ci/fn-replace-check, the wasm host's), doc or mod manifest names it;
 - a changed point (name kept, target or hash different) unless the same file lists it;
-- an added point, unless --allow-added;
+- an added point or catalog hook, unless --allow-added;
 - a difference in loops.json, and a difference in the other generated files that no accepted point change explains (the
-  generated API differs whenever a point does);
+  generated API differs whenever a point does). An additive catalog hook can explain its generated catalog and notes
+  and its own guest dispatch;
 - a removed internals.json entry (one becoming `shape_only` too), and with --allow-added only that: added and changed
   entries are listed and pass (`cargo horizon-mod update` reports signature-hash changes for declared internals).
 Moving code out of `game/` removes its points: list them in the file. A method of `Game` keeps its name, module path and
@@ -43,6 +44,7 @@ run builds the generator's crates and their dependencies twice.
 """
 
 import argparse
+from bisect import bisect_left
 import difflib
 import hashlib
 import json
@@ -69,6 +71,13 @@ SCRATCH_FILES = {"points-timing.txt"}
 # addition or a change with --allow-added; see internals_diff).
 INTERNALS = "internals.json"
 STRICT_FILES = {"loops.json", INTERNALS}
+HOOK_CATALOG = "catalog.json"
+GUEST_WIRE = "wire_guest_generated.rs"
+HOOK_FILES = {HOOK_CATALOG, "hook-notes.md", GUEST_WIRE}
+GUEST_HOOK_ARM = re.compile(
+    r"^\d+ => \{ let receiver = super::hooks\(\); .*?(?=^\d+ => \{|^_ =>)", re.MULTILINE | re.DOTALL)
+GUEST_HOOK_CALL = re.compile(r"\blet answer = receiver\.([a-zA-Z0-9_]+)\(")
+WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
 # Where a mod, a fixture or a doc may name a point.
 REFERENCE_PATHS = ("tools/ci/fn-replace-check", "crates/horizon-mod-wasm/tests/fixture", "docs", "*horizon-mod.toml")
 
@@ -133,6 +142,61 @@ def diff_files(base_dir, head_dir, base_root=None, head_root=None):
             diffs.append((name, list(difflib.unified_diff(
                 old.splitlines(), new.splitlines(), f"base/{name}", f"head/{name}", lineterm="", n=1))))
     return sorted(head_files - base_files), sorted(base_files - head_files), diffs
+
+
+def added_catalog_hooks(base_dir, head_dir):
+    base = json.loads((base_dir / HOOK_CATALOG).read_text(encoding="utf-8"))
+    head = json.loads((head_dir / HOOK_CATALOG).read_text(encoding="utf-8"))
+    try:
+        before = {hook["name"] for hook in base["hooks"]}
+        after = {hook["name"] for hook in head["hooks"]}
+    except (TypeError, KeyError):
+        return set()
+    if len(before) != len(base["hooks"]) or len(after) != len(head["hooks"]) or not all(
+        isinstance(name, str) for name in before | after
+    ):
+        return set()
+    retained = [hook for hook in head["hooks"] if hook["name"] in before]
+    return after - before if {**head, "hooks": retained} == base else set()
+
+
+def guest_wire_without_hooks(guest, hooks):
+    """Remove the new entries and close the gaps in the generator's private record numbers."""
+    for name in hooks:
+        guest, count = re.subn(rf'crate::HookId::\w+ => "{re.escape(name)}",', "", guest)
+        if count != 1:
+            return None
+    removed_records = set()
+
+    def remove_arm(match):
+        arm = match[0]
+        call = GUEST_HOOK_CALL.search(arm)
+        if call is None or call[1] not in hooks:
+            return arm
+        removed_records.update(map(int, WIRE_RECORD.findall(arm)))
+        return ""
+
+    guest = GUEST_HOOK_ARM.sub(remove_arm, guest)
+    gaps = sorted(removed_records - set(map(int, WIRE_RECORD.findall(guest))))
+
+    def renumber(match):
+        number = int(match[1])
+        return f"__wire_record_{number - bisect_left(gaps, number)}"
+
+    return WIRE_RECORD.sub(renumber, guest)
+
+
+def explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root):
+    changed = {name for name, _ in diffs}
+    if HOOK_CATALOG not in changed or changed - HOOK_FILES:
+        return set()
+    hooks = added_catalog_hooks(base_dir, head_dir)
+    if hooks and GUEST_WIRE in changed:
+        base = read_text(base_dir / GUEST_WIRE, [base_root] if base_root else [])
+        head = read_text(head_dir / GUEST_WIRE, [head_root] if head_root else [])
+        if guest_wire_without_hooks(head, hooks) != base:
+            return set()
+    return hooks
 
 
 def internal_entries(text):
@@ -385,6 +449,13 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
     removed_ok, removed_bad, changed_ok, changed_bad = classify(
         removed, changed, base_points, accepted, loop_targets(base_dir / "loops.json"), files() if removed else {})
     explained = bool((added and allow_added) or removed_ok or changed_ok)
+    # Function replacement points and named hooks are produced from different inputs. A new
+    # named hook may change its generated files while leaving every replacement point intact.
+    if allow_added and not explained and not files_added and not files_removed:
+        hook_additions = explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root)
+        if hook_additions:
+            print("Catalog hooks added (accepted): " + ", ".join(sorted(hook_additions)))
+            explained = True
     status = verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added,
                      internals)
     lines = summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, files_removed, diffs,
@@ -645,7 +716,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="the git ref to compare with (default: the merge base of HEAD and origin/main)")
     parser.add_argument("--allow-added", action="store_true",
-                        help="accept added points, and added or changed internals")
+                        help="accept added points and catalog hooks, and added or changed internals")
     parser.add_argument("--target-dir", type=Path,
                         help="Cargo build folder of the working tree; the base builds in mod-points-base inside it (default: "
                              "$CARGO_TARGET_DIR, else the repository's target)")

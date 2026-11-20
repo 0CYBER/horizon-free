@@ -347,6 +347,30 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("no accepted point change", text)
 
+    def test_catalog_hook_addition_preserves_existing_guest_dispatch(self):
+        old_hook = {"name": "existing", "neoforge": "existing event"}
+        new_hook = {"name": "added", "neoforge": "none"}
+        old_arm = ('12 => { let receiver = super::hooks(); let p = crate::__wire_record_52(value);\n'
+                   ' let answer = receiver.existing(&p); out.put_owned(answer); }\n')
+        new_arm = ('27 => { let receiver = super::hooks(); let p = crate::__wire_record_52(value);\n'
+                   ' let answer = receiver.added(&p); out.put_owned(answer); }\n')
+        old_name = 'crate::HookId::Existing => "existing",'
+        new_name = 'crate::HookId::Added => "added",'
+        fallback = '_ => return Err(crate::wire::WireError::Tag(id)) }\n'
+        base = {"catalog.json": json.dumps({"hooks": [old_hook]}), "hook-notes.md": "existing notes",
+                "wire_guest_generated.rs": old_name + "\n" + old_arm + fallback}
+        head = {"catalog.json": json.dumps({"hooks": [new_hook, old_hook]}), "hook-notes.md": "includes added hook",
+                "wire_guest_generated.rs": new_name + old_name + "\n" + new_arm
+                + old_arm.replace("_52", "_53") + fallback}
+        for allowed in (True, False):
+            with self.subTest(allow_added=allowed):
+                status, _ = self.run_compare([point("a")], [point("a")], base, head, allow_added=allowed)
+                self.assertEqual(status, 0 if allowed else 1)
+        modified = {**head, "wire_guest_generated.rs":
+                    head["wire_guest_generated.rs"].replace("receiver.existing(&p)", "receiver.existing(&other)")}
+        status, _ = self.run_compare([point("a")], [point("a")], base, modified, allow_added=True)
+        self.assertEqual(status, 1)
+
     def test_a_loops_json_difference_fails_with_the_flag(self):
         status, _ = self.run_compare([point("a")], [point("a"), point("b")], {"loops.json": NO_LOOPS},
                                      {"loops.json": json.dumps({"loops": [], "x": 1})}, allow_added=True)

@@ -602,17 +602,26 @@ impl Game<'_> {
     ) -> Result<Option<ItemStack>> {
         let mut answer = None;
         if self.serving.is_some() || self.options.dedicated.is_some() {
-            // The block the dispenser faces has the first say (`dispense_method`), then the
-            // item's own part (`dispense_item`); the first answer wins.
-            let front = self.block_at(offset(pos, facing));
-            self.native_dispense_method(
+            // A mod's global `dispenser_acts` first, then the block the dispenser faces
+            // (`dispense_method`), then the item's part (`dispense_item`); the first answer wins.
+            self.native_dispenser_acts(
                 self.dim.id(),
                 [pos.0, pos.1, pos.2],
                 facing,
-                front,
                 &stack,
                 &mut answer,
             );
+            if answer.is_none() {
+                let front = self.block_at(offset(pos, facing));
+                self.native_dispense_method(
+                    self.dim.id(),
+                    [pos.0, pos.1, pos.2],
+                    facing,
+                    front,
+                    &stack,
+                    &mut answer,
+                );
+            }
             if answer.is_none() {
                 self.native_dispense_item(
                     self.dim.id(),
