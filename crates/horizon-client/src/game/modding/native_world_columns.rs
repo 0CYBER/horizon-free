@@ -72,6 +72,40 @@ impl Game<'_> {
         }
         Ok(self.loaded_column_heights(columns, heightmap))
     }
+    /// For a client mod: each column's surface as this window's far terrain holds it (`Lod::surface`), whether
+    /// or not the chunk is loaded; none where no far tile covers it and everywhere while far terrain is off. `Err`
+    /// says why nothing was read: no client world, or more than 65,536 columns (`MAX_COLUMNS`).
+    pub(super) fn client_far_surface(
+        &self,
+        columns: &[(i32, i32)],
+    ) -> Result<Vec<Option<TerrainColumn>>, String> {
+        if !self.remote.as_ref().is_some_and(|r| r.logged_in) {
+            return Err("no client world is open".to_string());
+        }
+        if columns.len() > MAX_COLUMNS {
+            return Err(format!(
+                "{} columns, more than {MAX_COLUMNS} a call",
+                columns.len()
+            ));
+        }
+        let Some(lod) = self.lod.as_ref() else {
+            return Ok(vec![None; columns.len()]);
+        };
+        // The far tiles' biome ids are the world's table, as their worker context's (`worker_context`).
+        let (facts, biomes) = (self.res.facts(), world_biomes!(self));
+        Ok(columns
+            .iter()
+            .map(|&(x, z)| {
+                let s = lod.surface(x, z)?;
+                Some(mod_api::__private::built::terrain_column(
+                    s.height,
+                    facts.get(s.state).name.to_string(),
+                    s.water.map(|(top, _)| top),
+                    biomes.name(s.biome).to_owned(),
+                ))
+            })
+            .collect())
+    }
     /// For a server mod: each column's height by `heightmap` in the authoritative level `dimension` (the one being
     /// ticked), none for a column not loaded. `Err` says why nothing was read: another dimension or a client of a
     /// server, or more than 65,536 columns (`MAX_COLUMNS`).

@@ -108,6 +108,21 @@ pub trait ClientViewClientHost {
         heightmap: Heightmap,
     ) -> Result<Vec<Option<i32>>, String>;
     /// Side: client.
+    /// For a client mod drawing a map past the loaded chunks: each column's surface as this window's far
+    /// terrain (the LOD Distance setting) holds it, whether or not the chunk is loaded. It is the finest
+    /// far tile sampled there, so a far column is the reduced surface of a cell up to many blocks wide, and
+    /// it comes from wherever the far terrain does (this world's generator, the server's offer, the chunks
+    /// kept from earlier visits, a server's BlueMap). None for a column no tile covers yet, and for every
+    /// column while far terrain is off or not started; the tiles follow the camera, so a column far from it
+    /// can go back to None. Inside the loaded chunks read them instead (`client_surface_heights`): a tile can
+    /// lag an edit. `Err`, reading nothing, for no client world (the title screen) or more than 65,536
+    /// columns (`MAX_COLUMNS`).
+    #[access(WorldOnly)]
+    fn client_far_surface(
+        &self,
+        columns: &[(i32, i32)],
+    ) -> Result<Vec<Option<TerrainColumn>>, String>;
+    /// Side: client.
     /// Points the view at `entity` (`Minecraft.setCameraEntity`), as a server's camera packet
     /// does; the local player's own ref puts it back. True when the view now follows it; false,
     /// with nothing changed, for a stale ref, an entity this window is not shown, or one the

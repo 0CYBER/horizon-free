@@ -87,6 +87,22 @@ levels too, but keeps the client level, so the old handle reads again after the 
 server-only reads, the other level reads and the entity reads (`entities_in`) refuse a viewed level.
 Native and wasm mods use the same handle methods.
 
+## Far terrain reads
+
+A map drawing past the loaded chunks reads the far terrain the player already sees there:
+`client_far_surface(&columns)` gives each block column's `TerrainColumn` (top solid height, its
+block, the water's top and the biome) from the finest far tile sampled over it, whether or not
+its chunk is loaded. A far tile's cell can be many blocks wide, so a far column is that cell's
+reduced surface, and it comes from wherever the far terrain does: the world's generator, the
+server's offer, chunks kept from earlier visits or a server's BlueMap. It reads nothing new
+from the server.
+
+A column no tile covers yet is `None`, and every column is `None` while far terrain is off
+(LOD Distance 0) or not started. The tiles follow the camera, so a column can go back to `None`
+after the player moves away: keep what you read. Inside the loaded chunks read them instead
+(`client_surface_heights`), since a far tile can lag an edit. No client world, or more than
+65,536 columns in one call, is `Err` and reads nothing.
+
 ## Crosshair reads
 
 `ClientHost::crosshair_target()` returns the ordinary interaction-range target as

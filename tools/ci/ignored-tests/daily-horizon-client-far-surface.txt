@@ -1,0 +1,3 @@
+# A client's far terrain read needs prepared resources.
+# PACKAGE TEST TARGET daily REASON
+horizon-client game::native_world_columns::tests::a_client_reads_the_far_terrains_surface_past_its_chunks lib daily resources

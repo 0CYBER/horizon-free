@@ -94,7 +94,8 @@ pub struct ColumnBlocks {
     pub tints: Vec<u32>,
 }
 /// What `terrain_surface` found at one column of terrain nobody has loaded: the level's generator before its
-/// features (trees, ores, lava pools, cacti) are placed.
+/// features (trees, ores, lava pools, cacti) are placed. `client_far_surface` gives the same fields for a
+/// client's far terrain, the surface its finest far tile holds there.
 /// Mods receive this snapshot from the game; they do not construct it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

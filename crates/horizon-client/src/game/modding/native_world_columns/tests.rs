@@ -77,3 +77,58 @@ fn terrain_columns_are_the_generators_own_surface_and_load_no_chunk() {
         assert!(game.terrain_surface(OVERWORLD, &many).is_err());
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn a_client_reads_the_far_terrains_surface_past_its_chunks() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        use horizon_client::lod::{Column, Lod, Surface, TileKey};
+        // A tile of 8-block cells over x -384..-256, z 256..384, no chunk of it loaded.
+        let columns = [(-300, 300), (-257, 383), (-384, 256), (1000, 1000)];
+        assert!(
+            game.client_far_surface(&columns).is_err(),
+            "no client world"
+        );
+        let (client, _server) = horizon_protocol::connection::Pipe::pair();
+        game.connect_local(client, "far-surface-client").unwrap();
+        game.remote.as_mut().unwrap().logged_in = true;
+        game.lod = None;
+        assert_eq!(
+            game.client_far_surface(&columns).unwrap(),
+            [None, None, None, None],
+            "far terrain off"
+        );
+        let registry = game.pack.assets.registry;
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let water = registry.default_state("minecraft:water").unwrap();
+        let surface = Surface {
+            height: 61,
+            state: stone,
+            water: Some((63, water)),
+            biome: game.res.biomes().id("minecraft:ocean"),
+        };
+        let mut lod = Lod::new(game.streaming.lod_source(), game.worker_context());
+        lod.insert_ready_for_test(
+            TileKey {
+                x: -3,
+                z: 2,
+                level: 3,
+            },
+            vec![Column::from_surface(Some(surface)); 16 * 16],
+        );
+        game.lod = Some(lod);
+        let got = game.client_far_surface(&columns).unwrap();
+        for (column, at) in got.iter().zip(&columns).take(3) {
+            let column = column
+                .as_ref()
+                .unwrap_or_else(|| panic!("a far column at {at:?}"));
+            assert_eq!(column.height, 61);
+            assert_eq!(column.block, "minecraft:stone");
+            assert_eq!(column.water, Some(63));
+            assert_eq!(column.biome, "minecraft:ocean");
+        }
+        assert_eq!(got[3], None, "no tile there");
+        let many = vec![(0, 0); crate::game::block_edits::MAX_COLUMNS + 1];
+        assert!(game.client_far_surface(&many).is_err());
+    });
+}
