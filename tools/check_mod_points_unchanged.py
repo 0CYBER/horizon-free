@@ -23,6 +23,18 @@ signature, and only its body delegates. A mod that needs a moved function asks f
     python3 tools/check_mod_points_unchanged.py --allow-added        # new points are fine
     python3 tools/check_mod_points_unchanged.py --target-dir DIR     # the Cargo build folder of the working tree (default: target)
     python3 tools/check_mod_points_unchanged.py --compare OLD NEW    # compare two snapshot folders, build nothing
+    python3 tools/check_mod_points_unchanged.py --snapshots DIR      # use DIR's stored snapshot of the base if it has one
+    python3 tools/check_mod_points_unchanged.py --store-snapshot DIR # CI, main's pushes and the merge queue: keep HEAD's
+
+`--store-snapshot` builds and runs the generator on HEAD and keeps its output in DIR/<commit>, beside a marker that
+records the key (STORE_FORMAT, the commit, the checkout's `rustc -vV`, HORIZON_POINT_NAMES, RUSTC, RUSTUP_TOOLCHAIN),
+the checkout's path and every file's SHA-256, with a digest over all of it; it writes under a temporary name and
+renames, and keeps the newest KEEP_SNAPSHOTS. A staged copy (`.horizon-source-staged`) stores nothing. CI passes DIR on
+the build folder's sticky disk, which only main's pushes and the merge queue save, so a pull request (whose own copy of
+this script runs) can never leave a snapshot there; this script also refuses to store unless SAVE_BUILD_DISK is `true`.
+With `--snapshots`, a snapshot whose marker matches its digest and the base's key, and whose files all match their
+hashes, stands in for the base's build; anything else is a miss and the base is built as below. The commit decides the
+generator's source, its Cargo.lock and the tree it reads; the rest of the key covers what does not come from the commit.
 
 The base is built in a temporary `git worktree`, removed afterwards, into its own build folder (`mod-points-base` inside the
 working tree's): Cargo hashes a workspace member's path relative to the workspace root, so the base's and the working
@@ -32,6 +44,7 @@ run builds the generator's crates and their dependencies twice.
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -40,6 +53,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 DOC = "docs/layers.md#mod-points-stay-put"
@@ -426,16 +440,15 @@ def base_target(target_dir):
     return target_dir / "mod-points-base"
 
 
-def snapshot(root, out, target_dir, side):
-    """Run the hook_snapshot example of the tree at `root`, writing into `out`. Cargo's and the example's output is
-    captured: it prints nothing on success, and the end of stderr on failure."""
+def cargo(root, target_dir, side, verb, *extra):
+    """`cargo build` or `cargo run` of the hook_snapshot example in the tree at `root`, quiet, and the seconds it took.
+    Cargo's and the example's output is captured: nothing on success, the end of stderr on failure."""
     env = dict(os.environ, CARGO_TARGET_DIR=str(target_dir))
-    command = ["cargo", "run", "--locked", "--quiet", "-p", "horizon-mod-api-gen", "--example", "hook_snapshot",
-               "--", str(out), str(root)]
-    print(f"Snapshot of the {side} ({root})", flush=True)
+    command = ["cargo", verb, "--locked", "--quiet", "-p", "horizon-mod-api-gen", "--example", "hook_snapshot", *extra]
+    start = time.monotonic()
     result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, errors="replace")
     if result.returncode == 0:
-        return
+        return time.monotonic() - start
     stderr = result.stderr.strip()
     if LOCK_OUT_OF_DATE in stderr:
         if side == "base":
@@ -443,6 +456,183 @@ def snapshot(root, out, target_dir, side):
         raise RuntimeError(f"the {side}'s Cargo.lock is out of date: run cargo once without --locked, then rerun")
     tail = "\n".join(stderr.splitlines()[-TAIL_LINES:])
     raise RuntimeError(f"hook_snapshot failed on the {side} (exit {result.returncode}): {' '.join(command)}\n{tail}")
+
+
+def snapshot(root, out, target_dir, side):
+    """Build, then run, the hook_snapshot example of the tree at `root`, writing into `out`: (compile, generator)
+    seconds. Built first so the log tells the two apart."""
+    print(f"Snapshot of the {side} ({root})", flush=True)
+    compiled = cargo(root, target_dir, side, "build")
+    ran = cargo(root, target_dir, side, "run", "--", str(out), str(root))
+    return compiled, ran
+
+
+# A stored snapshot: STORE/<commit>/out (what hook_snapshot wrote) and STORE/<commit>/marker.json, outside the compared
+# folder. A change to this layout or to what decides a snapshot raises STORE_FORMAT, so older snapshots miss.
+STORE_FORMAT = 1
+MARKER = "marker.json"
+KEEP_SNAPSHOTS = 30
+TEMPORARY = ".partial-"
+
+
+STAGED_STAMP = ".horizon-source-staged"
+
+
+def toolchain(root):
+    """`rustc -vV` of the compiler Cargo uses in the checkout at `root` (`RUSTC`, else rustup's choice there, a
+    directory override included), or None when it cannot run. It is the base's compiler only when the checkout selects
+    the toolchain as the base does (selects_base_toolchain)."""
+    try:
+        result = subprocess.run([os.environ.get("RUSTC") or "rustc", "-vV"], cwd=root, capture_output=True, text=True)
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+# The files in a directory that rustup reads to choose its toolchain.
+TOOLCHAIN_FILES = ("rust-toolchain", "rust-toolchain.toml")
+
+
+def selects_base_toolchain(base, root=ROOT):
+    """Whether the checkout at `root` has the base's toolchain files (the same text, or both without the file), so the
+    compiler probed in the checkout is the one a build of the base would get. A file the change adds, edits or removes,
+    tracked or not, makes this False."""
+    for name in TOOLCHAIN_FILES:
+        in_base = git("show", f"{base}:{name}", cwd=root) if git("ls-tree", "--name-only", base, "--", name,
+                                                                   cwd=root) else None
+        path = Path(root) / name
+        here = path.read_text(encoding="utf-8", errors="replace").strip() if path.is_file() else None
+        if in_base != here:
+            return False
+    return True
+
+
+def snapshot_key(commit, rustc, env=None):
+    """Everything that decides a snapshot besides the commit's tree: the stored and the looked-up key must be equal."""
+    env = os.environ if env is None else env
+    return {"format": STORE_FORMAT, "commit": commit, "rustc": rustc, "point_names": env.get("HORIZON_POINT_NAMES"),
+            "rustc_env": env.get("RUSTC"), "rustup_toolchain": env.get("RUSTUP_TOOLCHAIN")}
+
+
+def file_hashes(folder):
+    """{relative path: SHA-256} of every file under `folder`."""
+    folder = Path(folder)
+    return {path.relative_to(folder).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(folder.rglob("*")) if path.is_file()}
+
+
+def marker_digest(key, root, files):
+    """SHA-256 over everything the marker says, so a damaged key, root or file list is a miss."""
+    text = json.dumps({"key": key, "root": root, "files": files}, sort_keys=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def may_store(env=None):
+    """Only where the disk is saved (SAVE_BUILD_DISK: main's pushes and the merge queue), never in a pull request."""
+    env = os.environ if env is None else env
+    return env.get("SAVE_BUILD_DISK") == "true" and env.get("GITHUB_EVENT_NAME") != "pull_request"
+
+
+def store_snapshot(store, out, key, root, keep=KEEP_SNAPSHOTS):
+    """Keep the snapshot folder `out`, made from the tree at `root`, as STORE/<commit>: copied under a temporary name
+    with its marker, then renamed. The marker records the generating root, which the comparison replaces in the text as
+    it replaces a base worktree's. Then keeps the newest `keep` snapshots. A failed store leaves no partial copy: on a
+    full disk it would take the space the job's next build needs."""
+    store = Path(store)
+    store.mkdir(parents=True, exist_ok=True)
+    commit = key["commit"]
+    partial = store / f"{TEMPORARY}{commit}-{os.getpid()}"
+    try:
+        shutil.rmtree(partial, ignore_errors=True)
+        shutil.copytree(out, partial / "out")
+        files = file_hashes(partial / "out")
+        marker = {"key": key, "root": str(root), "files": files, "digest": marker_digest(key, str(root), files)}
+        (partial / MARKER).write_text(json.dumps(marker, sort_keys=True), encoding="utf-8")
+        final = store / commit
+        shutil.rmtree(final, ignore_errors=True)
+        os.replace(partial, final)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    prune(store, keep)
+
+
+def prune(store, keep=KEEP_SNAPSHOTS):
+    """Remove every snapshot but the newest `keep` (by marker time), and leftovers of an interrupted store."""
+    kept = []
+    for entry in Path(store).iterdir():
+        if not entry.is_dir():
+            continue
+        marker = entry / MARKER
+        if entry.name.startswith(TEMPORARY) or not marker.is_file():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            kept.append((marker.stat().st_mtime, entry.name, entry))
+    for _, _, entry in sorted(kept, reverse=True)[keep:]:
+        shutil.rmtree(entry, ignore_errors=True)
+
+
+def find_snapshot(store, key):
+    """(folder, root, route) for the stored snapshot of key's commit: the snapshot folder and the root it was made from
+    on a hit, (None, None, why) on a miss. Anything that is not a complete snapshot under exactly this key is a miss,
+    never an error."""
+    folder = Path(store) / key["commit"]
+    try:
+        if not folder.is_dir():
+            return None, None, "miss: none stored"
+        marker = json.loads((folder / MARKER).read_text(encoding="utf-8"))
+        stored, root, files = marker["key"], marker["root"], marker["files"]
+        if marker["digest"] != marker_digest(stored, root, files):
+            return None, None, "miss: incomplete (the marker does not match its digest)"
+        if stored.get("commit") != key["commit"]:
+            return None, None, "miss: incomplete (the marker names another commit)"
+        if stored != key:
+            differs = ", ".join(name for name in sorted(set(stored) | set(key)) if stored.get(name) != key.get(name))
+            return None, None, f"miss: stored under another key ({differs})"
+        if not isinstance(root, str) or POINTS not in files or file_hashes(folder / "out") != files:
+            return None, None, "miss: incomplete (its files do not match the marker)"
+        return folder / "out", root, "hit"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return None, None, f"miss: incomplete ({type(error).__name__})"
+
+
+def store_head(store, target):
+    """--store-snapshot: build the generator on HEAD (as warming the build folder did: a failed build fails), then run
+    it and keep the snapshot. Everything after the build only warns: with no snapshot, pull requests build the base as
+    before."""
+    if not may_store():
+        print("Mod point check failed: --store-snapshot runs only where the build folder's disk is saved "
+              "(SAVE_BUILD_DISK=true, not a pull request); nothing stored.")
+        return 2
+    print(f"Build folder {target}, snapshots {store}")
+    print(f"Snapshot of HEAD ({ROOT})", flush=True)
+    try:
+        compiled = cargo(ROOT, target, "working tree", "build")
+    except (RuntimeError, OSError) as error:
+        print(f"Mod point check failed: {error}")
+        return 2
+    scratch = None
+    try:
+        commit = git("rev-parse", "HEAD")
+        # A staged copy's generator compiles the points' sites in (STAGED in points_generated.rs): not what a pull
+        # request's base worktree, which never has the stamp, would give.
+        if (ROOT / STAGED_STAMP).exists():
+            raise RuntimeError(f"{STAGED_STAMP} exists, so this checkout is a staged copy")
+        rustc = toolchain(ROOT)
+        if rustc is None:
+            raise RuntimeError("rustc -vV failed, so the snapshot has no key")
+        scratch = Path(tempfile.mkdtemp(prefix="mod-points-"))
+        ran = cargo(ROOT, target, "working tree", "run", "--", str(scratch / "out"), str(ROOT))
+        start = time.monotonic()
+        store_snapshot(store, scratch / "out", snapshot_key(commit, rustc), ROOT)
+        print(f"Mod points snapshot stored for {commit[:12]}: compile {compiled:.0f} s, generator {ran:.0f} s, "
+              f"store {time.monotonic() - start:.1f} s.")
+    except (RuntimeError, OSError, ValueError) as error:
+        print(f"warning: no mod points snapshot stored (compile {compiled:.0f} s): {error}")
+    finally:
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
+    return 0
 
 
 def resolve_target(option, env_value):
@@ -461,6 +651,11 @@ def main(argv=None):
                              "$CARGO_TARGET_DIR, else the repository's target)")
     parser.add_argument("--compare", nargs=2, metavar=("OLD", "NEW"), type=Path,
                         help="compare two snapshot folders instead of building")
+    parser.add_argument("--snapshots", type=Path, metavar="DIR",
+                        help="stored snapshots: the base's, when stored complete under the same key, replaces its build")
+    parser.add_argument("--store-snapshot", type=Path, metavar="DIR",
+                        help="build and run the generator on HEAD and keep its snapshot in DIR, compare nothing (CI: "
+                             "main's pushes and the merge queue only)")
     args = parser.parse_args(argv)
     if args.compare:
         try:
@@ -469,17 +664,40 @@ def main(argv=None):
             print(f"Mod point check failed: {error}")
             return 2
     target = resolve_target(args.target_dir, os.environ.get("CARGO_TARGET_DIR"))
+    if args.store_snapshot:
+        return store_head(args.store_snapshot.resolve(), target)
     scratch = Path(tempfile.mkdtemp(prefix="mod-points-"))
     worktree = scratch / "base"
     added_worktree = False
     try:
         base = git("rev-parse", args.base) if args.base else default_base()
         print(f"Base {base[:12]}, build folder {target}")
-        git("worktree", "add", "--detach", "--quiet", str(worktree), base)
-        added_worktree = True
-        snapshot(worktree, scratch / "base-out", base_target(target), "base")
-        snapshot(ROOT, scratch / "head-out", target, "working tree")
-        return compare(scratch / "base-out", scratch / "head-out", args.allow_added, worktree, ROOT)
+        base_dir, base_root, route = None, None, "built: no snapshot folder given"
+        if args.snapshots:
+            try:
+                same_toolchain = selects_base_toolchain(base, ROOT)
+            except (RuntimeError, OSError):
+                same_toolchain = None
+            if same_toolchain is None:
+                route = "miss: the toolchain files could not be read"
+            elif not same_toolchain:
+                route = "miss: the change selects another toolchain"
+            elif (rustc := toolchain(ROOT)) is None:
+                route = "miss: rustc -vV failed"
+            else:
+                base_dir, base_root, route = find_snapshot(args.snapshots, snapshot_key(base, rustc))
+        if base_dir is None:
+            git("worktree", "add", "--detach", "--quiet", str(worktree), base)
+            added_worktree = True
+            base_dir, base_root = scratch / "base-out", worktree
+            base_compile, base_run = snapshot(worktree, base_dir, base_target(target), "base")
+            base_time = f"{base_compile + base_run:.0f} s (compile {base_compile:.0f} s, generator {base_run:.0f} s)"
+        else:
+            base_time = "0 s (stored)"
+        head_compile, head_run = snapshot(ROOT, scratch / "head-out", target, "working tree")
+        print(f"Mod points base snapshot: {route}; base {base_time}, working tree {head_compile + head_run:.0f} s "
+              f"(compile {head_compile:.0f} s, generator {head_run:.0f} s).", flush=True)
+        return compare(base_dir, scratch / "head-out", args.allow_added, base_root, ROOT)
     except (RuntimeError, OSError, ValueError, KeyError) as error:
         print(f"Mod point check failed: {error}")
         return 2

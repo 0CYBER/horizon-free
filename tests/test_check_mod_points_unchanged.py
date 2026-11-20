@@ -1,9 +1,13 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from tools import check_mod_points_unchanged as gate
 
@@ -430,6 +434,230 @@ class TargetFolderTests(unittest.TestCase):
         target = Path("/build/target")
         self.assertEqual(gate.base_target(target), target / "mod-points-base")
         self.assertNotEqual(gate.base_target(target), target)
+
+
+class SnapshotStoreTests(unittest.TestCase):
+    """A stored snapshot of the base stands in for its build only when complete and under the same key."""
+
+    RUSTC = "rustc 1.99.0 (abc 2026-11-01)\nhost: x86_64-unknown-linux-gnu"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.store = self.tmp / "store"
+        self.key = gate.snapshot_key("c0ffee", self.RUSTC, env={})
+
+    def made(self, name, root, points=None):
+        """A snapshot folder as hook_snapshot writes it, naming `root` in a generated file."""
+        out = self.tmp / name
+        out.mkdir()
+        (out / "points.json").write_text(json.dumps(points or [point("tick")]))
+        (out / "api.rs").write_text(f"// generated from {root}/crates/horizon-client/src/game.rs\n")
+        return out
+
+    def stored(self, key=None):
+        self.made("main-out", "/work/main")
+        gate.store_snapshot(self.store, self.tmp / "main-out", key or self.key, "/work/main")
+        return self.store / (key or self.key)["commit"]
+
+    def test_a_stored_snapshot_compares_as_the_built_base_would(self):
+        self.stored()
+        folder, root, route = gate.find_snapshot(self.store, self.key)
+        self.assertEqual(route, "hit")
+        self.assertEqual(root, "/work/main")
+        head = self.made("head-out", "/work/head")
+        built = self.made("built-out", "/tmp/base")
+        with contextlib.redirect_stdout(io.StringIO()) as hit:
+            hit_status = gate.compare(folder, head, base_root=root, head_root="/work/head")
+        with contextlib.redirect_stdout(io.StringIO()) as build:
+            build_status = gate.compare(built, head, base_root="/tmp/base", head_root="/work/head")
+        self.assertEqual((hit_status, hit.getvalue()), (build_status, build.getvalue()))
+        self.assertEqual(hit_status, 0)
+
+    def test_nothing_stored_is_a_miss(self):
+        self.assertEqual(gate.find_snapshot(self.store, self.key), (None, None, "miss: none stored"))
+
+    def test_another_toolchain_or_point_selection_is_a_miss(self):
+        self.stored()
+        for key, differs in ((gate.snapshot_key("c0ffee", "rustc 2.0.0", env={}), "rustc"),
+                             (gate.snapshot_key("c0ffee", self.RUSTC, env={"HORIZON_POINT_NAMES": '["tick"]'}),
+                              "point_names")):
+            self.assertEqual(gate.find_snapshot(self.store, key),
+                             (None, None, f"miss: stored under another key ({differs})"))
+
+    def remarked(self, folder, digest=True, **fields):
+        """Rewrite the marker with `fields` changed, its digest recomputed or (digest=False) left as it was."""
+        marker = json.loads((folder / gate.MARKER).read_text())
+        marker.update(fields)
+        if digest:
+            marker["digest"] = gate.marker_digest(marker["key"], marker["root"], marker["files"])
+        (folder / gate.MARKER).write_text(json.dumps(marker))
+
+    def test_an_incomplete_or_corrupt_snapshot_is_a_miss_not_an_error(self):
+        damages = {
+            "truncated file": lambda folder: (folder / "out/points.json").write_text("[{"),
+            "added file": lambda folder: (folder / "out/extra.json").write_text("{}"),
+            "removed file": lambda folder: (folder / "out/api.rs").unlink(),
+            "no marker": lambda folder: (folder / gate.MARKER).unlink(),
+            "garbled marker": lambda folder: (folder / gate.MARKER).write_text("{\"key\": "),
+            "damaged root": lambda folder: self.remarked(folder, digest=False, root="/work/mail"),
+            "damaged key": lambda folder: self.remarked(folder, digest=False, key=dict(self.key, rustc="x")),
+            "marker of another commit": lambda folder: self.remarked(folder, key=dict(self.key, commit="beef")),
+            "marker without digest": lambda folder: (folder / gate.MARKER).write_text(
+                json.dumps({"key": self.key, "root": "/work/main", "files": gate.file_hashes(folder / "out")})),
+        }
+        for name, damage in damages.items():
+            with self.subTest(name):
+                shutil.rmtree(self.store, ignore_errors=True)
+                shutil.rmtree(self.tmp / "main-out", ignore_errors=True)
+                damage(self.stored())
+                folder, root, route = gate.find_snapshot(self.store, self.key)
+                self.assertIsNone(folder)
+                self.assertTrue(route.startswith("miss: "), route)
+
+    def test_only_the_newest_snapshots_and_no_partial_ones_are_kept(self):
+        for number in range(4):
+            out = self.tmp / f"out{number}"
+            out.mkdir()
+            (out / "points.json").write_text("[]")
+            gate.store_snapshot(self.store, out, dict(self.key, commit=f"c{number}"), "/r", keep=10)
+            marker = self.store / f"c{number}" / gate.MARKER
+            os.utime(marker, (1000 + number, 1000 + number))
+        (self.store / f"{gate.TEMPORARY}c9-1").mkdir()
+        gate.prune(self.store, keep=2)
+        self.assertEqual(sorted(path.name for path in self.store.iterdir()), ["c2", "c3"])
+
+    def test_a_pull_request_never_stores(self):
+        self.assertFalse(gate.may_store({"SAVE_BUILD_DISK": "true", "GITHUB_EVENT_NAME": "pull_request"}))
+        self.assertFalse(gate.may_store({"SAVE_BUILD_DISK": "false", "GITHUB_EVENT_NAME": "workflow_dispatch"}))
+        self.assertFalse(gate.may_store({}))
+        self.assertTrue(gate.may_store({"SAVE_BUILD_DISK": "true", "GITHUB_EVENT_NAME": "push"}))
+        self.assertTrue(gate.may_store({"SAVE_BUILD_DISK": "true", "GITHUB_EVENT_NAME": "merge_group"}))
+        built = mock.Mock(side_effect=AssertionError("built"))
+        with mock.patch.dict(os.environ, {"SAVE_BUILD_DISK": "true", "GITHUB_EVENT_NAME": "pull_request"}), \
+                mock.patch.object(gate, "cargo", built), contextlib.redirect_stdout(io.StringIO()):
+            status = gate.main(["--store-snapshot", str(self.store)])
+        self.assertEqual(status, 2)
+        self.assertFalse(self.store.exists())
+
+    def test_a_failed_store_leaves_no_partial_copy(self):
+        out = self.made("main-out", "/work/main")
+        with mock.patch.object(gate, "file_hashes", mock.Mock(side_effect=OSError("No space left on device"))):
+            with self.assertRaises(OSError):
+                gate.store_snapshot(self.store, out, self.key, "/work/main")
+        self.assertEqual(list(self.store.iterdir()), [])
+
+    def check(self, base_points, base_files=None, checkout_files=None):
+        """main() comparing a working tree of [tick] with the base `self.key` names, the stored snapshot (if any)
+        holding [tick] as well: (status, the sides built, the output). Git and the generator are stand-ins; a built
+        base writes `base_points`. `base_files` are the base commit's files ({name: text}) and `checkout_files` those
+        written into the checkout."""
+        sides, base_files = [], base_files or {}
+        checkout = self.tmp / "checkout"
+        shutil.rmtree(checkout, ignore_errors=True)
+        checkout.mkdir()
+        for name, text in (checkout_files or {}).items():
+            (checkout / name).write_text(text)
+
+        def snapshot(root, out, target_dir, side):
+            sides.append(side)
+            out.mkdir()
+            points = base_points if side == "base" else [point("tick")]
+            (out / "points.json").write_text(json.dumps(points))
+            (out / "api.rs").write_text(f"// generated from {root}/crates/horizon-client/src/game.rs\n")
+            return 1.0, 2.0
+
+        def git(*args, cwd=gate.ROOT):
+            if args[0] == "rev-parse":
+                return self.key["commit"]
+            if args[0] == "ls-tree":
+                return args[-1] if args[-1] in base_files else ""
+            if args[0] == "show":
+                return base_files[args[1].split(":", 1)[1]].strip()
+            self.assertEqual(args[:2], ("worktree", "add"))
+            Path(args[-2]).mkdir(parents=True)
+            return ""
+
+        # No real git: `git ls-files` lists nothing and the worktree removal does nothing.
+        listed = gate.subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(gate, "snapshot", snapshot), mock.patch.object(gate, "git", git), \
+                mock.patch.object(gate, "toolchain", lambda root: self.RUSTC), \
+                mock.patch.object(gate, "ROOT", checkout), \
+                mock.patch.object(gate.subprocess, "run", return_value=listed), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            status = gate.main(["--base", "HEAD", "--snapshots", str(self.store), "--target-dir", str(self.tmp)])
+        return status, sides, out.getvalue()
+
+    def test_a_hit_builds_only_the_working_tree(self):
+        self.key = gate.snapshot_key("c0ffee", self.RUSTC)
+        self.stored()
+        status, sides, out = self.check(base_points=[point("tick"), point("gone")])
+        self.assertEqual((status, sides), (0, ["working tree"]), out)
+        self.assertIn("Mod points base snapshot: hit; base 0 s (stored)", out)
+
+    def test_a_miss_builds_the_base_and_compares_with_it(self):
+        # The built base has a point the working tree lost: only a comparison with the built base fails.
+        self.key = gate.snapshot_key("c0ffee", self.RUSTC)
+        for name, prepare, route in (
+                ("nothing stored", lambda: None, "miss: none stored"),
+                ("corrupt root", lambda: self.remarked(self.stored(), digest=False, root="/work/mail"),
+                 "miss: incomplete (the marker does not match its digest)")):
+            with self.subTest(name):
+                shutil.rmtree(self.store, ignore_errors=True)
+                shutil.rmtree(self.tmp / "main-out", ignore_errors=True)
+                prepare()
+                status, sides, out = self.check(base_points=[point("tick"), point("gone")])
+                self.assertEqual((status, sides), (1, ["base", "working tree"]), out)
+                self.assertIn(f"Mod points base snapshot: {route}; base 3 s (compile 1 s, generator 2 s)", out)
+                self.assertIn("Points removed and failing (1):", out)
+
+    def test_a_toolchain_only_the_change_selects_never_hits(self):
+        # The probe runs in the checkout, so a pin there could match a snapshot the base's compiler never made.
+        self.key = gate.snapshot_key("c0ffee", self.RUSTC)
+        pin = '[toolchain]\nchannel = "1.99.0"\n'
+        for name, base_files, checkout_files in (
+                ("added", {}, {"rust-toolchain.toml": pin}),
+                ("changed", {"rust-toolchain": "1.98.0"}, {"rust-toolchain": "1.99.0"}),
+                ("removed", {"rust-toolchain.toml": pin}, {})):
+            with self.subTest(name):
+                shutil.rmtree(self.store, ignore_errors=True)
+                shutil.rmtree(self.tmp / "main-out", ignore_errors=True)
+                self.stored()
+                status, sides, out = self.check([point("tick"), point("gone")], base_files, checkout_files)
+                self.assertEqual((status, sides), (1, ["base", "working tree"]), out)
+                self.assertIn("Mod points base snapshot: miss: the change selects another toolchain;", out)
+        with self.subTest("the same pin"):
+            status, sides, out = self.check([point("tick")], {"rust-toolchain.toml": pin}, {"rust-toolchain.toml": pin})
+            self.assertEqual((status, sides), (0, ["working tree"]), out)
+
+
+class ToolchainFilesTests(unittest.TestCase):
+    """selects_base_toolchain on a real repository: the checkout's toolchain files against a commit's."""
+
+    def test_a_file_the_change_adds_edits_or_removes_selects_another_toolchain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def commit(message):
+                for args in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                                             "commit", "-q", "--allow-empty", "-m", message]):
+                    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+                return gate.git("rev-parse", "HEAD", cwd=root)
+
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "lib.rs").write_text("")
+            plain = commit("no pin")
+            self.assertTrue(gate.selects_base_toolchain(plain, root))
+            (root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.99.0"\n')
+            self.assertFalse(gate.selects_base_toolchain(plain, root), "untracked pin")
+            pinned = commit("pin")
+            self.assertTrue(gate.selects_base_toolchain(pinned, root))
+            self.assertFalse(gate.selects_base_toolchain(plain, root), "committed pin")
+            (root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.98.0"\n')
+            self.assertFalse(gate.selects_base_toolchain(pinned, root), "edited pin")
+            (root / "rust-toolchain.toml").unlink()
+            self.assertFalse(gate.selects_base_toolchain(pinned, root), "removed pin")
 
 
 if __name__ == "__main__":

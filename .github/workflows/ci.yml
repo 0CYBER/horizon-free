@@ -497,12 +497,31 @@ jobs:
       # On main's pushes and in the merge queue, where the build folder's disk is saved (SAVE_BUILD_DISK), the job only
       # builds what the check builds: the same cargo package, example, profile and features, in this folder, so a pull
       # request's run finds the generator's crates and dependencies built. A pull request does the comparison.
-      - name: Warm the build folder with the generator
+      # On Blacksmith those runs also run the generator and keep this commit's snapshot on the disk
+      # (mod-points-snapshots, by commit), and a pull request whose HEAD^1 is stored compares with it instead of
+      # building the base: the base side took 135-281 s in every pull request (#18840). Pull requests mount the disk
+      # but never save it (Blacksmith refuses), so none can leave a snapshot for another; our checks runners keep what
+      # a job leaves in the build folder, so there nothing is stored or read.
+      - name: Warm the build folder with the generator, and keep this commit's mod points snapshot
         if: github.event_name != 'pull_request'
-        run: cargo build --locked -p horizon-mod-api-gen --example hook_snapshot
+        env:
+          STORE: ${{ env.SAVE_BUILD_DISK == 'true' && startsWith(runner.name, 'blacksmith-') }}
+        run: |
+          if [ "$STORE" = true ]; then
+            python3 tools/check_mod_points_unchanged.py --store-snapshot "$CARGO_TARGET_DIR/mod-points-snapshots"
+          else
+            cargo build --locked -p horizon-mod-api-gen --example hook_snapshot
+          fi
       - name: Mod points and the generated API stay as they were
         if: github.event_name == 'pull_request' && steps.rust.outputs.mod_points != 'false'
-        run: python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added
+        env:
+          HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
+        run: |
+          if [ "$HOSTED" = true ]; then
+            python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added --snapshots "$CARGO_TARGET_DIR/mod-points-snapshots"
+          else
+            python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added
+          fi
       # verify-test builds the points' wire loopback empty: it needs a guest build whose table has sites (#18400).
       - name: The points' wire loopback
         if: steps.rust.outputs.mod_points != 'false'

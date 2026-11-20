@@ -70,6 +70,9 @@ branch than main ("... is not the default branch"), the merge queue's excepted: 
 fork's copy of the workflow cannot write this repository's disks. Forks' pull requests mount main's disks as well:
 until 2026-11-17 they had a set of their own that nothing could save, so each built the whole workspace (7-10 minutes
 per Rust part, against ~2 for a branch here).
+Because no pull request can save a disk, `verify (mod points)` keeps there what pull requests trust: each saved run's
+mod points snapshot of its commit (`mod-points-snapshots`, the newest 30), which a pull request whose `HEAD^1` is stored
+compares with instead of building the base (`tools/check_mod_points_unchanged.py --snapshots`).
 
 ## Try runs
 

@@ -216,6 +216,21 @@ class TryRunTests(unittest.TestCase):
                       "github.event_name == 'merge_group') && 'true' || 'false' }}\n", text)
         self.assertNotIn("secrets.", text)
 
+    def test_mod_point_snapshots_are_kept_only_on_mains_disk(self):
+        # A pull request compares with a stored snapshot of its base, so none of its jobs may store one: only the runs
+        # that save the disk, and only on Blacksmith, whose disk a pull request mounts but cannot save (our checks
+        # runners keep what any job leaves in the build folder).
+        steps = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["verify-mod-points"].split("\n      - ")
+        store = [step for step in steps if "--store-snapshot" in step]
+        read = [step for step in steps if "--snapshots" in step]
+        self.assertEqual((len(store), len(read)), (1, 1))
+        self.assertIn("if: github.event_name != 'pull_request'\n", store[0])
+        self.assertIn("STORE: ${{ env.SAVE_BUILD_DISK == 'true' && startsWith(runner.name, 'blacksmith-') }}\n",
+                      store[0])
+        self.assertIn('if [ "$STORE" = true ]; then\n', store[0])
+        self.assertIn("HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}\n", read[0])
+        self.assertIn('if [ "$HOSTED" = true ]; then\n', read[0])
+
     def test_the_windows_build_runs_by_hand_and_saves_no_cache(self):
         block = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["windows-x64"]
         self.assertIn("    if: github.event_name == 'workflow_dispatch' && inputs.windows\n", block)
