@@ -3,8 +3,10 @@ import copy
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +14,7 @@ from pathlib import Path
 
 from tools.ci import nightly
 from tools.ci import nightly_set as ns
+from tools.ci import cargo_isolation
 from tests.test_ci_concurrency import yaml
 
 NOW = "2026-10-28T12:00:00+00:00"
@@ -217,6 +220,121 @@ def polytone_gate_bypasses(game, nightly_build):
     return problems
 
 
+# The guard comes from the workflow's own commit into RUNNER_TEMP, never from the checkout being built.
+SETUP_RUN = r"""set -euo pipefail
+[ -x /usr/bin/python3 ] || { echo "::error::/usr/bin/python3 is missing"; exit 1; }
+dir="$(/usr/bin/mktemp -d "$RUNNER_TEMP/workflow-tools.XXXXXX")"
+url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_WORKFLOW_SHA/tools/ci/cargo_isolation.py"
+/usr/bin/curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 0 \
+  --noproxy '*' --max-time 60 --retry 5 -o "$dir/cargo_isolation.py" "$url"
+out="$(/usr/bin/python3 -I -S "$dir/cargo_isolation.py" "$GITHUB_WORKSPACE")" || { printf '%s\n' "$out"; exit 1; }
+printf '%s\n' "$out"
+[ "${out##*$'\n'}" = "cargo isolation: clean" ] || { echo "::error::the cargo guard did not finish"; exit 1; }
+"""
+SETUP_IFS = (None, "runner.environment == 'self-hosted'")
+CLEANUP_RUN = 'rm -rf "$RUNNER_TEMP/cargo-home"'
+CLEANUP_IFS = ("always()", "always() && runner.environment == 'self-hosted'")
+# A variable assigned or exported inside a run script: `NAME=`, `export NAME`, `env NAME=`, `declare -x NAME`.
+ASSIGNMENT = re.compile(r"(?<![\w$\{])([A-Za-z_][A-Za-z0-9_]*)="
+                        r"|\b(?:export|declare\s+-x|typeset\s+-x)\s+([A-Za-z_][A-Za-z0-9_]*)")
+CARGO_CALL = re.compile(r"\bcargo\b(?!-home)|\bxtask\b|\brustup\b|vanilla-data\.sh|runner-env\.sh")
+ENV_WRITE = re.compile(r"\b(CARGO_\w+|RUSTC\w*|RUSTDOC\w*|RUSTFLAGS|HORIZON_NO_SCCACHE)=.*GITHUB_ENV")
+
+
+SHELL_BUILTINS = {"set", "[", "echo", "printf", "exit"}
+
+
+def bare_commands(run):
+    """The commands in a run script that are neither a shell builtin nor a full /usr/bin or /bin path."""
+    found, continued = [], False
+    for line in run.splitlines():
+        if continued:
+            continued = line.endswith("\\")
+            continue
+        continued = line.endswith("\\")
+        for part in re.split(r"\$\(|\|\|?|&&|;|(?<![$\w])\{\s|\s\}|\)", line):
+            words = part.split()
+            word = words[0].strip('"') if words else ""
+            if word and "=" not in word and word not in SHELL_BUILTINS and not word.startswith(("/usr/bin/", "/bin/")):
+                found.append(word)
+    return found
+
+
+def self_hosted(job):
+    runs_on = json.dumps(job.get("runs-on", ""))
+    return "self-hosted" in runs_on or "MAC_RUNNER" in runs_on
+
+
+def machine_cache_problems(workflow):
+    """(job, problem) for each job that builds on a self-hosted runner, or sets up its tools (runner-env.sh), without
+    the protections: HORIZON_NO_SCCACHE: '1', empty compiler wrappers, cargo_isolation.py before the first cargo
+    call on every self-hosted leg, no step that sets what it refuses, and the cargo home's removal."""
+    found = []
+    for name, job in workflow["jobs"].items():
+        steps = job.get("steps", [])
+        runs = [step.get("run", "") for step in steps]
+        if not (any("runner-env.sh" in run for run in runs)
+                or self_hosted(job) and any(CARGO_CALL.search(run) for run in runs)):
+            continue
+
+        def problem(text):
+            found.append((name, text))
+        env = job.get("env", {})
+        mac_rustflags = any(entry.get("mac") and "rustflags" in entry
+                            for entry in job.get("strategy", {}).get("matrix", {}).get("include", []))
+        for key in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"):
+            if env.get(key) != "":
+                problem(f"job env {key} is not ''")
+        for key, value in env.items():
+            if key == "CARGO_HOME" or cargo_isolation.forbidden(key) and value != "" and not (
+                    key == "RUSTFLAGS" and value == "${{ matrix.rustflags }}" and not mac_rustflags):
+                problem(f"job env sets {key}")
+        setup = [i for i, run in enumerate(runs) if "cargo_isolation.py" in run]
+        if len(setup) != 1:
+            problem("not exactly one cargo_isolation.py step")
+        else:
+            step = steps[setup[0]]
+            if (step["run"] != SETUP_RUN or step.get("if") not in SETUP_IFS or step.get("continue-on-error")
+                    or step.get("env")):
+                problem("the cargo_isolation.py step changed")
+            first_cargo = next((i for i, run in enumerate(runs) if CARGO_CALL.search(run)), len(runs))
+            if first_cargo < setup[0]:
+                problem("a cargo call before cargo_isolation.py")
+        for step, run in zip(steps, runs):
+            step_env = step.get("env", {})
+            for key, value in step_env.items():
+                if key == "HORIZON_NO_SCCACHE" and value == "1":
+                    continue
+                if key in ("CARGO_HOME", "HORIZON_NO_SCCACHE") or cargo_isolation.forbidden(key):
+                    problem(f"a step sets {key}")
+            if "runner-env.sh" in run and {**env, **step_env}.get("HORIZON_NO_SCCACHE") != "1":
+                problem("runner-env.sh without HORIZON_NO_SCCACHE: '1'")
+            if ENV_WRITE.search(run):
+                problem("a step writes cargo settings to GITHUB_ENV")
+            for match in ASSIGNMENT.finditer(run):
+                key = match.group(1) or match.group(2)
+                if key == "CARGO_HOME" or cargo_isolation.forbidden(key):
+                    problem(f"a run script sets {key}")
+        if not any(run == CLEANUP_RUN and step.get("if") in CLEANUP_IFS for step, run in zip(steps, runs)):
+            problem("the cargo home is not removed with always()")
+    return found
+
+
+def route_workflows(*roots):
+    """The workflows the roots reach through `uses: ./.github/workflows/…`."""
+    seen, todo = [], list(roots)
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.append(name)
+        for job in yaml.safe_load((WORKFLOWS / name).read_text())["jobs"].values():
+            uses = job.get("uses", "")
+            if uses.startswith("./.github/workflows/"):
+                todo.append(uses.rsplit("/", 1)[1])
+    return seen
+
+
 class UntrustedBuildTests(unittest.TestCase):
     """A nightly can hold pull requests nobody reviewed: nothing its build leaves may reach a release (game-build.yml)."""
 
@@ -276,11 +394,159 @@ class UntrustedBuildTests(unittest.TestCase):
                 {"step": polytone["steps"][-1], "job": polytone}.get(where, mutated_build["jobs"].get(where)).update(change)
                 self.assertNotEqual(polytone_gate_bypasses(mutated_game, mutated_build), [])
 
-    def test_a_trusted_build_never_reads_the_shared_sccache(self):
-        calls = self.game.count("bash tools/ci/runner-env.sh")
-        self.assertEqual(self.game.count("HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}"), calls)
+    def test_mac_jobs_read_no_machine_shared_cache(self):
+        # Whatever `trusted` says; a job or workflow added to the route later is held to it too.
+        route = route_workflows("release.yml", "nightly-build.yml")
+        self.assertIn("game-build.yml", route)
+        for name in route:
+            with self.subTest(workflow=name):
+                self.assertEqual(machine_cache_problems(yaml.safe_load((WORKFLOWS / name).read_text())), [])
+        game = yaml.safe_load(self.game)
+        covered = {job for job, _ in machine_cache_problems(
+            {"jobs": {name: {**job, "steps": job["steps"][:1] + [{"run": "cargo build"}]}
+                      for name, job in game["jobs"].items() if "steps" in job}})}
+        self.assertLessEqual({"exporters", "build"}, covered)
+        # No caller can switch the protections off: none of them reads an input, and callers pass only declared ones.
+        inputs = set(game[True]["workflow_call"]["inputs"])
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            for job in (yaml.safe_load(path.read_text()) or {}).get("jobs", {}).values():
+                if job.get("uses", "").endswith("/game-build.yml"):
+                    with self.subTest(caller=path.name):
+                        self.assertLessEqual(set(job.get("with", {})), inputs)
+
+        def setup(job):
+            return next(step for step in job["steps"] if "cargo_isolation.py" in step.get("run", ""))
+
+        def later(job):
+            return next(step for step in job["steps"][job["steps"].index(setup(job)) + 1:] if "run" in step)
+
+        def runner_env(job):
+            return next(step for step in job["steps"] if "runner-env.sh" in step.get("run", ""))
+
+        def cleanup(job):
+            return next(step for step in job["steps"] if step.get("run") == CLEANUP_RUN)
+
+        def before_setup(step):
+            return lambda job: job["steps"].insert(job["steps"].index(setup(job)), step)
+
+        breaks = {
+            "setup removed": lambda job: job["steps"].remove(setup(job)),
+            "setup if trusted": lambda job: setup(job).update({"if": "${{ inputs.trusted }}"}),
+            "setup if false": lambda job: setup(job).update({"if": "false"}),
+            "setup if developer_id": lambda job: setup(job).update({"if": "inputs.developer_id"}),
+            "setup may fail": lambda job: setup(job).update({"continue-on-error": True}),
+            "setup script changed": lambda job: setup(job).update({"run": "true"}),
+            "setup gets env": lambda job: setup(job).update({"env": {"PYTHONPATH": "x"}}),
+            "setup after the cargo calls": lambda job: job["steps"].append(job["steps"].pop(job["steps"].index(setup(job)))),
+            "cargo before setup": before_setup({"run": "cargo build --release --locked -p horizon-prepare"}),
+            "xtask before setup": before_setup({"run": "cargo xtask package"}),
+            "script before setup": before_setup({"run": "bash tools/ci/vanilla-data.sh"}),
+            "step overrides RUSTC_WRAPPER": lambda job: later(job).setdefault("env", {}).update(RUSTC_WRAPPER="sccache"),
+            "step overrides CARGO_HOME": lambda job: later(job).setdefault("env", {}).update(CARGO_HOME="/x"),
+            "step sets RUSTFLAGS": lambda job: later(job).setdefault("env", {}).update(RUSTFLAGS="-C x"),
+            "sccache conditional": lambda job: runner_env(job)["env"].update(
+                HORIZON_NO_SCCACHE="${{ inputs.trusted && '1' || '' }}"),
+            "step writes RUSTC_WRAPPER": lambda job: later(job).update(run='echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"'),
+            "job env wrapper dropped": lambda job: job["env"].pop("RUSTC_WRAPPER"),
+            "job env CARGO_HOME": lambda job: job["env"].update(CARGO_HOME="/x"),
+            "cleanup removed": lambda job: job["steps"].remove(cleanup(job)),
+            "cleanup not always": lambda job: cleanup(job).update({"if": "success()"}),
+            "cleanup never runs": lambda job: cleanup(job).update({"if": "always() && false"}),
+            "guard from the checkout": lambda job: setup(job).update(
+                run='python3 tools/ci/cargo_isolation.py "$GITHUB_WORKSPACE"'),
+            "guard at the built ref": lambda job: setup(job).update(
+                run=SETUP_RUN.replace("$GITHUB_WORKFLOW_SHA", "${{ inputs.ref }}")),
+            "export before setup": before_setup({"run": "export RUSTFLAGS=-Cx"}),
+            "export after setup": lambda job: later(job).update(run="export RUSTFLAGS=-Cx\n" + later(job)["run"]),
+            "assignment on a cargo call": lambda job: later(job).update(run="RUSTFLAGS=-Cx cargo build"),
+            "env on a cargo call": lambda job: later(job).update(run="env CARGO_TARGET_DIR=/x cargo build"),
+            "export of a family name": lambda job: later(job).update(run="export CARGO_REGISTRIES_X_TOKEN\ncargo build"),
+            "declare -x": lambda job: later(job).update(run="declare -x RUSTC=/x\ncargo build"),
+        }
+        for name in ("exporters", "build"):
+            for label, change in breaks.items():
+                with self.subTest(job=name, change=label):
+                    mutated = copy.deepcopy(game)
+                    change(mutated["jobs"][name])
+                    self.assertIn(name, {job for job, _ in machine_cache_problems(mutated)})
+        mutated = copy.deepcopy(game)
+        mac = next(entry for entry in mutated["jobs"]["build"]["strategy"]["matrix"]["include"] if entry.get("mac"))
+        mac["rustflags"] = "-C x"
+        self.assertEqual({job for job, _ in machine_cache_problems(mutated)}, {"build"})
+        for new in ({"runs-on": ["self-hosted", "macOS"], "steps": [{"run": "bash tools/ci/runner-env.sh"}]},
+                    {"runs-on": "${{ vars.MAC_RUNNER }}", "steps": [{"run": "cargo build"}]}):
+            mutated = copy.deepcopy(game)
+            mutated["jobs"]["new-mac"] = new
+            self.assertEqual({job for job, _ in machine_cache_problems(mutated)}, {"new-mac"})
         env = (Path(__file__).resolve().parents[1] / "tools/ci/runner-env.sh").read_text()
         self.assertEqual(env.count('-z "${HORIZON_NO_SCCACHE:-}"'), 2)
+
+    def test_the_guard_never_comes_from_the_checkout_it_checks(self):
+        # Fetched at the workflow's own commit into a new RUNNER_TEMP folder, so a Nightly of an older commit still
+        # has it, and run by the system's curl and Python with nothing from the environment.
+        self.assertIn('dir="$(/usr/bin/mktemp -d "$RUNNER_TEMP/workflow-tools.XXXXXX")"', SETUP_RUN)
+        self.assertIn("/$GITHUB_WORKFLOW_SHA/tools/ci/cargo_isolation.py", SETUP_RUN)
+        self.assertIn('/usr/bin/python3 -I -S "$dir/cargo_isolation.py"', SETUP_RUN)
+        for flag in ("/usr/bin/curl -q ", "--fail", "--proto '=https'", "--proto-redir '=https'", "--max-redirs 0",
+                     "--noproxy '*'", "--max-time "):
+            self.assertIn(flag, SETUP_RUN)
+        self.assertNotIn("command -v", SETUP_RUN)
+        self.assertNotRegex(SETUP_RUN, r"\s-[a-zA-Z]*L")
+        self.assertIn(f'= "{cargo_isolation.CLEAN}" ]', SETUP_RUN)
+        # Before the guard has run, PATH is the machine's: every command is a shell builtin or a full system path.
+        self.assertEqual(bare_commands(SETUP_RUN), [])
+        for bare in ("mktemp", "curl", "python3", "tail", "cat"):
+            with self.subTest(bare=bare):
+                mutated = SETUP_RUN.replace(f"/usr/bin/{bare} ", f"{bare} ") if f"/usr/bin/{bare} " in SETUP_RUN \
+                    else SETUP_RUN.replace('printf \'%s\\n\' "$out"\n', f'printf \'%s\\n\' "$out" | {bare}\n')
+                self.assertEqual(bare_commands(mutated), [bare])
+        # No relative path at all: nothing in the step reads a file of the built commit.
+        for word in re.findall(r"[^\s\"'()]+", SETUP_RUN):
+            if "/" in word:
+                self.assertTrue(word.startswith(("$RUNNER_TEMP/", "/usr/bin/", "https://", "$dir/", "::error::/usr/bin/")),
+                                word)
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "needs a POSIX bash")
+    def test_the_guard_step_passes_only_when_the_guard_finished(self):
+        root = Path(__file__).resolve().parents[1]
+        guard = (root / "tools/ci/cargo_isolation.py").read_text()
+        cases = {
+            "the guard": (guard, 0),
+            "an empty file": ("", 1),
+            "a file that exits 0 without the line": ("print('hello')\n", 1),
+            "a cut-off file": (guard[:len(guard) // 2], 1),
+        }
+        for label, (served, expected) in cases.items():
+            with self.subTest(served=label), tempfile.TemporaryDirectory() as temporary:
+                temporary = Path(temporary)
+                checkout, runner_temp, bin_dir = temporary / "work" / "checkout", temporary / "temp", temporary / "bin"
+                for folder in (checkout, runner_temp, bin_dir):
+                    folder.mkdir(parents=True)
+                (runner_temp / "github-env").touch()
+                (temporary / "served.py").write_text(served)
+                # Stand-ins for /usr/bin/curl (the download at the workflow's commit) and /usr/bin/python3.
+                curl = bin_dir / "curl"
+                curl.write_text('#!/usr/bin/env bash\nwhile [ "$1" != -o ]; do shift; done\n'
+                                f'case "$3" in */abc123/tools/ci/cargo_isolation.py) '
+                                f'cp "{(temporary / "served.py").as_posix()}" "$2" ;; *) exit 22 ;; esac\n')
+                python = bin_dir / "python3"
+                python.write_text(f'#!/usr/bin/env bash\nexec "{Path(sys.executable).as_posix()}" "$@"\n')
+                for tool in (curl, python):
+                    tool.chmod(0o755)
+                environ = {key: value for key, value in os.environ.items() if not cargo_isolation.forbidden(key)}
+                environ.update(RUNNER_TEMP=str(runner_temp), GITHUB_ENV=str(runner_temp / "github-env"),
+                               GITHUB_WORKSPACE=str(checkout), GITHUB_REPOSITORY="horizon-rust/horizon",
+                               GITHUB_WORKFLOW_SHA="abc123")
+                # The ancestor walk ends at the temporary folder: a developer machine may hold configs above it.
+                run = (SETUP_RUN.replace("/usr/bin/curl", str(curl)).replace("/usr/bin/python3", str(python))
+                       .replace('"$GITHUB_WORKSPACE"', f'"$GITHUB_WORKSPACE" --top "{temporary.as_posix()}"'))
+                result = subprocess.run(["bash", "-c", run], cwd=checkout, env=environ, capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                # Nothing is written into the checkout, and the guard runs from a new folder each time.
+                self.assertEqual(list(checkout.iterdir()), [])
+                if expected == 0:
+                    self.assertTrue(result.stdout.endswith(cargo_isolation.CLEAN + "\n"))
+                    self.assertIn("CARGO_HOME=", (runner_temp / "github-env").read_text())
 
 
 class PruneBuildsTests(unittest.TestCase):

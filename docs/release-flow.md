@@ -858,12 +858,13 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
   merge with a read-only token that isn't kept in the checkout and no secrets; the runner's Developer ID keychain
   stays locked. `sign` is the only job with the key, and checks out only main's `tools/ci/sign_release.sh`, which
   hashes the archives with the runner's `sha256sum` and signs with its OpenSSL: it never runs what `build` made.
-  `publish` runs main's `horizon-release-sign`, never the archives. Nothing a nightly's build leaves reaches a
-  release either: `game-build.yml`'s `trusted` input is true only for `release.yml`. An untrusted build runs its
-  macOS jobs on the Mac mini's nightly runner (`horizon-nightly`, its own so a nightly never waits behind pull
-  requests' parity queue; same machine and trust as the `horizon-game` runner), never the release runner
-  (`MAC_RUNNER`), and its Rust cache has its own key and is never saved. A trusted build doesn't use the machine's
-  shared sccache, which pull requests' jobs write (`HORIZON_NO_SCCACHE`, `tools/ci/runner-env.sh`).
+  `publish` runs main's `horizon-release-sign`, never the archives.
+- **Where it builds.** `release.yml` starts `nightly-build.yml`, which calls `game-build.yml` with `trusted: false`
+  and `developer_id: false`, so releases build as Nightlies do. The macOS jobs run on the Mac mini's nightly runner
+  (`horizon-nightly`), never the release runner (`MAC_RUNNER`), and the Rust cache has its own key and is never
+  saved. They don't read machine-shared caches: no sccache (`HORIZON_NO_SCCACHE`, `tools/ci/runner-env.sh`) and no
+  cargo configuration from outside the checkout (`tools/ci/cargo_isolation.py` fails the job and names it), and
+  each run starts from a fresh cargo home.
 - **Players.** Every launcher and `horizon-server update` install the `nightly` pre-release
   ([Nightly only](#nightly-only)). It is never GitHub's latest: the last `vX.Y.Z` stays that, for launchers,
   servers and `install.sh` from before the switch.
@@ -895,13 +896,9 @@ failed or cancelled too (`dry-run-cleanup`, by that exact name).
 What it proves: the candidate's build, smoke test and SDK indexing. It still runs main's `nightly-build.yml`, the
 reusable workflows and `nightly.py pick`, so a fix to those can't be proven this way.
 
-Known limit, not solved: an off-main dry run runs the candidate's build scripts on the Mac mini's
-`ludovics-mac-mini-nightly` runner, the same persistent runner later real Nightlies use, and nothing isolates runner
-state outside the checkout. The control is who may push `dry-run/*`: the same people who can already dispatch the
-workflow from their own branch, which runs that branch's workflow on the same runner. So the option adds no new
-capability; it only removes the need to edit the workflow. As an untrusted build (`trusted: false`) it never uses the
-release runner and never saves the GitHub Actions Rust cache, but on the Mac it can read and write the machine's
-local compiler cache (sccache, `tools/ci/runner-env.sh`), which only trusted builds skip.
+An off-main dry run builds with `trusted: false` on the Mac mini's nightly runner (`ludovics-mac-mini-nightly`):
+it never uses the release runner, never saves the GitHub Actions Rust cache, doesn't read machine-shared caches
+(no sccache: `HORIZON_NO_SCCACHE`, `tools/ci/runner-env.sh`) and starts from a fresh cargo home.
 
 ## Nightly audit
 

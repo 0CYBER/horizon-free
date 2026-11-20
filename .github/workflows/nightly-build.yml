@@ -15,9 +15,9 @@ run-name: nightly build${{ (github.event_name == 'workflow_dispatch' && (inputs.
 #   pushes the merge as nightly/build-<date>-<n> and saves the set on the nightly-state branch.
 # - This file, game-build.yml and every script below run from main's copy: a schedule runs the default branch, and
 #   `uses: ./…` takes the caller's commit. A picked pull request's own .github/ is never read.
-# - `build` (game-build.yml, `trusted: false`) never reaches a release's tools: its macOS jobs run on the runner
-#   that already runs pull requests' parity jobs, never the release runner; its Rust cache has its own key and is
-#   never saved; and releases don't read the machine's shared sccache.
+# - `build` (game-build.yml, `trusted: false`): its macOS jobs run on the Nightly's runner, never the release runner;
+#   its Rust cache has its own key and is never saved; and its Mac jobs don't read machine-shared caches (no sccache,
+#   a fresh cargo home per run).
 # - `build` (game-build.yml) checks out and compiles the merge with no secrets: its token reads contents only and
 #   isn't kept in the checkout; the macOS programs are signed ad hoc (Developer ID needs the runner's keychain,
 #   which stays locked for nightlies).

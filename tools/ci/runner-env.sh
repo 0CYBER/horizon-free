@@ -16,7 +16,7 @@ if [ "$(uname)" = Darwin ]; then
   # Builds go through the machine's sccache (shared with ~/fleet/rbuild), so the build folders runner-gc.sh
   # removes come back from the cache instead of compiling cold. The shared wrapper retries cache
   # outages and then compiles directly; it also routes nested Clippy invocations.
-  # Not for a release (HORIZON_NO_SCCACHE=1, game-build.yml's trusted builds): pull requests' jobs write that cache.
+  # Not for game-build.yml's builds (HORIZON_NO_SCCACHE=1: Nightlies, dry runs and releases).
   if [ -x /opt/homebrew/bin/sccache ] && [ -z "${HORIZON_NO_SCCACHE:-}" ]; then
     { echo "RUSTC_WRAPPER=$GITHUB_WORKSPACE/tools/ci/compiler-cache.sh"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
   fi

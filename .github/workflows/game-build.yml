@@ -2,8 +2,8 @@ name: game build
 # Builds the game for every platform from `ref`: the Java exporters, then Linux and the Linux server, Windows x64
 # and ARM64 on GitHub, and macOS on the Mac mini's runner with a 1500-frame offscreen run of a new world (smoke-test.json): Apple
 # Silicon, and Intel cross-built there for x86_64-apple-darwin and checked under Rosetta 2 (#1161). Called by
-# release.yml (the releases) and nightly-build.yml (the opt-in Nightly), always from main's copy of this file: the
-# caller's commit, never the one being built. It holds no secrets: signing the checksums is the callers' own job,
+# nightly-build.yml (the Nightly, which release.yml starts), always from main's copy of this file: the caller's
+# commit, never the one being built. It holds no secrets: signing the checksums is the callers' own job,
 # which never runs what this one built. See docs/release-flow.md.
 on:
   workflow_call:
@@ -21,11 +21,10 @@ on:
         type: string
         default: ''
       trusted:
-        # Only release.yml says true: it builds main. A nightly can hold pull requests nobody reviewed yet, whose
-        # build scripts and tests run here and could rewrite target/, the cargo home or a compiler cache. So an
-        # untrusted build never runs on the release runner, never saves the Rust cache (its key is its own anyway),
-        # and a trusted one never reads the machine's shared sccache, which pull requests' jobs write
-        # (tests/test_nightly.py pins all of it).
+        # No caller passes true today: release.yml starts nightly-build.yml, which passes false here and for
+        # developer_id. With false, the build never runs on the release runner and never saves the Rust cache (its
+        # key is its own anyway). Mac jobs, true or false, don't read machine-shared caches or cargo configuration
+        # from outside the checkout (tools/ci/cargo_isolation.py; tests/test_nightly.py pins all of it).
         description: The source is main (a release); false for anything else (a nightly)
         type: boolean
         default: false
@@ -72,6 +71,11 @@ jobs:
     runs-on: ${{ inputs.trusted && vars.MAC_RUNNER || fromJSON('["self-hosted", "macOS", "horizon-nightly"]') }}
     # Three full preparations (two isolated, one batched) besides the compile.
     timeout-minutes: 60
+    env:
+      # An empty RUSTC_WRAPPER also overrides a build.rustc-wrapper in any cargo config. The variables cargo_isolation.py
+      # refuses may be set here only empty.
+      RUSTC_WRAPPER: ''
+      RUSTC_WORKSPACE_WRAPPER: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,9 +85,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
         with:
           toolchain: stable
+      - name: A fresh cargo home and no cargo configuration from outside the checkout
+        # The guard comes from this workflow's commit (GITHUB_WORKFLOW_SHA: the caller's, whose ./ copy of this file
+        # runs), never from the checkout it checks, which may be an older commit without it. It is fetched into a new
+        # folder and run by the system's own curl and Python (curl -q: no curlrc; python3 -I -S: no environment, no
+        # site), and the step passes only when its last line says it finished.
+        run: |
+          set -euo pipefail
+          [ -x /usr/bin/python3 ] || { echo "::error::/usr/bin/python3 is missing"; exit 1; }
+          dir="$(/usr/bin/mktemp -d "$RUNNER_TEMP/workflow-tools.XXXXXX")"
+          url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_WORKFLOW_SHA/tools/ci/cargo_isolation.py"
+          /usr/bin/curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 0 \
+            --noproxy '*' --max-time 60 --retry 5 -o "$dir/cargo_isolation.py" "$url"
+          out="$(/usr/bin/python3 -I -S "$dir/cargo_isolation.py" "$GITHUB_WORKSPACE")" || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          [ "${out##*$'\n'}" = "cargo isolation: clean" ] || { echo "::error::the cargo guard did not finish"; exit 1; }
       - run: bash tools/ci/runner-env.sh
         env:
-          HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
+          # Nightly, dry-run and release Mac jobs don't read machine-shared caches: no sccache, and a fresh cargo home
+          # per run (rustup's toolchains stay the machine's).
+          HORIZON_NO_SCCACHE: '1'
       - run: bash tools/ci/vanilla-data.sh
       - name: Compile and validate original exporters against the pinned jars
         shell: bash
@@ -109,6 +130,9 @@ jobs:
           path: exporters/
           if-no-files-found: error
           retention-days: 3
+      - name: The run's cargo home removed
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/cargo-home"
 
   polytone-windows:
     # The Polytone path regressions (#18051): resource paths joined with `\` list nothing on Windows. A job of its own
@@ -207,6 +231,9 @@ jobs:
       HORIZON_NIGHTLY: ${{ inputs.nightly }}
       # Where cargo puts the programs: target/release, or target/<target>/release for another target.
       BIN: ${{ matrix.target && format('target/{0}/release', matrix.target) || 'target/release' }}
+      # As in `exporters`.
+      RUSTC_WRAPPER: ''
+      RUSTC_WORKSPACE_WRAPPER: ''
     defaults:
       run:
         shell: bash
@@ -226,6 +253,22 @@ jobs:
         with:
           toolchain: ${{ steps.rust.outputs.version }}
           targets: ${{ matrix.target }}
+      - name: A fresh cargo home and no cargo configuration from outside the checkout
+        if: runner.environment == 'self-hosted'
+        # The guard comes from this workflow's commit (GITHUB_WORKFLOW_SHA: the caller's, whose ./ copy of this file
+        # runs), never from the checkout it checks, which may be an older commit without it. It is fetched into a new
+        # folder and run by the system's own curl and Python (curl -q: no curlrc; python3 -I -S: no environment, no
+        # site), and the step passes only when its last line says it finished.
+        run: |
+          set -euo pipefail
+          [ -x /usr/bin/python3 ] || { echo "::error::/usr/bin/python3 is missing"; exit 1; }
+          dir="$(/usr/bin/mktemp -d "$RUNNER_TEMP/workflow-tools.XXXXXX")"
+          url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_WORKFLOW_SHA/tools/ci/cargo_isolation.py"
+          /usr/bin/curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 0 \
+            --noproxy '*' --max-time 60 --retry 5 -o "$dir/cargo_isolation.py" "$url"
+          out="$(/usr/bin/python3 -I -S "$dir/cargo_isolation.py" "$GITHUB_WORKSPACE")" || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          [ "${out##*$'\n'}" = "cargo isolation: clean" ] || { echo "::error::the cargo guard did not finish"; exit 1; }
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: runner.environment == 'github-hosted' && !matrix.musl
         with:
@@ -318,7 +361,7 @@ jobs:
       - name: Tools from the runner
         if: runner.environment == 'self-hosted'
         env:
-          HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
+          HORIZON_NO_SCCACHE: '1' # as in `exporters`
         run: bash tools/ci/runner-env.sh
       - name: Resources prepared from the runner's own Minecraft
         if: runner.environment == 'self-hosted'
@@ -429,4 +472,7 @@ jobs:
       - name: The signing keychain, locked again
         if: always() && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != '' && inputs.developer_id
         run: packaging/macos/keychain.sh lock
+      - name: The run's cargo home removed
+        if: always() && runner.environment == 'self-hosted'
+        run: rm -rf "$RUNNER_TEMP/cargo-home"
 
