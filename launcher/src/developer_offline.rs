@@ -151,23 +151,21 @@ mod tests {
         assert!(!startup_failure(&"界".repeat(500)).ends_with('…'));
     }
 
+    /// Horizon-free: no account is needed to start the game (`backend::OFFLINE_PLAY`), with or
+    /// without upstream's developer opt-in. Play stops at the build that is not installed, and
+    /// never at a sign-in.
     #[test]
-    fn account_gate_is_preserved_without_opt_in_and_for_signed_lineage() {
+    fn play_starts_without_an_account_and_never_asks_to_sign_in() {
         if let Ok(tag) = std::env::var("OFFLINE_GATE_TEST_TAG") {
             assert!(!enabled(&tag));
             let error = crate::backend::client_as(&tag, None).unwrap_err();
             assert!(
-                error.contains(crate::i18n::tr(crate::backend::SIGN_IN_HINT)),
+                !error.contains(crate::i18n::tr(crate::backend::SIGN_IN_HINT)),
                 "{error}"
             );
             return;
         }
-        for (tag, opt_in) in [
-            ("developer-local", None),
-            ("v2026.11.10", Some("1")),
-            ("nightly-abcdef", Some("1")),
-            ("developer-local", Some("true")),
-        ] {
+        for tag in ["developer-local", "v2026.11.10", "nightly-abcdef"] {
             let root = tempfile::tempdir().unwrap();
             let version = root.path().join("versions").join(tag);
             std::fs::create_dir_all(&version).unwrap();
@@ -178,17 +176,13 @@ mod tests {
             )
             .unwrap();
             let mut child = Command::new(std::env::current_exe().unwrap());
-            child.args(["--exact", "developer_offline::tests::account_gate_is_preserved_without_opt_in_and_for_signed_lineage", "--nocapture"])
+            child.args(["--exact", "developer_offline::tests::play_starts_without_an_account_and_never_asks_to_sign_in", "--nocapture"])
                 .env("OFFLINE_GATE_TEST_TAG", tag)
                 .env("HORIZON_LAUNCHER_HOME", root.path())
                 .env("HORIZON_HOME", root.path().join("game"))
                 .env("XDG_CONFIG_HOME", root.path().join("config"))
-                .env("XDG_DATA_HOME", root.path().join("data"));
-            if let Some(value) = opt_in {
-                child.env(ENV, value);
-            } else {
-                child.env_remove(ENV);
-            }
+                .env("XDG_DATA_HOME", root.path().join("data"))
+                .env_remove(ENV);
             let output = child.output().unwrap();
             assert!(
                 output.status.success(),

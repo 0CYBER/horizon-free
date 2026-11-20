@@ -38,6 +38,7 @@ fn baseline(load: impl Fn() -> Result<serde_json::Value, String>) -> (Vec<Releas
             &installed_fixture(),
         ),
         launcher: launcher_update(&parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag)),
+        launcher_error: None,
     };
     (releases, updates)
 }
@@ -47,7 +48,7 @@ fn shared(load: impl FnOnce() -> Result<serde_json::Value, String>) -> (Vec<Rele
     let updates = releases_and_updates_with(
         load,
         installed_fixture,
-        |list| parse_releases(list, LAUNCHER_ASSET, is_launcher_tag),
+        |list| Ok(parse_releases(list, LAUNCHER_ASSET, is_launcher_tag)),
         |r| releases = Some(r.unwrap()),
     )
     .unwrap();
@@ -98,7 +99,7 @@ fn publish_games_before_older_launcher_fallback() {
         || Ok(serde_json::json!([{"tag_name": "v2026.10.14", "assets": []}])),
         Vec::new,
         |list| {
-            launcher_releases_in_with(list, |url| {
+            Ok(launcher_releases_in_with(list, |url| {
                 assert_eq!(events.borrow().first(), Some(&"releases"));
                 events.borrow_mut().push("fallback");
                 if url.contains("matching-refs") {
@@ -113,7 +114,7 @@ fn publish_games_before_older_launcher_fallback() {
                         }]}),
                     ))
                 }
-            })
+            }))
         },
         |r| {
             assert_eq!(r.unwrap()[0].tag, "v2026.10.14");
@@ -136,7 +137,7 @@ fn failed_launcher_fallback_keeps_game_result_and_checks_stay_fresh() {
                 Ok(serde_json::json!([{"tag_name": format!("v2026.10.{day}")}]))
             },
             Vec::new,
-            |list| launcher_releases_in_with(list, |_| Err("offline".into())),
+            |list| Ok(launcher_releases_in_with(list, |_| Err("offline".into()))),
             |r| published = Some(r.unwrap()),
         )
         .unwrap();
@@ -163,12 +164,13 @@ fn empty_or_prebuilt_only_fork_has_no_game_or_launcher_update() {
                 || Ok(list.clone()),
                 Vec::new,
                 |list| {
-                    launcher_releases_in_with(list, |url| {
-                        assert!(
-                            url.starts_with("https://api.github.com/repos/horizon-rust/horizon/")
-                        );
+                    Ok(launcher_releases_in_with(list, |url| {
+                        // Horizon-free: the launcher reads its own releases (LAUNCHER_REPO).
+                        assert!(url.starts_with(&format!(
+                            "https://api.github.com/repos/{LAUNCHER_REPO}/"
+                        )));
                         Ok(missing.clone())
-                    })
+                    }))
                 },
                 |result| games = Some(result.unwrap()),
             )
@@ -178,6 +180,28 @@ fn empty_or_prebuilt_only_fork_has_no_game_or_launcher_update() {
             assert!(updates.launcher.is_none());
         }
     }
+}
+
+#[test]
+fn a_launcher_update_downloads_the_forks_file_not_horizons_of_the_same_version() {
+    let Some(asset) = launcher_asset() else {
+        return;
+    };
+    // The fork and Horizon both publish `launcher@0.2.31`: the fork's list must send the update
+    // to the fork's file, or the launcher replaces itself with Horizon's build of that version.
+    let list = serde_json::json!([{
+        "tag_name": "launcher@0.2.31",
+        "assets": [{"name": asset, "size": 42,
+                    "browser_download_url": "https://example.test/horizons"}]
+    }]);
+    let releases = launcher_releases_in(&list);
+    assert_eq!(
+        releases[0].asset,
+        Some((
+            format!("https://github.com/{LAUNCHER_REPO}/releases/download/launcher@0.2.31/{asset}"),
+            42
+        ))
+    );
 }
 
 #[test]
@@ -319,6 +343,7 @@ fn benchmark_shared_startup_response() {
                         LAUNCHER_ASSET,
                         is_launcher_tag,
                     )),
+                    launcher_error: None,
                 }
             });
             (releases.join().unwrap(), updates.join().unwrap())
