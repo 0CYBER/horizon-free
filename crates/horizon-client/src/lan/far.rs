@@ -4,7 +4,11 @@
 //! positions stay (the player's `sent_chunks`). Bodies sent are kept a while for players walking back. A
 //! brake pulls the ring in while ticks run long and lets it out slowly once they are short again.
 
-use super::chunks::ChunkEncoder;
+use super::{
+    chunks::ChunkEncoder,
+    terrain_view::{self, Faces, Neighbours, Rules},
+};
+use crate::world::World;
 use crate::{biome::Biomes, fast_hash::FxHashMap, save::SaveDir};
 use horizon_world::registry::BlockRegistry;
 use std::{
@@ -20,6 +24,8 @@ const ASKED: usize = 32;
 pub const LOOKS: usize = 2 * ASKED;
 /// The bodies kept for players coming back: this many bytes, this long.
 const KEPT_BYTES: usize = 96 << 20;
+/// ...and no more than this many bodies, whatever their size.
+const KEPT_COUNT: usize = 32_768;
 const KEPT_FOR: Duration = Duration::from_secs(300);
 /// How long a chunk the save doesn't have (or not as a full chunk with its light) is not looked for again.
 const MISSING_FOR: Duration = Duration::from_secs(30);
@@ -34,7 +40,16 @@ const GROW_EVERY: u32 = 5;
 const READERS: usize = 2;
 
 /// A level's place in `Far::levels`, and a chunk of it.
-type Key = (usize, i32, i32);
+type Key = (usize, i32, i32, u64);
+type ColumnKey = (usize, i32, i32);
+type SavedBody = (Instant, Arc<[u8]>, Option<Faces>);
+type Variants = FxHashMap<u64, SavedBody>;
+fn protected_bytes((_, body, faces): &SavedBody) -> usize {
+    body.len() + faces.as_ref().map_or(0, Faces::bytes)
+}
+
+type ReadBody = (Vec<u8>, Option<Faces>);
+type Done = (Key, Option<ReadBody>);
 
 /// What the readers read a level from.
 pub struct Source {
@@ -45,13 +60,32 @@ pub struct Source {
 
 /// Reads a saved chunk's body: the game's reads it with `SaveDir::load_far`, encoded by
 /// `ChunkEncoder::body_alone`.
-type Reader = Arc<dyn Fn(&Source, i32, i32) -> Option<Vec<u8>> + Send + Sync>;
+type Reader = Arc<dyn Fn(&Source, i32, i32, Option<&View>) -> Option<ReadBody> + Send + Sync>;
+
+struct View {
+    rules: Arc<Rules>,
+    neighbours: Neighbours,
+}
 
 struct Level {
     name: String,
     source: Arc<Source>,
     /// Bodies read of the level, with when.
     bodies: FxHashMap<(i32, i32), (Instant, Arc<[u8]>)>,
+    protected: FxHashMap<(i32, i32), Variants>,
+}
+
+impl Level {
+    fn kept_at(&self, x: i32, z: i32, generation: u64) -> Option<Instant> {
+        if generation == 0 {
+            self.bodies.get(&(x, z)).map(|(at, _)| *at)
+        } else {
+            self.protected
+                .get(&(x, z))?
+                .get(&generation)
+                .map(|(at, _, _)| *at)
+        }
+    }
 }
 
 /// A far chunk as [`Far::saved`] finds it.
@@ -73,28 +107,52 @@ pub struct Far {
     /// Every body kept, oldest first, with when it was read (a later read of the column leaves its
     /// entry behind, skipped once it comes up).
     order: VecDeque<(Key, Instant)>,
+    /// How many bodies are kept (the entries of `order` that are not left behind).
+    kept: usize,
     bytes: usize,
     /// The reads asked for, true once what they read is out of date.
     asked: FxHashMap<Key, bool>,
-    missing: FxHashMap<Key, Instant>,
-    jobs: mpsc::Sender<(Key, Arc<Source>)>,
-    done: mpsc::Receiver<(Key, Option<Vec<u8>>)>,
+    protected_asked: usize,
+    missing: FxHashMap<ColumnKey, Instant>,
+    jobs: mpsc::Sender<(Key, Arc<Source>, Option<View>)>,
+    done: mpsc::Receiver<Done>,
 }
 
 impl Far {
     /// A far ring out to `max`, its readers decoding with the game's blocks and biomes.
     pub fn new(max: i32, registry: &'static BlockRegistry, biomes: Arc<Biomes>) -> Self {
-        Self::reading(
+        Self::start(
             max,
-            Arc::new(move |source: &Source, x, z| {
+            Arc::new(move |source: &Source, x, z, view| {
                 let chunk = source.save.load_far(x, z, registry, &biomes)?;
-                Some(source.encoder.body_alone(&chunk))
+                Some(match view {
+                    Some(view) => {
+                        let (body, faces) = source.encoder.terrain_body_alone(
+                            &chunk,
+                            &view.neighbours,
+                            &view.rules,
+                        );
+                        (body, Some(faces))
+                    }
+                    None => (source.encoder.body_alone(&chunk), None),
+                })
             }),
         )
     }
 
-    pub(super) fn reading(max: i32, read_one: Reader) -> Self {
-        let (jobs, asked) = mpsc::channel::<(Key, Arc<Source>)>();
+    #[cfg(test)]
+    pub(super) fn reading(
+        max: i32,
+        read_one: Arc<dyn Fn(&Source, i32, i32) -> Option<Vec<u8>> + Send + Sync>,
+    ) -> Self {
+        Self::start(
+            max,
+            Arc::new(move |source, x, z, _| read_one(source, x, z).map(|bytes| (bytes, None))),
+        )
+    }
+
+    fn start(max: i32, read_one: Reader) -> Self {
+        let (jobs, asked) = mpsc::channel::<(Key, Arc<Source>, Option<View>)>();
         let (read, done) = mpsc::channel();
         let asked = Arc::new(Mutex::new(asked));
         for n in 0..READERS {
@@ -104,11 +162,12 @@ impl Far {
                 .spawn(move || {
                     loop {
                         // The far ring is gone once its sender is.
-                        let Ok(((level, x, z), source)) = asked.lock().unwrap().recv() else {
+                        let Ok((key @ (_, x, z, _), source, view)) = asked.lock().unwrap().recv()
+                        else {
                             return;
                         };
-                        let body = read_one(&source, x, z);
-                        if read.send(((level, x, z), body)).is_err() {
+                        let body = read_one(&source, x, z, view.as_ref());
+                        if read.send((key, body)).is_err() {
                             return;
                         }
                     }
@@ -123,8 +182,10 @@ impl Far {
             levels: Vec::new(),
             here: None,
             order: VecDeque::new(),
+            kept: 0,
             bytes: 0,
             asked: Default::default(),
+            protected_asked: 0,
             missing: Default::default(),
             jobs,
             done,
@@ -158,6 +219,7 @@ impl Far {
                     name: name.to_owned(),
                     source: source(),
                     bodies: Default::default(),
+                    protected: Default::default(),
                 });
                 self.levels.len() - 1
             }
@@ -167,20 +229,76 @@ impl Far {
 
     /// A saved chunk of the level in place, asking for it to be read when there is room.
     pub fn saved(&mut self, x: i32, z: i32) -> Saved {
+        self.find_saved(x, z, 0, None, || None)
+    }
+
+    /// What the kept protected body of a saved column concealed (`Faces::saved`), none once it is gone.
+    pub(super) fn concealed(&self, x: i32, z: i32, generation: u64) -> &[terrain_view::Concealed] {
+        let Some(level) = self.here else {
+            return &[];
+        };
+        self.levels[level]
+            .protected
+            .get(&(x, z))
+            .and_then(|variants| variants.get(&generation))
+            .and_then(|(_, _, faces)| faces.as_ref())
+            .map_or(&[], Faces::concealed)
+    }
+
+    pub(super) fn saved_for_view(
+        &mut self,
+        x: i32,
+        z: i32,
+        rules: &Arc<Rules>,
+        world: &World,
+    ) -> Saved {
+        self.find_saved(x, z, rules.generation, Some((world, rules)), || {
+            Some(View {
+                rules: rules.clone(),
+                neighbours: terrain_view::neighbours(world, (x, z)),
+            })
+        })
+    }
+
+    fn find_saved(
+        &mut self,
+        x: i32,
+        z: i32,
+        generation: u64,
+        world: Option<(&World, &Rules)>,
+        view: impl FnOnce() -> Option<View>,
+    ) -> Saved {
         let Some(level) = self.here else {
             return Saved::Missing;
         };
-        let key = (level, x, z);
-        let bodies = &mut self.levels[level].bodies;
-        match bodies.get(&(x, z)) {
-            Some((at, body)) if at.elapsed() < KEPT_FOR => return Saved::Body(body.clone()),
-            Some(_) => self.bytes -= bodies.remove(&(x, z)).map_or(0, |(_, b)| b.len()),
-            None => {}
+        let column = (level, x, z);
+        let key = (level, x, z, generation);
+        let source = &mut self.levels[level];
+        if generation == 0 {
+            if let Some((at, body)) = source.bodies.get(&(x, z)) {
+                if at.elapsed() < KEPT_FOR {
+                    return Saved::Body(body.clone());
+                }
+                self.remove_body(key);
+            }
+        } else if let Some((at, body, faces)) = source
+            .protected
+            .get_mut(&(x, z))
+            .and_then(|v| v.get_mut(&generation))
+        {
+            if at.elapsed() < KEPT_FOR
+                && world
+                    .zip(faces.as_mut())
+                    .is_some_and(|((world, rules), faces)| faces.current(world, rules, (x, z)))
+            {
+                return Saved::Body(body.clone());
+            }
+            self.remove_body(key);
         }
-        match self.missing.get(&key) {
+        match self.missing.get(&column) {
             Some(at) if at.elapsed() < MISSING_FOR => return Saved::Missing,
             Some(_) => {
-                self.missing.remove(&key);
+                self.missing.remove(&column);
             }
             None => {}
         }
@@ -188,8 +306,11 @@ impl Far {
             return Saved::Waiting;
         }
         let source = self.levels[level].source.clone();
-        if source.save.pending_writes() <= WRITE_BACKLOG && self.jobs.send((key, source)).is_ok() {
+        if source.save.pending_writes() <= WRITE_BACKLOG
+            && self.jobs.send((key, source, view())).is_ok()
+        {
             self.asked.insert(key, false);
+            self.protected_asked += usize::from(generation != 0);
         }
         Saved::Waiting
     }
@@ -197,51 +318,86 @@ impl Far {
     /// Takes in what the readers have read.
     pub fn poll(&mut self) {
         while let Ok((key, body)) = self.done.try_recv() {
+            let Some(stale) = self.asked.remove(&key) else {
+                continue;
+            };
+            self.protected_asked -= usize::from(key.3 != 0);
             match body {
-                _ if self.asked.remove(&key).is_none_or(|stale| stale) => {}
-                Some(body) => self.keep(key, body.into()),
+                _ if stale => {}
+                Some((body, faces)) => self.keep(key, body.into(), faces),
                 None => {
-                    self.missing.insert(key, Instant::now());
+                    if self.missing.len() >= 16_384 {
+                        self.missing.retain(|_, at| at.elapsed() < MISSING_FOR);
+                        if self.missing.len() >= 16_384 {
+                            self.missing.clear();
+                        }
+                    }
+                    self.missing.insert((key.0, key.1, key.2), Instant::now());
                 }
             }
         }
     }
 
-    fn keep(&mut self, key: Key, body: Arc<[u8]>) {
-        let (level, x, z) = key;
+    fn keep(&mut self, key: Key, body: Arc<[u8]>, faces: Option<Faces>) {
+        let (level, x, z, generation) = key;
         let now = Instant::now();
-        self.bytes += body.len();
-        if let Some((_, old)) = self.levels[level].bodies.insert((x, z), (now, body)) {
-            self.bytes -= old.len();
-        }
+        self.bytes += body.len() + faces.as_ref().map_or(0, Faces::bytes);
+        let source = &mut self.levels[level];
+        let old = if generation == 0 {
+            source
+                .bodies
+                .insert((x, z), (now, body))
+                .map(|(_, b)| b.len())
+        } else {
+            source
+                .protected
+                .entry((x, z))
+                .or_default()
+                .insert(generation, (now, body, faces))
+                .as_ref()
+                .map(protected_bytes)
+        };
+        self.kept += usize::from(old.is_none());
+        self.bytes -= old.unwrap_or(0);
         self.order.push_back((key, now));
-        while self.bytes > KEPT_BYTES {
+        while self.bytes > KEPT_BYTES || self.kept > KEPT_COUNT {
             self.drop_oldest();
         }
-        if self.order.len() > 2 * self.bodies() + 1024 {
+        // Entries left behind by a later read or a removal are swept once they are half the queue, so
+        // the scan's cost is spread over the insertions that made them.
+        if self.order.len() > KEPT_COUNT && self.order.len() >= 2 * self.kept {
             let levels = &self.levels;
-            self.order.retain(|((level, x, z), at)| {
-                levels[*level]
-                    .bodies
-                    .get(&(*x, *z))
-                    .is_some_and(|(t, _)| t == at)
+            self.order.retain(|((level, x, z, generation), at)| {
+                levels[*level].kept_at(*x, *z, *generation) == Some(*at)
             });
         }
     }
 
-    fn bodies(&self) -> usize {
-        self.levels.iter().map(|l| l.bodies.len()).sum()
-    }
-
     /// Lets go of the oldest body kept (none when there is none).
     fn drop_oldest(&mut self) {
-        let Some(((level, x, z), at)) = self.order.pop_front() else {
-            self.bytes = 0;
+        let Some((key @ (level, x, z, generation), at)) = self.order.pop_front() else {
             return;
         };
-        let bodies = &mut self.levels[level].bodies;
-        if bodies.get(&(x, z)).is_some_and(|(t, _)| *t == at) {
-            self.bytes -= bodies.remove(&(x, z)).map_or(0, |(_, b)| b.len());
+        if self.levels[level].kept_at(x, z, generation) == Some(at) {
+            self.remove_body(key);
+        }
+    }
+
+    fn remove_body(&mut self, (level, x, z, generation): Key) {
+        let source = &mut self.levels[level];
+        if generation == 0 {
+            if let Some((_, body)) = source.bodies.remove(&(x, z)) {
+                self.bytes -= body.len();
+                self.kept -= 1;
+            }
+        } else if let Some(variants) = source.protected.get_mut(&(x, z)) {
+            if let Some(body) = variants.remove(&generation) {
+                self.bytes -= protected_bytes(&body);
+                self.kept -= 1;
+            }
+            if variants.is_empty() {
+                source.protected.remove(&(x, z));
+            }
         }
     }
 
@@ -251,11 +407,21 @@ impl Far {
             return;
         };
         self.missing.remove(&(level, x, z));
-        if let Some((_, body)) = self.levels[level].bodies.remove(&(x, z)) {
-            self.bytes -= body.len();
+        self.remove_body((level, x, z, 0));
+        if let Some(variants) = self.levels[level].protected.remove(&(x, z)) {
+            self.bytes -= variants.values().map(protected_bytes).sum::<usize>();
+            self.kept -= variants.len();
         }
-        if let Some(stale) = self.asked.get_mut(&(level, x, z)) {
-            *stale = true;
+        if self.protected_asked == 0 {
+            if let Some(stale) = self.asked.get_mut(&(level, x, z, 0)) {
+                *stale = true;
+            }
+        } else {
+            for (&(l, px, pz, _), stale) in &mut self.asked {
+                if (l, px, pz) == (level, x, z) {
+                    *stale = true;
+                }
+            }
         }
     }
 
@@ -265,10 +431,19 @@ impl Far {
         let Some(level) = self.here else {
             return;
         };
-        let bodies = &mut self.levels[level].bodies;
-        if !bodies.is_empty() {
-            self.bytes -= bodies.drain().map(|(_, (_, b))| b.len()).sum::<usize>();
+        let source = &mut self.levels[level];
+        self.kept -= source.bodies.len();
+        self.bytes -= source
+            .bodies
+            .drain()
+            .map(|(_, (_, b))| b.len())
+            .sum::<usize>();
+        let variants = source.protected.drain().flat_map(|(_, v)| v.into_values());
+        for body in variants {
+            self.bytes -= protected_bytes(&body);
+            self.kept -= 1;
         }
+        self.missing.retain(|&(l, _, _), _| l != level);
         for (_, stale) in self.asked.iter_mut().filter(|((l, ..), _)| *l == level) {
             *stale = true;
         }
@@ -438,5 +613,24 @@ mod tests {
         }
         assert!(far.levels[0].bodies.is_empty());
         assert!(matches!(read(&mut far, 6, 0), Saved::Body(_)));
+    }
+
+    /// The count limit evicts the oldest bodies, and entries a rewrite leaves behind are swept in
+    /// steps that spread their cost: the queue stays under twice the limit.
+    #[test]
+    fn kept_bodies_are_counted_and_stale_entries_swept_in_steps() {
+        let mut far = far(Arc::default());
+        let level = far.here.unwrap();
+        for x in 0..=KEPT_COUNT as i32 {
+            far.keep((level, x, 0, 0), Arc::from([0u8]), None);
+        }
+        assert_eq!(far.kept, KEPT_COUNT);
+        assert!(!far.levels[level].bodies.contains_key(&(0, 0)));
+        assert!(far.levels[level].bodies.contains_key(&(1, 0)));
+        for _ in 0..2 * KEPT_COUNT {
+            far.keep((level, 1, 0, 0), Arc::from([0u8]), None);
+            assert!(far.order.len() <= 2 * KEPT_COUNT + 1);
+        }
+        assert_eq!(far.kept, KEPT_COUNT);
     }
 }

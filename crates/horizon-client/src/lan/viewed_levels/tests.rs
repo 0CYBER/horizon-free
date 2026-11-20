@@ -1375,3 +1375,89 @@ fn a_travel_with_the_epochs_spent_closes_the_view_first() {
         "the Nether is sent again as its own"
     );
 }
+
+#[test]
+fn a_viewed_level_selects_terrain_by_its_own_dimension() {
+    use mod_api::__private::parts_installation::{block_key, block_key_slot};
+    use mod_api::{BlockState, BlockStateRecord, TerrainBand, TerrainPattern, TerrainView};
+
+    let (mut hub, rx) = hub_with(&[1, 2, 3], 2);
+    hub.encoder = crate::lan::chunks::ChunkEncoder::new(
+        ["minecraft:air", "minecraft:stone", "minecraft:diamond_ore"]
+            .map(|name| (std::sync::Arc::<str>::from(name), false)),
+        &horizon_protocol::registry::Builtin::default(),
+        &[],
+        &[],
+    );
+    let state = |id| BlockState::from(BlockStateRecord::new(block_key(id), 0));
+    hub.define_terrain_view(
+        "test",
+        1,
+        &TerrainView::new(
+            vec![TerrainBand::new(
+                0,
+                80,
+                vec![state(2)],
+                vec![state(1)],
+                TerrainPattern::Block(0),
+            )],
+            vec![state(1)],
+            true,
+            0,
+        ),
+        |state| Some(block_key_slot(state.block())),
+    )
+    .unwrap();
+    for uuid in 1..=3 {
+        hub.set_viewed_areas(uuid, "test:portal", nether(1))
+            .unwrap();
+    }
+    hub.set_terrain_view(1, NETHER, "test", Some(1)).unwrap();
+    hub.set_terrain_view(2, NETHER, "test", Some(1)).unwrap();
+    hub.set_terrain_view(3, "minecraft:overworld", "test", Some(1))
+        .unwrap();
+    hub.set_dimension(NETHER);
+    let mut world = lit_columns(1);
+    let column = std::sync::Arc::make_mut(world.chunks.get_mut(&(0, 0)).unwrap());
+    let [x, y, z] = [3, 33, 3];
+    for (dx, dy, dz) in crate::lan::terrain_view::FACES {
+        column.set(x + dx, y + dy, z + dz, 1);
+    }
+    column.set(x, y, z, 2);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut state = [None; 3];
+    while state.iter().any(Option::is_none) {
+        assert!(
+            std::time::Instant::now() < until,
+            "viewed columns never arrived"
+        );
+        for i in 0..hub.guests.len() {
+            hub.guests.update(i, |g| {
+                g.unacknowledged = 0;
+                g.batch_quota = 9.0;
+            });
+        }
+        run_level(&mut hub, &mut world);
+        for (i, rx) in rx.iter().enumerate() {
+            for got in got(rx) {
+                let Got::Wrapped { level, id, body } = got else {
+                    continue;
+                };
+                if let Ok(C::LevelChunkWithLight(p)) = C::decode(id, &body)
+                    && (p.x, p.z) == (0, 0)
+                {
+                    assert_eq!(level, NETHER_INDEX);
+                    let sections = p.chunk.sections(16, 15, 6).unwrap();
+                    // Every copy of the centre column a player is sent must show its own view.
+                    let shown = sections[(y >> 4) as usize]
+                        .states
+                        .get(crate::chunk::index(x, y, z));
+                    assert_eq!(shown, [1, 1, 2][i], "guest {i} was sent the wrong column");
+                    state[i] = Some(shown);
+                }
+            }
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(state, [Some(1), Some(1), Some(2)]);
+}

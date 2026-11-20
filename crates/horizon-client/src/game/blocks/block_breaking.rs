@@ -47,6 +47,13 @@ impl Game<'_> {
         let outer = self.lan_break_pos.replace(pos);
         let broken = self.with_player_actor(|game| game.break_block_as_player(pos));
         self.lan_break_pos = outer;
+        if matches!(broken, Ok(true))
+            && let Some(conn) = self.lan_acting
+            && let Some(host) = self.lan.as_mut()
+        {
+            host.hub
+                .reveal_terrain_after_break(conn, &mut self.world, pos);
+        }
         broken
     }
 

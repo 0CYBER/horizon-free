@@ -3,7 +3,7 @@
 //! its game time every 20 ticks, its clocks when they jump or change rate and its weather as it
 //! changes, the chunks no area covered for [`super::view::LINGER`] ticks forgotten, and `close`
 //! once nothing of it is left. Its entities go in the tracking pass (`entities`).
-use super::super::hub::{Hub, TickCtx, game_event};
+use super::super::hub::{Hub, TickCtx, game_event, terrain::Bodies};
 use super::view::View;
 use crate::{chunk::Chunk, streaming::Streaming, world::World};
 use horizon_protocol::{
@@ -76,6 +76,11 @@ impl Runs {
             payloads: Vec::new(),
         }
     }
+    /// Whether a packet of this size can be sent at all: not one too large to wrap.
+    pub(crate) fn fits(packet: &[u8]) -> bool {
+        RUN_HEAD + packet.len() + 5 <= MAX_RUN
+    }
+
     /// Adds a play clientbound packet as `Clientbound::encode` writes it, and says whether it
     /// will be sent. One too large to wrap at all, or that the codec refuses, is not; the first
     /// is logged once.
@@ -146,13 +151,13 @@ fn ready(world: &World, streaming: Option<&Streaming>, c: &Chunk) -> bool {
 pub(crate) fn batch_runs<T>(
     level: Level,
     taken: &[(usize, T)],
-    bodies: &[Vec<u8>],
+    bodies: &[impl AsRef<[u8]>],
 ) -> (Vec<Vec<u8>>, Vec<usize>) {
     let mut runs = Runs::new(level);
     let sent = taken
         .iter()
         .zip(bodies)
-        .filter(|(_, body)| runs.push(body))
+        .filter(|(_, body)| runs.push(body.as_ref()))
         .map(|((idx, _), _)| *idx)
         .collect();
     (runs.finish(), sent)
@@ -185,14 +190,16 @@ impl Hub {
         if !self.viewed.active() {
             return;
         }
+        self.prepare_terrain_pass();
         let dimension = self.config.dimension.clone();
         let active = self.viewed.active.clone();
+        let mut bodies = Bodies::default();
         for i in 0..self.guests.len() {
             if !self.guests[i].views_level(&dimension) {
                 continue;
             }
             if self.open_view(i, ctx) && self.update_viewed(i) {
-                self.send_view_batch(i, ctx.world, ctx.streaming);
+                self.send_view_batch(i, ctx.world, ctx.streaming, &mut bodies);
                 self.send_view_state(i, ctx.world, ctx.clock_rate);
             }
             self.guests.update(i, |g| g.viewed.recount(&active));
@@ -279,7 +286,13 @@ impl Hub {
 
     /// The next batch of the level in place guest `i` views: its ready columns nearest to an
     /// area's centre first, as many as the batch quota its own level left.
-    fn send_view_batch(&mut self, i: usize, world: &World, streaming: Option<&Streaming>) {
+    fn send_view_batch(
+        &mut self,
+        i: usize,
+        world: &World,
+        streaming: Option<&Streaming>,
+        protected: &mut Bodies,
+    ) {
         let g = &self.guests[i];
         if self.ticks <= g.placed_at + 1
             || g.unacknowledged >= g.max_unacknowledged
@@ -295,27 +308,55 @@ impl Hub {
         // ones is kept but not sent.
         let cap = self.viewed.caps.for_client(g.sender.viewed_levels);
         let room = (cap.loaded_per_player as usize).saturating_sub(view.sent.len());
+        let level = view.level;
+        let rules = self.terrain_rules(g.conn);
+        let budget = (g.batch_quota.floor() as usize).min(room);
         let taken: Vec<(usize, &Chunk)> = view
             .queue
             .iter()
             .enumerate()
             .filter_map(|(idx, key)| Some((idx, &**world.chunks.get(key)?)))
             .filter(|(_, c)| ready(world, streaming, c))
-            .take((g.batch_quota.floor() as usize).min(room))
+            .take(if rules.is_some() && budget != 0 {
+                budget.saturating_add(32)
+            } else {
+                budget
+            })
             .collect();
         if taken.is_empty() {
             return;
         }
-        let chunks: Vec<&Chunk> = taken.iter().map(|&(_, c)| c).collect();
-        self.encoder.warm(&chunks);
-        let bodies = self.encoder.bodies_with(&chunks, world, &|x, z| {
-            streaming.and_then(|s| s.proto_sections(x, z))
-        });
-        let (payloads, taken) = batch_runs(view.level, &taken, &bodies);
+        let protos = |x, z| streaming.and_then(|s| s.proto_sections(x, z));
+        let (payloads, taken) = if let Some(rules) = rules {
+            let (taken, bodies): (Vec<_>, Vec<_>) = taken
+                .into_iter()
+                .filter_map(|(idx, chunk)| {
+                    // A body no run can hold stays queued but is passed over, so it takes
+                    // none of the batch's places from the columns behind it.
+                    self.protected_body(protected, &rules, chunk, world, &protos, false)
+                        .filter(|body| Runs::fits(body))
+                        .map(|body| ((idx, chunk), body))
+                })
+                .take(budget)
+                .unzip();
+            batch_runs(level, &taken, &bodies)
+        } else {
+            let chunks: Vec<_> = taken.iter().map(|&(_, c)| c).collect();
+            self.encoder.warm(&chunks);
+            let bodies = self.encoder.bodies_with(&chunks, world, &protos);
+            batch_runs(level, &taken, &bodies)
+        };
         if taken.is_empty() {
             return;
         }
         let dimension = self.config.dimension.clone();
+        let guest = &self.guests[i];
+        let queue = &guest.viewed.views[&dimension].queue;
+        let mut overlays = Runs::new(level);
+        for body in self.terrain_overlays(guest.conn, world, taken.iter().map(|&i| queue[i])) {
+            overlays.push(&body);
+        }
+        let overlays = overlays.finish();
         let size = taken.len();
         self.guests.update(i, |g| {
             g.batch_quota -= size as f32;
@@ -324,6 +365,9 @@ impl Hub {
             g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
                 size: size as i32,
             }));
+            if !overlays.is_empty() {
+                g.sender.send_many(overlays);
+            }
             g.unacknowledged += 1;
             if let Some(view) = g.viewed.views.get_mut(&dimension) {
                 for idx in taken.into_iter().rev() {

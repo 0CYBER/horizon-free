@@ -51,6 +51,7 @@ mod recording;
 mod registry_names;
 pub mod scoreboard;
 mod sound_order;
+mod terrain_view;
 pub mod tracking;
 pub mod viewed_levels;
 pub mod waypoints;

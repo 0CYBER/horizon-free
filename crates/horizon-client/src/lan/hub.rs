@@ -54,6 +54,7 @@ mod pending_move;
 mod raw_inbox;
 mod selector_sync;
 mod spawn_info;
+pub(super) mod terrain;
 use advancements::AdvancementOwners;
 use chat::yellow_names;
 pub use pending_move::{Accepted, Hearing, PendingMove};
@@ -378,6 +379,7 @@ pub struct Hub {
     /// game replaces it on each reload.
     pub loop_context: Arc<LoopContext>,
     pub encoder: ChunkEncoder,
+    pub(in crate::lan) terrain: Option<Box<super::terrain_view::Views>>,
     pub guests: super::guest_list::GuestList,
     pub(super) sync: Arc<SyncData>,
     /// The active world session rule definitions.
@@ -848,6 +850,7 @@ impl Hub {
             selector_tokens: Vec::new(),
             native_menu_events: Vec::new(),
             chunk_watches: ChunkWatchLog::default(),
+            terrain: None,
             packet_drain: None,
             deferred_payloads: Default::default(),
             pending_kicks: Vec::new(),
@@ -2604,6 +2607,9 @@ impl Hub {
 
     pub(super) fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
         let mut g = self.guests.remove(i);
+        if let Some(terrain) = self.terrain.as_mut() {
+            terrain.players.remove(&g.conn);
+        }
         super::chunk_watch::unwatch_all(&mut self.chunk_watches, &mut g);
         if let Some(m) = g
             .menu
@@ -2823,6 +2829,7 @@ impl Hub {
     /// the save's readers made them.
     fn update_chunks(&mut self, ctx: &TickCtx) {
         let world = &*ctx.world;
+        self.prepare_terrain_pass();
         if let Some(far) = self.far.as_mut() {
             far.poll();
         }
@@ -2830,7 +2837,12 @@ impl Hub {
         let mut batches = Vec::new();
         for i in 0..self.guests.len() {
             if self.watches(&self.guests[i]) {
+                let moved =
+                    self.terrain.is_some() && self.guests[i].center != Some(self.guests[i].chunk());
                 self.update_view(i, watching);
+                if moved || self.terrain.is_some() && self.ticks <= self.guests[i].placed_at + 1 {
+                    self.warm_first_terrain(i, world, ctx.streaming);
+                }
                 if let Some(batch) = self.next_batch(i, world, ctx.streaming) {
                     batches.push((i, batch));
                 }
@@ -2843,18 +2855,53 @@ impl Hub {
         // number of batches that take it.
         let mut columns = Columns::default();
         let mut far_bodies = crate::fast_hash::FxHashMap::default();
+        let mut protected = terrain::Bodies::default();
+        let protos = |x, z| ctx.streaming.and_then(|s| s.proto_sections(x, z));
         let batches: Vec<_> = batches
             .into_iter()
             .map(|(i, batch)| {
+                let rules = self.terrain_rules(self.guests[i].conn);
                 let (taken, mut bodies): (Vec<_>, Vec<_>) = batch
                     .near
                     .into_iter()
-                    .map(|(idx, chunk)| (idx, Body::Level(columns.add(chunk))))
+                    .filter_map(|(idx, chunk)| {
+                        let at = (chunk.x, chunk.z);
+                        match rules.as_ref() {
+                            None => Some((idx, Body::Level(columns.add(chunk)))),
+                            Some(rules) => match self.protected_ready(rules, world, &protos, at)? {
+                                super::terrain_view::Ready::Ordinary => {
+                                    Some((idx, Body::Level(columns.add(chunk))))
+                                }
+                                ready => self
+                                    .finish_protected_body(
+                                        &mut protected,
+                                        (rules.generation, at, false),
+                                        chunk,
+                                        world,
+                                        &protos,
+                                        ready,
+                                    )
+                                    .map(|body| (idx, Body::Saved(body))),
+                            },
+                        }
+                    })
                     .unzip();
                 let mut far = Vec::new();
                 for (idx, column) in batch.far {
-                    far.push(idx);
                     let body = match column {
+                        Column::Level(chunk) if rules.is_some() => {
+                            let Some(body) = self.protected_body(
+                                &mut protected,
+                                rules.as_ref().unwrap(),
+                                chunk,
+                                world,
+                                &protos,
+                                true,
+                            ) else {
+                                continue;
+                            };
+                            body
+                        }
                         Column::Level(chunk) => far_bodies
                             .entry((chunk.x, chunk.z))
                             .or_insert_with(|| {
@@ -2863,6 +2910,7 @@ impl Hub {
                             .clone(),
                         Column::Saved(body) => body,
                     };
+                    far.push(idx);
                     bodies.push(Body::Saved(body));
                 }
                 (i, taken, far, bodies)
@@ -2875,6 +2923,13 @@ impl Hub {
         let uses = &mut columns.uses;
         let chunks = &columns.chunks;
         for (i, taken, far, batch) in batches {
+            let g = &self.guests[i];
+            let keys = taken
+                .iter()
+                .map(|&i| g.chunk_queue[i])
+                .chain(far.iter().map(|&i| g.far_queue[i]));
+            let overlays = self.terrain_overlays(g.conn, world, keys);
+            let protected = self.terrain_protected(g.conn, &g.dimension);
             self.guests.update(i, |g| {
                 let size = batch.len();
                 // The single-player window shares the sections it is sent (handoff.rs).
@@ -2884,22 +2939,25 @@ impl Hub {
                     g.send(&C::ChunkBatchStart(horizon_protocol::packets::Empty));
                     g.sender.send_many(batch.into_iter().map(|body| match body {
                         Body::Level(j) => {
-                            if memory {
+                            if memory && !protected {
                                 super::handoff::offer(chunks[j]);
                             }
                             uses[j] -= 1;
                             if uses[j] == 0 {
-                                std::mem::take(&mut encoded[j])
+                                super::Body::Owned(std::mem::take(&mut encoded[j]))
                             } else {
-                                encoded[j].clone()
+                                super::Body::Owned(encoded[j].clone())
                             }
                         }
-                        Body::Saved(body) => body.to_vec(),
+                        Body::Saved(body) => super::Body::Shared(body),
                     }));
                     g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
                         size: size as i32,
                     }));
                     g.unacknowledged += 1;
+                }
+                if !overlays.is_empty() {
+                    g.sender.send_many(overlays);
                 }
                 if watching {
                     // ChunkMap.markChunkPendingToSend, then PlayerChunkSender.sendChunk's end:
@@ -2947,6 +3005,16 @@ impl Hub {
         let (cx, cz) = self.guests[i].chunk();
         let r = self.guests[i].view_distance;
         let reach = self.reach(&self.guests[i]);
+        if self.guests[i].center != Some((cx, cz))
+            && let Some(reveals) = self
+                .terrain
+                .as_mut()
+                .and_then(|v| v.players.get_mut(&self.guests[i].conn))
+                .and_then(|levels| levels.get_mut(&self.config.dimension))
+                .map(|selection| &mut selection.reveals)
+        {
+            reveals.retain(|&(x, _, z)| tracked(cx, cz, reach, x >> 4, z >> 4));
+        }
         self.guests.update(i, |g| {
             if g.center == Some((cx, cz)) {
                 return;
@@ -3045,12 +3113,37 @@ impl Hub {
                     )
                 })
         };
+        let rules = self.terrain_rules(g.conn);
+        let protos = |x, z| streaming.and_then(|s| s.proto_sections(x, z));
+        let encode = super::terrain_view::EncodeContext {
+            dimension: &self.config.dimension,
+            encoder: &self.encoder,
+            world,
+            protos: &protos,
+            include_far: self.far.is_some(),
+        };
+        let mut terrain = self.terrain.as_mut();
         let near: Vec<_> = g
             .chunk_queue
             .iter()
             .enumerate()
             .filter_map(|(idx, key)| Some((idx, &**world.chunks.get(key)?)))
             .filter(|(_, c)| ready(c))
+            .take(if rules.is_some() {
+                near_take.saturating_add(32)
+            } else {
+                usize::MAX
+            })
+            .filter(|(_, c)| {
+                rules.as_ref().is_none_or(|rules| {
+                    terrain
+                        .as_deref_mut()
+                        .unwrap()
+                        .resident
+                        .get(&encode, rules, (c.x, c.z))
+                        .is_some()
+                })
+            })
             .take(near_take)
             .collect();
         let mut far = Vec::new();
@@ -3075,7 +3168,12 @@ impl Hub {
                     // Far columns carry all their own saved light layers. They need no
                     // neighbour views, including at the edge of the level's loading buffer.
                     Some(c) if c.lit => Column::Level(c),
-                    _ => match ring.saved(x, z) {
+                    Some(_) if rules.is_some() => continue,
+                    _ => match if let Some(rules) = &rules {
+                        ring.saved_for_view(x, z, rules, world)
+                    } else {
+                        ring.saved(x, z)
+                    } {
                         super::far::Saved::Body(body) => Column::Saved(body),
                         super::far::Saved::Missing | super::far::Saved::Waiting => {
                             continue;
@@ -4688,14 +4786,11 @@ impl Hub {
             }
         }
         for pos @ [x, y, z] in positions {
+            self.send_block_correction(conn, ctx.world, pos);
+            if !self.terrain_metadata_visible(conn, ctx.world, pos) {
+                continue;
+            }
             let state = ctx.world.block(x, y, z);
-            self.send_to(
-                conn,
-                &C::BlockUpdate(play::BlockUpdate {
-                    pos,
-                    state: state.0 as i32,
-                }),
-            );
             let Some(entity) = ctx.world.block_entities.get(&(x, y, z)) else {
                 continue;
             };
@@ -5471,6 +5566,8 @@ mod tests {
     mod pending_move_tests;
     mod skin_outer_layer_tests;
     mod sound_tests;
+    mod terrain_send_bench;
+    mod terrain_view_tests;
     use super::*;
     use crate::fast_hash::FxHashSet;
 

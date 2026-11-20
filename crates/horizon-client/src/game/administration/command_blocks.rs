@@ -1029,18 +1029,21 @@ impl Game<'_> {
         let Some(block) = self.command_block(pos) else {
             return;
         };
+        let at = [pos.0, pos.1, pos.2];
+        if !host.hub.terrain_metadata_visible(conn, &self.world, at) {
+            return;
+        }
         let tag = Tag::compound(block.save());
         let state = self.world.block(pos.0, pos.1, pos.2).0;
         let Some(kind) = host.hub.encoder.entity_type(state) else {
             return;
         };
+        if host.hub.terrain_protected(conn, self.dim.id()) {
+            host.hub.send_block_correction(conn, &self.world, at);
+        }
         host.hub.send_to(
             conn,
-            &C::BlockEntityData(play::BlockEntityData {
-                pos: [pos.0, pos.1, pos.2],
-                kind,
-                tag,
-            }),
+            &C::BlockEntityData(play::BlockEntityData { pos: at, kind, tag }),
         );
     }
     /// What `handleSetCommandBlock` does once the player may edit the block.

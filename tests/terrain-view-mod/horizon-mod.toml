@@ -1,0 +1,7 @@
+id = "terrain_view_fixture"
+name = "Terrain View Fixture"
+version = "0.1.0"
+description = "Exercises the outbound terrain SDK with a buried chest."
+api = "0.2"
+side = "server"
+capabilities = ["registries"]

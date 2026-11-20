@@ -371,9 +371,7 @@ impl Game<'_> {
             return refused.map_or(Ok(consumed), Err);
         };
         for pos in [hit.pos, hit.beside()] {
-            let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
-            host.hub
-                .send_to(conn, &C::BlockUpdate(play::BlockUpdate { pos, state }));
+            host.hub.send_block_correction(conn, &self.world, pos);
         }
         refused.map_or(Ok(consumed), Err)
     }

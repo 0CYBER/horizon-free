@@ -63,7 +63,7 @@ pub struct Service {
     biome_names: Arc<Vec<String>>,
     worker: Option<Worker>,
     /// Replies the worker finished, waiting for their connection.
-    ready: VecDeque<(u32, Vec<u8>)>,
+    ready: VecDeque<Completed>,
 }
 /// A tile admitted, waiting for the worker.
 pub struct Job {
@@ -73,6 +73,13 @@ pub struct Job {
     pub source: Arc<dyn LodSource>,
     pub request: Request,
 }
+
+struct Completed {
+    conn: u32,
+    level: String,
+    data: Vec<u8>,
+}
+
 impl Service {
     pub fn new(distance: u32, biome_names: Vec<String>) -> Self {
         Self {
@@ -150,21 +157,28 @@ impl Service {
     /// keep their place among the game's packets. A reply its connection
     /// is too busy for waits; one taken frees its player's slot.
     pub fn deliver(&mut self, mut send: impl FnMut(u32, &mut Vec<u8>) -> Delivery) {
+        self.deliver_in_level(|conn, _, data| send(conn, data));
+    }
+
+    /// Also supplies the level sampled by the worker, so the game can recheck the
+    /// player's current dimension and terrain view before sending the reply.
+    pub fn deliver_in_level(&mut self, mut send: impl FnMut(u32, &str, &mut Vec<u8>) -> Delivery) {
         if let Some(worker) = &self.worker {
             self.ready.extend(lock(&worker.shared.done).drain(..));
         }
         let players = &mut self.players;
-        self.ready
-            .retain_mut(|(conn, data)| match send(*conn, data) {
+        self.ready.retain_mut(
+            |reply| match send(reply.conn, &reply.level, &mut reply.data) {
                 Delivery::Sent => {
-                    if let Some(p) = players.get_mut(conn) {
+                    if let Some(p) = players.get_mut(&reply.conn) {
                         p.in_flight = p.in_flight.saturating_sub(1);
                     }
                     false
                 }
                 Delivery::Busy => true,
                 Delivery::Gone => false,
-            });
+            },
+        );
     }
 }
 
@@ -180,7 +194,7 @@ struct WorkerShared {
     queue: Mutex<Queue>,
     wake: Condvar,
     /// Replies sampled, for [`Service::deliver`].
-    done: Mutex<Vec<(u32, Vec<u8>)>>,
+    done: Mutex<Vec<Completed>>,
     tiles: Mutex<TileCache>,
 }
 #[derive(Default)]
@@ -210,7 +224,11 @@ impl Worker {
                     let r = job.request;
                     let kept = lock(&worker.tiles).get(&job.level, &job.source, &r);
                     if let Some(reply) = kept {
-                        lock(&worker.done).push((job.conn, reply));
+                        lock(&worker.done).push(Completed {
+                            conn: job.conn,
+                            level: job.level,
+                            data: reply,
+                        });
                         continue;
                     }
                     // A sampler that panics is dropped, and the tile refused
@@ -243,7 +261,11 @@ impl Worker {
                     if sampled {
                         lock(&worker.tiles).put(&job.level, &job.source, &r, &tile);
                     }
-                    lock(&worker.done).push((job.conn, reply(r.id, &tile)));
+                    lock(&worker.done).push(Completed {
+                        conn: job.conn,
+                        level: job.level,
+                        data: reply(r.id, &tile),
+                    });
                 }
             })
             .expect("far terrain server thread");
@@ -350,8 +372,13 @@ mod tests {
             service.request(1, &request(0, 0), at, true, later),
             Verdict::Refuse(_)
         ));
-        service.ready.push_back((1, Vec::new()));
-        service.ready.push_back((2, Vec::new()));
+        for conn in [1, 2] {
+            service.ready.push_back(Completed {
+                conn,
+                level: "minecraft:overworld".into(),
+                data: Vec::new(),
+            });
+        }
         service.deliver(|conn, _| {
             if conn == 1 {
                 Delivery::Sent
@@ -404,12 +431,12 @@ mod tests {
     }
 
     /// Every reply in `service` for `count` requests.
-    fn replies(service: &mut Service, count: usize) -> Vec<(u32, Vec<u8>)> {
+    fn replies(service: &mut Service, count: usize) -> Vec<(String, Vec<u8>)> {
         let mut replies = Vec::new();
         let start = Instant::now();
         while replies.len() < count && start.elapsed() < Duration::from_secs(10) {
-            service.deliver(|conn, data| {
-                replies.push((conn, std::mem::take(data)));
+            service.deliver_in_level(|_, level, data| {
+                replies.push((level.to_owned(), std::mem::take(data)));
                 Delivery::Sent
             });
             thread::sleep(Duration::from_millis(2));
@@ -449,7 +476,8 @@ mod tests {
         // Each the bytes a fresh sample makes for its id.
         let mut fresh = Counted(Arc::default());
         let fresh = fresh.grid(-16, 0, 1, SIDE);
-        for (_, reply) in &got {
+        for (level, reply) in &got {
+            assert_eq!(level, "minecraft:overworld");
             let id = super::super::reply_id(reply).unwrap();
             assert_eq!(*reply, encode_reply(id, Some(&fresh), &names));
         }
@@ -470,7 +498,13 @@ mod tests {
                 request,
             });
         }
-        assert_eq!(replies(&mut service, 2).len(), 2);
+        assert_eq!(
+            replies(&mut service, 2)
+                .into_iter()
+                .map(|(level, _)| level)
+                .collect::<Vec<_>>(),
+            ["minecraft:the_nether", "minecraft:overworld"]
+        );
         assert_eq!(
             columns.load(std::sync::atomic::Ordering::Relaxed),
             3 * SIDE * SIDE

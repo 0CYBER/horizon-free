@@ -148,6 +148,10 @@ pub struct World {
     /// Writes of this tick's block events and block entities, held out of
     /// the log while it is sent: they go out with the next tick's.
     pub block_log_held: Vec<(i32, i32, i32)>,
+    /// The state each position had before its first write since the hub last took it, for the
+    /// projections of the players whose view of the terrain differs (`lan::terrain_view`); kept
+    /// only while that hub asks for it.
+    pub block_previous: Option<FxHashMap<(i32, i32, i32), u32>>,
     /// Every write since the mobs last ticked (position, old and new state),
     /// for `ServerLevel.sendBlockUpdated`'s path recomputing; kept only while
     /// the mobs of this world tick (`game/mobs/creatures/mod.rs`).
@@ -342,6 +346,7 @@ impl World {
             weather: Weather::default(),
             block_log: None,
             block_log_held: Vec::new(),
+            block_previous: None,
             path_writes: None,
             bulk_log: Default::default(),
             light_log: None,
@@ -479,6 +484,9 @@ impl World {
                 self.watched_writes.push(((x, y, z), previous, state.0));
             }
             self.revision = self.revision.wrapping_add(1);
+            if let Some(states) = &mut self.block_previous {
+                states.entry((x, y, z)).or_insert(previous);
+            }
             if notify && let Some(log) = &mut self.block_log {
                 log.push((x, y, z));
             }

@@ -240,7 +240,7 @@ impl Hub {
 
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks); wrapped, to the
     /// clients that view the level and hold its chunk.
-    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
+    pub fn block_event(&self, world: &World, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
             .encoder
             .block_ids
@@ -254,8 +254,26 @@ impl Hub {
             b1: b1 as u8,
             block,
         });
-        self.broadcast_near(at, 64.0, &packet, None);
-        self.send_viewers_of((pos[0] >> 4, pos[2] >> 4), &packet);
+        let key = (pos[0] >> 4, pos[2] >> 4);
+        if !self.has_terrain_views() {
+            self.broadcast_near(at, 64.0, &packet, None);
+            self.send_viewers_of(key, &packet);
+            return;
+        }
+        let body = packet.encode();
+        for g in self
+            .guests
+            .iter()
+            .filter(|g| self.terrain_state(g.conn, world, (pos[0], pos[1], pos[2]), state) == state)
+        {
+            if self.here(g) && within_range(at, g.position, 64.0) {
+                g.sender.send(body.clone());
+            } else if let Some(view) = self.view_here(g).filter(|v| v.sent.contains(&key)) {
+                let mut runs = super::viewed_levels::send::Runs::new(view.level);
+                runs.push(&body);
+                g.sender.send_many(runs.finish());
+            }
+        }
     }
 
     /// `ServerLevel.broadcastEntityEvent`: send to the players tracking the

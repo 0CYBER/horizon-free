@@ -317,11 +317,7 @@ impl Game<'_> {
                     // ServerPlayerGameMode.abortDestroyBlock clears the dig and the crack; the
                     // clock `destroy_pos` names is left to the next START (arismoko/horizon#4124).
                     host.play.entry(conn).or_default().dig_ended();
-                    let state = self.world.block(a.pos[0], a.pos[1], a.pos[2]).0 as i32;
-                    host.hub.send_to(
-                        conn,
-                        &C::BlockUpdate(play::BlockUpdate { pos: a.pos, state }),
-                    );
+                    host.hub.send_block_correction(conn, &self.world, a.pos);
                     self.guest_crack_progress(conn, a.pos, -1);
                     let Some(host) = self.lan.as_ref() else {
                         return;

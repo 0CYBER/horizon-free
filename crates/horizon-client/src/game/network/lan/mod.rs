@@ -2784,7 +2784,7 @@ impl Game<'_> {
             // piston's `triggerEvent` on the blocks as they were before the
             // move, a base the last tick restored included.
             for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
-                host.hub.block_event(pos, b0, b1, state);
+                host.hub.block_event(&self.world, pos, b0, b1, state);
             }
             let entities = states.as_slice();
             self.lan_prepare_captured_sounds(entities);
@@ -3332,7 +3332,7 @@ impl Game<'_> {
             }
         }
         for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
-            host.hub.block_event(pos, b0, b1, state);
+            host.hub.block_event(&self.world, pos, b0, b1, state);
         }
         for (id, event) in std::mem::take(&mut self.lan_entity_events) {
             host.hub.entity_event(id, event);
