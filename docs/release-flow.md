@@ -168,13 +168,24 @@ which runs them on main a batch of merges at a time, on the Mac mini's runner:
 - `tools/parity_main.py base` gives the newest commit main contains whose parity-main passed (else the last
   merge's parent), and the run is `tools/parity.py --changed <that commit>`: the union of the harnesses every merge
   since then can affect, once, with every earlier pass reused.
-- On a failure, `tools/parity_main.py bisect` checks out the batch's first-parent merges by halves and runs only
-  the failing harnesses, names the first merge they fail on in the run's summary and comments on its pull request
-  (`🤖 Agent: parity-main found that this merge breaks ...`). Fix it with a pull request as usual; the next
-  run checks from the last green commit again. The search has 90 minutes (`--budget`): after that it says between
-  which merges each harness broke, and the next run goes on from there (`.local/parity-runner/bisect.json`, kept
-  while the base is the same), without commenting again on a merge it already named. Before 2026-11-11 a search
-  over many merges ran into the job's 240 minutes and said nothing.
+- On a failure, `tools/parity_main.py verdict` decides the run, as before: the failed harnesses (known failing
+  ones aside) run again at HEAD on the same build, and the run passes only when they all pass then (a flake, counted
+  as a pass). It reads only the list this run's `tools/parity.py` recorded (`PARITY_RUN_ID`, the run id and attempt):
+  a batch that stopped before recording one fails the run instead of judging an earlier run's list. The step has
+  50 minutes, so a hung rerun ends red. The search for the merge that broke a harness is no longer part of the run:
+  it held the only gate runner for up to an hour. Run it by hand on a machine whose
+  `.local/parity-runner/last-run.json` holds the failed harnesses (`python3 tools/parity.py <them>` on the run's
+  commit writes it; the verdict report lists them): `python3 tools/parity_main.py bisect <base> [--comment]` reruns
+  them at HEAD as the gate did, then checks out the batch's first-parent merges by halves, names the first merge they
+  fail on and, with `--comment`, comments on its pull request. It has 90 minutes (`--budget`), then says between
+  which merges each harness broke; a later search from the same base goes on from there
+  (`.local/parity-runner/bisect.json`).
+- The verdict report, `verdict-<run id>-<attempt>.json` (the run's `parity-main-verdict` artifact, uploaded best
+  effort), holds the head, the base, the run id and attempt, the exit code, each failed harness's tries (the batch's,
+  its retry if `tools/parity.py` gave one, the rerun at HEAD) and `repeat_flakers`: harnesses not on `known_flaky`
+  that passed only when run again in 3 or more of the last 10 runs (kept in
+  `.local/parity-runner/verdict-history.json` on the runner). The run's summary names each; they don't fail it: put
+  one on `known_flaky` with its issue, or fix it. Neither the report nor the history can change the verdict.
 - Nightlies build only on a commit both `checks` and `parity-main` passed on (`tools/release_train.py`,
   `tools/ci/nightly.py`, see below), so a broken merge holds them instead of reaching players. They take the
   newest such commit even when a later batch failed: that failure is in merges the green commit doesn't contain, so

@@ -1,6 +1,7 @@
 """tools/parity_main.py: the base of a parity-main run, and the bisect after a failure."""
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -138,6 +139,202 @@ class ParityMainTests(unittest.TestCase):
         # Failing again at the merge and passing again before it names the merge.
         self.assertEqual(self.bisect({"pearl": None}, scripted={"pearl": [fail, ok, ok, ok, fail, ok]}),
                          (1, [("3", "`pearl`")]))
+
+    def run_command(self, command, last_run, fails=None, run_id=None, known=None, flaky=None, since_head=False,
+                    records=None, history=None, folders=(), rerun_exit=None):
+        """parity_main.py COMMAND BASE through main(), in a fresh scratch repo of 3 merges on a fresh runner folder.
+        last_run: last-run.json (None: missing, str: its raw text). fails: {harness: "head" (fails there only),
+        "always" or None}. records: state.json's harnesses before the rerun. folders: runner files that are folders
+        instead, so reading or writing them fails. rerun_exit: run_harnesses runs for real, and tools/parity.py exits
+        with it without recording anything (a rerun that stopped). Returns (exit code, commits harnesses ran at, lines
+        reported, this run's verdict report or None, the flake history after)."""
+        fails = fails or {}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(parity_main, "ROOT", Path(tmp)):
+            git = lambda *arguments: parity_main.git(*arguments).stdout.strip()
+            git("init", "-q")
+            for n in range(3):
+                git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                    "-m", f"Merge pull request #{n} from x/y")
+            commits = git("rev-list", "--reverse", "HEAD").split()
+            runner = Path(tmp) / ".local/parity-runner"
+            runner.mkdir(parents=True)
+            for name in folders:
+                (runner / name).mkdir()
+            if last_run is not None:
+                (runner / "last-run.json").write_text(last_run if isinstance(last_run, str) else json.dumps(last_run))
+            if records is not None:
+                (runner / "state.json").write_text(json.dumps({"harnesses": records}))
+            if history is not None:
+                (runner / "verdict-history.json").write_text(history if isinstance(history, str) else json.dumps(history))
+            (Path(tmp) / "tools").mkdir()
+            (Path(tmp) / "tools/parity_hosts.json").write_text(json.dumps({"known_failing": known or {},
+                                                                           "known_flaky": flaky or {}}))
+            real_run = parity_main.subprocess.run
+            ran, reported = [], []
+            at = lambda: commits.index(git("rev-parse", "HEAD"))
+            for name in (last_run or {}).get("failed", []) if rerun_exit is not None else []:
+                (Path(tmp) / f"tools/test_{name}_parity.py").write_text("")
+
+            def fake_run(command, **kwargs):
+                if command[0] == "gh":
+                    return mock.Mock(returncode=0)
+                if command[1:2] == ["tools/parity.py"]:
+                    ran.append(at())
+                    return mock.Mock(returncode=rerun_exit)
+                return real_run(command, **kwargs)
+
+            def run(names, timeout):
+                ran.append(at())
+                return [name for name in names if fails.get(name) == "always" or
+                        fails.get(name) == "head" and at() == len(commits) - 1]
+            environment = {key: value for key, value in parity_main.os.environ.items()
+                           if key not in ("GITHUB_STEP_SUMMARY", "PARITY_RUN_ID")}
+            environment.update({"PARITY_RUN_ID": run_id} if run_id else {})
+            since = commits[-1] if since_head else commits[0]
+            with mock.patch.object(parity_main, "LAST_RUN", runner / "last-run.json"), \
+                 mock.patch.object(parity_main, "BISECT", runner / "bisect.json"), \
+                 mock.patch.object(parity_main, "STATE", runner / "state.json"), \
+                 mock.patch.object(parity_main, "VERDICT", runner / "verdict.json"), \
+                 mock.patch.object(parity_main, "HISTORY", runner / "verdict-history.json"), \
+                 mock.patch.object(parity_main, "run_harnesses", parity_main.run_harnesses if rerun_exit is not None
+                                   else run), \
+                 mock.patch.object(parity_main.subprocess, "run", fake_run), \
+                 mock.patch.dict(parity_main.os.environ, environment, clear=True), \
+                 mock.patch.object(parity_main.sys, "argv", ["parity_main.py", command] + [since] * (command != "history")), \
+                 mock.patch("builtins.print", lambda *lines, **kwargs: reported.extend(map(str, lines))):
+                code = parity_main.main()
+            read = lambda name: json.loads((runner / name).read_text()) if (runner / name).is_file() else None
+            report_name = f"verdict-{run_id}.json" if run_id else "verdict.json"
+            return code, ran, reported, read(report_name), read("verdict-history.json")
+
+    def test_verdict_exits_as_bisect_does(self):
+        # The gate runs `verdict`; `bisect` (by hand) must reach the same verdict, or one of them judges wrongly.
+        cases = {
+            "no failure": ({"failed": []}, {}, {}),
+            "every failure passes again": ({"failed": ["music", "sound"]}, {}, {}),
+            "one fails again at HEAD only": ({"failed": ["music", "sound"]}, {"sound": "head"}, {}),
+            "one fails again everywhere": ({"failed": ["music"]}, {"music": "always"}, {}),
+            "only known failing ones": ({"failed": ["datafix#2", "crafter"]}, {"crafter": "always"},
+                                        {"known": {"datafix": "#1", "crafter": "#2"}}),
+            "last-run.json missing": (None, {}, {}),
+            "last-run.json unreadable": ("{not json", {}, {}),
+            "last-run.json not an object": ("[]", {}, {}),
+            "no merge since the base": ({"failed": ["music"]}, {}, {"since_head": True}),
+            "this run's list": ({"run": "7-1", "failed": ["music"]}, {}, {"run_id": "7-1"}),
+            "an earlier run's list": ({"run": "6-1", "failed": ["music"]}, {}, {"run_id": "7-1"}),
+            "a list without a run": ({"failed": ["music"]}, {}, {"run_id": "7-1"}),
+            "by hand, any list": ({"run": "6-1", "failed": ["music"]}, {}, {}),
+        }
+        passing = {"every failure passes again", "this run's list", "by hand, any list"}
+        rerun = passing | {"one fails again at HEAD only", "one fails again everywhere"}
+        for case, (last_run, fails, options) in cases.items():
+            with self.subTest(case):
+                code, ran, _, _, _ = self.run_command("verdict", last_run, fails, **options)
+                self.assertEqual(code, 0 if case in passing else 1)
+                self.assertEqual(self.run_command("bisect", last_run, fails, **options)[0], code)
+                self.assertEqual(ran, [2] if case in rerun else [],
+                                 "verdict runs the failed harnesses again at HEAD only, and only with a list to judge")
+
+    def test_a_list_an_earlier_run_left_fails_the_run(self):
+        # tools/parity.py writes last-run.json only when its run ends: one that stopped before leaves the last list, a
+        # flaky harness's that passes at HEAD, and the batch nothing judged would pass.
+        for command in ("verdict", "bisect"):
+            code, ran, reported, _, _ = self.run_command(command, {"run": "6-1", "failed": ["music"]}, run_id="7-1")
+            self.assertEqual((code, ran), (1, []), command)
+            self.assertTrue(any("not this one (7-1)" in line for line in reported), reported)
+
+    def test_verdict_json_holds_each_try_and_the_repeat_flakers(self):
+        records = {"music": {"status": "fail"}, "pearl": {"status": "fail", "retried": "known flaky"}}
+        code, _, reported, written, history = self.run_command(
+            "verdict", {"run": "11-2", "failed": ["music", "pearl", "sound"]}, {"sound": "always"}, run_id="11-2",
+            records=records, flaky={"pearl": "#5: heap"},
+            history=[{"run": f"{n}-1", "head": "x", "rerun_passed": ["music", "pearl"]} for n in range(1, 11)])
+        self.assertEqual(code, 1)
+        self.assertEqual(written["exit_code"], 1)
+        self.assertEqual(written["harnesses"], {
+            "music": [{"try": "batch", "result": "fail"}, {"try": "rerun at HEAD", "result": "pass"}],
+            "pearl": [{"try": "batch", "result": "fail"}, {"try": "batch, retried (known flaky)", "result": "fail"},
+                      {"try": "rerun at HEAD", "result": "pass"}],
+            "sound": [{"try": "batch", "result": "fail"}, {"try": "rerun at HEAD", "result": "fail"}]})
+        self.assertEqual(written["repeat_flakers"], ["music"], "pearl is on known_flaky")
+        self.assertEqual([run["run"] for run in history], [f"{n}-1" for n in range(2, 11)] + ["11-2"], "the last 10")
+        self.assertEqual(sum("repeat flaker" in line for line in reported), 1, reported)
+        # This run's rerun and two earlier ones of the last ten make a repeat flaker; one that dropped out of the ten
+        # doesn't count. A passing verdict writes its file too.
+        needed, clean = {"head": "x", "rerun_passed": ["music"]}, {"head": "x", "rerun_passed": []}
+        earlier = [dict(needed, run="1-1"), dict(needed, run="2-1")] + [dict(clean, run=f"{n}-1") for n in range(3, 10)]
+        code, _, _, written, _ = self.run_command("verdict", {"run": "10-1", "failed": ["music"]}, run_id="10-1",
+                                                  history=earlier)
+        self.assertEqual((code, written["exit_code"], written["repeat_flakers"]), (0, 0, ["music"]))
+        code, _, _, written, _ = self.run_command("verdict", {"run": "11-1", "failed": ["music"]}, run_id="11-1",
+                                                  history=earlier + [dict(clean, run="10-1")])
+        self.assertEqual((code, written["repeat_flakers"]), (0, []))
+        # A history that can't be read starts again; bisect by hand keeps none.
+        code, _, _, written, history = self.run_command("verdict", {"run": "3-1", "failed": ["music"]},
+                                                        run_id="3-1", history="{half")
+        self.assertEqual((code, [run["run"] for run in history]), (0, ["3-1"]))
+        self.assertIsNone(self.run_command("bisect", {"run": "3-1", "failed": ["music"]}, run_id="3-1")[4])
+
+    def test_what_failed_the_old_bisect_fails_both_commands(self):
+        # The same command checking itself can't see a change from before: these pin the old bisect's effects.
+        # The record of the rerun at HEAD (bisect.json) can't be written: red, as it was, though the harness passed.
+        for command in ("verdict", "bisect"):
+            with self.subTest(command), self.assertRaises(OSError):
+                self.run_command(command, {"failed": ["music"]}, folders=["bisect.json"])
+        # last-run.json that exists and can't be read (not only malformed): red, judged on nothing.
+        for command in ("verdict", "bisect"):
+            self.assertEqual(self.run_command(command, None, folders=["last-run.json"])[:2], (1, []), command)
+        # The rerun stopped (tools/parity.py exits nonzero and records nothing new): the batch's list stands, red.
+        for command in ("verdict", "bisect"):
+            for exit_code in (1, -9):
+                code, ran, _, _, _ = self.run_command(command, {"run": "5-1", "failed": ["music"]}, run_id="5-1",
+                                                      rerun_exit=exit_code)
+                self.assertEqual((code, ran[:1]), (1, [2]), (command, exit_code))
+            self.assertEqual(self.run_command(command, {"run": "5-1", "failed": ["music"]}, run_id="5-1",
+                                              rerun_exit=0)[0], 0, "and passes when the rerun does")
+
+    def test_the_flake_history_and_the_report_never_change_the_verdict(self):
+        last_run = {"run": "5-1", "failed": ["music", "sound"]}
+        for case, options in {
+            "history is a folder": {"folders": ["verdict-history.json"]},
+            "malformed history entries": {"history": [{"run": "1-1", "rerun_passed": 5}, "junk", [],
+                                                      {"run": "2-1", "rerun_passed": [["x"], None]}]},
+            "an old report that is a folder": {"folders": ["verdict-5-1.json"]},
+        }.items():
+            for fails, expected in (({}, 0), ({"sound": "always"}, 1)):
+                with self.subTest(case, fails=fails):
+                    code, ran, _, written, _ = self.run_command("verdict", last_run, fails, run_id="5-1", **options)
+                    self.assertEqual((code, ran), (expected, [2]))
+                    if "report" not in case:
+                        self.assertEqual((written["exit_code"], sorted(written["harnesses"])),
+                                         (expected, ["music", "sound"]), "the report is written all the same")
+
+    def test_a_run_whose_harnesses_passed_counts_in_the_history(self):
+        code, ran, _, _, history = self.run_command("history", None, run_id="4-1",
+                                                    history=[{"run": "3-1", "head": "x", "rerun_passed": ["music"]}])
+        self.assertEqual((code, ran, [(run["run"], run["rerun_passed"]) for run in history]),
+                         (0, [], [("3-1", ["music"]), ("4-1", [])]))
+        with self.assertRaises(SystemExit):
+            self.run_command("history", None)
+
+    def test_the_workflow_gives_the_verdict_and_leaves_the_search_out(self):
+        root = Path(__file__).resolve().parents[1]
+        # The repository's offline YAML parser, as tests/test_ci_concurrency.py uses it.
+        with mock.patch("sys.path", [str(root / "tools/ci/vendor/pyyaml-6.0.3.zip"), *sys.path]):
+            import yaml
+        workflow = yaml.safe_load((root / ".github/workflows/parity-main.yml").read_text(encoding="utf-8"))
+        job = workflow["jobs"]["parity-main"]
+        self.assertEqual(job["env"]["PARITY_RUN_ID"], "${{ github.run_id }}-${{ github.run_attempt }}")
+        commands = [step["run"].split() for step in job["steps"] if "run" in step]
+        self.assertIn(["python3", "tools/parity_main.py", "verdict", '"$BASE_SHA"'], commands)
+        self.assertFalse([command for command in commands if "bisect" in command], "the search is not in the gate run")
+        verdict = next(step for step in job["steps"] if "verdict" in step.get("run", ""))
+        self.assertEqual(verdict.get("timeout-minutes"), 50)
+        self.assertNotIn("continue-on-error", verdict, "the verdict step decides the run")
+        upload = next(step for step in job["steps"] if step.get("name") == "Upload the verdict")
+        self.assertTrue(upload["continue-on-error"], "the artifact service never decides the run")
+        self.assertEqual(upload["with"]["path"],
+                         ".local/parity-runner/verdict-${{ github.run_id }}-${{ github.run_attempt }}.json")
 
     def test_a_harness_a_commit_does_not_have_cannot_fail_there(self):
         with mock.patch.object(parity_main.subprocess, "run") as run:

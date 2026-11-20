@@ -52,7 +52,7 @@ python3 tools/parity.py --changed origin/main      # those a branch's changes ca
 python3 tools/parity.py --changed-files paths.txt  # the same for listed paths, in a copy without Git (tools/pr_ready.py)
 ```
 
-On CI, a pull request runs the parity job only when it changes a harness, an oracle, a probe or the runner; everything else is checked on main by `parity-main`, a batch of merges at a time, which bisects a failure to the merge that caused it (`tools/parity_main.py`; [release-flow.md](release-flow.md#parity-on-main)). Game releases wait for it.
+On CI, a pull request runs the parity job only when it changes a harness, an oracle, a probe or the runner; everything else is checked on main by `parity-main`, a batch of merges at a time; the merge that broke a harness is found by hand with `tools/parity_main.py bisect` ([release-flow.md](release-flow.md#parity-on-main)). Game releases wait for it.
 
 Each harness runs unmodified under a tracer that records the files it depended on: its Python modules, its Java oracle and the oracle sources javac pulled in, other repository files it read, and the Rust sources of the probes it ran (from Cargo's `.d` dep-info files). A pass stands until one of those files, the pinned vanilla artifacts, `Cargo.lock` or the Rust/Java toolchains change. State and logs are in `.local/parity-runner/`; each harness's own outputs stay in its `.local/<name>/` directory.
 
