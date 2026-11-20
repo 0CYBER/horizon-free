@@ -2172,7 +2172,7 @@ impl Game<'_> {
     /// Whether a box in `corner` shows: F3's debug screen takes both top
     /// corners (its left and right columns), and a bottom corner while one
     /// of its charts is drawn there.
-    pub(super) fn native_corner_shown(&self, corner: Corner) -> bool {
+    pub(in crate::game) fn native_corner_shown(&self, corner: Corner) -> bool {
         let charts = self.debug_charts.corners(!self.has_singleplayer_server());
         !debug_takes(corner, self.debug, charts)
     }

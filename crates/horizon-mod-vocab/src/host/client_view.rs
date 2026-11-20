@@ -17,6 +17,13 @@ pub trait ClientViewClientHost {
     #[access(ClientSetup)]
     fn hud_mode(&self) -> HudMode;
     /// Side: client.
+    /// Whether F3's debug screen leaves `corner` free this frame for a box `render_gui_post`
+    /// places: false for a corner it takes (`DebugScreenOverlay`), both top corners while it
+    /// is open (its left and right columns) and a bottom corner while one of its charts is
+    /// drawn there. Only F3: read [`Self::hud_mode`] for whether the HUD is drawn at all (F1).
+    #[access(ClientSetup)]
+    fn native_corner_shown(&self, corner: Corner) -> bool;
+    /// Side: client.
     /// Select HUD and hand visibility, including after vanilla F1 input handling.
     /// Other first-person hand restrictions and render cancellation still apply.
     #[access(ClientSetup)]
