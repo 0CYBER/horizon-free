@@ -639,3 +639,29 @@ class OffMainDryRunTests(unittest.TestCase):
         # The build legs, which run the commit's code, get no secrets at all.
         for name in ("build", "sdk"):
             self.assertNotIn("secrets", jobs[name])
+
+
+class PrebuiltGameSecretsTests(unittest.TestCase):
+    """prebuilt-game.yml calls the same sdk-publish.yml as the Nightly: it too passes only the signing keys, and none
+    in a dry run, whose commit need not be on main and whose index and verify jobs run that commit's scripts."""
+
+    def test_only_a_real_run_passes_the_signing_keys(self):
+        text = (WORKFLOWS / "prebuilt-game.yml").read_text()
+        jobs = yaml.safe_load(text)["jobs"]
+        self.assertNotIn("inherit", text)
+        real = "needs.source.outputs.publish == 'true'"
+        self.assertEqual(jobs["publish"]["secrets"], {
+            key: f"${{{{ {real} && secrets.{key} || '' }}}}"
+            for key in ("RELEASE_SIGNING_KEY", "RELEASE_SIGNING_KEY_NEXT")})
+        self.assertEqual(jobs["publish"]["with"]["publish"], f"${{{{ {real} }}}}")
+        # `publish` is true only off a dry run dispatched from main, after `authorize` passed on that exact commit.
+        source = next(s for s in jobs["source"]["steps"] if s.get("id") == "source")
+        self.assertEqual(source["env"]["PUBLISH"], "${{ !inputs.dry_run && github.ref == 'refs/heads/main' }}")
+        self.assertIn('python3 tools/prebuilt_game.py authorize "$COMMIT"', source["run"])
+        # The keys name sdk-publish's own interface, and nothing else in this workflow reads a secret.
+        sdk = yaml.safe_load((WORKFLOWS / "sdk-publish.yml").read_text())
+        self.assertEqual(set(sdk[True]["workflow_call"]["secrets"]), set(jobs["publish"]["secrets"]))
+        for line in text.splitlines():
+            if "secrets." in line:
+                self.assertIn(real, line)
+        self.assertNotIn("secrets", jobs["build"])

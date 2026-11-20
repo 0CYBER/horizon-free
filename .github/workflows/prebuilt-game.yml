@@ -65,7 +65,11 @@ jobs:
     with:
       commit: ${{ needs.source.outputs.commit }}
       publish: ${{ needs.source.outputs.publish == 'true' }}
-    secrets: inherit
+    # Only the signing keys, and none in a dry run: its index and verify jobs run the built commit's own scripts.
+    # (RELEASE_SIGNING_KEY is the `release` environment's, which sdk-publish's sign job reads itself on a real run.)
+    secrets:
+      RELEASE_SIGNING_KEY: ${{ needs.source.outputs.publish == 'true' && secrets.RELEASE_SIGNING_KEY || '' }}
+      RELEASE_SIGNING_KEY_NEXT: ${{ needs.source.outputs.publish == 'true' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
   existing:
     needs: [source, build]
     if: needs.build.outputs.needed != 'true'
