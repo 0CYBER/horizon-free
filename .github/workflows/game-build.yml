@@ -110,6 +110,37 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  polytone-windows:
+    # The Polytone path regressions (#18051): resource paths joined with `\` list nothing on Windows. A job of its own
+    # beside `build windows`, not a step in it, so the Windows archive doesn't wait ~25 min for a test binary. It
+    # builds that binary the same way: the Windows x64 runner, toolchain, RUSTFLAGS and release profile, from `ref`.
+    # Callers wait for it as for `build`: a failed job fails this whole workflow, so `needs: build` holds sign and
+    # publish. No cache: a cold build of its own.
+    name: polytone windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      HORIZON_VERSION: ${{ inputs.version }}
+      HORIZON_NIGHTLY: ${{ inputs.nightly }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+          clean: true
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+      - name: Windows x64 Polytone path regressions
+        run: |
+          cargo test --release --locked -p horizon-client-render --lib particles::polytone::tests::
+
   build:
     needs: [exporters, wasm-std]
     name: build ${{ matrix.name }}
@@ -164,8 +195,8 @@ jobs:
             asset: horizon-macos-x64.zip
     runs-on: ${{ matrix.mac && (inputs.trusted && vars.MAC_RUNNER || fromJSON('["self-hosted", "macOS", "horizon-nightly"]')) || matrix.os }}
     # Notarizing the zip can take a few minutes. The hosted Windows and Linux release builds alone took 35–40 min
-    # on 2026-11-18 (run 44227464218), past the old 40. Windows also runs the Polytone path tests in release
-    # (#18051): about 60 min in all, and a slow runner took 71 before packaging (run 44362281429).
+    # on 2026-11-18 (run 44227464218), past the old 40. Windows x64 took 76-77 min on 2026-11-19/20 with the Polytone
+    # tests in it (runs 44424401791, 44515830051); they run in `polytone-windows` beside it now.
     timeout-minutes: ${{ matrix.mac && 60 || startsWith(matrix.name, 'windows') && 90 || 75 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
@@ -207,10 +238,6 @@ jobs:
       - name: Build the official game, horizon-ctl, horizon-prepare and horizon-server
         if: ${{ !matrix.musl }}
         run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p horizon-official --bin horizon-official -p horizon-client-lib --bin horizon-ctl -p horizon-prepare --bin horizon-prepare -p horizon-server --bin horizon-server
-      - name: Windows x64 Polytone path regressions
-        if: runner.os == 'Windows' && matrix.pe_arch == 'x64'
-        run: |
-          cargo test --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -p horizon-client-render --lib particles::polytone::tests::
       - name: The official game is the game players get, under its name
         # horizon-official: horizon-client's game with Horizon's own parts plugged in (docs/layers.md, "How a
         # Horizon crate plugs in"). Everything below, the launcher and players know it as horizon-client.
