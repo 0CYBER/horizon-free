@@ -10,6 +10,7 @@ players. Native and wasm mods use the same calls.
 | `host.commands()` | `run_command(line)` runs through the console command path with permission level 4. `feedback(text)` answers the command source. |
 | `host.messages()` | `broadcast(text)` fires the broadcast hook and writes to the server log. `text_allowed(text)` checks the server chat filter. |
 | `host.players()` | `server_players()` returns `Vec<PlayerRef>` in connection order. `acting_player()` returns the optional player whose state is active in the hook. `player_by_name(name)` finds a connected real player by case-insensitive account name, not nickname. |
+| `host.profiles()` | `resolve_name(name)` and `resolve_id(uuid)` ask the game's Minecraft profile resolver, the one behind dynamic player heads and `/fetchprofile`, for an account's profile. The first call answers `ProfileResolution::Pending`; poll it from `server_tick` for `Done(Some(profile))`, or `Done(None)` when there is no such account or the lookup failed (for example, a rate-limited lookup). `Done(None)` does not prove the account is missing. The resolver caches answers, paces a mod's new lookups at 60 a minute, and reaches Mojang's services whatever the server's online mode. |
 | `host.levels()` | `list_levels()` returns loaded server levels in vanilla dimension order, or an empty list before a server world opens. |
 
 Player and level lookup services accept `&dyn ServerHost` and do not mutate the
@@ -55,7 +56,49 @@ current dimension, even when another dimension is ticking. On a client they
 identify the local player's level. Unknown, disconnected, replaced or stale handles
 return `None`.
 
-Game profiles (server only): `host.profile_by_uuid(uuid)` and `host.profile_by_name(name)` (any case) return the `GameProfile` the server knows: an online player's, with its properties, else the name from the user cache (`usercache.json`, on a dedicated server), without properties. Neither asks Mojang, and `None` means neither the server nor its cache knows the player. To change a skin, `player.set_profile_property(host, "textures", value, signature)` sets the `textures` property (Mojang's base64 value and its signature). Other players see it once `player.refresh(host)` sends the player to them again; the player's own client keeps its current skin until they change level or join again. A property set this way is published and returned by the two lookups; `player.profile(host)` keeps returning the properties the player logged in with.
+## Profiles and skins
+
+Two server-side lookups answer different questions.
+
+`host.profile_by_uuid(uuid)` and `host.profile_by_name(name)` (any case) return the `GameProfile`
+the server already knows: an online player's, with its properties, else the name from the user
+cache (`usercache.json`, on a dedicated server), without properties. Neither asks Mojang, and
+`None` means neither the server nor its cache knows the player. `player.profile(host)` returns a
+connected or acting player's login profile, including the signed `textures` property.
+
+`host.profiles().resolve_name("Notch")` (or `resolve_id(uuid)`) asks the game's own Minecraft
+profile resolver, the one behind dynamic player heads and `/fetchprofile`, for an account's current
+session-server profile. This is the asynchronous Mojang lookup, and it works whatever the server's
+online mode. The first call answers `ProfileResolution::Pending` while the background lookup runs;
+poll it from a command or `server_tick` until `ProfileResolution::Done(Some(profile))` with the
+account's UUID, current name and properties, or `ProfileResolution::Done(None)` when there is no
+such account or the lookup failed (for example, Mojang rate-limited it). `Done(None)` does not
+prove the account is missing; retry later when the distinction matters. A mod's new lookups are
+paced at 60 a minute (the game's own lookups are not), so `Pending` can also mean that budget is
+refilling; poll again later. The resolver caches answers and uses the TLS stack the game already
+links, so a mod needs no HTTP client of its own. Keep the result in your own state; do not block a
+login hook on it.
+
+To change a skin, `player.set_profile_property(host, "textures", value, signature)` sets the
+`textures` property (Mojang's base64 value and its signature). Other players see it once
+`player.refresh(host)` sends the player to them again; the player's own client keeps its current
+skin until they change level or join again. A property set this way is published and returned by
+`profile_by_uuid` and `profile_by_name`; `player.profile(host)` keeps returning the properties the
+player logged in with. The `player_login_profile` hook below does this before the login success
+instead, so the player's own client gets the skin at once and no refresh is needed.
+
+## A player's profile at login
+
+`player_login_profile` runs once for each accepted login, after the name,
+whitelist, ban and server-full checks and before the login success is sent, with
+the UUID and name the login authenticated and the profile's `properties`. A skin
+or identity mod replaces the `textures` property there; the login success and the
+player list then carry the changed profile. It has no `Host` (it runs on the
+connection thread), so answer from the arguments and your mod's own state alone,
+and keep the list inside the profile's limits: at most 16 properties, names of 64
+UTF-16 units, values of 32767 and signatures of 1024. A list past a limit is
+refused and the login's own properties are sent. `player_login` follows later and
+can still refuse the player.
 
 ## Messages and visibility
 

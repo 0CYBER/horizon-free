@@ -47,14 +47,18 @@ pub trait PlayersServerHost {
     /// never asked of Mojang: an online player's whole profile (the properties
     /// the player list gives, so with those `player_set_profile_property` set),
     /// else the user cache's name (`usercache.json`, a dedicated server's),
-    /// without properties. None when neither knows them.
+    /// without properties. None when neither knows them. For a current Mojang
+    /// lookup, including an account the server has never seen, use
+    /// [`Profiles::resolve_id`](crate::Profiles).
     #[access(WorldOnly)]
     fn profile_by_uuid(&self, uuid: u128) -> Option<GameProfile>;
     /// Side: server.
     /// The profile of the player with this name, any case, as
     /// `profile_by_uuid` knows it: an online player's, else an unexpired
     /// user cache entry. Never asked of Mojang, and an unknown name is not
-    /// made an offline player.
+    /// made an offline player. For a current Mojang lookup, including an
+    /// account the server has never seen, use
+    /// [`Profiles::resolve_name`](crate::Profiles).
     #[access(WorldOnly)]
     fn profile_by_name(&self, name: &str) -> Option<GameProfile>;
 }
@@ -526,8 +530,11 @@ pub trait PlayersBackend {
     /// may call it. On a client, for the local player only. None for an unknown state, a
     /// stale or unavailable player.
     #[access(WorldOnly)]
-    fn player_has_correct_tool_for_drops(&self, player: PlayerRef, state: BlockState)
-    -> Option<bool>;
+    fn player_has_correct_tool_for_drops(
+        &self,
+        player: PlayerRef,
+        state: BlockState,
+    ) -> Option<bool>;
 }
 /// The handles' client reads of the `players` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

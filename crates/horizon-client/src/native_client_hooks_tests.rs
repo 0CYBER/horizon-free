@@ -93,6 +93,11 @@ pub(crate) fn install() {
                     };
                 }
             },
+            player_login_profile: |player, name, properties| {
+                if mod_api::__private::listened(mod_api::HookId::PlayerLoginProfile) {
+                    mod_api::dispatch_player_login_profile(player, name, properties);
+                }
+            },
             farmland_trample: |context, _, _, _, _, cancel| {
                 *cancel = context.setting("rules_mod", "stack").is_some();
             },

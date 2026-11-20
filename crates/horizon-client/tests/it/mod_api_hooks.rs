@@ -27,6 +27,50 @@ fn a_mod_implements_the_key_hooks() {
     let _: ModEntry = ModEntry::new("keys", hooks());
 }
 
+/// A login profile reaches the mods before the login success sends it, and a mod replaces the
+/// skin there.
+#[test]
+fn a_mod_changes_a_login_profile_before_it_is_sent() {
+    use mod_api::{ProfileProperty, dispatch_player_login_profile};
+    use std::sync::Mutex;
+
+    static SEEN: Mutex<Vec<(u128, String)>> = Mutex::new(Vec::new());
+
+    #[derive(Default)]
+    struct Skin;
+
+    #[mod_api::horizon_mod]
+    impl Hooks for Skin {
+        fn player_login_profile(&self, event: &mut mod_api::PlayerLoginProfileEvent<'_>) {
+            SEEN.lock()
+                .unwrap()
+                .push((event.player, event.name.to_owned()));
+            event
+                .properties
+                .retain(|property| property.name != "textures");
+            event.properties.push(ProfileProperty::new(
+                "textures".into(),
+                "new".into(),
+                Some("signed".into()),
+            ));
+        }
+    }
+
+    let mut properties = vec![ProfileProperty::new("textures".into(), "old".into(), None)];
+    mod_platform::testing::with_mods(vec![ModEntry::new("skin", Box::new(Skin))].into(), || {
+        dispatch_player_login_profile(7, "Alex", &mut properties)
+    });
+    assert_eq!(*SEEN.lock().unwrap(), [(7, "Alex".to_owned())]);
+    assert_eq!(
+        properties,
+        [ProfileProperty::new(
+            "textures".into(),
+            "new".into(),
+            Some("signed".into())
+        )]
+    );
+}
+
 mod sidebar {
     use super::*;
 

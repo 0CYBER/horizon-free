@@ -1189,6 +1189,20 @@ impl ProfileProperty {
     }
 }
 
+/// How a [`Profiles`] lookup stands: the game resolves profiles in the background, so a
+/// lookup's first call answers [`Pending`](Self::Pending) and a later one its answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum ProfileResolution {
+    /// The lookup is still running, or waiting for the resolver's per-minute budget; ask again
+    /// on a later tick.
+    Pending,
+    /// The services' answer: the profile, or `None` when there is no such account or the lookup
+    /// failed (for example, a rate-limited lookup). `None` does not prove the account is missing.
+    Done(Option<GameProfile>),
+}
+
 /// Why [`PlayerRef::open_mod_menu`] opened nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

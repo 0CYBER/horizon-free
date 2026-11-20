@@ -104,6 +104,47 @@ impl Players for Game<'_> {
         self.native_acting_player()
     }
 }
+impl Profiles for Game<'_> {
+    fn resolve_name(&mut self, name: &str) -> ProfileResolution {
+        mod_api::__private::check_access("resolve_name", mod_api::__private::LoadAccess::WorldOnly);
+        profile_resolution(
+            self.skin_profiles
+                .borrow_mut()
+                .state(&horizon_client::skins::NameOrId::Name(name.to_owned())),
+        )
+    }
+    fn resolve_id(&mut self, id: u128) -> ProfileResolution {
+        mod_api::__private::check_access("resolve_id", mod_api::__private::LoadAccess::WorldOnly);
+        profile_resolution(
+            self.skin_profiles
+                .borrow_mut()
+                .state(&horizon_client::skins::NameOrId::Id(id)),
+        )
+    }
+}
+
+/// The game's resolver answer as the API's: its properties become the profile's.
+fn profile_resolution(resolve: horizon_client::skins::Resolve) -> ProfileResolution {
+    match resolve {
+        horizon_client::skins::Resolve::Pending => ProfileResolution::Pending,
+        horizon_client::skins::Resolve::Done(profile) => {
+            ProfileResolution::Done(profile.map(|profile| {
+                GameProfile::new(
+                    profile.id,
+                    profile.name,
+                    profile
+                        .properties
+                        .into_iter()
+                        .map(|(name, value, signature)| {
+                            ProfileProperty::new(name, value, signature)
+                        })
+                        .collect(),
+                )
+            }))
+        }
+    }
+}
+
 impl RuntimeLevels for Game<'_> {
     fn open(&mut self, id: &str, level: RuntimeLevel) -> Result<LevelRef, RuntimeLevelError> {
         mod_api::__private::check_access("open", mod_api::__private::LoadAccess::WorldOnly);
@@ -143,5 +184,40 @@ impl RenderAssets for Game<'_> {
             mod_api::__private::LoadAccess::PublishedResources,
         );
         self.pack.render.animation(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::skins::{Resolve, ResolvedProfile};
+
+    #[test]
+    fn a_resolver_answer_becomes_the_apis_profile() {
+        let answer = profile_resolution(Resolve::Done(Some(ResolvedProfile {
+            id: 7,
+            name: "Notch".into(),
+            properties: vec![("textures".into(), "value".into(), Some("signature".into()))],
+        })));
+        assert_eq!(
+            answer,
+            ProfileResolution::Done(Some(GameProfile::new(
+                7,
+                "Notch".into(),
+                vec![ProfileProperty::new(
+                    "textures".into(),
+                    "value".into(),
+                    Some("signature".into())
+                )]
+            )))
+        );
+        assert_eq!(
+            profile_resolution(Resolve::Pending),
+            ProfileResolution::Pending
+        );
+        assert_eq!(
+            profile_resolution(Resolve::Done(None)),
+            ProfileResolution::Done(None)
+        );
     }
 }

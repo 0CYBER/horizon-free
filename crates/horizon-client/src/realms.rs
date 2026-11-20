@@ -1868,7 +1868,7 @@ impl Screen {
         let (value, signature) = {
             let mut profiles = self.skin_workers.profiles.lock().ok()?;
             let crate::skins::Resolve::Done(Some(profile)) =
-                profiles.state(&crate::skins::NameOrId::Id(id))
+                profiles.state_for_game(&crate::skins::NameOrId::Id(id))
             else {
                 return None;
             };

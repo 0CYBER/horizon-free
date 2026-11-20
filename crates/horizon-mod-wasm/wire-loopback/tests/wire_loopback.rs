@@ -2225,6 +2225,61 @@ fn world_phase_messages_round_trip_returns_filter_decision() {
 }
 
 #[test]
+fn world_phase_profiles_round_trip_a_resolved_profile() {
+    mod_api::__private::initialize().unwrap();
+    struct World;
+    impl mod_api::Host for World {}
+    mod_api::impl_host_areas!(World);
+    impl mod_api::ServerHost for World {}
+    mod_api::impl_server_host_areas!(World, except(services));
+    impl mod_api::prelude::ServicesServerHost for World {
+        fn profiles(&mut self) -> &mut dyn mod_api::Profiles {
+            self
+        }
+    }
+    impl mod_api::Profiles for World {
+        fn resolve_name(&mut self, name: &str) -> mod_api::ProfileResolution {
+            assert_eq!(name, "Notch");
+            mod_api::ProfileResolution::Done(Some(mod_api::GameProfile::new(
+                0x069a_79f4_44e9_4726_a5be_fca9_0e38_aaf5,
+                "Notch".into(),
+                vec![mod_api::ProfileProperty::new(
+                    "textures".into(),
+                    "value".into(),
+                    Some("signature".into()),
+                )],
+            )))
+        }
+    }
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    let mut world = World;
+    let mut frame = boundary::Frame::default();
+    frame.set_server_host_mut(&mut world);
+    let mut cx = boundary::Cx::default();
+    cx.frames.push(frame);
+    let id = boundary::import_id("Profiles", "resolve_name").unwrap();
+    let mut input = Writer::new();
+    input.put("Notch");
+    let mut out = Writer::new();
+    unsafe { boundary::serve(id, &mut cx, input.bytes(), &mut out) }.unwrap();
+    match Reader::decode::<mod_api::ProfileResolution>(out.bytes()).unwrap() {
+        mod_api::ProfileResolution::Done(Some(profile)) => {
+            assert_eq!(profile.uuid, 0x069a_79f4_44e9_4726_a5be_fca9_0e38_aaf5);
+            assert_eq!(profile.name, "Notch");
+            assert_eq!(
+                profile.properties,
+                [mod_api::ProfileProperty::new(
+                    "textures".into(),
+                    "value".into(),
+                    Some("signature".into())
+                )]
+            );
+        }
+        other => panic!("expected a resolved profile, got {other:?}"),
+    }
+}
+
+#[test]
 fn wire_loopback_block_entity_data_received_preserves_tag_and_handle() {
     thread_local! { static CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
     use horizon_core::nbt::Tag;

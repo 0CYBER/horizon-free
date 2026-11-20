@@ -1093,6 +1093,106 @@ fn authenticate(
     }
 }
 
+/// The profile property limits the login success keeps (`ExtraCodecs.GAME_PROFILE_PROPERTIES`):
+/// 16 properties, names of 64 UTF-16 units, values of 32767 and signatures of 1024.
+const MAX_LOGIN_PROPERTIES: usize = 16;
+const MAX_LOGIN_PROPERTY_NAME: usize = 64;
+const MAX_LOGIN_PROPERTY_VALUE: usize = 32767;
+const MAX_LOGIN_PROPERTY_SIGNATURE: usize = 1024;
+
+/// A string's length in UTF-16 code units, what the profile's wire limits count.
+fn utf16_units(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// The login's own properties as the mod API's, for `player_login_profile`.
+fn api_profile_properties(properties: &[login::Property]) -> Vec<mod_api::ProfileProperty> {
+    properties
+        .iter()
+        .map(|property| {
+            mod_api::ProfileProperty::new(
+                property.name.clone(),
+                property.value.clone(),
+                property.signature.clone(),
+            )
+        })
+        .collect()
+}
+
+/// The properties a `player_login_profile` listener left, as the login's own, or None when the
+/// list is past the profile's wire limits: the login's own properties are sent then.
+fn login_profile_properties(
+    changed: Vec<mod_api::ProfileProperty>,
+) -> Option<Vec<login::Property>> {
+    if changed.len() > MAX_LOGIN_PROPERTIES {
+        return None;
+    }
+    changed
+        .into_iter()
+        .map(|property| {
+            if property.name.is_empty()
+                || utf16_units(&property.name) > MAX_LOGIN_PROPERTY_NAME
+                || utf16_units(&property.value) > MAX_LOGIN_PROPERTY_VALUE
+                || property
+                    .signature
+                    .as_deref()
+                    .is_some_and(|signature| utf16_units(signature) > MAX_LOGIN_PROPERTY_SIGNATURE)
+            {
+                return None;
+            }
+            Some(login::Property {
+                name: property.name,
+                value: property.value,
+                signature: property.signature,
+            })
+        })
+        .collect()
+}
+
+/// A player's game profile at login, before the server sends it (`player_login_profile`): the
+/// UUID and name the login authenticated and the properties it would send. The mods may change
+/// the properties; a list past the profile limits leaves the login's own. Runs on the connection
+/// thread, so the callback it reaches has no host.
+#[inline(never)]
+pub fn native_player_login_profile(
+    player: u128,
+    name: &str,
+    properties: &mut Vec<mod_api::ProfileProperty>,
+) {
+    crate::native_client_hooks::player_login_profile(player, name, properties);
+}
+
+/// Holds an admitted login's uuid until the login reaches play. Dropping it while armed releases
+/// the uuid, including while a panic unwinds.
+struct Admission<'a> {
+    shared: &'a Shared,
+    uuid: u128,
+    armed: bool,
+}
+
+impl<'a> Admission<'a> {
+    fn new(shared: &'a Shared, uuid: u128) -> Self {
+        Self {
+            shared,
+            uuid,
+            armed: true,
+        }
+    }
+
+    /// The login reached play, whose connection releases the uuid when it closes.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for Admission<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.shared.release(self.uuid);
+        }
+    }
+}
+
 fn serve_login(
     mut c: Connection,
     address: std::net::SocketAddr,
@@ -1151,7 +1251,7 @@ fn serve_login(
         .as_ref()
         .filter(|(owner_name, _)| c.is_memory() && hello.name.eq_ignore_ascii_case(owner_name))
         .map(|(owner_name, uuid)| (owner_name.clone(), *uuid));
-    let (uuid, properties) = match (online, forwarding) {
+    let (uuid, mut properties) = match (online, forwarding) {
         (Some(online), _) => {
             match authenticate(&mut c, shared, online, &hello.name, address, &user) {
                 Ok(Ok(profile)) => profile,
@@ -1217,6 +1317,21 @@ fn serve_login(
         lost(shared, &user, &text);
         return Ok(());
     }
+    // Holds the admitted uuid until the login reaches play. A panic in a mod listener or in a
+    // later login step drops it, which releases the uuid.
+    let mut admitted = Admission::new(shared.as_ref(), uuid);
+    // The mods may change the profile the login success carries, before it is sent: a skin mod
+    // replaces the `textures` property here. A list past the profile limits keeps the login's own.
+    if mod_api::__private::listened(mod_api::HookId::PlayerLoginProfile) {
+        let mut changed = api_profile_properties(&properties);
+        native_player_login_profile(uuid, &name, &mut changed);
+        match login_profile_properties(changed) {
+            Some(changed) => properties = changed,
+            None => log::warn!(
+                "Horizon: a mod's login profile for {name} is past the profile limits; keeping the login's own"
+            ),
+        }
+    }
     // A player a proxy said would arrive (`player-expect`) uses the expectation up
     // here, as the login starts: one that ran out while the player was still in
     // configuration (a resource pack prompt) would otherwise make it an ordinary
@@ -1241,6 +1356,7 @@ fn serve_login(
     let result = login_and_configure(&mut c, shared, uuid, &name, &user, properties);
     match result {
         Ok(Some(parts)) => {
+            admitted.disarm();
             play(
                 c,
                 shared,
@@ -1254,12 +1370,10 @@ fn serve_login(
         }
         Ok(None) => {
             put_back();
-            shared.release(uuid);
             Ok(())
         }
         Err(err) => {
             put_back();
-            shared.release(uuid);
             // ServerConfigurationPacketListenerImpl.onDisconnect.
             let profile = format!("{name} ({})", uuid_string(uuid));
             lost(shared, &profile, "Disconnected");
@@ -2666,6 +2780,130 @@ mod tests {
         assert!(big.handed(size));
     }
     use super::*;
+
+    /// The profile's wire limits: a list past one is refused whole, so the login's own
+    /// properties are sent, and the 16th property is still taken.
+    #[test]
+    fn a_modded_login_profile_keeps_the_profiles_wire_limits() {
+        let property = |name: &str, value: &str, signature: Option<&str>| {
+            mod_api::ProfileProperty::new(name.into(), value.into(), signature.map(str::to_owned))
+        };
+        assert_eq!(
+            login_profile_properties(vec![property("textures", "e30=", Some("s"))]),
+            Some(vec![login::Property {
+                name: "textures".into(),
+                value: "e30=".into(),
+                signature: Some("s".into()),
+            }])
+        );
+        assert_eq!(login_profile_properties(Vec::new()), Some(Vec::new()));
+        assert!(
+            login_profile_properties(
+                (0..16)
+                    .map(|i| property(&format!("p{i}"), "v", None))
+                    .collect()
+            )
+            .is_some(),
+            "the sixteenth property is allowed"
+        );
+        assert!(
+            login_profile_properties(
+                (0..17)
+                    .map(|i| property(&format!("p{i}"), "v", None))
+                    .collect()
+            )
+            .is_none(),
+            "a seventeenth property is not"
+        );
+        assert!(login_profile_properties(vec![property("", "v", None)]).is_none());
+        assert!(
+            login_profile_properties(vec![property(&"\u{1F600}".repeat(33), "v", None)]).is_none(),
+            "an astral character counts two UTF-16 units: 33 are over 64"
+        );
+        assert!(login_profile_properties(vec![property("n", &"v".repeat(32768), None)]).is_none());
+        assert!(
+            login_profile_properties(vec![property("n", "v", Some(&"s".repeat(1025)))]).is_none()
+        );
+    }
+
+    /// A mod's login-profile edit is what the login success sends, with the login's own uuid and
+    /// name; a list past the profile limits falls back to the login's own properties.
+    #[test]
+    fn a_modded_login_profile_reaches_the_login_success() {
+        use mod_api::{Hooks, ModEntry, ProfileProperty};
+
+        // The library's test adapter installs process-wide, once; it must dispatch this hook.
+        crate::native_client_hooks::test_hooks::install();
+
+        #[derive(Default)]
+        struct Skin;
+        #[mod_api::__subscriptions]
+        impl Hooks for Skin {
+            fn player_login_profile(&self, event: &mut mod_api::PlayerLoginProfileEvent<'_>) {
+                event.properties.retain(|p| p.name != "textures");
+                event.properties.push(ProfileProperty::new(
+                    "textures".into(),
+                    "new".into(),
+                    Some("signed".into()),
+                ));
+            }
+        }
+
+        #[derive(Default)]
+        struct TooMany;
+        #[mod_api::__subscriptions]
+        impl Hooks for TooMany {
+            fn player_login_profile(&self, event: &mut mod_api::PlayerLoginProfileEvent<'_>) {
+                *event.properties = (0..17)
+                    .map(|i| ProfileProperty::new(format!("p{i}"), "v".into(), None))
+                    .collect();
+            }
+        }
+
+        let lan = crate::lan::Lan::start_with(
+            Arc::new(SyncData::empty()),
+            crate::lan::NetConfig {
+                listen: false,
+                ..crate::lan::NetConfig::loopback(0, "Mods".into(), 8)
+            },
+        )
+        .unwrap();
+
+        let login = |mods: mod_platform::Mods| {
+            mod_platform::testing::with_mods(mods, || {
+                let (client, server) = horizon_protocol::connection::Pipe::pair();
+                let shared = lan.shared.clone();
+                let serve = mod_platform::testing::inherit_mods(move |_: &()| {
+                    let _ = super::serve_local(server, shared);
+                });
+                let worker =
+                    horizon_guest_stack::spawn("mod-login".into(), move || serve(&())).unwrap();
+                let profile = login_profile(&mut Connection::local(client), "Alex");
+                worker.join().unwrap();
+                profile
+            })
+        };
+
+        let profile = login(vec![ModEntry::new("skin", Box::new(Skin))].into());
+        assert_eq!(profile.uuid, offline_uuid("Alex"));
+        assert_eq!(profile.name, "Alex");
+        assert_eq!(
+            profile.properties,
+            vec![login::Property {
+                name: "textures".into(),
+                value: "new".into(),
+                signature: Some("signed".into()),
+            }]
+        );
+
+        let profile = login(vec![ModEntry::new("too-many", Box::new(TooMany))].into());
+        assert_eq!(profile.uuid, offline_uuid("Alex"));
+        assert_eq!(profile.name, "Alex");
+        assert!(
+            profile.properties.is_empty(),
+            "a list past the limits keeps the login's own properties"
+        );
+    }
 
     /// arismoko/horizon#3209: a client may announce its channels while the server waits on a configuration
     /// task (here the code of conduct). With no typed declaration the wait reads packets

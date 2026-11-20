@@ -13,6 +13,9 @@ pub struct NativeClientHooks {
     pub item_stacked_on_other: fn(&LoopContext, &mut crate::menu::StackedOnOther<'_>, &mut bool),
     pub living_heal: fn(&LoopContext, u32, &mut f32, &mut bool),
     pub living_breathe: fn(&LoopContext, u32, &str, &mut bool, &mut i32, &mut i32),
+    /// `player_login_profile`: a login's UUID, name and profile properties, before the login
+    /// success sends them. The login thread calls it, so the callback has no host.
+    pub player_login_profile: fn(u128, &str, &mut Vec<mod_api::ProfileProperty>),
     pub farmland_trample: fn(&LoopContext, u32, [i32; 3], u32, f64, &mut bool),
     pub has_mods: fn() -> bool,
     pub player_name_format: fn(&LoopContext, &crate::text::Text, &mut crate::text::Text),
@@ -109,6 +112,16 @@ pub(crate) fn living_breathe(
 ) {
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_breathe)(context, entity, kind, can_breathe, consume, refill);
+    }
+}
+
+pub(crate) fn player_login_profile(
+    player: u128,
+    name: &str,
+    properties: &mut Vec<mod_api::ProfileProperty>,
+) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.player_login_profile)(player, name, properties);
     }
 }
 

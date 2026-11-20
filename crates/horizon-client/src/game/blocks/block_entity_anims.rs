@@ -950,7 +950,8 @@ impl Game<'_> {
         // `Dynamic` (name- or id-only) profile.
         let download = skin.download.clone().or_else(|| {
             let key = skin.dynamic.as_ref()?;
-            let skins::Resolve::Done(Some(profile)) = self.skin_profiles.borrow_mut().state(key)
+            let skins::Resolve::Done(Some(profile)) =
+                self.skin_profiles.borrow_mut().state_for_game(key)
             else {
                 return None;
             };
