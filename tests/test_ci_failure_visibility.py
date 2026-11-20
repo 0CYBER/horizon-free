@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.test_ignored_test_completion import IgnoredTests, target, summary
+from tests.symlinks import symlink_or_skip
 from tools.ci import ignored_tests
 
 
@@ -64,7 +65,7 @@ class Visibility(unittest.TestCase):
                 path = Path("crates/example/src/lib.rs")
                 path.parent.mkdir(parents=True)
                 path.write_text('panic!("checked-in reason");\n')
-                Path("crates/link.rs").symlink_to("/tmp/private.rs")
+                symlink_or_skip(Path("crates/link.rs"), "/tmp/private.rs")
                 subprocess.run(["git", "add", str(path), "crates/link.rs"], check=True)
                 subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], check=True)
                 path.write_text("PRIVATE_WORKTREE")

@@ -13,6 +13,7 @@ from unittest import mock
 import zipfile
 
 from tools import datafix_paths, pr_ready
+from tests.symlinks import symlink_or_skip
 
 
 class DatafixPaths(unittest.TestCase):
@@ -33,18 +34,18 @@ class DatafixPaths(unittest.TestCase):
 
     def test_minecraft_input_does_not_select_output(self):
         (self.checkout / '.local').mkdir()
-        (self.checkout / '.local/minecraft').symlink_to(self.shared, target_is_directory=True)
+        symlink_or_skip(self.checkout / '.local/minecraft', self.shared, target_is_directory=True)
         self.assertEqual(datafix_paths.writable_root(), self.checkout / '.local/datafix')
 
     def test_symlinked_ancestor_refused(self):
-        (self.checkout / '.local').symlink_to(self.shared, target_is_directory=True)
+        symlink_or_skip(self.checkout / '.local', self.shared, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT'):
             datafix_paths.writable_root()
         self.assertEqual(list(self.shared.iterdir()), [])
 
     def test_datafix_symlink_refused(self):
         (self.checkout / '.local').mkdir()
-        (self.checkout / '.local/datafix').symlink_to(self.shared, target_is_directory=True)
+        symlink_or_skip(self.checkout / '.local/datafix', self.shared, target_is_directory=True)
         with self.assertRaises(ValueError):
             datafix_paths.writable_root()
 
@@ -74,7 +75,7 @@ class DatafixPaths(unittest.TestCase):
 
     def test_protected_ancestor_root_refused(self):
         os.environ['HORIZON_DATAFIX_ROOT'] = str(self.base)
-        (self.base / 'servers').symlink_to(self.shared / 'servers')
+        symlink_or_skip(self.base / 'servers', self.shared / 'servers')
         with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT'):
             datafix_paths.writable_root()
         self.assertEqual(list(self.shared.iterdir()), [])
@@ -110,7 +111,7 @@ class DatafixPaths(unittest.TestCase):
         for name in ('servers', 'java', 'worlds', 'worlds-pre-1.17', 'generate.lock'):
             with self.subTest(name=name):
                 link = root / name
-                link.symlink_to(self.shared / name)
+                symlink_or_skip(link, self.shared / name)
                 with self.assertRaisesRegex(ValueError, 'HORIZON_DATAFIX_ROOT.*escapes'):
                     datafix_paths.writable_root()
                 self.assertEqual(list(self.shared.iterdir()), [])

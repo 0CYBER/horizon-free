@@ -5,6 +5,8 @@ import unittest
 import tempfile
 from unittest import mock
 
+from tests.symlinks import symlink_or_skip
+
 with mock.patch.object(sys, 'path', [*sys.path, str(Path(__file__).resolve().parents[1] / 'tools')]):
     from check_mod_vocabulary_state import declarations, violations, unsafe_violations, expansion_violations, symlink_violations
 
@@ -41,8 +43,8 @@ class VocabularyStateGate(unittest.TestCase):
             root.mkdir()
             outside.mkdir()
             (outside / 'socket.rs').write_text('static HIDDEN: AtomicBool = make();')
-            (root / 'outer').symlink_to(outside, target_is_directory=True)
-            (root / 'socket.rs').symlink_to(outside / 'socket.rs')
+            symlink_or_skip(root / 'outer', outside, target_is_directory=True)
+            symlink_or_skip(root / 'socket.rs', outside / 'socket.rs')
             self.assertEqual(len(symlink_violations(root)), 2)
             self.assertTrue(all('descendant modules can escape' in error for error in symlink_violations(root)))
 

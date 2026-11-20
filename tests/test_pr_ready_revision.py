@@ -9,6 +9,7 @@ from argparse import Namespace
 from unittest.mock import patch
 
 from tools import pr_ready
+from tests.symlinks import symlink_or_skip
 
 
 class RevisionOrchestration(unittest.TestCase):
@@ -21,7 +22,7 @@ class RevisionOrchestration(unittest.TestCase):
             root = Path(directory)
             subprocess.run(["git", "init", "-q", directory], check=True)
             # Reuse the real guard/parser while the guard inspects only this private repo.
-            (root / "tools").symlink_to(pr_ready.ROOT / "tools", target_is_directory=True)
+            symlink_or_skip(root / "tools", pr_ready.ROOT / "tools", target_is_directory=True)
             bad = root / "bad.txt"
             bad.write_text("[" + "truncated" + "]\n")
             subprocess.run(["git", "add", "bad.txt"], cwd=root, check=True)

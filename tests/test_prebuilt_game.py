@@ -15,6 +15,7 @@ from pathlib import Path
 
 from tools import prebuilt_game
 from tests.test_ci_concurrency import yaml
+from tests.symlinks import symlink_or_skip
 
 COMMIT = "c" * 40
 
@@ -204,7 +205,7 @@ class RegistryPatchTests(unittest.TestCase):
             (source / "Cargo.toml").write_text("[patch.crates-io]\nallocator-sys={path='patch'}\n")
             outside = root / "private.txt"
             outside.write_text("must not ship")
-            (patched / "leak").symlink_to(outside)
+            symlink_or_skip(patched / "leak", outside)
             with self.assertRaisesRegex(ValueError, "symlink"):
                 prebuilt_game.carry_patches(source, sdk)
             self.assertFalse((sdk / "patches").exists())
@@ -227,7 +228,7 @@ class RegistryPatchTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "aren't compiler outputs"):
                 prebuilt_game.check(sdk)
             extra.unlink()
-            extra.symlink_to(declared)
+            symlink_or_skip(extra, declared)
             with self.assertRaisesRegex(SystemExit, "symlinks"):
                 prebuilt_game.check(sdk)
             extra.unlink()
