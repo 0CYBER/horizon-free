@@ -2452,6 +2452,7 @@ impl Game<'_> {
     /// sees the support (arismoko/horizon#4510). `tick_lan` then syncs the level; a paused
     /// tick that never calls this still drains inside `tick_lan`.
     pub(in crate::game) fn tick_lan_packets(&mut self) {
+        self.answer_status_pings();
         if self.level_pass.packets_drained {
             return;
         }

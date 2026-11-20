@@ -65,7 +65,7 @@ fn login_disconnect(c: &mut Connection, reason: &horizon_core::nbt::Tag) {
 pub fn component_json(tag: &horizon_core::nbt::Tag) -> String {
     component_value(tag).compact()
 }
-fn component_value(tag: &horizon_core::nbt::Tag) -> crate::server::json::Json {
+pub fn component_value(tag: &horizon_core::nbt::Tag) -> crate::server::json::Json {
     use crate::server::json::Json;
     use horizon_core::nbt::Tag;
     const ORDER: &[&str] = &[
@@ -810,7 +810,12 @@ fn serve_connection(
         // ServerHandshakePacketListenerImpl: a server that does not reply
         // to status requests closes the connection.
         handshake::STATUS if !shared.enable_status() => Ok(()),
-        handshake::STATUS => serve_status(&mut c, &shared, intention.protocol),
+        handshake::STATUS => {
+            let host = typed_address(&intention, c.is_memory())
+                .map(|(host, _)| host.to_string())
+                .unwrap_or_default();
+            serve_status(&mut c, &shared, intention.protocol, &host)
+        }
         handshake::TRANSFER if !shared.accepts_transfers() => {
             login_disconnect(
                 &mut c,
@@ -883,7 +888,12 @@ fn older_client(
     .then_some(version)
 }
 
-fn serve_status(c: &mut Connection, shared: &Shared, protocol: i32) -> Result<(), String> {
+fn serve_status(
+    c: &mut Connection,
+    shared: &Shared,
+    protocol: i32,
+    virtual_host: &str,
+) -> Result<(), String> {
     let e = |e: horizon_protocol::Error| e.to_string();
     let mut requested = false;
     loop {
@@ -894,9 +904,13 @@ fn serve_status(c: &mut Connection, shared: &Shared, protocol: i32) -> Result<()
             status::Serverbound::StatusRequest(_) => {
                 requested = true;
                 // A client this server lets join is told its own protocol, so its list shows it joinable.
-                let json = match older_client(shared, protocol) {
-                    Some(_) => shared.status_json_for(protocol),
-                    None => shared.status_json(),
+                let shown = match older_client(shared, protocol) {
+                    Some(_) => protocol,
+                    None => PROTOCOL_VERSION,
+                };
+                // The mods may change the answer, or cancel it: the connection then closes.
+                let Some(json) = shared.status_for(protocol, shown, virtual_host) else {
+                    return Ok(());
                 };
                 c.send(
                     &status::Clientbound::StatusResponse(status::StatusResponse { json }).encode(),

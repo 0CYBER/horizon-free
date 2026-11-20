@@ -98,6 +98,18 @@ in place of the player's name, `None` when there is none (`Option<Option<String>
 An outer `None` means a stale or unavailable player for all three, a client or an
 unjoinable world for `hidden`, and no server list for `nickname`.
 
+## The server list
+
+Changing what the server list shows (a MOTD with colours or a random line, an icon, fake counts, a hidden player list):
+the `server_list_ping` hook is heard once for each status request, on the game thread, before the answer goes out.
+`protocol` and `virtual_host` (the host the client typed, without its port) are read-only; `motd` (`Text`),
+`favicon` (`Option<Vec<u8>>`, PNG bytes), `online`, `max_players`, `sample` (`Vec<(String, u128)>`, a name and the UUID
+the list shows) and `hide_players` start as vanilla's answer. `hide_players` leaves out the whole players part;
+`cancel` closes the connection without an answer. At most 64 sample entries are kept, and an icon that is not a PNG
+is dropped. An answer longer than a client reads (32767 characters) is replaced by the plain one, and so is any answer
+the mods do not finish within half a second. With no listener the request is not put to the game thread at all.
+The legacy ping of pre-1.7 clients is not asked.
+
 ## Chat lines and respawn
 
 Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`
