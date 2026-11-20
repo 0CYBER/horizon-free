@@ -578,36 +578,57 @@ impl Replay {
             (offset(&self.body), 0)
         } else {
             let mut best: Option<(f64, u8, Box<PlayerMotion>)> = None;
-            for candidate in (0..16u8)
+            let mut last_won: Option<(f64, u8)> = None;
+            let mut candidates = (0..16u8)
                 .filter(|&c| c == 0 || [1, 2, 4, 8].into_iter().all(|b| c & b == 0 || unknown(b)))
-            {
-                let mut body = self.body.clone();
-                if candidate & 1 != 0 {
-                    body.ground.on_ground = !body.ground.on_ground;
-                }
-                if candidate & 2 != 0 {
-                    body.item_use_speed = used;
-                }
-                if candidate & 4 != 0 {
-                    body.no_jump_delay = i32::from(body.no_jump_delay == 0);
-                }
-                if let Some(met) = meeting.filter(|_| candidate & 8 != 0) {
-                    body.velocity = body.velocity.add_vector(met);
-                }
-                if run(&mut body, keys, sprinting).is_err() {
-                    continue;
-                }
-                let off = offset(&body);
-                if best.as_ref().is_none_or(|b| off < b.0) {
-                    best = Some((off, candidate, body));
-                }
-                if off <= EXACT {
-                    break;
+                .peekable();
+            while let Some(candidate) = candidates.next() {
+                let last_candidate = candidates.peek().is_none();
+                let apply_candidate = |body: &mut PlayerMotion| {
+                    if candidate & 1 != 0 {
+                        body.ground.on_ground = !body.ground.on_ground;
+                    }
+                    if candidate & 2 != 0 {
+                        body.item_use_speed = used;
+                    }
+                    if candidate & 4 != 0 {
+                        body.no_jump_delay = i32::from(body.no_jump_delay == 0);
+                    }
+                    if let Some(met) = meeting.filter(|_| candidate & 8 != 0) {
+                        body.velocity = body.velocity.add_vector(met);
+                    }
+                };
+                if last_candidate {
+                    apply_candidate(&mut self.body);
+                    if run(&mut self.body, keys, sprinting).is_ok() {
+                        let off = offset(&self.body);
+                        if best.as_ref().is_none_or(|b| off < b.0) {
+                            last_won = Some((off, candidate));
+                        }
+                    }
+                } else {
+                    let mut body = self.body.clone();
+                    apply_candidate(&mut body);
+                    if run(&mut body, keys, sprinting).is_err() {
+                        continue;
+                    }
+                    let off = offset(&body);
+                    if best.as_ref().is_none_or(|b| off < b.0) {
+                        best = Some((off, candidate, body));
+                    }
+                    if off <= EXACT {
+                        break;
+                    }
                 }
             }
-            let (off, candidate, body) = best?;
-            self.body = body;
-            (off, candidate)
+            match last_won {
+                Some((off, candidate)) => (off, candidate),
+                None => {
+                    let (off, candidate, body) = best?;
+                    self.body = body;
+                    (off, candidate)
+                }
+            }
         };
         let body = &mut self.body;
         let end = said.unwrap_or(last);

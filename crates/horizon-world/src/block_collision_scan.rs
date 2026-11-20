@@ -2,7 +2,7 @@
 //! chunk availability, state metadata, suffocation predicates and context dispatch.
 use crate::{collision_context::CollisionContext, registry::BlockStateId};
 use horizon_core::{
-    geometry::{Aabb, ShapeError, ShapeOp, Vec3, VoxelShape},
+    geometry::{Aabb, COLLISION_EPSILON, ShapeError, ShapeOp, Vec3, VoxelShape},
     position::{BlockPos, ChunkPos},
 };
 
@@ -183,6 +183,88 @@ fn moved_block(p: BlockPos, offset: Vec3, shape: &VoxelShape) -> VoxelShape {
         cache[slot] = Some((p, moved.clone()));
         moved
     })
+}
+
+/// Entries of the per-thread cache of moved non-full shapes (stairs, slabs, walls, fences...).
+const MOVED_SHAPES: usize = 512;
+type MovedShapes = [Option<(BlockPos, VoxelShape, VoxelShape)>; MOVED_SHAPES];
+thread_local! {
+    static MOVED_NON_FULL: std::cell::RefCell<Box<MovedShapes>> =
+        std::cell::RefCell::new(Box::new(std::array::from_fn(|_| None)));
+}
+
+/// `shape.moved(offset)` for a non-full `shape` at block `p`, keyed by position and exact
+/// unmoved shape identity (`VoxelShape::same_identity`), so context-dependent shapes never alias.
+fn moved_shape(p: BlockPos, offset: Vec3, shape: &VoxelShape) -> VoxelShape {
+    let slot = (p.x.wrapping_mul(73_856_093)
+        ^ p.y.wrapping_mul(19_349_663)
+        ^ p.z.wrapping_mul(83_492_791)) as u32 as usize
+        % MOVED_SHAPES;
+    MOVED_NON_FULL.with(|cache| {
+        let Ok(mut cache) = cache.try_borrow_mut() else {
+            return shape.moved(offset);
+        };
+        if let Some((at, src, moved)) = &cache[slot]
+            && *at == p
+            && src.same_identity(shape)
+        {
+            return moved.clone();
+        }
+        let moved = shape.moved(offset);
+        cache[slot] = Some((p, shape.clone(), moved.clone()));
+        moved
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FastOverlap {
+    Inside,
+    Outside,
+    Boundary,
+}
+
+/// Exact zero-allocation classification of `shape.moved(offset).join_is_not_empty(from_box(bounds), AND)`.
+/// Returns `Inside` only when some box overlaps `bounds` by strictly more than `2 * COLLISION_EPSILON`
+/// on all three axes, `Outside` only when every box is separated by at least `2 * COLLISION_EPSILON`
+/// (or `bounds` is degenerate), and `Boundary` in the microscopic `[-2e-7, +2e-7]` band so the caller
+/// falls back to the exact `VoxelShape::join_is_not_empty` path.
+#[inline]
+fn fast_box_overlap(shape: &VoxelShape, offset: Vec3, bounds: Aabb) -> FastOverlap {
+    const EPS: f64 = 2.0 * COLLISION_EPSILON;
+    let bmin = bounds.min_position();
+    let bmax = bounds.max_position();
+    if bmax.x - bmin.x < COLLISION_EPSILON
+        || bmax.y - bmin.y < COLLISION_EPSILON
+        || bmax.z - bmin.z < COLLISION_EPSILON
+    {
+        return FastOverlap::Outside;
+    }
+    let mut boundary = false;
+    for b in shape.boxes() {
+        let lo = b.min_position();
+        let hi = b.max_position();
+        let ox = (hi.x + offset.x).min(bmax.x) - (lo.x + offset.x).max(bmin.x);
+        if ox <= -EPS {
+            continue;
+        }
+        let oy = (hi.y + offset.y).min(bmax.y) - (lo.y + offset.y).max(bmin.y);
+        if oy <= -EPS {
+            continue;
+        }
+        let oz = (hi.z + offset.z).min(bmax.z) - (lo.z + offset.z).max(bmin.z);
+        if oz <= -EPS {
+            continue;
+        }
+        if ox > EPS && oy > EPS && oz > EPS {
+            return FastOverlap::Inside;
+        }
+        boundary = true;
+    }
+    if boundary {
+        FastOverlap::Boundary
+    } else {
+        FastOverlap::Outside
+    }
 }
 
 pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
@@ -491,21 +573,34 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 {
                     continue;
                 }
-                let moved = shape.moved(offset);
-                let entity_shape = match &self.entity_shape {
-                    Some(shape) => shape,
-                    None => self.entity_shape.insert(
-                        VoxelShape::from_box(self.bounds).map_err(CollisionScanError::Shape)?,
-                    ),
-                };
-                if moved.is_empty()
-                    || !moved
-                        .join_is_not_empty(entity_shape, ShapeOp::AND)
-                        .map_err(CollisionScanError::Shape)?
-                {
-                    continue;
+                match fast_box_overlap(&shape, offset, self.bounds) {
+                    FastOverlap::Outside => continue,
+                    FastOverlap::Inside => {
+                        if self.presence_only {
+                            VoxelShape::block()
+                        } else {
+                            moved_shape(p, offset, &shape)
+                        }
+                    }
+                    FastOverlap::Boundary => {
+                        let moved = moved_shape(p, offset, &shape);
+                        let entity_shape = match &self.entity_shape {
+                            Some(shape) => shape,
+                            None => self.entity_shape.insert(
+                                VoxelShape::from_box(self.bounds)
+                                    .map_err(CollisionScanError::Shape)?,
+                            ),
+                        };
+                        if moved.is_empty()
+                            || !moved
+                                .join_is_not_empty(entity_shape, ShapeOp::AND)
+                                .map_err(CollisionScanError::Shape)?
+                        {
+                            continue;
+                        }
+                        moved
+                    }
                 }
-                moved
             };
             return Ok(Some(BlockCollisionHit {
                 position: p,
