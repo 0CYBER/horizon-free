@@ -41,11 +41,14 @@ impl Renderer {
             && let Some(driver) = &self.hdr_driver
         {
             static LOGGED: std::sync::Once = std::sync::Once::new();
-            LOGGED.call_once(|| {
-                log::warn!(
+            LOGGED.call_once(|| match settings.safe_start_holds_hdr(driver) {
+                true => log::warn!(
+                    "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) lost the graphics device with HDR output on. Choose an HDR mode on the HDR page to try again"
+                ),
+                false => log::warn!(
                     "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) ended before HDR output showed a frame. Choose an HDR mode on the HDR page to try again (or remove hdrFailedStart from {})",
                     crate::graphics::FILE
-                )
+                ),
             });
         }
     }
@@ -61,6 +64,13 @@ impl Renderer {
             let _ = std::fs::write(marker, crate::graphics::hdr_marker_text(driver));
             self.hdr_marker = Some(marker.to_owned());
         }
+    }
+
+    /// Writes the marker of this window's graphics device loss at `marker`
+    /// (`gfx::safe_start::MARKER`); offscreen, nothing. True when it was written.
+    pub fn mark_device_lost(&self, marker: &std::path::Path) -> bool {
+        super::safe_start::loss_text(self.hdr_driver.as_deref(), self.hdr.is_some())
+            .is_some_and(|text| std::fs::write(marker, text).is_ok())
     }
 
     /// The graphics driver this window's HDR output starts on (`output::window_driver`);

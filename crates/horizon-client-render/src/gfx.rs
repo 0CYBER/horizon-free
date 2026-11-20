@@ -503,6 +503,7 @@ mod in_flight;
 mod material_animate;
 #[cfg(test)]
 mod material_animation_tests;
+pub mod safe_start;
 pub use hdr::{Calibration as HdrCalibration, Output as HdrOutput};
 pub use output::{DisplayReading, EffectiveOutput, FrameConfiguration, FrameRequest};
 

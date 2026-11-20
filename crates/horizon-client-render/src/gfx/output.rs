@@ -17,7 +17,8 @@ pub(crate) struct OutputCapabilities {
     /// The device keeps the HUD on a layer of its own (`hud_coverage::supported`).
     pub hud_layer: bool,
     /// HDR output is held back: the last start on this window's graphics driver ended before
-    /// HDR output showed a frame ([`held`]). The mode stays; the output is SDR.
+    /// HDR output showed a frame, or lost the graphics device ([`held`]). The mode stays; the
+    /// output is SDR.
     pub held: bool,
 }
 impl OutputCapabilities {
