@@ -12,6 +12,8 @@
     nightly.py sdk-index <sha> <out>     writes sdk-<sha>'s sdk.json to <out>, checked against its SHA256SUMS
     nightly.py sdk-previous <sha> <out>  prints the SDK published before <sha> on its history, and writes its
                                    surface.json to <out>, checked; prints nothing when there is none
+    nightly.py base <sha>          checks <sha> by the Nightly's base rule (green_base, with DRY_RUN and
+                                   NIGHTLY_OFF_MAIN) and prints it in full: prebuilt-game.yml's commit gets that rule
 
 A nightly builds main plus the pull requests the trusted reviewers picked (the set: tools/ci/nightly_set.py), merged
 in their order and pushed as nightly/build-<date>-<n>; with no set, main alone. Main is its newest commit where
@@ -336,13 +338,14 @@ def require_sdk(sha: str) -> None:
     published_index(sha)
 
 
-def green_base(repo: str, issue: str) -> Ref:
-    """The main commit a nightly builds on: NIGHTLY_BASE, else main's newest commit where checks and parity-main
-    passed (what releases ship), so a merge that breaks main never reaches a nightly: it builds on the commit before.
+def green_base(repo: str, issue: str, base: str = "") -> Ref:
+    """The main commit a nightly builds on: `base` or NIGHTLY_BASE, else main's newest commit where checks and
+    parity-main passed (what releases ship), so a merge that breaks main never reaches a nightly: it builds on the
+    commit before.
     Only a dry run with NIGHTLY_OFF_MAIN (the `off_main` input) builds a base off main, from a dry-run/* branch
     ([`off_main_base`]); the input set with a base on main stops too, so the run's name never says "off main"
     wrongly."""
-    sha = os.environ.get("NIGHTLY_BASE", "").strip() or train.green_main_head(parity=True)
+    sha = base or os.environ.get("NIGHTLY_BASE", "").strip() or train.green_main_head(parity=True)
     if not sha:
         stop(repo, issue, "the build stopped: no recent commit of main passed both checks and parity-main, so "
                           "none is green to build on. The next build after they pass takes it.")
@@ -361,8 +364,8 @@ def green_base(repo: str, issue: str) -> Ref:
 
 DRY_RUN_PREFIX = "dry-run/"
 BRANCHES = "refs/nightly-base/"
-HOW = (f"Push the commit to {DRY_RUN_PREFIX}<name>, dispatch the workflow from main with base=<full sha> and "
-       "off_main=true, and delete the branch afterwards.")
+HOW = (f"Push the commit to {DRY_RUN_PREFIX}<name>, dispatch the workflow from main with base=<full sha> (the "
+       "prebuilt game's: commit=<full sha>) and off_main=true, and delete the branch afterwards.")
 
 
 def off_main_base(repo: str, issue: str, base: str) -> Ref:
@@ -516,6 +519,7 @@ def main() -> None:
     sub.add_parser("require-sdk").add_argument("sha")
     sub.add_parser("sdk-archives")
     sub.add_parser("sdk-assets")
+    sub.add_parser("base").add_argument("sha")
     index = sub.add_parser("sdk-index")
     index.add_argument("sha")
     index.add_argument("out", type=Path)
@@ -536,6 +540,8 @@ def main() -> None:
         print("\n".join(SDK_ARCHIVES))
     elif args.cmd == "sdk-assets":
         print("\n".join(SDK_ASSETS))
+    elif args.cmd == "base":
+        print(green_base(os.environ.get("GITHUB_REPOSITORY", ""), "", args.sha.strip()).sha)
     elif args.cmd == "sdk-index":
         args.out.write_bytes(published_index(args.sha))
     elif args.cmd == "sdk-previous":

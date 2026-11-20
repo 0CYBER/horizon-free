@@ -264,7 +264,19 @@ concurrency group of their own ([When it releases](#when-it-releases)).
 gh workflow run prebuilt-game.yml --ref main                         # full dry run
 gh workflow run nightly-build.yml --ref main -f dry_run=true         # SDK + game dry run
 gh workflow run prebuilt-game.yml --ref main -f dry_run=false         # maintainer publication, after review/CI
+gh workflow run prebuilt-game.yml --ref main -f off_main=true -f commit=<full sha>   # dry run of a dry-run/* commit
 ```
+
+Its `commit` gets the Nightly's base rule (its dry run off main, under
+[Trusted reviewers pick the Nightly's pull requests](#trusted-reviewers-pick-the-nightlys-pull-requests): `nightly.py
+base`, run from this workflow's own commit, checked out beside the judged one and never inside it): on main, or, in a
+dry run with `off_main` only, a commit a
+freshly fetched `dry-run/*` branch holds. A pull request's head, another branch's commit or a bare SHA is refused, a
+dry run's too, and so is `off_main` with a commit on main or in a real run; the run's name says `(off main)`. A
+branch run's own commit, off main, needs the same: a `dry-run/*` branch holding it and `off_main`. The
+dry run runs the commit's own build scripts in jobs whose GitHub Actions cache scope is main's when dispatched from
+main, which is why the commit must be one somebody with push rights chose. No job on the route saves a cache: no
+`actions/cache`, Rust cache, sticky disk or compiler cache (tests/test_nightly.py pins it).
 
 These are publication machinery, not evidence that a candidate has shipped. Activate a candidate only after
 code-owner review, green exact-head CI and the real platform/native canaries. A Nightly predating this route may
