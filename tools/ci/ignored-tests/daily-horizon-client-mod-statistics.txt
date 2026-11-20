@@ -1,0 +1,2 @@
+# horizon-rust/horizon#17889: these tests read the prepared 26.3 data.
+horizon-client game::native_player_stats::tests::statistics_are_read_and_replaced_whole lib daily resources

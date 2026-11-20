@@ -98,6 +98,32 @@ impl Stats {
     pub fn custom(&mut self, key: &str, n: i32) {
         namespaced(key, |key| self.add("custom", key, n));
     }
+    /// `StatsCounter.setValue` for every statistic: `values` in place of the counters, those
+    /// it lacks back to 0. Each changed one is reset then raised to its value for the
+    /// scoreboard criteria to follow, and is dirty for the client's next request.
+    pub fn replace(&mut self, values: BTreeMap<String, BTreeMap<String, i32>>) {
+        let old = std::mem::take(&mut self.values);
+        let value = |all: &BTreeMap<String, BTreeMap<String, i32>>, ty: &str, key: &str| {
+            all.get(ty).and_then(|m| m.get(key)).copied().unwrap_or(0)
+        };
+        let keys: BTreeSet<(String, String)> = old
+            .iter()
+            .chain(&values)
+            .flat_map(|(ty, m)| m.keys().map(move |key| (ty.clone(), key.clone())))
+            .collect();
+        for (ty, key) in keys {
+            let new = value(&values, &ty, &key);
+            if value(&old, &ty, &key) == new {
+                continue;
+            }
+            self.events.push((ty.clone(), key.clone(), None));
+            if new != 0 {
+                self.events.push((ty.clone(), key.clone(), Some(new)));
+            }
+            self.mark_dirty(&ty, &key);
+        }
+        self.values = values;
+    }
     /// `ServerStatsCounter.markAllDirty`: everything goes out on the next request.
     pub fn mark_all_dirty(&mut self) {
         self.dirty = self
@@ -165,15 +191,45 @@ impl Stats {
             "DataVersion": horizon_world::DATA_VERSION,
         })
     }
-    /// `ServerStatsCounter.save`.
+    /// `ServerStatsCounter.save`: written to a sibling temporary file and moved over the old one, so a
+    /// full disk leaves the old file whole; a failure is logged.
     pub fn write(&self, path: &Path) {
-        let json = self.to_json();
+        if let Err(e) = self.try_write(path) {
+            log::warn!("could not save the statistics file {}: {e}", path.display());
+        }
+    }
+    /// [`Self::write`], reporting why it failed. The old file is left as it was then.
+    pub fn try_write(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            std::fs::create_dir_all(dir)?;
         }
-        if let Ok(text) = serde_json::to_string_pretty(&json) {
-            let _ = std::fs::write(path, text);
+        let text = serde_json::to_string_pretty(&self.to_json()).map_err(std::io::Error::other)?;
+        let mut temporary = path.as_os_str().to_owned();
+        temporary.push(".tmp");
+        let temporary = PathBuf::from(temporary);
+        let written =
+            std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
         }
+        written
+    }
+    /// The counters of a snapshot a mod hands over (`player_set_statistics`), read strictly: a JSON
+    /// object with a `stats` object of type objects of whole numbers that fit an `i32`. Anything else is
+    /// None, so a half-valid snapshot never replaces live counters; `{"stats":{}}` is the explicit reset.
+    pub fn from_snapshot(json: &serde_json::Value) -> Option<Self> {
+        let all = json.get("stats")?.as_object()?;
+        let mut stats = Self {
+            loaded: true,
+            ..Self::default()
+        };
+        for (ty, entries) in all {
+            let map = stats.values.entry(ty.clone()).or_default();
+            for (key, v) in entries.as_object()? {
+                map.insert(key.clone(), i32::try_from(v.as_i64()?).ok()?);
+            }
+        }
+        Some(stats)
     }
 }
 /// `players/<dir>/<uuid>.json` of a world (advancements, stats).
@@ -359,5 +415,42 @@ mod tests {
         );
         s.mark_all_dirty();
         assert_eq!(s.take_dirty().len(), 3);
+    }
+
+    /// A snapshot is read whole or not at all; the file the mod's counters are saved to is replaced
+    /// atomically and a failed save leaves the old one.
+    #[test]
+    fn a_snapshot_is_validated_whole_and_a_save_is_atomic() {
+        let ok = serde_json::json!({"stats": {"minecraft:mined": {"minecraft:stone": 3}}});
+        let read = Stats::from_snapshot(&ok).unwrap();
+        assert_eq!(read.values["minecraft:mined"]["minecraft:stone"], 3);
+        assert!(
+            Stats::from_snapshot(&serde_json::json!({"stats": {}}))
+                .unwrap()
+                .values
+                .is_empty()
+        );
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"DataVersion": 1}),
+            serde_json::json!({"stats": []}),
+            serde_json::json!({"stats": {"minecraft:mined": 5}}),
+            serde_json::json!({"stats": {"minecraft:mined": {"minecraft:stone": "3"}}}),
+            serde_json::json!({"stats": {"minecraft:mined": {"minecraft:stone": 2_147_483_648_i64}}}),
+            serde_json::json!({"stats": {"minecraft:mined": {"minecraft:stone": 1.5}}}),
+        ] {
+            assert!(Stats::from_snapshot(&bad).is_none(), "{bad}");
+        }
+        let dir = std::env::temp_dir().join(format!("stats-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("p.json");
+        read.try_write(&path).unwrap();
+        assert!(!dir.join("p.json.tmp").exists());
+        let before = std::fs::read_to_string(&path).unwrap();
+        // the temporary file cannot be made (its name is a directory): the old file stays whole
+        std::fs::create_dir(dir.join("p.json.tmp")).unwrap();
+        assert!(Stats::default().try_write(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

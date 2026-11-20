@@ -78,6 +78,36 @@ impl Game<'_> {
             && self.native_as_player_handle(player, |game| game.stats.reset(ty, &key))
     }
 
+    /// `ServerStatsCounter.toJson` of all the player's statistics.
+    pub(super) fn player_statistics(&self, player: PlayerRef) -> Option<String> {
+        if self.remote.is_some() {
+            return None;
+        }
+        let json = match self.native_player_stats(player)? {
+            Some(stats) => stats.to_json(),
+            None => Stats::default().to_json(),
+        };
+        serde_json::to_string(&json).ok()
+    }
+    /// `ServerStatsCounter.parseLocal`'s counters of `json` in place of the player's own,
+    /// each set as `StatsCounter.setValue` sets it.
+    pub(super) fn player_set_statistics(&mut self, player: PlayerRef, json: &str) -> bool {
+        if self.remote.is_some() {
+            return false;
+        }
+        let Ok(value @ serde_json::Value::Object(_)) = serde_json::from_str(json) else {
+            return false;
+        };
+        // Checked whole first: a snapshot with a missing `stats`, a malformed entry or a number that does not fit
+        // changes nothing (`{"stats":{}}` is the explicit reset).
+        let Some(snapshot) = Stats::from_snapshot(&value) else {
+            return false;
+        };
+        let values = snapshot.values;
+        self.native_player_current(player)
+            && self.native_as_player_handle(player, |game| game.stats.replace(values))
+    }
+
     /// Whether the player's recipe book knows `recipe`
     /// (`ServerRecipeBook.contains`).
     pub(super) fn player_has_discovered_recipe(
@@ -242,5 +272,85 @@ mod tests {
             game.lan.as_mut().unwrap().play.remove(&1);
             assert_eq!(jump(game), Some(0));
         });
+    }
+
+    /// All statistics read as the stats file has them go back in whole: one the text lacks
+    /// is 0 again, each change is reset then set for the scoreboard criteria, and the client
+    /// is told on its next request.
+    #[test]
+    #[ignore = "daily"]
+    fn statistics_are_read_and_replaced_whole() {
+        super::super::native_guest_turn_tests::with_guests(|game| {
+            let mut play = super::super::lan_actions::GuestPlay::default();
+            play.stats.add("custom", "minecraft:jump", 7);
+            play.stats.add("mined", "minecraft:stone", 2);
+            play.stats.take_dirty();
+            play.stats.events.clear();
+            game.lan.as_mut().unwrap().play.insert(13, play);
+            let b = game.player(13).unwrap();
+            let read: serde_json::Value =
+                serde_json::from_str(&game.player_statistics(b).unwrap()).unwrap();
+            assert_eq!(read["stats"]["minecraft:custom"]["minecraft:jump"], 7);
+            assert_eq!(read["DataVersion"], horizon_world::DATA_VERSION);
+            let json = r#"{"stats":{"minecraft:custom":{"minecraft:jump":9},"minecraft:killed":{"minecraft:zombie":1}},"DataVersion":4000}"#;
+            assert!(game.player_set_statistics(b, json));
+            assert_eq!(game.player_stat(b, StatType::Custom, "jump"), Some(9));
+            assert_eq!(game.player_stat(b, StatType::Mined, "stone"), Some(0));
+            assert_eq!(game.player_stat(b, StatType::Killed, "zombie"), Some(1));
+            // The turn hands the events to the scoreboard as it ends (`turns.rs`).
+            let stats = &mut game.lan.as_mut().unwrap().play.get_mut(&13).unwrap().stats;
+            assert!(stats.events.is_empty());
+            let mut dirty = stats.take_dirty();
+            dirty.sort();
+            assert_eq!(dirty.len(), 3, "{dirty:?}");
+            let read: serde_json::Value =
+                serde_json::from_str(&game.player_statistics(b).unwrap()).unwrap();
+            assert_eq!(read["stats"]["minecraft:killed"]["minecraft:zombie"], 1);
+            assert!(read["stats"].get("minecraft:mined").is_none());
+            assert!(!game.player_set_statistics(b, "[]"));
+            assert!(!game.player_set_statistics(b, "not json"));
+            // a snapshot that is not whole changes nothing: no `stats`, a malformed entry, a number that
+            // does not fit; `{"stats":{}}` is the explicit reset
+            let before = game.player_statistics(b).unwrap();
+            for bad in [
+                r#"{}"#,
+                r#"{"DataVersion":1}"#,
+                r#"{"stats":{"minecraft:custom":{"minecraft:jump":"x"}}}"#,
+                r#"{"stats":{"minecraft:custom":{"minecraft:jump":4294967297}}}"#,
+                r#"{"stats":{"minecraft:custom":7}}"#,
+            ] {
+                assert!(!game.player_set_statistics(b, bad), "{bad}");
+                assert_eq!(game.player_statistics(b).unwrap(), before, "{bad}");
+            }
+            assert!(game.player_set_statistics(b, r#"{"stats":{}}"#));
+            let read: serde_json::Value =
+                serde_json::from_str(&game.player_statistics(b).unwrap()).unwrap();
+            assert_eq!(read["stats"], serde_json::json!({}));
+            assert_eq!(game.player_stat(b, StatType::Custom, "jump"), Some(0));
+        });
+    }
+
+    /// Each changed statistic is reset then set for the scoreboard criteria; unchanged ones
+    /// are not touched.
+    #[test]
+    fn a_replaced_statistic_is_reset_then_set_for_the_criteria() {
+        let mut stats = super::Stats::default();
+        stats.add("custom", "minecraft:jump", 7);
+        stats.add("custom", "minecraft:walk_one_cm", 3);
+        stats.add("mined", "minecraft:stone", 2);
+        stats.events.clear();
+        let json = serde_json::json!({"stats": {"minecraft:custom": {
+            "minecraft:jump": 9, "minecraft:walk_one_cm": 3}}});
+        stats.replace(super::Stats::from_json(&json).values);
+        let (custom, mined) = ("minecraft:custom".to_owned(), "minecraft:mined".to_owned());
+        let (jump, stone) = ("minecraft:jump".to_owned(), "minecraft:stone".to_owned());
+        assert_eq!(
+            stats.events,
+            [
+                (custom.clone(), jump.clone(), None),
+                (custom, jump, Some(9)),
+                (mined, stone, None),
+            ]
+        );
     }
 }
