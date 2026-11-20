@@ -246,7 +246,8 @@ The mod SDK of a Nightly is built inside `nightly build`, for the exact main com
 
 `prebuilt-game.yml` is the same SDK build/publication route by hand. It defaults to a full dry run; branch runs are
 always dry. Dry runs rebuild all four legs, use a throwaway signing key, and publish no SDK tag or release. Nightly
-dry runs consume that run's validated index without requiring a published SDK.
+dry runs consume that run's validated index without requiring a published SDK, and run beside a real Nightly in a
+concurrency group of their own ([When it releases](#when-it-releases)).
 
 ```sh
 gh workflow run prebuilt-game.yml --ref main                         # full dry run
@@ -351,9 +352,13 @@ commits) since the commit the published Nightly was built on:
 - A pull request labelled `skip-release` (work players don't see) doesn't count and isn't listed in the notes.
 - An open issue labelled `release-blocker` holds every Nightly, forced ones too (`held by release-blocker #N`);
   `nightly build` checks again right before publishing.
-- One Nightly build at a time: while one runs or waits, the train starts none. At most 12 builds a UTC day (the
-  reviewers' `/nightly` builds count): past that the train waits for the next day, except for `release-now` and
-  `force=true`.
+- One Nightly build at a time: while one runs or waits, dry runs included, the train starts none. Real builds share
+  the concurrency group `nightly-build`, which never cancels a running build. A dry run (`dry_run`, or any dispatch
+  off main) gets a group of its own, `nightly-build-dry-<run id>`: it never holds up a real cut (the rerun of its
+  `sdk-publish` jobs queues in the shared group) nor replaces it or another dry run as the waiting run, so a dry run
+  can start while a cut waits. The run's name says `(dry run)` or `(real)` and the `base` it was given. At most 12
+  builds a UTC day (the reviewers' `/nightly` builds count): past that the train waits for the next day, except for
+  `release-now` and `force=true`.
 - A scheduled run takes main's newest commit where `checks` and `parity-main` passed (a later failed
   parity-main batch doesn't change it); after a run of either, the commit it passed on, once both passed there.
 

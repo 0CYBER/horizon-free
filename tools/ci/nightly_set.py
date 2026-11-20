@@ -595,6 +595,13 @@ def answer(repo: str, issue: str, text: str) -> None:
     gh("api", f"repos/{repo}/issues/{issue}/comments", "-f", f"body=🤖 Nightly: {text}")
 
 
+def title_request(title: str) -> str:
+    """The request id in a `nightly build` run's name, or ''. It sits right after the mode (nightly-build.yml's
+    run-name), before the free-form base, so a base that mentions another request's id is never taken for it."""
+    match = re.match(r"nightly build \((?:dry run|real)\) \(request ([^)\s]+)\)", title)
+    return match.group(1) if match else ""
+
+
 def dispatch(repo: str, issue: str, request: str, dry_run: list[dict] | None) -> str:
     """Starts `nightly build` for this request; returns its run's URL once GitHub lists it."""
     args = ["workflow", "run", "nightly-build.yml", "--repo", repo, "--ref", "main", "-f", f"issue={issue}",
@@ -607,7 +614,7 @@ def dispatch(repo: str, issue: str, request: str, dry_run: list[dict] | None) ->
         runs = json.loads(gh("run", "list", "--repo", repo, "--workflow", "nightly-build.yml", "--event",
                              "workflow_dispatch", "--limit", "20", "--json", "displayTitle,url", check=False) or "[]")
         for r in runs:
-            if request in r["displayTitle"]:
+            if title_request(r["displayTitle"]) == request:
                 return r["url"]
     return f"https://github.com/{repo}/actions/workflows/nightly-build.yml"
 

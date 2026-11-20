@@ -540,12 +540,31 @@ def published_nightly():
     return json.loads(out) if out.strip() else None
 
 
-def nightly_building():
-    """The run of `nightly build` under way or waiting, if any: the train starts no second one."""
-    runs = gh_json("run", "list", "--repo", REPO, "--workflow", NIGHTLY_WORKFLOW, "--limit", "10",
-                   "--json", "databaseId,status")
-    return next((entry["databaseId"] for entry in runs if entry["status"] in ("queued", "in_progress", "waiting",
-                                                                              "pending", "requested")), None)
+# How far back `nightly_building` looks, and the most runs it lists. GitHub allows a run to be rerun for 30 days and
+# the rerun keeps the run's creation date (a real cut's `sdk-publish` rerun after parity-main passes), so any run
+# created in the last 35 days may be active again. GitHub returns at most 1000 runs for a filtered listing; a full
+# one counts as building.
+NIGHTLY_ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
+NIGHTLY_LOOKBACK_DAYS = 35
+NIGHTLY_LISTING = 1000
+
+
+def nightly_building(now):
+    """The run of `nightly build` under way or waiting, if any: the train starts no second one. One listing of every
+    run created in the lookback, so a run moving between states is seen in exactly one of them, and newer finished
+    runs (dry runs no longer wait in line) can't hide an active one. A full listing may be cut off: it counts as
+    building. A dry run counts too: its own concurrency group, but its macOS jobs share the Mac's one nightly
+    runner."""
+    since = (now - dt.timedelta(days=NIGHTLY_LOOKBACK_DAYS)).date().isoformat()
+    runs = gh_json("run", "list", "--repo", REPO, "--workflow", NIGHTLY_WORKFLOW, "--created", f">={since}",
+                   "--limit", str(NIGHTLY_LISTING), "--json", "databaseId,status")
+    if not isinstance(runs, list):
+        # gh prints `[]` for no runs; blank or anything else is a listing that failed, never "nothing is building".
+        raise SystemExit(f"gh run list {NIGHTLY_WORKFLOW}: no run listing ({runs!r})")
+    active = next((entry["databaseId"] for entry in runs if entry["status"] in NIGHTLY_ACTIVE), None)
+    if active is None and len(runs) >= NIGHTLY_LISTING:
+        return f"unknown: {len(runs)} runs since {since} fill the listing, so one may be hidden"
+    return active
 
 
 def nightly_builds_today(today):
@@ -697,7 +716,7 @@ def main():
         release, reason = False, f"waiting for checks and parity-main to pass on {head[:9]}"
     urgent = False
     if args.kind == "game":
-        release, reason, urgent = nightly_decision(release, reason, prs, nightly_building(),
+        release, reason, urgent = nightly_decision(release, reason, prs, nightly_building(now),
                                                    len(nightly_builds_today(now.date().isoformat())), args.force)
     minor = any("feature" in pr["labels"] for pr in prs if pr["paths"])
     tag = "nightly" if args.kind == "game" else next_launcher_tag(tags, minor, line)

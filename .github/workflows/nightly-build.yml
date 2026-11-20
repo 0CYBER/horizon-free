@@ -1,5 +1,5 @@
 name: nightly build
-run-name: nightly build${{ inputs.request && format(' (request {0})', inputs.request) || '' }}
+run-name: nightly build${{ (github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main')) && ' (dry run)' || ' (real)' }}${{ inputs.request && format(' (request {0})', inputs.request) || '' }}${{ inputs.base && format(' on {0}', inputs.base) || '' }}
 # The Nightly, the only build Horizon ships since 2026-10-28 (docs/release-flow.md "Nightly"; Ludovic). When the batch
 # train decides (release.yml, with the commit as `base`), once a night, and when a trusted
 # reviewer asks (`/nightly 2640 2642`, nightly-command.yml), it builds main plus the pull requests the reviewers
@@ -67,9 +67,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  # One build at a time. A newer request replaces one still waiting: it builds the set as it is by then, so no pick
-  # is lost.
-  group: nightly-build
+  # One real build at a time. A newer request replaces one still waiting: it builds the set as it is by then, so no
+  # pick is lost. A dry run (the `mode` step's rule: `dry_run`, or any dispatch off main) publishes nothing, so each
+  # gets a group of its own: it never holds up a real cut (whose `sdk-publish` rerun queues in the shared group) and
+  # never replaces it or another dry run as the waiting run (#18779).
+  group: nightly-build${{ (github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main')) && format('-dry-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 jobs:
   pick:

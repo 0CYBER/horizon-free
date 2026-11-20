@@ -324,6 +324,53 @@ class PruneBuildsTests(unittest.TestCase):
         self.assertIn("GITHUB_STEP_SUMMARY", step)
 
 
+class ConcurrencyTests(unittest.TestCase):
+    """A dry run never waits for, holds up or replaces a real cut or another dry run (#18779)."""
+
+    def setUp(self):
+        self.build = (WORKFLOWS / "nightly-build.yml").read_text()
+        # The rule `pick` publishes by: a dry run is the `dry_run` input or any dispatch off main.
+        mode = self.build.split("\n  pick:", 1)[1].split("- id: mode", 1)[1].split("- id: pick", 1)[0]
+        self.dry = mode.split('run: echo "dry_run=${{ ', 1)[1].split(" }}", 1)[0]
+
+    def test_real_runs_keep_the_shared_group_and_dry_runs_get_one_each(self):
+        concurrency = self.build.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
+        settings = [line.strip() for line in concurrency.splitlines() if not line.strip().startswith("#")]
+        # Not a dry run: the suffix is '', so the group is `nightly-build` as before, never cancelling.
+        self.assertEqual(settings, [
+            f"group: nightly-build${{{{ ({self.dry}) && format('-dry-{{0}}', github.run_id) || '' }}}}",
+            "cancel-in-progress: false",
+        ])
+        # Written out, so a rule changed in all three places at once still fails here.
+        self.assertEqual(self.dry, "github.event_name == 'workflow_dispatch' && "
+                                   "(inputs.dry_run || github.ref != 'refs/heads/main')")
+
+    def test_the_run_name_says_dry_run_or_real_and_keeps_the_request(self):
+        run_name = self.build.split("\nrun-name: ", 1)[1].split("\n", 1)[0]
+        # nightly_set.dispatch finds the run it started by the request id right after the mode, before the free-form
+        # base (nightly_set.title_request).
+        self.assertEqual(run_name, "nightly build"
+                         f"${{{{ ({self.dry}) && ' (dry run)' || ' (real)' }}}}"
+                         "${{ inputs.request && format(' (request {0})', inputs.request) || '' }}"
+                         "${{ inputs.base && format(' on {0}', inputs.base) || '' }}")
+
+    def test_dispatch_finds_its_own_run_not_one_whose_base_names_its_request(self):
+        runs = [
+            {"displayTitle": "nightly build (real) on 2640-1795140000 (request 2640-1795140000)", "url": "u/base"},
+            {"displayTitle": "nightly build (dry run) on 2640-1795140000", "url": "u/no-request"},
+            {"displayTitle": "nightly build (real) (request 2640-17951400001)", "url": "u/longer-id"},
+            {"displayTitle": "nightly build (dry run) (request 2640-1795140000) on abc", "url": "u/ours"},
+        ]
+
+        def gh(*args, check=True):
+            return json.dumps(runs) if args[:2] == ("run", "list") else ""
+
+        with mock.patch.object(ns, "gh", side_effect=gh), mock.patch.object(ns.time, "sleep"):
+            self.assertEqual(ns.dispatch("o/r", "2640", "2640-1795140000", []), "u/ours")
+        self.assertEqual(ns.title_request("nightly build (real) (request 7-1) on 2640-1795140000"), "7-1")
+        self.assertEqual(ns.title_request("nightly build (real) on (request 7-1)"), "")
+
+
 
 class SdkPairTests(unittest.TestCase):
     def test_only_complete_published_exact_pair_is_eligible(self):
