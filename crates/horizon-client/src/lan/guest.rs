@@ -323,6 +323,8 @@ pub struct Guest {
     pub replay: Option<Box<super::prediction::Replay>>,
     /// What the server sent this tick that changes how the client moves (only while it records).
     pub changes: std::sync::Mutex<Vec<Change>>,
+    /// The pings sent to it that its client has not answered (`player_pong` hears only those).
+    pub pings: std::sync::Mutex<super::ping_ledger::PingLedger>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -779,6 +781,7 @@ impl Guest {
             client_sprinting: false,
             replay: None,
             changes: Default::default(),
+            pings: Default::default(),
             moved: false,
             tab_hidden: Default::default(),
             loaded: false,
@@ -898,6 +901,12 @@ impl Guest {
         }
         if self.record.is_some() {
             self.note_change(packet);
+        }
+        if let play::Clientbound::Ping(p) = packet {
+            self.pings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .sent(p.id, std::time::Instant::now());
         }
         match packet.try_encode() {
             Ok(body) => self.sender.send(body),

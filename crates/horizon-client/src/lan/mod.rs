@@ -43,6 +43,7 @@ pub mod menu_extra_rev;
 pub mod packet_counts;
 #[cfg(test)]
 mod payload_bounds_tests;
+pub mod ping_ledger;
 pub mod player_shown;
 pub mod playerdata;
 pub mod prediction;
