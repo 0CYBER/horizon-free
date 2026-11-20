@@ -154,6 +154,10 @@ horizon-extras = ["friends"]
 friends = ["dep:horizon-friends"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace", "horizon-client-lib/rng-trace"]
+# horizon-client-lib's own `default` (only `audio` and `controllers`, which `audio` and `controllers` above turn on
+# anyway): what `-p horizon-client-lib` on the command line turns on. horizon-game's default asks for it, so the game
+# built with and without `-p horizon-client-lib` (parity's two selections) is one build, not two.
+client-lib-default = ["horizon-client-lib/default"]
 # Rust's allocations go to the system heap instead of mimalloc, where heap profilers that replace
 # malloc (heaptrack, valgrind's massif) see them. Also the Windows and macOS prebuilt archives' allocator
 # (tools/prebuilt_game.py, arismoko/horizon#2394, arismoko/horizon#3877): there std's shared library keeps its own allocator. Otherwise mimalloc is faster.

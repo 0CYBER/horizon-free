@@ -24,7 +24,8 @@ path = "src/main.rs"
 test = false
 
 [features]
-default = ["audio", "controllers", "horizon-extras"]
+# horizon-client/client-lib-default: one build of the game whether or not horizon-client-lib is also named.
+default = ["audio", "controllers", "horizon-extras", "horizon-client/client-lib-default"]
 audio = ["horizon-client/audio"]
 controllers = ["horizon-client/controllers"]
 horizon-extras = ["horizon-client/horizon-extras"]
