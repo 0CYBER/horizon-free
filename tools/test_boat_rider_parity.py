@@ -8,19 +8,17 @@ handler, object ticker, ride tick, outgoing vehicle packets and item-use gate in
 an isolated headless process with a memory connection. No desktop input is used.
 
 The contract compares ownership, packet counts, interpolation dispatch, hands,
-angular/vertical motion and every non-authoritative velocity component exactly.
-Authoritative horizontal motion remains in the raw outputs as a diagnostic: the
-unchanged Rust sin/cos steering kernel differs from vanilla Mth lookup (observed
-maximum 2.164393663406372e-6 here). This is not a full trajectory comparison.
+the boat's spin and every velocity component exactly, so the steering push
+(controlBoat's Mth.sin/Mth.cos table lookup) of a turning, paddling boat is
+compared over up to four ticks. The oracle's move is a no-op, so this is not a
+full trajectory comparison.
 """
 import argparse
-import copy
 import itertools
 import json
 import os
 from pathlib import Path
 import subprocess
-import struct
 import tempfile
 try:
     from . import lab, test_rust_parity as base, test_model_baking_parity as baking
@@ -62,35 +60,11 @@ def cases():
 
 
 
-def contract(row):
-    """Project the same authority-based contract on either raw implementation."""
-    result = copy.deepcopy(row)
-    for step in result['steps']:
-        if step['controlled']:
-            step['velocity'] = [None, step['velocity'][1], None]
-    return result
-
-
 def compare_outputs(inputs, native, rust):
     assert len(native) == len(rust) == len(inputs)
-    errors = [(case['name'], n, r) for case, n, r in zip(inputs, native, rust)
-              if contract(n) != contract(r)]
-    different_cases = set()
-    deltas = []
     for case, n, r in zip(inputs, native, rust):
         assert len(n['steps']) == len(r['steps']) == len(case['first'])
-        for ns, rs in zip(n['steps'], r['steps']):
-            if ns['controlled'] and rs['controlled']:
-                for axis in (0, 2):
-                    a, b = ns['velocity'][axis], rs['velocity'][axis]
-                    if a != b:
-                        different_cases.add(case['name'])
-                        av = struct.unpack('>d', bytes.fromhex(a))[0]
-                        bv = struct.unpack('>d', bytes.fromhex(b))[0]
-                        deltas.append(abs(av - bv))
-    return errors, dict(cases=len(different_cases), components=len(deltas),
-                        max_absolute_delta=max(deltas, default=0.0),
-                        compared=False, reason='unchanged authoritative sin/cos steering kernel')
+    return [(case['name'], n, r) for case, n, r in zip(inputs, native, rust) if n != r]
 
 
 def main():
@@ -141,17 +115,16 @@ def main():
                      stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
     native = json.loads((work / 'vanilla.json').read_text(encoding='utf-8'))
     rust = json.loads((work / 'rust.json').read_text(encoding='utf-8'))
-    errors, horizontal = compare_outputs(inputs, native, rust)
+    errors = compare_outputs(inputs, native, rust)
     if errors:
         raise AssertionError(f'{len(errors)}/{len(inputs)} boat rider cases differ: {errors[:2]}')
     assert hashes == {name: lab.digest(lab.ROOT / name, 'sha256') for name in SOURCES}, 'sources changed during validation'
     ticks = sum(len(case['first']) for case in inputs)
     lab.write_json(report, dict(minecraft=lock['minecraft']['version'], cases=len(inputs), ticks=ticks,
                                output_sha256=lab.digest(work / 'rust.json', 'sha256'),
-                               source_hashes=hashes, authoritative_horizontal_diagnostic=horizontal,
+                               source_hashes=hashes,
                                scope=__doc__))
-    print(f'boat rider: {len(inputs)}/{len(inputs)} authority cases and {ticks} tick states match vanilla; '
-          f'authoritative horizontal diagnostic: {horizontal}')
+    print(f'boat rider: {len(inputs)}/{len(inputs)} authority cases and {ticks} tick states match vanilla')
 
 
 if __name__ == '__main__':

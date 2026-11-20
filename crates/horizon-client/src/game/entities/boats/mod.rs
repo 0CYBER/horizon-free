@@ -25,13 +25,22 @@ use horizon_client::{
     motion::{BubbleColumn, RiddenBoat, bubble_column_at},
 };
 use horizon_core::{
-    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape, trig},
     position::BlockPos,
     random::RandomSource,
 };
 use horizon_world::collision_context::CollisionContext;
 use std::{f32::consts::PI, sync::Arc};
 
+/// The push the paddles give along the boat's yaw (`tick_boat`'s
+/// controlBoat): the sine and cosine of the yaw in float radians from `Mth`'s
+/// sine table, times the acceleration as floats, widened to double.
+fn paddle_push(yaw: f32, acceleration: f32) -> (f64, f64) {
+    (
+        f64::from(trig::sin(f64::from(-yaw * trig::DEG_TO_RAD)) * acceleration),
+        f64::from(trig::cos(f64::from(yaw * trig::DEG_TO_RAD)) * acceleration),
+    )
+}
 /// What `PowderSnowBlock.entityInside` passes to `makeStuckInBlock`.
 fn powder_snow_stuck() -> Vec3 {
     Vec3::new(f64::from(0.9_f32), 1.5, f64::from(0.9_f32))
@@ -469,9 +478,9 @@ impl Game<'_> {
             if down {
                 acceleration -= 0.005;
             }
-            let r = b.yaw.to_radians();
-            b.velocity.x += f64::from((-r).sin() * acceleration);
-            b.velocity.z += f64::from(r.cos() * acceleration);
+            let (x, z) = paddle_push(b.yaw, acceleration);
+            b.velocity.x += x;
+            b.velocity.z += z;
             b.paddling = [right && !left || up, left && !right || up];
         }
         // Entity.move: collisions zero the blocked components, the world border's
@@ -1789,6 +1798,23 @@ mod tests {
 
     fn boat() -> Boat {
         Boat::new(1, Arc::from("oak"), Vec3::ZERO, 0.0)
+    }
+
+    /// `controlBoat`'s push with `Mth`'s sine table (`(float) Math.sin(i /
+    /// 10430.378350470453)`, indexed by `(long) (radians * 10430.378350470453)
+    /// & 65535`) and float products. Expected values worked out apart from
+    /// Horizon, in Python with float32 rounding; the platform's sine gives
+    /// -0.011894993484020233 for the first x.
+    #[test]
+    fn paddling_pushes_along_the_sine_table() {
+        for (yaw, acceleration, push) in [
+            (17.3, 0.04, (-0.011893643997609615, 0.03819085285067558)),
+            (-123.45, 0.04, (0.03337550163269043, -0.022047126665711403)),
+            (250.0, 0.04, (0.03758755698800087, -0.013681206852197647)),
+            (-6.736, 0.005, (0.0005863539990969002, 0.004965443629771471)),
+        ] {
+            assert_eq!(paddle_push(yaw, acceleration), push, "yaw {yaw}");
+        }
     }
 
     #[test]
