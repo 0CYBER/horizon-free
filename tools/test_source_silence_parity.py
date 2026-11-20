@@ -43,8 +43,10 @@ def main():
             HORIZON_SOURCE_SILENCE_OUTPUT=scratch,
             CARGO_BUILD_JOBS=os.environ.get('CARGO_BUILD_JOBS', '2'),
             RUST_TEST_THREADS='2')
+        # The limit covers the build, and other harnesses' builds holding the shared target directory's lock.
         h.run_logged(['cargo', 'test', '--locked', '-p', 'horizon-client', '--lib',
-            'game::tnt::tests::silent_', '--', '--nocapture'], build, 'rust', env=env)
+            'game::tnt::tests::silent_', '--', '--ignored', '--nocapture'], build, 'rust',
+            timeout=3600, env=env)
         rust = build / 'rust.txt'
         rust.write_text(''.join((Path(scratch) / f'{name}.txt').read_text()
             for name in ('explosion', 'potions', 'bottles')), encoding='utf-8')

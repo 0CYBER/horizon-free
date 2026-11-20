@@ -101,14 +101,12 @@
   "enchantment_map_validation": "#18133: an emptied enchantments component stays as {}",
   "environment_render": "#18133: probe prints sky_light_level/15",
   "fishing_rng": "#18133: test fixture leaves 5 hooks extracted (UnbalancedPass)",
-  "lan_auth": "#18133: harness runs a daily-ignored test without --include-ignored",
-  "level_environment_reads": "#18133: harness expects 5 passed tests, 6 pass",
+  "lan_auth": "#18133: cargo test timed out at 180 s, its build included, in parity run 44649713430; the 3600 s limit has no Mac run yet",
   "living_damage": "#18133: NaN vs +Inf in a non-finite damage record",
   "menu_click": "#18133: writable_book_content:{pages:[]} and damage:0 kept",
   "mob_ai": "#18133: enderman hurt twice in a tick teleports differently",
   "numeric_damage_component": "#18133: damage:0 kept and readable by /data",
   "portal_cooldown": "#18133: cooldown test fails; Rust log not in the artifact",
-  "raid_village": "#18133: NoAI write changes live POI inputs before the comparison",
   "recipe": "#18133: repaired and dyed items keep damage:0/max_damage",
   "registered_player_combat": "#18133: NaN where vanilla has Float.MAX_VALUE",
   "save_roundtrip": "#18133: level.dat gains fml and horizon keys",
@@ -118,6 +116,6 @@
   "server_player_combat": "#18133: NaN where vanilla has Float.MAX_VALUE",
   "server_player_damage": "#18133: an `updated` record missing at line 249973",
   "server_resource_pack": "#18133: extra config custom_payload horizon:payloads",
-  "source_silence": "#18133: Rust run writes no explosion.txt"
+  "source_silence": "#18133: cargo test timed out at 900 s, its build included, in parity run 44649713430; the 3600 s limit has no Mac run yet"
  }
 }

@@ -128,6 +128,13 @@ def validate_java_inputs(build, script):
             raise RuntimeError('Java NoAI write changed live villager identity/health/home/position')
 
 
+def poi_type(debug):
+    """The innermost name of a Rust `Option` POI print: `Some(Vanilla(Home))` and `Some(Home)` -> `Home`."""
+    import re
+    match=re.fullmatch(r'Some\((?:\w+\()*(\w+)\)+',debug or '')
+    return match and match.group(1)
+
+
 def validate_native_inputs(build, script):
     """The observer exposes production inputs, not a newly computed occupied-POI answer."""
     import json
@@ -145,5 +152,5 @@ def validate_native_inputs(build, script):
         a,b=before['villagers'][i-1],after['villagers'][i-1]
         if a['noai'] or not b['noai'] or any(a[k]!=b[k] for k in ['uuid','type','health','pos','home']):
             raise RuntimeError('Native NoAI write changed actual villager identity/health/home/position')
-        if before['live_poi']!='Some(Home)' or after['live_poi']!='Some(Home)' or before['claimed_pois']!=after['claimed_pois']:
+        if poi_type(before['live_poi'])!='Home' or poi_type(after['live_poi'])!='Home' or before['claimed_pois']!=after['claimed_pois']:
             raise RuntimeError('Native NoAI write changed existing live POI/claimed-position inputs')

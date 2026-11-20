@@ -23,9 +23,11 @@ def main():
     classes, dependencies, oracle = oh.compile_oracle(
         build, 'VanillaLanAuthOracle', jars, client_libraries(), lock['minecraft']['java_major'])
     oh.java_run(build, classes, dependencies, 'VanillaLanAuthOracle', [], 'vanilla')
+    # The limit covers the build, and other harnesses' builds holding the shared target directory's lock.
     oh.run_logged(['cargo', 'test', '-p', 'horizon-client-lib', '--lib',
-                   'net::tests::lan_login_continues_after_authentication_failure', '--', '--nocapture'],
-                  build, 'rust', timeout=180)
+                   'net::tests::lan_login_continues_after_authentication_failure', '--', '--ignored',
+                   '--exact', '--nocapture'],
+                  build, 'rust', timeout=3600)
     pattern = r'lan_auth=(LAN|OTHER):(true|false):(true|false)'
     expected = re.findall(pattern, (build / 'vanilla.log').read_text(encoding='utf-8'))
     actual = re.findall(pattern, (build / 'rust.log').read_text(encoding='utf-8'))
