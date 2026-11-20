@@ -99,7 +99,7 @@
   "dispenser": "#18133: container-entity slot0 and sapling-growth `set` records missing",
   "dragon_render": "#18133: dragon tests exit 101; Rust log not in the artifact",
   "enchantment_map_validation": "#18133: an emptied enchantments component stays as {}",
-  "environment_render": "#18133: probe prints sky_light_level/15",
+  "environment_render": "#18727: the probe now prints sky_light_level on vanilla's 0 to 15 scale; no Mac pass yet (parity run 44650421940 hit the 3-hour limit after 5 of 353 harnesses)",
   "fishing_rng": "#18133: test fixture leaves 5 hooks extracted (UnbalancedPass)",
   "lan_auth": "#18133: cargo test timed out at 180 s, its build included, in parity run 44649713430; the 3600 s limit has no Mac run yet",
   "living_damage": "#18133: NaN vs +Inf in a non-finite damage record",

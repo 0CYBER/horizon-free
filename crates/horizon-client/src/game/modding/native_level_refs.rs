@@ -2967,6 +2967,14 @@ mod environment_read_tests {
                 Some(11),
                 "parked level keeps its dimension's sky"
             );
+            // The End's own branch of Game::sky_darken: the vanilla vectors record 0 at every time.
+            game.enter_level(Dim::End).unwrap();
+            for time in [0, 1234, 6000, 12500, 18000] {
+                game.world.day_time = time;
+                assert_eq!(game.sky_darken(), 0, "the End at {time}");
+            }
+            game.enter_level(Dim::Overworld).unwrap();
+            game.world.day_time = 6000;
             let stale = LevelRef::new(
                 WorldEpoch::new(overworld.epoch().get() + 1),
                 overworld.dimension(),

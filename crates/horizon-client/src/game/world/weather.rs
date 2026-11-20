@@ -32,15 +32,13 @@ impl Game<'_> {
             return 11;
         }
         if self.dim == Dim::End {
-            let sky = self
-                .res
-                .end_environment()
-                .sample(&horizon_client::environment::Sample {
-                    day_time: self.world.day_time,
-                    ..Default::default()
-                });
-            // Level.updateSkyBrightness truncates (`(int)`), see `environment::sky_darken`.
-            return (15.0 - 15.0 * sky.sky_light_level) as i32;
+            // No weather in the End; Level.updateSkyBrightness truncates the raw level there too.
+            return horizon_client::environment::sky_darken(
+                self.res.end_environment(),
+                self.world.day_time,
+                0.0,
+                0.0,
+            );
         }
         let (rain, thunder) = self.weather_levels(1.0);
         // Sampled once per (dimension, time, weather): every mob asks each tick.
