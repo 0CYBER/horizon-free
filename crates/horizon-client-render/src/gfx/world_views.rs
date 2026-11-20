@@ -351,7 +351,10 @@ impl Renderer {
             None => {
                 pass.set_pipeline(flipped.map_or(&self.translucent, |f| &f.translucent));
                 pass.set_vertex_buffer(1, self.instances.slice(..));
-                self.draw_sections(&mut pass, &self.indirect, 0, translucent, end - translucent);
+                let (first, count) = (translucent, end - translucent);
+                // `flipped`'s translucent pipeline takes the vertex buffer.
+                let pulled = flipped.is_none() && self.translucent_pulled();
+                self.draw_sections_from(&mut pass, &self.indirect, 0, first, count, pulled);
             }
         }
     }
