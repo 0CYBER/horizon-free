@@ -831,6 +831,42 @@ impl crate::level::LevelAccess for ShapeLevel<'_, '_> {
     fn game_time(&self) -> i64 {
         0
     }
+    /// The parts' `canSurvive` answer for `state` at `pos`, asked before the block's own rule
+    /// exactly as the live game's level asks it: a mod's answer replaces the rule, so a feature
+    /// and a hand placement agree (#17943).
+    fn before_can_survive(&self, pos: BlockPos, state: BlockStateId, survives: &mut Option<bool>) {
+        *survives = crate::native_worldgen_hooks::can_survive(state, [pos.x, pos.y, pos.z]);
+    }
+    /// The parts of the soil `ground`'s answer for the plant `state` above it, asked before the
+    /// plant's own `mayPlaceOn`, as the live game's level asks it.
+    fn before_can_sustain_plant(
+        &self,
+        state: BlockStateId,
+        ground: BlockStateId,
+        ground_pos: BlockPos,
+        sustains: &mut Option<bool>,
+    ) {
+        *sustains = crate::native_worldgen_hooks::can_sustain_plant(
+            state,
+            ground,
+            [ground_pos.x, ground_pos.y, ground_pos.z],
+        );
+    }
+    /// The parts' `mayPlaceOn` answer for the plant `state` on `ground` at `ground_pos`, asked
+    /// where the plant's own rule would be.
+    fn before_may_place_on(
+        &self,
+        state: BlockStateId,
+        ground: BlockStateId,
+        ground_pos: BlockPos,
+        may: &mut Option<bool>,
+    ) {
+        *may = crate::native_worldgen_hooks::may_place_on(
+            state,
+            ground,
+            [ground_pos.x, ground_pos.y, ground_pos.z],
+        );
+    }
     /// Lighting has not run during FEATURES: the light engine has no data for
     /// these chunks, so sky light reads zero too (MushroomBlock.canSurvive).
     fn sky_light(&self, _: BlockPos) -> i32 {

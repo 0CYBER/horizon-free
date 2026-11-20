@@ -397,6 +397,9 @@ fn publish(game: &mut crate::game::Game<'_>) {
             alter_ground: crate::game::api_values::alter_ground,
             on_tree_grow: crate::game::native_tree_grow::on_tree_grow,
             rotate: super::rotate,
+            can_survive: crate::game::native_survival::can_survive_v2,
+            may_place_on: crate::game::native_survival::may_place_on_v2,
+            can_sustain_plant: crate::game::native_survival::can_sustain_plant_v2,
             feature: native_worldgen_parts::feature,
         },
     );

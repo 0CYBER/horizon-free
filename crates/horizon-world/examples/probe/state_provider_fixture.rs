@@ -461,6 +461,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &survival_definitions,
         &built.tags,
         &fluid_tags.tags,
+        // These probes run with no worldgen hooks installed, so no state's parts answer
+        // and the ground question changes nothing here.
+        BTreeSet::new(),
     )?;
     let bindings = StateProviderBindings::new(&registry, integers, &built.tags)?
         .with_block_properties(&properties)?

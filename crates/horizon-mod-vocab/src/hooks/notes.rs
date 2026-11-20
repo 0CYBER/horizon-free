@@ -1750,9 +1750,13 @@ still go on each event or registrar.
   drops when a neighbour changes), and wherever else vanilla asks. `state` may not be in the world yet, so decide from
   `state`. `may_place_on(dimension, state, ground, ground_pos, may)` answers `VegetationBlock.mayPlaceOn` for a
   mod plant (a block whose template is a vanilla plant, such as a crop): the blocks it can stand on, which its
-  template's `canSurvive` asks, so it is refused elsewhere and pops off when its ground changes. Answer only for your
-  own blocks and leave the answer empty otherwise; the level is read-only. Both run on every shape update of such a
-  block: keep them short.
+  template's `canSurvive` asks, so it is refused elsewhere and pops off when its ground changes.
+  `can_sustain_plant(dimension, state, ground, ground_pos, sustains)` is the soil's half of that question, asked
+  before the plant's `may_place_on`: an answer there is the plant's. Answer only for your own blocks and leave the
+  answer empty otherwise; the level is read-only. All three run on every shape update of such a block: keep them
+  short. `can_survive_v2`, `may_place_on_v2` and `can_sustain_plant_v2` are the same three questions in world
+  generation: a feature placing a block reads the server's tables instead of a level, and asks the soil before the
+  plant as the live game does.
 
 - Drawing mod block entities on the client. `block_entity_submit(pos, block, state, entity, draw)` runs once a frame
   for each mod block entity in view, as vanilla's `BlockEntityRenderer.submit` does (within its view distance, 64 blocks

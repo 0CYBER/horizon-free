@@ -1,7 +1,7 @@
 use horizon_core::geometry::VoxelShape;
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, BufRead, Write},
     path::Path,
@@ -224,6 +224,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &definitions,
         &tags.tags,
         &fluid_tags.tags,
+        // These probes run with no worldgen hooks installed, so no state's parts answer
+        // and the ground question changes nothing here.
+        BTreeSet::new(),
     )?;
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
     for line in io::BufReader::new(fs::File::open(dir.join("inputs.txt"))?).lines() {

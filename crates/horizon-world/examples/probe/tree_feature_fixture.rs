@@ -605,6 +605,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &survival_definitions,
         &tags.tags,
         &fluid_tags.tags,
+        // These probes run with no worldgen hooks installed, so no state's parts answer
+        // and the ground question changes nothing here.
+        BTreeSet::new(),
     )?;
     let chest = registry.default_state("minecraft:chest").unwrap();
     let vegetation: BTreeSet<BlockStateId> = ["minecraft:short_grass", "minecraft:fern"]

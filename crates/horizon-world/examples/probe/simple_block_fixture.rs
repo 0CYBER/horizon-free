@@ -5,7 +5,7 @@ use horizon_core::{
 };
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, BufRead, Write},
     path::Path,
@@ -674,6 +674,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &definitions,
         &tags.tags,
         &fluid_tags.tags,
+        // These probes run with no worldgen hooks installed, so no state's parts answer
+        // and the ground question changes nothing here.
+        BTreeSet::new(),
     )?;
     let facts: Value = serde_json::from_str(&fs::read_to_string(dir.join("facts.json"))?)?;
     let integers: std::collections::BTreeSet<(String, String)> = facts["integers"]

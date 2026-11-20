@@ -359,14 +359,33 @@ pub fn generate_points(root: &Path, out_dir: &Path) -> Result<(), String> {
     })
 }
 
+/// Every input the two point generations read, told to Cargo: the game module's folder and its
+/// root file, the marked crates' files, the vocabulary whose declarations decide which signatures
+/// have an API record, and the staging stamp.
+///
+/// One list for both, because a build script Cargo leaves stale for one crate but reruns for the
+/// other splits the two halves of a dispatch: a game module file the source gained put its records
+/// in `horizon-mod-points`, which watches the folder, while `horizon-engine-slots` kept a
+/// generation without them and failed to compile (arismoko/horizon#17943).
+fn track_points(root: &Path) -> Result<(), String> {
+    let src = root.join("crates/horizon-client/src");
+    crate::rerun_if_changed(&src.join("game.rs").display());
+    // The folder as well as its files: a module file the source gained has no mtime to compare
+    // against the generation that came before it.
+    crate::rerun_if_changed(&src.join("game").display());
+    crate::rerun_if_changed(&root.join("crates/horizon-mod-vocab/src").display());
+    for path in super::points::tracked(root)? {
+        crate::rerun_if_changed(&path.display());
+    }
+    crate::rerun_if_staged(root);
+    Ok(())
+}
+
 /// Generate the engine-owned point vocabulary and typed dispatch.
 pub fn generate_engine_points(root: &Path, out_dir: &Path) -> Result<(), String> {
     crate::incremental::with_cache(out_dir, || {
         crate::source::with_walk_cache(|| {
-            for path in super::points::tracked(root)? {
-                crate::rerun_if_changed(&path.display());
-            }
-            crate::rerun_if_staged(root);
+            track_points(root)?;
             let points = super::points::game_points(root)?;
             println!("cargo:rerun-if-env-changed=HORIZON_POINT_NAMES");
             let selected = std::env::var("HORIZON_POINT_NAMES")
@@ -412,12 +431,7 @@ pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), S
     let mut phase = |name: &str| {
         timing.push_str(&format!("{name} {:.2}s\n", started.elapsed().as_secs_f64()));
     };
-    let src = root.join("crates/horizon-client/src");
-    crate::rerun_if_changed(&src.join("game.rs").display());
-    crate::rerun_if_changed(&src.join("game").display());
-    for path in super::points::tracked(root)? {
-        crate::rerun_if_changed(&path.display());
-    }
+    track_points(root)?;
     phase("tracked");
     println!("cargo:rerun-if-env-changed=HORIZON_POINT_NAMES");
     let selected = std::env::var("HORIZON_POINT_NAMES")
@@ -428,8 +442,7 @@ pub(super) fn generate_points_inner(root: &Path, out_dir: &Path) -> Result<(), S
         })
         .transpose()?;
     // Only a staged copy compiles the points' sites into the game; the wasm host's listener
-    // fixture brings its own.
-    crate::rerun_if_staged(root);
+    // fixture brings its own. `track_points` watches its stamp.
     let staged =
         root.join(".horizon-source-staged").is_file() || cfg!(feature = "listener-fixture");
     let points = super::points::game_points(root)?;
@@ -500,4 +513,60 @@ pub(super) fn track(root: &Path, all_game: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A game module file the source gained has to reach both generations: Cargo rerunning only
+    /// `horizon-mod-points` put that file's records in it while `horizon-engine-slots` kept a
+    /// generation without the types they re-export (arismoko/horizon#17943).
+    #[test]
+    fn both_point_generations_watch_the_game_folder_and_agree_on_their_sources() {
+        let root = std::env::temp_dir().join(format!("horizon-point-watch-{}", std::process::id()));
+        let put = |path: &str, text: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        put("Cargo.toml", "[workspace]\n");
+        put(
+            "crates/horizon-client/Cargo.toml",
+            "[package]\nname = 'horizon-client'\n",
+        );
+        put(
+            "crates/horizon-engine-slots/Cargo.toml",
+            "[package]\nname = 'horizon-engine-slots'\n",
+        );
+        put("crates/horizon-client/src/lib.rs", "mod game;\n");
+        put("crates/horizon-client/src/game.rs", "mod gained;\n");
+        put("crates/horizon-client/src/game/gained.rs", "");
+        let watched = |name: &str, generate: fn(&Path, &Path) -> Result<(), String>| {
+            let out = root.join(name);
+            fs::create_dir_all(&out).unwrap();
+            crate::CAPTURED_RERUNS.set(Some(Vec::new()));
+            generate(&root, &out).unwrap();
+            let mut watched: Vec<String> = crate::CAPTURED_RERUNS
+                .take()
+                .unwrap()
+                .iter()
+                .map(|path| path.replace('\\', "/"))
+                .collect();
+            watched.sort();
+            watched
+        };
+        let platform = watched("platform", generate_points_inner);
+        let engine = watched("engine", generate_engine_points);
+        let folder = format!(
+            "{}/crates/horizon-client/src/game",
+            root.display().to_string().replace('\\', "/")
+        );
+        assert!(
+            platform.contains(&folder) && engine.contains(&folder),
+            "the game folder is what a gained module file changes: {platform:?} {engine:?}"
+        );
+        assert_eq!(engine, platform);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

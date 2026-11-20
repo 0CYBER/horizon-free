@@ -115,7 +115,13 @@ use horizon_core::{
 use horizon_core::{
     connection_kind::ConnectionKind, dimension::Dimension, neighbour_update::NeighbourUpdate,
 };
-use std::{collections::HashMap, io, path::Path, sync::Arc, sync::RwLock};
+use std::{
+    collections::{BTreeSet, HashMap},
+    io,
+    path::Path,
+    sync::Arc,
+    sync::RwLock,
+};
 
 pub use block_maps::BlockMaps;
 pub mod classes;
@@ -1436,6 +1442,18 @@ impl Behaviours {
     }
     pub fn block(&self, state: BlockStateId) -> BlockId {
         self.table.block(state)
+    }
+    /// The states whose own block template asks the ground it stands on: the live game
+    /// dispatches that ask on `Class::Vegetation` (`Sim::can_survive`, then
+    /// `Sim::may_place_on`, `survive.rs`), whose `canSurvive` asks the soil's parts and
+    /// then the plant's. A block whose chain holds no such class never asks, whatever
+    /// stands under it, so only these states reach a survival table's ground hooks
+    /// (#17943).
+    pub fn states_asking_their_ground(&self) -> BTreeSet<BlockStateId> {
+        (0..self.table.state_count())
+            .map(|id| BlockStateId(id as u32))
+            .filter(|state| self.data(*state).is(classes::Class::Vegetation))
+            .collect()
     }
     pub fn item_binding(&self, item: &str) -> Option<&ItemBinding> {
         self.items.get(item)

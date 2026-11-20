@@ -8,7 +8,7 @@ use crate::{
     block_support::BlockSupportRegistry,
     block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule},
     collision::CachedCollisionRegistry,
-    registry::{BlockRegistry, BlockTableFile},
+    registry::{BlockRegistry, BlockStateId, BlockTableFile},
 };
 use serde_json::Value;
 use std::{
@@ -92,11 +92,14 @@ impl BlockBehavior {
     /// Files: `block-properties.nbt`, `cached-collision.nbt`,
     /// `cached-support.nbt`, `survival-rules.json`,
     /// `survival-extra-definitions.json` and `placement-definitions.json`.
+    /// `asks_their_ground` is the block behaviours' answer to which templates ask the
+    /// ground they stand on (`Behaviours::states_asking_their_ground`), empty without them.
     pub(super) fn load(
         dir: &Path,
         registry: &'static BlockRegistry,
         tags: &BTreeMap<String, Vec<String>>,
         fluid_tags: &BTreeMap<String, Vec<String>>,
+        asks_their_ground: BTreeSet<BlockStateId>,
     ) -> Result<Option<Self>, GeneratorError> {
         if !dir.join("block-properties.nbt").exists() {
             return Ok(None);
@@ -154,6 +157,7 @@ impl BlockBehavior {
             &definitions,
             tags,
             fluid_tags,
+            asks_their_ground,
         )?;
         let placement = json("placement-definitions.json")?;
         Ok(Some(Self {

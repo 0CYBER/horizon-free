@@ -205,10 +205,32 @@ impl GeneratorData {
         // and the block behaviours) need only the tags: they run on threads of
         // their own while this one reads the rest. A new world's first chunks
         // wait for all of it, with the chunk workers idle.
+        // The block tables ask which templates ask their own ground, which is the class
+        // chain in the behaviours: those load first and hand the answer over, still on
+        // threads of their own.
+        let (ground_askers_tx, ground_askers_rx) = std::sync::mpsc::channel();
+        let behaviours = loading({
+            let root = dir.parent().map(Path::to_owned);
+            move || {
+                let behaviours = root
+                    .filter(|root| root.join("block-behaviours.json").exists())
+                    .and_then(|root| crate::level::Behaviours::load(registry, &root).ok())
+                    .map(Arc::new);
+                let askers = behaviours
+                    .as_deref()
+                    .map(crate::level::Behaviours::states_asking_their_ground)
+                    .unwrap_or_default();
+                let _ = ground_askers_tx.send(askers);
+                behaviours
+            }
+        })?;
         let blocks = loading({
             let (dir, tags, fluids) = (dir.join("blocks"), block_tags.clone(), fluid_tags.clone());
             move || {
-                super::super::generator_blocks::BlockBehavior::load(&dir, registry, &tags, &fluids)
+                let askers = ground_askers_rx.recv().unwrap_or_default();
+                super::super::generator_blocks::BlockBehavior::load(
+                    &dir, registry, &tags, &fluids, askers,
+                )
             }
         })?;
         let structures = loading({
@@ -227,14 +249,6 @@ impl GeneratorData {
                     )
                     .with_templates(ov.templates().clone()),
                 )))
-            }
-        })?;
-        let behaviours = loading({
-            let root = dir.parent().map(Path::to_owned);
-            move || {
-                root.filter(|root| root.join("block-behaviours.json").exists())
-                    .and_then(|root| crate::level::Behaviours::load(registry, &root).ok())
-                    .map(Arc::new)
             }
         })?;
         let tag_set = |name: &str| -> Result<BTreeSet<&str>, GeneratorError> {
