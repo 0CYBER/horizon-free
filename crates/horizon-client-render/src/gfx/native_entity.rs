@@ -365,9 +365,10 @@ impl NativeEntity {
         let scene = stage.scene_source.as_deref().and_then(|source| {
             let shape = TraceShape {
                 entities: stage.traces_entities(),
-                ..*shape
+                ..shape.clone()
             };
-            let scene = (&entity_entries()[..], &shape, stage.traces_looks());
+            let reads = (stage.traces_looks(), stage.traces_lights());
+            let scene = (&entity_entries()[..], &shape, reads);
             let reads = kept.as_ref().map_or(&[][..], |k| &k.entries);
             StageTrace::new(device, frame, scene, reads, |group| build(source, group))
         });

@@ -241,7 +241,8 @@ blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 fog = "engine"             # optional: engine (default) or pack, when the pack fogs what its stages draw
 
-[ray_tracing]              # optional, needs [[post]], [[before_world]], [material] or [entity], no keys: the post stage gets `trace` and `trace_any`, other supported stages get them where they call them
+[ray_tracing]              # optional, needs [[post]], [[before_world]], [material] or [entity]: the post stage gets `trace` and `trace_any`, other supported stages get them where they call them
+lights = true              # optional, default false: the light sources (`ray_lights_near`, `ray_light`) in the stages that name them
 [motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
@@ -250,7 +251,7 @@ linear light: decode a constant written for display values with a 2.2 power, com
 `frame.luminance`, and stop returning `input.color.a` from post passes (their alpha is ignored). The example pack,
 `crates/horizon-shader-api/packs/golden_hour`, was moved this way. `packs/traced_shadows` and
 `packs/traced_water` are the smallest packs that trace rays, from a post pass and from the material stage
-([the guide](../shaders.md#ray-tracing)). `packs/horizon_hdr` is Horizon's own HDR look as a pack, from the look file
+([the guide](../shaders.md#ray-tracing)); `packs/traced_lights` lights a post pass with the block light sources. `packs/horizon_hdr` is Horizon's own HDR look as a pack, from the look file
 the renderer's own shaders start with: it reads the light-source fields, `frame.full_lightmap` and `lit_tint`
 (changelog, 2026-11-19), and its README lists what a pack can't draw of the look yet.
 
@@ -297,6 +298,12 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-20: API 0.2 (additions, preview): the light sources, under `[ray_tracing]` with its first key,
+  `lights = true` (off by default). A stage whose files name `ray_lights_near`, `ray_light`, `ray_light_at`,
+  `ray_light_count` or `RayLight` gets the light-giving blocks around the camera (`RayLight`: `position`, `level`,
+  `color`, `material`; up to 1024, nearest first; fluids left out) and a grid of 8-block cells listing the sources that
+  reach each, so a pass aims shadow rays at a few sources ([the guide](../shaders.md#light-sources)); only such a pass
+  binds them (binding 80). A pack without the key sees the same prelude as before, and its own names stay its own.
 - 2026-11-19: API 0.2 (change, preview): under a pack without `[[post]]` whose frame holds gamma light and whose
   `[tonemap]`, if it has one, never reads `previous`, TAA upscaling and its sharpening apply too (#16126 step 7): the
   world draws smaller, `frame.resolution` stays its size, `input.color` samples the picture TAA rebuilt, and the

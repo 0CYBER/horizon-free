@@ -878,6 +878,30 @@ fn compute_files_that_trace_are_built_against_the_scene() {
     }
 }
 
+/// With `[ray_tracing] lights = true`, a `[[before_world]]` pass and a compute `[[post]]` pass
+/// that name the light functions, and no trace function, are built against the scene with the
+/// light sources (binding 80); the pass of the same pack that names none is built without them.
+#[test]
+fn compute_files_that_name_the_light_sources_get_them() {
+    let counts = "fn compute(input: ComputeInput) {\n    \
+                  if input.in_bounds { hits[input.cell.x] = f32(ray_light_count()); }\n}\n";
+    let near = "fn compute(input: ComputeInput) {\n    \
+                let n = ray_lights_near(vec3<f32>(hits[0]));\n    \
+                let l: RayLight = ray_light(ray_light_at(n.x));\n    \
+                _ = l.position * l.level + l.color * f32(l.material + n.y);\n}\n";
+    let manifest = TRACING.replace("[ray_tracing]\n", "[ray_tracing]\nlights = true\n");
+    let files = [("w.wgsl", counts), ("c.wgsl", near), ("last.wgsl", PICTURE)];
+    let report = check(&pack(&format!("{manifest}{LAST}"), &files)).unwrap();
+    for (kind, lights) in [
+        (StageKind::BeforeWorld, true),
+        (StageKind::Compute, true),
+        (StageKind::Post, false),
+    ] {
+        let stage = report.stages.iter().find(|s| s.kind == kind).unwrap();
+        assert_eq!(stage.traces_lights(), lights, "{kind:?}");
+    }
+}
+
 /// `[ray_tracing]` with only a `[[before_world]]` pass to trace from (and a sky to draw) is a
 /// pack that traces.
 #[test]

@@ -37,10 +37,13 @@ impl ExternalPipeline for NativePack {
         debug_assert!(freed.is_ok(), "{freed:?}");
     }
 
-    /// The kept resources start over.
+    /// The kept resources start over, and the light sources with the new world's sections.
     fn world_cleared(&mut self) {
         if let Some(epochs) = &mut self.frame.epochs {
             epochs.note(horizon_shader_api::kept::REASON_WORLD);
+        }
+        if let Some(lights) = &mut self.frame.ray_lights {
+            lights.clear();
         }
     }
 

@@ -675,8 +675,9 @@ impl NativeMaterial {
         }
         let pipelines = built?;
         let scene = stage.scene_source.as_deref().and_then(|source| {
-            let traced = TraceShape::of(shape, stage.traces_entities());
-            let terrain = (&terrain_entries()[..], &traced, stage.traces_looks());
+            let traced = TraceShape::of(shape, stage.traces_entities(), None);
+            let reads = (stage.traces_looks(), stage.traces_lights());
+            let terrain = (&terrain_entries()[..], &traced, reads);
             let own = kept.as_ref().map_or(&[][..], |k| &k.entries);
             TerrainTrace::new(device, frame, terrain, own, |group| build(source, group))
         });

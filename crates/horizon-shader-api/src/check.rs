@@ -15,7 +15,8 @@ use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
     Composed, GROUP, KEPT_BINDING, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING,
-    RAY_LOOKS_BINDING, RAY_SCENE_BINDING, StageKind, compose_traced, identifiers,
+    RAY_LIGHTS_BINDING, RAY_LOOKS_BINDING, RAY_SCENE_BINDING, StageKind, compose_traced,
+    identifiers, lights_on,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
@@ -97,16 +98,17 @@ impl CheckedStage {
         })
     }
 
+    /// Whether the stage against the scene reads the light sources: its own files name them
+    /// (`[ray_tracing] lights = true`, `stages::names_lights`), so the renderer binds their list in
+    /// this pass's layout (binding 80) and keeps it for the pack.
+    pub fn traces_lights(&self) -> bool {
+        (self.scene.as_ref()).is_some_and(|module| binds(module, RAY_LIGHTS_BINDING))
+    }
+
     /// Whether the stage against the scene reads a terrain hit's look (`RAY_LOOK_FIELDS`), so the
     /// renderer binds the scene's looks for it (`RAY_LOOKS_BINDING`).
     pub fn traces_looks(&self) -> bool {
-        self.scene.as_ref().is_some_and(|module| {
-            module.global_variables.iter().any(|(_, g)| {
-                g.binding
-                    .as_ref()
-                    .is_some_and(|b| b.group == GROUP && b.binding == RAY_LOOKS_BINDING)
-            })
-        })
+        (self.scene.as_ref()).is_some_and(|module| binds(module, RAY_LOOKS_BINDING))
     }
 
     /// Whether the stage's inputs end with `shaded_tint` (`SHADED_TINT`): its pack's files name
@@ -438,10 +440,15 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
         )
         .chain(m.post.iter().enumerate().map(|(i, s)| match s.compute {
             true => (StageKind::Compute, s, Some(i)),
-            // In a pack without kept resources or compute passes an ordinary pass keeps the first
-            // entry with its file, as such packs were built before, so they compose
-            // byte-identically; with them, each entry's own `reads` decide its declarations.
-            false => (StageKind::Post, s, m.computes().then_some(i)),
+            // In a pack without kept resources, compute passes or the light sources an ordinary
+            // pass keeps the first entry with its file, as such packs were built before, so they
+            // compose byte-identically; with them, each entry's own `reads` and `files` decide
+            // its declarations and whether it binds the light sources.
+            false => (
+                StageKind::Post,
+                s,
+                (m.computes() || lights_on(pack)).then_some(i),
+            ),
         }))
         .chain(m.tonemap.iter().map(|s| (StageKind::Tonemap, s, None)))
         .chain(m.entity.iter().map(|s| (StageKind::Entity, s, None)));
@@ -588,13 +595,40 @@ fn check_entry(
     let scene = match traced {
         Some(mut composed) => {
             let module = parse(&composed)?;
+            // A material or entity stage that reads the light sources shares its module with
+            // Horizon's vertex code, whose builtin calls a pack function of the same name would
+            // take over, reaching binding 80 from a vertex shader. (One that only traces or
+            // reads looks keeps such helpers, as 0.2 packs had them.)
+            let who = match kind {
+                StageKind::Material => Some("a `[material]`"),
+                StageKind::Entity => Some("an `[entity]`"),
+                _ => None,
+            };
+            if let Some(who) = who.filter(|_| binds(&module, RAY_LIGHTS_BINDING)) {
+                let problems = shadowed_builtins(&composed, who);
+                if !problems.is_empty() {
+                    return Err(problems);
+                }
+            }
             let capabilities = Capabilities::default() | Capabilities::RAY_QUERY;
             let info = validate(&module, &composed, capabilities)?;
             if kind == StageKind::Material {
-                let what = "a trace function: it runs in a vertex shader, and only `material` \
-                            traces rays";
-                let scene = (RAY_SCENE_BINDING..=RAY_ENTITY_RETAINED_BINDING, what);
-                let problems = vertex_reach(&module, &info, &composed, &pack.manifest, scene);
+                // The scene's bindings, the entity layer's last, and the light sources'.
+                let reached = [
+                    (
+                        RAY_SCENE_BINDING..=RAY_ENTITY_RETAINED_BINDING,
+                        "a trace function: it runs in a vertex shader, and only `material` \
+                         traces rays",
+                    ),
+                    (
+                        RAY_LIGHTS_BINDING..=RAY_LIGHTS_BINDING,
+                        "the light sources: it runs in a vertex shader, and only `material` \
+                         reads them",
+                    ),
+                ];
+                let problems: Vec<_> = (reached.into_iter())
+                    .flat_map(|r| vertex_reach(&module, &info, &composed, &pack.manifest, r))
+                    .collect();
                 if !problems.is_empty() {
                     return Err(problems);
                 }
@@ -846,6 +880,50 @@ fn vertex_reach(
     problems
 }
 
+/// Whether `module` has a global at `binding` of group 3.
+fn binds(module: &naga::Module, binding: u32) -> bool {
+    (module.global_variables.iter()).any(|(_, g)| {
+        (g.binding.as_ref()).is_some_and(|b| b.group == GROUP && b.binding == binding)
+    })
+}
+
+/// WGSL's builtin functions.
+const WGSL_BUILTINS: &str = "\
+    abs acos acosh all any arrayLength asin asinh atan atan2 atanh atomicAdd atomicAnd \
+    atomicCompareExchangeWeak atomicExchange atomicLoad atomicMax atomicMin atomicOr \
+    atomicStore atomicSub atomicXor bitcast ceil clamp cos cosh countLeadingZeros countOneBits \
+    countTrailingZeros cross degrees determinant distance dot dot4I8Packed dot4U8Packed dpdx \
+    dpdxCoarse dpdxFine dpdy dpdyCoarse dpdyFine exp exp2 extractBits faceForward \
+    firstLeadingBit firstTrailingBit floor fma fract frexp fwidth fwidthCoarse fwidthFine \
+    insertBits inverseSqrt ldexp length log log2 max min mix modf normalize pack2x16float \
+    pack2x16snorm pack2x16unorm pack4x8snorm pack4x8unorm pack4xI8 pack4xI8Clamp pack4xU8 \
+    pack4xU8Clamp pow quantizeToF16 radians reflect refract reverseBits round saturate select \
+    sign sin sinh smoothstep sqrt step storageBarrier tan tanh textureBarrier \
+    textureDimensions textureGather textureGatherCompare textureLoad textureNumLayers \
+    textureNumLevels textureNumSamples textureSample textureSampleBaseClampToEdge \
+    textureSampleBias textureSampleCompare textureSampleCompareLevel textureSampleGrad \
+    textureSampleLevel textureStore transpose trunc unpack2x16float unpack2x16snorm \
+    unpack2x16unorm unpack4x8snorm unpack4x8unorm unpack4xI8 unpack4xU8 workgroupBarrier \
+    workgroupUniformLoad";
+
+/// The pack's functions in `composed` named as a WGSL builtin: Horizon's own code in the same
+/// module would call them in place of the builtin. `who`: the stage, and what puts it there.
+fn shadowed_builtins(composed: &Composed, who: &str) -> Vec<Problem> {
+    let names = identifiers(&composed.text);
+    (names.windows(2))
+        .filter(|w| w[0].1 == "fn" && WGSL_BUILTINS.split_whitespace().any(|b| b == w[1].1))
+        .map(|w| {
+            let message = format!(
+                "`fn {}` takes the name of a WGSL builtin: {who} stage that reads the light \
+                 sources shares its module with Horizon's vertex code, which would call it in \
+                 place of the builtin; name it otherwise",
+                w[1].1
+            );
+            located(composed, Some(w[1].0), message)
+        })
+        .collect()
+}
+
 fn located(composed: &Composed, offset: Option<usize>, message: String) -> Problem {
     match offset {
         Some(at) => {
@@ -867,6 +945,14 @@ fn parse(composed: &Composed) -> Result<naga::Module, Vec<Problem>> {
         let mut message = e.message().to_owned();
         if let Some((_, text)) = label.filter(|(_, t)| !t.is_empty() && !message.contains(*t)) {
             message += &format!(" ({text})");
+        }
+        // A light function named without the key, or outside the stages that trace: undefined.
+        let light =
+            |n: &&str| e.message() == format!("no definition in scope for identifier: `{n}`");
+        if crate::stages::LIGHT_NAMES.iter().any(light) {
+            message += "; the light sources are only in the post, compute, `[[before_world]]`, \
+                        material and entity stages of a pack with `lights = true` under \
+                        `[ray_tracing]`";
         }
         let at = label.and_then(|(span, _)| span.to_range()).map(|r| r.start);
         vec![located(composed, at, message)]
@@ -1028,7 +1114,7 @@ fn api_rules(module: &naga::Module, kind: StageKind, own: &Composed) -> Vec<Prob
 }
 
 /// The pack's files construct none of the structs Horizon hands a stage (`Frame`, the
-/// stage inputs, the post helpers' `SurfaceData` and `RayHit`). They may gain fields, which would break a
+/// stage inputs, the post helpers' `SurfaceData`, `RayHit` and `RayLight`). They may gain fields, which would break a
 /// positional `PostInput(...)`; reading them and passing them along stay as they are. `Surface`,
 /// which `material` returns, is built.
 fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
@@ -1041,6 +1127,7 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
             COMPUTE_INPUT.name,
             "SurfaceData",
             RAY_HIT.name,
+            "RayLight",
             "MotionData",
         ])
         .collect();

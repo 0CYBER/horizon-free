@@ -30,7 +30,7 @@ impl Renderer {
         let lights_changed = if mesh.lights.is_empty() {
             self.light_blocks.remove(&key).is_some()
         } else {
-            let old = self.light_blocks.insert(key, mesh.lights.to_vec());
+            let old = self.light_blocks.insert(key, mesh.lights.into());
             old.as_deref() != Some(mesh.lights)
         };
         if lights_changed {

@@ -351,6 +351,9 @@ pub struct NativeFrame {
     pub textures: Vec<(wgpu::TextureView, wgpu::Sampler)>,
     /// The colour of block light around the camera (`[[lights]]`), bindings 9 and 10.
     pub block_light: super::block_light::BlockLight,
+    /// The light sources a `[ray_tracing]` pack's rays aim at, where its files name them
+    /// (`NativePack::build` adds them).
+    pub ray_lights: Option<super::ray_lights::RayLights>,
     pub group: wgpu::BindGroup,
     /// The world's depth before translucent terrain (the material stage's `opaque_depth`,
     /// binding 6), copied each frame.
@@ -600,6 +603,7 @@ impl NativeFrame {
         Self {
             textures,
             block_light,
+            ray_lights: None,
             pbr,
             buffer,
             layout,

@@ -768,6 +768,14 @@
     "rationale": "Existing explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-render.txt: requires a Vulkan/Metal/DX12 adapter; cargo test -p horizon-client-render --test world_view_slots -- --ignored. Not selected by daily shards."
   },
   {
+    "package": "horizon-client-render",
+    "target": "lib",
+    "test": "gfx::ray_lights::tests::rebuild_timings",
+    "path": "crates/horizon-client-render/src/gfx/ray_lights.rs",
+    "reason": "timing",
+    "rationale": "Manual wall-clock measurement of the ray light sources' rebuild (render-thread cost and worker build), not a daily correctness check. Run by hand on an idle machine with --release, exact-selecting the full test path with --ignored --exact --nocapture; the grid's correctness is covered by the other gfx::ray_lights tests."
+  },
+  {
     "package": "horizon-core",
     "target": "lib",
     "test": "paletted::tests::benchmark_pack",

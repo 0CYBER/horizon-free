@@ -255,7 +255,11 @@ fn keep(value: &str) -> Result<Keep, String> {
     }
 }
 
-fn resource(r: RawResource, ray_tracing: bool, motion: bool) -> Result<Resource, String> {
+fn resource(
+    r: RawResource,
+    ray_tracing: Option<&crate::manifest::RayTracing>,
+    motion: bool,
+) -> Result<Resource, String> {
     let name = &r.name;
     let previous = format!("{name}_previous");
     // WGSL's own functions and types too: a global by such a name hides them from the prelude.
@@ -492,7 +496,7 @@ pub(crate) fn check(
     raw: Vec<RawResource>,
     before_world: Vec<Stage>,
     post: &[Stage],
-    ray_tracing: bool,
+    ray_tracing: Option<&crate::manifest::RayTracing>,
     motion: bool,
     resets: Vec<(String, String)>,
 ) -> Result<Kept, String> {

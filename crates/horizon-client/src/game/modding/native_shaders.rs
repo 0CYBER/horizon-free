@@ -272,8 +272,39 @@ impl Game<'_> {
                     }
                 }
             }
+            // Each light source a `[ray_tracing] lights = true` pack's rays read: its
+            // `[[lights]]` colour, its level and its model's `[[materials]]` id (lava left out),
+            // where a stage reads them and the device traces.
+            let mut sources = horizon_client::gfx::ray_lights::Sources::default();
+            let traces_lights = report.stages.iter().any(|s| s.traces_lights());
+            if traces_lights && renderer.ray_queries() {
+                let catalog = &self.pack.render.model_catalog;
+                let origin = horizon_core::position::BlockPos::new(0, 0, 0);
+                for (id, state) in self.res.facts().states.iter().enumerate() {
+                    if state.emission == 0 {
+                        continue;
+                    }
+                    let state_id = horizon_world::registry::BlockStateId(id as u32);
+                    let models = catalog.collect(state_id, origin).unwrap_or_default();
+                    let layers = models
+                        .iter()
+                        .flat_map(|(_, m)| m.faces.iter().map(|f| f.layer));
+                    let color = pack.manifest.light_of(&state.name);
+                    let light = (state.emission, state.fluid);
+                    let source = horizon_client::gfx::ray_lights::source;
+                    if let Some(s) = source(light, color, layers, &materials) {
+                        sources.insert(id as u32, s);
+                    }
+                }
+            }
             let labels = renderer
-                .set_native_shader_pack(Some((report, constants, tags, materials, lights)))
+                .set_native_shader_pack(Some((
+                    report,
+                    constants,
+                    tags,
+                    materials,
+                    (lights, sources),
+                )))
                 .map_err(|e| vec![e])?;
             Ok((pack.manifest, labels, translucent))
         });

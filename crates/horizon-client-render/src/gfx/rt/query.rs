@@ -12,6 +12,13 @@ pub(in crate::gfx) fn on(device: &wgpu::Device) -> bool {
     device.features().contains(RAY_QUERY)
 }
 
+impl crate::gfx::Renderer {
+    /// Whether the device traces rays (`on`): a pack's ray-only data is worth building.
+    pub fn ray_queries(&self) -> bool {
+        on(&self.device)
+    }
+}
+
 /// What buffers that BLAS builds read (the quad indices) need on top of their own usage:
 /// nothing without ray queries, so the off path's buffers are main's.
 pub(in crate::gfx) fn blas_input(device: &wgpu::Device) -> wgpu::BufferUsages {

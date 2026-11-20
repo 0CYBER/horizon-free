@@ -16,8 +16,8 @@ use crate::manifest::{
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
     GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
-    RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_LOOKS_BINDING, RAY_SCENE_BINDING,
-    RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
+    RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_LIGHTS_BINDING, RAY_LOOKS_BINDING,
+    RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
 };
 
 fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
@@ -168,11 +168,12 @@ scatters, a little denser in the middle tones. A post pass fogs what the stages 
 fn ray_tracing() -> String {
     let mut out = String::from(
         "### Ray tracing\n\n\
-         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[[before_world]]` pass, a\n\
-         `[material]` or an `[entity]` stage), post passes get `RayHit` and the functions and constants below. So do the\n\
-         material, entity, compute and `[[before_world]]` stages whose files name one of the four trace functions.\n\
-         Every stage of the pack has `frame.has_ray_tracing` and `frame.ray_distance`. A pack without the key has none of\n\
-         these. A material, entity, compute or `[[before_world]]` stage that names no trace function is built as without it.\n\n\
+         With `[ray_tracing]` in the manifest (it needs a `[[post]]` pass, a `[[before_world]]` pass, a `[material]` or an\n\
+         `[entity]` stage; its one key, `lights`, is below), post passes get `RayHit` and the functions and constants\n\
+         below. So do the material, entity, compute and `[[before_world]]` stages whose files name one of the four trace\n\
+         functions (or, with `lights = true`, a light one). Every stage of the pack has `frame.has_ray_tracing` and\n\
+         `frame.ray_distance`. A pack without the key has none of these. A material, entity, compute or `[[before_world]]`\n\
+         stage that names no trace function (nor, with `lights = true`, a light one) is built as without it.\n\n\
          The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it\n\
          ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a\n\
          pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1`\n\
@@ -202,7 +203,38 @@ fn ray_tracing() -> String {
          packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`\n  \
          and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.\n\
          - In the post, entity, compute and `[[before_world]]` stages, `fn block_pbr_maps() -> bool`: whether the resource packs\n  \
-         ship LabPBR maps, as the material stage's.\n\n\
+         ship LabPBR maps, as the material stage's.\n\
+         - The light sources, only with `lights = true` under `[ray_tracing]` (off by default: without it these five names\n  \
+         are free for the pack's own), and only in a stage whose files name one of them outside a comment, which alone\n  \
+         binds them. `struct RayLight`: `position: vec3<f32>`, the centre of its block, camera-relative from the player's\n  \
+         camera (`frame.camera_position`) in every pass, as `trace`'s `origin` and `view_position` are (the water mirror\n  \
+         is drawn by Horizon's own terrain shader, and the shadow map with the vertex stage, which can't reach the light\n  \
+         functions: no pass reads them from another camera); `level: f32`,\n  \
+         vanilla's light level of the block, 1 to 15 (a terrain hit's `RayHit.emission` times 15); `color: vec3<f32>`,\n  \
+         its `[[lights]]` colour decoded to linear as `block_light_color`'s is, white for a block the pack gives none;\n  \
+         `material: u32`, its `[[materials]]` id, the one `RayHit.material` reports on the first face of its model whose\n  \
+         sprite has one, 0 where none does; it is taken from one fixed model of the block state, so where a resource pack\n  \
+         gives the state weighted models with different materials it can differ from the `RayHit.material` of that\n  \
+         block. `fn ray_light_count() -> u32` and `fn ray_light(i: u32) -> RayLight`: the blocks that give off light\n  \
+         in the sections the grid or 15 blocks around it touch (so up to a section past where their light reaches it),\n  \
+         the nearest the camera first, at most 1024; `ray_light` gives level 0 past the count.\n  \
+         Fluids are left out: lava is not listed, so lava lakes don't light through `ray_lights_near` (they would fill\n  \
+         every cell nearby and push the torches out; a ray meets the lava's surface anyway, with its `emission`).\n  \
+         `fn ray_lights_near(position: vec3<f32>) -> vec2<u32>`: the sources whose light reaches some part of the cell of\n  \
+         a camera-relative point, as the first and the count of the indices `fn ray_light_at(i: u32) -> u32` reads;\n  \
+         none outside the grid. `ray_light_at` gives `0xffffffffu`, which `ray_light` reads as level 0, for an `i` past\n  \
+         its cell's count. Both are candidate sets, not a verdict: a source listed may not reach the point itself, so\n  \
+         the pack's own falloff (and a trace) decides what each gives. A cell's order is its strength at the cell's\n  \
+         nearest point, not at the point: a pass that tests only its first few shows the cells' edges. The list is\n  \
+         the data, and the grid a convenience built from it with fixed choices (8-block cells, 16 a side around the\n  \
+         camera, at most 24 a cell, ranked by vanilla's falloff, level minus distance, at the cell's nearest point): a\n  \
+         pack that wants others reads the list and builds its own grid into a kept buffer in a compute or\n  \
+         `[[before_world]]` pass. Both are rebuilt off the render thread when the camera crosses a 16-block step, and\n  \
+         at most every 100 ms when a source block changes, and reach the passes a frame or two later; their positions\n  \
+         stay relative to the current camera meanwhile. The list only says where sources are: trace towards one (`trace_any`) to know whether\n  \
+         its light gets through. A full glowing cube (glowstone, a sea lantern) is in the scene itself, so a ray aimed\n  \
+         at its centre is stopped by the source: end the ray where it enters the source's block (as\n  \
+         `packs/traced_lights` does), or take a hit within the block as the source.\n\n\
          A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what\n\
          the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,\n\
          plants), as terrain's alpha test does: a texel stops it from alpha 0.5 up. In the translucent layer every texel\n\
@@ -233,7 +265,8 @@ fn ray_tracing() -> String {
     out += &shaded_table(&RAY_HIT);
     out += &format!(
         "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces ({RAY_ENTITY_STORE_BINDING} to\n\
-         {RAY_ENTITY_RETAINED_BINDING} the entity layer, for a pack that names it), and in a post, compute or `[[before_world]]` pass bindings\n\
+         {RAY_ENTITY_RETAINED_BINDING} the entity layer, for a pack that names it, {RAY_LIGHTS_BINDING} the light sources, for a pass that\n\
+         names them under `lights = true`), and in a post, compute or `[[before_world]]` pass bindings\n\
          {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the material and entity stages have them there already).\n\
          Binding {RAY_LOOKS_BINDING} holds terrain hit looks for a stage that reads `RayHit.tint`, `shade` or `ao` from its entry point.\n\
          These bindings are Horizon's, as their `horizon_` names say, and change with the renderer.\n\n",

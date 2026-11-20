@@ -22,8 +22,7 @@ use super::pack_timing::PassTiming;
 pub use super::SectionLists;
 pub use super::rt::scene::{RayScene, Traced, TracedEntities};
 pub use super::weather::Weather;
-use super::{Cull, EffectiveOutput, Frame, Frustum, SectionKey, Sides, facing_runs, frustum};
-use crate::fast_hash::FxHashMap;
+use super::{Cull, EffectiveOutput, Frame, Frustum, Sides, facing_runs, frustum};
 
 /// What a world frame gives an external pipeline at its points: the frame's own values, and
 /// the display's from the renderer's one output snapshot (`EffectiveOutput`: whether HDR is on,
@@ -253,8 +252,10 @@ pub struct FrameStart<'a> {
     /// This frame's output, whose display values a 0.2 pack reads.
     pub output: &'a EffectiveOutput,
     /// The light sources the section meshes list, and their revision (`BlockLight::update`).
-    pub lights: &'a FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    pub lights: &'a super::block_light::SectionLights,
     pub light_revision: u64,
+    /// The lowest block of the level's columns, which the sections' keys count from.
+    pub min_y: i32,
     /// The sky is open this frame.
     pub sky_visible: bool,
     /// The ray scene, when the game traces rays (`ExternalPipeline::start_frame`).

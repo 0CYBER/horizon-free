@@ -151,7 +151,13 @@ impl Renderer {
                     * (size_of::<crate::lod::TileKey>() + size_of::<lod::Tile>() + 1),
             ),
             ("block_entities", lists(&self.block_entities)),
-            ("light_sources", lists(&self.light_blocks)),
+            (
+                "light_sources",
+                per_section(
+                    self.light_blocks.capacity(),
+                    self.light_blocks.values().map(|l| l.len()).sum::<usize>(),
+                ),
+            ),
         ]
     }
 }

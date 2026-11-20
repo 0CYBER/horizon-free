@@ -279,14 +279,16 @@ impl NativePack {
     /// The pack of the checked stages `report` with the option values `constants`, drawing
     /// onto the world's targets as `terrain` describes; the sky reads the terrain's group 0.
     /// Also returns its stages' labels, in the order they draw. Errors name the stage wgpu
-    /// refused.
+    /// refused. `lights` holds the `[[lights]]` colours of the block states they name,
+    /// `sources` each listed light source's (`ray_lights::source`), for a pack whose rays read
+    /// them (`[ray_tracing] lights = true`).
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         terrain: &TerrainShape<'_>,
         report: Report,
         constants: &[(String, f64)],
-        lights: super::block_light::LightTable,
+        (lights, sources): (super::block_light::LightTable, super::ray_lights::Sources),
     ) -> Result<(Self, Vec<String>), String> {
         // A backend may refuse a layout or pipeline the pack asks for (a stage's bindings
         // past its sampled-texture limit, say, as OpenGL's 16 was before #10095): the pack
@@ -295,7 +297,7 @@ impl NativePack {
         // internal error, which a validation scope lets through: each scope takes both.
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let built = Self::build(device, queue, terrain, report, constants, lights);
+        let built = Self::build(device, queue, terrain, report, constants, (lights, sources));
         let internal = pollster::block_on(internal.pop());
         let refused = internal.or(pollster::block_on(validation.pop()));
         match (built, refused) {
@@ -311,7 +313,7 @@ impl NativePack {
         terrain: &TerrainShape<'_>,
         report: Report,
         constants: &[(String, f64)],
-        lights: super::block_light::LightTable,
+        (lights, sources): (super::block_light::LightTable, super::ray_lights::Sources),
     ) -> Result<(Self, Vec<String>), String> {
         let (globals, format) = (terrain.globals, terrain.format);
         let kept = super::native_post::kept::Signature::of(&report, constants);
@@ -332,6 +334,12 @@ impl NativePack {
             terrain.pbr,
             terrain.linear,
         );
+        // One buffer of light sources for every stage of a `[ray_tracing] lights = true` pack
+        // whose files name them, on a device that traces: the passes' bind groups take it as
+        // they are made. Its sources and worker wait for a pass that reads them (below).
+        if report.stages.iter().any(CheckedStage::traces_lights) && super::rt::query::on(device) {
+            frame.ray_lights = Some(super::ray_lights::RayLights::new(device));
+        }
         let reach = report.manifest.kept.reach;
         frame.epochs = (kept.as_ref()).map(|_| super::native_post::kept::Epochs::new(reach));
         // `[displacement]`, unless its option is off; nothing to displace without heights.
@@ -480,7 +488,7 @@ impl NativePack {
                 let manifest = &report.manifest;
                 let listed = manifest.entity.as_ref();
                 let kept = StageReads::new(device, manifest, listed, &frame);
-                let shape = super::native_post::trace::TraceShape::of(terrain, false);
+                let shape = super::native_post::trace::TraceShape::of(terrain, false, None);
                 let stage = (stage, kept, &shape);
                 NativeEntity::new(device, format, groups, &frame, stage, constants, manifest)
             })
@@ -491,6 +499,8 @@ impl NativePack {
         // compute passes keep theirs (`ComputePass::scene`). Whether any of them, compute and
         // before-world passes included, reads the entity layer.
         let entities = post.iter().any(CheckedStage::traces_entities);
+        // The light sources, once for the pack: each pass that reads them binds them.
+        let lights = frame.ray_lights.as_ref().map(|l| l.buffer.clone());
         let scenes: Vec<(String, naga::Module)> = (post.iter_mut())
             .filter(|s| s.kind == StageKind::Post)
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
@@ -515,12 +525,25 @@ impl NativePack {
             ));
         let tracing = !scenes.is_empty() || post.computes_trace();
         let posted = tracing && !refused && {
-            let shape = super::native_post::trace::TraceShape::of(terrain, entities);
+            let shape = super::native_post::trace::TraceShape::of(terrain, entities, lights);
             post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
         };
         if refused || (tracing && !posted) {
             material.iter_mut().for_each(|m| m.scene = None);
             entity.iter_mut().for_each(|e| e.scene = None);
+        }
+        // Nothing is built against the scene that reads them (refused, or past the device's
+        // limits): no list to keep.
+        let terrain_lights = material.as_ref().and_then(|m| m.scene.as_ref());
+        let entity_lights = entity.as_ref().and_then(|e| e.scene.as_ref());
+        if !post.traces_lights()
+            && !terrain_lights.is_some_and(|t| t.traces_lights())
+            && !entity_lights.is_some_and(|t| t.traces_lights())
+        {
+            frame.ray_lights = None;
+        }
+        if let Some(r) = &mut frame.ray_lights {
+            r.start(sources);
         }
         let mut labels: Vec<String> = sky.iter().map(|s| s.label.clone()).collect();
         labels.extend(
@@ -568,6 +591,7 @@ impl NativePack {
             output,
             lights,
             light_revision,
+            min_y,
             sky_visible,
             scene,
             lightmap,
@@ -581,6 +605,10 @@ impl NativePack {
         self.frame
             .block_light
             .update(queue, frame.camera, lights, light_revision);
+        // Kept only while the passes trace: in a frame without the scene they miss anyway.
+        if let (Some(r), Some(_)) = (&mut self.frame.ray_lights, &scene) {
+            r.update(queue, frame.camera, (lights, min_y), light_revision);
+        }
         let Some(t) = &mut self.timing else {
             return false;
         };

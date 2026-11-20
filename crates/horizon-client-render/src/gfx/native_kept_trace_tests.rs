@@ -183,6 +183,18 @@ pub(super) fn pack(
     manifest: &str,
     files: &[(&str, &str)],
 ) -> NativePack {
+    pack_with(device, queue, scene, manifest, files, Default::default())
+}
+
+/// `pack` with the light sources `sources` (`ray_lights::source`).
+fn pack_with(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &Scene,
+    manifest: &str,
+    files: &[(&str, &str)],
+    sources: crate::gfx::ray_lights::Sources,
+) -> NativePack {
     let manifest = format!("{HEAD}{manifest}[tonemap]\nfile = \"t.wgsl\"\n");
     let mut all: std::collections::BTreeMap<String, Vec<u8>> = (files.iter())
         .chain(&[("t.wgsl", IDENTITY)])
@@ -195,8 +207,15 @@ pub(super) fn pack(
         sprite_views: &scene.sprites,
         ..crate::gfx::native_pack::tests::terrain_shape(&globals, &empty)
     };
-    let (mut pack, _) =
-        NativePack::new(device, queue, &terrain, report, &[], Default::default()).unwrap();
+    let (mut pack, _) = NativePack::new(
+        device,
+        queue,
+        &terrain,
+        report,
+        &[],
+        (Default::default(), sources),
+    )
+    .unwrap();
     install(device, Some(&mut pack.post), None, [1, 1]).unwrap();
     pack
 }
@@ -899,6 +918,66 @@ fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
     );
 }
 
+/// Under `[ray_tracing] lights = true`, a `[[before_world]]` pass and a compute `[[post]]` pass
+/// read a torch through the light functions (its level and material, and its cell's list), and
+/// a fragment post pass of the same pack that names none of them traces with exactly the 8
+/// storage buffers the device takes: it has no binding 80, or its rays would miss.
+#[test]
+fn only_the_passes_that_name_the_light_sources_bind_them() {
+    let Some((_, device, queue)) = ray_device_with_storage_limit(8) else {
+        return;
+    };
+    let mut manifest = HIT.replace("[ray_tracing]\n", "[ray_tracing]\nlights = true\n");
+    for i in 1..=5 {
+        manifest += &format!(
+            "[[resource]]\nname = \"b{i}\"\nbuffer = 16\nelement = \"f32\"\nkeep = \"view\"\n"
+        );
+    }
+    manifest += "[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+                 writes = [\"hit\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+                 dispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\nwrites = [\"hit\"]\n[[post]]\n\
+                 file = \"l.wgsl\"\nreads = [\"hit\", \"b1\", \"b2\", \"b3\", \"b4\", \"b5\"]\n";
+    let level = "fn compute(input: ComputeInput) {\n    \
+                 let l = ray_light(0u);\n    \
+                 hit[1] = l.level + f32(l.material) * f32(ray_light_count());\n}\n";
+    let near = "fn compute(input: ComputeInput) {\n    \
+                hit[2] = f32(ray_lights_near(ray_light(0u).position).y);\n}\n";
+    // Red the pass's own hit's distance / 8, green `has_ray_tracing`, blue the light passes'.
+    let show = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                let d = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0).distance;\n    \
+                let kept = b1[0] + b2[0] + b3[0] + b4[0] + b5[0];\n    \
+                let lights = (hit[1] + hit[2]) / 32.0 + kept;\n    \
+                return vec4<f32>(d / 8.0, f32(frame.has_ray_tracing), lights, 1.0);\n}\n";
+    let mut sources = crate::gfx::ray_lights::Sources::default();
+    let torch = crate::gfx::ray_lights::Source {
+        color: [1.0; 3],
+        level: 14,
+        material: 3,
+    };
+    sources.insert(1, torch);
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let files = [("w.wgsl", level), ("c.wgsl", near), ("l.wgsl", show)];
+    let mut pack = pack_with(&device, &queue, &scene, &manifest, &files, sources);
+    let camera = glam::DVec3::new(0.5, 64.5, 0.5);
+    let key = (0, (64 - crate::chunk::MIN_Y) / 16, 0);
+    let sections = [(key, vec![([2, 64, 0], 1)].into())].into_iter().collect();
+    let lights = pack.frame.ray_lights.as_mut().expect("the light sources");
+    lights.update(&queue, camera, (&sections, crate::chunk::MIN_Y), 1);
+    lights.settle(&queue);
+    let got = frame(
+        (&device, &queue, &world),
+        &mut pack,
+        1,
+        Some(&scene.traced()),
+    );
+    // Level 14 plus material 3 of the one source, and the one source its cell lists.
+    assert!(shows(got, [0.5, 1.0, 18.0 / 32.0]), "{got:?}");
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+}
+
 /// Both stages fit with the scene's two storage buffers. Binding terrain hit looks takes a
 /// third slot, which the entity stage cannot use on this device.
 #[test]
@@ -940,4 +1019,56 @@ fn refusing_entity_look_bindings_makes_the_post_stage_miss_too() {
     }
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
+}
+
+/// Under `lights = true` an entity stage that names the light sources binds them in its scene
+/// group: a third storage buffer, past a device that takes two, so its scene is refused and
+/// the post stage misses too; on one that takes three it traces with them, and the pack keeps
+/// the list.
+#[test]
+fn the_entity_stage_binds_the_light_sources_it_names() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let manifest =
+        "[ray_tracing]\nlights = true\n[entity]\nfile = \"e.wgsl\"\n[[post]]\nfile = \"p.wgsl\"\n";
+    let post = "fn post(input: PostInput) -> vec4<f32> {
+        let hit = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0);
+        return vec4<f32>(select(0.25, hit.distance / 8.0, hit.distance >= 0.0),
+                        f32(frame.has_ray_tracing), 0.0, 1.0);
+    }";
+    let entity = "fn entity(input: EntityInput) -> Surface {
+        let hit = trace(input.position, input.normal, 16.0);
+        let near = ray_lights_near(input.position);
+        return Surface(vec4<f32>(vec3<f32>(hit.distance + f32(near.y)), 1.0));
+    }";
+    for (limit, traces) in [(2, false), (3, true)] {
+        let Some((_, device, queue)) = ray_device_with_storage_limit(limit) else {
+            return;
+        };
+        let scene = Scene::new(&device, &queue, 4.0, 1);
+        let world = World::new(&device);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let files = [("e.wgsl", entity), ("p.wgsl", post)];
+        let built = super::material_tests::built(&device, &queue, Some(&scene), manifest, &files);
+        let (mut pack, _) = built.unwrap();
+        let pixel = frame(
+            (&device, &queue, &world),
+            &mut pack,
+            1,
+            Some(&scene.traced()),
+        );
+        let expected = hit_shown(traces.then_some(4.0));
+        assert!(
+            shows(pixel, expected),
+            "{limit}: {pixel:?}, expected {expected:?}"
+        );
+        let stage = pack.entity.as_ref().unwrap();
+        let lit = stage.scene.as_ref().is_some_and(|t| t.traces_lights());
+        assert_eq!(
+            (lit, pack.frame.ray_lights.is_some()),
+            (traces, traces),
+            "{limit}"
+        );
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "{error:?}");
+    }
 }

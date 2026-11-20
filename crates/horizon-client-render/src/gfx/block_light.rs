@@ -23,6 +23,10 @@ const MAX_SOURCES: usize = 2048;
 /// `[[lights]]` colours go up to 4; the cells keep them over 4 in 8 bits.
 const COLOR_RANGE: f32 = 4.0;
 
+/// The light-giving blocks each section mesh lists (`SectionMesh::lights`), `(block, state)`,
+/// by section: shared, so the ray light sources' worker reads them without a copy.
+pub type SectionLights = FxHashMap<SectionKey, std::sync::Arc<[([i32; 3], u32)]>>;
+
 /// The light a block state gives off: its `[[lights]]` colour and its level, 1 to 15.
 pub type LightTable = FxHashMap<u32, ([f32; 3], u8)>;
 
@@ -73,7 +77,7 @@ impl BlockLight {
         &mut self,
         queue: &wgpu::Queue,
         camera: DVec3,
-        sections: &FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
+        sections: &SectionLights,
         revision: u64,
     ) {
         let half = (SIZE as f32 * CELL / 2.0) as f64;
@@ -107,12 +111,7 @@ impl BlockLight {
 }
 
 /// The cells of the grid with its corner at `origin`: RGBA8, x fastest, then y, then z.
-fn build(
-    table: &LightTable,
-    origin: [i32; 3],
-    camera: DVec3,
-    sections: &FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
-) -> Vec<u8> {
+fn build(table: &LightTable, origin: [i32; 3], camera: DVec3, sections: &SectionLights) -> Vec<u8> {
     let n = SIZE as usize;
     let mut cells = vec![0u8; n * n * n * 4];
     if table.is_empty() {
@@ -128,7 +127,7 @@ fn build(
         if (0..3).any(|i| key[i] < lo[i] || key[i] > hi[i]) {
             continue;
         }
-        for &(pos, state) in lights {
+        for &(pos, state) in lights.iter() {
             let Some(&(color, level)) = table.get(&state) else {
                 continue;
             };
@@ -196,7 +195,7 @@ mod tests {
         let mut sections = FxHashMap::default();
         // A torch at world (8, 64, 8): section y = (64 - MIN_Y) / 16.
         let sy = (64 - crate::chunk::MIN_Y) / 16;
-        sections.insert((0, sy, 0), vec![([8, 64, 8], 7)]);
+        sections.insert((0, sy, 0), vec![([8, 64, 8], 7)].into());
         let camera = DVec3::new(8.0, 64.0, 8.0);
         let origin = [-64, 0, -64];
         let cells = build(&table, origin, camera, &sections);

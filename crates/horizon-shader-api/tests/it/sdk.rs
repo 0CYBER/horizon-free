@@ -49,6 +49,7 @@ fn the_traced_examples_pass_without_the_scene_and_with_it() {
     for (pack, label) in [
         ("traced_shadows", "Sun shadows"),
         ("traced_water", "Reflecting water"),
+        ("traced_lights", "Block lights"),
     ] {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("packs")

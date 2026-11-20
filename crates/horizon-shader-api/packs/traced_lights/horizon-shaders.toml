@@ -1,0 +1,15 @@
+schema = 1
+id = "traced_lights"
+name = "Traced Lights"
+version = "1.0.0"
+api = "0.2"
+description = "Light from torches, lanterns and other light blocks, each tested with a ray: the smallest pack that reads the scene's light sources. A test pack of the SDK, not offered to players."
+authors = ["Horizon"]
+license = "MIT"
+
+[ray_tracing]
+lights = true
+
+[[post]]
+file = "post.wgsl"
+name = "Block lights"

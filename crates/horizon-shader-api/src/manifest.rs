@@ -165,11 +165,16 @@ pub struct Manifest {
 
 /// `[ray_tracing]` (0.2): the pack's post passes, and its material, entity, compute and `[[before_world]]`
 /// stages where they call them, get `trace`, `trace_layers` and the other trace functions, which read the terrain around the
-/// camera where the device traces rays (`frame.has_ray_tracing`) and miss where it doesn't. No
-/// keys yet.
+/// camera where the device traces rays (`frame.has_ray_tracing`) and miss where it doesn't.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct RayTracing {}
+pub struct RayTracing {
+    /// `lights = true`: the stages whose files name them get the light sources around the
+    /// camera (`RayLight`, `ray_light`, `ray_lights_near`, ...), and the names are taken. Off,
+    /// the pack is built as without the key.
+    #[serde(default)]
+    pub lights: bool,
+}
 
 /// `[motion]` (0.2): the pack's post passes get `scene_motion`, `motion_at`, `MotionData` and
 /// the `MOTION_` kinds, how each pixel's surface moved since last frame. No keys yet.
@@ -619,9 +624,9 @@ struct RawBudget {
 }
 
 /// Whether `name` is taken from a pack's own WGSL names: by the post prelude's resources or, under
-/// `[ray_tracing]`, by its functions, or, under `[motion]`, by the motion guide's `scene_motion`
-/// and `motion_at`, or as a word WGSL reserves.
-pub(crate) fn taken(name: &str, ray_tracing: bool, motion: bool) -> bool {
+/// `[ray_tracing]`, by its functions (the light sources' only with `lights = true`), or, under
+/// `[motion]`, by the motion guide's `scene_motion` and `motion_at`, or as a word WGSL reserves.
+pub(crate) fn taken(name: &str, ray_tracing: Option<&RayTracing>, motion: bool) -> bool {
     // The post prelude's functions `[ray_tracing]` brings.
     let traced = [
         "trace",
@@ -651,7 +656,8 @@ pub(crate) fn taken(name: &str, ray_tracing: bool, motion: bool) -> bool {
         "scene_surface",
     ];
     reserved.contains(&name)
-        || (ray_tracing && traced.contains(&name))
+        || (ray_tracing.is_some() && traced.contains(&name))
+        || (ray_tracing.is_some_and(|r| r.lights) && crate::stages::LIGHT_NAMES.contains(&name))
         || (motion && guide.contains(&name))
         || naga::keywords::wgsl::RESERVED.contains(&name)
 }
@@ -675,7 +681,7 @@ pub(crate) fn target_name(name: &str) -> bool {
 /// texture writes it (`kept::kept_targets`).
 fn check_post_targets(
     post: &[Stage],
-    ray_tracing: bool,
+    ray_tracing: Option<&RayTracing>,
     motion: bool,
     kept: &[crate::kept::Resource],
 ) -> Result<(), String> {
@@ -897,7 +903,7 @@ impl Manifest {
         let resets = (raw.options.iter())
             .filter_map(|o| Some((o.id.clone(), o.resets.clone()?)))
             .collect();
-        let traced = raw.ray_tracing.is_some();
+        let traced = raw.ray_tracing.as_ref();
         let moving = raw.motion.is_some();
         let kept = crate::kept::check(
             raw.kept,
@@ -990,7 +996,7 @@ impl Manifest {
             options.push(option);
         }
         // `RayHit` has a surface's tags and material id, as `MaterialInput` does.
-        if !raw.tags.is_empty() && raw.material.is_none() && !traced {
+        if !raw.tags.is_empty() && raw.material.is_none() && traced.is_none() {
             return Err(err("tags are read by the material stage and by `trace`: \
                  give it a [material] or a [ray_tracing]"
                 .into()));
@@ -1017,7 +1023,7 @@ impl Manifest {
             }
         }
         let solid_ids = raw.shadow.iter().any(|s| !s.solid_materials.is_empty());
-        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids && !traced {
+        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids && traced.is_none() {
             return Err(err(
                 "materials are read by the material stage, `trace` and \
                  shadow.solid_materials: give it a [material] or a [ray_tracing], or use \
