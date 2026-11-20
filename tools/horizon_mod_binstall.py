@@ -24,6 +24,21 @@ PLATFORMS = [
     {"target": "aarch64-apple-darwin", "os": "macos-latest", "run": True},
 ]
 
+# The row a pull request builds: nobody downloads a pull request's archives, so it builds the one Linux archive
+# whose binary is started, on one runner of GitHub's shared pool instead of five. wasm-std-hosts.yml builds the tool
+# on Windows for the same paths, and the tool has no macOS-only code; a tag or a manual run builds every row.
+PULL_REQUEST_TARGET = "x86_64-unknown-linux-gnu"
+
+
+def platforms(event):
+    """The rows `.github/workflows/cargo-horizon-mod.yml` builds for a run started by `event`."""
+    if event != "pull_request":
+        return PLATFORMS
+    rows = [platform for platform in PLATFORMS if platform["target"] == PULL_REQUEST_TARGET]
+    if len(rows) != 1 or not rows[0]["run"]:
+        raise ValueError(f"{PULL_REQUEST_TARGET} is not one row whose binary is started")
+    return rows
+
 # Match any identifier-ish brace placeholder, not just lowercase letters and hyphens, so an unknown
 # name (e.g. `{target_os}`) reaches `fill()` and raises KeyError instead of surviving into the URL.
 PLACEHOLDER = re.compile(r"\{\s*([A-Za-z0-9_-]+)\s*\}")

@@ -3,11 +3,13 @@ name: cargo-horizon-mod
 # [package.metadata.binstall] from crates/cargo-horizon-mod/Cargo.toml and downloads the archive this workflow
 # attaches to the tag `cargo-horizon-mod-v<version>`, whose version must be the manifest's. The targets come from
 # tools/horizon_mod_binstall.py, the same file the manifest's template is checked against, so a platform added there
-# is built here and one nobody publishes is caught before it ships. A pull request builds the archives and publishes
-# nothing.
+# is built here and one nobody publishes is caught before it ships. A pull request builds only the Linux x64 archive
+# (`platforms()` there) and publishes nothing; a manual run (`gh workflow run cargo-horizon-mod --ref <branch>`) builds
+# every row without publishing, the check before a tag.
 on:
   push:
     tags: ['cargo-horizon-mod-v*']
+  workflow_dispatch:
   pull_request:
     paths:
       - 'crates/cargo-horizon-mod/**'
@@ -24,7 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: platforms
-        run: echo "platforms=$(python3 -c 'import json, tools.horizon_mod_binstall as m; print(json.dumps(m.PLATFORMS))')" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT: ${{ github.event_name }}
+        run: echo "platforms=$(python3 -c 'import json, os, tools.horizon_mod_binstall as m; print(json.dumps(m.platforms(os.environ["EVENT"])))')" >> "$GITHUB_OUTPUT"
   build:
     needs: plan
     name: build ${{ matrix.target }}
@@ -76,7 +80,7 @@ jobs:
           retention-days: 3
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

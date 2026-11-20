@@ -45,6 +45,15 @@ class BinstallTests(unittest.TestCase):
 
             self.assertTrue(any("not" in problem for problem in binstall.check(directory, "cargo-horizon-mod-v9.9.9")))
 
+    def test_a_pull_request_builds_one_linux_archive_and_a_tag_or_manual_run_builds_all(self):
+        rows = binstall.platforms("pull_request")
+        self.assertEqual([row["target"] for row in rows], ["x86_64-unknown-linux-gnu"])
+        self.assertTrue(rows[0]["run"])
+        self.assertTrue(rows[0]["os"].startswith("ubuntu"))
+        for event in ("push", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertEqual(binstall.platforms(event), binstall.PLATFORMS)
+
 
 if __name__ == "__main__":
     unittest.main()
