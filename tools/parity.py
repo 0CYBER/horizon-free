@@ -1186,6 +1186,10 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles, r
                 # gets its own retry below instead, which keeps reusing oracle results afterwards.
                 retried.add(label)
                 queue.insert(0, label)
+                if os.environ.get("PARITY_KEEP_FIRST_LOGS") == "1":
+                    # A hosted runner (parity-hosted.yml) keeps nothing else: the first run's log is the only
+                    # evidence of why it failed.
+                    keep_first_log(label)
                 print(f"retry {label} without reused oracle results", flush=True)
                 continue
             # A harness that only passes fresh no longer reuses oracle results.

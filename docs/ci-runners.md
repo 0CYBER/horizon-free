@@ -21,6 +21,8 @@ mini's) is kept small by [`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) befor
 Blacksmith's runners (outside GitHub's 20-job pool) took over from GitHub's on 2026-11-17 for jobs that hold no
 secret and neither publish nor release: `checks`' `verify` ([below](#verify-on-blacksmith)), `perf-wasm`,
 `cargo-horizon-mod`'s `plan`, `needs-info`, and the bots whenever `SELF_HOSTED_CI=off` sends them away from ours.
+One exception holds secrets there: [hosted parity](#hosted-parity), started by hand, whose fetch step reads the
+maintainers' vanilla data.
 
 ## What stays on GitHub, and why
 
@@ -30,6 +32,8 @@ secret and neither publish nor release: `checks`' `verify` ([below](#verify-on-b
   writes the set of pull requests the Nightly holds), `native hook stamp` (it pushes a branch). playhorizon is a
   partner's server that the partner can reach, and a checks runner keeps what a fork's job left behind: neither may
   decide or sign what players download. `tests/test_ci_runners.py` pins it.
+  Not on GitHub's own runners, as the one exception: [hosted parity](#hosted-parity)'s fetch step, on Blacksmith's,
+  holds the vanilla data's two secrets. It decides, signs and publishes nothing, and its token only reads.
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
@@ -102,6 +106,59 @@ git push origin --delete try/<name>                           # when done
   queue's commit, which a try run cannot give.
 - The run uses the branch's own copy of `ci.yml`: a branch from before 2026-11-19 has no inputs and always starts the
   ARM64 and JFR jobs. Rebase it on main first.
+
+## Hosted parity
+
+`.github/workflows/parity-hosted.yml` runs vanilla harnesses on Blacksmith's 16-vCPU runners, outside the Mac mini.
+For now a maintainer starts it by hand (`workflow_dispatch` only). It is advisory: no required check waits for it,
+and its jobs are named `hosted parity …` so nobody mistakes them for the Mac's `parity / parity`. The job to read is
+`hosted parity (advisory)`: it fails when a shard failed, when the plan failed, and when the run had no access to
+the data ("hosted parity did not run: no access to the data"). It passes only when every shard passed, or when the
+plan had nothing to run.
+
+```sh
+gh workflow run parity-hosted.yml --ref <branch> -f harnesses="food light spawn_loot"   # these, by name
+gh workflow run parity-hosted.yml --ref <branch> -f base=<commit>                       # what the branch's changes reach
+```
+
+- **The game's data.** Horizon's code never downloads the game. The data comes from `horizon-rust/vanilla-data`, a
+  private repository of the maintainers' own Minecraft files.
+  - It holds them encrypted (AES-256, zstd) in datasets made with `lab.py prepare`. Today there is one,
+    `26.3-linux-x64`: the jars and libraries, without sources, sounds or other languages.
+  - A read-only deploy key (`VANILLA_DATA_DEPLOY_KEY`) clones it, and `VANILLA_DATA_PASSPHRASE` decrypts it.
+  - Those two secrets reach one step, which runs `tools/ci/fetch-vanilla-data.sh`. The script writes them to a
+    private folder, removes that folder before it ends, and prints only sizes, counts and timings.
+  - That step runs before the tested commit is checked out, with the default branch's copy of the script: the
+    secrets never meet the tested commit's code. Without that copy the shard stops. The workflow file itself comes
+    from the dispatched ref, so who may dispatch (write access) is still the guard against a branch that edits it.
+  - Only a commit on a branch of this repository runs, resolved once to a full SHA that every job uses.
+- **What never leaves the runner.** The data, what is prepared from it, `target/` and `.local/` are never put on a
+  sticky disk, in a cache (no `actions/cache`, no sccache) or in an artifact: a fork's pull request can mount this
+  repository's disks and caches. Everything is built cold and thrown away with the runner.
+- **What is public.** The job logs and the uploaded logs hold what `parity.yml`'s public runs already show: compared
+  values, log tails and harness names. That is the only exception to "sizes, counts and timings only", which the
+  fetch step keeps. The upload holds the first run's log of each retried harness, the last log of each that failed,
+  and how each retry ended (from its saved record), kept 3 days. `tests/test_ci_runners.py` pins all of this.
+- **Plan, shards, result.** A `plan` job, with no secret and no data, selects with `tools/parity.py` and splits the
+  selection with `tools/parity_plan.py` into shards by the probe each harness builds (world, client, game, other), so
+  a runner pays only that group's cold build.
+  - There are no hosted dependency lists yet, so with `base` every harness counts as reached, and the full set is
+    planned. The lists will come from a hosted full run on main.
+  - `base` matters only when the head conflicts with main: otherwise the head is tested merged into main's tip and
+    compared with it, as in `parity.yml`.
+  - Each shard runs on a `run` runner with Xvfb and Mesa's software Vulkan (lavapipe), as playhorizon has. The oracle
+    cache is created before the harnesses start, since shims that create it at once can fail.
+  - `hosted parity (advisory)` states the result and lists what was not run. It lists a harness as passed on its
+    retry only when its saved record says so; a first log without one (a shard stopped mid-retry) is listed as a
+    retry not finished.
+- **Not run on hosted runners.** These are listed with their reason, never counted as passed:
+  - the harnesses the `hosted` entry of `tools/parity_hosts.json` excludes: sounds, other languages, sources, older
+    servers' worlds, the network;
+  - `known_failing` and `named_only` ones.
+- **Cost, measured 2026-11-19.**
+  - About a minute of setup and data per runner.
+  - Cold probe builds: world 40 s; client 530 s (two profiles); the game 480 s.
+  - Then 3-10 s of runner time per harness, 8 at a time, most of it in the vanilla oracle.
 
 ## Which jobs, and when
 

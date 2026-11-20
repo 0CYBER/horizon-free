@@ -120,6 +120,21 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.plan(["food"], {}, needed=parity_plan.MATRIX_LIMIT + 1), (1, None))
 
 
+class HostedTests(unittest.TestCase):
+    def test_hosted_runners_leave_out_what_they_cannot_run_and_say_why(self):
+        config = {"hosts": {"hosted": {"exclude": {"music": "no sounds"}}, "playhorizon": {"exclude": {"mob_ai": "heap"}}},
+                  "known_failing": {"datafix": "#1: worlds"}, "named_only": {"lan": "slow"}}
+        names = ["food", "music", "mob_ai", "datafix#1", "datafix#2", "lan"]
+        self.assertEqual(parity_plan.hosted_left_out(names, config),
+                         {"music": "no sounds", "datafix#1": "known failing: #1: worlds",
+                          "datafix#2": "known failing: #1: worlds", "lan": "named only: slow"})
+
+    def test_the_repositorys_hosted_excludes_name_real_harnesses(self):
+        found = {parity.base_name(name) for name in parity.harnesses()}
+        excluded = parity.host_config()["hosts"]["hosted"]["exclude"]
+        self.assertEqual(set(excluded) - found, set())
+
+
 class ExportTests(unittest.TestCase):
     def test_a_fresh_runs_passes_are_exported(self):
         records = {

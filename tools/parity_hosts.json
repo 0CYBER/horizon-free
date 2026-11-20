@@ -27,6 +27,22 @@
     "remote_fireworks": "fails here even alone, at bare main 3b19c386c (2 of 2 runs and the retry), and passes on the Mac mini: the guest's sparks are gone by its trail screenshot (same CPU starvation as remote_fireball; a private Xvfb on CPUs 0-3 did not help) - 2026-10-27"
    },
    "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), its CI runner has CPUs 4-7, so workers get 0-3 (as tools/remote.sh runs do) and 3 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
+  },
+  "hosted": {
+   "note": "Not a worker: the hosted runners without a GPU that .github/workflows/parity-hosted.yml uses. tools/parity_plan.py --hosted leaves these out, and known_failing and named_only too, and lists them as not run there.",
+   "exclude": {
+    "ambient_sound": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "audio_attributes": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "music": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "situational_music": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "sound_engine": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "sound_event": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "subtitle": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
+    "pack_screen": "needs the vanilla languages besides en_us, which the hosted runners' data leaves out",
+    "entity_model": "reads the decompiled client sources, which the hosted runners' data leaves out",
+    "datafix": "upgrades worlds made with the official server jars of 1.18.2 to 26.2, which the hosted runners' data leaves out",
+    "redstone_catalog": "downloads its schematics from the network while it runs"
+   }
   }
  },
  "local_only": {

@@ -655,6 +655,21 @@ class KnownFlakyTests(unittest.TestCase):
         self.assertEqual(started, [("food", True), ("food", False)])
         self.assertFalse(results["food"]["oracle_reuse"])
 
+    def test_only_hosted_runs_keep_the_first_log_of_an_ordinary_retry(self):
+        for keep, logs in (("1", ["food.first-run.log"]), ("", ["food.log"])):
+            with self.subTest(keep=keep), tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch.dict(os.environ, {"PARITY_KEEP_FIRST_LOGS": keep}), \
+                    mock.patch.multiple(parity, STATE_DIR=Path(tmp), SHARED=Path(tmp)), \
+                    mock.patch.object(parity, "save_state"), mock.patch.object(parity, "time") as clock, \
+                    mock.patch("builtins.print"):
+                clock.monotonic.return_value = 0.0
+                (Path(tmp) / "logs").mkdir()
+                (Path(tmp) / "logs/food.log").write_text("the first run")
+                state = {"harnesses": {"food": {"status": "pass", "oracle_reuse": True}}}
+                results, _ = parity.run({"food": ["fail", "pass"]}, state, None, "env", [FakeExecutor()], True)
+                self.assertEqual(results["food"]["retried"], "reused oracle results")
+                self.assertEqual(sorted(path.name for path in (Path(tmp) / "logs").iterdir()), logs)
+
     def test_repeated_runs_get_no_retry(self):
         results, started = self.run_harnesses({"dedicated_server": ["pass", "fail"]}, {"dedicated_server": "timer"},
                                               rounds={"dedicated_server": 2})

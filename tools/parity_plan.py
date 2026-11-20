@@ -120,6 +120,17 @@ def plan(names, groups, count):
     return [(group, members[group][index::counts[group]]) for group in present for index in range(counts[group])]
 
 
+def hosted_left_out(names, config):
+    """{name: reason} for the selected harnesses hosted runners don't run: those the "hosted" entry of
+    tools/parity_hosts.json excludes (data their runners lack), left out as playhorizon's excludes are there, and
+    the known failing and named-only ones."""
+    reasons = {**{name: f"named only: {why}" for name, why in parity.named_only(config).items()},
+               **{name: f"known failing: {why}" for name, why in parity.known_failing(config).items()},
+               **parity.platform_skips(config, "hosted")}
+    return {name: reasons.get(name) or reasons[parity.base_name(name)] for name in names
+            if name in reasons or parity.base_name(name) in reasons}
+
+
 class IncompleteExport(Exception):
     pass
 
@@ -171,6 +182,8 @@ def main(argv=None):
                         help="write the dependency lists of the harnesses passed here into DIR (empty or new; no "
                              "selection). Only meaningful on a runner that started without parity state and ran "
                              "parity.py once; exits 1, writing nothing, when the export would be incomplete")
+    parser.add_argument("--hosted", action="store_true",
+                        help="leave out what hosted runners don't run (hosted_left_out), and list it")
     args = parser.parse_args(ours)
     records = parity.load_state()["harnesses"]
     if args.export_dependencies:
@@ -182,8 +195,11 @@ def main(argv=None):
         print(f"{count} dependency lists written to {args.export_dependencies}")
         return 0
     names, left_out = selection(rest)
+    if args.hosted:
+        left_out.update(hosted_left_out(names, parity.host_config()))
     for name, reason in left_out.items():
         print(f"not run here: {name}: {reason}", file=sys.stderr if args.shard else sys.stdout)
+    names = [name for name in names if name not in left_out]
     groups = {name: probe_group(artifacts(name, records)) for name in names}
     if args.shard:
         index, count = args.shard
