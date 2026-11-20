@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -91,6 +92,130 @@ class ParityRunnerTests(unittest.TestCase):
             ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "a", "--example", "b",
              "--example", "old"],
         ])
+
+    def test_a_prebuild_cargo_run_says_where_its_time_went(self):
+        command = ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--features", "f",
+                   "--example", "a", "--example", "b", "--bins"]
+        # As Cargo prints them with CARGO_TERM_COLOR=always: a bold, coloured status word, then a reset.
+        lines = [(10.0, "\x1b[1m\x1b[36m    Blocking\x1b[0m waiting for file lock on package cache\n"),
+                 (12.0, "\x1b[1m\x1b[36m    Blocking\x1b[0m waiting for file lock on build directory\n"),
+                 (700.0, "\x1b[1m\x1b[92m   Compiling\x1b[0m serde v1.0.0\n"),
+                 (900.0, "\x1b[1m\x1b[32m   Compiling\x1b[0m horizon-world v0.1.0 (/w)\n"),
+                 (1000.0, "\x1b[1m\x1b[92m    Finished\x1b[0m `release` profile [optimized] target(s) in 16m 40s\n")]
+        expected = ("release -p horizon-world --features f --bins 2 targets: 1001s, 2 crates compiled, "
+                    "about 2s waiting for the package cache lock (to cargo's next line), "
+                    "about 688s waiting for the build directory lock (to cargo's next line)")
+        self.assertEqual(parity.describe_cargo_build(command, lines, 0.0, 1001.0), expected)
+        plain = [(at, parity.ANSI_ESCAPE.sub("", line)) for at, line in lines]
+        self.assertEqual(plain[2][1], "   Compiling serde v1.0.0\n")
+        self.assertEqual(parity.describe_cargo_build(command, plain, 0.0, 1001.0), expected)
+        # Still waiting when the run ended (it failed or was stopped).
+        self.assertEqual(parity.describe_cargo_build(["cargo", "build", "--locked", "--example", "a"],
+                                                     [(5.0, "Blocking waiting for file lock on build directory\n")],
+                                                     0.0, 65.0),
+                         "dev 1 target: 65s, 0 crates compiled, "
+                         "about 60s waiting for the build directory lock (to cargo's next line)")
+
+    def test_the_prebuild_still_returns_a_failed_runs_errors(self):
+        # Bytes UTF-8 can't decode must not stop the line reader (and with it the build).
+        script = ("import sys; print('Blocking waiting for file lock on build directory', file=sys.stderr, flush=True); "
+                  "sys.stderr.buffer.write(b'\\x1b[1m\\x1b[32m   Compiling\\x1b[0m x v1 \\x81\\xff\\x81\\n'); "
+                  "sys.stderr.flush(); sys.exit(1)")
+        with mock.patch.object(parity, "target_packages", return_value={}), \
+                mock.patch.object(parity, "prebuild_commands", return_value=[[sys.executable, "-c", script]]), \
+                mock.patch.object(parity, "sccache_stats", return_value=None), \
+                mock.patch.object(parity.locale, "getpreferredencoding", return_value="utf-8"), \
+                mock.patch("builtins.print") as printed:
+            built, errors = parity.prebuild([], 2)
+        self.assertFalse(built)
+        self.assertEqual(errors, "Blocking waiting for file lock on build directory\n"
+                                 "\x1b[1m\x1b[32m   Compiling\x1b[0m x v1 ���\n")  # colours kept here
+        self.assertIn("1 crate compiled", printed.call_args_list[0].args[0])
+        # The failure path prints them where the console can't encode U+FFFD (cp1252 on Windows).
+        with self.assertRaises(UnicodeEncodeError):
+            print(errors, file=io.TextIOWrapper(io.BytesIO(), encoding="cp1252"))
+        console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
+        with mock.patch.object(parity.sys, "stdout", console):
+            print(parity.printable(errors))
+        console.flush()
+        self.assertTrue(console.buffer.getvalue().endswith(b" x v1 ???\n\n"), console.buffer.getvalue())
+
+    def test_the_prebuild_machine_and_cache_lines(self):
+        self.assertEqual(parity.describe_machine(12, (3.14, 2.0, 1.0), (9.0, 6.5, 2.25)),
+                         "machine: 12 CPUs, load (1/5/15 min) at start 3.1 2.0 1.0, end 9.0 6.5 2.2")
+        self.assertEqual(parity.describe_machine(8, None, None), "machine: 8 CPUs")
+        self.assertEqual(parity.describe_sccache({"hits": 10, "misses": 5}, {"hits": 410, "misses": 7}),
+                         "compiler cache (whole sccache server): 400 hits, 2 misses")
+        for before in (None, {"hits": 500, "misses": 5}):  # none, or a server restarted meanwhile
+            self.assertEqual(parity.describe_sccache(before, {"hits": 410, "misses": 7}),
+                             "compiler cache: not in use, or its counts could not be read")
+
+    def test_sccache_counts_come_from_a_file_within_a_time_limit(self):
+        stats = (b"Compile requests                   500\nCache hits                         410\n"
+                 b"Cache hits (Rust)                  410\nCache misses                         7\n"
+                 b"Cache hits rate                  98.33 %\nCache location     /Users/\xff\n")
+
+        class FakeSccache:
+            """Popen as subprocess.run drives it; `stall` is what communicate raises before a kill."""
+            started, stall = [], None
+            stdin = stdout = stderr = None
+
+            def __init__(self, command, **options):
+                FakeSccache.started.append(self)
+                self.args = self.command = command
+                self.options, self.events = options, []
+                self.returncode, self.killed = None, False
+                options["stdout"].write(stats)  # a real file, not a pipe
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exception):
+                self.wait()
+
+            def communicate(self, input=None, timeout=None):
+                self.events.append(("communicate", timeout))
+                if FakeSccache.stall and not self.killed:
+                    raise FakeSccache.stall
+                self.returncode = -9 if self.killed else 0
+                return None, None
+
+            def kill(self):
+                self.events.append("kill")
+                self.killed = True
+
+            def wait(self, timeout=None):
+                self.events.append("wait")
+                self.returncode = -9 if self.killed else 0
+                return self.returncode
+
+            def poll(self):
+                return self.returncode
+
+        with mock.patch.object(parity.subprocess, "Popen", FakeSccache):
+            self.assertEqual(parity.sccache_stats({"RUSTC_WRAPPER": "/opt/homebrew/bin/sccache"}),
+                             {"hits": 410, "misses": 7})
+            probe, = FakeSccache.started
+            self.assertEqual(probe.command, ["/opt/homebrew/bin/sccache", "--show-stats"])
+            self.assertNotEqual(probe.options["stdout"], subprocess.PIPE)
+            self.assertEqual(probe.events[0], ("communicate", 10))
+            self.assertIsNone(parity.sccache_stats({}))  # no wrapper: not asked
+            self.assertEqual(len(FakeSccache.started), 1)
+            # Past its 10 s: killed, then reaped (waited for) before giving up.
+            FakeSccache.stall = subprocess.TimeoutExpired("sccache", 10)
+            self.assertIsNone(parity.sccache_stats({"RUSTC_WRAPPER": "sccache"}))
+            probe = FakeSccache.started[-1]
+            self.assertEqual(probe.events[:2], [("communicate", 10), "kill"])
+            self.assertTrue(set(probe.events[2:]) & {"wait", ("communicate", None)}, probe.events)
+            self.assertEqual(probe.returncode, -9)
+            # An interrupt still ends the run, with the probe killed.
+            FakeSccache.stall = KeyboardInterrupt()
+            with self.assertRaises(KeyboardInterrupt):
+                parity.sccache_stats({"RUSTC_WRAPPER": "sccache"})
+            self.assertIn("kill", FakeSccache.started[-1].events)
+        for failure in (OSError, ValueError):
+            with mock.patch.object(parity.subprocess, "Popen", side_effect=failure):
+                self.assertIsNone(parity.sccache_stats({"RUSTC_WRAPPER": "sccache"}))
 
     def test_a_probe_binary_depends_only_on_the_probes_it_ran(self):
         commands = [["/t/release/examples/world_probe", "a_fixture", "/dir"],
