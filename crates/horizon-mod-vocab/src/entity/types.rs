@@ -1217,6 +1217,39 @@ impl NoBackend for OpenMenuError {
     }
 }
 
+/// Why [`PlayerRef::open_station`] opened nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum OpenStationError {
+    /// The menu type is not a workstation the game opens without a block: the crafting
+    /// table's, the loom's, the grindstone's, the cartography table's, the stonecutter's,
+    /// the smithing table's or the anvil's.
+    NotStation,
+    /// The player is stale, not connected (a fake player), or not in the world; also a host
+    /// without a game.
+    PlayerUnavailable,
+    /// More `inputs` than the station has input slots.
+    TooManyInputs,
+    /// The player's station is asking the mods already, while it opens or takes a click: a
+    /// listener there (`prepare_item_craft`, `anvil_update`...) can't open another in its place.
+    Busy,
+    /// One of the inputs was refused at the game's item conversion boundary.
+    Stack(StackWriteError),
+}
+
+impl From<StackWriteError> for OpenStationError {
+    fn from(error: StackWriteError) -> Self {
+        Self::Stack(error)
+    }
+}
+
+impl NoBackend for OpenStationError {
+    fn no_backend() -> Self {
+        Self::PlayerUnavailable
+    }
+}
+
 /// Why [`PlayerRef::respawn`] respawned nobody. Nothing changed when one comes back; the checks
 /// run in the order the variants are listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

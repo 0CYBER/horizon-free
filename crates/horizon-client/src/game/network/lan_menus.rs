@@ -22,6 +22,13 @@ pub(in crate::game) struct GuestMenus {
     /// The storage a mod backed its open menu's slots with (`player_back_mod_menu_slots`);
     /// None for every menu no mod backed.
     pub(in crate::game) slot_places: Option<super::native_menu_places::MenuSlotPlaces>,
+    /// The crafting table or workstation a mod opened with no block
+    /// (game/modding/native_stations.rs); None for every other menu.
+    pub(in crate::game) portable: Option<super::native_stations::PortableStation>,
+    /// The guest's crafting table or workstation is asking the mods, while a mod opens one with
+    /// no block or it takes a click: those hooks (`prepare_item_craft`...) can't open another,
+    /// which would take this one's place and lose its inputs.
+    pub(in crate::game) station_busy: bool,
 }
 
 impl LanHost {

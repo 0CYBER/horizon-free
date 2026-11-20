@@ -739,6 +739,30 @@ pub trait PlayersBackendMut {
         replace: MenuReplace,
     ) -> Result<Option<i32>, OpenMenuError>;
     /// Side: server.
+    /// Opens vanilla workstation menu `menu` for a connected player with no block, as a Java
+    /// item does with a `ContainerLevelAccess` at the player: `minecraft:crafting`, `loom`,
+    /// `grindstone`, `cartography_table`, `stonecutter`, `smithing` or `anvil`. The station
+    /// works where the player stands at each use (its sounds, experience and level events);
+    /// its input slots start with `inputs` (the crafting grid's nine, row by row; a station's
+    /// in its menu's order). It stays open while the player's inventory holds one of `keep`
+    /// (`AbstractContainerMenu.stillValid`) and closes as walking away does once it holds
+    /// none, so an empty `keep` closes it on the next tick. An anvil opened this way wears no
+    /// block and plays no anvil event: its mod does both after `anvil_craft_post`. Before the
+    /// inputs go back to the inventory on closing, `station_closing` lets a mod keep them.
+    /// The menu replaces the one the player had open, as `player_open_menu`'s does; a stock
+    /// client shows it. The window id, or Ok(None) when a mod cancelled the open. Errors:
+    /// `NotStation`, `PlayerUnavailable`, `TooManyInputs`, `Stack` for an input the game
+    /// refuses, or `Busy` from a hook the player's station asks while it opens or takes a click;
+    /// a refused open leaves the old menu as it was.
+    #[access(WorldOnly)]
+    fn player_open_station(
+        &mut self,
+        player: PlayerRef,
+        menu: MenuKey,
+        inputs: Vec<Option<ItemStack>>,
+        keep: Vec<ItemKey>,
+    ) -> Result<Option<i32>, OpenStationError>;
+    /// Side: server.
     /// Backs the container slots of the mod menu `window` that `player_open_mod_menu` opened
     /// for the player with storage that is not a block entity (arismoko/horizon#3385; NeoForge's
     /// `StackCopySlot` and `ResourceHandlerSlot`): `places[n]` is what slot `n` shows. From then

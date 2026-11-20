@@ -1068,27 +1068,59 @@ impl Game<'_> {
 
     /// The guest opened a crafting table (`CraftingTableBlock.getMenuProvider`).
     pub(super) fn lan_open_crafting(&mut self, conn: u32, pos: [i32; 3]) {
+        let _ = self.lan_open_crafting_with(conn, pos, Vec::new());
+    }
+
+    /// `lan_open_crafting` with the grid starting as `grid` (row by row; a mod's table with no
+    /// block, game/modding/native_stations.rs): its window, None when a mod stopped it or no
+    /// window opened.
+    pub(super) fn lan_open_crafting_with(
+        &mut self,
+        conn: u32,
+        pos: [i32; 3],
+        grid: Vec<Option<ItemStack>>,
+    ) -> Option<i32> {
         if !self.guest_may_open(conn, "minecraft:crafting", Some(pos)) {
-            return;
+            return None;
         }
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_close_all(conn);
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
+        let host = self.lan.as_mut()?;
         let title = horizon_protocol::text::translatable("container.crafting", &[]);
-        let Some(window) = host.hub.open_window(conn, "minecraft:crafting", title) else {
-            return;
-        };
+        let window = host.hub.open_window(conn, "minecraft:crafting", title)?;
         let mut menu = Box::new(Menu::new(Kind::Crafting));
         menu.set_registry_id(Some("minecraft:crafting"));
+        if !grid.is_empty()
+            && let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
+        {
+            self.guest_menu_op(gi, &mut menu, |menu, env| {
+                for (slot, stack) in (1..10).zip(grid) {
+                    menu.set_slot(env, slot, stack);
+                }
+            });
+            // The mods have their say on the restored grid's result, as after a click.
+            let guest = &self.lan.as_ref()?.hub.guests[gi];
+            let (uuid, name) = (guest.uuid, guest.name.clone());
+            let mut result = menu.slot(0).cloned();
+            self.native_prepare_item_craft(uuid, &name, Some(pos), &mut result);
+            let env = self.menu_env();
+            menu.set_slot(&env, 0, result);
+        }
+        let host = self.lan.as_mut()?;
         *host.menus.entry(conn).or_default().crafting.table = Some((window, 0, menu, pos));
         self.lan_send_table_content(conn);
         self.player_menu_opening(conn);
+        Some(window)
     }
 
-    /// A click on the guest's crafting table window; false for other windows.
+    /// A click on the guest's crafting table window; false for other windows. The table is out
+    /// of the guest's menus while the mods are asked about its result, so it is busy: a hook
+    /// can't open a station in its place.
     pub(super) fn lan_crafting_click(&mut self, conn: u32, p: &play::ContainerClick) -> bool {
+        self.with_station_busy(conn, |game| game.lan_crafting_click_busy(conn, p))
+    }
+
+    fn lan_crafting_click_busy(&mut self, conn: u32, p: &play::ContainerClick) -> bool {
         let Some(host) = self.lan.as_mut() else {
             return false;
         };
@@ -1113,7 +1145,9 @@ impl Game<'_> {
         };
         if let Some(gi) = gi
             && !host.hub.guests[gi].spectator()
-            && self.lan_table_valid(&host.hub.guests[gi], pos)
+            && self
+                .portable_station_valid(&host.hub.guests[gi], window)
+                .unwrap_or_else(|| self.lan_table_valid(&host.hub.guests[gi], pos))
         {
             let Some(mut changed) = self.guest_menu_op(gi, &mut menu, |menu, env| {
                 let before: Vec<_> = (0..menu.slot_count())
@@ -1458,12 +1492,13 @@ impl Game<'_> {
             .menus
             .iter()
             .filter_map(|(c, p)| p.crafting.table.as_ref().map(|t| (*c, t.0, t.3)))
-            .filter(|&(c, _, pos)| {
-                host.hub
-                    .guests
-                    .iter()
-                    .find(|g| g.conn == c)
-                    .is_some_and(|g| host.hub.here(g) && !self.lan_table_valid(g, pos))
+            .filter(|&(c, window, pos)| {
+                host.hub.guests.iter().find(|g| g.conn == c).is_some_and(|g| {
+                    host.hub.here(g)
+                        && !self
+                            .portable_station_valid(g, window)
+                            .unwrap_or_else(|| self.lan_table_valid(g, pos))
+                })
             })
             .map(|(c, window, _)| (c, window))
             .collect();
@@ -1575,7 +1610,18 @@ impl Game<'_> {
                 .table
                 .take_if(|(w, ..)| window.is_none_or(|window| *w == window))
             {
-                Some((_, _, menu, _)) => (1..10).filter_map(|s| menu.slot(s).cloned()).collect(),
+                Some((table, _, menu, _)) => {
+                    let mut grid: Vec<Option<ItemStack>> =
+                        (1..10).map(|s| menu.slot(s).cloned()).collect();
+                    // A mod's table with no block: the mods may keep its grid first, unless
+                    // the player left.
+                    if matches!(removal, MenuRemoval::Live) {
+                        self.portable_station_closing(conn, table, "minecraft:crafting", &mut grid);
+                    } else {
+                        self.portable_station_closed(conn, table);
+                    }
+                    grid.into_iter().flatten().collect()
+                }
                 None => return false,
             }
         };

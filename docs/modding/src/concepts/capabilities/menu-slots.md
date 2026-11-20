@@ -274,6 +274,45 @@ if let Some(window) = window {
 
 A vanilla menu and a menu no mod backed never take this path: their slots keep the backing they had.
 
+## A workstation with no block
+
+An item that carries a crafting table or an anvil ("workbench on a stick") opens the vanilla workstation menu with
+no block, as a Java item does with a `ContainerLevelAccess` at the player:
+`player.open_station(host, menu, inputs, keep)`. `menu` is the key of `minecraft:crafting`, `minecraft:loom`,
+`minecraft:grindstone`, `minecraft:cartography_table`, `minecraft:stonecutter`, `minecraft:smithing` or
+`minecraft:anvil`. The station works where the player stands at each use: its sounds, the grindstone's experience
+and the smithing table's level event happen there. Its input slots start with `inputs` (the crafting grid's nine row
+by row, a station's in its menu's order), so a mod can put back what the item kept. It stays open while the player's
+inventory (main slots, armour, off hand) holds one of the items in `keep`, which stands in for the Java menu's
+`stillValid`, and closes as walking away from a block does once it holds none. A stock client shows it: the client
+opens station screens from the menu type alone.
+
+The menu replaces the one the player had open. The call returns the window id, `Ok(None)` when a mod cancelled the
+open (`container_opened`), or an `OpenStationError`: `NotStation` for any other menu type,
+`PlayerUnavailable`, `TooManyInputs`, or `Stack(StackWriteError)` for an input the game refuses.
+
+Before its inputs go back to the inventory on closing (the player closed it, it was no longer valid, another menu
+replaced it), `station_closing` hands a mod the input slots. Empty a slot to keep its stack, for instance in the
+item's `minecraft:container` component through an `ItemPlace` write in the same hook; only emptied slots count, so a
+listener can't make or grow a stack there. When the player leaves, the inputs go back to the inventory before it is
+saved and the hook doesn't fire. An anvil opened this way wears no block and plays no anvil event: its mod wears its
+own item after `anvil_craft_post` and plays level event 1029 or 1030 with `level.level_event`.
+
+```rust,ignore
+// An ItemPart on the stick; `self.stick` is its ItemKey, from `r.item_key` in `register`.
+fn use_item(&self, host: HostSide<'_>, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
+    let HostSide::Server(host) = host else { return Some(InteractionResult::Consume) };
+    let player = host.player(event.player)?;
+    let table = host
+        .menu_keys()
+        .into_iter()
+        .find(|key| host.menu_key_id(*key) == "minecraft:crafting")?;
+    let grid = stored_grid(event.stack); // what this item kept from its last use
+    player.open_station(host, table, grid, vec![self.stick]).ok()?;
+    Some(InteractionResult::SuccessServer)
+}
+```
+
 ## Recipe transfer into a mod menu
 
 A recipe viewer's "+" calls `RecipesClientHost::transfer_recipe_id(recipe, max)` (or `transfer_recipe(book_id)`

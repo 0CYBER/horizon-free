@@ -1,0 +1,5 @@
+# Workstations a native mod opens with no block (#18347) need prepared resources and isolated mod registration.
+horizon-client game::lan_stations::portable_anvil_tests::an_anvil_with_no_block_wears_no_block lib daily resources
+horizon-client game::native_stations_tests::a_station_opened_with_inputs_is_prepared_and_a_leaving_player_asks_no_mod lib daily resources
+horizon-client game::native_stations_tests::a_station_opening_refuses_another_from_its_hooks lib daily resources
+horizon-client game::native_stations_tests::a_table_with_no_block_keeps_to_its_item_and_lets_the_mods_keep_its_grid lib daily resources
