@@ -7,7 +7,9 @@
 //! (capped at the view distance), `player_shown`, and whether the client has the chunk. The
 //! farthest corner of the cell is no nearer than any entity in it, so a cell whose corner is in
 //! range has every entity in range; an entity shown to every client (not a spectator, not
-//! watching through another, not hidden) is shown to this one; the chunk is looked up each time.
+//! watching through another, not hidden) is shown to this one, unless a mod hid entities from
+//! this client alone (`Tracker::hidden`), whose cells are then never skipped; the chunk is
+//! looked up each time.
 //! That the entities are tracked comes from the tick the client last met the cell in full and
 //! found them so (`Verified`); it holds until the cell's entities change (`Stat::epoch`), and
 //! every other way the tracker's set changes drops it (`drop_cell`, `Tracker::forget` and `clear`).
@@ -49,7 +51,7 @@ pub(super) fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]
             p.range,
         ),
     };
-    near && broadcast_to_player(v, p) && {
+    near && broadcast_to_player(v, p) && !v.tracker.hidden.contains(&p.uuid) && {
         let held = &mut held[p.chunk as usize];
         if *held == 0 {
             *held = 1 + u8::from(v.chunks.contains(&chunks[p.chunk as usize]));
@@ -176,7 +178,8 @@ pub(super) fn skip(
     probes: &[Probe],
     flags: &mut [u8],
 ) -> Option<usize> {
-    if v.sources.is_some() || !stat.plain {
+    // An entity a mod hid from this client alone is no cell's property: look at each.
+    if v.sources.is_some() || !stat.plain || !v.tracker.hidden.is_empty() {
         return None;
     }
     let ver = *v.tracker.verified.get(&cell)?;
@@ -211,7 +214,7 @@ pub(super) fn record(
     probes: &[Probe],
     (tracked, started): (usize, bool),
 ) {
-    if v.sources.is_none() && stat.plain && !started {
+    if v.sources.is_none() && stat.plain && v.tracker.hidden.is_empty() && !started {
         let own = members
             .iter()
             .filter(|&&m| probes[m as usize].id == v.entity_id)

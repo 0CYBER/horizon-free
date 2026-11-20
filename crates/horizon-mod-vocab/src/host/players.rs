@@ -484,7 +484,8 @@ pub trait PlayersBackend {
     /// Whether `viewer`'s client is shown the player `target` by the rules players are tracked
     /// with (`ServerPlayer.broadcastToPlayer`; Paper's `Player.canSee`): a spectator is seen
     /// only by spectators, and by them only while it watches through its own camera, and a
-    /// player hidden with `player_hide` is seen only by players of at least that level.
+    /// player hidden with `player_hide` is seen only by players of at least that level, and one a
+    /// mod hid from this viewer with `entity_set_visible_to` is not seen.
     /// Distance and chunks are not part of it, so a player out of range is still seen. A player
     /// sees themselves. Refuses with `PlayerWorldRefusal`: `Client`, `Stale` (a handle of the
     /// two no longer identifies a player in the server's list) and `NoConnection` (a fake

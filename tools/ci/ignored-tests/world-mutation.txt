@@ -6,3 +6,4 @@ horizon-client game::native_player_visibility_tests::each_show_block_refusal_has
 horizon-client game::native_player_visibility_tests::player_sees_follows_the_trackers_rules lib daily resources
 horizon-client game::native_player_visibility_tests::each_sees_refusal_has_its_own_name lib daily resources
 horizon-client game::native_player_visibility_tests::a_client_cannot_ack_show_or_ask_who_sees lib daily resources
+horizon-client game::native_player_visibility_tests::an_entity_is_hidden_from_one_viewer_alone lib daily resources

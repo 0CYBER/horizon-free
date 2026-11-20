@@ -852,9 +852,25 @@ pub struct Tracker {
     events: Vec<TrackEvent>,
     /// The cells this client tracks whole (`cells`).
     verified: crate::fast_hash::FxHashMap<(i32, i32), cells::Verified>,
+    /// Entities (by UUID) a native mod hid from this client alone
+    /// (`entity_set_visible_to`): never paired with it, whatever the other rules say.
+    hidden: crate::fast_hash::FxHashSet<u128>,
 }
 
 impl Tracker {
+    /// Hides the entity `uuid` from this client (`false`: it already was), or shows it
+    /// again (`false`: it was not hidden). The next sweep pairs or unpairs it.
+    pub fn set_entity_hidden(&mut self, uuid: u128, hidden: bool) -> bool {
+        if hidden {
+            self.hidden.insert(uuid)
+        } else {
+            self.hidden.remove(&uuid)
+        }
+    }
+    /// Whether a native mod hid the entity `uuid` from this client.
+    pub fn entity_hidden(&self, uuid: u128) -> bool {
+        self.hidden.contains(&uuid)
+    }
     /// The bytes of its tables, from their capacities.
     pub fn heap_bytes(&self) -> usize {
         use std::mem::size_of;
@@ -942,6 +958,7 @@ struct Probe {
     x: f64,
     z: f64,
     id: i32,
+    uuid: u128,
     range: i32,
     chunk: u32,
     spectator: bool,
@@ -1106,6 +1123,7 @@ impl Entities {
                 x: e.position[0],
                 z: e.position[2],
                 id: e.id,
+                uuid: e.uuid,
                 range: self
                     .range_percent
                     .map_or(range * 16, |p| p * (range * 16) / 100),
@@ -1303,6 +1321,7 @@ impl Entities {
                 x: e.position[0],
                 z: e.position[2],
                 id: e.id,
+                uuid: e.uuid,
                 range: self
                     .range_percent
                     .map_or(s.range * 16, |p| p * (s.range * 16) / 100),
@@ -3067,6 +3086,43 @@ mod tests {
         c.moved = [true, false];
         c.tick(&mut level, &[&op]);
         assert!(c.trackers[0].is_tracking(9) && !c.trackers[1].is_tracking(9));
+    }
+
+    /// `entity_set_visible_to`: an entity hidden from one client is tracked by the other and
+    /// by that client again once shown, whether it was hidden before or after being paired, and
+    /// whether the sweep skips whole cells or not.
+    #[test]
+    fn an_entity_hidden_from_one_client_is_tracked_by_the_others() {
+        for cells in [false, true] {
+            let mut level = Entities::default();
+            let mut c = Clients::new();
+            level.cells.off = !cells;
+            let zombie = state(0.0);
+            // Hidden before the first pass: only the second client is paired with it.
+            assert!(c.trackers[0].set_entity_hidden(1, true));
+            assert!(!c.trackers[0].set_entity_hidden(1, true), "already hidden");
+            c.moved = [true, true];
+            c.tick(&mut level, &[&zombie]);
+            c.tick(&mut level, &[&zombie]);
+            assert!(!c.trackers[0].is_tracking(7), "cells: {cells}");
+            assert!(c.trackers[1].is_tracking(7));
+            // Shown: the first client pairs with it on its next check.
+            assert!(c.trackers[0].set_entity_hidden(1, false));
+            c.moved = [true, false];
+            c.tick(&mut level, &[&zombie]);
+            assert!(c.trackers[0].is_tracking(7) && c.trackers[1].is_tracking(7));
+            // Hidden while tracked: removed from that client alone.
+            assert!(c.trackers[1].set_entity_hidden(1, true));
+            c.moved = [false, true];
+            c.tick(&mut level, &[&zombie]);
+            assert!(c.trackers[0].is_tracking(7) && !c.trackers[1].is_tracking(7));
+            assert!(c.trackers[1].entity_hidden(1) && !c.trackers[0].entity_hidden(1));
+            // Another entity is not affected.
+            let mut pig = state(0.0);
+            (pig.id, pig.uuid) = (8, 2);
+            c.tick(&mut level, &[&zombie, &pig]);
+            assert!(c.trackers[1].is_tracking(8));
+        }
     }
 
     #[test]

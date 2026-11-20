@@ -1355,6 +1355,31 @@ impl Hub {
                 .is_none_or(|&level| permission >= level)
     }
 
+    /// Paper's `Player.hideEntity` and `showEntity`: the entity `entity` is never paired with
+    /// the client of the placed player `viewer` while hidden (`Tracker::hidden`), and is paired
+    /// again once shown. `None` when no such player is placed; otherwise whether it changed. A
+    /// change has the tracker check that client's pairs again on the next pass. Kept until the
+    /// player leaves.
+    pub fn set_entity_hidden_from(
+        &mut self,
+        viewer: u128,
+        entity: u128,
+        hidden: bool,
+    ) -> Option<bool> {
+        let index = (0..self.guests.len())
+            .find(|&i| self.guests[i].uuid == viewer && self.guests[i].placed)?;
+        Some(self.guests.update(index, |g| {
+            let changed = g.tracker.set_entity_hidden(entity, hidden);
+            g.moved |= changed;
+            changed
+        }))
+    }
+    /// Whether `Player.hideEntity` hid the entity `entity` from the placed player `viewer`.
+    pub fn entity_hidden_from(&self, viewer: u128, entity: u128) -> Option<bool> {
+        let guest = self.guests.iter().find(|g| g.uuid == viewer && g.placed)?;
+        Some(guest.tracker.entity_hidden(entity))
+    }
+
     /// The player lists after `hidden` or a permission changed: each placed
     /// player loses the players hidden from it (ClientboundPlayerInfoRemove)
     /// and gets back those it sees again (an ADD_PLAYER entry). A change

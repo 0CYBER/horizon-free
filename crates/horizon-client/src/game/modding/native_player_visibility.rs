@@ -106,6 +106,10 @@ impl Game<'_> {
             .lan
             .as_ref()
             .and_then(|lan| lan.hub.tracker_hidden(t.uuid));
+        // `entity_set_visible_to` hid the target from this viewer alone.
+        if v.tracker.entity_hidden(t.uuid) {
+            return Ok(false);
+        }
         Ok(player_shown(
             v.spectator(),
             v.permission,

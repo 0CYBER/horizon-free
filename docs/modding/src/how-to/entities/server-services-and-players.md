@@ -90,6 +90,17 @@ across a leave and rejoin. The `player_tab_list_name_format` hook still has the 
 and chat, name tags and commands keep the real name. The call returns `false` for a stale
 handle, an unavailable server list or a player who is not online.
 
+To hide one entity, a player included, from one player's client only, call
+`entity.set_visible_to(host, viewer, false)` (Paper's `Player.hideEntity`): the entity tracker
+stops pairing it with that client and removes it from it on the next pass, while everyone else
+still sees it. `true` shows it again and `entity.visible_to(host, viewer)` reads the
+state. A mod uses it for a per-player hologram, a vanish that only some players honour, or a
+helper entity only its owner should see. It is kept by the entity's UUID until shown again or
+the viewer leaves; a rejoin starts with nothing hidden. A hidden player stays in the viewer's
+Tab list (`hide` lists them out too), and chat is not filtered. The calls return whether
+anything changed, and refuse with `EntityVisibilityRefusal`: `Client`, `Stale`, `NoConnection` for a
+fake viewer and `StaleEntity` for an entity handle that names nothing or the viewer's own player.
+
 The reads `player.latency(host)`, `player.hidden(host)` and `player.nickname(host)`
 return what the calls above set. Latency is the Tab list ping in milliseconds
 (`Option<i32>`, `0` until the first keep-alive answer). `hidden` is the level
