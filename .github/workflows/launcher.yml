@@ -187,8 +187,9 @@ jobs:
             # The C runtime linked in, so the standalone ARM64 launcher needs no redistributable.
             rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.mac && (needs.decide.outputs.main == 'true' && (vars.MAC_RUNNER || 'ludovics-mac-mini') || 'macos-15') || matrix.os }}
-    # Notarizing the app and then the .dmg can take a few minutes each.
-    timeout-minutes: ${{ matrix.mac && 60 || 40 }}
+    # Notarizing the app and then the .dmg can take a few minutes each. The Mac mini's builds (main) may first wait
+    # up to 60 min for their turn at compiling (tools/compile_lock.py); the leg itself took 5-6 min on 2026-11-20.
+    timeout-minutes: ${{ matrix.mac && needs.decide.outputs.main == 'true' && 90 || matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
       # Where cargo puts the launcher: target/release, or target/<target>/release for another target.
@@ -239,6 +240,16 @@ jobs:
             echo "::notice::No Metal toolchain on this runner: GPUI compiles its shaders at run time"
             echo "LAUNCHER_FEATURES=gpui_platform/runtime_shaders" >> "$GITHUB_ENV"
           fi
+      # On the Mac mini (main's builds), the tests and the launcher compile in one turn at compiling with the other
+      # jobs on that machine (tools/compile_lock.py), exec'd so a cancelled job's signals reach the turn's holder;
+      # the two steps below then only run the tests and find the launcher built. Branch builds run on GitHub's Macs.
+      - name: The launcher and its tests, compiled in their turn
+        if: matrix.mac && needs.decide.outputs.main == 'true'
+        run: |
+          compile='cargo test --release --locked --no-run ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"} && cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}'
+          [ ! -f ../tools/ci/compile-lock.sh ] || exec bash ../tools/ci/compile-lock.sh build -- bash -c "$compile"
+          echo "  compile lock: this ref has no tools/ci/compile-lock.sh: compiling without a turn"
+          exec bash -c "$compile"
       # Binary and integration tests link the library without cfg(test), so its fallback
       # test_home does not isolate them. Use pr_ready's scratch-home convention for every target.
       - name: Test every launcher target in a scratch home

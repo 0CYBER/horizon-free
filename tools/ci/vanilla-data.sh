@@ -128,10 +128,13 @@ if [ ! -f "$prepared/.entries" ]; then
   done
   before=$(ls -1A .local | LC_ALL=C sort)
   started=$SECONDS
+  # In the job's turn at compiling on the self-hosted Mac (tools/compile_lock.py; a no-op elsewhere).
+  # Its own name: `lock` is the preparation lock's folder, which the EXIT trap above removes.
+  in_turn=""; [ ! -f tools/ci/compile-lock.sh ] || in_turn="bash tools/ci/compile-lock.sh ${HORIZON_COMPILE_LOCK_ROLE:-pr} --"
   if [ "$persistent" = true ]; then
-    python3 tools/ci/preparation_step.py preparer-build "$RUNNER_TEMP/prepare-build.log" cargo build --release --locked -p horizon-prepare
+    $in_turn python3 tools/ci/preparation_step.py preparer-build "$RUNNER_TEMP/prepare-build.log" cargo build --release --locked -p horizon-prepare
   else
-    cargo build --release --locked -p horizon-prepare
+    $in_turn cargo build --release --locked -p horizon-prepare
   fi
   if python3 tools/ci/preparation_step.py resource-export "$RUNNER_TEMP/prepare.log" "${CARGO_TARGET_DIR:-target}/release/horizon-prepare" --root "$PWD"; then
     :

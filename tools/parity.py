@@ -64,14 +64,17 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 try:
     from . import parity_reach
+    from . import compile_lock
     from . import file_lock
     from . import process_tree
 except ImportError:
     import parity_reach
+    import compile_lock
     import file_lock
     import process_tree
 
@@ -757,33 +760,76 @@ def selected_builds(artifacts, packages=None):
         yield kind, name, profile, selection, examples
 
 
+# parity-main's probe prebuild ends the run past this, after its turn on the Mac (tools/compile_lock.py): loaded
+# by other jobs' compiles it ran 2 h and more and left the harnesses too little of the job's 300 min.
+PREBUILD_LIMIT = {"main": 120 * 60}
+
+
 def prebuild(artifacts, jobs):
-    """Build the recorded probes before the harnesses start, so they don't serialise on Cargo's lock."""
+    """Build the recorded probes before the harnesses start, so they don't serialise on Cargo's lock.
+
+    On the self-hosted Mac the Cargo runs wait for a turn on the machine (tools/compile_lock.py), as the job's
+    HORIZON_COMPILE_LOCK_ROLE says: `main` for parity-main, else `pr`."""
     environment = run_environment()
     environment["CARGO_BUILD_JOBS"] = str(jobs)
     errors = ""
     packages = target_packages()
     commands = prebuild_commands(artifacts, packages)
-    load, stats = machine_load(), sccache_stats(environment)
-    for number, command in enumerate(commands, 1):
-        started = time.monotonic()
-        # Stderr is read line by line, timed, so the summary can tell lock waits from compiling; stdout, which
-        # Cargo leaves empty here, was discarded before too. Undecodable bytes are replaced: decoding as the lines
-        # arrive must never interrupt the build. The encoding is text mode's default, named so tests can pin it.
-        with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                              text=True, encoding=locale.getpreferredencoding(False), errors="replace") as process:
-            try:
-                lines = [(time.monotonic(), line) for line in process.stderr]
-                process.wait()
-            except BaseException:
-                process.kill()  # as subprocess.run does
-                raise
-        if process.returncode:
-            errors += "".join(line for _, line in lines)
-        report(lambda: f"cargo {number}/{len(commands)}: "
-                       f"{describe_cargo_build(command, lines, started, time.monotonic())}")
-    report(lambda: describe_machine(os.cpu_count(), load, machine_load()))
-    report(lambda: describe_sccache(stats, sccache_stats(environment)))
+    role = os.environ.get("HORIZON_COMPILE_LOCK_ROLE") or "pr"
+    with compile_lock.Turn(role):
+        limit = PREBUILD_LIMIT.get(role)
+        deadline = time.monotonic() + limit if limit else None
+        expired = threading.Event()
+        load, stats = machine_load(), sccache_stats(environment)
+        for number, command in enumerate(commands, 1):
+            started = time.monotonic()
+            # Stderr is read line by line, timed, so the summary can tell lock waits from compiling; stdout, which
+            # Cargo leaves empty here, was discarded before too. Undecodable bytes are replaced: decoding as the
+            # lines arrive must never interrupt the build. The encoding is text mode's default, named so tests can
+            # pin it.
+            # Cargo leads a process group of its own, so the limit or a cancelled job ends rustc and build
+            # scripts with it, and none of them keeps the stderr pipe (and this loop) open.
+            with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.PIPE, text=True, encoding=locale.getpreferredencoding(False),
+                                  errors="replace", start_new_session=os.name != "nt") as process:
+                # The line loop blocks while Cargo is quiet, so a timer ends a run past the limit.
+                def stop(process=process):
+                    expired.set()
+                    compile_lock.stop_group(process)
+                watchdog = threading.Timer(max(0, deadline - time.monotonic()), stop) if deadline else None
+                if watchdog:
+                    watchdog.daemon = True
+                    watchdog.start()
+                try:
+                    lines = [(time.monotonic(), line) for line in process.stderr]
+                    if watchdog:
+                        # Stderr can close before Cargo exits, so the deadline stays armed until Cargo has exited
+                        # (not reaped yet: its group's id stays its own). Then a watchdog already stopping the group
+                        # (a child that closed stderr outlives Cargo) finishes before Cargo is reaped and the turn
+                        # released.
+                        compile_lock.wait_exited(process)
+                        watchdog.cancel()
+                        watchdog.join()
+                    process.wait()
+                except BaseException:
+                    # A cancelled job's next signal must not cut this short: it only shortens the grace.
+                    with compile_lock.Hurry():
+                        if watchdog:
+                            watchdog.cancel()
+                            watchdog.join()
+                        compile_lock.stop_group(process)  # its whole group, as subprocess.run kills the process
+                    raise
+            if process.returncode:
+                errors += "".join(line for _, line in lines)
+            report(lambda: f"cargo {number}/{len(commands)}: "
+                           f"{describe_cargo_build(command, lines, started, time.monotonic())}")
+            if expired.is_set():
+                print(f"::error::The probe prebuild passed its {limit // 60:.0f} min limit at cargo {number}/"
+                      f"{len(commands)} (stopped there). The machine is likely loaded by other jobs' compiles: "
+                      "see the compile lock lines above.", flush=True)
+                sys.exit(1)
+        report(lambda: describe_machine(os.cpu_count(), load, machine_load()))
+        report(lambda: describe_sccache(stats, sccache_stats(environment)))
     return not errors, errors
 
 

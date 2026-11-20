@@ -35,6 +35,11 @@ jobs:
       # This run's identity: tools/parity.py records it with the harnesses that failed (last-run.json), and the verdict
       # judges only a list this run wrote, never one an earlier run left when this batch stopped before writing its own.
       PARITY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      # The probe prebuild's turn on the self-hosted Mac (tools/compile_lock.py), and the preparer build's in
+      # vanilla-data.sh: a pull request's parity job takes the turn only while this run neither waits for it nor holds
+      # it. This run waits at most 20 min in all, and its prebuild has 120 min (tools/parity.py PREBUILD_LIMIT), which
+      # leaves the harnesses at least 160 of the job's 300 min.
+      HORIZON_COMPILE_LOCK_ROLE: main
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,10 +67,11 @@ jobs:
         env:
           PARITY_HOSTS: ''
           BASE_SHA: ${{ steps.base.outputs.sha }}
+        # exec: a cancelled job's signals reach tools/parity.py, which stops its builds' process groups.
         run: |
           echo "Merges since ${BASE_SHA}:"
           git log --first-parent --format='  %h %s' "$BASE_SHA..HEAD"
-          python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400
+          exec python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400
       - name: Preserve the initial failure logs
         if: steps.harnesses.outcome == 'failure'
         run: |
@@ -88,6 +94,8 @@ jobs:
         env:
           PARITY_HOSTS: ''
           BASE_SHA: ${{ steps.base.outputs.sha }}
+          # The failed harnesses' probes were built in the step before: no wait for a turn inside this step's 50 min.
+          HORIZON_COMPILE_LOCK_ROLE: 'off'
         run: python3 tools/parity_main.py verdict "$BASE_SHA"
       - name: Upload the verdict
         if: ${{ !cancelled() && steps.harnesses.outcome == 'failure' }}
