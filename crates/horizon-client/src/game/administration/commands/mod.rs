@@ -639,7 +639,10 @@ impl Game<'_> {
             if dim == source_dim {
                 candidates.append(&mut source_candidates);
             }
-            if s.kind != 's' {
+            // EntitySelector.findEntities: a selector without entities (`@a`, `@p`, `@r`, a
+            // players-only token) reads the player list alone, which `player_candidates` gave;
+            // the level's entities would only be typed one by one and dropped.
+            if s.kind != 's' && s.include_entities {
                 if s.kind == 'e' && matches!(s.sort, Sort::Arbitrary) && !s.world_limited() {
                     candidates.extend(self.global_selector_candidates());
                 } else {
