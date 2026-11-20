@@ -121,9 +121,10 @@ pub(super) fn custom_value(kind: &str, value: String) -> mod_api::CommandArgumen
     }
 }
 
-/// Whether `word` is a usage's literal word: lowercase letters, digits, `_` and `-`. The first
-/// word may also start with one `/`, so a mod can register WorldEdit-style `//set` (typed with the
-/// chat slash): the node keeps the slash, and the client completes `//set ` against it.
+/// Whether `word` is a usage's literal word: ASCII letters of either case, digits, `_` and `-`.
+/// Brigadier's literals take any case (`/cu callItemClear`), matched as written. The first word
+/// may also start with one `/`, so a mod can register WorldEdit-style `//set` (typed with the chat
+/// slash): the node keeps the slash, and the client completes `//set ` against it.
 pub(super) fn command_word(word: &str, first: bool) -> bool {
     let word = match first {
         true => word.strip_prefix('/').unwrap_or(word),
@@ -132,7 +133,7 @@ pub(super) fn command_word(word: &str, first: bool) -> bool {
     !word.is_empty()
         && word
             .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-".contains(c))
+            .all(|c| c.is_ascii_alphanumeric() || "_-".contains(c))
 }
 
 /// The brigadier parser of a built-in argument kind, its properties and its dispatcher type.

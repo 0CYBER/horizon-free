@@ -4221,7 +4221,7 @@ mod tests {
             mod_api::Command::new("b <x:text> <y:word>"),
             mod_api::Command::new("c <x:colour>"),
             mod_api::Command::new("<x:integer>"),
-            mod_api::Command::new("Bad"),
+            mod_api::Command::new("b.d"),
             mod_api::Command::new("d <x:integer>"),
             mod_api::Command::new("d <x:word>"),
         ]);
@@ -4233,6 +4233,29 @@ mod tests {
         );
         let (none, levels, _) = tree(&[]);
         assert!(none.is_null() && levels.is_empty());
+    }
+
+    /// Brigadier's literals keep their case: Crash Utilities' `cu callItemClear` registers and runs
+    /// as written, and `cu callitemclear` doesn't.
+    #[test]
+    fn literal_words_keep_their_case() {
+        let (t, levels, problems) = tree(&[mod_api::Command::new("cu callItemClear")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(levels.keys().collect::<Vec<_>>(), ["cu"]);
+        assert_eq!(t["children"]["cu"]["children"]["callItemClear"]["type"], "literal");
+        let arguments = command_arguments();
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &t, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+        let parsed = dispatcher.parse("cu callItemClear", &registries);
+        let (context, _) = parsed.executable().expect("`cu callItemClear` runs");
+        assert_eq!(context.literals, ["cu", "callItemClear"]);
+        assert!(
+            dispatcher
+                .parse("cu callitemclear", &registries)
+                .executable()
+                .is_err()
+        );
     }
 
     /// WorldEdit-style `//set`: the usage `/set <x:word>` (typed `//set` with the chat slash) is a
