@@ -48,3 +48,32 @@ It returns `true` when queued, then the client starts its normal shutdown after 
 dispatch returns. This includes saving and stopping an open integrated server.
 It returns `false` if a quit is already queued or underway, or when the host cannot quit
 the primary window, for example on a headless client or a splitscreen guest.
+
+## Taking a screenshot
+
+`ClientHost::request_screenshot()` takes a screenshot as the screenshot key (F2) does. The next
+frame is read back at the size F2 saves, the `screenshot` hook runs on it as it does for F2 (so every
+mod's screenshot listener sees mod-started screenshots too, and may change, rename or cancel them), and
+the PNG is written to the player's `screenshots` folder under vanilla's file name with F2's chat line.
+`Ok(())` means the screenshot is queued, not yet written.
+
+A mod-started screenshot never replaces a file. Each PNG is written to a temporary file in the same
+folder and then published under its final name only if no file has that name: a name the hook picked
+that already exists keeps the existing file, the new one is deleted, and the chat line reports the
+failure. A failed write leaves no partial file. A name the hook picked may create at most one new
+folder: a deeper path reports the failure and writes nothing.
+
+It returns `Err(ScreenshotError)` and queues nothing:
+
+| Error | When |
+|---|---|
+| `Busy` | a capture is queued or being read back, the `screenshot` hook is running, a screenshot is still being written, or a screenshot sequence runs |
+| `BudgetExhausted` | mod-started screenshots have written 4 GiB this game session, shared by all mods |
+| `Folder` | the `screenshots` folder could not be created |
+| `Unavailable` | no window renders here: a server's thread or a client without a renderer |
+
+One screenshot runs at a time, so a mod cannot queue a burst. The session budget counts each written
+capture at its uncompressed size after the hook (4 bytes a pixel, 6 for an HDR copy), an upper bound on
+the PNGs, and at least 1 MiB: about 500 screenshots at 1920 by 1080, 120 at 3840 by 2160, and never more
+than 4096. A capture that would pass the budget once the hook has run is not written, and the chat line
+reports the failure. The budget is reset when the game restarts. F2 itself is never limited.

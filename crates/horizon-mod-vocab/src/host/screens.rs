@@ -135,4 +135,25 @@ pub trait ScreensClientHost {
     /// Unknown names are not down. Modifier combinations use `ClientHost::modifiers`.
     #[access(ClientSetup)]
     fn is_key_down(&self, key: &str) -> bool;
+    /// Side: client.
+    /// Takes a screenshot as the screenshot key (F2) does (`Screenshot.grab`): the
+    /// next frame is read back at the size F2 saves (the game's resolution times the
+    /// screenshot quality), the `screenshot` hook runs on it as for F2, so every mod's
+    /// screenshot listener sees it, and it is written to the player's `screenshots`
+    /// folder under vanilla's file name, with F2's chat line. `Ok` means queued: the
+    /// files are written, or the hook cancels them, after the next frame. Unlike F2's,
+    /// its files never replace one: each is written to a temporary file and published
+    /// only under a name no file has (a name the hook picked that exists keeps the
+    /// existing file and reports failure), a failed write leaves no partial file, and
+    /// a name the hook picked may create at most one new folder (a deeper one reports
+    /// failure). One screenshot runs at a time, and all mods together may write 4 GiB
+    /// of screenshots per game session, each counted at its uncompressed size after the
+    /// hook (4 bytes a pixel, 6 more for an HDR copy) and at least 1 MiB: about 500 at
+    /// 1920 by 1080, and never more than 4096. A capture that would pass the budget is
+    /// not written and reports failure. Refused with nothing
+    /// queued, by name, as [`ScreenshotError`] lists: one still in progress, the
+    /// session's budget used up, no screenshots folder, or no window here. Native and
+    /// wasm alike.
+    #[access(ClientSetup)]
+    fn request_screenshot(&mut self) -> Result<(), ScreenshotError>;
 }

@@ -316,6 +316,14 @@ pub struct UiState {
     /// F2 screenshots not written yet: each reports in chat once its PNG is.
     pub screenshot_messages: Vec<std::path::PathBuf>,
     pub screenshot_writes: Vec<super::screenshot_writer::ScreenshotWrite>,
+    /// The path a mod's `request_screenshot` queued, until its readback reaches
+    /// `save_screenshot`: that capture is written without replacing a file.
+    pub mod_screenshot: Option<std::path::PathBuf>,
+    /// Uncompressed bytes of the mod captures written this session (`request_screenshot`'s budget).
+    pub mod_screenshot_bytes: u64,
+    /// The `screenshot` hook is running: a mod's request from inside it is `Busy`.
+    /// Shared with the guard that clears it, so a listener's panic can't leave it set.
+    pub screenshot_hook: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The options screens.
     pub options: horizon_client::options_ui::OptionsUi,
     /// The prepared resources before resource packs are layered on.
@@ -2306,16 +2314,44 @@ impl Game<'_> {
             .into_owned();
         let mut message = None;
         let mut cancel = false;
+        let hook = super::native_screenshot_request::HookRunning::start(&self.ui.screenshot_hook);
         self.native_screenshot(
             pending.image_mut(),
             &mut file_name,
             &mut message,
             &mut cancel,
         );
+        drop(hook);
+        let by_mod = self
+            .ui
+            .mod_screenshot
+            .take_if(|path| *path == pending.path)
+            .is_some();
         if cancel {
             self.ui.screenshot_messages.remove(at);
             self.post_screenshot_chat(screenshot_cancel_line(message));
             return None;
+        }
+        if by_mod {
+            // Charged before the writer starts, at no less than the minimum, so a hook that
+            // shrinks the image can't make captures free.
+            let charge =
+                super::native_screenshot_request::mod_screenshot_charge(pending.raw_bytes());
+            if !super::native_screenshot_request::within_budget(
+                self.ui.mod_screenshot_bytes,
+                charge,
+            ) {
+                self.ui.screenshot_messages.remove(at);
+                self.post_screenshot_chat(Text::translate(
+                    "screenshot.failure",
+                    &[Text::literal(
+                        "mod screenshots have used this session's budget",
+                    )],
+                ));
+                return None;
+            }
+            pending.no_replace = true;
+            self.ui.mod_screenshot_bytes += charge;
         }
         let root = horizon_client::logging::player_dir().join("screenshots");
         self.ui

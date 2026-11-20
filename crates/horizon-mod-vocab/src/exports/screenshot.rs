@@ -1,1 +1,1 @@
-pub use client::screenshot::ScreenshotImage;
+pub use client::screenshot::{ScreenshotError, ScreenshotImage};
