@@ -12,7 +12,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|text| {
             serde_json::json!({
                 "valid": is_valid_address(text),
-                "parsed": parse_address(text),
+                // ServerAddress.parseString returns its INVALID fallback instead of null.
+                "parsed": parse_address(text).unwrap_or(("server.invalid".into(), 25565)),
             })
         })
         .collect();

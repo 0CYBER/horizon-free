@@ -99,7 +99,6 @@
   "sculk": "#18133: catalyst XP orbs missing",
   "sculk_saved_fields": "#18133: placed sensor/shrieker vibration fields read back as 0",
   "seed_sync": "#18133: summoned armor stand gets a different UUID",
-  "server_address": "#17430: the oracle records vanilla's INVALID fallback (server.invalid:25565) where the Rust probe records null for an invalid address",
   "server_player_combat": "#18133: NaN where vanilla has Float.MAX_VALUE",
   "server_player_damage": "#18133: an `updated` record missing at line 249973",
   "server_resource_pack": "#18133: extra config custom_payload horizon:payloads",
