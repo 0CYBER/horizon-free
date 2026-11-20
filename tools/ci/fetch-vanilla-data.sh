@@ -9,6 +9,12 @@
 # and unset at once; that folder, with the key, the passphrase and the clone, is removed before the script ends,
 # whatever happens. Only sizes, counts and timings are printed: never a file name from the archive, never a secret.
 # DATASET/MANIFEST: "sha256 <digest of the encrypted whole>", then the chunk names in order.
+#
+# With VANILLA_DATA_CACHE (a folder outside the checkout that the workflow keeps in a cache entry), the datasets'
+# encrypted chunks are taken from there when they match the MANIFESTs just read from the repository, which is what
+# authenticates them: only the MANIFESTs' blobs are downloaded then. Otherwise the chunks are downloaded and the folder
+# is refilled with them. Either way the script appends "cache=hit" or "cache=refreshed" to GITHUB_OUTPUT, and
+# "digest=" with 16 hex digits of the MANIFESTs (of encrypted data: nothing of the game) for the entries' keys.
 set -euo pipefail
 umask 077
 destination=${1:?destination}
@@ -38,12 +44,37 @@ export GIT_TERMINAL_PROMPT=0
 started=$SECONDS
 # Only these datasets' blobs: a shallow, blobless clone with a sparse checkout of their folders.
 git clone -q --depth 1 --filter=blob:none --sparse git@github.com:horizon-rust/vanilla-data.git "$work/repo"
-git -C "$work/repo" sparse-checkout set "$@" > /dev/null
-echo "clone $((SECONDS - started)) s"
+cache=${VANILLA_DATA_CACHE:-}
+from=$work/repo
+if [ -n "$cache" ]; then
+  case "$(realpath -m "$cache")/" in
+    "$(realpath -m "${GITHUB_WORKSPACE:-$PWD}")"/*) echo "::error::the cache folder must be outside the checkout"; exit 2 ;;
+  esac
+  # The MANIFESTs alone, then each cached dataset checked against the repository's.
+  mkdir "$work/manifests"
+  from=$cache
+  for dataset in "$@"; do
+    manifest="$work/manifests/$dataset"
+    git -C "$work/repo" show "HEAD:$dataset/MANIFEST" > "$manifest" 2> /dev/null || { echo "::error::no dataset $dataset"; exit 1; }
+    expected=$(sed -n 's/^sha256 \([0-9a-f]\{64\}\)$/\1/p' "$manifest")
+    mapfile -t chunks < <(sed -n '2,$p' "$manifest")
+    # Only plain files are read from the restored folder: a link, a pipe or a device there is never opened.
+    plain=true
+    [ -d "$cache/$dataset" ] && [ ! -L "$cache/$dataset" ] && [ ! -L "$cache" ] || plain=false
+    for chunk in MANIFEST "${chunks[@]}"; do
+      [[ "$chunk" =~ ^[A-Za-z0-9._-]+$ && -f "$cache/$dataset/$chunk" && ! -L "$cache/$dataset/$chunk" ]] || plain=false
+    done
+    if [ "$plain" != true ]; then from=$work/repo; continue; fi
+    cached=$(cd "$cache/$dataset" 2> /dev/null && cat -- "${chunks[@]}" 2> /dev/null < /dev/null | sha256sum | cut -c1-64) || cached=
+    cmp -s "$manifest" "$cache/$dataset/MANIFEST" && [ -n "$expected" ] && [ "$cached" = "$expected" ] || from=$work/repo
+  done
+fi
+[ "$from" = "$cache" ] || git -C "$work/repo" sparse-checkout set "$@" > /dev/null
+echo "clone $((SECONDS - started)) s ($([ "$from" = "$cache" ] && echo "chunks from the cache" || echo "chunks downloaded"))"
 rm -rf "$destination" && mkdir -p "$destination"
 for dataset in "$@"; do
   started=$SECONDS
-  folder="$work/repo/$dataset"
+  folder="$from/$dataset"
   [ -f "$folder/MANIFEST" ] || { echo "::error::no dataset $dataset"; exit 1; }
   expected=$(sed -n 's/^sha256 \([0-9a-f]\{64\}\)$/\1/p' "$folder/MANIFEST")
   mapfile -t chunks < <(sed -n '2,$p' "$folder/MANIFEST")
@@ -60,6 +91,20 @@ for dataset in "$@"; do
   echo "dataset $dataset: ${#chunks[@]} chunks, $encrypted bytes encrypted, verified and unpacked in" \
     "$((SECONDS - started)) s"
 done
+if [ -n "$cache" ]; then
+  state=hit
+  if [ "$from" != "$cache" ]; then
+    state=refreshed
+    rm -rf "$cache"
+    for dataset in "$@"; do
+      mkdir -p "$cache/$dataset"
+      mapfile -t chunks < <(sed -n '2,$p' "$work/repo/$dataset/MANIFEST")
+      (cd "$work/repo/$dataset" && cp -- MANIFEST "${chunks[@]}" "$cache/$dataset/")
+    done
+  fi
+  digest=$(cd "$work/manifests" && cat -- "$@" | sha256sum | cut -c1-16)
+  { echo "cache=$state"; echo "digest=$digest"; } >> "${GITHUB_OUTPUT:-/dev/null}"
+fi
 cleanup
 trap - EXIT
 echo "unpacked: $(du -sk "$destination" | cut -f1) KiB, $(find "$destination" -type f | wc -l) files"

@@ -132,15 +132,56 @@ gh workflow run parity-hosted.yml --ref <branch> -f base=<commit>               
   - It holds them encrypted (AES-256, zstd) in datasets made with `lab.py prepare`. Today there is one,
     `26.3-linux-x64`: the jars and libraries, without sources, sounds or other languages.
   - A read-only deploy key (`VANILLA_DATA_DEPLOY_KEY`) clones it, and `VANILLA_DATA_PASSPHRASE` decrypts it.
-  - Those two secrets reach one step, which runs `tools/ci/fetch-vanilla-data.sh`. The script writes them to a
-    private folder, removes that folder before it ends, and prints only sizes, counts and timings.
-  - That step runs before the tested commit is checked out, with the default branch's copy of the script: the
-    secrets never meet the tested commit's code. Without that copy the shard stops. The workflow file itself comes
-    from the dispatched ref, so who may dispatch (write access) is still the guard against a branch that edits it.
+  - Those two secrets reach the step that runs `tools/ci/fetch-vanilla-data.sh`, and the passphrase also reaches
+    the steps that run `tools/ci/sealed-cache.sh` (below). The scripts write them to a private folder, remove that
+    folder before they end, and print only sizes, counts and timings.
+  - Fetching and unsealing run before the tested commit is checked out, sealing after the harnesses on main only.
+    Each of those steps takes its script from the GitHub API at the default branch's commit (resolved through
+    `heads/<branch>` by the plan job, which restores nothing) into a new private folder, checks that it is not empty
+    and that its git blob id is the one the API names for that path (asked for separately), and runs it under
+    `/usr/bin/bash` with `env -i`, `PATH=/usr/bin:/bin`, an empty `HOME`, no `BASH_ENV`/`ENV`, and the secrets on
+    standard input. Nothing a secret step executes or reads as code comes from the workspace, `.git` or a restored
+    path. Without the fetch script, or with one that fails the check, the shard stops; without `sealed-cache.sh` it
+    starts cold and saves nothing. The workflow file itself comes from the dispatched ref, so who may dispatch
+    (write access) is still the guard against a branch that edits it.
+  - What this does not stop: a restore extracts with absolute paths, so a hostile entry can write any file the
+    runner user owns, among them the code of a later action step (the cache action, node). Code run that way
+    shares the secret steps' user and could watch them. Branch-scoped cache entries (GitHub's rule, and
+    Blacksmith's default, which the owner confirms in its dashboard) are what keeps such an entry from a run of
+    main.
   - Only a commit on a branch of this repository runs, resolved once to a full SHA that every job uses.
-- **What never leaves the runner.** The data, what is prepared from it, `target/` and `.local/` are never put on a
-  sticky disk, in a cache (no `actions/cache`, no sccache) or in an artifact: a fork's pull request can mount this
-  repository's disks and caches. Everything is built cold and thrown away with the runner.
+- **Caches.** A fork's pull request can restore this repository's cache entries, and a branch's copy of the workflow
+  can name any key. So only a run of main writes them, and what is made from the data goes into one only sealed.
+  Every other run restores and saves nothing. No sticky disk, no sccache.
+  - The plan job's `saves` is true only for a push, schedule or dispatch whose ref is exactly `refs/heads/main`, is
+    the default branch and is protected, compared in shell (expressions compare strings without case). It is a job
+    output, not a variable: the oracle shim keys every variable the harnesses see, so a variable that differs
+    between main's saving run and a reading run would make every reading run miss.
+  - The dataset's encrypted chunks, as they are. The fetch script takes them only when they are plain files that
+    match the MANIFEST it reads from `horizon-rust/vanilla-data` each run, and downloads the dataset otherwise.
+  - Sealed by `tools/ci/sealed-cache.sh`: the build folders (`.local/parity-target`, `target/`, one entry per probe
+    group, keyed by the toolchain and `Cargo.lock`), the prepared resources, and the oracle results with the
+    parity state. Sealing is tar, zstd, the dataset's own encryption (AES-256-CBC, PBKDF2), then HMAC-SHA256 with
+    a second key derived from the passphrase, over the entry's kind, its full cache key and the ciphertext.
+    Sealing takes folders and regular files only: symbolic links stay out (each run makes its own again: the
+    prepared resources' links to the data, the shim's `java` and `javac`), a folder given as one included.
+    Unsealing checks the tag and that the key has the prefix the run asked for, decrypts, then lists the archive. It
+    refuses absolute or `..` names, a name twice, any symbolic link, a hard link other than to a regular file
+    listed before it by exact name (Cargo's binaries), and special files, then extracts into a new empty folder
+    with `--keep-old-files`, renamed into place only when whole. An entry that fails is discarded with a warning,
+    and the run goes on cold. The build is sealed too because a build script could copy data into it, and so that
+    the binaries the harnesses run are authenticated.
+  - Incremental builds are on (`CARGO_INCREMENTAL=1`) and `tools/ci/source_mtimes.py` gives unchanged sources their
+    old dates, so a change rebuilds only what it touches. A damaged date file, oracle record or hash database is a
+    miss, never a red job. A shim that meets a failing hash database hashes files itself and never removes it (another
+    may have it open). Here, `tools/parity.py` removes a damaged one, found by `PRAGMA quick_check`, before any
+    shim starts (`PARITY_REPAIR_ORACLE_HASHES=1`: the runner's one parity run owns the cache); elsewhere it only
+    names it. An oracle record holds the length and SHA-256 of its output streams, which are written
+    before it under temporary names: a stream cut short or of another write is a miss, never replayed. The oracle
+    shim's runtime memo (`.local/parity-runner/runtime-memo`, guarded by one machine's file stat data) is never
+    sealed or restored.
+- **What never leaves the runner** unsealed: the data, what is prepared from it, and `.local/` but the build. None
+  of it goes into an artifact.
 - **What is public.** The job logs and the uploaded logs hold what `parity.yml`'s public runs already show: compared
   values, log tails and harness names. That is the only exception to "sizes, counts and timings only", which the
   fetch step keeps. The upload holds the first run's log of each retried harness, the last log of each that failed,
@@ -161,10 +202,13 @@ gh workflow run parity-hosted.yml --ref <branch> -f base=<commit>               
   - the harnesses the `hosted` entry of `tools/parity_hosts.json` excludes: sounds, other languages, sources, older
     servers' worlds, the network;
   - `known_failing` and `named_only` ones.
-- **Cost, measured 2026-11-19.**
+- **Cost, measured 2026-11-19 (cold).**
   - About a minute of setup and data per runner.
   - Cold probe builds: world 40 s; client 530 s (two profiles); the game 480 s.
   - Then 3-10 s of runner time per harness, 8 at a time, most of it in the vanilla oracle.
+  - From main's caches, the builds take seconds, or what a change touches. The cached state serves the probes'
+    prebuild and the oracle results' reuse, not the selection: the plan job holds no secret, and its dependency
+    lists are still to come from a hosted full run on main.
 
 ## Which jobs, and when
 

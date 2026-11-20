@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -78,6 +80,21 @@ class SourceMtimesTests(unittest.TestCase):
         (self.root / "src/value.txt").write_text("uncommitted\n")
         with self.assertRaises(subprocess.CalledProcessError):
             restore_and_snapshot(self.root, self.snapshot)
+
+    def test_a_damaged_snapshot_is_ignored_with_a_warning(self):
+        # A cache entry cut short: nothing is restored, every input dated now, and the job goes on.
+        restore_and_snapshot(self.root, self.snapshot)
+        whole = self.snapshot.read_text()
+        for damaged in (whole[: len(whole) // 2], "[]", '{"src": "x"}'):
+            with self.subTest(damaged=damaged[:20]):
+                self.snapshot.write_text(damaged)
+                os.utime(self.root / "src/value.txt", ns=(1, 1))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    restore_and_snapshot(self.root, self.snapshot)
+                self.assertIn("::warning::ci-source-mtimes.json is damaged", output.getvalue())
+                self.assertGreater((self.root / "src/value.txt").stat().st_mtime_ns, 1)
+                self.assertIn("src/value.txt", json.loads(self.snapshot.read_text()))
 
     def test_clippy_reuses_both_feature_graphs_and_rechecks_changed_source(self):
         # verify runs Python tests before installing its Rust components. The

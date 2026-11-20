@@ -6,6 +6,8 @@
 - Neither takes a job that holds a secret or whose token can push, publish or start workflows: playhorizon is a
   partner's server, and a checks runner keeps what a fork's job left behind.
 """
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -160,9 +162,14 @@ class OwnRunnerTests(unittest.TestCase):
 
 
 class HostedParityTests(unittest.TestCase):
-    """parity-hosted.yml fetches the maintainers' encrypted vanilla data onto Blacksmith's runners: the secrets reach
-    one step, and nothing of the data or what is built from it may outlive the runner (a fork's pull request can
-    mount this repository's sticky disks and caches)."""
+    """parity-hosted.yml fetches the maintainers' encrypted vanilla data onto Blacksmith's runners. The secrets reach
+    only the default branch's fetch and seal scripts, downloaded inside the step that holds them and run in a fixed
+    environment, never beside the tested commit's code but on main. A fork's pull request can restore this
+    repository's cache entries, so only main's runs write them, and nothing made from the data goes into one, an
+    artifact or a log unsealed: the dataset's encrypted chunks are the only clear entry."""
+
+    SECRET_STEPS = ["Fetch the vanilla data", "Unseal the restored caches", "Seal for the caches"]
+    SHELL = "/usr/bin/bash --noprofile --norc -e -o pipefail {0}"
 
     @classmethod
     def setUpClass(cls):
@@ -170,8 +177,19 @@ class HostedParityTests(unittest.TestCase):
         import yaml
         cls.text = (WORKFLOWS / "parity-hosted.yml").read_text()
         cls.workflow = yaml.safe_load(cls.text)
+        cls.plan = cls.workflow["jobs"]["plan"]["steps"]
+        cls.steps = cls.workflow["jobs"]["run"]["steps"]
+        cls.names = [step.get("name") or step.get("uses") for step in cls.steps]
 
-    def test_secret_values_reach_only_the_fetch_step(self):
+    def step(self, name, steps=None):
+        steps = self.steps if steps is None else steps
+        return next(step for step in steps if (step.get("name") or step.get("uses")) == name)
+
+    def prologue(self, name):
+        """A secret step's fixed environment: its script up to the first download."""
+        return self.step(name)["run"].split("\nfetched ", 1)[0]
+
+    def test_secret_values_reach_only_the_trusted_scripts(self):
         holders = []
         for job, body in self.workflow["jobs"].items():
             self.assertNotIn("secrets.", repr({k: v for k, v in body.items() if k != "steps"}), job)
@@ -180,30 +198,324 @@ class HostedParityTests(unittest.TestCase):
                     holders.append((job, step.get("name"), step.get("env", {})))
         values = [(job, name) for job, name, env in holders if any(
             re.fullmatch(r"\$\{\{ secrets\.\w+ \}\}", str(value)) for value in env.values())]
-        self.assertEqual(values, [("run", "Fetch the vanilla data")])
+        self.assertEqual(values, [("run", name) for name in self.SECRET_STEPS])
         # The plan learns only whether they are set.
         others = [(job, name) for job, name, _ in holders if (job, name) not in values]
         self.assertEqual(others, [("plan", "Access to the vanilla data")])
+        # Each runs only a script it downloaded itself from the trusted commit, never one of the checkout.
+        for name in self.SECRET_STEPS:
+            run = self.step(name)["run"]
+            self.assertNotRegex(run, r"\b(python3?|bash) +(\./)?tools/|\$GITHUB_WORKSPACE/tools/", name)
+            fetched = re.findall(r"^fetched (\S+) \|\| \{$", run, re.M)
+            self.assertTrue(fetched, name)
+            self.assertEqual(set(re.findall(r'"\$private/([a-z.-]+)"', run.split("\nfetched ", 1)[1])), set(fetched),
+                             name)
 
-    def test_nothing_is_cached_or_kept(self):
-        steps = [step for body in self.workflow["jobs"].values() for step in body["steps"]]
-        for step in steps:
-            uses = step.get("uses", "")
-            self.assertFalse(re.search(r"cache|sticky|useblacksmith/", uses), uses)
-            self.assertEqual([key for key in step.get("with", {}) if "cache" in key], [], uses or step.get("name"))
+    def test_the_secrets_meet_no_tested_code_but_mains(self):
+        # Before the checkout the workspace is empty: no code of the tested commit can run beside the secrets.
+        checkout = next(index for index, name in enumerate(self.names) if name.startswith("actions/checkout@"))
+        self.assertLess(self.names.index("Fetch the vanilla data"), checkout)
+        self.assertLess(self.names.index("Unseal the restored caches"), checkout)
+        # Sealing comes after the harnesses: on main only, whose code it is.
+        self.assertGreater(self.names.index("Seal for the caches"), self.names.index("The shard's harnesses"))
+        self.assertIn("needs.plan.outputs.saves == 'true'", self.step("Seal for the caches")["if"])
+        self.assertEqual(set(self.workflow[True]), {"workflow_dispatch"})
+        # The default branch's commit, resolved in the plan job, where no cache entry is restored.
+        trusted = self.step("The commit of the trusted scripts", self.plan)
+        self.assertEqual(trusted["env"]["DEFAULT"], "${{ github.event.repository.default_branch }}")
+        self.assertEqual(self.workflow["jobs"]["plan"]["outputs"]["trusted"], "${{ steps.trusted.outputs.sha }}")
+        for name in self.SECRET_STEPS:
+            self.assertEqual(self.step(name)["env"]["TRUSTED_SHA"], "${{ needs.plan.outputs.trusted }}", name)
+        # The oracle shim's runtime memo (machine-local stat data) and this run's logs are excluded wherever the
+        # oracle entry is sealed or unsealed; tests/test_ci_sealed_cache.py checks the exclusion itself.
+        folders = self.step("Folders for the data, outside the checkout")["run"]
+        self.assertIn('echo "RUNTIME_MEMO=$GITHUB_WORKSPACE/.local/parity-runner/runtime-memo"', folders)
+        self.assertIn('echo "PARITY_LOGS=$GITHUB_WORKSPACE/.local/parity-runner/logs"', folders)
+        for name in ("Unseal the restored caches", "Seal for the caches"):
+            self.assertIn('--exclude "$RUNTIME_MEMO" --exclude "$PARITY_LOGS"', self.step(name)["run"], name)
+
+    def test_a_secret_step_trusts_nothing_a_cache_entry_could_have_written(self):
+        # actions/cache unpacks an entry with absolute paths before anything checks it: each secret step comes after
+        # every restore it depends on and downloads its script itself; the step's shell is root's, not one on PATH.
+        restores = [index for index, step in enumerate(self.steps)
+                    if step.get("uses", "").startswith("actions/cache/restore@")]
+        self.assertLess(restores[-1], self.names.index("Unseal the restored caches"))
+        for name in self.SECRET_STEPS:
+            step = self.step(name)
+            self.assertEqual(step["shell"], self.SHELL, name)
+            self.assertEqual((step["env"]["BASH_ENV"], step["env"]["ENV"]), ("", ""), name)
+            # One fixed environment, the same in all three.
+            self.assertEqual(self.prologue(name), self.prologue(self.SECRET_STEPS[0]), name)
+        prologue = self.prologue(self.SECRET_STEPS[0])
+        self.assertIn("export PATH=/usr/bin:/bin", prologue)
+        self.assertIn('curl -q -fsS --proto =https', prologue)
+        self.assertIn("contents/tools/ci/$1?ref=$TRUSTED_SHA", prologue)
+        # The trusted commit is the default branch's, named by its explicit ref.
+        trusted = self.step("The commit of the trusted scripts", self.plan)["run"]
+        self.assertIn('git/ref/heads/$DEFAULT', trusted)
+        self.assertNotIn("/commits/", trusted)
+        # The token reaches curl on its stdin, never its command line.
+        self.assertNotRegex(prologue, r'curl[^|]*\$GH_TOKEN')
+
+    LINUX_STEP = (sys.platform == "linux" and os.access("/usr/bin/bash", os.X_OK)
+                  and not os.access("/usr/bin", os.W_OK), "needs Linux, with /usr/bin not writable")
+
+    def run_secret_step(self, script, folder):
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(folder), "TRUSTED_SHA": "0" * 40, "GH_TOKEN": "token",
+               "GITHUB_REPOSITORY": "owner/repo", "GITHUB_WORKSPACE": str(folder), "RUNNER_TEMP": str(folder),
+               "GITHUB_OUTPUT": str(folder / "output"), "BASH_ENV": "", "ENV": ""}
+        return subprocess.run([*self.SHELL.replace("{0}", "").split(), "-c", script], env=env, capture_output=True,
+                              text=True)
+
+    @unittest.skipUnless(*LINUX_STEP)
+    def test_a_downloaded_script_runs_only_as_the_blob_the_api_names(self):
+        # verified, from the steps' own prologue: not empty, and git's blob id of the bytes equals the API's.
+        def blob(data):
+            return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+        script = b"#!/usr/bin/env bash\necho fetched\n"
+        cases = [(script, blob(script), 0), (script + b" ", blob(script), 1), (script, blob(script).upper(), 1),
+                 (script, blob(script)[:39], 1), (script, "", 1), (b"", blob(b""), 1),
+                 (b"\0" * 70000, blob(b"\0" * 70000), 0)]
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            for data, expected, status in cases:
+                with self.subTest(size=len(data), expected=expected):
+                    (folder / "script.sh").write_bytes(data)
+                    result = self.run_secret_step(self.prologue("Fetch the vanilla data")
+                                                  + f'\nverified "{folder}/script.sh" "{expected}"\n', folder)
+                    self.assertEqual(result.returncode, status, result.stderr)
+
+    @unittest.skipUnless(*LINUX_STEP)
+    def test_a_script_is_fetched_only_as_the_blob_its_listing_names(self):
+        # The steps' own fetched, with only the two API requests answered from files: the listing's sha and the raw
+        # bytes must agree, and the script lands in the private folder only then.
+        script = b"#!/usr/bin/env bash\necho fetched\n"
+        blob = hashlib.sha1(b"blob %d\0" % len(script) + script).hexdigest()
+        empty = hashlib.sha1(b"blob 0\0").hexdigest()
+        cases = [("matching", json.dumps({"sha": blob, "type": "file"}), script, 0),
+                 ("another sha", json.dumps({"sha": "1" * 40}), script, 1),
+                 ("not an object", "[]", script, 1),
+                 ("no listing", "", script, 1),
+                 ("empty bytes", json.dumps({"sha": empty}), b"", 1)]
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            for case, listing, data, status in cases:
+                with self.subTest(case):
+                    (folder / "listing.json").write_text(listing)
+                    (folder / "raw").write_bytes(data)
+                    stub = (f'api() {{ case "$1" in *+json) cp {folder}/listing.json "$3" ;; '
+                            f'*.raw) cp {folder}/raw "$3" ;; esac; }}')
+                    result = self.run_secret_step(self.prologue("Fetch the vanilla data") + f"\n{stub}\n"
+                                                  'fetched script.sh && cmp -s "$private/script.sh" '
+                                                  f'{folder}/raw\n', folder)
+                    self.assertEqual(result.returncode, status, result.stderr)
+
+    @unittest.skipUnless(*LINUX_STEP)
+    def test_a_script_that_does_not_verify_stops_the_fetch_and_skips_the_seal_steps(self):
+        # Fetching fails closed (no data); unsealing and sealing go on without the cache. Nothing runs either way.
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            for name, status, line in [("Fetch the vanilla data", 1, "::error::"),
+                                       ("Unseal the restored caches", 0, "::warning::"),
+                                       ("Seal for the caches", 0, "::warning::")]:
+                with self.subTest(name):
+                    marker = folder / "ran"
+                    prologue, rest = self.step(name)["run"].split("\nfetched ", 1)
+                    script = (prologue + f"\nfetched() {{ return 1; }}\nisolated() {{ touch {marker}; }}\n"
+                              + "fetched " + rest)
+                    result = self.run_secret_step(script, folder)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    self.assertIn(line, result.stdout)
+                    self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(sys.platform == "linux" and os.access("/usr/bin/bash", os.X_OK)
+                         and not os.access("/usr/bin", os.W_OK), "needs Linux, with /usr/bin not writable")
+    def test_the_trusted_script_runs_in_a_fixed_environment(self):
+        # The step's own prologue around a stand-in script, under an environment a hostile entry could have shaped:
+        # a bash and a curl first on PATH, BASH_ENV and ENV, a HOME with a .bashrc and .gitconfig.
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            hostile = folder / "hostile"
+            (hostile / "home").mkdir(parents=True)
+            marker = folder / "marker"
+            for name in ("bash", "env", "curl"):
+                (hostile / name).write_text(f"#!/bin/sh\ntouch {marker}\nexec /usr/bin/{name} \"$@\"\n")
+                (hostile / name).chmod(0o755)
+            (hostile / "rc").write_text(f"touch {marker}\n")
+            (hostile / "home/.bashrc").write_text(f"touch {marker}\n")
+            (hostile / "home/.gitconfig").write_text("[core]\n\thooksPath = /tmp\n")
+            probe = folder / "probe.sh"
+            probe.write_text('printf "%s\\n" "$@" > "$OUT.args"\n'
+                             'printf "%s" "$VANILLA_DATA_DEPLOY_KEY" > "$OUT.key"\n'
+                             'env -0 > "$OUT.env"\nls -A "$HOME" > "$OUT.home"\n')
+            out = folder / "out"
+            key = "-----BEGIN KEY-----\nline two\n-----END KEY-----\n"
+            script = (self.prologue("Fetch the vanilla data")
+                      + f'\nisolated "VANILLA_DATA_DEPLOY_KEY VANILLA_DATA_PASSPHRASE" OUT={out} -- {probe} one "two words"\n')
+            env = {"PATH": f"{hostile}:/usr/bin:/bin", "HOME": str(hostile / "home"), "BASH_ENV": str(hostile / "rc"),
+                   "ENV": str(hostile / "rc"), "TRUSTED_SHA": "0" * 40, "GH_TOKEN": "token",
+                   "GITHUB_WORKSPACE": str(folder), "RUNNER_TEMP": str(folder), "GITHUB_OUTPUT": str(folder / "output"),
+                   "VANILLA_DATA_DEPLOY_KEY": key, "VANILLA_DATA_PASSPHRASE": "pass phrase", "UNRELATED": "x"}
+            # The step's own literal values override what earlier steps left (BASH_ENV and ENV: empty).
+            env.update({name: value for name, value in self.step("Fetch the vanilla data")["env"].items()
+                        if "${{" not in str(value)})
+            # As the runner starts the step, with the shell named in it.
+            shell = self.SHELL.replace("{0}", "").split()
+            result = subprocess.run([*shell, "-c", script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            names = {entry.split("=", 1)[0] for entry in Path(f"{out}.env").read_text().split("\0") if entry}
+            # Only what the script needs (bash adds PWD, SHLVL and _ itself).
+            self.assertEqual(names - {"PWD", "OLDPWD", "SHLVL", "_"}, {"PATH", "HOME", "GITHUB_WORKSPACE", "RUNNER_TEMP",
+                                                             "GITHUB_OUTPUT", "OUT", "VANILLA_DATA_DEPLOY_KEY",
+                                                             "VANILLA_DATA_PASSPHRASE"})
+            self.assertIn("PATH=/usr/bin:/bin", Path(f"{out}.env").read_text().split("\0"))
+            self.assertEqual(Path(f"{out}.key").read_text(), key)
+            self.assertEqual(Path(f"{out}.args").read_text(), "one\ntwo words\n")
+            self.assertEqual(Path(f"{out}.home").read_text(), "")
+            self.assertFalse(marker.exists())
+
+    def test_the_plans_key_values_are_checked_before_they_name_anything(self):
+        # They come from the tested tree (the plan job): the step's own check, run with good and bad values.
+        script = self.step("Cache keys")["run"].split("\nh() {", 1)[0]
+        good = {"GROUP": "game+client", "JAVA_MAJOR": "25", "LOCK": "0123456789ab", "PREPARE": "0123456789abcdef"}
+        bad = [("GROUP", "game/../x"), ("GROUP", ""), ("JAVA_MAJOR", "25 x"), ("LOCK", "0123456789aB"),
+               ("PREPARE", "0123456789abcdef0"), ("PREPARE", "../../etc")]
+        def run(values):
+            return subprocess.run([BASH, "-c", script], env={**os.environ, **values}, capture_output=True).returncode
+        self.assertEqual(run(good), 0)
+        for name, value in bad:
+            with self.subTest(name=name, value=value):
+                self.assertNotEqual(run({**good, name: value}), 0)
+
+    @unittest.skipUnless(BASH, "needs bash")
+    def test_each_sealed_entry_is_restored_sealed_and_saved_under_one_key(self):
+        # The key sealed into an entry is the one it is saved under; a restore takes it by that key or its prefix, and
+        # unsealing accepts only an entry sealed for a key with that prefix.
+        seal, unseal = self.step("Seal for the caches")["env"], self.step("Unseal the restored caches")["env"]
+        for label, restore, save in (("prepared", "Restore the prepared resources (sealed)",
+                                      "Save the prepared resources (sealed)"),
+                                     ("oracle", "Restore the oracle results and parity state (sealed)",
+                                      "Save the oracle results and parity state (sealed)"),
+                                     ("build", "Restore the build folders (sealed)",
+                                      "Save the build folders (sealed)")):
+            with self.subTest(label):
+                key, prefix = ("${{ steps.entries.outputs.%s }}" % name for name in (label, label + "_prefix"))
+                restored = self.step(restore)["with"]
+                self.assertEqual((restored["key"], restored["path"]), (key, "${{ env.SEALED }}/" + label))
+                self.assertEqual(self.step(save)["with"]["key"], key)
+                self.assertEqual(seal[label.upper()], key)
+                if label == "prepared":
+                    self.assertNotIn("restore-keys", restored)
+                    self.assertEqual(unseal["PREPARED"], key)
+                else:
+                    self.assertEqual(restored["restore-keys"], prefix)
+                    self.assertEqual(unseal[label.upper() + "_PREFIX"], prefix)
+        # Each full key begins with its prefix.
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "output"
+            env = {**os.environ, "DIGEST": "0123456789abcdef", "BUILD": "parity-build-v2-other-r-l-",
+                   "ORACLE": "j-r-f-other-", "PREPARE": "fedcba9876543210", "COMMIT": "c" * 40, "SHARD": "2",
+                   "GITHUB_OUTPUT": str(output)}
+            subprocess.run([BASH, "-c", self.step("Keys of the sealed entries")["run"]], env=env, check=True)
+            keys = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        self.assertEqual(keys["oracle"], keys["oracle_prefix"] + "c" * 40 + "-2")
+        self.assertEqual(keys["build"], keys["build_prefix"] + "c" * 40)
+
+    @unittest.skipUnless(BASH, "needs bash")
+    def test_only_mains_runs_save(self):
+        # Compared in the shell: an expression's == ignores case, so a branch `Main` would pass it.
+        self.assertEqual(self.workflow["jobs"]["plan"]["outputs"]["saves"], "${{ steps.gate.outputs.saves }}")
+        gate = self.step("Whether this run saves the caches", self.plan)
+        checkout = next(index for index, step in enumerate(self.plan)
+                        if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertLess(self.plan.index(gate), checkout)
+        # Nowhere else is the ref or the event compared in an expression.
+        self.assertNotRegex(self.text, r"github\.(ref|ref_name|head_ref|base_ref|event_name)\s*(==|!=)"
+                                       r"|startsWith\(github\.ref")
+        main = {"REF": "refs/heads/main", "EVENT": "workflow_dispatch", "DEFAULT": "main", "PROTECTED": "true"}
+        cases = [({}, "true"), ({"EVENT": "push"}, "true"), ({"EVENT": "schedule"}, "true"),
+                 ({"REF": "refs/heads/Main"}, "false"), ({"REF": "refs/heads/MAIN"}, "false"),
+                 ({"REF": "refs/heads/main/x"}, "false"), ({"REF": "refs/tags/main"}, "false"),
+                 ({"REF": "refs/heads/feature"}, "false"), ({"DEFAULT": "Main"}, "false"),
+                 ({"DEFAULT": "trunk"}, "false"), ({"PROTECTED": "false"}, "false"),
+                 ({"EVENT": "pull_request_target"}, "false"), ({"EVENT": "Workflow_dispatch"}, "false"),
+                 ({"EVENT": "pull_request"}, "false")]
+        for change, expected in cases:
+            with self.subTest(**change), tempfile.TemporaryDirectory() as folder:
+                output = Path(folder) / "output"
+                env = {**os.environ, **main, **change, "GITHUB_OUTPUT": str(output)}
+                subprocess.run([BASH, "-c", gate["run"]], env=env, check=True)
+                self.assertEqual(output.read_text(), f"saves={expected}\n")
+        for name in ("Seal for the caches", "Save the encrypted dataset"):
+            self.assertIn("needs.plan.outputs.saves == 'true'", self.step(name)["if"], name)
+        saves = [step for step in self.steps if step.get("uses", "").startswith("actions/cache/save@")]
+        self.assertEqual(len(saves), 4)
+        for step in saves:
+            condition = step["if"]
+            self.assertTrue("needs.plan.outputs.saves == 'true'" in condition or "steps.seal.outputs." in condition,
+                            step["name"])
+        # No action that restores and saves at once, no sticky disk, no compiler cache.
+        for body in self.workflow["jobs"].values():
+            for step in body["steps"]:
+                uses = step.get("uses", "")
+                self.assertFalse(re.search(r"^actions/cache@|sticky|useblacksmith/|rust-cache", uses), uses)
         self.assertEqual(self.workflow["jobs"]["run"]["env"]["HORIZON_NO_SCCACHE"], "1")
-        uploads = [step["with"]["path"] for step in steps if "upload-artifact" in step.get("uses", "")]
+
+    def test_the_harnesses_see_nothing_that_differs_between_a_saving_and_a_reading_run(self):
+        # The oracle shim keys every variable the harnesses see but those it ignores (tools/parity_shim.py): one that
+        # differs between main's saving run and a reading run (whether it saves, the event, the ref, a pull request's
+        # number) would make every reading run miss main's records.
+        sys.path.insert(0, str(ROOT / "tools"))
+        import parity_shim
+        harnesses = self.names.index("The shard's harnesses")
+        seen = {**self.workflow["env"], **self.workflow["jobs"]["run"]["env"], **self.steps[harnesses].get("env", {})}
+        self.assertNotIn("SAVE_CACHES", seen)
+        for name, value in seen.items():
+            if name not in parity_shim.IGNORED and not name.startswith(parity_shim.IGNORED_PREFIXES):
+                self.assertNotIn("${{", str(value), name)
+        # Nor does a step before them write one for the steps after it.
+        for step in self.steps[:harnesses]:
+            for line in step.get("run", "").splitlines():
+                if "GITHUB_ENV" in line:
+                    self.assertNotRegex(line, r"\$\{\{|SAVE", step.get("name"))
+
+    def test_nothing_made_from_the_data_is_cached_in_the_clear(self):
+        # The dataset's chunks are encrypted as they come; everything else (the build folders included: a build
+        # script could copy data into them, and the harnesses run what they hold) only sealed.
+        for step in self.steps:
+            if step.get("uses", "").startswith("actions/cache/"):
+                paths = {line.strip() for line in step["with"]["path"].splitlines() if line.strip()}
+                self.assertTrue(paths == {"${{ env.VANILLA_DATA_CACHE }}"}
+                                or all(path.startswith("${{ env.SEALED }}/") for path in paths), step["name"])
+        uploads = [step["with"]["path"] for step in self.steps if "upload-artifact" in step.get("uses", "")]
         self.assertEqual(uploads, ["${{ runner.temp }}/parity-hosted-logs/"])
 
-    def test_the_data_is_fetched_before_the_tested_commit_is_checked_out(self):
-        # Before the checkout the workspace is empty: no code of the tested commit can run beside the secrets.
-        names = [step.get("name") or step.get("uses") for step in self.workflow["jobs"]["run"]["steps"]]
-        checkout = next(index for index, name in enumerate(names) if name.startswith("actions/checkout@"))
-        self.assertLess(names.index("Fetch the vanilla data"), checkout)
-        self.assertEqual(set(self.workflow[True]), {"workflow_dispatch"})
-        # The default branch's copy of the fetch script, or none: never the tested commit's.
-        script = self.workflow["jobs"]["run"]["steps"][names.index("The fetch script, from the default branch")]["run"]
-        self.assertEqual(re.findall(r"ref=\S+", script), ['ref=$TRUSTED_REF"'])
+    def test_a_damaged_hash_database_is_left_to_parity_py(self):
+        # An entry cut short or damaged is a cold start for that part, never a red job. The step only creates a
+        # missing database; tools/parity.py removes a damaged one before the first shim starts.
+        step = self.step("The oracle cache, created before the harnesses start")
+        program = re.search(r"<<'EOF'\n(.*)\nEOF", step["run"], re.S).group(1)
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder) / "oracle-cache"
+            for damaged in (False, True):
+                if damaged:
+                    for path in cache.iterdir():
+                        path.unlink()
+                    (cache / "hashes.sqlite").write_bytes(b"not a database" * 100)
+                result = subprocess.run([sys.executable, "-c", program], cwd=ROOT, capture_output=True, text=True,
+                                        env={**os.environ, "PARITY_SHIM_CACHE": str(cache)})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                header = (cache / "hashes.sqlite").read_bytes()[:15]
+                self.assertTrue(header.startswith(b"not a database" if damaged else b"SQLite format 3"), header)
+
+    def test_only_the_hosted_run_may_remove_a_damaged_hash_database(self):
+        # Its fresh runner has one parity run, which owns the oracle cache; elsewhere another run in the checkout may
+        # have the database open, so tools/parity.py only names a damaged one.
+        self.assertEqual(self.workflow["jobs"]["run"]["env"]["PARITY_REPAIR_ORACLE_HASHES"], "1")
+        for name in sorted(WORKFLOWS.glob("*.yml")):
+            if name.name != "parity-hosted.yml":
+                self.assertNotIn("PARITY_REPAIR_ORACLE_HASHES", name.read_text(encoding="utf-8"), name.name)
 
     def test_no_required_check_waits_for_it(self):
         for path in sorted(WORKFLOWS.glob("*.yml")):
