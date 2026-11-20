@@ -35,7 +35,7 @@ ClientboundBossEventPacket.encodeProperties	port	crates/horizon-protocol/src/pac
 ClientboundBossEventPacket.AddOperation.dispatch	port	crates/horizon-client/src/boss_overlay.rs::BossOverlay::apply
 ClientboundChunksBiomesPacket.ChunkBiomeData.calculateChunkSize	inline	crates/horizon-protocol/src/packets/play.rs::ChunkBiomeData::from_biomes	the buffer grows as each section's container is written, so no size is computed or prefixed on the wire
 ClientboundChunksBiomesPacket.ChunkBiomeData.extractChunkData	port	crates/horizon-protocol/src/packets/play.rs::ChunkBiomeData::from_biomes	the column's sections' biome containers written one after another into the buffer
-ClientboundCommandSuggestionsPacket.toSuggestions	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_command_suggestions	start, length and tooltip become the suggestion range
+ClientboundCommandSuggestionsPacket.toSuggestions	port	crates/horizon-client/src/game/network/remote/polling.rs::Game::handle_command_suggestions_body	start, length and tooltip become the suggestion range
 ClientboundCommandsPacket.validateEntries	port	crates/horizon-protocol/src/packets/play/commands.rs::Commands::read	a node whose redirect or children never build (a cycle) is refused; the root index is read last
 ClientboundCommandsPacket.enumerateNodes	port	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	breadth-first node ids on the LAN host
 ClientboundCommandsPacket.createEntries	port	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	builds the node list for the LAN host's Commands packet
@@ -50,7 +50,7 @@ ClientboundCommandsPacket.ArgumentNodeStub.write	inline	crates/horizon-protocol/
 ClientboundCommandsPacket.readNode	inline	crates/horizon-protocol/src/packets/play/commands.rs::Commands::read	flags, children and redirect, then the literal or argument stub
 ClientboundContainerSetDataPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! ContainerSetData {container VarInt, id Short, value Short}
 ClientboundContainerSetSlotPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! ContainerSetSlot {container, state, slot, item Slot}
-ClientboundDamageEventPacket.getSource	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: minor: DamageSource is not rebuilt; the hurt sound comes from the host's sound packet
+ClientboundDamageEventPacket.getSource	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	gap: minor: DamageSource is not rebuilt; the hurt sound comes from the host's sound packet
 ClientboundDebugSamplePacket.write	skip:debug		F3 debug chart sample; Horizon has no debug subscription
 ClientboundEntityEventPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! EntityEvent {id Int, event Byte}
 ClientboundEntityPositionSyncPacket.of	port	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	builds the position sync for the LAN host
@@ -75,11 +75,11 @@ ClientboundPlayerInfoUpdatePacket.toString	skip:debug		debug string
 ClientboundPlayerInfoUpdatePacket.EntryBuilder.build	inline	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::read	entry fields read in action order
 ClientboundPlayerLookAtPacket.<init>	port	crates/horizon-client/src/game/administration/commands/mod.rs::Game::send_player_look_at	every target of /tp ... facing and /rotate ... facing gets the packet, a guest over its connection
 ClientboundPlayerLookAtPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! PlayerLookAt {from, target, entity LookAtEntity {id, anchor}}
-ClientboundPlayerLookAtPacket.getPosition	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_look_at	the point is read off the packet, unless the named entity is tracked, then its feet or eyes
+ClientboundPlayerLookAtPacket.getPosition	inline	crates/horizon-client/src/game/network/remote/entity_updates.rs::Game::remote_look_at_body	the point is read off the packet, unless the named entity is tracked, then its feet or eyes
 ClientboundRotateHeadPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! RotateHead {id VarInt, head_yaw Byte}
 ClientboundSectionBlocksUpdatePacket.<init>	port	crates/horizon-client/src/lan/hub.rs::Hub::broadcast_block_changes	builds the section's change list from the changed blocks
 ClientboundSectionBlocksUpdatePacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! SectionBlocksUpdate (play.rs) with SectionPos and VarLong changes
-ClientboundSectionBlocksUpdatePacket.runUpdates	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	applies each change at its section position
+ClientboundSectionBlocksUpdatePacket.runUpdates	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	applies each change at its section position
 ClientboundSetChunkCacheCenterPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! SetChunkCacheCenter {x VarInt, z VarInt}
 ClientboundSetEntityDataPacket.pack	port	crates/horizon-protocol/src/entity_data.rs::EntityData::write	entries then 0xFF terminator
 ClientboundSetEntityDataPacket.unpack	port	crates/horizon-protocol/src/entity_data.rs::EntityData::read	entries until 0xFF
@@ -129,8 +129,8 @@ SynchedEntityData.defineId	skip:other		entity data ids are fixed in code per ent
 SynchedEntityData.set	inline	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	gap: minor: no per-value dirty flag; the metadata list is compared each tick
 SynchedEntityData.packDirty	port	crates/horizon-client/src/lan/entity.rs::ServerEntity::send_changes	sends the changed metadata values
 SynchedEntityData.getNonDefaultValues	port	crates/horizon-client/src/lan/entity.rs::ServerEntity::pairing	non-empty metadata goes out with the spawn
-SynchedEntityData.assignValues	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	applies the values to the entity by index
-SynchedEntityData.assignValue	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: minor: no serializer type check
+SynchedEntityData.assignValues	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	applies the values to the entity by index
+SynchedEntityData.assignValue	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	gap: minor: no serializer type check
 SynchedEntityData.Builder.define	skip:other		entity data ids and defaults are fixed per entity type in Horizon
 SynchedEntityData.Builder.build	skip:other		entity data ids and defaults are fixed per entity type in Horizon
 SynchedEntityData.DataValue.create	skip:java		copies a value; Rust owns the value

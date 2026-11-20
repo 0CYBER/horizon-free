@@ -7,7 +7,7 @@ Interaction.interact	port	crates/horizon-client/src/game/remote.rs::Game::remote
 Interaction.getLastAttacker	missing		client copy only: the server keeps the attack targets; a client's copy answers only the click
 Interaction.getTarget	missing		client copy only: the server keeps the attack targets; a client's copy answers only the click
 Leashable.isLeashed	inline	crates/horizon-client/src/mobs/leash.rs::tick	the mob's extra.leash being set
-Leashable.setDelayedLeashHolderId	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	SetEntityLink arm: a holder id not known yet waits as Holder::Mob until the knot arrives (remote_objects.rs)
+Leashable.setDelayedLeashHolderId	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	SetEntityLink arm: a holder id not known yet waits as Holder::Mob until the knot arrives (remote_objects.rs)
 Leashable.readLeashData	port	crates/horizon-client/src/mobs/leash.rs::pending_from_nbt	holder UUID or fence knot block; kept pending until the holder exists
 Leashable.restoreLeashFromSave	port	crates/horizon-client/src/game/entities/leads.rs::Game::tick_leads	holder found by UUID or knot block; a lead whose holder never shows up drops as an item after 100 ticks
 Leashable.angularFriction	inline	crates/horizon-client/src/mobs/leash.rs::tick	ground friction is the friction of the block under the mob (0.989 on blue ice, 0.6 default) times 0.91; 0.8 in a liquid, 0.91 in the air
@@ -26,9 +26,9 @@ LightningBolt.spawnFire	port	crates/horizon-client/src/game/entities/lightning.r
 LightningBolt.randomWalkCleaningCopper	inline	crates/horizon-world/src/level/tick.rs::Sim::lightning_clear_copper	3 to 5 walks of up to 8 steps
 LightningBolt.randomStepCleaningCopper	inline	crates/horizon-world/src/level/tick.rs::Sim::lightning_clear_copper	up to 10 random blocks in the 3x3x3 cube, first weathering copper steps back
 LightningBolt.shouldRenderAtSqrDistance	port	crates/horizon-client/src/game/entities/lightning.rs::Game::bolt_instances	ticked in arismoko/horizon#3514; `LightningBolt.shouldRenderAtSqrDistance` is cited at crates/horizon-client/src/game/entities/lightning.rs:591
-LinearInterpolationHandler.create	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::move_entity	3 steps (lerps.insert); only on a server's client, a local game moves boats, carts and bobbers directly
-LinearInterpolationHandler.startInterpolating	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::move_entity	target kept as Lerp with steps 3
-LinearInterpolationHandler.doInterpolate	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	gap: minor: position eased by 1/steps; a boat's or minecart's yaw is set at once, not eased
+LinearInterpolationHandler.create	inline	crates/horizon-client/src/game/network/remote/entities.rs::Game::move_entity_body	3 steps (lerps.insert); only on a server's client, a local game moves boats, carts and bobbers directly
+LinearInterpolationHandler.startInterpolating	inline	crates/horizon-client/src/game/network/remote/entities.rs::Game::move_entity_body	target kept as Lerp with steps 3
+LinearInterpolationHandler.doInterpolate	inline	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::tick_remote_entities_body	gap: minor: position eased by 1/steps; a boat's or minecart's yaw is set at once, not eased
 LivingEntity.<init>	port	crates/horizon-client/src/mobs.rs::Mob::new	box, health, random yaw
 LivingEntity.canFreeze	port	crates/horizon-client/src/mobs/ai/freezing.rs::can_freeze	the freeze_immune_entity_types tag and the freeze_immune_wearables on every armour slot, with the class answers below
 Skeleton.canFreeze	port	crates/horizon-client/src/mobs/ai/freezing.rs::can_freeze	false: a skeleton never freezes; the bogged, parched and wither skeleton extend AbstractSkeleton and are not affected, the stray is immune through the freeze_immune_entity_types tag
@@ -72,7 +72,7 @@ LivingEntity.setIgnoreFallDamageFromCurrentImpulse	port	crates/horizon-world/src
 LivingEntity.getDamageAfterArmorAbsorb	inline	crates/horizon-client/src/mobs.rs::Mob::damage_with	the player's armor wear is health.rs hurt_armor; the mob path also scales armor effectiveness (breach)
 LivingEntity.getKillCredit	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::mob_died	the last player to hit it, else the last mob
 LivingEntity.getTicksSinceLastKineticHitFeedback	port	crates/horizon-client/src/game/items/spear.rs::Game::kinetic_hit_ticks
-LivingEntity.swapHandItems	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	entity event 55 swaps another player's hands; the arm is in `handle_packet`
+LivingEntity.swapHandItems	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	entity event 55 swaps another player's hands; the arm is in `handle_packet`
 LivingEntity.getAttackRangeWith	inline	crates/horizon-client/src/game.rs::Game::reach	gap: minor: only the spear's range is item specific (spear.rs REACH); other items use the default reach
 LivingEntity.SwingState.getAnimation	port	crates/horizon-client/src/first_person.rs::SwingState::animation	partial-tick interpolation wraps a restarted animation forward through one
 LivingEntity.getActiveItem	inline	crates/horizon-client/src/game.rs::Game::held	the selected slot; the item in use is the `using` slot
@@ -110,9 +110,9 @@ LivingEntity.getEquipmentSlotForItem	inline	crates/horizon-client/src/game/mobs/
 LivingEntity.createEquipmentSlotAccess	inline	crates/horizon-client/src/game/administration/commands/items.rs::Game::slots_named	/item slot names such as armor.head and weapon.mainhand
 LivingEntity.getEquipmentSlot	inline	crates/horizon-client/src/game/administration/commands/items.rs::Game::slots_named	slot names instead of the numeric ids 98, 99 and 100 and up
 LivingEntity.getSlot	port	crates/horizon-client/src/game/administration/commands/items.rs::Game::slots_named	for the player and mobs through /item
-LivingEntity.recreateFromPacket	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::spawn_entity	position, head yaw and movement of a server's mob
+LivingEntity.recreateFromPacket	port	crates/horizon-client/src/game/network/remote/entities.rs::Game::spawn_entity_body	position, head yaw and movement of a server's mob
 LivingEntity.getPassengerRidingPosition	port	crates/horizon-client/src/mobs/riders.rs::seat	gap: minor: attachments are a table by species, not scaled by the age scale
-LivingEntity.lerpHeadRotationStep	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	head_lerps: 1/steps of the way to the target yaw
+LivingEntity.lerpHeadRotationStep	inline	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::tick_remote_entities_body	head_lerps: 1/steps of the way to the target yaw
 LivingEntity.isInvulnerableTo	inline	crates/horizon-client/src/mobs.rs::Mob::damage_with	gap: minor: the invulnerable flag only; no enchantment damage immunity
 Mob.getMoveControl	port	crates/horizon-client/src/mobs/control.rs::Mob::move_control_tick	a mount is steered through riders.rs::drive
 Mob.getNavigation	inline	crates/horizon-client/src/mobs/riders.rs::tick	controlling mob passengers lend the vehicle navigation recursively; path creation uses the vehicle body, raw serverAiStep ticks private navigation

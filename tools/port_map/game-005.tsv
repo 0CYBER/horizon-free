@@ -1,7 +1,7 @@
 Entity.<init>	port	crates/horizon-client/src/mobs.rs::Mob::new	mobs only; players and projectiles are built by their own structs and the synched defaults (flags, air, name, pose) are plain fields
 Entity.get	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::mob_entity	mob predicate projection: live custom_name Text and the existing type-variant component; gap: custom_data is not projected
 Entity.getMovementEmission	port	crates/horizon-client/src/mobs/ai.rs::movement_sounds	EVENTS for silverfish, endermite, bats, squids, glow squids, guardians, elder guardians and breezes (game events, no sounds), NONE for a shulker (ai.rs::emits_movement), ALL for every other type
-Entity.isColliding	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::block_meets_player	the state's collision shape at the player's pose against the player's box; `end_predictions` asks it for a restored block and snaps the player to the position the prediction remembered (`snap_target`, guarded by `onTeleport`)
+Entity.isColliding	port	crates/horizon-client/src/game/network/remote/blocks.rs::Game::block_meets_player_body	the state's collision shape at the player's pose against the player's box; `end_predictions` asks it for a restored block and snaps the player to the position the prediction remembered (`snap_target`, guarded by `onTeleport`)
 Entity.canInteractWithLevel	inline	crates/horizon-client/src/mobs/leash.rs::tick	the leashed mob's life, and its player holder's life and spectator state, are checked: a dead or spectating holder drops the lead
 Entity.unRide	inline	crates/horizon-client/src/game/items/consume.rs::Game::stop_riding	gap: minor: the player's half (boat, minecart or mob mount); riders of a vehicle are let go by sync_riders and eject_boat_mobs
 Entity.addTag	port	crates/horizon-gameplay/src/commands/tag.rs::tag	the tag.add branch, with the 1024 tag limit
@@ -93,7 +93,7 @@ Entity.getRopeHoldPosition	inline	crates/horizon-client/src/game/entities/leads.
 Entity.setYRot	skip:other		plain setter; yaw is a struct field
 Entity.getClientPosition	port	crates/horizon-world/src/stepped_interpolation.rs::SteppedInterpolation::heading	the interpolation target while it runs, else the entity's position
 Entity.shouldBeSaved	inline	crates/horizon-client/src/game/world/persist.rs::Game::put_mob_passengers	riders are saved inside their vehicle's tag, not on their own
-Entity.lerpPositionAndRotationStep	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	boats, minecarts, projectiles and orbs of a server step toward the packet's target by 1/steps each tick
+Entity.lerpPositionAndRotationStep	inline	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::tick_remote_entities_body	boats, minecarts, projectiles and orbs of a server step toward the packet's target by 1/steps each tick
 Entity.applyImplicitComponents	port	crates/horizon-client/src/game/entities/armor_stands.rs::Game::armor_stand_spawn	ticked in arismoko/horizon#3514; `Entity.applyImplicitComponents` is cited at crates/horizon-client/src/game/entities/armor_stands.rs:390 (in a comment, so `where` names the enclosing fn)
 Entity.applyImplicitComponent	inline	crates/horizon-client/src/entity_nbt.rs::apply_item_components	the stack's components (name, bucket data, variant, trim...) applied to the entity it spawns
 Entity.applyImplicitComponentIfPresent	inline	crates/horizon-client/src/entity_nbt.rs::apply_item_components	each component is applied only when the stack carries it

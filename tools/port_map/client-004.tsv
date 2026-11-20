@@ -62,7 +62,7 @@ HorseRenderer.getTextureLocation	port	crates/horizon-client/src/mobs/render.rs::
 HorseRenderer.extractRenderState	port	crates/horizon-client/src/mobs/equine.rs::markings	variant, markings and armour layer
 HumanoidMobRenderer.getArmPose	port	crates/horizon-client/src/mobs/anim.rs::humanoid_arm_poses	item declarations and get_arm_pose replacements staged by gameplay before humanoid animation
 HumanoidMobRenderer.usesSpearPose	inline	crates/horizon-client/src/mobs/anim.rs::pose_arm	spear pose check folded into the arm pose
-HumanoidMobRenderer.extractRenderState	port	crates/horizon-client/src/game/network/remote/mod.rs::tick_remote_arm_poses	select humanoid poses, fire get_arm_pose with ClientHost, stage answers for both arms
+HumanoidMobRenderer.extractRenderState	port	crates/horizon-client/src/game/network/remote/tick_entities.rs::tick_remote_arm_poses	select humanoid poses, fire get_arm_pose with ClientHost, stage answers for both arms
 HumanoidMobRenderer.extractHumanoidRenderState	port	crates/horizon-client/src/game/interface/perspective.rs::held_arm_poses	borrow typed held items, main arm, use state and selected poses for get_arm_pose
 HumanoidMobRenderer.getEquipmentIfRenderable	port	crates/horizon-client/src/mobs/render.rs::humanoid_armor	armour slot shown only when renderable
 IllagerRenderer.extractRenderState	port	crates/horizon-client/src/mobs/illager.rs::holding_crossbow	crossbow charge and aggressive pose

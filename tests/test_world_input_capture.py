@@ -47,23 +47,23 @@ class WorldInputCaptureTests(unittest.TestCase):
         game = "".join((ROOT / "crates/horizon-client/src" / path).read_text(encoding="utf-8")
                        for path in ("game/world/player_spawn.rs", "game/runtime/window_handler.rs", "game.rs"))
         remote_dir = next(ROOT.glob('crates/horizon-client/src/game/*/remote'))
-        remote = (remote_dir / "mod.rs").read_text(encoding="utf-8")
+        remote = (remote_dir / "tick.rs").read_text(encoding="utf-8")
         level_tick = (remote_dir / "client_level_tick.rs").read_text(encoding="utf-8")
         spawn = method(game, "spawn_player")
         self.assertLess(spawn.index("self.player = Some(player)"),
                         spawn.index("self.capture_loaded_world()"))
         # ClientPacketListener.tick: the level load tracker ends the loading screen,
         # the server hears PlayerLoaded, the mouse is captured, then the player moves.
-        ready = remote[remote.index("    fn tick_client_load("):]
+        ready = remote[remote.index("    pub(super) fn tick_client_load_body("):]
         self.assertLess(ready.index("r.loaded_sent = true"),
                         ready.index("self.capture_loaded_world()"))
         level_fn = level_tick[level_tick.index("    pub(in crate::game) fn tick_remote_level("):]
         self.assertIn("self.tick_remote_player(running, hold)", level_fn)
-        level = method(remote, "tick_remote_player")
+        level = method(remote, "tick_remote_player_body")
         self.assertLess(level.index("self.tick_client_load()"),
                         level.index("self.tick_local_player("))
         # The extracted local-player pass owns the movement input now.
-        self.assertIn("let stick = self.pad_move()", method(remote, "tick_local_player"))
+        self.assertIn("let stick = self.pad_move()", method(remote, "tick_local_player_body"))
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_capture_lifecycle(self):

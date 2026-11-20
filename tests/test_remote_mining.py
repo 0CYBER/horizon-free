@@ -18,9 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
 class RemoteMiningTests(unittest.TestCase):
     def test_break_timing_and_packets(self):
-        source = (next(ROOT.glob('crates/horizon-client/src/game/*/remote/mod.rs'))).read_text()
-        start = source.index("    pub(super) fn stop_remote_mining(")
-        end = source.index("    fn veto_mining_prediction(", start)
+        source = (next(ROOT.glob('crates/horizon-client/src/game/*/remote/mining.rs'))).read_text()
+        start = source.index("    pub(super) fn stop_remote_mining_body(")
+        end = source.index("    pub(super) fn veto_mining_prediction_body(", start)
         fixture = r'''
 #![allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -228,7 +228,7 @@ fn main() {
         assert!(game.remote.as_ref().unwrap().destroying.is_none());
     }
 }
-'''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn"))
+'''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn").replace("_body(", "("))
         with tempfile.TemporaryDirectory(prefix="remote-mining-") as directory:
             path = Path(directory)
             (path / "main.rs").write_text(fixture)

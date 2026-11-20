@@ -82,7 +82,7 @@ PlayerTeam.pack	port	crates/horizon-client-core/src/scoreboard.rs::Scoreboard::p
 PlayerTeam.setPlayerPrefix	port	crates/horizon-client/src/scoreboard_cmd.rs::team_modify	the team.modify prefix path; the null-to-empty rule is not repeated here
 PlayerTeam.setPlayerSuffix	port	crates/horizon-client/src/scoreboard_cmd.rs::team_modify	the team.modify suffix path
 PlayerTeam.packOptions	port	crates/horizon-client/src/lan/scoreboard.rs::View::of	the friendly fire and see-invisible flags as the team options byte
-PlayerTeam.unpackOptions	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_team	the two option bits are read from the team packet
+PlayerTeam.unpackOptions	port	crates/horizon-client/src/game/network/remote/scoreboard.rs::Game::remote_team_body	the two option bits are read from the team packet
 ScoreHolder.getFeedbackDisplayName	port	crates/horizon-client/src/scoreboard_cmd.rs::Holder::named	gap: minor: the hover with the scoreboard name is set where a holder is built from an entity, not here
 ScoreHolder.forNameOnly	port	crates/horizon-client/src/scoreboard_cmd.rs::Holder::named	gap: minor: "*" is not a wildcard holder; game/interface/scoreboard/mod.rs maps it to the player name
 Scoreboard.getOrCreatePlayerScore	port	crates/horizon-client-core/src/scoreboard.rs::Scoreboard::score_mut	gap: minor: the read-only criteria check is in scoreboard_cmd.rs, not here

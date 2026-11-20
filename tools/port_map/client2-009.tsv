@@ -87,7 +87,7 @@ Hud.extractFood	inline	crates/horizon-client-render/src/hud_layout.rs::HealthHud
 Hud.extractTextureOverlay	port	crates/horizon-client-render/src/hud_overlays.rs::camera_overlays	gap: player: the powder-snow freeze outline is not drawn; only the equippable camera overlay (pumpkin) is
 Hud.extractSlot	port	crates/horizon-client/src/game/interface/inventory_slots.rs::Game::draw_slot_item
 Hud.setNowPlaying	port	crates/horizon-client-render/src/hud_overlays.rs::Titles::set_overlay	the animate flag gives the rainbow colour
-Hud.onDisconnected	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::hud_disconnected	the tab list, boss bars, toasts, debug charts and titles reset; chat is left alone (ChatComponent.storeState)
+Hud.onDisconnected	port	crates/horizon-client/src/game/network/remote/wire.rs::Game::hud_disconnected_body	the tab list, boss bars, toasts, debug charts and titles reset; chat is left alone (ChatComponent.storeState)
 Hud.willPrioritizeJumpInfo	port	crates/horizon-client/src/locator_bar.rs::ContextualBar::next	the jumping input comes from Game::mount_jumping
 Hud.HeartType.getSprite	port	crates/horizon-client-render/src/hud_layout.rs::heart
 Hud.HeartType.forPlayer	inline	crates/horizon-client-render/src/hud_layout.rs::HealthHud::layout	heart kind comes from the health inputs

@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
 class RemoteMotionTests(unittest.TestCase):
     def test_mob_velocity_reaches_squid_animation(self):
-        source = (next(ROOT.glob('crates/horizon-client/src/game/*/remote/mod.rs'))).read_text()
-        start = source.index("    fn remote_motion(")
-        end = source.index("    fn apply_remote_health(", start)
+        source = (next(ROOT.glob('crates/horizon-client/src/game/*/remote/entity_updates.rs'))).read_text()
+        start = source.index("    pub(super) fn remote_motion_body(")
+        end = source.index("    pub(super) fn apply_remote_health_body(", start)
         fixture = r'''
 #![allow(dead_code)]
 use std::collections::HashMap;
@@ -101,7 +101,7 @@ fn main() {
     game.remote_motion(45, [0.1, 0.0, 0.0]);
     assert!(!game.tridents[0].in_ground);
 }
-'''.replace("METHOD", source[start:end])
+'''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn").replace("_body(", "("))
         with tempfile.TemporaryDirectory(prefix="remote-motion-") as directory:
             path = Path(directory)
             (path / "main.rs").write_text(fixture)

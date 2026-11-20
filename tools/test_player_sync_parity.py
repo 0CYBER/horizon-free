@@ -69,6 +69,8 @@ def main():
         "scheduling and live anticheat behaviour are outside this harness.",
         sources=[lab.ROOT / "crates/horizon-client/src/player_sync.rs",
                  lab.ROOT / "crates/horizon-client/src/game/network/remote/mod.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/network/remote/entity_updates.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/network/remote/player_state.rs",
                  lab.ROOT / "crates/horizon-client/src/net.rs"])
 
 

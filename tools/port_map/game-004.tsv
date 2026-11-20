@@ -58,7 +58,7 @@ AreaEffectCloud.get	skip:other		entity data component accessor for predicates an
 AreaEffectCloud.applyImplicitComponents	inline	crates/horizon-client/src/game/items/potions.rs::Game::splash	the lingering branch takes the thrown stack's potion effects and colour; potion_duration_scale is fixed at 0.25
 AreaEffectCloud.applyImplicitComponent	inline	crates/horizon-client/src/game/items/potions.rs::Game::splash	same: potion contents only
 Avatar.defineSynchedData	port	crates/horizon-client/src/lan/hub.rs::Hub::player_state	gap: minor: skin parts (entry 16) are sent, the main hand entry is not
-Avatar.isModelPartShown	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::update_remote_skins	the Skin Customization cape option reaches the drawn player
+Avatar.isModelPartShown	port	crates/horizon-client/src/game/network/remote/skins.rs::Game::update_remote_skins_body	the Skin Customization cape option reaches the drawn player
 Bucketable.loadDefaultDataFromBucketTag	port	crates/horizon-client/src/entity_nbt.rs::apply_item_components	NoAI, Silent, NoGravity, Glowing, Invulnerable, PersistenceRequired and Health, read from the bucket's entity data
 ContainerUser.getLivingEntity	skip:java		interface cast; every container user here is the player
 ConversionTracker.addAdditionalSaveData	inline	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	Zombie-derived InWaterTime saves -1 unless cached eyes are in water; gap: supplied NBT can still shadow live counter progress

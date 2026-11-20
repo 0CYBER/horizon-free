@@ -1,5 +1,5 @@
 RemotePlayer.shouldRenderAtSqrDistance	port	crates/horizon-client/src/game/interface/entity_culling/mod.rs::entity_view_scale	every entity's draw distance is scaled by the view scale and the limit, remote players included
-RemotePlayer.aiStep	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	gap: minor: the head yaws over its lerp steps; the smoothed delta movement and the push step are not ported
+RemotePlayer.aiStep	inline	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::tick_remote_entities_body	gap: minor: the head yaws over its lerp steps; the smoothed delta movement and the push step are not ported
 RemotePlayer.lerpMotion	missing		unsure: no lerp of received remote-player motion found in game/network/remote/mod.rs
 Hotbar.storeFrom	port	crates/horizon-client/src/game/items/creative_hotbar.rs::Game::hotbar_load_or_save	save copies the nine slots into the hotbar.nbt row
 Hotbar.isEmpty	inline	crates/horizon-client/src/game/items/creative_hotbar.rs::Game::refresh_saved_hotbars	the empty creative hotbar row carries the inventory.hotbarInfo hint

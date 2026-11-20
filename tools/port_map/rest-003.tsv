@@ -90,9 +90,9 @@ Minecraft.archiveProfilingReport	skip:debug		profiling archive
 Minecraft.isLevelRunningNormally	port	crates/horizon-client/src/clock.rs::TickRateManager::runs_normally
 Minecraft.isMultiplayerServer	skip:other		no single predicate; remote and LAN code test their own state
 Minecraft.getQuickActionsDialog	port	crates/horizon-client/src/game/interface/quick_actions.rs::Game::open_quick_actions	key.quickActions opens the tag's dialog, or minecraft:quick_actions when it names several
-Minecraft.disconnectFromWorld	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::leave_server	gap: minor: only the remote exit; local worlds exit via close_world
+Minecraft.disconnectFromWorld	port	crates/horizon-client/src/game/network/remote/connection.rs::Game::leave_server_body	gap: minor: only the remote exit; local worlds exit via close_world
 Minecraft.disconnectWithProgressScreen	inline	crates/horizon-client/src/game/world/world_session.rs::Game::close_world	the exit is folded into the world close
-Minecraft.clearClientLevel	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::leave_server	level teardown is part of leave_server
+Minecraft.clearClientLevel	inline	crates/horizon-client/src/game/network/remote/connection.rs::Game::leave_server_body	level teardown is part of leave_server
 Minecraft.setScreenAndShow	skip:other		Horizon switches the screen field; no forced frame render needed
 Minecraft.updateLevelInEngines	skip:other		one world state in Horizon; no engines to update
 Minecraft.telemetryOptInExtra	skip:service

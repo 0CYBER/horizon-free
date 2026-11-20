@@ -94,8 +94,8 @@ Level.getWorldBorderAdjustedRespawnData	missing		unsure: respawn clamp to the wo
 Level.hasEntities	missing		unsure: no entity-in-box test found for this use
 Level.getClockTimeTicks	port	crates/horizon-client/src/game/blocks/level_access.rs::GameLevel::day_time	day time; no separate clock time
 Level.getThunderLevel	port	crates/horizon-client-render/src/world.rs::World::levels	thunder scaled by rain
-Level.setThunderLevel	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	weather game event sets the thunder level
-Level.setRainLevel	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	weather game event sets the rain level
+Level.setThunderLevel	port	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	weather game event sets the thunder level
+Level.setRainLevel	port	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	weather game event sets the rain level
 Level.fillReportDetails	skip:debug		crash-report details
 BlockGetter.getBlockEntity	skip:other		bare block_entities map lookup at each caller
 BlockGetter.isBlockInLine	skip:other		no caller in 26.3 code

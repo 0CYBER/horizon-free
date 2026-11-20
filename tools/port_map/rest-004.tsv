@@ -101,8 +101,8 @@ net/minecraft/client/main/Main#getQuickPlayVariant	port	crates/horizon-client/sr
 net/minecraft/client/main/Main#parseArgument	inline	crates/horizon-client/src/game/launch_options.rs::Options::parse	the argument loop itself (Options::read is the wrapper that feeds it std::env::args)
 net/minecraft/client/main/Main#hasValidUuid	skip:other		the --uuid argument is what reaches it, and Horizon's client parses none (game/launch_options.rs::Options::parse takes its own flags)
 net/minecraft/client/main/Main#isUuidValid	skip:other		the check behind hasValidUuid, which no --uuid argument reaches
-AbstractClientPlayer.getPlayerInfo	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_pushes	the entity id -> uuid -> tab entry lookups stand in for the PlayerInfo; the name, team and game mode are read from that entry
-AbstractClientPlayer.getSkin	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::update_remote_skins	the downloaded skin and slim flag, else DefaultPlayerSkin by uuid, as PlayerInfo.getSkin
+AbstractClientPlayer.getPlayerInfo	inline	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::remote_pushes_body	the entity id -> uuid -> tab entry lookups stand in for the PlayerInfo; the name, team and game mode are read from that entry
+AbstractClientPlayer.getSkin	port	crates/horizon-client/src/game/network/remote/skins.rs::Game::update_remote_skins_body	the downloaded skin and slim flag, else DefaultPlayerSkin by uuid, as PlayerInfo.getSkin
 AbstractClientPlayer.getParrotVariantOnShoulder	port	crates/horizon-client/src/mobs/render.rs::shoulder_parrot	the shoulder slot's stored variant picks the parrot texture and model in the layer
 ClientInput.makeJump	inline	crates/horizon-client/src/motion.rs::MotionWorld::controlled_simulation_tick	gap: minor: carries the auto-jump flag; no separate jump input
 FirstPersonHandsAndItems.extractRenderState	inline	crates/horizon-client/src/game/items/hand.rs::Game::visible_hand_items	gap: minor: bob, swing and map state are read elsewhere; no render-state struct
@@ -113,10 +113,10 @@ ItemActivation.tick	port	crates/horizon-client/src/item_activation.rs::ItemActiv
 ItemActivation.activate	port	crates/horizon-client/src/item_activation.rs::ItemActivation::activate	a copy of the stack, the 40 ticks and two offsets in [-1, 1); game/items/totem.rs sets it from findTotem
 KeyboardInput.calculateImpulse	inline	crates/horizon-client-input/src/input.rs::keyboard_direction
 LocalPlayer.<init>	inline	crates/horizon-client/src/ambience.rs::Ambience::new	gap: minor: the three ambient handlers are the Ambience loops; no connection set-up
-LocalPlayer.sendChanges	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_send_state
+LocalPlayer.sendChanges	port	crates/horizon-client/src/game/network/remote/player_state.rs::Game::remote_send_state_body
 LocalPlayer.getCurrentMood	inline	crates/horizon-client/src/ambience.rs::Ambience::tick_biome	gap: minor: moodiness is built here; no getter is exposed
-LocalPlayer.sendIsSprintingIfNeeded	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_send_state	sprint start and stop commands
-LocalPlayer.closeContainer	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_close_container
+LocalPlayer.sendIsSprintingIfNeeded	inline	crates/horizon-client/src/game/network/remote/player_state.rs::Game::remote_send_state_body	sprint start and stop commands
+LocalPlayer.closeContainer	port	crates/horizon-client/src/game/network/remote/menus.rs::Game::remote_close_container_body
 LocalPlayer.isSuppressingSlidingDownLadder	port	crates/horizon-client/src/motion.rs::MotionWorld::suppressing_ladder_slide	gap: minor: sneak only; vanilla also requires not flying
 LocalPlayer.canSpawnSprintParticle	port	crates/horizon-client/src/game/interface/client_ambient.rs::Game::sprint_dust	gap: minor: the test there is Entity.canSpawnSprintParticle's (sprinting, not spectator, not crouching, alive, out of water and lava) without the !abilities.flying LocalPlayer adds
 LocalPlayer.sendRidingJump	port	crates/horizon-client/src/game/network/remote_vehicles.rs::riding_jump	START_RIDING_JUMP carrying the jump scale
@@ -124,7 +124,7 @@ LocalPlayer.removeRecipeHighlight	port	crates/horizon-client/src/recipe_book.rs:
 LocalPlayer.moveTowardsClosestSpace	port	crates/horizon-client/src/game.rs::Game::closest_space_nudge	the four body corners, 0.1 towards the nearest free side on its axis, a later corner overwriting an earlier one
 LocalPlayer.suffocatesAt	inline	crates/horizon-client/src/game.rs::closest_space_nudge	the suffocates_at closure tests a full collision cube that is also a full render cube, over the body's Y span
 LocalPlayer.setExperienceDisplayStartTickToTickCount	inline	crates/horizon-client/src/game/interface/locator_bar.rs::Game::track_experience_display
-LocalPlayer.handleEntityEvent	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: minor: only the permission events 24 to 28 of the local player
+LocalPlayer.handleEntityEvent	port	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	gap: minor: only the permission events 24 to 28 of the local player
 LocalPlayer.startUsingItem	port	crates/horizon-client/src/game.rs::Game::use_hand
 LocalPlayer.isSlowDueToUsingItem	port	crates/horizon-client/src/game.rs::Game::sync_player_body	the used item's UseEffects.canSprint reaches sprint's slow_item, which stops a sprint starting and ends one
 LocalPlayer.onSyncedDataUpdated	inline	crates/horizon-client/src/game/interface/music.rs::Game::tick_sound_engine	starting to glide starts the elytra flying sound; the living flags are local state on this side
@@ -146,5 +146,5 @@ LocalPlayer.getRopeHoldPosition	port	crates/horizon-client/src/game/entities/lea
 LocalPlayer.raycastHitResult	port	crates/horizon-client/src/game/items/hand.rs::GameHands::hit	gap: minor: block fallback is Game::pick; no separate item attack-range pass
 LocalPlayer.filterHitResult	inline	crates/horizon-client/src/game.rs::Game::pick	gap: minor: reach is applied inside the clip; no miss direction is returned
 LocalPlayerResolver.fetchByName	inline	crates/horizon-client-render/src/skins.rs::Resolver::state	a name is fetched by getByName (resolve_profile) after StringUtil.isValidPlayerName; an invalid name caches as no profile
-LocalPlayerResolver.fetchById	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_pushes	the uuid -> tab entry lookup is inline wherever a player's name, team or skin is needed
+LocalPlayerResolver.fetchById	inline	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::remote_pushes_body	the uuid -> tab entry lookup is inline wherever a player's name, team or skin is needed
 Options.mouseWheelSensitivity	port	crates/horizon-client-render/src/options_ui_wheel.rs::kind	IntRange(-200, 100) through logMouse/unlogMouse: the slider runs over 10^(i/100), 0.01 to 10.0

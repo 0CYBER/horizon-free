@@ -33,16 +33,16 @@ ClientCommonPacketListenerImpl.handleKeepAlive	port	crates/horizon-client/src/ne
 ClientCommonPacketListenerImpl.handleCustomPayload	port	crates/horizon-client/src/net.rs::receive_brand	the brand, quiet, mod-network and LOD channels are read in receive_brand; mod-network, attachment-sync, menu-extra and recipe transfer/content payloads in Game::handle_packet
 ClientCommonPacketListenerImpl.handleResourcePackPush	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_push
 ClientCommonPacketListenerImpl.handleResourcePackPop	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_pop
-ClientCommonPacketListenerImpl.handlePostEffects	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet
+ClientCommonPacketListenerImpl.handlePostEffects	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body
 ClientCommonPacketListenerImpl.preparePackPrompt	port	crates/horizon-client/src/game/world/server_packs.rs::PackPrompt::texts	builds the server prompt line from the header and the server's prompt
 ClientCommonPacketListenerImpl.handleStoreCookie	port	crates/horizon-client/src/net.rs::receive_play	stores the cookie for a later transfer or cookie request
 ClientCommonPacketListenerImpl.handleCustomReportDetails	skip:debug		extra lines for crash reports only
 ClientCommonPacketListenerImpl.showDialog	port	crates/horizon-client/src/game/interface/dialogs.rs::Game::show_play_dialog	shows a direct or registry dialog
 ClientCommonPacketListenerImpl.clearDialog	port	crates/horizon-client/src/game/interface/dialogs.rs::Game::clear_dialog	closes the dialog screen
 ClientCommonPacketListenerImpl.sendDeferredPackets	missing		minor: no deferred-packet queue; keep-alive and other packets are sent at once
-ClientCommonPacketListenerImpl.onDisconnect	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::leave_server	shows the disconnect reason on the multiplayer screen; no telemetry
+ClientCommonPacketListenerImpl.onDisconnect	port	crates/horizon-client/src/game/network/remote/connection.rs::Game::leave_server_body	shows the disconnect reason on the multiplayer screen; no telemetry
 ClientCommonPacketListenerImpl.fillListenerSpecificCrashDetails	skip:debug		crash report details only
-ClientCommonPacketListenerImpl.createDisconnectScreen	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::leave_server	disconnected view with the reason (Screen::Disconnected)
+ClientCommonPacketListenerImpl.createDisconnectScreen	port	crates/horizon-client/src/game/network/remote/connection.rs::Game::leave_server_body	disconnected view with the reason (Screen::Disconnected)
 ClientCommonPacketListenerImpl.sendWhen	missing		minor: no deferred sends; packets go out at once (see handleKeepAlive)
 ClientCommonPacketListenerImpl.addOrUpdatePackPrompt	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_push	one prompt holds every pack pushed before it is answered
 ClientCommonPacketListenerImpl.PackConfirmScreen.<init>	port	crates/horizon-client/src/game/world/server_packs.rs::Game::handle_pack_push	creates the prompt with its pending requests
@@ -81,25 +81,25 @@ ClientHandshakePacketListenerImpl.onDisconnect	port	crates/horizon-client/src/ne
 ClientHandshakePacketListenerImpl.handleCompression	port	crates/horizon-client/src/net.rs::run	sets the compression threshold
 ClientHandshakePacketListenerImpl.handleCustomQuery	port	crates/horizon-client/src/net.rs::run	answers an unknown custom query with no data
 ClientHandshakePacketListenerImpl.fillListenerSpecificCrashDetails	skip:debug		crash report details only
-ClientLevel.handleBlockChangedAck	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::end_predictions	settles the predicted block actions up to the sequence
+ClientLevel.handleBlockChangedAck	port	crates/horizon-client/src/game/network/remote/blocks.rs::Game::end_predictions_body	settles the predicted block actions up to the sequence
 ClientLevel.onBlockEntityAdded	port	crates/horizon-client/src/game.rs::Game::entity_geometry	off-screen block entities (beacon, end gateway, structure and test blocks) are drawn without a view test
-ClientLevel.syncBlockState	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::end_predictions	gap: minor: writes the server's state but does not move the player out when the block would sit on them (absSnapTo)
-ClientLevel.setBlock	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::set_block	gap: minor: the prediction bookkeeping is in Game::server_block
-ClientLevel.<init>	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::enter_remote_dimension	gap: minor: the environment layers are applied in Game::render
+ClientLevel.syncBlockState	port	crates/horizon-client/src/game/network/remote/blocks.rs::Game::end_predictions_body	gap: minor: writes the server's state but does not move the player out when the block would sit on them (absSnapTo)
+ClientLevel.setBlock	port	crates/horizon-client/src/game/network/remote/blocks.rs::Game::set_block_body	gap: minor: the prediction bookkeeping is in Game::server_block
+ClientLevel.<init>	port	crates/horizon-client/src/game/network/remote/level_state.rs::Game::enter_remote_dimension_body	gap: minor: the environment layers are applied in Game::render
 ClientLevel.addEnvironmentAttributeLayers	port	crates/horizon-client/src/game.rs::Game::render	sky colour and sky light move during a lightning flash
 ClientLevel.pollLightUpdates	skip:other		light is applied when it arrives or relit at once (light.rs relight); there is no queue to poll
 ClientLevel.getPrecipitationAt	port	crates/horizon-client/src/game/blocks/level_access.rs::GameLevel::precipitation	the column's biome decides; no column, no answer (the chunk lookup fails, as vanilla answers none for an unloaded column)
 ClientLevel.removeBlockBreakingProgress	inline	crates/horizon-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress	minor: the 400-tick expiry runs on every update, not every 20 ticks
 ClientLevel.removeProgress	inline	crates/horizon-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress	cracks are keyed by breaker id, so there are no per-position sets to tidy
 ClientLevel.shouldTickDeath	inline	crates/horizon-client/src/mobs/ai.rs::base_tick	death_time advances for every held remote mob; no simulation-distance gate decides whether the death animation ticks
-ClientLevel.tickNonPassenger	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote_entities	ticks each remote entity
+ClientLevel.tickNonPassenger	port	crates/horizon-client/src/game/network/remote/tick_entities.rs::Game::tick_remote_entities_body	ticks each remote entity
 ClientLevel.tickPassenger	port	crates/horizon-client/src/game/entities/passengers.rs::Game::position_riders	gap: minor: passengers are placed on their vehicle; no per-passenger tick
 ClientLevel.update	skip:other		runs the light queue each tick; Horizon relights when changes arrive
-ClientLevel.unload	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	minor: the ForgetLevelChunk arm clears block entities and renderer columns; light and entity ticking are not toggled
+ClientLevel.unload	inline	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	minor: the ForgetLevelChunk arm clears block entities and renderer columns; light and entity ticking are not toggled
 ClientLevel.onChunkLoaded	inline	crates/horizon-client/src/game/network/remote_chunks.rs::Game::remote_chunk	minor: chunks are meshed on arrival; no tint cache to clear and no entity-ticking gate
 ClientLevel.removeEntity	port	crates/horizon-client/src/game/network/remote_removal.rs::Game::remove_entity	removes the entity and its passengers
 ClientLevel.getPushableEntities	missing		minor: the client does not push the local player with nearby mobs or boats; the server's position correction moves it
-ClientLevel.disconnect	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::leave_server	gap: minor: no presence update
+ClientLevel.disconnect	port	crates/horizon-client/src/game/network/remote/connection.rs::Game::leave_server_body	gap: minor: no presence update
 ClientLevel.spawnParticle	port	crates/horizon-client/src/animate_tick.rs::try_spawn_drip	drip particle from a block shape (doAnimateTick)
 ClientLevel.spawnFluidParticle	port	crates/horizon-client/src/animate_tick.rs::try_spawn_drip	drip particle over a solid top (doAnimateTick)
 ClientLevel.fillReportDetails	skip:debug		crash report details only
@@ -113,5 +113,5 @@ ClientLevel.getSkyFlashTime	inline	crates/horizon-client/src/game.rs::Game::rend
 ClientLevel.calculateBlockTint	port	crates/horizon-client-render/src/mesher.rs::MeshTables::terrain_particle_tint	gap: minor: returns none for grass-block tints
 ClientLevel.playBreakingSound	port	crates/horizon-client/src/game/interface/level_particles.rs::Game::breaking_block_effects	the block's hit sound while digging
 ClientLevel.getClientLeafTintColor	port	crates/horizon-client/src/animate_tick.rs::AnimateContext::foliage	leaf tint for tinted leaves particles; the caller is TintedParticleLeavesBlock
-ClientLevel.EntityCallbacks.onTrackingStart	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::spawn_entity	minor: ender dragon parts are placed by the dragon module, with no tracked parts list
+ClientLevel.EntityCallbacks.onTrackingStart	inline	crates/horizon-client/src/game/network/remote/entities.rs::Game::spawn_entity_body	minor: ender dragon parts are placed by the dragon module, with no tracked parts list
 ClientLevel.EntityCallbacks.onTrackingEnd	port	crates/horizon-client/src/game/network/remote_removal.rs::Game::remove_entity	minor: detaches passengers and removes the dragon's parts; the leave-level event is not posted

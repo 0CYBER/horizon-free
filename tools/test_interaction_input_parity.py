@@ -57,6 +57,8 @@ def main():
         "Game-mode side effects and world simulation are controlled fixtures.",
         sources=[lab.ROOT / "crates/horizon-client-input/src/interaction_input.rs",
                  lab.ROOT / "crates/horizon-client/src/game/network/remote/mod.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/network/remote/input.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/network/remote/use_prediction.rs",
                  lab.ROOT / "crates/horizon-client/src/game/items/hand.rs",
                  lab.ROOT / "mods/horizon/src/test/java/dev/horizonlab/parity/ParityData.java"])
 

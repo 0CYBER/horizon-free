@@ -24,25 +24,25 @@ ChatListener.tick	port	crates/horizon-client/src/game/network/remote/chat_queue.
 ChatListener.setMessageDelay	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::chat_delay_ms	Chat Delay in milliseconds, as Java truncates it, read when a chat line arrives
 ChatListener.flushQueue	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::flush_chat_queue	each message through accept_chat, so it counts as processed
 ChatListener.acceptNextDelayedMessage	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::accept_next_delayed_message	the chat.queue row's click shows one held message, without moving the delay timer
-ChatListener.removeFromDelayedMessageQueue	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_delete_chat
-ChatListener.handleMessage	port	crates/horizon-client/src/game/network/remote/mod.rs::handle_player_chat	a line with a delay goes into remote.chat_queue instead of the chat
-ChatListener.handlePlayerChatMessage	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: player: no Only Show Secure Chat filter, no server filter-mask text, no block or friend-only hiding of chat lines
-ChatListener.handleChatMessageError	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_chat_message_error	the red italic chat.validation_error in the message's chat type, tagged chatError; gap: minor: a blocked or friends-only sender is not skipped (no social list), no narration, no markMessageAsProcessed
-ChatListener.handleDisguisedChatMessage	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: minor: no narration and no chat log entry
+ChatListener.removeFromDelayedMessageQueue	inline	crates/horizon-client/src/game/network/remote/chat.rs::Game::handle_delete_chat_body
+ChatListener.handleMessage	port	crates/horizon-client/src/game/network/remote/chat.rs::handle_player_chat	a line with a delay goes into remote.chat_queue instead of the chat
+ChatListener.handlePlayerChatMessage	port	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	gap: player: no Only Show Secure Chat filter, no server filter-mask text, no block or friend-only hiding of chat lines
+ChatListener.handleChatMessageError	port	crates/horizon-client/src/game/network/remote/chat.rs::Game::handle_chat_message_error_body	the red italic chat.validation_error in the message's chat type, tagged chatError; gap: minor: a blocked or friends-only sender is not skipped (no social list), no narration, no markMessageAsProcessed
+ChatListener.handleDisguisedChatMessage	port	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	gap: minor: no narration and no chat log entry
 ChatListener.showMessageToPlayer	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::chat_line	gap: player: trust, block, friend-only and secure-only checks are not run before showing
-ChatListener.evaluateTrustLevel	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::chat_trust
+ChatListener.evaluateTrustLevel	port	crates/horizon-client/src/game/network/remote/chat.rs::Game::chat_trust_body
 ChatListener.logPlayerMessage	skip:service		feeds the chat log that chat reports read
 ChatListener.logSystemMessage	skip:service		feeds the chat log that chat reports read
-ChatListener.handleSystemMessage	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: minor: hide-matched-names and friend filtering are not applied to system lines
+ChatListener.handleSystemMessage	port	crates/horizon-client/src/game/network/remote/apply_packet.rs::Game::apply_packet_body	gap: minor: hide-matched-names and friend filtering are not applied to system lines
 ChatListener.guessChatUUID	skip:service		social lookup of a name in a system line, used only for blocking and hiding
-ChatListener.isSenderLocalPlayer	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::chat_trust	the local player's own message on their own server is secure
+ChatListener.isSenderLocalPlayer	inline	crates/horizon-client/src/game/network/remote/chat.rs::Game::chat_trust_body	the local player's own message on their own server is secure
 ChatLog.codec	skip:java		serializer of the chat log
 ChatLog.loggedChatEvents	skip:service		chat log for chat reports
 ChatLog.push	skip:service		chat log for chat reports
 ChatLog.lookup	skip:service		chat log for chat reports
-ChatTrustLevel.evaluate	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::chat_trust	secure, modified (signed content gone or the font changed) or not secure (unsigned or expired)
-ChatTrustLevel.isModified	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::chat_trust	the signed content is not in the line, or the replacement uses another font
-ChatTrustLevel.containsModifiedStyle	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::chat_trust	the font check over the replacement component
+ChatTrustLevel.evaluate	port	crates/horizon-client/src/game/network/remote/chat.rs::Game::chat_trust_body	secure, modified (signed content gone or the font changed) or not secure (unsigned or expired)
+ChatTrustLevel.isModified	inline	crates/horizon-client/src/game/network/remote/chat.rs::Game::chat_trust_body	the signed content is not in the line, or the replacement uses another font
+ChatTrustLevel.containsModifiedStyle	inline	crates/horizon-client/src/game/network/remote/chat.rs::Game::chat_trust_body	the font check over the replacement component
 ChatTrustLevel.createTag	port	crates/horizon-client/src/game/network/remote/mod.rs::ChatTrust::tag	secure has no tag; modified keeps the signed content, not secure and error have theirs
 GuiMessage.splitLines	port	crates/horizon-client-render/src/chat.rs::Chat::add_lines	gap: minor: no width reserved for a tag icon; Horizon draws no icon tags
 GuiMessageTag.chatModified	port	crates/horizon-client-render/src/chat.rs::Tag::modified	the modified tooltip with the original content in grey
@@ -79,7 +79,7 @@ SkinReport.copy	skip:service		chat and player reporting
 SkinReport.Builder.hasContent	skip:service		chat and player reporting
 SkinReport.Builder.checkBuildable	skip:service		chat and player reporting
 SkinReport.Builder.build	skip:service		chat and player reporting
-BlockStatePredictionHandler.updateKnownServerState	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::server_block	a predicted block keeps its predicted state; the server state is remembered
+BlockStatePredictionHandler.updateKnownServerState	port	crates/horizon-client/src/game/network/remote/blocks.rs::Game::server_block_body	a predicted block keeps its predicted state; the server state is remembered
 BlockStatePredictionHandler.startPredicting	port	crates/horizon-client/src/game/network/remote/break_prediction.rs::Game::predict_break	gap: minor: the sequence number is passed in by the caller instead of counted here
 AddressCheck.createFromService	missing		minor: no block-list suppliers are loaded, so no address is refused on connect
 ServerAddress.isValidAddress	port	crates/horizon-protocol/src/servers.rs::is_valid_address	parse_address plus java.net.IDN.toASCII-compatible nameprep, transitional mapping and Punycode; ASCII labels preserve their case and default-rule characters
@@ -96,7 +96,7 @@ AbstractHorseRenderer.extractRenderState	port	crates/horizon-client/src/mobs/equ
 AbstractMinecartRenderer.submit	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::cart_geometry	gap: player: no hurt tilt when a cart is hit (hurt_time is not read here); minor: no per-cart offset jitter
 AbstractMinecartRenderer.newRender	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::cart_geometry	the new path's seat translation after the yaw/pitch rotation, drawn when `minecart_improvements()` is on or a lerp is queued
 AbstractMinecartRenderer.oldRender	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::cart_geometry	rail-based draw is the path Horizon has
-AbstractMinecartRenderer.newExtractState	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_minecart_lerp	the cart's position and rotation sampled at the frame's partial tick from the steps a NewMinecartBehavior cart has queued; None when the cart has no lerp, and the renderer then keeps the entity's own interpolated position and rotation
+AbstractMinecartRenderer.newExtractState	port	crates/horizon-client/src/game/network/remote/player_state.rs::Game::remote_minecart_lerp_body	the cart's position and rotation sampled at the frame's partial tick from the steps a NewMinecartBehavior cart has queued; None when the cart has no lerp, and the renderer then keeps the entity's own interpolated position and rotation
 AbstractMinecartRenderer.oldExtractState	port	crates/horizon-client/src/game/entities/minecarts.rs::Game::cart_geometry	rail front and back points are taken from the cart's rail position
 AbstractMinecartRenderer.getRenderOffset	missing		minor: only the new render path offsets the cart
 AbstractSkeletonRenderer.extractRenderState	port	crates/horizon-client/src/mobs/anim.rs::setup	the aggressive and bow flags are read in setup; the freeze-conversion shake is render::shaking

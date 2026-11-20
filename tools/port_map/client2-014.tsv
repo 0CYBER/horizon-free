@@ -8,9 +8,9 @@ ConfirmScreen.addMessage	port	crates/horizon-client/src/confirm_screen.rs::Confi
 ConfirmScreen.addButtons	port	crates/horizon-client/src/confirm_screen.rs::Confirm::answer_at	Yes and No buttons; the answer comes from the click position
 ConfirmScreen.tick	inline	crates/horizon-client/src/confirm_screen.rs::Confirm::draw_active	the 20-tick delay is a 1000 ms timer kept by the caller; buttons are greyed while it runs
 ConnectScreen.connect	port	crates/horizon-client/src/net.rs::Session::connect	background connect on its own thread (Session::start)
-ConnectScreen.tick	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::tick_remote	ticks the pending session while it opens; game.rs tick sends remote sessions here
+ConnectScreen.tick	port	crates/horizon-client/src/game/network/remote/tick.rs::Game::tick_remote_body	ticks the pending session while it opens; game.rs tick sends remote sessions here
 ConnectScreen.init	port	crates/horizon-client-render/src/level_loading.rs::draw_connecting	the status centred at (width / 2, height / 2 - 50) and Cancel at `connect_cancel`'s corner while the connection can still be cancelled; unsure whether Escape aborts the join
-ConnectScreen.extractRenderState	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_overlay	gap: minor: also draws the address line, vanilla draws only the status
+ConnectScreen.extractRenderState	port	crates/horizon-client/src/game/network/remote/screens.rs::Game::remote_overlay_body	gap: minor: also draws the address line, vanilla draws only the status
 CreateBuffetWorldScreen.init	port	crates/horizon-client/src/title/buffet.rs::State::new	title, the 200x15 search box, the biome list and the footer's Done and Cancel; the list is drawn each frame
 CreateBuffetWorldScreen.repositionElements	skip:ui		layout only; the list is laid out each frame in buffet.rs::list_area
 CreateBuffetWorldScreen.updateButtonValidity	inline	crates/horizon-client/src/title/buffet.rs::buttons	Done needs a selected biome, that is one the search text still shows
@@ -82,10 +82,10 @@ ManageServerScreen.init	port	crates/horizon-client/src/multiplayer.rs::Screen::b
 ManageServerScreen.resize	skip:ui		layout only; Screen::Edit keeps its fields
 ManageServerScreen.onAdd	port	crates/horizon-client/src/multiplayer.rs::Screen::click	Done saves the name (default if empty) and the address
 ManageServerScreen.extractRenderState	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	labels and fields (Screen::Edit arm)
-MenuScreens.create	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_open_screen	server-opened menus; gap: minor: the screen is built from the packet title
+MenuScreens.create	port	crates/horizon-client/src/game/network/remote/menus.rs::Game::remote_open_screen_body	server-opened menus; gap: minor: the screen is built from the packet title
 MenuScreens.register	skip:data		registry of menu types; Horizon reads them from tables
 MenuScreens.selfTest	skip:debug		startup check that every menu has a screen
-MenuScreens.ScreenConstructor.fromPacket	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::remote_open_screen	builds the screen from the open-screen packet and sets the container menu
+MenuScreens.ScreenConstructor.fromPacket	port	crates/horizon-client/src/game/network/remote/menus.rs::Game::remote_open_screen_body	builds the screen from the open-screen packet and sets the container menu
 NoticeWithLinkScreen.init	port	crates/horizon-client/src/title.rs::Title::play	opening a world whose folder holds links sets Mode::Error with Alert::Symlink (symlink_warning.title.world)
 NoticeWithLinkScreen.getNarrationMessage	inline	crates/horizon-client/src/title.rs::Title::narration	the world_error screen narrates the symlink title and message
 OutOfMemoryScreen.init	missing		minor: unsure: no out-of-memory screen; Horizon does not handle allocation failures this way
