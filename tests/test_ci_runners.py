@@ -788,7 +788,7 @@ class TryRunTests(unittest.TestCase):
         # The surface report left with the fork's gate workflow (878ac391) and with it the only pull request check
         # that sees a changed wire layout or a new hook argument (#18742, #18874).
         steps = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["verify-mod-points"].split("\n      - ")
-        report = [step for step in steps if "python3 tools/ci/surface_report.py" in step]
+        report = [step for step in steps if "python3 tools/ci/surface_report.py\n" in step]
         self.assertEqual(len(report), 1)
         self.assertIn("github.event_name == 'pull_request'", report[0])
         self.assertIn("steps.rust.outputs.mod_points != 'false'", report[0])
@@ -796,6 +796,15 @@ class TryRunTests(unittest.TestCase):
         self.assertIn("HORIZON_STAGE_TOOL=", report[0])
         self.assertIn("EVENT: ${{ github.event_name }}\n", report[0])
         self.assertNotIn("continue-on-error", report[0])
+        # The base's compiled layouts come from the store main's runs fill (wire-layouts, by commit).
+        self.assertIn('WIRE_LAYOUTS_STORE="${CARGO_TARGET_DIR:-$PWD/target}/wire-layouts"', report[0])
+        store = [step for step in steps if "--store-layouts" in step]
+        self.assertEqual(len(store), 1)
+        self.assertIn("if: github.event_name != 'pull_request'", store[0])
+        self.assertIn('--store-layouts "$CARGO_TARGET_DIR/wire-layouts"', store[0])
+        # Only a push to main stores one: the merge queue saves the disk too.
+        self.assertIn('if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then\n'
+                      '              python3 tools/ci/surface_report.py --store-layouts', store[0])
 
     def test_the_windows_build_runs_by_hand_and_saves_no_cache(self):
         block = dict(jobs((WORKFLOWS / "ci.yml").read_text()))["windows-x64"]

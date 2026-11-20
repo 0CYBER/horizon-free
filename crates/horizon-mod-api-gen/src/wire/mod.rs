@@ -710,11 +710,38 @@ pub fn generate(root: &Path, included: &[(&str, &str)]) -> Result<Generated, Str
 /// a mod's start receives, is a list of `PackageInfo`. The core hash mixes in their layouts.
 const CONTROL_OWNED: &[&str] = &["mod_api::PackageInfo"];
 
+/// The owned types the core reaches, by the path the glue names them by: the control payloads'
+/// and those of the prepared hooks' entries (`reads:Vec<crate::EquipReadRow>`), sorted.
+fn core_owned(abis: &[prepared::Abi]) -> Vec<String> {
+    let mut paths: std::collections::BTreeSet<String> = CONTROL_OWNED
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect();
+    for entry in abis.iter().flat_map(|abi| &abi.entries) {
+        for argument in entry.input.iter().chain(&entry.output) {
+            let ty = argument.split_once(':').map_or(*argument, |(_, ty)| ty);
+            let ty = ty
+                .strip_prefix("Vec<")
+                .and_then(|ty| ty.strip_suffix('>'))
+                .unwrap_or(ty);
+            // `crate::wire::Id` is a transport value; scalars and tuples have no owned type.
+            if let Some(name) = ty.strip_prefix("crate::")
+                && !name.starts_with("wire::")
+            {
+                paths.insert(format!("mod_api::{name}"));
+            }
+        }
+    }
+    paths.into_iter().collect()
+}
+
 /// What a wasm mod and the game check each other by when it loads (`mod_surface::boundary`):
 /// every call's key, signature hash and the owned types it reaches, as `call_layouts` mixes them,
 /// a fingerprint of the core hash's inputs that the source holds (the hand-written codecs and
 /// the transport values `codecs` reads, and the prepared hooks' ABI) and the owned types the
-/// core reaches. The owned types' shapes are left for the surface export to fill in.
+/// core reaches: the control payloads' and the prepared hooks' entries' (`prepared_abi_layout`
+/// mixes in each entry type's layout). The owned types' shapes are left for the surface export
+/// to fill in.
 pub(crate) fn boundary(
     root: &Path,
     surface: &Surface<'_>,
@@ -753,12 +780,9 @@ pub(crate) fn boundary(
     Ok(mod_surface::boundary::Boundary {
         schema: mod_surface::boundary::SCHEMA,
         core: format!("{core:016x}"),
-        core_owned: CONTROL_OWNED
-            .iter()
-            .map(|path| mod_surface::boundary::Owned {
-                path: (*path).into(),
-                shape: None,
-            })
+        core_owned: core_owned(&abis)
+            .into_iter()
+            .map(|path| mod_surface::boundary::Owned { path, shape: None })
             .collect(),
         calls,
     })

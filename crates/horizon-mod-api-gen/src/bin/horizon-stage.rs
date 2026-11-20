@@ -14,9 +14,12 @@
 //! `horizon-stage fits USES_JSON TARGET_SURFACE`: whether a uses table fits a build's surface,
 //! naming each changed item. Exit 0 fits, 1 does not fit, 2 error.
 //!
-//! `horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS] [--notes DIR] [--base-notes DIR]
+//! `horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS [--layouts OLD_LAYOUTS NEW_LAYOUTS]]
+//! [--notes DIR] [--base-notes DIR]
 //! [--json OUT] [--gate]`: print what changed between two surface exports, breaking changes first.
-//! `--calls` adds the changes to the calls and core both builds' wasm mods are checked by. `--notes` attaches
+//! `--calls` adds the changes to the calls and core both builds' wasm mods are checked by;
+//! `--layouts` adds the two builds' compiled hashes (`horizon-mod-api`'s `wire_layouts` example)
+//! for the changes the source does not show. `--notes` attaches
 //! the change notes of DIR (`crates/horizon-mod-vocab/changes`) whose file names are not in
 //! `--base-notes` (the base tree's folder; required with `--notes`). Exits 1 when a new note
 //! names an id that did not change, or with `--gate` when a breaking change has no note; 2 when
@@ -184,11 +187,11 @@ fn surface_diff(args: &[PathBuf]) -> ! {
     use horizon_mod_api_gen::surface::notes;
     let [old, new, options @ ..] = args else {
         fail(
-            "usage: horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS] [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]",
+            "usage: horizon-stage surface-diff OLD NEW [--calls OLD_CALLS NEW_CALLS [--layouts OLD_LAYOUTS NEW_LAYOUTS]] [--notes DIR] [--base-notes DIR] [--json OUT] [--gate]",
         )
     };
     let (mut notes_dir, mut base_notes, mut json, mut gate) = (None, None, None, false);
-    let mut calls = None;
+    let (mut calls, mut layouts) = (None, None);
     let mut options = options.iter();
     while let Some(option) = options.next() {
         let slot = match option.to_str() {
@@ -203,6 +206,13 @@ fn surface_diff(args: &[PathBuf]) -> ! {
                 calls = Some((old, new));
                 continue;
             }
+            Some("--layouts") => {
+                let (Some(old), Some(new)) = (options.next(), options.next()) else {
+                    fail("--layouts needs OLD_LAYOUTS and NEW_LAYOUTS")
+                };
+                layouts = Some((old, new));
+                continue;
+            }
             Some("--notes") => &mut notes_dir,
             Some("--base-notes") => &mut base_notes,
             Some("--json") => &mut json,
@@ -215,14 +225,31 @@ fn surface_diff(args: &[PathBuf]) -> ! {
     }
     let (old, new) = (read_surface(old), read_surface(new));
     let mut diff = mod_surface::diff(&old, &new);
-    if let Some((old_calls, new_calls)) = calls {
+    let bytes = |path: &PathBuf| {
+        std::fs::read(path).unwrap_or_else(|e| fail(format!("{}: {e}", path.display())))
+    };
+    let compiled = layouts.map(|(old, new)| {
         let read = |path: &PathBuf| {
-            let bytes =
-                std::fs::read(path).unwrap_or_else(|e| fail(format!("{}: {e}", path.display())));
-            mod_surface::boundary::Boundary::read(&bytes)
+            mod_surface::boundary::Compiled::read(&bytes(path))
                 .unwrap_or_else(|e| fail(format!("{}: {e}", path.display())))
         };
-        mod_surface::boundary::apply(&mut diff, &old, &new, &read(old_calls), &read(new_calls));
+        (read(old), read(new))
+    });
+    if let Some((old_calls, new_calls)) = calls {
+        let read = |path: &PathBuf| {
+            mod_surface::boundary::Boundary::read(&bytes(path))
+                .unwrap_or_else(|e| fail(format!("{}: {e}", path.display())))
+        };
+        mod_surface::boundary::apply(
+            &mut diff,
+            &old,
+            &new,
+            &read(old_calls),
+            &read(new_calls),
+            compiled.as_ref().map(|(old, new)| (old, new)),
+        );
+    } else if compiled.is_some() {
+        fail("--layouts needs --calls")
     }
     let mut stale = Vec::new();
     if let Some(dir) = notes_dir {

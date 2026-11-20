@@ -1,7 +1,7 @@
 //! One case per boundary rule, on small surfaces and call tables written out here. The calls'
 //! hashes are what the generator would write; real trees are checked by replaying
 //! `horizon-stage surface-diff --calls` on them.
-use super::{Boundary, Call, Owned, SCHEMA, apply};
+use super::{Boundary, COMPILED_SCHEMA, Call, Compiled, CompiledCall, Owned, SCHEMA, apply};
 use crate::diff::Class;
 use crate::*;
 
@@ -118,7 +118,30 @@ fn boundary(core: &str, calls: Vec<Call>) -> Boundary {
 /// The surface diff with the boundary applied.
 fn compared(old: (&Surface, &Boundary), new: (&Surface, &Boundary)) -> Diff {
     let mut d = crate::diff(old.0, new.0);
-    apply(&mut d, old.0, new.0, old.1, new.1);
+    apply(&mut d, old.0, new.0, old.1, new.1, None);
+    d
+}
+
+/// A build's compiled hashes: its core layout and its calls' (key, layout).
+fn built(core: &str, calls: &[(&str, &str)]) -> Compiled {
+    Compiled {
+        schema: COMPILED_SCHEMA,
+        core: core.into(),
+        calls: calls
+            .iter()
+            .map(|(key, layout)| CompiledCall {
+                key: (*key).into(),
+                layout: (*layout).into(),
+                export: true,
+            })
+            .collect(),
+    }
+}
+
+/// The surface diff with the boundary and both builds' compiled hashes applied.
+fn compiled(old: (&Surface, &Boundary, &Compiled), new: (&Surface, &Boundary, &Compiled)) -> Diff {
+    let mut d = crate::diff(old.0, new.0);
+    apply(&mut d, old.0, new.0, old.1, new.1, Some((old.2, new.2)));
     d
 }
 
@@ -347,4 +370,148 @@ fn another_schema_is_refused() {
     assert_eq!(Boundary::read(b.to_json().as_bytes()).unwrap(), b);
     b.schema = SCHEMA + 1;
     assert!(Boundary::read(b.to_json().as_bytes()).is_err());
+}
+
+#[test]
+fn a_compiled_change_the_source_does_not_show_breaks_under_the_call() {
+    // `PackageInfo`'s private `kind` stored as a new derived enum with the same variants: the
+    // shape leaves type names out, the derive hashes them.
+    let s = surface(&["tick"], vec![]);
+    let b = boundary("c0", vec![call("Hooks::tick", "01", true, &[])]);
+    let d = compiled(
+        (&s, &b, &built("l0", &[("Hooks::tick", "a1")])),
+        (&s, &b, &built("l0", &[("Hooks::tick", "a2")])),
+    );
+    assert_eq!(undeclared(&d), ["method:Hooks::tick"]);
+    assert_eq!(
+        d.changes[0].what,
+        [
+            "call `Hooks::tick`: its compiled layout changed (`a1` → `a2`): every wasm mod built before it is refused at load"
+        ]
+    );
+    let d = compiled(
+        (&s, &b, &built("l0", &[("Hooks::tick", "a1")])),
+        (&s, &b, &built("l1", &[("Hooks::tick", "a1")])),
+    );
+    assert_eq!(undeclared(&d), ["core:wire"]);
+    assert!(d.changes[0].what[0].starts_with("the compiled core layout changed (`l0` → `l1`)"));
+    // Unchanged compiled hashes add nothing.
+    let same = built("l0", &[("Hooks::tick", "a1")]);
+    let d = compiled((&s, &b, &same), (&s, &b, &same));
+    assert_eq!(d.verdict, Verdict::Identical);
+}
+
+#[test]
+fn a_type_change_does_not_cover_a_second_compiled_change_of_the_core() {
+    // One pull request swaps `EquipReadRow.health` and `max_health` (the source shows it) and
+    // stores `PackageInfo.kind` as a new derived enum (only the compiled core shows it). A note
+    // naming `type:EquipReadRow` alone must not pass it.
+    let s = surface(&[], vec![]);
+    let core = |equip: &str| {
+        let mut b = boundary("c0", vec![]);
+        b.core_owned = owned(&[
+            ("mod_api::EquipReadRow", equip),
+            ("mod_api::PackageInfo", "p0"),
+        ]);
+        b
+    };
+    let d = compiled(
+        (&s, &core("e1"), &built("l0", &[])),
+        (&s, &core("e2"), &built("l1", &[])),
+    );
+    assert_eq!(undeclared(&d), ["core:wire", "type:EquipReadRow"]);
+    let wire = d.changes.iter().find(|c| c.id == "core:wire").unwrap();
+    assert_eq!(
+        wire.what,
+        [
+            "the compiled core layout changed (`l0` → `l1`); the source shows `mod_api::EquipReadRow` changed, which it reaches, and cannot tell whether that is all: every wasm mod built before it is refused at load"
+        ]
+    );
+    // Without the compiled layouts, the source change alone.
+    let d = compared((&s, &core("e1")), (&s, &core("e2")));
+    assert_eq!(undeclared(&d), ["type:EquipReadRow"]);
+}
+
+#[test]
+fn a_type_change_does_not_cover_a_second_compiled_change_of_a_call() {
+    // #18742's `PlayerWorldRefusal` insert, with another hidden change on the same call: the call
+    // is named too, so a note must list both ids.
+    let s = surface(&["place_block"], vec![]);
+    let reaching = |shape| {
+        boundary(
+            "c0",
+            vec![call(
+                "Hooks::place_block",
+                "01",
+                true,
+                &[("mod_api::PlayerWorldRefusal", shape)],
+            )],
+        )
+    };
+    let d = compiled(
+        (
+            &s,
+            &reaching("aaaa"),
+            &built("l0", &[("Hooks::place_block", "a1")]),
+        ),
+        (
+            &s,
+            &reaching("bbbb"),
+            &built("l0", &[("Hooks::place_block", "a2")]),
+        ),
+    );
+    assert_eq!(
+        undeclared(&d),
+        ["method:Hooks::place_block", "type:PlayerWorldRefusal"]
+    );
+    // A signature change the source shows is under the call's own id: the compiled change adds a
+    // line there, no second id.
+    let signed = |signature| boundary("c0", vec![call("Hooks::place_block", signature, true, &[])]);
+    let d = compiled(
+        (
+            &s,
+            &signed("01"),
+            &built("l0", &[("Hooks::place_block", "a1")]),
+        ),
+        (
+            &s,
+            &signed("02"),
+            &built("l0", &[("Hooks::place_block", "a2")]),
+        ),
+    );
+    assert_eq!(undeclared(&d), ["method:Hooks::place_block"]);
+    assert_eq!(d.changes[0].what.len(), 2);
+}
+
+#[test]
+fn compiled_layouts_of_another_schema_are_refused() {
+    let mut b = built("l0", &[("Hooks::tick", "a1")]);
+    let text = serde_json::to_string(&b).unwrap();
+    assert_eq!(Compiled::read(text.as_bytes()).unwrap(), b);
+    b.schema = COMPILED_SCHEMA + 1;
+    assert!(Compiled::read(serde_json::to_string(&b).unwrap().as_bytes()).is_err());
+}
+
+#[test]
+fn a_call_only_the_new_build_compiled_is_additive() {
+    // The reviewer's case: the head's generator emits one more call for a method the base
+    // already had, so its reading of both trees lists the same calls, and only the compiled
+    // tables differ: 2315 calls in the base's, 2316 in the head's.
+    let s = surface(&["tick"], vec![]);
+    let b = boundary("c0", vec![call("Hooks::tick", "01", true, &[])]);
+    let keys: Vec<String> = (0..2316).map(|i| format!("Hooks::k{i:04}")).collect();
+    let table = |n: usize| {
+        let calls: Vec<(&str, &str)> = keys[..n].iter().map(|k| (k.as_str(), "a1")).collect();
+        built("l0", &calls)
+    };
+    let d = compiled((&s, &b, &table(2315)), (&s, &b, &table(2316)));
+    assert_eq!(d.verdict, Verdict::Additive);
+    assert!(undeclared(&d).is_empty());
+    assert_eq!(d.changes.len(), 1);
+    assert_eq!(d.changes[0].id, "call:Hooks::k2315");
+    assert_eq!(d.changes[0].class, Class::Additive);
+    assert_eq!(
+        d.changes[0].what,
+        ["call `Hooks::k2315` is new in the compiled table"]
+    );
 }

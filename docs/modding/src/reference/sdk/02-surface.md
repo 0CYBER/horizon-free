@@ -67,12 +67,22 @@ same report for two published builds.
 
 When the `verify (mod points)` check runs on a pull request, its summary carries this report, comparing the merge
 base with the head; `--calls` adds the calls and core each build's wasm mods are checked by (`horizon-stage surface
-ROOT OUT --calls CALLS` writes them). The head's `horizon-stage` exports both trees, so a change to the generator
-itself (its file roots or prepared ids, how it hashes a call) shows in neither. It reports, and fails the check only
-when:
+ROOT OUT --calls CALLS` writes them). `--layouts` adds what both builds compiled: the core layout and every call's
+hash, exactly as the game compares them (`crates/horizon-mod-api/examples/wire_layouts.rs` prints them). Every
+compiled change is reported under the call's id or `core:wire`, even when the source shows a cause (a type the call
+reaches, for example): one hash per call cannot tell whether that cause is all of it, so a note names the call or
+`core:wire` too. One note can list all of a change's ids. This also catches what the source shows nothing of, a
+crossing type's name (the `Wire` derive hashes it, a shape leaves it out) or a change to the generator itself. The
+base's compiled layouts come from a store that only main's pushes fill, one file per commit (a symlink, another schema,
+no calls or a call count other than the one written beside them is a miss), or are built by checking the base out in place, with
+the base's own copy of the example. A base older than the example is compared by source alone, with a warning. A pull
+request that changes the gate's own code gets a warning that its result needs a maintainer's look. A source change the
+compiled hashes do not see still counts: a newtype that crosses `via` the type it wraps changes the
+shape and not the layout, and needs a note. It reports, and fails the check only when:
 
 - the head's tree cannot be exported;
-- with the gate on, no comparison can run: the base cannot be found or fetched, or the head's tool cannot read it;
+- with the gate on, no comparison can run: the base cannot be found or fetched, the head's tool cannot read it, or
+  the head's compiled layouts, or those of a base that has the example, cannot be built;
 - a change note cannot be read, or names an item that did not change;
 - a breaking change has no change note: every breaking record the report lists, members included (a removed field is
   its own line), is named by a note the pull request adds. Conditional and additive changes need none. The gate is
